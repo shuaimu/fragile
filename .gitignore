@@ -1,0 +1,11 @@
+/target
+Cargo.lock
+*.o
+*.a
+*.so
+*.dylib
+**/*.rs.bk
+.idea/
+.vscode/
+*.swp
+*.swo

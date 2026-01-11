@@ -1,0 +1,10 @@
+[package]
+name = "fragile-common"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+smol_str.workspace = true
+rustc-hash.workspace = true
+miette.workspace = true
+thiserror.workspace = true

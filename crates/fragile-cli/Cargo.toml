@@ -1,0 +1,14 @@
+[package]
+name = "fragile-cli"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "fragile"
+path = "src/main.rs"
+
+[dependencies]
+fragile-driver.workspace = true
+fragile-common.workspace = true
+clap.workspace = true
+miette.workspace = true

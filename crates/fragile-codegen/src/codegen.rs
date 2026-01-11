@@ -1,0 +1,725 @@
+use fragile_common::SymbolInterner;
+use fragile_hir::{
+    BinOp, Expr, ExprKind, FnDef, Item, ItemKind, Literal, Module,
+    Mutability, PrimitiveType, Stmt, StmtKind, Type, UnaryOp,
+};
+use inkwell::builder::Builder;
+use inkwell::context::Context;
+use inkwell::module::Module as LlvmModule;
+use inkwell::targets::{
+    CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetMachine,
+};
+use inkwell::types::{BasicMetadataTypeEnum, BasicType, BasicTypeEnum};
+use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum, CallSiteValue, FunctionValue, PointerValue};
+use inkwell::OptimizationLevel;
+use inkwell::{AddressSpace, IntPredicate, FloatPredicate};
+use miette::Result;
+use rustc_hash::FxHashMap;
+use std::path::Path;
+
+pub struct CodeGenerator<'ctx> {
+    context: &'ctx Context,
+    interner: &'ctx SymbolInterner,
+}
+
+impl<'ctx> CodeGenerator<'ctx> {
+    pub fn new(context: &'ctx Context, interner: &'ctx SymbolInterner) -> Self {
+        Self { context, interner }
+    }
+
+    pub fn compile_module(&self, module: &Module) -> Result<LlvmModule<'ctx>> {
+        let name = self.interner.resolve(module.name);
+        let llvm_module = self.context.create_module(&name);
+
+        let mut compiler = ModuleCompiler::new(self.context, &llvm_module, self.interner);
+
+        // First pass: declare all functions
+        for item in &module.items {
+            if let ItemKind::Function(fn_def) = &item.kind {
+                compiler.declare_function(fn_def)?;
+            }
+        }
+
+        // Second pass: compile function bodies
+        for item in &module.items {
+            if let ItemKind::Function(fn_def) = &item.kind {
+                compiler.compile_function(fn_def)?;
+            }
+        }
+
+        Ok(llvm_module)
+    }
+
+    pub fn write_object_file(&self, module: &LlvmModule<'ctx>, path: &Path) -> Result<()> {
+        Target::initialize_native(&InitializationConfig::default())
+            .map_err(|e| miette::miette!("Failed to initialize target: {}", e))?;
+
+        let triple = TargetMachine::get_default_triple();
+        let target = Target::from_triple(&triple)
+            .map_err(|e| miette::miette!("Failed to get target: {}", e))?;
+
+        let cpu = TargetMachine::get_host_cpu_name();
+        let features = TargetMachine::get_host_cpu_features();
+
+        let target_machine = target
+            .create_target_machine(
+                &triple,
+                cpu.to_str().unwrap_or("generic"),
+                features.to_str().unwrap_or(""),
+                OptimizationLevel::Default,
+                RelocMode::PIC,
+                CodeModel::Default,
+            )
+            .ok_or_else(|| miette::miette!("Failed to create target machine"))?;
+
+        target_machine
+            .write_to_file(module, FileType::Object, path)
+            .map_err(|e| miette::miette!("Failed to write object file: {}", e))?;
+
+        Ok(())
+    }
+}
+
+struct ModuleCompiler<'a, 'ctx> {
+    context: &'ctx Context,
+    module: &'a LlvmModule<'ctx>,
+    builder: Builder<'ctx>,
+    interner: &'a SymbolInterner,
+    functions: FxHashMap<String, FunctionValue<'ctx>>,
+    variables: FxHashMap<String, (PointerValue<'ctx>, BasicTypeEnum<'ctx>)>,
+}
+
+impl<'a, 'ctx> ModuleCompiler<'a, 'ctx> {
+    fn new(
+        context: &'ctx Context,
+        module: &'a LlvmModule<'ctx>,
+        interner: &'a SymbolInterner,
+    ) -> Self {
+        Self {
+            context,
+            module,
+            builder: context.create_builder(),
+            interner,
+            functions: FxHashMap::default(),
+            variables: FxHashMap::default(),
+        }
+    }
+
+    fn declare_function(&mut self, fn_def: &FnDef) -> Result<FunctionValue<'ctx>> {
+        let name = self.interner.resolve(fn_def.name);
+
+        // Get parameter types
+        let param_types: Vec<BasicMetadataTypeEnum> = fn_def
+            .sig
+            .params
+            .iter()
+            .filter_map(|p| self.lower_type(&p.ty).map(|t| t.into()))
+            .collect();
+
+        // Get return type
+        let ret_type = self.lower_type(&fn_def.sig.ret_ty);
+
+        let fn_type = match ret_type {
+            Some(ty) => ty.fn_type(&param_types, false),
+            None => self.context.void_type().fn_type(&param_types, false),
+        };
+
+        let function = self.module.add_function(&name, fn_type, None);
+        self.functions.insert(name.to_string(), function);
+
+        Ok(function)
+    }
+
+    fn compile_function(&mut self, fn_def: &FnDef) -> Result<()> {
+        let name = self.interner.resolve(fn_def.name);
+        let function = self
+            .functions
+            .get(name.as_str())
+            .copied()
+            .ok_or_else(|| miette::miette!("Function {} not found", name))?;
+
+        // Clear variables for this function
+        self.variables.clear();
+
+        // Create entry block
+        let entry = self.context.append_basic_block(function, "entry");
+        self.builder.position_at_end(entry);
+
+        // Create allocas for parameters
+        for (i, param) in fn_def.sig.params.iter().enumerate() {
+            let param_name = self.interner.resolve(param.name);
+            let param_value = function.get_nth_param(i as u32);
+
+            if let Some(value) = param_value {
+                let ty = value.get_type();
+                let alloca = self.create_entry_alloca(function, &param_name, ty);
+                self.builder.build_store(alloca, value)
+                    .map_err(|e| miette::miette!("Failed to store param: {:?}", e))?;
+                self.variables.insert(param_name.to_string(), (alloca, ty));
+            }
+        }
+
+        // Compile body
+        if let Some(body) = &fn_def.body {
+            let result = self.compile_expr(body, function)?;
+
+            // Add return if needed
+            if !self.current_block_has_terminator() {
+                if fn_def.sig.ret_ty == Type::unit() {
+                    self.builder.build_return(None)
+                        .map_err(|e| miette::miette!("Failed to build return: {:?}", e))?;
+                } else if let Some(val) = result {
+                    self.builder.build_return(Some(&val))
+                        .map_err(|e| miette::miette!("Failed to build return: {:?}", e))?;
+                } else {
+                    self.builder.build_return(None)
+                        .map_err(|e| miette::miette!("Failed to build return: {:?}", e))?;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn compile_expr(
+        &mut self,
+        expr: &Expr,
+        function: FunctionValue<'ctx>,
+    ) -> Result<Option<BasicValueEnum<'ctx>>> {
+        match &expr.kind {
+            ExprKind::Literal(lit) => self.compile_literal(lit),
+
+            ExprKind::Ident(symbol) => {
+                let name = self.interner.resolve(*symbol);
+                if let Some(&(ptr, ty)) = self.variables.get(name.as_str()) {
+                    let val = self.builder.build_load(ty, ptr, &name)
+                        .map_err(|e| miette::miette!("Failed to load: {:?}", e))?;
+                    Ok(Some(val))
+                } else if let Some(&func) = self.functions.get(name.as_str()) {
+                    Ok(Some(func.as_global_value().as_pointer_value().into()))
+                } else {
+                    Err(miette::miette!("Unknown variable: {}", name))
+                }
+            }
+
+            ExprKind::Binary { op, lhs, rhs } => {
+                let lhs_val = self
+                    .compile_expr(lhs, function)?
+                    .ok_or_else(|| miette::miette!("Binary lhs has no value"))?;
+                let rhs_val = self
+                    .compile_expr(rhs, function)?
+                    .ok_or_else(|| miette::miette!("Binary rhs has no value"))?;
+
+                self.compile_binary_op(*op, lhs_val, rhs_val)
+            }
+
+            ExprKind::Unary { op, operand } => {
+                let val = self
+                    .compile_expr(operand, function)?
+                    .ok_or_else(|| miette::miette!("Unary operand has no value"))?;
+
+                self.compile_unary_op(*op, val)
+            }
+
+            ExprKind::Call { callee, args } => {
+                let _callee_val = self.compile_expr(callee, function)?;
+
+                // Compile arguments
+                let arg_vals: Vec<BasicMetadataValueEnum> = args
+                    .iter()
+                    .filter_map(|a| self.compile_expr(a, function).ok().flatten())
+                    .map(|v| v.into())
+                    .collect();
+
+                // Get function to call
+                if let ExprKind::Ident(sym) = &callee.kind {
+                    let name = self.interner.resolve(*sym);
+                    if let Some(&func) = self.functions.get(name.as_str()) {
+                        let call = self.builder.build_call(func, &arg_vals, "call")
+                            .map_err(|e| miette::miette!("Failed to build call: {:?}", e))?;
+                        let value = match call.try_as_basic_value() {
+                            inkwell::values::ValueKind::Basic(v) => Some(v),
+                            inkwell::values::ValueKind::Instruction(_) => None,
+                        };
+                        return Ok(value);
+                    }
+                }
+
+                Ok(None)
+            }
+
+            ExprKind::Block { stmts, expr } => {
+                for stmt in stmts {
+                    self.compile_stmt(stmt, function)?;
+                }
+                if let Some(e) = expr {
+                    self.compile_expr(e, function)
+                } else {
+                    Ok(None)
+                }
+            }
+
+            ExprKind::If {
+                cond,
+                then_branch,
+                else_branch,
+            } => {
+                let cond_val = self
+                    .compile_expr(cond, function)?
+                    .ok_or_else(|| miette::miette!("If condition has no value"))?;
+
+                let cond_bool = if cond_val.is_int_value() {
+                    let int_val = cond_val.into_int_value();
+                    let zero = int_val.get_type().const_zero();
+                    self.builder.build_int_compare(IntPredicate::NE, int_val, zero, "cond")
+                        .map_err(|e| miette::miette!("Failed to build compare: {:?}", e))?
+                } else {
+                    return Err(miette::miette!("If condition must be boolean"));
+                };
+
+                let then_bb = self.context.append_basic_block(function, "then");
+                let else_bb = self.context.append_basic_block(function, "else");
+                let merge_bb = self.context.append_basic_block(function, "merge");
+
+                self.builder.build_conditional_branch(cond_bool, then_bb, else_bb)
+                    .map_err(|e| miette::miette!("Failed to build branch: {:?}", e))?;
+
+                // Then block
+                self.builder.position_at_end(then_bb);
+                let then_val = self.compile_expr(then_branch, function)?;
+                if !self.current_block_has_terminator() {
+                    self.builder.build_unconditional_branch(merge_bb)
+                        .map_err(|e| miette::miette!("Failed to build branch: {:?}", e))?;
+                }
+                let then_bb_end = self.builder.get_insert_block().unwrap();
+
+                // Else block
+                self.builder.position_at_end(else_bb);
+                let else_val = if let Some(else_branch) = else_branch {
+                    self.compile_expr(else_branch, function)?
+                } else {
+                    None
+                };
+                if !self.current_block_has_terminator() {
+                    self.builder.build_unconditional_branch(merge_bb)
+                        .map_err(|e| miette::miette!("Failed to build branch: {:?}", e))?;
+                }
+                let else_bb_end = self.builder.get_insert_block().unwrap();
+
+                // Merge block
+                self.builder.position_at_end(merge_bb);
+
+                // Create phi if both branches have values
+                if let (Some(then_v), Some(else_v)) = (then_val, else_val) {
+                    if then_v.get_type() == else_v.get_type() {
+                        let phi = self.builder.build_phi(then_v.get_type(), "ifphi")
+                            .map_err(|e| miette::miette!("Failed to build phi: {:?}", e))?;
+                        phi.add_incoming(&[(&then_v, then_bb_end), (&else_v, else_bb_end)]);
+                        return Ok(Some(phi.as_basic_value()));
+                    }
+                }
+
+                Ok(None)
+            }
+
+            ExprKind::While { cond, body } => {
+                let cond_bb = self.context.append_basic_block(function, "while.cond");
+                let body_bb = self.context.append_basic_block(function, "while.body");
+                let end_bb = self.context.append_basic_block(function, "while.end");
+
+                self.builder.build_unconditional_branch(cond_bb)
+                    .map_err(|e| miette::miette!("Failed to build branch: {:?}", e))?;
+
+                // Condition
+                self.builder.position_at_end(cond_bb);
+                let cond_val = self
+                    .compile_expr(cond, function)?
+                    .ok_or_else(|| miette::miette!("While condition has no value"))?;
+
+                let cond_bool = if cond_val.is_int_value() {
+                    let int_val = cond_val.into_int_value();
+                    let zero = int_val.get_type().const_zero();
+                    self.builder.build_int_compare(IntPredicate::NE, int_val, zero, "cond")
+                        .map_err(|e| miette::miette!("Failed to build compare: {:?}", e))?
+                } else {
+                    return Err(miette::miette!("While condition must be boolean"));
+                };
+
+                self.builder.build_conditional_branch(cond_bool, body_bb, end_bb)
+                    .map_err(|e| miette::miette!("Failed to build branch: {:?}", e))?;
+
+                // Body
+                self.builder.position_at_end(body_bb);
+                self.compile_expr(body, function)?;
+                if !self.current_block_has_terminator() {
+                    self.builder.build_unconditional_branch(cond_bb)
+                        .map_err(|e| miette::miette!("Failed to build branch: {:?}", e))?;
+                }
+
+                // End
+                self.builder.position_at_end(end_bb);
+
+                Ok(None)
+            }
+
+            ExprKind::Loop { body } => {
+                let body_bb = self.context.append_basic_block(function, "loop.body");
+                let end_bb = self.context.append_basic_block(function, "loop.end");
+
+                self.builder.build_unconditional_branch(body_bb)
+                    .map_err(|e| miette::miette!("Failed to build branch: {:?}", e))?;
+
+                self.builder.position_at_end(body_bb);
+                self.compile_expr(body, function)?;
+                if !self.current_block_has_terminator() {
+                    self.builder.build_unconditional_branch(body_bb)
+                        .map_err(|e| miette::miette!("Failed to build branch: {:?}", e))?;
+                }
+
+                self.builder.position_at_end(end_bb);
+
+                Ok(None)
+            }
+
+            ExprKind::Return(value) => {
+                if let Some(val_expr) = value {
+                    let val = self.compile_expr(val_expr, function)?;
+                    if let Some(v) = val {
+                        self.builder.build_return(Some(&v))
+                            .map_err(|e| miette::miette!("Failed to build return: {:?}", e))?;
+                    } else {
+                        self.builder.build_return(None)
+                            .map_err(|e| miette::miette!("Failed to build return: {:?}", e))?;
+                    }
+                } else {
+                    self.builder.build_return(None)
+                        .map_err(|e| miette::miette!("Failed to build return: {:?}", e))?;
+                }
+                Ok(None)
+            }
+
+            ExprKind::Assign { lhs, rhs } => {
+                let rhs_val = self
+                    .compile_expr(rhs, function)?
+                    .ok_or_else(|| miette::miette!("Assignment rhs has no value"))?;
+
+                if let ExprKind::Ident(sym) = &lhs.kind {
+                    let name = self.interner.resolve(*sym);
+                    if let Some(&(ptr, _ty)) = self.variables.get(name.as_str()) {
+                        self.builder.build_store(ptr, rhs_val)
+                            .map_err(|e| miette::miette!("Failed to store: {:?}", e))?;
+                        return Ok(Some(rhs_val));
+                    }
+                }
+
+                Ok(None)
+            }
+
+            _ => Ok(None),
+        }
+    }
+
+    fn compile_stmt(&mut self, stmt: &Stmt, function: FunctionValue<'ctx>) -> Result<()> {
+        match &stmt.kind {
+            StmtKind::Let {
+                pattern,
+                ty,
+                init,
+                mutability: _,
+            } => {
+                if let fragile_hir::Pattern::Ident(sym) = pattern {
+                    let name = self.interner.resolve(*sym);
+
+                    // Determine type from init or type annotation
+                    let llvm_ty = if let Some(init_expr) = init {
+                        let init_val = self.compile_expr(init_expr, function)?;
+                        if let Some(val) = init_val {
+                            let val_ty = val.get_type();
+                            let alloca = self.create_entry_alloca(function, &name, val_ty);
+                            self.builder.build_store(alloca, val)
+                                .map_err(|e| miette::miette!("Failed to store: {:?}", e))?;
+                            self.variables.insert(name.to_string(), (alloca, val_ty));
+                        }
+                        return Ok(());
+                    } else if let Some(t) = ty {
+                        self.lower_type(t)
+                    } else {
+                        None
+                    };
+
+                    if let Some(llvm_ty) = llvm_ty {
+                        let alloca = self.create_entry_alloca(function, &name, llvm_ty);
+                        self.variables.insert(name.to_string(), (alloca, llvm_ty));
+                    }
+                }
+            }
+
+            StmtKind::Expr(expr) => {
+                self.compile_expr(expr, function)?;
+            }
+
+            StmtKind::Empty => {}
+
+            StmtKind::Item(_) => {
+                // Nested items not supported yet
+            }
+        }
+
+        Ok(())
+    }
+
+    fn compile_literal(&self, lit: &Literal) -> Result<Option<BasicValueEnum<'ctx>>> {
+        match lit {
+            Literal::Int(v) => {
+                let ty = self.context.i64_type();
+                Ok(Some(ty.const_int(*v as u64, true).into()))
+            }
+            Literal::Float(v) => {
+                let ty = self.context.f64_type();
+                Ok(Some(ty.const_float(*v).into()))
+            }
+            Literal::Bool(v) => {
+                let ty = self.context.bool_type();
+                Ok(Some(ty.const_int(*v as u64, false).into()))
+            }
+            Literal::Char(c) => {
+                let ty = self.context.i32_type();
+                Ok(Some(ty.const_int(*c as u64, false).into()))
+            }
+            Literal::String(_s) => {
+                // TODO: String handling
+                Ok(None)
+            }
+            Literal::Unit => Ok(None),
+        }
+    }
+
+    fn compile_binary_op(
+        &self,
+        op: BinOp,
+        lhs: BasicValueEnum<'ctx>,
+        rhs: BasicValueEnum<'ctx>,
+    ) -> Result<Option<BasicValueEnum<'ctx>>> {
+        if lhs.is_int_value() && rhs.is_int_value() {
+            let lhs_int = lhs.into_int_value();
+            let rhs_int = rhs.into_int_value();
+
+            let result = match op {
+                BinOp::Add => self.builder.build_int_add(lhs_int, rhs_int, "add"),
+                BinOp::Sub => self.builder.build_int_sub(lhs_int, rhs_int, "sub"),
+                BinOp::Mul => self.builder.build_int_mul(lhs_int, rhs_int, "mul"),
+                BinOp::Div => self.builder.build_int_signed_div(lhs_int, rhs_int, "div"),
+                BinOp::Rem => self.builder.build_int_signed_rem(lhs_int, rhs_int, "rem"),
+                BinOp::BitAnd => self.builder.build_and(lhs_int, rhs_int, "and"),
+                BinOp::BitOr => self.builder.build_or(lhs_int, rhs_int, "or"),
+                BinOp::BitXor => self.builder.build_xor(lhs_int, rhs_int, "xor"),
+                BinOp::Shl => self.builder.build_left_shift(lhs_int, rhs_int, "shl"),
+                BinOp::Shr => self.builder.build_right_shift(lhs_int, rhs_int, true, "shr"),
+                BinOp::Eq => {
+                    return Ok(Some(
+                        self.builder
+                            .build_int_compare(IntPredicate::EQ, lhs_int, rhs_int, "eq")
+                            .map_err(|e| miette::miette!("Failed to build compare: {:?}", e))?
+                            .into(),
+                    ))
+                }
+                BinOp::Ne => {
+                    return Ok(Some(
+                        self.builder
+                            .build_int_compare(IntPredicate::NE, lhs_int, rhs_int, "ne")
+                            .map_err(|e| miette::miette!("Failed to build compare: {:?}", e))?
+                            .into(),
+                    ))
+                }
+                BinOp::Lt => {
+                    return Ok(Some(
+                        self.builder
+                            .build_int_compare(IntPredicate::SLT, lhs_int, rhs_int, "lt")
+                            .map_err(|e| miette::miette!("Failed to build compare: {:?}", e))?
+                            .into(),
+                    ))
+                }
+                BinOp::Le => {
+                    return Ok(Some(
+                        self.builder
+                            .build_int_compare(IntPredicate::SLE, lhs_int, rhs_int, "le")
+                            .map_err(|e| miette::miette!("Failed to build compare: {:?}", e))?
+                            .into(),
+                    ))
+                }
+                BinOp::Gt => {
+                    return Ok(Some(
+                        self.builder
+                            .build_int_compare(IntPredicate::SGT, lhs_int, rhs_int, "gt")
+                            .map_err(|e| miette::miette!("Failed to build compare: {:?}", e))?
+                            .into(),
+                    ))
+                }
+                BinOp::Ge => {
+                    return Ok(Some(
+                        self.builder
+                            .build_int_compare(IntPredicate::SGE, lhs_int, rhs_int, "ge")
+                            .map_err(|e| miette::miette!("Failed to build compare: {:?}", e))?
+                            .into(),
+                    ))
+                }
+                BinOp::And => self.builder.build_and(lhs_int, rhs_int, "land"),
+                BinOp::Or => self.builder.build_or(lhs_int, rhs_int, "lor"),
+            };
+
+            Ok(Some(result.map_err(|e| miette::miette!("Failed to build op: {:?}", e))?.into()))
+        } else if lhs.is_float_value() && rhs.is_float_value() {
+            let lhs_float = lhs.into_float_value();
+            let rhs_float = rhs.into_float_value();
+
+            let result = match op {
+                BinOp::Add => self.builder.build_float_add(lhs_float, rhs_float, "fadd"),
+                BinOp::Sub => self.builder.build_float_sub(lhs_float, rhs_float, "fsub"),
+                BinOp::Mul => self.builder.build_float_mul(lhs_float, rhs_float, "fmul"),
+                BinOp::Div => self.builder.build_float_div(lhs_float, rhs_float, "fdiv"),
+                BinOp::Rem => self.builder.build_float_rem(lhs_float, rhs_float, "frem"),
+                BinOp::Eq => {
+                    return Ok(Some(
+                        self.builder
+                            .build_float_compare(FloatPredicate::OEQ, lhs_float, rhs_float, "feq")
+                            .map_err(|e| miette::miette!("Failed to build compare: {:?}", e))?
+                            .into(),
+                    ))
+                }
+                BinOp::Ne => {
+                    return Ok(Some(
+                        self.builder
+                            .build_float_compare(FloatPredicate::ONE, lhs_float, rhs_float, "fne")
+                            .map_err(|e| miette::miette!("Failed to build compare: {:?}", e))?
+                            .into(),
+                    ))
+                }
+                BinOp::Lt => {
+                    return Ok(Some(
+                        self.builder
+                            .build_float_compare(FloatPredicate::OLT, lhs_float, rhs_float, "flt")
+                            .map_err(|e| miette::miette!("Failed to build compare: {:?}", e))?
+                            .into(),
+                    ))
+                }
+                BinOp::Le => {
+                    return Ok(Some(
+                        self.builder
+                            .build_float_compare(FloatPredicate::OLE, lhs_float, rhs_float, "fle")
+                            .map_err(|e| miette::miette!("Failed to build compare: {:?}", e))?
+                            .into(),
+                    ))
+                }
+                BinOp::Gt => {
+                    return Ok(Some(
+                        self.builder
+                            .build_float_compare(FloatPredicate::OGT, lhs_float, rhs_float, "fgt")
+                            .map_err(|e| miette::miette!("Failed to build compare: {:?}", e))?
+                            .into(),
+                    ))
+                }
+                BinOp::Ge => {
+                    return Ok(Some(
+                        self.builder
+                            .build_float_compare(FloatPredicate::OGE, lhs_float, rhs_float, "fge")
+                            .map_err(|e| miette::miette!("Failed to build compare: {:?}", e))?
+                            .into(),
+                    ))
+                }
+                _ => return Err(miette::miette!("Invalid float operation")),
+            };
+
+            Ok(Some(result.map_err(|e| miette::miette!("Failed to build op: {:?}", e))?.into()))
+        } else {
+            Err(miette::miette!("Type mismatch in binary operation"))
+        }
+    }
+
+    fn compile_unary_op(
+        &self,
+        op: UnaryOp,
+        val: BasicValueEnum<'ctx>,
+    ) -> Result<Option<BasicValueEnum<'ctx>>> {
+        match op {
+            UnaryOp::Neg => {
+                if val.is_int_value() {
+                    let result = self.builder.build_int_neg(val.into_int_value(), "neg")
+                        .map_err(|e| miette::miette!("Failed to build neg: {:?}", e))?;
+                    Ok(Some(result.into()))
+                } else if val.is_float_value() {
+                    let result = self.builder.build_float_neg(val.into_float_value(), "fneg")
+                        .map_err(|e| miette::miette!("Failed to build fneg: {:?}", e))?;
+                    Ok(Some(result.into()))
+                } else {
+                    Err(miette::miette!("Cannot negate this type"))
+                }
+            }
+            UnaryOp::Not => {
+                if val.is_int_value() {
+                    let result = self.builder.build_not(val.into_int_value(), "not")
+                        .map_err(|e| miette::miette!("Failed to build not: {:?}", e))?;
+                    Ok(Some(result.into()))
+                } else {
+                    Err(miette::miette!("Cannot not this type"))
+                }
+            }
+            _ => Ok(None), // TODO: Deref, AddrOf
+        }
+    }
+
+    fn lower_type(&self, ty: &Type) -> Option<BasicTypeEnum<'ctx>> {
+        match ty {
+            Type::Primitive(prim) => match prim {
+                PrimitiveType::I8 | PrimitiveType::U8 => Some(self.context.i8_type().into()),
+                PrimitiveType::I16 | PrimitiveType::U16 => Some(self.context.i16_type().into()),
+                PrimitiveType::I32 | PrimitiveType::U32 | PrimitiveType::Char => {
+                    Some(self.context.i32_type().into())
+                }
+                PrimitiveType::I64 | PrimitiveType::U64 => Some(self.context.i64_type().into()),
+                PrimitiveType::I128 | PrimitiveType::U128 => Some(self.context.i128_type().into()),
+                PrimitiveType::Isize | PrimitiveType::Usize => {
+                    Some(self.context.i64_type().into()) // Assume 64-bit
+                }
+                PrimitiveType::F32 => Some(self.context.f32_type().into()),
+                PrimitiveType::F64 => Some(self.context.f64_type().into()),
+                PrimitiveType::Bool => Some(self.context.bool_type().into()),
+                PrimitiveType::Unit | PrimitiveType::Never => None,
+            },
+            Type::Pointer { .. } => {
+                Some(self.context.ptr_type(AddressSpace::default()).into())
+            }
+            Type::Reference { .. } => {
+                Some(self.context.ptr_type(AddressSpace::default()).into())
+            }
+            Type::Array { inner, size } => {
+                let inner_ty = self.lower_type(inner)?;
+                Some(inner_ty.array_type(*size as u32).into())
+            }
+            _ => None,
+        }
+    }
+
+    fn create_entry_alloca(
+        &self,
+        function: FunctionValue<'ctx>,
+        name: &str,
+        ty: BasicTypeEnum<'ctx>,
+    ) -> PointerValue<'ctx> {
+        let builder = self.context.create_builder();
+        let entry = function.get_first_basic_block().unwrap();
+
+        match entry.get_first_instruction() {
+            Some(instr) => builder.position_before(&instr),
+            None => builder.position_at_end(entry),
+        }
+
+        builder.build_alloca(ty, name).unwrap()
+    }
+
+    fn current_block_has_terminator(&self) -> bool {
+        self.builder
+            .get_insert_block()
+            .and_then(|bb| bb.get_terminator())
+            .is_some()
+    }
+}

@@ -1,0 +1,12 @@
+[package]
+name = "fragile-frontend-rust"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+fragile-common.workspace = true
+fragile-hir.workspace = true
+tree-sitter.workspace = true
+tree-sitter-rust.workspace = true
+miette.workspace = true
+thiserror.workspace = true

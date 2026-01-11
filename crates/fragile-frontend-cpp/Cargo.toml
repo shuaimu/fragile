@@ -1,0 +1,12 @@
+[package]
+name = "fragile-frontend-cpp"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+fragile-common.workspace = true
+fragile-hir.workspace = true
+tree-sitter.workspace = true
+tree-sitter-cpp.workspace = true
+miette.workspace = true
+thiserror.workspace = true

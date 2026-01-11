@@ -1,0 +1,14 @@
+[package]
+name = "fragile-driver"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+fragile-common.workspace = true
+fragile-hir.workspace = true
+fragile-frontend-rust.workspace = true
+fragile-frontend-cpp.workspace = true
+fragile-frontend-go.workspace = true
+fragile-codegen.workspace = true
+miette.workspace = true
+thiserror.workspace = true
