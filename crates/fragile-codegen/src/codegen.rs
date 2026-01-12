@@ -50,7 +50,10 @@ impl<'ctx> CodeGenerator<'ctx> {
         for item in &module.items {
             match &item.kind {
                 ItemKind::Function(fn_def) => {
-                    compiler.declare_function(fn_def)?;
+                    // Skip generic functions (requires monomorphization)
+                    if fn_def.type_params.is_empty() {
+                        compiler.declare_function(fn_def)?;
+                    }
                 }
                 ItemKind::Impl(impl_def) => {
                     // Declare methods with mangled names (Type_method)
@@ -234,6 +237,11 @@ impl<'a, 'ctx> ModuleCompiler<'a, 'ctx> {
     fn compile_function(&mut self, fn_def: &FnDef) -> Result<()> {
         // Skip extern functions (no body to compile)
         if fn_def.body.is_none() {
+            return Ok(());
+        }
+
+        // Skip generic functions (requires monomorphization)
+        if !fn_def.type_params.is_empty() {
             return Ok(());
         }
 

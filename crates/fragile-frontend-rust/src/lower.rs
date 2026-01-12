@@ -2,7 +2,7 @@ use fragile_common::{SourceFile, SourceId, Span, Symbol, SymbolInterner};
 use fragile_hir::{
     Abi, Attribute, BinOp, EnumDef, EnumVariant, Expr, ExprKind, Field, FnDef, FnSig, ImplDef,
     Item, ItemKind, Literal, MatchArm, Module, Mutability, Param, Pattern, PrimitiveType,
-    SourceLang, Stmt, StmtKind, StructDef, Type, Visibility,
+    SourceLang, Stmt, StmtKind, StructDef, TraitBound, Type, TypeParam, Visibility,
 };
 use miette::Result;
 use tree_sitter::{Node, Tree};
@@ -151,6 +151,13 @@ impl<'a> LoweringContext<'a> {
             .ok_or_else(|| miette::miette!("Function missing name"))?;
         let name = self.intern(self.text(name_node));
 
+        // Get type parameters (generics)
+        let type_params = if let Some(type_params_node) = node.child_by_field_name("type_parameters") {
+            self.lower_type_parameters(type_params_node)?
+        } else {
+            vec![]
+        };
+
         // Get parameters
         let params = if let Some(params_node) = node.child_by_field_name("parameters") {
             self.lower_parameters(params_node)?
@@ -175,7 +182,7 @@ impl<'a> LoweringContext<'a> {
         Ok(FnDef {
             name,
             vis,
-            type_params: vec![],
+            type_params,
             sig: FnSig {
                 params,
                 ret_ty,
@@ -637,6 +644,27 @@ impl<'a> LoweringContext<'a> {
                 Ok(Type::Tuple(types))
             }
             "unit_type" | "()" => Ok(Type::unit()),
+            "generic_type" => {
+                // Handle generic types like Option<T>
+                let type_node = node.child_by_field_name("type")
+                    .ok_or_else(|| miette::miette!("Generic type missing type"))?;
+                let name = self.intern(self.text(type_node));
+
+                let mut type_args = vec![];
+                if let Some(args_node) = node.child_by_field_name("type_arguments") {
+                    let mut cursor = args_node.walk();
+                    for child in args_node.children(&mut cursor) {
+                        match child.kind() {
+                            "<" | ">" | "," => continue,
+                            _ => {
+                                type_args.push(self.lower_type(child)?);
+                            }
+                        }
+                    }
+                }
+
+                Ok(Type::Named { name, type_args })
+            }
             _ => {
                 // Try as named type
                 let name = self.intern(self.text(node));
@@ -646,6 +674,47 @@ impl<'a> LoweringContext<'a> {
                 })
             }
         }
+    }
+
+    /// Lower type parameters (generics) like <T, U: Clone>
+    fn lower_type_parameters(&self, node: Node) -> Result<Vec<TypeParam>> {
+        let mut type_params = vec![];
+        let mut cursor = node.walk();
+
+        for child in node.children(&mut cursor) {
+            if child.kind() == "type_parameter" {
+                type_params.push(self.lower_type_parameter(child)?);
+            }
+        }
+
+        Ok(type_params)
+    }
+
+    /// Lower a single type parameter like T or T: Clone + Copy
+    fn lower_type_parameter(&self, node: Node) -> Result<TypeParam> {
+        // Get the type parameter name
+        let name_node = node
+            .children(&mut node.walk())
+            .find(|c| c.kind() == "type_identifier")
+            .ok_or_else(|| miette::miette!("Type parameter missing name"))?;
+        let name = self.intern(self.text(name_node));
+
+        // Get trait bounds if any
+        let mut bounds = vec![];
+        if let Some(bounds_node) = node.children(&mut node.walk()).find(|c| c.kind() == "trait_bounds") {
+            let mut cursor = bounds_node.walk();
+            for child in bounds_node.children(&mut cursor) {
+                if child.kind() == "type_identifier" {
+                    let trait_name = self.intern(self.text(child));
+                    bounds.push(TraitBound {
+                        trait_name,
+                        type_args: vec![],
+                    });
+                }
+            }
+        }
+
+        Ok(TypeParam { name, bounds })
     }
 
     fn primitive_type(&self, text: &str) -> Type {
