@@ -1,7 +1,7 @@
 use fragile_common::{Symbol, SymbolInterner};
 use fragile_hir::{
-    Abi, BinOp, Expr, ExprKind, FnDef, ItemKind, Literal, Module,
-    PrimitiveType, Stmt, StmtKind, StructDef, Type, UnaryOp,
+    Abi, BinOp, Expr, ExprKind, FnDef, FnSig, ItemKind, Literal, Module, Param,
+    PrimitiveType, Stmt, StmtKind, StructDef, Type, TypeParam, UnaryOp,
 };
 use inkwell::builder::Builder;
 use inkwell::context::Context;
@@ -50,12 +50,16 @@ impl<'ctx> CodeGenerator<'ctx> {
         }
 
         // Second pass: declare all functions (including methods from impl blocks)
+        // Also collect generic functions for later monomorphization
         for item in &module.items {
             match &item.kind {
                 ItemKind::Function(fn_def) => {
-                    // Skip generic functions (requires monomorphization)
                     if fn_def.type_params.is_empty() {
+                        // Non-generic function - declare directly
                         compiler.declare_function(fn_def)?;
+                    } else {
+                        // Generic function - store for monomorphization
+                        compiler.generic_functions.insert(fn_def.name, fn_def.clone());
                     }
                 }
                 ItemKind::Impl(impl_def) => {
@@ -132,6 +136,8 @@ struct ModuleCompiler<'a, 'ctx> {
     variables: FxHashMap<String, (PointerValue<'ctx>, BasicTypeEnum<'ctx>)>,
     struct_types: FxHashMap<Symbol, StructInfo<'ctx>>,
     enum_types: FxHashMap<Symbol, EnumInfo>,
+    /// Generic function definitions for monomorphization
+    generic_functions: FxHashMap<Symbol, FnDef>,
 }
 
 impl<'a, 'ctx> ModuleCompiler<'a, 'ctx> {
@@ -149,6 +155,7 @@ impl<'a, 'ctx> ModuleCompiler<'a, 'ctx> {
             variables: FxHashMap::default(),
             struct_types: FxHashMap::default(),
             enum_types: FxHashMap::default(),
+            generic_functions: FxHashMap::default(),
         }
     }
 
@@ -448,20 +455,36 @@ impl<'a, 'ctx> ModuleCompiler<'a, 'ctx> {
             }
 
             ExprKind::Call { callee, args } => {
-                let _callee_val = self.compile_expr(callee, function)?;
+                // Compile arguments first to get their types for generic inference
+                let mut arg_vals: Vec<BasicMetadataValueEnum> = vec![];
+                let mut arg_types: Vec<Type> = vec![];
 
-                // Compile arguments
-                let arg_vals: Vec<BasicMetadataValueEnum> = args
-                    .iter()
-                    .filter_map(|a| self.compile_expr(a, function).ok().flatten())
-                    .map(|v| v.into())
-                    .collect();
+                for arg in args {
+                    if let Some(val) = self.compile_expr(arg, function)? {
+                        arg_types.push(self.infer_type_from_value(val));
+                        arg_vals.push(val.into());
+                    }
+                }
 
                 // Get function to call
                 if let ExprKind::Ident(sym) = &callee.kind {
                     let name = self.interner.resolve(*sym);
+
+                    // First check if it's a regular (non-generic) function
                     if let Some(&func) = self.functions.get(name.as_str()) {
                         let call = self.builder.build_call(func, &arg_vals, "call")
+                            .map_err(|e| miette::miette!("Failed to build call: {:?}", e))?;
+                        let value = match call.try_as_basic_value() {
+                            inkwell::values::ValueKind::Basic(v) => Some(v),
+                            inkwell::values::ValueKind::Instruction(_) => None,
+                        };
+                        return Ok(value);
+                    }
+
+                    // Check if it's a generic function that needs monomorphization
+                    if self.generic_functions.contains_key(sym) {
+                        let spec_fn = self.get_or_create_specialization(*sym, &arg_types, function)?;
+                        let call = self.builder.build_call(spec_fn, &arg_vals, "call")
                             .map_err(|e| miette::miette!("Failed to build call: {:?}", e))?;
                         let value = match call.try_as_basic_value() {
                             inkwell::values::ValueKind::Basic(v) => Some(v),
@@ -1333,5 +1356,218 @@ impl<'a, 'ctx> ModuleCompiler<'a, 'ctx> {
             .get_insert_block()
             .and_then(|bb| bb.get_terminator())
             .is_some()
+    }
+
+    /// Substitute type parameters with concrete types in a type
+    fn substitute_type(
+        &self,
+        ty: &Type,
+        substitutions: &FxHashMap<Symbol, Type>,
+    ) -> Type {
+        match ty {
+            Type::Named { name, type_args } => {
+                // Check if this is a type parameter
+                if let Some(concrete) = substitutions.get(name) {
+                    return concrete.clone();
+                }
+                // Otherwise substitute in type args
+                Type::Named {
+                    name: *name,
+                    type_args: type_args
+                        .iter()
+                        .map(|t| self.substitute_type(t, substitutions))
+                        .collect(),
+                }
+            }
+            Type::Pointer { inner, mutability } => Type::Pointer {
+                inner: Box::new(self.substitute_type(inner, substitutions)),
+                mutability: *mutability,
+            },
+            Type::Reference { inner, mutability } => Type::Reference {
+                inner: Box::new(self.substitute_type(inner, substitutions)),
+                mutability: *mutability,
+            },
+            Type::Array { inner, size } => Type::Array {
+                inner: Box::new(self.substitute_type(inner, substitutions)),
+                size: *size,
+            },
+            Type::Slice { inner } => Type::Slice {
+                inner: Box::new(self.substitute_type(inner, substitutions)),
+            },
+            Type::Tuple(types) => Type::Tuple(
+                types
+                    .iter()
+                    .map(|t| self.substitute_type(t, substitutions))
+                    .collect(),
+            ),
+            Type::Function { params, ret, is_variadic } => Type::Function {
+                params: params
+                    .iter()
+                    .map(|t| self.substitute_type(t, substitutions))
+                    .collect(),
+                ret: Box::new(self.substitute_type(ret, substitutions)),
+                is_variadic: *is_variadic,
+            },
+            // Primitives and other types remain unchanged
+            _ => ty.clone(),
+        }
+    }
+
+    /// Create a mangled name for a specialized generic function
+    fn mangle_generic_name(&self, base_name: &str, type_args: &[Type]) -> String {
+        let mut name = base_name.to_string();
+        for ty in type_args {
+            name.push('_');
+            name.push_str(&self.type_to_string(ty));
+        }
+        name
+    }
+
+    /// Convert a type to a string for mangling
+    fn type_to_string(&self, ty: &Type) -> String {
+        match ty {
+            Type::Primitive(p) => format!("{:?}", p).to_lowercase(),
+            Type::Named { name, .. } => self.interner.resolve(*name).to_string(),
+            Type::Pointer { inner, .. } => format!("ptr_{}", self.type_to_string(inner)),
+            Type::Reference { inner, .. } => format!("ref_{}", self.type_to_string(inner)),
+            Type::Array { inner, size } => format!("arr{}_{}", size, self.type_to_string(inner)),
+            Type::Tuple(types) => {
+                let inner: Vec<_> = types.iter().map(|t| self.type_to_string(t)).collect();
+                format!("tuple_{}", inner.join("_"))
+            }
+            _ => "unknown".to_string(),
+        }
+    }
+
+    /// Infer concrete type from a compiled value
+    fn infer_type_from_value(&self, val: BasicValueEnum<'ctx>) -> Type {
+        if val.is_int_value() {
+            let int_type = val.into_int_value().get_type();
+            let bits = int_type.get_bit_width();
+            match bits {
+                1 => Type::Primitive(PrimitiveType::Bool),
+                8 => Type::Primitive(PrimitiveType::I8),
+                16 => Type::Primitive(PrimitiveType::I16),
+                32 => Type::Primitive(PrimitiveType::I32),
+                64 => Type::Primitive(PrimitiveType::I64),
+                128 => Type::Primitive(PrimitiveType::I128),
+                _ => Type::Primitive(PrimitiveType::I64),
+            }
+        } else if val.is_float_value() {
+            let float_type = val.into_float_value().get_type();
+            if float_type == self.context.f32_type() {
+                Type::Primitive(PrimitiveType::F32)
+            } else {
+                Type::Primitive(PrimitiveType::F64)
+            }
+        } else {
+            Type::Primitive(PrimitiveType::I64) // Default fallback
+        }
+    }
+
+    /// Get or create a specialized version of a generic function
+    fn get_or_create_specialization(
+        &mut self,
+        fn_name: Symbol,
+        arg_types: &[Type],
+        function: FunctionValue<'ctx>,
+    ) -> Result<FunctionValue<'ctx>> {
+        // Get the generic function definition
+        let generic_fn = self.generic_functions.get(&fn_name).cloned()
+            .ok_or_else(|| {
+                let name = self.interner.resolve(fn_name);
+                miette::miette!("Generic function {} not found", name)
+            })?;
+
+        // Build type substitution map
+        let mut substitutions = FxHashMap::default();
+        for (i, type_param) in generic_fn.type_params.iter().enumerate() {
+            if i < arg_types.len() {
+                substitutions.insert(type_param.name, arg_types[i].clone());
+            }
+        }
+
+        // Create mangled name
+        let base_name = self.interner.resolve(fn_name);
+        let mangled_name = self.mangle_generic_name(&base_name, arg_types);
+
+        // Check if we've already created this specialization
+        if let Some(&func) = self.functions.get(&mangled_name) {
+            return Ok(func);
+        }
+
+        // Create specialized parameter types
+        let param_types: Vec<BasicMetadataTypeEnum> = generic_fn
+            .sig
+            .params
+            .iter()
+            .filter_map(|p| {
+                let subst_ty = self.substitute_type(&p.ty, &substitutions);
+                self.lower_type(&subst_ty).map(|t| t.into())
+            })
+            .collect();
+
+        // Create specialized return type
+        let ret_ty = self.substitute_type(&generic_fn.sig.ret_ty, &substitutions);
+        let llvm_ret_ty = self.lower_type(&ret_ty);
+
+        // Create function type
+        let fn_type = match llvm_ret_ty {
+            Some(ty) => ty.fn_type(&param_types, false),
+            None => self.context.void_type().fn_type(&param_types, false),
+        };
+
+        // Declare the specialized function
+        let spec_fn = self.module.add_function(&mangled_name, fn_type, None);
+        self.functions.insert(mangled_name.clone(), spec_fn);
+
+        // Save current builder position
+        let saved_block = self.builder.get_insert_block();
+        let saved_vars = std::mem::take(&mut self.variables);
+
+        // Create entry block for the specialized function
+        let entry = self.context.append_basic_block(spec_fn, "entry");
+        self.builder.position_at_end(entry);
+
+        // Create allocas for parameters
+        for (i, param) in generic_fn.sig.params.iter().enumerate() {
+            let param_name = self.interner.resolve(param.name);
+            let param_val = spec_fn.get_nth_param(i as u32);
+
+            if let Some(value) = param_val {
+                let ty = value.get_type();
+                let alloca = self.create_entry_alloca(spec_fn, &param_name, ty);
+                self.builder.build_store(alloca, value)
+                    .map_err(|e| miette::miette!("Failed to store param: {:?}", e))?;
+                self.variables.insert(param_name.to_string(), (alloca, ty));
+            }
+        }
+
+        // Compile the function body
+        if let Some(body) = &generic_fn.body {
+            let result = self.compile_expr(body, spec_fn)?;
+
+            // Add return if needed
+            if !self.current_block_has_terminator() {
+                if ret_ty == Type::unit() {
+                    self.builder.build_return(None)
+                        .map_err(|e| miette::miette!("Failed to build return: {:?}", e))?;
+                } else if let Some(val) = result {
+                    self.builder.build_return(Some(&val))
+                        .map_err(|e| miette::miette!("Failed to build return: {:?}", e))?;
+                } else {
+                    self.builder.build_return(None)
+                        .map_err(|e| miette::miette!("Failed to build return: {:?}", e))?;
+                }
+            }
+        }
+
+        // Restore builder position and variables
+        self.variables = saved_vars;
+        if let Some(bb) = saved_block {
+            self.builder.position_at_end(bb);
+        }
+
+        Ok(spec_fn)
     }
 }
