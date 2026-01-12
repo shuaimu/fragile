@@ -622,6 +622,20 @@ impl<'a> LoweringContext<'a> {
                     size,
                 })
             }
+            "tuple_type" => {
+                // Parse (T1, T2, ...)
+                let mut types = vec![];
+                let mut cursor = node.walk();
+                for child in node.children(&mut cursor) {
+                    match child.kind() {
+                        "(" | ")" | "," => continue,
+                        _ => {
+                            types.push(self.lower_type(child)?);
+                        }
+                    }
+                }
+                Ok(Type::Tuple(types))
+            }
             "unit_type" | "()" => Ok(Type::unit()),
             _ => {
                 // Try as named type
@@ -996,6 +1010,21 @@ impl<'a> LoweringContext<'a> {
             }
 
             "unit_expression" | "()" => ExprKind::Literal(Literal::Unit),
+
+            "tuple_expression" => {
+                // Parse (expr1, expr2, ...)
+                let mut elements = vec![];
+                let mut cursor = node.walk();
+                for child in node.children(&mut cursor) {
+                    match child.kind() {
+                        "(" | ")" | "," => continue,
+                        _ => {
+                            elements.push(self.lower_expr(child)?);
+                        }
+                    }
+                }
+                ExprKind::Tuple(elements)
+            }
 
             "struct_expression" => {
                 // Get name from the type/path

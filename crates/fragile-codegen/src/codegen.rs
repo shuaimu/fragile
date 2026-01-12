@@ -836,6 +836,35 @@ impl<'a, 'ctx> ModuleCompiler<'a, 'ctx> {
                     }
                 }
 
+                // Check if this is a tuple field access (numeric field name like "0", "1")
+                let field_name = self.interner.resolve(*field);
+                if let Ok(field_idx) = field_name.parse::<u32>() {
+                    // This is a tuple field access like t.0
+                    if let ExprKind::Ident(sym) = &expr.kind {
+                        let var_name = self.interner.resolve(*sym);
+                        if let Some(&(ptr, ty)) = self.variables.get(var_name.as_str()) {
+                            // Check if the type is a struct (tuple)
+                            if ty.is_struct_type() {
+                                let struct_type = ty.into_struct_type();
+                                let field_ptr = self
+                                    .builder
+                                    .build_struct_gep(struct_type, ptr, field_idx, "tuple_field_ptr")
+                                    .map_err(|e| miette::miette!("Failed to get tuple field ptr: {:?}", e))?;
+
+                                let field_ty = struct_type.get_field_type_at_index(field_idx)
+                                    .ok_or_else(|| miette::miette!("Tuple field {} not found", field_idx))?;
+
+                                let field_val = self
+                                    .builder
+                                    .build_load(field_ty, field_ptr, "tuple_field_val")
+                                    .map_err(|e| miette::miette!("Failed to load tuple field: {:?}", e))?;
+
+                                return Ok(Some(field_val));
+                            }
+                        }
+                    }
+                }
+
                 // Fallback: compile the expression and try to use it
                 let struct_val = self
                     .compile_expr(expr, function)?
@@ -844,6 +873,16 @@ impl<'a, 'ctx> ModuleCompiler<'a, 'ctx> {
                 // If we have a struct value directly, use extractvalue
                 if struct_val.is_struct_value() {
                     let struct_v = struct_val.into_struct_value();
+
+                    // Check if field name is numeric (tuple access)
+                    if let Ok(field_idx) = field_name.parse::<u32>() {
+                        let field_val = self
+                            .builder
+                            .build_extract_value(struct_v, field_idx, "tuple_field_val")
+                            .map_err(|e| miette::miette!("Failed to extract tuple field: {:?}", e))?;
+                        return Ok(Some(field_val));
+                    }
+
                     // Find the struct type and field index
                     for (_struct_name, info) in &self.struct_types {
                         if let Some(&field_idx) = info.field_indices.get(field) {
@@ -856,8 +895,39 @@ impl<'a, 'ctx> ModuleCompiler<'a, 'ctx> {
                     }
                 }
 
-                let field_name = self.interner.resolve(*field);
                 Err(miette::miette!("Could not resolve field access: {}", field_name))
+            }
+
+            ExprKind::Tuple(elements) => {
+                // Compile each element
+                let mut values: Vec<BasicValueEnum> = vec![];
+                for elem in elements {
+                    if let Some(val) = self.compile_expr(elem, function)? {
+                        values.push(val);
+                    }
+                }
+
+                if values.is_empty() {
+                    return Ok(None); // Unit tuple
+                }
+
+                // Create tuple type from element types
+                let field_types: Vec<BasicTypeEnum> = values
+                    .iter()
+                    .map(|v| v.get_type())
+                    .collect();
+                let tuple_type = self.context.struct_type(&field_types, false);
+
+                // Build the tuple value
+                let mut tuple_val = tuple_type.get_undef();
+                for (i, val) in values.into_iter().enumerate() {
+                    tuple_val = self.builder
+                        .build_insert_value(tuple_val, val, i as u32, "tuple_elem")
+                        .map_err(|e| miette::miette!("Failed to insert tuple element: {:?}", e))?
+                        .into_struct_value();
+                }
+
+                Ok(Some(tuple_val.into()))
             }
 
             _ => Ok(None),
@@ -1145,6 +1215,14 @@ impl<'a, 'ctx> ModuleCompiler<'a, 'ctx> {
                 self.struct_types
                     .get(name)
                     .map(|info| info.llvm_type.as_basic_type_enum())
+            }
+            Type::Tuple(types) => {
+                // Tuples are represented as LLVM structs
+                let field_types: Vec<BasicTypeEnum> = types
+                    .iter()
+                    .filter_map(|t| self.lower_type(t))
+                    .collect();
+                Some(self.context.struct_type(&field_types, false).into())
             }
             _ => None,
         }
