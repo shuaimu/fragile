@@ -10,7 +10,7 @@ use inkwell::targets::{
     CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetMachine,
 };
 use inkwell::types::{BasicMetadataTypeEnum, BasicType, BasicTypeEnum, StructType};
-use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum, CallSiteValue, FunctionValue, PointerValue};
+use inkwell::values::{BasicMetadataValueEnum, BasicValue, BasicValueEnum, CallSiteValue, FunctionValue, PointerValue};
 use inkwell::OptimizationLevel;
 use inkwell::{AddressSpace, IntPredicate, FloatPredicate};
 use miette::Result;
@@ -33,10 +33,16 @@ impl<'ctx> CodeGenerator<'ctx> {
 
         let mut compiler = ModuleCompiler::new(self.context, &llvm_module, self.interner);
 
-        // First pass: register all struct types
+        // First pass: register all struct and enum types
         for item in &module.items {
-            if let ItemKind::Struct(struct_def) = &item.kind {
-                compiler.register_struct(struct_def)?;
+            match &item.kind {
+                ItemKind::Struct(struct_def) => {
+                    compiler.register_struct(struct_def)?;
+                }
+                ItemKind::Enum(enum_def) => {
+                    compiler.register_enum(enum_def)?;
+                }
+                _ => {}
             }
         }
 
@@ -93,6 +99,11 @@ struct StructInfo<'ctx> {
     field_indices: FxHashMap<Symbol, u32>,
 }
 
+/// Info about an enum: variant name -> discriminant mapping
+struct EnumInfo {
+    variant_discriminants: FxHashMap<Symbol, i128>,
+}
+
 struct ModuleCompiler<'a, 'ctx> {
     context: &'ctx Context,
     module: &'a LlvmModule<'ctx>,
@@ -101,6 +112,7 @@ struct ModuleCompiler<'a, 'ctx> {
     functions: FxHashMap<String, FunctionValue<'ctx>>,
     variables: FxHashMap<String, (PointerValue<'ctx>, BasicTypeEnum<'ctx>)>,
     struct_types: FxHashMap<Symbol, StructInfo<'ctx>>,
+    enum_types: FxHashMap<Symbol, EnumInfo>,
 }
 
 impl<'a, 'ctx> ModuleCompiler<'a, 'ctx> {
@@ -117,6 +129,7 @@ impl<'a, 'ctx> ModuleCompiler<'a, 'ctx> {
             functions: FxHashMap::default(),
             variables: FxHashMap::default(),
             struct_types: FxHashMap::default(),
+            enum_types: FxHashMap::default(),
         }
     }
 
@@ -146,6 +159,25 @@ impl<'a, 'ctx> ModuleCompiler<'a, 'ctx> {
             StructInfo {
                 llvm_type: struct_type,
                 field_indices,
+            },
+        );
+
+        Ok(())
+    }
+
+    fn register_enum(&mut self, enum_def: &fragile_hir::EnumDef) -> Result<()> {
+        // Build variant name -> discriminant mapping
+        let mut variant_discriminants = FxHashMap::default();
+        for variant in &enum_def.variants {
+            if let Some(disc) = variant.discriminant {
+                variant_discriminants.insert(variant.name, disc);
+            }
+        }
+
+        self.enum_types.insert(
+            enum_def.name,
+            EnumInfo {
+                variant_discriminants,
             },
         );
 
@@ -532,6 +564,25 @@ impl<'a, 'ctx> ModuleCompiler<'a, 'ctx> {
                     .map_err(|e| miette::miette!("Failed to load struct: {:?}", e))?;
 
                 Ok(Some(struct_val))
+            }
+
+            ExprKind::EnumVariant { enum_name, variant } => {
+                // Look up the discriminant value for this variant
+                let enum_info = self.enum_types.get(enum_name).ok_or_else(|| {
+                    let name_str = self.interner.resolve(*enum_name);
+                    miette::miette!("Unknown enum type: {}", name_str)
+                })?;
+
+                let discriminant = *enum_info.variant_discriminants.get(variant).ok_or_else(|| {
+                    let enum_str = self.interner.resolve(*enum_name);
+                    let var_str = self.interner.resolve(*variant);
+                    miette::miette!("Unknown variant {}::{}", enum_str, var_str)
+                })?;
+
+                // Return the discriminant as an i32 value
+                let int_type = self.context.i32_type();
+                let value = int_type.const_int(discriminant as u64, false);
+                Ok(Some(value.as_basic_value_enum()))
             }
 
             ExprKind::Field { expr, field } => {

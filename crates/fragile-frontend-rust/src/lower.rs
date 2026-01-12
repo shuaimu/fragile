@@ -1,8 +1,8 @@
 use fragile_common::{SourceFile, SourceId, Span, Symbol, SymbolInterner};
 use fragile_hir::{
-    Abi, Attribute, BinOp, Expr, ExprKind, Field, FnDef, FnSig, Item, ItemKind, Literal, Module,
-    Mutability, Param, Pattern, PrimitiveType, SourceLang, Stmt, StmtKind,
-    StructDef, Type, Visibility,
+    Abi, Attribute, BinOp, EnumDef, EnumVariant, Expr, ExprKind, Field, FnDef, FnSig, Item,
+    ItemKind, Literal, Module, Mutability, Param, Pattern, PrimitiveType, SourceLang, Stmt,
+    StmtKind, StructDef, Type, Visibility,
 };
 use miette::Result;
 use tree_sitter::{Node, Tree};
@@ -118,6 +118,10 @@ impl<'a> LoweringContext<'a> {
                 let struct_def = self.lower_struct(node)?;
                 // TODO: Add attributes to structs
                 Ok(vec![Item::new(ItemKind::Struct(struct_def), span)])
+            }
+            "enum_item" => {
+                let enum_def = self.lower_enum(node)?;
+                Ok(vec![Item::new(ItemKind::Enum(enum_def), span)])
             }
             "foreign_mod_item" => {
                 // This is extern "C" { ... } block
@@ -306,6 +310,64 @@ impl<'a> LoweringContext<'a> {
             name,
             fields,
             type_params: vec![], // TODO: generics
+        })
+    }
+
+    fn lower_enum(&self, node: Node) -> Result<EnumDef> {
+        let span = self.span(node);
+
+        // Get visibility
+        let vis = if node.child_by_field_name("visibility").is_some() {
+            Visibility::Public
+        } else {
+            Visibility::Private
+        };
+
+        // Get name
+        let name_node = node
+            .child_by_field_name("name")
+            .ok_or_else(|| miette::miette!("Enum missing name"))?;
+        let name = self.intern(self.text(name_node));
+
+        // Get variants from enum_variant_list (body)
+        let mut variants = vec![];
+        if let Some(body_node) = node.child_by_field_name("body") {
+            let mut cursor = body_node.walk();
+            let mut discriminant: i128 = 0;
+            for child in body_node.children(&mut cursor) {
+                if child.kind() == "enum_variant" {
+                    let variant = self.lower_enum_variant(child, discriminant)?;
+                    // Update discriminant for next variant
+                    discriminant = variant.discriminant.unwrap_or(discriminant) + 1;
+                    variants.push(variant);
+                }
+            }
+        }
+
+        Ok(EnumDef {
+            name,
+            vis,
+            type_params: vec![], // TODO: generics
+            variants,
+            span,
+        })
+    }
+
+    fn lower_enum_variant(&self, node: Node, default_discriminant: i128) -> Result<EnumVariant> {
+        // Get variant name
+        let name = node
+            .children(&mut node.walk())
+            .find(|c| c.kind() == "identifier")
+            .map(|n| self.intern(self.text(n)))
+            .ok_or_else(|| miette::miette!("Enum variant missing name"))?;
+
+        // For now, we support simple unit variants (no fields)
+        // TODO: Support tuple variants and struct variants
+
+        Ok(EnumVariant {
+            name,
+            fields: vec![],
+            discriminant: Some(default_discriminant),
         })
     }
 
@@ -625,6 +687,29 @@ impl<'a> LoweringContext<'a> {
             "identifier" => {
                 let name = self.intern(self.text(node));
                 ExprKind::Ident(name)
+            }
+
+            "scoped_identifier" => {
+                // Handle enum variant like Color::Red
+                let mut cursor = node.walk();
+                let children: Vec<_> = node.children(&mut cursor).collect();
+
+                // First identifier is the enum name, last identifier is the variant
+                let identifiers: Vec<_> = children
+                    .iter()
+                    .filter(|c| c.kind() == "identifier" || c.kind() == "type_identifier")
+                    .collect();
+
+                if identifiers.len() >= 2 {
+                    let enum_name = self.intern(self.text(*identifiers[0]));
+                    let variant = self.intern(self.text(*identifiers[identifiers.len() - 1]));
+                    ExprKind::EnumVariant { enum_name, variant }
+                } else if identifiers.len() == 1 {
+                    // Just an identifier
+                    ExprKind::Ident(self.intern(self.text(*identifiers[0])))
+                } else {
+                    ExprKind::Error
+                }
             }
 
             "binary_expression" => {

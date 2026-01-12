@@ -162,6 +162,12 @@ pub enum ExprKind {
         fields: Vec<(Symbol, Expr)>,
     },
 
+    /// Enum variant: Color::Red
+    EnumVariant {
+        enum_name: Symbol,
+        variant: Symbol,
+    },
+
     /// Type cast: x as T
     Cast {
         expr: Box<Expr>,
