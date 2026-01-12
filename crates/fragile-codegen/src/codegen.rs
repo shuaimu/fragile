@@ -138,6 +138,8 @@ struct ModuleCompiler<'a, 'ctx> {
     enum_types: FxHashMap<Symbol, EnumInfo>,
     /// Generic function definitions for monomorphization
     generic_functions: FxHashMap<Symbol, FnDef>,
+    /// Counter for generating unique closure names
+    closure_counter: u32,
 }
 
 impl<'a, 'ctx> ModuleCompiler<'a, 'ctx> {
@@ -156,6 +158,7 @@ impl<'a, 'ctx> ModuleCompiler<'a, 'ctx> {
             struct_types: FxHashMap::default(),
             enum_types: FxHashMap::default(),
             generic_functions: FxHashMap::default(),
+            closure_counter: 0,
         }
     }
 
@@ -1034,6 +1037,80 @@ impl<'a, 'ctx> ModuleCompiler<'a, 'ctx> {
                     }
                     Ok(Some(phi.as_basic_value()))
                 }
+            }
+
+            ExprKind::Lambda { params, body } => {
+                // Generate a unique name for the closure
+                let closure_name = format!("__closure_{}", self.closure_counter);
+                self.closure_counter += 1;
+
+                // For now, assume all parameters are i64 (simplified type inference)
+                // In a real implementation, we'd infer types from usage
+                let param_types: Vec<BasicMetadataTypeEnum> = params
+                    .iter()
+                    .map(|(_, ty)| {
+                        if let Some(t) = ty {
+                            self.lower_type(t)
+                                .map(|t| t.into())
+                                .unwrap_or_else(|| self.context.i64_type().into())
+                        } else {
+                            self.context.i64_type().into()
+                        }
+                    })
+                    .collect();
+
+                // Create the closure function type (returns i64 for now)
+                let fn_type = self.context.i64_type().fn_type(&param_types, false);
+
+                // Add the closure function to the module
+                let closure_fn = self.module.add_function(&closure_name, fn_type, None);
+                self.functions.insert(closure_name.clone(), closure_fn);
+
+                // Save current state
+                let saved_block = self.builder.get_insert_block();
+                let saved_vars = std::mem::take(&mut self.variables);
+
+                // Create entry block for closure
+                let entry = self.context.append_basic_block(closure_fn, "entry");
+                self.builder.position_at_end(entry);
+
+                // Set up parameters as variables
+                for (i, (param_name, _)) in params.iter().enumerate() {
+                    let name = self.interner.resolve(*param_name);
+                    if let Some(param_val) = closure_fn.get_nth_param(i as u32) {
+                        let ty = param_val.get_type();
+                        let alloca = self.create_entry_alloca(closure_fn, &name, ty);
+                        self.builder.build_store(alloca, param_val)
+                            .map_err(|e| miette::miette!("Failed to store closure param: {:?}", e))?;
+                        self.variables.insert(name.to_string(), (alloca, ty));
+                    }
+                }
+
+                // Compile closure body
+                let result = self.compile_expr(body, closure_fn)?;
+
+                // Add return
+                if !self.current_block_has_terminator() {
+                    if let Some(val) = result {
+                        self.builder.build_return(Some(&val))
+                            .map_err(|e| miette::miette!("Failed to build closure return: {:?}", e))?;
+                    } else {
+                        // Return 0 as default
+                        let zero = self.context.i64_type().const_int(0, false);
+                        self.builder.build_return(Some(&zero))
+                            .map_err(|e| miette::miette!("Failed to build closure return: {:?}", e))?;
+                    }
+                }
+
+                // Restore state
+                self.variables = saved_vars;
+                if let Some(bb) = saved_block {
+                    self.builder.position_at_end(bb);
+                }
+
+                // Return pointer to the closure function
+                let fn_ptr = closure_fn.as_global_value().as_pointer_value();
+                Ok(Some(fn_ptr.into()))
             }
 
             _ => Ok(None),

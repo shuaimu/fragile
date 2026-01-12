@@ -1441,6 +1441,10 @@ impl<'a> LoweringContext<'a> {
                 }
             }
 
+            "closure_expression" => {
+                self.lower_closure(node)?
+            }
+
             _ => {
                 // For now, treat unknown as error
                 ExprKind::Error
@@ -1448,6 +1452,66 @@ impl<'a> LoweringContext<'a> {
         };
 
         Ok(Expr::new(kind, span))
+    }
+
+    fn lower_closure(&self, node: Node) -> Result<ExprKind> {
+        // Parse closure parameters
+        let params_node = node
+            .children(&mut node.walk())
+            .find(|c| c.kind() == "closure_parameters")
+            .ok_or_else(|| miette::miette!("Closure missing parameters"))?;
+
+        let mut params = vec![];
+        let mut cursor = params_node.walk();
+        for child in params_node.children(&mut cursor) {
+            match child.kind() {
+                "identifier" => {
+                    // Untyped parameter: |x|
+                    let name = self.intern(self.text(child));
+                    params.push((name, None));
+                }
+                "parameter" => {
+                    // Typed parameter: |x: i32|
+                    let name_node = child
+                        .children(&mut child.walk())
+                        .find(|c| c.kind() == "identifier")
+                        .ok_or_else(|| miette::miette!("Closure param missing name"))?;
+                    let name = self.intern(self.text(name_node));
+
+                    let ty = child
+                        .children(&mut child.walk())
+                        .find(|c| {
+                            c.kind() == "primitive_type"
+                                || c.kind() == "type_identifier"
+                                || c.kind() == "generic_type"
+                        })
+                        .map(|n| self.lower_type(n))
+                        .transpose()?;
+
+                    params.push((name, ty));
+                }
+                _ => continue,
+            }
+        }
+
+        // Find the body expression (the part after the parameters)
+        // It can be a block or any expression
+        let body_node = node
+            .children(&mut node.walk())
+            .find(|c| {
+                c.kind() != "closure_parameters"
+                    && c.kind() != "->"
+                    && c.kind() != "primitive_type"
+                    && c.kind() != "type_identifier"
+            })
+            .ok_or_else(|| miette::miette!("Closure missing body"))?;
+
+        let body = self.lower_expr(body_node)?;
+
+        Ok(ExprKind::Lambda {
+            params,
+            body: Box::new(body),
+        })
     }
 
     fn lower_match_arm(&self, node: Node) -> Result<MatchArm> {
