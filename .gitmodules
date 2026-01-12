@@ -1,0 +1,6 @@
+[submodule "vendor/rust"]
+	path = vendor/rust
+	url = https://github.com/rust-lang/rust.git
+[submodule "vendor/llvm-project"]
+	path = vendor/llvm-project
+	url = https://github.com/llvm/llvm-project.git
