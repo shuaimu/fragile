@@ -1,8 +1,8 @@
 use fragile_common::{SourceFile, SourceId, Span, Symbol, SymbolInterner};
 use fragile_hir::{
-    BinOp, Expr, ExprKind, FnDef, FnSig, Item, ItemKind, Literal, Module,
+    BinOp, Expr, ExprKind, Field, FnDef, FnSig, Item, ItemKind, Literal, Module,
     Mutability, Param, Pattern, PrimitiveType, SourceLang, Stmt, StmtKind,
-    Type, Visibility,
+    StructDef, Type, Visibility,
 };
 use miette::Result;
 use tree_sitter::{Node, Tree};
@@ -62,7 +62,11 @@ impl<'a> LoweringContext<'a> {
                 let fn_def = self.lower_function(node)?;
                 Ok(Some(Item::new(ItemKind::Function(fn_def), span)))
             }
-            // TODO: struct_item, enum_item, impl_item, etc.
+            "struct_item" => {
+                let struct_def = self.lower_struct(node)?;
+                Ok(Some(Item::new(ItemKind::Struct(struct_def), span)))
+            }
+            // TODO: enum_item, impl_item, etc.
             _ => Ok(None), // Skip unknown nodes
         }
     }
@@ -117,6 +121,52 @@ impl<'a> LoweringContext<'a> {
             span,
             source_lang: SourceLang::Rust,
         })
+    }
+
+    fn lower_struct(&self, node: Node) -> Result<StructDef> {
+        // Get name
+        let name_node = node
+            .child_by_field_name("name")
+            .ok_or_else(|| miette::miette!("Struct missing name"))?;
+        let name = self.intern(self.text(name_node));
+
+        // Get fields from field_declaration_list
+        let mut fields = vec![];
+        if let Some(body_node) = node.child_by_field_name("body") {
+            let mut cursor = body_node.walk();
+            for child in body_node.children(&mut cursor) {
+                if child.kind() == "field_declaration" {
+                    let field = self.lower_field(child)?;
+                    fields.push(field);
+                }
+            }
+        }
+
+        Ok(StructDef {
+            name,
+            fields,
+            type_params: vec![], // TODO: generics
+        })
+    }
+
+    fn lower_field(&self, node: Node) -> Result<Field> {
+        // Check for visibility
+        let is_public = node.child_by_field_name("visibility").is_some();
+
+        // Get name
+        let name_node = node
+            .child_by_field_name("name")
+            .ok_or_else(|| miette::miette!("Field missing name"))?;
+        let name = self.intern(self.text(name_node));
+
+        // Get type
+        let ty = if let Some(ty_node) = node.child_by_field_name("type") {
+            self.lower_type(ty_node)?
+        } else {
+            Type::Error
+        };
+
+        Ok(Field { name, ty, is_public })
     }
 
     fn lower_parameters(&self, node: Node) -> Result<Vec<Param>> {
@@ -265,13 +315,16 @@ impl<'a> LoweringContext<'a> {
         let mut final_expr = None;
 
         let mut cursor = node.walk();
-        let children: Vec<_> = node.children(&mut cursor).collect();
+        // Filter out braces when collecting children
+        let children: Vec<_> = node
+            .children(&mut cursor)
+            .filter(|c| c.kind() != "{" && c.kind() != "}")
+            .collect();
 
         for (i, child) in children.iter().enumerate() {
             let is_last = i == children.len() - 1;
 
             match child.kind() {
-                "{" | "}" => continue,
                 "let_declaration" => {
                     stmts.push(self.lower_let_stmt(*child)?);
                 }
@@ -537,6 +590,61 @@ impl<'a> LoweringContext<'a> {
             }
 
             "unit_expression" | "()" => ExprKind::Literal(Literal::Unit),
+
+            "struct_expression" => {
+                // Get name from the type/path
+                let name_node = node
+                    .child_by_field_name("name")
+                    .ok_or_else(|| miette::miette!("Struct literal missing name"))?;
+                let name = self.intern(self.text(name_node));
+
+                // Get field initializers from body
+                let mut fields = vec![];
+                if let Some(body_node) = node.child_by_field_name("body") {
+                    let mut cursor = body_node.walk();
+                    for child in body_node.children(&mut cursor) {
+                        if child.kind() == "field_initializer" {
+                            let field_name_node = child
+                                .child_by_field_name("field")
+                                .or_else(|| child.child_by_field_name("name"))
+                                .ok_or_else(|| miette::miette!("Field initializer missing name"))?;
+                            let field_name = self.intern(self.text(field_name_node));
+
+                            let value_node = child
+                                .child_by_field_name("value")
+                                .ok_or_else(|| miette::miette!("Field initializer missing value"))?;
+                            let value = self.lower_expr(value_node)?;
+
+                            fields.push((field_name, value));
+                        } else if child.kind() == "shorthand_field_initializer" {
+                            // Handle `Point { x, y }` shorthand syntax
+                            let field_name = self.intern(self.text(child));
+                            let value = Expr::new(ExprKind::Ident(field_name), self.span(child));
+                            fields.push((field_name, value));
+                        }
+                    }
+                }
+
+                ExprKind::Struct { name, fields }
+            }
+
+            "field_expression" => {
+                let expr = node
+                    .child_by_field_name("value")
+                    .map(|n| self.lower_expr(n))
+                    .transpose()?
+                    .ok_or_else(|| miette::miette!("Field expression missing value"))?;
+
+                let field_node = node
+                    .child_by_field_name("field")
+                    .ok_or_else(|| miette::miette!("Field expression missing field name"))?;
+                let field = self.intern(self.text(field_node));
+
+                ExprKind::Field {
+                    expr: Box::new(expr),
+                    field,
+                }
+            }
 
             _ => {
                 // For now, treat unknown as error

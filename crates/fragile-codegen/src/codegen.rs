@@ -1,7 +1,7 @@
-use fragile_common::SymbolInterner;
+use fragile_common::{Symbol, SymbolInterner};
 use fragile_hir::{
-    BinOp, Expr, ExprKind, FnDef, Item, ItemKind, Literal, Module,
-    Mutability, PrimitiveType, Stmt, StmtKind, Type, UnaryOp,
+    BinOp, Expr, ExprKind, FnDef, ItemKind, Literal, Module,
+    PrimitiveType, Stmt, StmtKind, StructDef, Type, UnaryOp,
 };
 use inkwell::builder::Builder;
 use inkwell::context::Context;
@@ -9,7 +9,7 @@ use inkwell::module::Module as LlvmModule;
 use inkwell::targets::{
     CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetMachine,
 };
-use inkwell::types::{BasicMetadataTypeEnum, BasicType, BasicTypeEnum};
+use inkwell::types::{BasicMetadataTypeEnum, BasicType, BasicTypeEnum, StructType};
 use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum, CallSiteValue, FunctionValue, PointerValue};
 use inkwell::OptimizationLevel;
 use inkwell::{AddressSpace, IntPredicate, FloatPredicate};
@@ -33,14 +33,21 @@ impl<'ctx> CodeGenerator<'ctx> {
 
         let mut compiler = ModuleCompiler::new(self.context, &llvm_module, self.interner);
 
-        // First pass: declare all functions
+        // First pass: register all struct types
+        for item in &module.items {
+            if let ItemKind::Struct(struct_def) = &item.kind {
+                compiler.register_struct(struct_def)?;
+            }
+        }
+
+        // Second pass: declare all functions
         for item in &module.items {
             if let ItemKind::Function(fn_def) = &item.kind {
                 compiler.declare_function(fn_def)?;
             }
         }
 
-        // Second pass: compile function bodies
+        // Third pass: compile function bodies
         for item in &module.items {
             if let ItemKind::Function(fn_def) = &item.kind {
                 compiler.compile_function(fn_def)?;
@@ -80,6 +87,12 @@ impl<'ctx> CodeGenerator<'ctx> {
     }
 }
 
+/// Info about a struct: its LLVM type and field name -> index mapping
+struct StructInfo<'ctx> {
+    llvm_type: StructType<'ctx>,
+    field_indices: FxHashMap<Symbol, u32>,
+}
+
 struct ModuleCompiler<'a, 'ctx> {
     context: &'ctx Context,
     module: &'a LlvmModule<'ctx>,
@@ -87,6 +100,7 @@ struct ModuleCompiler<'a, 'ctx> {
     interner: &'a SymbolInterner,
     functions: FxHashMap<String, FunctionValue<'ctx>>,
     variables: FxHashMap<String, (PointerValue<'ctx>, BasicTypeEnum<'ctx>)>,
+    struct_types: FxHashMap<Symbol, StructInfo<'ctx>>,
 }
 
 impl<'a, 'ctx> ModuleCompiler<'a, 'ctx> {
@@ -102,7 +116,40 @@ impl<'a, 'ctx> ModuleCompiler<'a, 'ctx> {
             interner,
             functions: FxHashMap::default(),
             variables: FxHashMap::default(),
+            struct_types: FxHashMap::default(),
         }
+    }
+
+    fn register_struct(&mut self, struct_def: &StructDef) -> Result<()> {
+        let name = self.interner.resolve(struct_def.name);
+
+        // Create LLVM struct type
+        let field_types: Vec<BasicTypeEnum> = struct_def
+            .fields
+            .iter()
+            .filter_map(|f| self.lower_type(&f.ty))
+            .collect();
+
+        let struct_type = self.context.struct_type(&field_types, false);
+
+        // Create field name -> index mapping
+        let mut field_indices = FxHashMap::default();
+        for (i, field) in struct_def.fields.iter().enumerate() {
+            field_indices.insert(field.name, i as u32);
+        }
+
+        // Register named struct type in LLVM module
+        let _named_struct = self.context.opaque_struct_type(&name);
+
+        self.struct_types.insert(
+            struct_def.name,
+            StructInfo {
+                llvm_type: struct_type,
+                field_indices,
+            },
+        );
+
+        Ok(())
     }
 
     fn declare_function(&mut self, fn_def: &FnDef) -> Result<FunctionValue<'ctx>> {
@@ -415,6 +462,114 @@ impl<'a, 'ctx> ModuleCompiler<'a, 'ctx> {
                 Ok(None)
             }
 
+            ExprKind::Struct { name, fields } => {
+                // Look up the struct type and copy needed data to avoid borrow issues
+                let (struct_type, field_indices) = {
+                    let struct_info = self
+                        .struct_types
+                        .get(name)
+                        .ok_or_else(|| {
+                            let name_str = self.interner.resolve(*name);
+                            miette::miette!("Unknown struct type: {}", name_str)
+                        })?;
+                    (struct_info.llvm_type, struct_info.field_indices.clone())
+                };
+
+                // Allocate space for the struct on the stack
+                let alloca = self
+                    .builder
+                    .build_alloca(struct_type, "struct_tmp")
+                    .map_err(|e| miette::miette!("Failed to alloca struct: {:?}", e))?;
+
+                // Initialize each field
+                for (field_name, field_expr) in fields {
+                    let field_val = self
+                        .compile_expr(field_expr, function)?
+                        .ok_or_else(|| miette::miette!("Struct field has no value"))?;
+
+                    let field_idx = *field_indices.get(field_name).ok_or_else(|| {
+                        let field_name_str = self.interner.resolve(*field_name);
+                        miette::miette!("Unknown struct field: {}", field_name_str)
+                    })?;
+
+                    let field_ptr = self
+                        .builder
+                        .build_struct_gep(struct_type, alloca, field_idx, "field_ptr")
+                        .map_err(|e| miette::miette!("Failed to get field ptr: {:?}", e))?;
+
+                    self.builder
+                        .build_store(field_ptr, field_val)
+                        .map_err(|e| miette::miette!("Failed to store field: {:?}", e))?;
+                }
+
+                // Load the entire struct value
+                let struct_val = self
+                    .builder
+                    .build_load(struct_type, alloca, "struct_val")
+                    .map_err(|e| miette::miette!("Failed to load struct: {:?}", e))?;
+
+                Ok(Some(struct_val))
+            }
+
+            ExprKind::Field { expr, field } => {
+                // First, compile the expression
+                let struct_val = self
+                    .compile_expr(expr, function)?
+                    .ok_or_else(|| miette::miette!("Field access on non-value"))?;
+
+                // Get the struct type from the expression
+                // We need to figure out which struct type this is
+                // For now, we'll need to look it up based on the expression type
+                // or store the struct on the stack and use GEP
+
+                // If the expression was an identifier, look it up
+                if let ExprKind::Ident(sym) = &expr.kind {
+                    let name = self.interner.resolve(*sym);
+                    if let Some(&(ptr, ty)) = self.variables.get(name.as_str()) {
+                        // We have a pointer to the struct, use GEP
+                        // Find which struct type this is
+                        for (struct_name, info) in &self.struct_types {
+                            if info.llvm_type.as_basic_type_enum() == ty {
+                                if let Some(&field_idx) = info.field_indices.get(field) {
+                                    let field_ptr = self
+                                        .builder
+                                        .build_struct_gep(info.llvm_type, ptr, field_idx, "field_ptr")
+                                        .map_err(|e| miette::miette!("Failed to get field ptr: {:?}", e))?;
+
+                                    let field_ty = info.llvm_type.get_field_type_at_index(field_idx)
+                                        .ok_or_else(|| miette::miette!("Field type not found"))?;
+
+                                    let field_val = self
+                                        .builder
+                                        .build_load(field_ty, field_ptr, "field_val")
+                                        .map_err(|e| miette::miette!("Failed to load field: {:?}", e))?;
+
+                                    return Ok(Some(field_val));
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Fallback: if we have a struct value directly, use extractvalue
+                if struct_val.is_struct_value() {
+                    let struct_v = struct_val.into_struct_value();
+                    // Find the struct type and field index
+                    for (_struct_name, info) in &self.struct_types {
+                        if let Some(&field_idx) = info.field_indices.get(field) {
+                            let field_val = self
+                                .builder
+                                .build_extract_value(struct_v, field_idx, "field_val")
+                                .map_err(|e| miette::miette!("Failed to extract field: {:?}", e))?;
+                            return Ok(Some(field_val));
+                        }
+                    }
+                }
+
+                let field_name = self.interner.resolve(*field);
+                Err(miette::miette!("Could not resolve field access: {}", field_name))
+            }
+
             _ => Ok(None),
         }
     }
@@ -694,6 +849,12 @@ impl<'a, 'ctx> ModuleCompiler<'a, 'ctx> {
             Type::Array { inner, size } => {
                 let inner_ty = self.lower_type(inner)?;
                 Some(inner_ty.array_type(*size as u32).into())
+            }
+            Type::Named { name, .. } => {
+                // Look up struct type
+                self.struct_types
+                    .get(name)
+                    .map(|info| info.llvm_type.as_basic_type_enum())
             }
             _ => None,
         }
