@@ -106,6 +106,46 @@ impl<'a> LoweringContext<'a> {
         Ok(None)
     }
 
+    fn lower_visibility(&self, node: Node) -> Visibility {
+        // Look for visibility_modifier child
+        let vis_node = node
+            .children(&mut node.walk())
+            .find(|c| c.kind() == "visibility_modifier");
+
+        if let Some(vis) = vis_node {
+            // Check what kind of visibility this is
+            let mut has_pub = false;
+            let mut restriction = None;
+
+            let mut cursor = vis.walk();
+            for child in vis.children(&mut cursor) {
+                match child.kind() {
+                    "pub" => has_pub = true,
+                    "crate" => return Visibility::Crate,
+                    "super" => return Visibility::Super,
+                    "self" => return Visibility::Private, // pub(self) == private
+                    "scoped_identifier" | "identifier" => {
+                        // pub(in path) - collect the path
+                        if let Ok(path) = self.lower_use_path(child) {
+                            restriction = Some(path);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
+            if let Some(path) = restriction {
+                return Visibility::Restricted(path);
+            }
+
+            if has_pub {
+                return Visibility::Public;
+            }
+        }
+
+        Visibility::Private
+    }
+
     fn lower_items_with_attrs(&self, node: Node, attrs: Vec<Attribute>) -> Result<Vec<Item>> {
         let kind = node.kind();
         let span = self.span(node);
@@ -152,11 +192,7 @@ impl<'a> LoweringContext<'a> {
         let span = self.span(node);
 
         // Get visibility
-        let vis = if node.child_by_field_name("visibility").is_some() {
-            Visibility::Public
-        } else {
-            Visibility::Private
-        };
+        let vis = self.lower_visibility(node);
 
         // Get module name
         let name_node = node
@@ -207,11 +243,7 @@ impl<'a> LoweringContext<'a> {
         let span = self.span(node);
 
         // Get visibility
-        let vis = if node.child_by_field_name("visibility").is_some() {
-            Visibility::Public
-        } else {
-            Visibility::Private
-        };
+        let vis = self.lower_visibility(node);
 
         // Find the path (scoped_identifier or identifier)
         let path_node = node
@@ -270,11 +302,7 @@ impl<'a> LoweringContext<'a> {
         let span = self.span(node);
 
         // Get visibility
-        let vis = if node.child_by_field_name("visibility").is_some() {
-            Visibility::Public
-        } else {
-            Visibility::Private
-        };
+        let vis = self.lower_visibility(node);
 
         // Get name
         let name_node = node
@@ -377,11 +405,7 @@ impl<'a> LoweringContext<'a> {
         let span = self.span(node);
 
         // Get visibility (usually not specified in extern blocks)
-        let vis = if node.child_by_field_name("visibility").is_some() {
-            Visibility::Public
-        } else {
-            Visibility::Private
-        };
+        let vis = self.lower_visibility(node);
 
         // Get name
         let name_node = node
@@ -466,11 +490,7 @@ impl<'a> LoweringContext<'a> {
         let span = self.span(node);
 
         // Get visibility
-        let vis = if node.child_by_field_name("visibility").is_some() {
-            Visibility::Public
-        } else {
-            Visibility::Private
-        };
+        let vis = self.lower_visibility(node);
 
         // Get name
         let name_node = node
@@ -558,11 +578,7 @@ impl<'a> LoweringContext<'a> {
         let span = self.span(node);
 
         // Get visibility
-        let vis = if node.child_by_field_name("visibility").is_some() {
-            Visibility::Public
-        } else {
-            Visibility::Private
-        };
+        let vis = self.lower_visibility(node);
 
         // Get trait name (type_identifier)
         let name_node = node
@@ -649,11 +665,7 @@ impl<'a> LoweringContext<'a> {
         let span = self.span(node);
 
         // Get visibility
-        let vis = if node.child_by_field_name("visibility").is_some() {
-            Visibility::Public
-        } else {
-            Visibility::Private
-        };
+        let vis = self.lower_visibility(node);
 
         // Get name
         let name_node = node
@@ -742,7 +754,8 @@ impl<'a> LoweringContext<'a> {
 
     fn lower_field(&self, node: Node) -> Result<Field> {
         // Check for visibility
-        let is_public = node.child_by_field_name("visibility").is_some();
+        let vis = self.lower_visibility(node);
+        let is_public = vis != Visibility::Private;
 
         // Get name
         let name_node = node

@@ -4,11 +4,19 @@ use crate::stmt::Stmt;
 use crate::expr::Expr;
 
 /// Visibility of an item.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum Visibility {
+    /// Private to the current module
     #[default]
     Private,
+    /// Public to everyone
     Public,
+    /// Public within the crate (pub(crate))
+    Crate,
+    /// Public to the parent module (pub(super))
+    Super,
+    /// Public to a specific path (pub(in path))
+    Restricted(Vec<Symbol>),
 }
 
 /// An attribute (e.g., #[inline], #[derive(Debug)])
