@@ -1,6 +1,6 @@
 use fragile_common::{Symbol, SymbolInterner};
 use fragile_hir::{
-    BinOp, Expr, ExprKind, FnDef, ItemKind, Literal, Module,
+    Abi, BinOp, Expr, ExprKind, FnDef, ItemKind, Literal, Module,
     PrimitiveType, Stmt, StmtKind, StructDef, Type, UnaryOp,
 };
 use inkwell::builder::Builder;
@@ -166,18 +166,32 @@ impl<'a, 'ctx> ModuleCompiler<'a, 'ctx> {
         // Get return type
         let ret_type = self.lower_type(&fn_def.sig.ret_ty);
 
+        // Handle variadic functions
+        let is_variadic = fn_def.sig.is_variadic;
+
         let fn_type = match ret_type {
-            Some(ty) => ty.fn_type(&param_types, false),
-            None => self.context.void_type().fn_type(&param_types, false),
+            Some(ty) => ty.fn_type(&param_types, is_variadic),
+            None => self.context.void_type().fn_type(&param_types, is_variadic),
         };
 
         let function = self.module.add_function(&name, fn_type, None);
+
+        // Set C calling convention for extern "C" functions
+        if fn_def.abi == Abi::C {
+            function.set_call_conventions(0); // 0 = C calling convention
+        }
+
         self.functions.insert(name.to_string(), function);
 
         Ok(function)
     }
 
     fn compile_function(&mut self, fn_def: &FnDef) -> Result<()> {
+        // Skip extern functions (no body to compile)
+        if fn_def.body.is_none() {
+            return Ok(());
+        }
+
         let name = self.interner.resolve(fn_def.name);
         let function = self
             .functions

@@ -1,6 +1,6 @@
 use fragile_common::{SourceFile, SourceId, Span, Symbol, SymbolInterner};
 use fragile_hir::{
-    BinOp, Expr, ExprKind, Field, FnDef, FnSig, Item, ItemKind, Literal, Module,
+    Abi, BinOp, Expr, ExprKind, Field, FnDef, FnSig, Item, ItemKind, Literal, Module,
     Mutability, Param, Pattern, PrimitiveType, SourceLang, Stmt, StmtKind,
     StructDef, Type, Visibility,
 };
@@ -45,7 +45,8 @@ impl<'a> LoweringContext<'a> {
 
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
-            if let Some(item) = self.lower_item(child)? {
+            let items = self.lower_items(child)?;
+            for item in items {
                 module.add_item(item);
             }
         }
@@ -53,25 +54,28 @@ impl<'a> LoweringContext<'a> {
         Ok(module)
     }
 
-    fn lower_item(&self, node: Node) -> Result<Option<Item>> {
+    fn lower_items(&self, node: Node) -> Result<Vec<Item>> {
         let kind = node.kind();
         let span = self.span(node);
 
         match kind {
             "function_item" => {
-                let fn_def = self.lower_function(node)?;
-                Ok(Some(Item::new(ItemKind::Function(fn_def), span)))
+                let fn_def = self.lower_function(node, Abi::Rust)?;
+                Ok(vec![Item::new(ItemKind::Function(fn_def), span)])
             }
             "struct_item" => {
                 let struct_def = self.lower_struct(node)?;
-                Ok(Some(Item::new(ItemKind::Struct(struct_def), span)))
+                Ok(vec![Item::new(ItemKind::Struct(struct_def), span)])
             }
-            // TODO: enum_item, impl_item, etc.
-            _ => Ok(None), // Skip unknown nodes
+            "foreign_mod_item" => {
+                // This is extern "C" { ... } block
+                self.lower_extern_block(node)
+            }
+            _ => Ok(vec![]), // Skip unknown nodes
         }
     }
 
-    fn lower_function(&self, node: Node) -> Result<FnDef> {
+    fn lower_function(&self, node: Node, abi: Abi) -> Result<FnDef> {
         let span = self.span(node);
 
         // Get visibility
@@ -120,6 +124,108 @@ impl<'a> LoweringContext<'a> {
             body,
             span,
             source_lang: SourceLang::Rust,
+            abi,
+        })
+    }
+
+    fn lower_extern_block(&self, node: Node) -> Result<Vec<Item>> {
+        let mut items = vec![];
+
+        // Determine ABI from the extern block
+        // extern "C" { ... } or extern { ... } (defaults to "C")
+        let abi = if let Some(abi_node) = node.child_by_field_name("abi") {
+            let abi_text = self.text(abi_node);
+            // Remove quotes: "C" -> C
+            let abi_str = abi_text.trim_matches('"');
+            match abi_str {
+                "C" => Abi::C,
+                "Rust" => Abi::Rust,
+                other => Abi::Other(other.to_string()),
+            }
+        } else {
+            Abi::C // Default extern is "C"
+        };
+
+        // Find the declaration list inside the extern block
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            match child.kind() {
+                "declaration_list" => {
+                    // Process items inside the declaration list
+                    let mut inner_cursor = child.walk();
+                    for inner_child in child.children(&mut inner_cursor) {
+                        if inner_child.kind() == "function_signature_item" {
+                            let fn_def = self.lower_extern_fn(inner_child, abi.clone())?;
+                            let span = self.span(inner_child);
+                            items.push(Item::new(ItemKind::Function(fn_def), span));
+                        }
+                    }
+                }
+                "function_signature_item" => {
+                    // Direct child function signature
+                    let fn_def = self.lower_extern_fn(child, abi.clone())?;
+                    let span = self.span(child);
+                    items.push(Item::new(ItemKind::Function(fn_def), span));
+                }
+                _ => {}
+            }
+        }
+
+        Ok(items)
+    }
+
+    fn lower_extern_fn(&self, node: Node, abi: Abi) -> Result<FnDef> {
+        let span = self.span(node);
+
+        // Get visibility (usually not specified in extern blocks)
+        let vis = if node.child_by_field_name("visibility").is_some() {
+            Visibility::Public
+        } else {
+            Visibility::Private
+        };
+
+        // Get name
+        let name_node = node
+            .child_by_field_name("name")
+            .ok_or_else(|| miette::miette!("Extern function missing name"))?;
+        let name = self.intern(self.text(name_node));
+
+        // Get parameters
+        let params = if let Some(params_node) = node.child_by_field_name("parameters") {
+            self.lower_parameters(params_node)?
+        } else {
+            vec![]
+        };
+
+        // Get return type
+        let ret_ty = if let Some(ret_node) = node.child_by_field_name("return_type") {
+            self.lower_type(ret_node)?
+        } else {
+            Type::unit()
+        };
+
+        // Check for variadic
+        let is_variadic = if let Some(params_node) = node.child_by_field_name("parameters") {
+            let mut cursor = params_node.walk();
+            let has_variadic = params_node.children(&mut cursor).any(|c| c.kind() == "variadic_parameter");
+            has_variadic
+        } else {
+            false
+        };
+
+        Ok(FnDef {
+            name,
+            vis,
+            type_params: vec![],
+            sig: FnSig {
+                params,
+                ret_ty,
+                is_variadic,
+            },
+            body: None, // Extern functions have no body
+            span,
+            source_lang: SourceLang::Rust,
+            abi,
         })
     }
 

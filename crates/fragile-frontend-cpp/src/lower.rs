@@ -1,6 +1,6 @@
 use fragile_common::{SourceFile, Span, Symbol, SymbolInterner};
 use fragile_hir::{
-    BinOp, Expr, ExprKind, FnDef, FnSig, Item, ItemKind, Literal, Module,
+    Abi, BinOp, Expr, ExprKind, FnDef, FnSig, Item, ItemKind, Literal, Module,
     Mutability, Param, Pattern, PrimitiveType, SourceLang, Stmt, StmtKind,
     Type, Visibility,
 };
@@ -106,6 +106,7 @@ impl<'a> LoweringContext<'a> {
             body,
             span,
             source_lang: SourceLang::Cpp,
+            abi: Abi::C, // C++ uses C calling convention by default
         })
     }
 

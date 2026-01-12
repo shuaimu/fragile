@@ -28,6 +28,18 @@ pub struct FnSig {
     pub is_variadic: bool,
 }
 
+/// ABI specification for functions.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum Abi {
+    /// Default ABI (Rust calling convention)
+    #[default]
+    Rust,
+    /// C calling convention
+    C,
+    /// Other ABI (name stored)
+    Other(String),
+}
+
 /// A function definition.
 #[derive(Debug, Clone)]
 pub struct FnDef {
@@ -39,6 +51,8 @@ pub struct FnDef {
     pub span: Span,
     /// The source language of this function.
     pub source_lang: SourceLang,
+    /// The ABI for this function (None = default Rust ABI, Some("C") = extern "C")
+    pub abi: Abi,
 }
 
 /// The source language a construct came from.
