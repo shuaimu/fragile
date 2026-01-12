@@ -164,6 +164,17 @@ pub struct UseDef {
     pub span: Span,
 }
 
+/// A module declaration.
+#[derive(Debug, Clone)]
+pub struct ModDef {
+    pub name: Symbol,
+    pub vis: Visibility,
+    /// If None, this is an external module (mod foo;)
+    /// If Some, this is an inline module with items
+    pub items: Option<Vec<Item>>,
+    pub span: Span,
+}
+
 /// A top-level item.
 #[derive(Debug, Clone)]
 pub struct Item {
@@ -182,7 +193,8 @@ pub enum ItemKind {
     Const(ConstDef),
     Static(StaticDef),
     Use(UseDef),
-    // TODO: Mod, ExternBlock
+    Mod(ModDef),
+    // TODO: ExternBlock
 }
 
 impl Item {

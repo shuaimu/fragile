@@ -1,7 +1,7 @@
 use fragile_common::{SourceFile, SourceId, Span, Symbol, SymbolInterner};
 use fragile_hir::{
     Abi, Attribute, BinOp, EnumDef, EnumVariant, Expr, ExprKind, Field, FnDef, FnSig, ImplDef,
-    Item, ItemKind, Literal, MatchArm, Module, Mutability, Param, Pattern, PrimitiveType,
+    Item, ItemKind, Literal, MatchArm, ModDef, Module, Mutability, Param, Pattern, PrimitiveType,
     SourceLang, Stmt, StmtKind, StructDef, TraitBound, TraitDef, TraitMethod, Type, TypeParam,
     UseDef, Visibility,
 };
@@ -140,8 +140,67 @@ impl<'a> LoweringContext<'a> {
                 let use_def = self.lower_use(node)?;
                 Ok(vec![Item::new(ItemKind::Use(use_def), span)])
             }
+            "mod_item" => {
+                let mod_def = self.lower_mod(node)?;
+                Ok(vec![Item::new(ItemKind::Mod(mod_def), span)])
+            }
             _ => Ok(vec![]), // Skip unknown nodes
         }
+    }
+
+    fn lower_mod(&self, node: Node) -> Result<ModDef> {
+        let span = self.span(node);
+
+        // Get visibility
+        let vis = if node.child_by_field_name("visibility").is_some() {
+            Visibility::Public
+        } else {
+            Visibility::Private
+        };
+
+        // Get module name
+        let name_node = node
+            .children(&mut node.walk())
+            .find(|c| c.kind() == "identifier")
+            .ok_or_else(|| miette::miette!("Module missing name"))?;
+        let name = self.intern(self.text(name_node));
+
+        // Check if this is an inline module (has declaration_list) or external (ends with ;)
+        let items = if let Some(decl_list) = node
+            .children(&mut node.walk())
+            .find(|c| c.kind() == "declaration_list")
+        {
+            // Inline module - parse items from declaration_list
+            let mut items = vec![];
+            let mut pending_attrs = vec![];
+            let mut cursor = decl_list.walk();
+
+            for child in decl_list.children(&mut cursor) {
+                match child.kind() {
+                    "attribute_item" => {
+                        if let Some(attr) = self.lower_attribute(child)? {
+                            pending_attrs.push(attr);
+                        }
+                    }
+                    _ => {
+                        let attrs = std::mem::take(&mut pending_attrs);
+                        let mut new_items = self.lower_items_with_attrs(child, attrs)?;
+                        items.append(&mut new_items);
+                    }
+                }
+            }
+            Some(items)
+        } else {
+            // External module (mod foo;) - items loaded from file later
+            None
+        };
+
+        Ok(ModDef {
+            name,
+            vis,
+            items,
+            span,
+        })
     }
 
     fn lower_use(&self, node: Node) -> Result<UseDef> {
