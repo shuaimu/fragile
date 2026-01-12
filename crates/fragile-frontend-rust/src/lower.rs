@@ -3,7 +3,7 @@ use fragile_hir::{
     Abi, Attribute, BinOp, EnumDef, EnumVariant, Expr, ExprKind, Field, FnDef, FnSig, ImplDef,
     Item, ItemKind, Literal, MatchArm, Module, Mutability, Param, Pattern, PrimitiveType,
     SourceLang, Stmt, StmtKind, StructDef, TraitBound, TraitDef, TraitMethod, Type, TypeParam,
-    Visibility,
+    UseDef, Visibility,
 };
 use miette::Result;
 use tree_sitter::{Node, Tree};
@@ -136,8 +136,75 @@ impl<'a> LoweringContext<'a> {
                 // This is extern "C" { ... } block
                 self.lower_extern_block(node)
             }
+            "use_declaration" => {
+                let use_def = self.lower_use(node)?;
+                Ok(vec![Item::new(ItemKind::Use(use_def), span)])
+            }
             _ => Ok(vec![]), // Skip unknown nodes
         }
+    }
+
+    fn lower_use(&self, node: Node) -> Result<UseDef> {
+        let span = self.span(node);
+
+        // Get visibility
+        let vis = if node.child_by_field_name("visibility").is_some() {
+            Visibility::Public
+        } else {
+            Visibility::Private
+        };
+
+        // Find the path (scoped_identifier or identifier)
+        let path_node = node
+            .children(&mut node.walk())
+            .find(|c| c.kind() == "scoped_identifier" || c.kind() == "identifier")
+            .ok_or_else(|| miette::miette!("Use declaration missing path"))?;
+
+        let path = self.lower_use_path(path_node)?;
+
+        // Check for alias (use Foo as Bar)
+        let alias = node
+            .children(&mut node.walk())
+            .find(|c| c.kind() == "identifier" && c.start_byte() > path_node.end_byte())
+            .map(|n| self.intern(self.text(n)));
+
+        Ok(UseDef {
+            path,
+            alias,
+            vis,
+            span,
+        })
+    }
+
+    fn lower_use_path(&self, node: Node) -> Result<Vec<Symbol>> {
+        let mut path = vec![];
+
+        match node.kind() {
+            "identifier" | "crate" | "super" | "self" => {
+                path.push(self.intern(self.text(node)));
+            }
+            "scoped_identifier" => {
+                // Recursively collect path segments
+                let mut cursor = node.walk();
+                for child in node.children(&mut cursor) {
+                    match child.kind() {
+                        "identifier" | "crate" | "super" | "self" => {
+                            path.push(self.intern(self.text(child)));
+                        }
+                        "scoped_identifier" => {
+                            // Nested scoped_identifier
+                            let nested = self.lower_use_path(child)?;
+                            path.extend(nested);
+                        }
+                        "::" => continue,
+                        _ => {}
+                    }
+                }
+            }
+            _ => {}
+        }
+
+        Ok(path)
     }
 
     fn lower_function_with_attrs(&self, node: Node, abi: Abi, attributes: Vec<Attribute>) -> Result<FnDef> {

@@ -152,6 +152,18 @@ pub struct StaticDef {
     pub span: Span,
 }
 
+/// A use/import declaration.
+#[derive(Debug, Clone)]
+pub struct UseDef {
+    /// The path being imported (e.g., ["std", "io"] for `use std::io`)
+    pub path: Vec<Symbol>,
+    /// Optional alias (e.g., `use Foo as Bar` has alias "Bar")
+    pub alias: Option<Symbol>,
+    /// Visibility (for `pub use`)
+    pub vis: Visibility,
+    pub span: Span,
+}
+
 /// A top-level item.
 #[derive(Debug, Clone)]
 pub struct Item {
@@ -169,7 +181,8 @@ pub enum ItemKind {
     TypeAlias(TypeAlias),
     Const(ConstDef),
     Static(StaticDef),
-    // TODO: Use, Mod, ExternBlock
+    Use(UseDef),
+    // TODO: Mod, ExternBlock
 }
 
 impl Item {
