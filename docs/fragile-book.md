@@ -4,6 +4,37 @@
 
 ---
 
+## Table of Contents
+
+- [Part I: Introduction and Getting Started](#part-i-introduction-and-getting-started)
+  - [Introduction](#introduction)
+  - [Getting Started](#getting-started)
+- [Part II: The Unified Model](#part-ii-the-unified-model)
+  - [Philosophy](#philosophy)
+  - [Memory Model](#memory-model)
+  - [Type System](#type-system)
+  - [Error Handling](#error-handling)
+- [Part III: Syntax Mapping](#part-iii-syntax-mapping)
+  - [Rust Syntax](#rust-syntax)
+  - [C++ Syntax](#c-syntax)
+  - [Go Syntax](#go-syntax)
+- [Part IV: Cross-Language Programming](#part-iv-cross-language-programming)
+  - [Calling Functions](#calling-functions)
+  - [Sharing Types](#sharing-types)
+  - [Generics](#generics)
+- [Part V: Reference](#part-v-reference)
+  - [Built-in Types](#built-in-types)
+  - [Operators](#operators)
+  - [Attributes](#attributes)
+  - [C ABI](#c-abi)
+- [Part VI: Appendix](#part-vi-appendix)
+  - [Syntax Comparison](#syntax-comparison)
+  - [Differences from Native Compilers](#differences-from-native-compilers)
+  - [Migration Guide](#migration-guide)
+  - [Ecosystem Compatibility](#ecosystem-compatibility)
+
+---
+
 # Part I: Introduction and Getting Started
 
 ## Introduction
