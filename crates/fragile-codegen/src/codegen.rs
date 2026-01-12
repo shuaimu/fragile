@@ -46,17 +46,30 @@ impl<'ctx> CodeGenerator<'ctx> {
             }
         }
 
-        // Second pass: declare all functions
+        // Second pass: declare all functions (including methods from impl blocks)
         for item in &module.items {
-            if let ItemKind::Function(fn_def) = &item.kind {
-                compiler.declare_function(fn_def)?;
+            match &item.kind {
+                ItemKind::Function(fn_def) => {
+                    compiler.declare_function(fn_def)?;
+                }
+                ItemKind::Impl(impl_def) => {
+                    // Declare methods with mangled names (Type_method)
+                    compiler.declare_impl_methods(impl_def)?;
+                }
+                _ => {}
             }
         }
 
-        // Third pass: compile function bodies
+        // Third pass: compile function bodies (including methods)
         for item in &module.items {
-            if let ItemKind::Function(fn_def) = &item.kind {
-                compiler.compile_function(fn_def)?;
+            match &item.kind {
+                ItemKind::Function(fn_def) => {
+                    compiler.compile_function(fn_def)?;
+                }
+                ItemKind::Impl(impl_def) => {
+                    compiler.compile_impl_methods(impl_def)?;
+                }
+                _ => {}
             }
         }
 
@@ -274,6 +287,115 @@ impl<'a, 'ctx> ModuleCompiler<'a, 'ctx> {
         Ok(())
     }
 
+    fn declare_impl_methods(&mut self, impl_def: &fragile_hir::ImplDef) -> Result<()> {
+        // Get the type name for mangling
+        let type_name = match &impl_def.self_ty {
+            Type::Named { name, .. } => self.interner.resolve(*name).to_string(),
+            _ => return Ok(()), // Skip non-named types for now
+        };
+
+        for item in &impl_def.items {
+            if let ItemKind::Function(fn_def) = &item.kind {
+                let method_name = self.interner.resolve(fn_def.name);
+                let mangled_name = format!("{}_{}", type_name, method_name);
+
+                // Get parameter types
+                let param_types: Vec<BasicMetadataTypeEnum> = fn_def
+                    .sig
+                    .params
+                    .iter()
+                    .filter_map(|p| self.lower_type(&p.ty).map(|t| t.into()))
+                    .collect();
+
+                // Get return type
+                let ret_type = self.lower_type(&fn_def.sig.ret_ty);
+
+                let fn_type = match ret_type {
+                    Some(ty) => ty.fn_type(&param_types, false),
+                    None => self.context.void_type().fn_type(&param_types, false),
+                };
+
+                let function = self.module.add_function(&mangled_name, fn_type, None);
+                self.functions.insert(mangled_name, function);
+            }
+        }
+
+        Ok(())
+    }
+
+    fn compile_impl_methods(&mut self, impl_def: &fragile_hir::ImplDef) -> Result<()> {
+        // Get the type name for mangling
+        let type_name = match &impl_def.self_ty {
+            Type::Named { name, .. } => self.interner.resolve(*name).to_string(),
+            _ => return Ok(()),
+        };
+
+        for item in &impl_def.items {
+            if let ItemKind::Function(fn_def) = &item.kind {
+                if fn_def.body.is_none() {
+                    continue;
+                }
+
+                let method_name = self.interner.resolve(fn_def.name);
+                let mangled_name = format!("{}_{}", type_name, method_name);
+
+                let function = self
+                    .functions
+                    .get(&mangled_name)
+                    .copied()
+                    .ok_or_else(|| miette::miette!("Method {} not found", mangled_name))?;
+
+                // Clear variables for this function
+                self.variables.clear();
+
+                // Create entry block
+                let entry = self.context.append_basic_block(function, "entry");
+                self.builder.position_at_end(entry);
+
+                // Create allocas for parameters (including self)
+                for (i, param) in fn_def.sig.params.iter().enumerate() {
+                    let param_name = self.interner.resolve(param.name);
+                    let param_val = function.get_nth_param(i as u32).ok_or_else(|| {
+                        miette::miette!("Missing parameter {}", param_name)
+                    })?;
+
+                    let param_ty = self.lower_type(&param.ty).ok_or_else(|| {
+                        miette::miette!("Unsupported parameter type")
+                    })?;
+
+                    let alloca = self.builder.build_alloca(param_ty, &param_name)
+                        .map_err(|e| miette::miette!("Failed to alloca: {:?}", e))?;
+
+                    self.builder.build_store(alloca, param_val)
+                        .map_err(|e| miette::miette!("Failed to store: {:?}", e))?;
+
+                    self.variables.insert(param_name.to_string(), (alloca, param_ty));
+                }
+
+                // Compile method body
+                if let Some(body) = &fn_def.body {
+                    let result = self.compile_expr(body, function)?;
+
+                    // Handle return
+                    if result.is_none() {
+                        self.builder.build_return(None)
+                            .map_err(|e| miette::miette!("Failed to build return: {:?}", e))?;
+                    } else if fn_def.sig.ret_ty != Type::unit() {
+                        if let Some(val) = result {
+                            self.builder.build_return(Some(&val))
+                                .map_err(|e| miette::miette!("Failed to build return: {:?}", e))?;
+                        }
+                    } else {
+                        self.builder.build_return(None)
+                            .map_err(|e| miette::miette!("Failed to build return: {:?}", e))?;
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     fn compile_expr(
         &mut self,
         expr: &Expr,
@@ -339,6 +461,73 @@ impl<'a, 'ctx> ModuleCompiler<'a, 'ctx> {
                 }
 
                 Ok(None)
+            }
+
+            ExprKind::MethodCall { receiver, method, args } => {
+                // Compile receiver (the object we're calling the method on)
+                let receiver_val = self
+                    .compile_expr(receiver, function)?
+                    .ok_or_else(|| miette::miette!("Method receiver has no value"))?;
+
+                // Try to determine the type name from the receiver
+                // For now, we'll look up the variable to find its type
+                let type_name = if let ExprKind::Ident(sym) = &receiver.kind {
+                    let var_name = self.interner.resolve(*sym);
+                    if let Some(&(_ptr, ty)) = self.variables.get(var_name.as_str()) {
+                        // Find the struct type that matches this type
+                        let mut found_name = None;
+                        for (struct_sym, info) in &self.struct_types {
+                            if info.llvm_type.as_basic_type_enum() == ty {
+                                found_name = Some(self.interner.resolve(*struct_sym).to_string());
+                                break;
+                            }
+                        }
+                        found_name
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
+                let type_name = type_name.ok_or_else(|| {
+                    miette::miette!("Could not determine receiver type for method call")
+                })?;
+
+                let method_name = self.interner.resolve(*method);
+                let mangled_name = format!("{}_{}", type_name, method_name);
+
+                // Get the method function
+                let func = self.functions.get(&mangled_name).copied().ok_or_else(|| {
+                    miette::miette!("Method {} not found", mangled_name)
+                })?;
+
+                // Build arguments: receiver (as pointer to the variable) + explicit args
+                let mut arg_vals: Vec<BasicMetadataValueEnum> = vec![];
+
+                // Pass receiver - need to pass a pointer for &self
+                if let ExprKind::Ident(sym) = &receiver.kind {
+                    let var_name = self.interner.resolve(*sym);
+                    if let Some(&(ptr, _ty)) = self.variables.get(var_name.as_str()) {
+                        arg_vals.push(ptr.into());
+                    }
+                }
+
+                // Add explicit arguments
+                for arg in args {
+                    if let Some(val) = self.compile_expr(arg, function)? {
+                        arg_vals.push(val.into());
+                    }
+                }
+
+                let call = self.builder.build_call(func, &arg_vals, "method_call")
+                    .map_err(|e| miette::miette!("Failed to build method call: {:?}", e))?;
+
+                let value = match call.try_as_basic_value() {
+                    inkwell::values::ValueKind::Basic(v) => Some(v),
+                    inkwell::values::ValueKind::Instruction(_) => None,
+                };
+                Ok(value)
             }
 
             ExprKind::Block { stmts, expr } => {
@@ -586,23 +775,12 @@ impl<'a, 'ctx> ModuleCompiler<'a, 'ctx> {
             }
 
             ExprKind::Field { expr, field } => {
-                // First, compile the expression
-                let struct_val = self
-                    .compile_expr(expr, function)?
-                    .ok_or_else(|| miette::miette!("Field access on non-value"))?;
-
-                // Get the struct type from the expression
-                // We need to figure out which struct type this is
-                // For now, we'll need to look it up based on the expression type
-                // or store the struct on the stack and use GEP
-
-                // If the expression was an identifier, look it up
+                // If the expression is an identifier, look it up to get its pointer
                 if let ExprKind::Ident(sym) = &expr.kind {
                     let name = self.interner.resolve(*sym);
                     if let Some(&(ptr, ty)) = self.variables.get(name.as_str()) {
-                        // We have a pointer to the struct, use GEP
-                        // Find which struct type this is
-                        for (struct_name, info) in &self.struct_types {
+                        // Check if this is a struct type directly
+                        for (_struct_name, info) in &self.struct_types {
                             if info.llvm_type.as_basic_type_enum() == ty {
                                 if let Some(&field_idx) = info.field_indices.get(field) {
                                     let field_ptr = self
@@ -622,10 +800,48 @@ impl<'a, 'ctx> ModuleCompiler<'a, 'ctx> {
                                 }
                             }
                         }
+
+                        // Check if this is a pointer/reference to a struct (like &self)
+                        // In this case, ty is ptr type, and we need to load the struct pointer
+                        // then do GEP
+                        if ty.is_pointer_type() {
+                            // Load the pointer (self is stored as a pointer to a pointer)
+                            let struct_ptr = self.builder.build_load(ty, ptr, "self_ptr")
+                                .map_err(|e| miette::miette!("Failed to load self ptr: {:?}", e))?;
+
+                            if struct_ptr.is_pointer_value() {
+                                let struct_ptr = struct_ptr.into_pointer_value();
+
+                                // Try to find matching struct type and do GEP
+                                for (_struct_name, info) in &self.struct_types {
+                                    if let Some(&field_idx) = info.field_indices.get(field) {
+                                        let field_ptr = self
+                                            .builder
+                                            .build_struct_gep(info.llvm_type, struct_ptr, field_idx, "field_ptr")
+                                            .map_err(|e| miette::miette!("Failed to get field ptr: {:?}", e))?;
+
+                                        let field_ty = info.llvm_type.get_field_type_at_index(field_idx)
+                                            .ok_or_else(|| miette::miette!("Field type not found"))?;
+
+                                        let field_val = self
+                                            .builder
+                                            .build_load(field_ty, field_ptr, "field_val")
+                                            .map_err(|e| miette::miette!("Failed to load field: {:?}", e))?;
+
+                                        return Ok(Some(field_val));
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
 
-                // Fallback: if we have a struct value directly, use extractvalue
+                // Fallback: compile the expression and try to use it
+                let struct_val = self
+                    .compile_expr(expr, function)?
+                    .ok_or_else(|| miette::miette!("Field access on non-value"))?;
+
+                // If we have a struct value directly, use extractvalue
                 if struct_val.is_struct_value() {
                     let struct_v = struct_val.into_struct_value();
                     // Find the struct type and field index

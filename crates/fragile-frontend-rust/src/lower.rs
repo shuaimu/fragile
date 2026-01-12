@@ -1,7 +1,7 @@
 use fragile_common::{SourceFile, SourceId, Span, Symbol, SymbolInterner};
 use fragile_hir::{
-    Abi, Attribute, BinOp, EnumDef, EnumVariant, Expr, ExprKind, Field, FnDef, FnSig, Item,
-    ItemKind, Literal, Module, Mutability, Param, Pattern, PrimitiveType, SourceLang, Stmt,
+    Abi, Attribute, BinOp, EnumDef, EnumVariant, Expr, ExprKind, Field, FnDef, FnSig, ImplDef,
+    Item, ItemKind, Literal, Module, Mutability, Param, Pattern, PrimitiveType, SourceLang, Stmt,
     StmtKind, StructDef, Type, Visibility,
 };
 use miette::Result;
@@ -122,6 +122,10 @@ impl<'a> LoweringContext<'a> {
             "enum_item" => {
                 let enum_def = self.lower_enum(node)?;
                 Ok(vec![Item::new(ItemKind::Enum(enum_def), span)])
+            }
+            "impl_item" => {
+                let impl_def = self.lower_impl(node)?;
+                Ok(vec![Item::new(ItemKind::Impl(impl_def), span)])
             }
             "foreign_mod_item" => {
                 // This is extern "C" { ... } block
@@ -369,6 +373,135 @@ impl<'a> LoweringContext<'a> {
             fields: vec![],
             discriminant: Some(default_discriminant),
         })
+    }
+
+    fn lower_impl(&self, node: Node) -> Result<ImplDef> {
+        let span = self.span(node);
+
+        // Get the type being implemented (e.g., Point in `impl Point`)
+        let type_node = node
+            .children(&mut node.walk())
+            .find(|c| c.kind() == "type_identifier" || c.kind() == "generic_type")
+            .ok_or_else(|| miette::miette!("Impl missing type"))?;
+        let self_ty = self.lower_type(type_node)?;
+
+        // Get methods from declaration_list
+        let mut items = vec![];
+        if let Some(decl_list) = node
+            .children(&mut node.walk())
+            .find(|c| c.kind() == "declaration_list")
+        {
+            let mut cursor = decl_list.walk();
+            for child in decl_list.children(&mut cursor) {
+                if child.kind() == "function_item" {
+                    let fn_def = self.lower_method(child, &self_ty)?;
+                    items.push(Item::new(ItemKind::Function(fn_def), self.span(child)));
+                }
+            }
+        }
+
+        Ok(ImplDef {
+            type_params: vec![], // TODO: generics
+            trait_ref: None,     // TODO: trait impls
+            self_ty,
+            items,
+            span,
+        })
+    }
+
+    fn lower_method(&self, node: Node, self_ty: &Type) -> Result<FnDef> {
+        let span = self.span(node);
+
+        // Get visibility
+        let vis = if node.child_by_field_name("visibility").is_some() {
+            Visibility::Public
+        } else {
+            Visibility::Private
+        };
+
+        // Get name
+        let name_node = node
+            .child_by_field_name("name")
+            .ok_or_else(|| miette::miette!("Method missing name"))?;
+        let name = self.intern(self.text(name_node));
+
+        // Get parameters (including self)
+        let params = if let Some(params_node) = node.child_by_field_name("parameters") {
+            self.lower_method_parameters(params_node, self_ty)?
+        } else {
+            vec![]
+        };
+
+        // Get return type
+        let ret_ty = if let Some(ret_node) = node.child_by_field_name("return_type") {
+            self.lower_type(ret_node)?
+        } else {
+            Type::unit()
+        };
+
+        // Get body
+        let body = if let Some(body_node) = node.child_by_field_name("body") {
+            Some(self.lower_block(body_node)?)
+        } else {
+            None
+        };
+
+        Ok(FnDef {
+            name,
+            vis,
+            type_params: vec![],
+            sig: FnSig {
+                params,
+                ret_ty,
+                is_variadic: false,
+            },
+            body,
+            span,
+            source_lang: SourceLang::Rust,
+            abi: Abi::Rust,
+            attributes: vec![],
+        })
+    }
+
+    fn lower_method_parameters(&self, node: Node, self_ty: &Type) -> Result<Vec<Param>> {
+        let mut params = vec![];
+
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            match child.kind() {
+                "self_parameter" => {
+                    // Handle &self, &mut self, self
+                    let span = self.span(child);
+                    let self_name = self.intern("self");
+
+                    // Check if it's a reference
+                    let has_ref = child.children(&mut child.walk()).any(|c| c.kind() == "&");
+                    let has_mut = child.children(&mut child.walk()).any(|c| c.kind() == "mutable_specifier" || self.text(c) == "mut");
+
+                    let ty = if has_ref {
+                        Type::Reference {
+                            inner: Box::new(self_ty.clone()),
+                            mutability: if has_mut { Mutability::Mutable } else { Mutability::Immutable },
+                        }
+                    } else {
+                        self_ty.clone()
+                    };
+
+                    params.push(Param {
+                        name: self_name,
+                        ty,
+                        mutability: if has_mut { Mutability::Mutable } else { Mutability::Immutable },
+                        span,
+                    });
+                }
+                "parameter" => {
+                    params.push(self.lower_parameter(child)?);
+                }
+                _ => {}
+            }
+        }
+
+        Ok(params)
     }
 
     fn lower_field(&self, node: Node) -> Result<Field> {
@@ -689,6 +822,12 @@ impl<'a> LoweringContext<'a> {
                 ExprKind::Ident(name)
             }
 
+            "self" => {
+                // `self` in method body
+                let name = self.intern("self");
+                ExprKind::Ident(name)
+            }
+
             "scoped_identifier" => {
                 // Handle enum variant like Color::Red
                 let mut cursor = node.walk();
@@ -759,10 +898,8 @@ impl<'a> LoweringContext<'a> {
             }
 
             "call_expression" => {
-                let callee = node
+                let callee_node = node
                     .child_by_field_name("function")
-                    .map(|n| self.lower_expr(n))
-                    .transpose()?
                     .ok_or_else(|| miette::miette!("Call missing function"))?;
 
                 let mut args = vec![];
@@ -775,9 +912,33 @@ impl<'a> LoweringContext<'a> {
                     }
                 }
 
-                ExprKind::Call {
-                    callee: Box::new(callee),
-                    args,
+                // Check if this is a method call (callee is field_expression)
+                if callee_node.kind() == "field_expression" {
+                    // This is a method call like p.get_x()
+                    let receiver_node = callee_node
+                        .children(&mut callee_node.walk())
+                        .next()
+                        .ok_or_else(|| miette::miette!("Method call missing receiver"))?;
+                    let receiver = self.lower_expr(receiver_node)?;
+
+                    let method_node = callee_node
+                        .children(&mut callee_node.walk())
+                        .find(|c| c.kind() == "field_identifier")
+                        .ok_or_else(|| miette::miette!("Method call missing method name"))?;
+                    let method = self.intern(self.text(method_node));
+
+                    ExprKind::MethodCall {
+                        receiver: Box::new(receiver),
+                        method,
+                        args,
+                    }
+                } else {
+                    // Regular function call
+                    let callee = self.lower_expr(callee_node)?;
+                    ExprKind::Call {
+                        callee: Box::new(callee),
+                        args,
+                    }
                 }
             }
 
