@@ -107,6 +107,7 @@ impl<'a> LoweringContext<'a> {
             span,
             source_lang: SourceLang::Cpp,
             abi: Abi::C, // C++ uses C calling convention by default
+            attributes: vec![], // TODO: Parse C++ attributes [[...]]
         })
     }
 

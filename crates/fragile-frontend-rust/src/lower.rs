@@ -1,6 +1,6 @@
 use fragile_common::{SourceFile, SourceId, Span, Symbol, SymbolInterner};
 use fragile_hir::{
-    Abi, BinOp, Expr, ExprKind, Field, FnDef, FnSig, Item, ItemKind, Literal, Module,
+    Abi, Attribute, BinOp, Expr, ExprKind, Field, FnDef, FnSig, Item, ItemKind, Literal, Module,
     Mutability, Param, Pattern, PrimitiveType, SourceLang, Stmt, StmtKind,
     StructDef, Type, Visibility,
 };
@@ -43,28 +43,80 @@ impl<'a> LoweringContext<'a> {
         let name = self.intern("main"); // TODO: derive from file path
         let mut module = Module::new(name, self.source.id);
 
+        // Collect pending attributes to apply to the next item
+        let mut pending_attrs: Vec<Attribute> = vec![];
+
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
-            let items = self.lower_items(child)?;
-            for item in items {
-                module.add_item(item);
+            match child.kind() {
+                "attribute_item" => {
+                    // Collect attribute to apply to next item
+                    if let Some(attr) = self.lower_attribute(child)? {
+                        pending_attrs.push(attr);
+                    }
+                }
+                _ => {
+                    // Pass pending attributes to items
+                    let attrs = std::mem::take(&mut pending_attrs);
+                    let items = self.lower_items_with_attrs(child, attrs)?;
+                    for item in items {
+                        module.add_item(item);
+                    }
+                }
             }
         }
 
         Ok(module)
     }
 
-    fn lower_items(&self, node: Node) -> Result<Vec<Item>> {
+    fn lower_attribute(&self, node: Node) -> Result<Option<Attribute>> {
+        let span = self.span(node);
+
+        // Find the attribute child node
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if child.kind() == "attribute" {
+                // Get the attribute name (identifier)
+                if let Some(name_node) = child.child_by_field_name("path") {
+                    let name = self.intern(self.text(name_node));
+                    // TODO: Parse attribute arguments
+                    return Ok(Some(Attribute {
+                        name,
+                        args: vec![],
+                        span,
+                    }));
+                } else {
+                    // Try first child as identifier
+                    let mut inner_cursor = child.walk();
+                    for inner in child.children(&mut inner_cursor) {
+                        if inner.kind() == "identifier" {
+                            let name = self.intern(self.text(inner));
+                            return Ok(Some(Attribute {
+                                name,
+                                args: vec![],
+                                span,
+                            }));
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(None)
+    }
+
+    fn lower_items_with_attrs(&self, node: Node, attrs: Vec<Attribute>) -> Result<Vec<Item>> {
         let kind = node.kind();
         let span = self.span(node);
 
         match kind {
             "function_item" => {
-                let fn_def = self.lower_function(node, Abi::Rust)?;
+                let fn_def = self.lower_function_with_attrs(node, Abi::Rust, attrs)?;
                 Ok(vec![Item::new(ItemKind::Function(fn_def), span)])
             }
             "struct_item" => {
                 let struct_def = self.lower_struct(node)?;
+                // TODO: Add attributes to structs
                 Ok(vec![Item::new(ItemKind::Struct(struct_def), span)])
             }
             "foreign_mod_item" => {
@@ -75,7 +127,7 @@ impl<'a> LoweringContext<'a> {
         }
     }
 
-    fn lower_function(&self, node: Node, abi: Abi) -> Result<FnDef> {
+    fn lower_function_with_attrs(&self, node: Node, abi: Abi, attributes: Vec<Attribute>) -> Result<FnDef> {
         let span = self.span(node);
 
         // Get visibility
@@ -125,6 +177,7 @@ impl<'a> LoweringContext<'a> {
             span,
             source_lang: SourceLang::Rust,
             abi,
+            attributes,
         })
     }
 
@@ -226,6 +279,7 @@ impl<'a> LoweringContext<'a> {
             span,
             source_lang: SourceLang::Rust,
             abi,
+            attributes: vec![], // Extern functions don't have attributes yet
         })
     }
 

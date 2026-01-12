@@ -11,6 +11,16 @@ pub enum Visibility {
     Public,
 }
 
+/// An attribute (e.g., #[inline], #[derive(Debug)])
+#[derive(Debug, Clone)]
+pub struct Attribute {
+    /// The attribute name (e.g., "inline", "derive", "cfg")
+    pub name: Symbol,
+    /// Optional arguments (e.g., for #[derive(Debug, Clone)], args would be ["Debug", "Clone"])
+    pub args: Vec<Symbol>,
+    pub span: Span,
+}
+
 /// A function parameter.
 #[derive(Debug, Clone)]
 pub struct Param {
@@ -53,6 +63,8 @@ pub struct FnDef {
     pub source_lang: SourceLang,
     /// The ABI for this function (None = default Rust ABI, Some("C") = extern "C")
     pub abi: Abi,
+    /// Attributes on this function (e.g., #[inline], #[no_mangle])
+    pub attributes: Vec<Attribute>,
 }
 
 /// The source language a construct came from.

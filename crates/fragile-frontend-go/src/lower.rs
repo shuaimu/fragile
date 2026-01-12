@@ -123,6 +123,7 @@ impl<'a> LoweringContext<'a> {
             span,
             source_lang: SourceLang::Go,
             abi: Abi::Rust, // Go uses its own ABI, treat as Rust for now
+            attributes: vec![], // Go doesn't have attributes
         })
     }
 
