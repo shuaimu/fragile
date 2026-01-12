@@ -930,6 +930,78 @@ impl<'a, 'ctx> ModuleCompiler<'a, 'ctx> {
                 Ok(Some(tuple_val.into()))
             }
 
+            ExprKind::Match { scrutinee, arms } => {
+                // Compile scrutinee
+                let scrutinee_val = self
+                    .compile_expr(scrutinee, function)?
+                    .ok_or_else(|| miette::miette!("Match scrutinee has no value"))?;
+
+                // We need the scrutinee to be an integer for switch
+                let scrutinee_int = scrutinee_val.into_int_value();
+
+                // Create blocks for each arm and merge block
+                let merge_bb = self.context.append_basic_block(function, "match.merge");
+                let mut arm_blocks = vec![];
+                let mut default_block = None;
+
+                for (i, arm) in arms.iter().enumerate() {
+                    let block = self.context.append_basic_block(function, &format!("match.arm.{}", i));
+                    arm_blocks.push(block);
+                    if matches!(&arm.pattern, fragile_hir::Pattern::Wildcard) {
+                        default_block = Some(block);
+                    }
+                }
+
+                // If no wildcard, use unreachable as default
+                let default_bb = default_block.unwrap_or_else(|| {
+                    self.context.append_basic_block(function, "match.unreachable")
+                });
+
+                // Build switch cases
+                let mut cases = vec![];
+                for (i, arm) in arms.iter().enumerate() {
+                    if let fragile_hir::Pattern::Literal(fragile_hir::Literal::Int(value)) = &arm.pattern {
+                        let case_val = scrutinee_int.get_type().const_int(*value as u64, false);
+                        cases.push((case_val, arm_blocks[i]));
+                    }
+                }
+
+                // Build switch instruction
+                self.builder.build_switch(scrutinee_int, default_bb, &cases)
+                    .map_err(|e| miette::miette!("Failed to build switch: {:?}", e))?;
+
+                // Compile each arm body
+                let mut incoming: Vec<(BasicValueEnum, inkwell::basic_block::BasicBlock)> = vec![];
+                for (i, arm) in arms.iter().enumerate() {
+                    self.builder.position_at_end(arm_blocks[i]);
+                    if let Some(val) = self.compile_expr(&arm.body, function)? {
+                        if !self.current_block_has_terminator() {
+                            self.builder.build_unconditional_branch(merge_bb)
+                                .map_err(|e| miette::miette!("Failed to build branch: {:?}", e))?;
+                        }
+                        let block_end = self.builder.get_insert_block().unwrap();
+                        incoming.push((val, block_end));
+                    } else if !self.current_block_has_terminator() {
+                        self.builder.build_unconditional_branch(merge_bb)
+                            .map_err(|e| miette::miette!("Failed to build branch: {:?}", e))?;
+                    }
+                }
+
+                // Position at merge and create phi
+                self.builder.position_at_end(merge_bb);
+
+                if incoming.is_empty() {
+                    Ok(None)
+                } else {
+                    let phi = self.builder.build_phi(incoming[0].0.get_type(), "match.phi")
+                        .map_err(|e| miette::miette!("Failed to build phi: {:?}", e))?;
+                    for (val, block) in &incoming {
+                        phi.add_incoming(&[(val, *block)]);
+                    }
+                    Ok(Some(phi.as_basic_value()))
+                }
+            }
+
             _ => Ok(None),
         }
     }

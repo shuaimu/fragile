@@ -1,8 +1,8 @@
 use fragile_common::{SourceFile, SourceId, Span, Symbol, SymbolInterner};
 use fragile_hir::{
     Abi, Attribute, BinOp, EnumDef, EnumVariant, Expr, ExprKind, Field, FnDef, FnSig, ImplDef,
-    Item, ItemKind, Literal, Module, Mutability, Param, Pattern, PrimitiveType, SourceLang, Stmt,
-    StmtKind, StructDef, Type, Visibility,
+    Item, ItemKind, Literal, MatchArm, Module, Mutability, Param, Pattern, PrimitiveType,
+    SourceLang, Stmt, StmtKind, StructDef, Type, Visibility,
 };
 use miette::Result;
 use tree_sitter::{Node, Tree};
@@ -699,8 +699,14 @@ impl<'a> LoweringContext<'a> {
                 }
                 "expression_statement" => {
                     if let Some(expr_node) = child.child(0) {
-                        let expr = self.lower_expr(expr_node)?;
-                        stmts.push(Stmt::expr(expr));
+                        // If this is the last statement and it's an expression,
+                        // it becomes the block's value
+                        if is_last {
+                            final_expr = Some(Box::new(self.lower_expr(expr_node)?));
+                        } else {
+                            let expr = self.lower_expr(expr_node)?;
+                            stmts.push(Stmt::expr(expr));
+                        }
                     }
                 }
                 _ => {
@@ -767,6 +773,11 @@ impl<'a> LoweringContext<'a> {
                 Ok(Pattern::Ident(name))
             }
             "_" => Ok(Pattern::Wildcard),
+            "integer_literal" => {
+                let text = self.text(node).replace('_', "");
+                let value: i128 = text.parse().unwrap_or(0);
+                Ok(Pattern::Literal(Literal::Int(value)))
+            }
             "tuple_pattern" => {
                 let mut patterns = vec![];
                 let mut cursor = node.walk();
@@ -776,6 +787,19 @@ impl<'a> LoweringContext<'a> {
                     }
                 }
                 Ok(Pattern::Tuple(patterns))
+            }
+            "match_pattern" => {
+                // match_pattern wraps the actual pattern
+                let mut cursor = node.walk();
+                for child in node.children(&mut cursor) {
+                    match child.kind() {
+                        "_" | "identifier" | "integer_literal" | "tuple_pattern" => {
+                            return self.lower_pattern(child);
+                        }
+                        _ => continue,
+                    }
+                }
+                Ok(Pattern::Wildcard)
             }
             _ => {
                 // Default to identifier
@@ -993,6 +1017,31 @@ impl<'a> LoweringContext<'a> {
                 }
             }
 
+            "match_expression" => {
+                // Get the scrutinee (value being matched)
+                let scrutinee_node = node
+                    .children(&mut node.walk())
+                    .find(|c| c.kind() != "match" && c.kind() != "match_block")
+                    .ok_or_else(|| miette::miette!("Match missing scrutinee"))?;
+                let scrutinee = self.lower_expr(scrutinee_node)?;
+
+                // Get match arms from match_block
+                let mut arms = vec![];
+                if let Some(block) = node.children(&mut node.walk()).find(|c| c.kind() == "match_block") {
+                    let mut cursor = block.walk();
+                    for child in block.children(&mut cursor) {
+                        if child.kind() == "match_arm" {
+                            arms.push(self.lower_match_arm(child)?);
+                        }
+                    }
+                }
+
+                ExprKind::Match {
+                    scrutinee: Box::new(scrutinee),
+                    arms,
+                }
+            }
+
             "return_expression" => {
                 let value = node.child(1).map(|n| self.lower_expr(n)).transpose()?;
                 ExprKind::Return(value.map(Box::new))
@@ -1088,6 +1137,37 @@ impl<'a> LoweringContext<'a> {
         };
 
         Ok(Expr::new(kind, span))
+    }
+
+    fn lower_match_arm(&self, node: Node) -> Result<MatchArm> {
+        // Get pattern from match_pattern
+        let pattern_node = node
+            .children(&mut node.walk())
+            .find(|c| c.kind() == "match_pattern")
+            .ok_or_else(|| miette::miette!("Match arm missing pattern"))?;
+        let pattern = self.lower_pattern(pattern_node)?;
+
+        // Get body expression (after =>)
+        let mut found_arrow = false;
+        let mut body = None;
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if child.kind() == "=>" {
+                found_arrow = true;
+                continue;
+            }
+            if found_arrow && child.kind() != "," {
+                body = Some(self.lower_expr(child)?);
+                break;
+            }
+        }
+        let body = body.ok_or_else(|| miette::miette!("Match arm missing body"))?;
+
+        Ok(MatchArm {
+            pattern,
+            guard: None, // TODO: support guards
+            body,
+        })
     }
 
     fn lower_binop(&self, op: &str) -> Result<BinOp> {
