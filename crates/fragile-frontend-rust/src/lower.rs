@@ -2,7 +2,8 @@ use fragile_common::{SourceFile, SourceId, Span, Symbol, SymbolInterner};
 use fragile_hir::{
     Abi, Attribute, BinOp, EnumDef, EnumVariant, Expr, ExprKind, Field, FnDef, FnSig, ImplDef,
     Item, ItemKind, Literal, MatchArm, Module, Mutability, Param, Pattern, PrimitiveType,
-    SourceLang, Stmt, StmtKind, StructDef, TraitBound, Type, TypeParam, Visibility,
+    SourceLang, Stmt, StmtKind, StructDef, TraitBound, TraitDef, TraitMethod, Type, TypeParam,
+    Visibility,
 };
 use miette::Result;
 use tree_sitter::{Node, Tree};
@@ -126,6 +127,10 @@ impl<'a> LoweringContext<'a> {
             "impl_item" => {
                 let impl_def = self.lower_impl(node)?;
                 Ok(vec![Item::new(ItemKind::Impl(impl_def), span)])
+            }
+            "trait_item" => {
+                let trait_def = self.lower_trait(node)?;
+                Ok(vec![Item::new(ItemKind::Trait(trait_def), span)])
             }
             "foreign_mod_item" => {
                 // This is extern "C" { ... } block
@@ -420,6 +425,97 @@ impl<'a> LoweringContext<'a> {
             self_ty,
             items,
             span,
+        })
+    }
+
+    fn lower_trait(&self, node: Node) -> Result<TraitDef> {
+        let span = self.span(node);
+
+        // Get visibility
+        let vis = if node.child_by_field_name("visibility").is_some() {
+            Visibility::Public
+        } else {
+            Visibility::Private
+        };
+
+        // Get trait name (type_identifier)
+        let name_node = node
+            .children(&mut node.walk())
+            .find(|c| c.kind() == "type_identifier")
+            .ok_or_else(|| miette::miette!("Trait missing name"))?;
+        let name = self.intern(self.text(name_node));
+
+        // Get type parameters (generics)
+        let type_params = if let Some(type_params_node) = node.child_by_field_name("type_parameters") {
+            self.lower_type_parameters(type_params_node)?
+        } else {
+            vec![]
+        };
+
+        // Get methods from declaration_list
+        let mut methods = vec![];
+        if let Some(decl_list) = node
+            .children(&mut node.walk())
+            .find(|c| c.kind() == "declaration_list")
+        {
+            let mut cursor = decl_list.walk();
+            for child in decl_list.children(&mut cursor) {
+                if child.kind() == "function_signature_item" {
+                    methods.push(self.lower_trait_method(child)?);
+                }
+            }
+        }
+
+        Ok(TraitDef {
+            name,
+            vis,
+            type_params,
+            methods,
+            span,
+        })
+    }
+
+    fn lower_trait_method(&self, node: Node) -> Result<TraitMethod> {
+        // Get method name
+        let name_node = node
+            .children(&mut node.walk())
+            .find(|c| c.kind() == "identifier")
+            .ok_or_else(|| miette::miette!("Trait method missing name"))?;
+        let name = self.intern(self.text(name_node));
+
+        // Get parameters (including self)
+        // For trait methods, we use a placeholder self type
+        let placeholder_self = Type::Named {
+            name: self.intern("Self"),
+            type_args: vec![],
+        };
+        let params = if let Some(params_node) = node.child_by_field_name("parameters") {
+            self.lower_method_parameters(params_node, &placeholder_self)?
+        } else {
+            vec![]
+        };
+
+        // Get return type
+        let ret_ty = node
+            .children(&mut node.walk())
+            .find(|c| c.kind() == "primitive_type" || c.kind() == "type_identifier" || c.kind() == "generic_type")
+            .map(|n| self.lower_type(n))
+            .transpose()?
+            .unwrap_or_else(Type::unit);
+
+        // Trait methods with default implementations have a body
+        let has_default = node
+            .children(&mut node.walk())
+            .any(|c| c.kind() == "block");
+
+        Ok(TraitMethod {
+            name,
+            sig: FnSig {
+                params,
+                ret_ty,
+                is_variadic: false,
+            },
+            has_default,
         })
     }
 

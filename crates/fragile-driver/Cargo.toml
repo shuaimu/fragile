@@ -12,3 +12,6 @@ fragile-frontend-go.workspace = true
 fragile-codegen.workspace = true
 miette.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+tempfile = "3.24.0"
