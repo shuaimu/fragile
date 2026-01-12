@@ -37,7 +37,10 @@ impl<'ctx> CodeGenerator<'ctx> {
         for item in &module.items {
             match &item.kind {
                 ItemKind::Struct(struct_def) => {
-                    compiler.register_struct(struct_def)?;
+                    // Skip generic structs (requires monomorphization)
+                    if struct_def.type_params.is_empty() {
+                        compiler.register_struct(struct_def)?;
+                    }
                 }
                 ItemKind::Enum(enum_def) => {
                     compiler.register_enum(enum_def)?;

@@ -305,6 +305,13 @@ impl<'a> LoweringContext<'a> {
             .ok_or_else(|| miette::miette!("Struct missing name"))?;
         let name = self.intern(self.text(name_node));
 
+        // Get type parameters (generics)
+        let type_params = if let Some(type_params_node) = node.child_by_field_name("type_parameters") {
+            self.lower_type_parameters(type_params_node)?
+        } else {
+            vec![]
+        };
+
         // Get fields from field_declaration_list
         let mut fields = vec![];
         if let Some(body_node) = node.child_by_field_name("body") {
@@ -320,7 +327,7 @@ impl<'a> LoweringContext<'a> {
         Ok(StructDef {
             name,
             fields,
-            type_params: vec![], // TODO: generics
+            type_params,
         })
     }
 
