@@ -501,10 +501,19 @@ impl<'a, 'ctx> ModuleCompiler<'a, 'ctx> {
                         .compile_expr(field_expr, function)?
                         .ok_or_else(|| miette::miette!("Struct field has no value"))?;
 
-                    let field_idx = *field_indices.get(field_name).ok_or_else(|| {
-                        let field_name_str = self.interner.resolve(*field_name);
-                        miette::miette!("Unknown struct field: {}", field_name_str)
-                    })?;
+                    // Check if this is a positional field (__0, __1, etc. from C++)
+                    let field_name_str = self.interner.resolve(*field_name);
+                    let field_idx = if field_name_str.starts_with("__") {
+                        // Positional field - extract the index directly
+                        field_name_str[2..]
+                            .parse::<u32>()
+                            .map_err(|_| miette::miette!("Invalid positional field: {}", field_name_str))?
+                    } else {
+                        // Named field - look up in field_indices
+                        *field_indices.get(field_name).ok_or_else(|| {
+                            miette::miette!("Unknown struct field: {}", field_name_str)
+                        })?
+                    };
 
                     let field_ptr = self
                         .builder

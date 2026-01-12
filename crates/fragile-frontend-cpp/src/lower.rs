@@ -1,8 +1,8 @@
 use fragile_common::{SourceFile, Span, Symbol, SymbolInterner};
 use fragile_hir::{
-    Abi, BinOp, Expr, ExprKind, FnDef, FnSig, Item, ItemKind, Literal, Module,
+    Abi, BinOp, Expr, ExprKind, Field, FnDef, FnSig, Item, ItemKind, Literal, Module,
     Mutability, Param, Pattern, PrimitiveType, SourceLang, Stmt, StmtKind,
-    Type, Visibility,
+    StructDef, Type, Visibility,
 };
 use miette::Result;
 use tree_sitter::{Node, Tree};
@@ -61,9 +61,74 @@ impl<'a> LoweringContext<'a> {
                 let fn_def = self.lower_function(node)?;
                 Ok(Some(Item::new(ItemKind::Function(fn_def), span)))
             }
-            // TODO: struct/class, enum, etc.
+            "struct_specifier" => {
+                // Only lower if this is a struct definition (has field_declaration_list)
+                if node.child_by_field_name("body").is_some()
+                    || node
+                        .children(&mut node.walk())
+                        .any(|c| c.kind() == "field_declaration_list")
+                {
+                    let struct_def = self.lower_struct(node)?;
+                    Ok(Some(Item::new(ItemKind::Struct(struct_def), span)))
+                } else {
+                    Ok(None) // Forward declaration, skip for now
+                }
+            }
+            // TODO: class, enum, etc.
             _ => Ok(None),
         }
+    }
+
+    fn lower_struct(&self, node: Node) -> Result<StructDef> {
+        // Get name
+        let name = node
+            .children(&mut node.walk())
+            .find(|c| c.kind() == "type_identifier")
+            .map(|n| self.intern(self.text(n)))
+            .ok_or_else(|| miette::miette!("Struct missing name"))?;
+
+        // Get fields from field_declaration_list
+        let mut fields = vec![];
+        if let Some(field_list) = node
+            .children(&mut node.walk())
+            .find(|c| c.kind() == "field_declaration_list")
+        {
+            let mut cursor = field_list.walk();
+            for child in field_list.children(&mut cursor) {
+                if child.kind() == "field_declaration" {
+                    // Get type
+                    let ty = child
+                        .child_by_field_name("type")
+                        .or_else(|| {
+                            child
+                                .children(&mut child.walk())
+                                .find(|c| c.kind() == "primitive_type" || c.kind() == "type_identifier")
+                        })
+                        .map(|n| self.lower_type(n))
+                        .transpose()?
+                        .unwrap_or(Type::Infer(0));
+
+                    // Get field name
+                    let field_name = child
+                        .children(&mut child.walk())
+                        .find(|c| c.kind() == "field_identifier")
+                        .map(|n| self.intern(self.text(n)))
+                        .ok_or_else(|| miette::miette!("Field missing name"))?;
+
+                    fields.push(Field {
+                        name: field_name,
+                        ty,
+                        is_public: true, // C++ struct fields are public by default
+                    });
+                }
+            }
+        }
+
+        Ok(StructDef {
+            name,
+            fields,
+            type_params: vec![],
+        })
     }
 
     fn lower_function(&self, node: Node) -> Result<FnDef> {
@@ -288,16 +353,18 @@ impl<'a> LoweringContext<'a> {
     fn lower_declaration(&self, node: Node) -> Result<Option<Stmt>> {
         let span = self.span(node);
 
-        // Get type
-        let ty = if let Some(type_node) = node.child_by_field_name("type") {
-            Some(self.lower_type(type_node)?)
-        } else {
-            None
-        };
+        // Get type (may be struct name like "Point")
+        let ty = node.child_by_field_name("type").map(|n| self.lower_type(n)).transpose()?;
+
+        // Get struct name if this is a struct type (for initializer_list)
+        let struct_name = node
+            .child_by_field_name("type")
+            .filter(|n| n.kind() == "type_identifier")
+            .map(|n| self.intern(self.text(n)));
 
         // Get declarator (may have initializer)
         if let Some(decl) = node.child_by_field_name("declarator") {
-            let (name, init) = self.lower_init_declarator(decl)?;
+            let (name, init) = self.lower_init_declarator(decl, struct_name)?;
 
             return Ok(Some(Stmt::new(
                 StmtKind::Let {
@@ -313,27 +380,75 @@ impl<'a> LoweringContext<'a> {
         Ok(None)
     }
 
-    fn lower_init_declarator(&self, node: Node) -> Result<(Symbol, Option<Expr>)> {
+    fn lower_init_declarator(
+        &self,
+        node: Node,
+        struct_name: Option<Symbol>,
+    ) -> Result<(Symbol, Option<Expr>)> {
         match node.kind() {
             "init_declarator" => {
+                let span = self.span(node);
                 let name = if let Some(decl) = node.child_by_field_name("declarator") {
                     self.intern(self.text(decl))
                 } else {
                     self.intern("_")
                 };
-                let init = if let Some(value) = node.child_by_field_name("value") {
+
+                // Check for initializer_list (struct literal like `Point p{1, 2}`)
+                let init = node
+                    .children(&mut node.walk())
+                    .find(|c| c.kind() == "initializer_list")
+                    .map(|init_list| {
+                        if let Some(struct_sym) = struct_name {
+                            // This is a struct literal - collect values and pair with field indices
+                            let mut values: Vec<Expr> = vec![];
+                            let mut cursor = init_list.walk();
+                            for child in init_list.children(&mut cursor) {
+                                match child.kind() {
+                                    "{" | "}" | "," => continue,
+                                    _ => {
+                                        if let Ok(expr) = self.lower_expr(child) {
+                                            values.push(expr);
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Create struct literal with positional fields (field0, field1, etc.)
+                            // The actual field names will be resolved during type checking
+                            let fields: Vec<(Symbol, Expr)> = values
+                                .into_iter()
+                                .enumerate()
+                                .map(|(i, expr)| (self.intern(&format!("__{}", i)), expr))
+                                .collect();
+
+                            Ok(Expr::new(
+                                ExprKind::Struct {
+                                    name: struct_sym,
+                                    fields,
+                                },
+                                span,
+                            ))
+                        } else {
+                            // Not a struct type, treat as array initializer
+                            Err(miette::miette!("Initializer list without struct type"))
+                        }
+                    })
+                    .transpose()?;
+
+                // If no initializer_list, check for regular value
+                let init = if init.is_some() {
+                    init
+                } else if let Some(value) = node.child_by_field_name("value") {
                     Some(self.lower_expr(value)?)
                 } else {
                     None
                 };
+
                 Ok((name, init))
             }
-            "identifier" => {
-                Ok((self.intern(self.text(node)), None))
-            }
-            _ => {
-                Ok((self.intern(self.text(node)), None))
-            }
+            "identifier" => Ok((self.intern(self.text(node)), None)),
+            _ => Ok((self.intern(self.text(node)), None)),
         }
     }
 
@@ -608,6 +723,31 @@ impl<'a> LoweringContext<'a> {
                     cond: Box::new(cond),
                     then_branch: Box::new(then_expr),
                     else_branch: Some(Box::new(else_expr)),
+                }
+            }
+
+            "field_expression" => {
+                // p.x -> Field { expr: p, field: x }
+                let mut cursor = node.walk();
+                let children: Vec<_> = node.children(&mut cursor).collect();
+
+                // First child is the object expression
+                let expr = children
+                    .first()
+                    .map(|n| self.lower_expr(*n))
+                    .transpose()?
+                    .ok_or_else(|| miette::miette!("Field expression missing object"))?;
+
+                // Find the field_identifier
+                let field = children
+                    .iter()
+                    .find(|c| c.kind() == "field_identifier")
+                    .map(|n| self.intern(self.text(*n)))
+                    .ok_or_else(|| miette::miette!("Field expression missing field name"))?;
+
+                ExprKind::Field {
+                    expr: Box::new(expr),
+                    field,
                 }
             }
 
