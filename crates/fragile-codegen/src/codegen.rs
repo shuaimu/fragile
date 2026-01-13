@@ -1,7 +1,7 @@
 use fragile_common::{Symbol, SymbolInterner};
 use fragile_hir::{
-    Abi, BinOp, Expr, ExprKind, FnDef, FnSig, ItemKind, Literal, Module, Param,
-    PrimitiveType, Stmt, StmtKind, StructDef, Type, TypeParam, UnaryOp,
+    Abi, BinOp, ConstDef, Expr, ExprKind, FnDef, FnSig, Item, ItemKind, Literal, Module, Mutability,
+    Param, PrimitiveType, StaticDef, Stmt, StmtKind, StructDef, Type, TypeAlias, TypeParam, UnaryOp,
 };
 use inkwell::builder::Builder;
 use inkwell::context::Context;
@@ -27,14 +27,32 @@ impl<'ctx> CodeGenerator<'ctx> {
         Self { context, interner }
     }
 
+    /// Recursively collect all items from a module, including items from nested modules.
+    fn collect_all_items(items: &[Item]) -> Vec<&Item> {
+        let mut result = Vec::new();
+        for item in items {
+            result.push(item);
+            // If this is a module with items, recursively collect them
+            if let ItemKind::Mod(mod_def) = &item.kind {
+                if let Some(ref nested_items) = mod_def.items {
+                    result.extend(Self::collect_all_items(nested_items));
+                }
+            }
+        }
+        result
+    }
+
     pub fn compile_module(&self, module: &Module) -> Result<LlvmModule<'ctx>> {
         let name = self.interner.resolve(module.name);
         let llvm_module = self.context.create_module(&name);
 
         let mut compiler = ModuleCompiler::new(self.context, &llvm_module, self.interner);
 
-        // First pass: register all struct and enum types
-        for item in &module.items {
+        // Collect all items including from nested modules
+        let all_items = Self::collect_all_items(&module.items);
+
+        // First pass: register all struct, enum, and type alias definitions
+        for item in &all_items {
             match &item.kind {
                 ItemKind::Struct(struct_def) => {
                     // Skip generic structs (requires monomorphization)
@@ -43,7 +61,19 @@ impl<'ctx> CodeGenerator<'ctx> {
                     }
                 }
                 ItemKind::Enum(enum_def) => {
-                    compiler.register_enum(enum_def)?;
+                    // Skip generic enums (requires monomorphization)
+                    if enum_def.type_params.is_empty() {
+                        compiler.register_enum(enum_def)?;
+                    } else {
+                        // Store generic enum for later monomorphization
+                        compiler.generic_enums.insert(enum_def.name, enum_def.clone());
+                    }
+                }
+                ItemKind::TypeAlias(type_alias) => {
+                    // Skip generic type aliases for now
+                    if type_alias.type_params.is_empty() {
+                        compiler.register_type_alias(type_alias);
+                    }
                 }
                 _ => {}
             }
@@ -51,7 +81,7 @@ impl<'ctx> CodeGenerator<'ctx> {
 
         // Second pass: declare all functions (including methods from impl blocks)
         // Also collect generic functions for later monomorphization
-        for item in &module.items {
+        for item in &all_items {
             match &item.kind {
                 ItemKind::Function(fn_def) => {
                     if fn_def.type_params.is_empty() {
@@ -70,10 +100,24 @@ impl<'ctx> CodeGenerator<'ctx> {
             }
         }
 
-        // Third pass: compile function bodies (including methods)
-        for item in &module.items {
+        // Third pass: compile const and static items
+        for item in &all_items {
+            match &item.kind {
+                ItemKind::Const(const_def) => {
+                    compiler.compile_const(const_def)?;
+                }
+                ItemKind::Static(static_def) => {
+                    compiler.compile_static(static_def)?;
+                }
+                _ => {}
+            }
+        }
+
+        // Fourth pass: compile function bodies (including methods)
+        for item in &all_items {
             match &item.kind {
                 ItemKind::Function(fn_def) => {
+                    let fn_name = compiler.interner.resolve(fn_def.name);
                     compiler.compile_function(fn_def)?;
                 }
                 ItemKind::Impl(impl_def) => {
@@ -108,6 +152,12 @@ impl<'ctx> CodeGenerator<'ctx> {
             )
             .ok_or_else(|| miette::miette!("Failed to create target machine"))?;
 
+        // Verify the module first
+        if let Err(e) = module.verify() {
+            // Print the module for debugging
+            return Err(miette::miette!("Module verification failed: {}", e.to_string()));
+        }
+
         target_machine
             .write_to_file(module, FileType::Object, path)
             .map_err(|e| miette::miette!("Failed to write object file: {}", e))?;
@@ -122,9 +172,13 @@ struct StructInfo<'ctx> {
     field_indices: FxHashMap<Symbol, u32>,
 }
 
-/// Info about an enum: variant name -> discriminant mapping
-struct EnumInfo {
+/// Info about an enum: variant name -> discriminant mapping and data types
+struct EnumInfo<'ctx> {
     variant_discriminants: FxHashMap<Symbol, i128>,
+    /// Variant name -> list of field types (for variants with data)
+    variant_fields: FxHashMap<Symbol, Vec<BasicTypeEnum<'ctx>>>,
+    /// The LLVM struct type for this enum (discriminant + payload)
+    llvm_type: Option<StructType<'ctx>>,
 }
 
 struct ModuleCompiler<'a, 'ctx> {
@@ -135,11 +189,29 @@ struct ModuleCompiler<'a, 'ctx> {
     functions: FxHashMap<String, FunctionValue<'ctx>>,
     variables: FxHashMap<String, (PointerValue<'ctx>, BasicTypeEnum<'ctx>)>,
     struct_types: FxHashMap<Symbol, StructInfo<'ctx>>,
-    enum_types: FxHashMap<Symbol, EnumInfo>,
+    enum_types: FxHashMap<Symbol, EnumInfo<'ctx>>,
     /// Generic function definitions for monomorphization
     generic_functions: FxHashMap<Symbol, FnDef>,
+    /// Generic enum definitions for monomorphization
+    generic_enums: FxHashMap<Symbol, fragile_hir::EnumDef>,
     /// Counter for generating unique closure names
     closure_counter: u32,
+    /// Global constants and statics
+    globals: FxHashMap<String, (PointerValue<'ctx>, BasicTypeEnum<'ctx>)>,
+    /// Type aliases (name -> aliased type)
+    type_aliases: FxHashMap<Symbol, Type>,
+    /// Current loop context for break handling (break target block, optional value alloca)
+    loop_context: Option<LoopContext<'ctx>>,
+    /// Track pointee types for pointer variables (variable name -> element type)
+    pointer_element_types: FxHashMap<String, BasicTypeEnum<'ctx>>,
+}
+
+/// Context for handling break statements in loops
+struct LoopContext<'ctx> {
+    /// Block to branch to on break
+    break_block: inkwell::basic_block::BasicBlock<'ctx>,
+    /// Optional alloca for storing break value
+    break_value: Option<(PointerValue<'ctx>, BasicTypeEnum<'ctx>)>,
 }
 
 impl<'a, 'ctx> ModuleCompiler<'a, 'ctx> {
@@ -158,7 +230,12 @@ impl<'a, 'ctx> ModuleCompiler<'a, 'ctx> {
             struct_types: FxHashMap::default(),
             enum_types: FxHashMap::default(),
             generic_functions: FxHashMap::default(),
+            generic_enums: FxHashMap::default(),
             closure_counter: 0,
+            globals: FxHashMap::default(),
+            type_aliases: FxHashMap::default(),
+            loop_context: None,
+            pointer_element_types: FxHashMap::default(),
         }
     }
 
@@ -197,20 +274,274 @@ impl<'a, 'ctx> ModuleCompiler<'a, 'ctx> {
     fn register_enum(&mut self, enum_def: &fragile_hir::EnumDef) -> Result<()> {
         // Build variant name -> discriminant mapping
         let mut variant_discriminants = FxHashMap::default();
+        let mut variant_fields: FxHashMap<Symbol, Vec<BasicTypeEnum>> = FxHashMap::default();
+        let mut has_data = false;
+        let mut max_payload_size = 0usize;
+
         for variant in &enum_def.variants {
             if let Some(disc) = variant.discriminant {
                 variant_discriminants.insert(variant.name, disc);
             }
+
+            // Check if this variant has data fields
+            if !variant.fields.is_empty() {
+                has_data = true;
+                let mut field_types = vec![];
+                let mut payload_size = 0usize;
+                for field in &variant.fields {
+                    if let Some(llvm_ty) = self.lower_type(&field.ty) {
+                        payload_size += self.type_size(llvm_ty);
+                        field_types.push(llvm_ty);
+                    }
+                }
+                max_payload_size = max_payload_size.max(payload_size);
+                variant_fields.insert(variant.name, field_types);
+            } else {
+                variant_fields.insert(variant.name, vec![]);
+            }
         }
+
+        // Create LLVM struct type if any variant has data
+        let llvm_type = if has_data {
+            let enum_name = self.interner.resolve(enum_def.name);
+            // Enum layout: { i32 discriminant, [max_payload_size x i8] payload }
+            let disc_type = self.context.i32_type().as_basic_type_enum();
+            let payload_type = self.context.i8_type().array_type(max_payload_size as u32).as_basic_type_enum();
+            let struct_type = self.context.struct_type(&[disc_type, payload_type], false);
+            // Name the struct type for debugging
+            let _ = self.context.opaque_struct_type(&enum_name);
+            Some(struct_type)
+        } else {
+            None
+        };
 
         self.enum_types.insert(
             enum_def.name,
             EnumInfo {
                 variant_discriminants,
+                variant_fields,
+                llvm_type,
             },
         );
 
         Ok(())
+    }
+
+    /// Get or create a specialized enum type (e.g., Option<i32>).
+    /// Returns the Symbol for the specialized enum.
+    fn get_or_create_specialized_enum(&mut self, enum_name: Symbol, type_args: &[Type]) -> Result<Symbol> {
+        // Generate mangled name for specialization (e.g., Option_i32)
+        let base_name = self.interner.resolve(enum_name);
+        let type_args_str: Vec<String> = type_args
+            .iter()
+            .map(|t| self.type_to_string(t))
+            .collect();
+        let specialized_name = format!("{}_{}", base_name, type_args_str.join("_"));
+        let specialized_sym = self.interner.intern(&specialized_name);
+
+        // Check if already specialized
+        if self.enum_types.contains_key(&specialized_sym) {
+            return Ok(specialized_sym);
+        }
+
+        // Get the generic enum definition
+        let generic_enum = self.generic_enums.get(&enum_name).cloned()
+            .ok_or_else(|| miette::miette!("Generic enum '{}' not found", base_name))?;
+
+        // Build type parameter substitution map
+        let mut type_subst: FxHashMap<Symbol, Type> = FxHashMap::default();
+        for (i, param) in generic_enum.type_params.iter().enumerate() {
+            if i < type_args.len() {
+                type_subst.insert(param.name, type_args[i].clone());
+            } else {
+                // Use i32 as default for unspecified type parameters
+                type_subst.insert(param.name, Type::Primitive(PrimitiveType::I32));
+            }
+        }
+
+        // Create specialized variants by substituting type parameters
+        let mut variant_discriminants = FxHashMap::default();
+        let mut variant_fields: FxHashMap<Symbol, Vec<BasicTypeEnum>> = FxHashMap::default();
+        let mut has_data = false;
+        let mut max_payload_size = 0usize;
+
+        for variant in &generic_enum.variants {
+            if let Some(disc) = variant.discriminant {
+                variant_discriminants.insert(variant.name, disc);
+            }
+
+            if !variant.fields.is_empty() {
+                has_data = true;
+                let mut field_types = vec![];
+                let mut payload_size = 0usize;
+                for field in &variant.fields {
+                    // Substitute type parameters in field type
+                    let substituted_ty = self.substitute_type(&field.ty, &type_subst);
+                    if let Some(llvm_ty) = self.lower_type(&substituted_ty) {
+                        payload_size += self.type_size(llvm_ty);
+                        field_types.push(llvm_ty);
+                    }
+                }
+                max_payload_size = max_payload_size.max(payload_size);
+                variant_fields.insert(variant.name, field_types);
+            } else {
+                variant_fields.insert(variant.name, vec![]);
+            }
+        }
+
+        // Create LLVM struct type if any variant has data
+        let llvm_type = if has_data {
+            let disc_type = self.context.i32_type().as_basic_type_enum();
+            let payload_type = self.context.i8_type().array_type(max_payload_size as u32).as_basic_type_enum();
+            let struct_type = self.context.struct_type(&[disc_type, payload_type], false);
+            Some(struct_type)
+        } else {
+            None
+        };
+
+        self.enum_types.insert(
+            specialized_sym,
+            EnumInfo {
+                variant_discriminants,
+                variant_fields,
+                llvm_type,
+            },
+        );
+
+        Ok(specialized_sym)
+    }
+
+    fn type_size(&self, ty: BasicTypeEnum) -> usize {
+        match ty {
+            BasicTypeEnum::IntType(t) => (t.get_bit_width() / 8) as usize,
+            BasicTypeEnum::FloatType(_) => 4,
+            BasicTypeEnum::PointerType(_) => 8,
+            BasicTypeEnum::ArrayType(t) => t.len() as usize * self.type_size(t.get_element_type()),
+            BasicTypeEnum::StructType(t) => {
+                t.get_field_types().iter().map(|f| self.type_size(*f)).sum()
+            }
+            BasicTypeEnum::VectorType(_) => 16, // Assume 128-bit vectors
+            BasicTypeEnum::ScalableVectorType(_) => 16, // Assume 128-bit scalable vectors
+        }
+    }
+
+    fn register_type_alias(&mut self, type_alias: &TypeAlias) {
+        // Store the aliased type for resolution
+        self.type_aliases.insert(type_alias.name, type_alias.ty.clone());
+    }
+
+    fn compile_const(&mut self, const_def: &ConstDef) -> Result<()> {
+        let name = self.interner.resolve(const_def.name);
+        let ty = self.lower_type(&const_def.ty)
+            .ok_or_else(|| miette::miette!("Cannot lower type for const '{}'", name))?;
+
+        // Evaluate the constant expression to get an initial value
+        let init_value = self.compile_const_expr(&const_def.value, ty)?;
+
+        // Create a global constant
+        let global = self.module.add_global(ty, None, &name);
+        global.set_initializer(&init_value);
+        global.set_constant(true);
+
+        // Store in globals map for later reference
+        self.globals.insert(name.to_string(), (global.as_pointer_value(), ty));
+
+        Ok(())
+    }
+
+    fn compile_static(&mut self, static_def: &StaticDef) -> Result<()> {
+        let name = self.interner.resolve(static_def.name);
+        let ty = self.lower_type(&static_def.ty)
+            .ok_or_else(|| miette::miette!("Cannot lower type for static '{}'", name))?;
+
+        // Get initializer value (or default to zero)
+        let init_value = if let Some(ref init) = static_def.init {
+            self.compile_const_expr(init, ty)?
+        } else {
+            // Default to zero-initialized
+            ty.const_zero()
+        };
+
+        // Create a global variable
+        let global = self.module.add_global(ty, None, &name);
+        global.set_initializer(&init_value);
+
+        // Static mut is not constant, static (without mut) could be constant
+        // but for simplicity, we treat all statics as mutable globals
+        global.set_constant(static_def.mutability == Mutability::Immutable);
+
+        // Store in globals map for later reference
+        self.globals.insert(name.to_string(), (global.as_pointer_value(), ty));
+
+        Ok(())
+    }
+
+    /// Compile a constant expression (literals and simple integer operations)
+    fn compile_const_expr(&self, expr: &Expr, ty: BasicTypeEnum<'ctx>) -> Result<BasicValueEnum<'ctx>> {
+        match &expr.kind {
+            ExprKind::Literal(lit) => {
+                match lit {
+                    Literal::Int(val) => {
+                        let int_ty = ty.into_int_type();
+                        Ok(int_ty.const_int(*val as u64, true).into())
+                    }
+                    Literal::Float(val) => {
+                        let float_ty = ty.into_float_type();
+                        Ok(float_ty.const_float(*val).into())
+                    }
+                    Literal::Bool(val) => {
+                        let bool_ty = self.context.bool_type();
+                        Ok(bool_ty.const_int(*val as u64, false).into())
+                    }
+                    Literal::Char(val) => {
+                        let char_ty = self.context.i32_type();
+                        Ok(char_ty.const_int(*val as u64, false).into())
+                    }
+                    Literal::String(s) => {
+                        // Create a global string constant
+                        let string_val = self.context.const_string(s.as_bytes(), true);
+                        Ok(string_val.into())
+                    }
+                    Literal::Unit => {
+                        // Unit type - shouldn't be used in const context typically
+                        Err(miette::miette!("Unit literal not supported in const context"))
+                    }
+                }
+            }
+            ExprKind::Binary { op, lhs, rhs } => {
+                // Support simple constant integer binary expressions
+                if ty.is_int_type() {
+                    let left_val = self.compile_const_expr(lhs, ty)?;
+                    let right_val = self.compile_const_expr(rhs, ty)?;
+                    let left_int = left_val.into_int_value();
+                    let right_int = right_val.into_int_value();
+                    let result = match op {
+                        BinOp::Add => left_int.const_add(right_int),
+                        BinOp::Sub => left_int.const_sub(right_int),
+                        BinOp::Mul => left_int.const_mul(right_int),
+                        _ => return Err(miette::miette!("Unsupported binary op in const expr")),
+                    };
+                    Ok(result.into())
+                } else {
+                    Err(miette::miette!("Only integer binary ops supported in const expr"))
+                }
+            }
+            ExprKind::Unary { op, operand } => {
+                let operand_val = self.compile_const_expr(operand, ty)?;
+                if ty.is_int_type() {
+                    let int_val = operand_val.into_int_value();
+                    let result = match op {
+                        fragile_hir::UnaryOp::Neg => int_val.const_neg(),
+                        fragile_hir::UnaryOp::Not => int_val.const_not(),
+                        _ => return Err(miette::miette!("Unsupported unary op in const expr")),
+                    };
+                    Ok(result.into())
+                } else {
+                    Err(miette::miette!("Only integer unary ops supported in const expr"))
+                }
+            }
+            _ => Err(miette::miette!("Unsupported expression in const context")),
+        }
     }
 
     fn declare_function(&mut self, fn_def: &FnDef) -> Result<FunctionValue<'ctx>> {
@@ -291,12 +622,28 @@ impl<'a, 'ctx> ModuleCompiler<'a, 'ctx> {
             let result = self.compile_expr(body, function)?;
 
             // Add return if needed
-            if !self.current_block_has_terminator() {
+            let has_term = self.current_block_has_terminator();
+            if !has_term {
                 if fn_def.sig.ret_ty == Type::unit() {
                     self.builder.build_return(None)
                         .map_err(|e| miette::miette!("Failed to build return: {:?}", e))?;
                 } else if let Some(val) = result {
-                    self.builder.build_return(Some(&val))
+                    // Cast return value if needed (e.g., i64 literal to i32 return type)
+                    let ret_llvm_ty = self.lower_type(&fn_def.sig.ret_ty);
+                    let return_val = if let Some(ret_ty) = ret_llvm_ty {
+                        if val.get_type() != ret_ty && val.is_int_value() && ret_ty.is_int_type() {
+                            self.builder.build_int_cast(
+                                val.into_int_value(),
+                                ret_ty.into_int_type(),
+                                "ret_cast"
+                            ).map_err(|e| miette::miette!("Failed to cast return: {:?}", e))?.into()
+                        } else {
+                            val
+                        }
+                    } else {
+                        val
+                    };
+                    self.builder.build_return(Some(&return_val))
                         .map_err(|e| miette::miette!("Failed to build return: {:?}", e))?;
                 } else {
                     self.builder.build_return(None)
@@ -403,7 +750,22 @@ impl<'a, 'ctx> ModuleCompiler<'a, 'ctx> {
                             .map_err(|e| miette::miette!("Failed to build return: {:?}", e))?;
                     } else if fn_def.sig.ret_ty != Type::unit() {
                         if let Some(val) = result {
-                            self.builder.build_return(Some(&val))
+                            // Cast return value if needed (e.g., i64 literal to i32 return type)
+                            let ret_llvm_ty = self.lower_type(&fn_def.sig.ret_ty);
+                            let return_val = if let Some(ret_ty) = ret_llvm_ty {
+                                if val.get_type() != ret_ty && val.is_int_value() && ret_ty.is_int_type() {
+                                    self.builder.build_int_cast(
+                                        val.into_int_value(),
+                                        ret_ty.into_int_type(),
+                                        "ret_cast"
+                                    ).map_err(|e| miette::miette!("Failed to cast return: {:?}", e))?.into()
+                                } else {
+                                    val
+                                }
+                            } else {
+                                val
+                            };
+                            self.builder.build_return(Some(&return_val))
                                 .map_err(|e| miette::miette!("Failed to build return: {:?}", e))?;
                         }
                     } else {
@@ -450,6 +812,40 @@ impl<'a, 'ctx> ModuleCompiler<'a, 'ctx> {
             }
 
             ExprKind::Unary { op, operand } => {
+                // Special handling for address-of operators - need the address, not the value
+                match op {
+                    UnaryOp::AddrOf | UnaryOp::AddrOfMut => {
+                        // If taking address of an identifier, return its alloca directly
+                        if let ExprKind::Ident(sym) = &operand.kind {
+                            let name = self.interner.resolve(*sym);
+                            if let Some(&(ptr, _ty)) = self.variables.get(name.as_str()) {
+                                return Ok(Some(ptr.into()));
+                            }
+                        }
+                        // Otherwise fall through to normal handling (creates temp)
+                    }
+                    UnaryOp::Deref => {
+                        // If dereferencing an identifier, look up its pointee type
+                        if let ExprKind::Ident(sym) = &operand.kind {
+                            let name = self.interner.resolve(*sym);
+                            // Look up the pointee type
+                            if let Some(&pointee_ty) = self.pointer_element_types.get(name.as_str()) {
+                                // Load the pointer from the variable
+                                if let Some(&(alloca, ptr_ty)) = self.variables.get(name.as_str()) {
+                                    let ptr = self.builder.build_load(ptr_ty, alloca, &format!("{}_load", name))
+                                        .map_err(|e| miette::miette!("Failed to load pointer: {:?}", e))?
+                                        .into_pointer_value();
+                                    let result = self.builder.build_load(pointee_ty, ptr, "deref")
+                                        .map_err(|e| miette::miette!("Failed to build deref load: {:?}", e))?;
+                                    return Ok(Some(result));
+                                }
+                            }
+                        }
+                        // Fall through to general handling
+                    }
+                    _ => {}
+                }
+
                 let val = self
                     .compile_expr(operand, function)?
                     .ok_or_else(|| miette::miette!("Unary operand has no value"))?;
@@ -475,7 +871,30 @@ impl<'a, 'ctx> ModuleCompiler<'a, 'ctx> {
 
                     // First check if it's a regular (non-generic) function
                     if let Some(&func) = self.functions.get(name.as_str()) {
-                        let call = self.builder.build_call(func, &arg_vals, "call")
+                        // Cast arguments to match function parameter types
+                        let param_types = func.get_type().get_param_types();
+                        let casted_args: Vec<BasicMetadataValueEnum> = arg_vals
+                            .into_iter()
+                            .zip(param_types.iter())
+                            .map(|(arg, param_ty)| {
+                                let arg_val: BasicValueEnum = arg.try_into().unwrap();
+                                if arg_val.is_int_value() && param_ty.is_int_type() {
+                                    let arg_int = arg_val.into_int_value();
+                                    let param_int = param_ty.into_int_type();
+                                    if arg_int.get_type() != param_int {
+                                        self.builder.build_int_cast(arg_int, param_int, "arg_cast")
+                                            .map(|v| v.as_basic_value_enum().into())
+                                            .unwrap_or(arg_val.into())
+                                    } else {
+                                        arg_val.into()
+                                    }
+                                } else {
+                                    arg_val.into()
+                                }
+                            })
+                            .collect();
+
+                        let call = self.builder.build_call(func, &casted_args, "call")
                             .map_err(|e| miette::miette!("Failed to build call: {:?}", e))?;
                         let value = match call.try_as_basic_value() {
                             inkwell::values::ValueKind::Basic(v) => Some(v),
@@ -494,6 +913,120 @@ impl<'a, 'ctx> ModuleCompiler<'a, 'ctx> {
                             inkwell::values::ValueKind::Instruction(_) => None,
                         };
                         return Ok(value);
+                    }
+                }
+
+                // Check if callee is an enum variant with data (e.g., Option::Some(36))
+                // or a module path function call (e.g., math::add)
+                if let ExprKind::EnumVariant { enum_name, variant } = &callee.kind {
+                    // First check if this is a non-generic enum variant
+                    let resolved_enum_name = if self.enum_types.contains_key(enum_name) {
+                        *enum_name
+                    } else if self.generic_enums.contains_key(enum_name) {
+                        // Generic enum - infer type arguments from argument types
+                        let type_args: Vec<Type> = arg_types.clone();
+                        if !type_args.is_empty() {
+                            self.get_or_create_specialized_enum(*enum_name, &type_args)?
+                        } else {
+                            // No arguments - treat as unit variant, infer as i32 default
+                            *enum_name
+                        }
+                    } else {
+                        // Not an enum - will be handled as module path below
+                        *enum_name
+                    };
+
+                    if let Some(enum_info) = self.enum_types.get(&resolved_enum_name) {
+                        let discriminant = *enum_info.variant_discriminants.get(variant).ok_or_else(|| {
+                            let enum_str = self.interner.resolve(*enum_name);
+                            let var_str = self.interner.resolve(*variant);
+                            miette::miette!("Unknown variant {}::{}", enum_str, var_str)
+                        })?;
+
+                        // Check if this enum has a struct type (has data variants)
+                        if let Some(enum_type) = enum_info.llvm_type {
+                            // Create an undef value of the enum struct type
+                            let mut enum_val = enum_type.get_undef();
+
+                            // Store the discriminant in field 0
+                            let disc_val = self.context.i32_type().const_int(discriminant as u64, false);
+                            enum_val = self.builder.build_insert_value(enum_val, disc_val, 0, "disc")
+                                .map_err(|e| miette::miette!("Failed to insert discriminant: {:?}", e))?
+                                .into_struct_value();
+
+                            // Store the data in the payload field
+                            // For now, we only handle single-field variants
+                            if !arg_vals.is_empty() {
+                                let arg_val = arg_vals[0].into_int_value();
+                                // Create a pointer to the payload field
+                                let alloca = self.builder.build_alloca(enum_type, "enum_tmp")
+                                    .map_err(|e| miette::miette!("Failed to alloc enum: {:?}", e))?;
+                                self.builder.build_store(alloca, enum_val)
+                                    .map_err(|e| miette::miette!("Failed to store enum: {:?}", e))?;
+
+                                // GEP to the payload field
+                                let payload_ptr = self.builder.build_struct_gep(enum_type, alloca, 1, "payload_ptr")
+                                    .map_err(|e| miette::miette!("Failed to GEP payload: {:?}", e))?;
+
+                                // Cast payload ptr to pointer to the data type and store
+                                let data_ty = arg_val.get_type();
+                                let data_ptr = self.builder.build_pointer_cast(
+                                    payload_ptr,
+                                    data_ty.ptr_type(inkwell::AddressSpace::default()),
+                                    "data_ptr"
+                                ).map_err(|e| miette::miette!("Failed to cast ptr: {:?}", e))?;
+
+                                self.builder.build_store(data_ptr, arg_val)
+                                    .map_err(|e| miette::miette!("Failed to store data: {:?}", e))?;
+
+                                // Load the complete enum value
+                                let result = self.builder.build_load(enum_type, alloca, "enum_val")
+                                    .map_err(|e| miette::miette!("Failed to load enum: {:?}", e))?;
+                                return Ok(Some(result));
+                            }
+
+                            return Ok(Some(enum_val.as_basic_value_enum()));
+                        } else {
+                            // Unit variant (no data) - just return discriminant
+                            let disc_val = self.context.i32_type().const_int(discriminant as u64, false);
+                            return Ok(Some(disc_val.as_basic_value_enum()));
+                        }
+                    } else {
+                        // Not an enum - treat as module path function call (e.g., math::add)
+                        let fn_name = self.interner.resolve(*variant);
+
+                        if let Some(&func) = self.functions.get(fn_name.as_str()) {
+                            // Cast arguments to match function parameter types
+                            let param_types = func.get_type().get_param_types();
+                            let casted_args: Vec<BasicMetadataValueEnum> = arg_vals
+                                .into_iter()
+                                .zip(param_types.iter())
+                                .map(|(arg, param_ty)| {
+                                    let arg_val: BasicValueEnum = arg.try_into().unwrap();
+                                    if arg_val.is_int_value() && param_ty.is_int_type() {
+                                        let arg_int = arg_val.into_int_value();
+                                        let param_int = param_ty.into_int_type();
+                                        if arg_int.get_type() != param_int {
+                                            self.builder.build_int_cast(arg_int, param_int, "arg_cast")
+                                                .map(|v| v.as_basic_value_enum().into())
+                                                .unwrap_or(arg_val.into())
+                                        } else {
+                                            arg_val.into()
+                                        }
+                                    } else {
+                                        arg_val.into()
+                                    }
+                                })
+                                .collect();
+
+                            let call = self.builder.build_call(func, &casted_args, "call")
+                                .map_err(|e| miette::miette!("Failed to build call: {:?}", e))?;
+                            let value = match call.try_as_basic_value() {
+                                inkwell::values::ValueKind::Basic(v) => Some(v),
+                                inkwell::values::ValueKind::Instruction(_) => None,
+                            };
+                            return Ok(value);
+                        }
                     }
                 }
 
@@ -685,6 +1218,17 @@ impl<'a, 'ctx> ModuleCompiler<'a, 'ctx> {
                 let body_bb = self.context.append_basic_block(function, "loop.body");
                 let end_bb = self.context.append_basic_block(function, "loop.end");
 
+                // Create alloca for break value (default to i64)
+                let break_value_ty = self.context.i64_type().into();
+                let break_value_alloca = self.create_entry_alloca(function, "__loop_break_val", break_value_ty);
+
+                // Save old loop context and set new one
+                let old_context = self.loop_context.take();
+                self.loop_context = Some(LoopContext {
+                    break_block: end_bb,
+                    break_value: Some((break_value_alloca, break_value_ty)),
+                });
+
                 self.builder.build_unconditional_branch(body_bb)
                     .map_err(|e| miette::miette!("Failed to build branch: {:?}", e))?;
 
@@ -695,9 +1239,15 @@ impl<'a, 'ctx> ModuleCompiler<'a, 'ctx> {
                         .map_err(|e| miette::miette!("Failed to build branch: {:?}", e))?;
                 }
 
+                // Restore old loop context
+                self.loop_context = old_context;
+
                 self.builder.position_at_end(end_bb);
 
-                Ok(None)
+                // Load and return the break value
+                let result = self.builder.build_load(break_value_ty, break_value_alloca, "loop_result")
+                    .map_err(|e| miette::miette!("Failed to load loop result: {:?}", e))?;
+                Ok(Some(result))
             }
 
             ExprKind::Return(value) => {
@@ -717,18 +1267,119 @@ impl<'a, 'ctx> ModuleCompiler<'a, 'ctx> {
                 Ok(None)
             }
 
+            ExprKind::Break(value) => {
+                // Extract loop context data before mutable borrow
+                let (break_block, break_value_ptr) = {
+                    let loop_ctx = self.loop_context.as_ref()
+                        .ok_or_else(|| miette::miette!("Break outside of loop"))?;
+                    (loop_ctx.break_block, loop_ctx.break_value.map(|(ptr, _)| ptr))
+                };
+
+                // If there's a break value, store it
+                if let Some(val_expr) = value {
+                    let val = self.compile_expr(val_expr, function)?
+                        .ok_or_else(|| miette::miette!("Break value has no value"))?;
+                    if let Some(ptr) = break_value_ptr {
+                        self.builder.build_store(ptr, val)
+                            .map_err(|e| miette::miette!("Failed to store break value: {:?}", e))?;
+                    }
+                }
+
+                // Branch to the loop's end block
+                self.builder.build_unconditional_branch(break_block)
+                    .map_err(|e| miette::miette!("Failed to build break branch: {:?}", e))?;
+
+                Ok(None)
+            }
+
+            ExprKind::Continue => {
+                // For continue, we'd need to track the loop header block
+                // For now, just return an error
+                Err(miette::miette!("Continue not yet implemented"))
+            }
+
+            ExprKind::Cast { expr, ty } => {
+                let val = self.compile_expr(expr, function)?
+                    .ok_or_else(|| miette::miette!("Cast value has no value"))?;
+                let target_type = self.lower_type(ty)
+                    .ok_or_else(|| miette::miette!("Cannot lower cast target type"))?;
+
+                // Handle different cast types
+                if val.is_int_value() {
+                    let int_val = val.into_int_value();
+                    if target_type.is_int_type() {
+                        // Int to int cast
+                        let target_int = target_type.into_int_type();
+                        let result = self.builder.build_int_cast(int_val, target_int, "cast")
+                            .map_err(|e| miette::miette!("Failed to build int cast: {:?}", e))?;
+                        Ok(Some(result.into()))
+                    } else if target_type.is_pointer_type() {
+                        // Int to pointer cast
+                        let result = self.builder.build_int_to_ptr(int_val, target_type.into_pointer_type(), "inttoptr")
+                            .map_err(|e| miette::miette!("Failed to build int to ptr: {:?}", e))?;
+                        Ok(Some(result.into()))
+                    } else {
+                        Err(miette::miette!("Unsupported cast from int"))
+                    }
+                } else if val.is_pointer_value() {
+                    let ptr_val = val.into_pointer_value();
+                    if target_type.is_pointer_type() {
+                        // Pointer to pointer cast - just bitcast
+                        let result = self.builder.build_pointer_cast(ptr_val, target_type.into_pointer_type(), "ptrcast")
+                            .map_err(|e| miette::miette!("Failed to build pointer cast: {:?}", e))?;
+                        Ok(Some(result.into()))
+                    } else if target_type.is_int_type() {
+                        // Pointer to int cast
+                        let result = self.builder.build_ptr_to_int(ptr_val, target_type.into_int_type(), "ptrtoint")
+                            .map_err(|e| miette::miette!("Failed to build ptr to int: {:?}", e))?;
+                        Ok(Some(result.into()))
+                    } else {
+                        Err(miette::miette!("Unsupported cast from pointer"))
+                    }
+                } else {
+                    Err(miette::miette!("Unsupported cast source type"))
+                }
+            }
+
             ExprKind::Assign { lhs, rhs } => {
                 let rhs_val = self
                     .compile_expr(rhs, function)?
                     .ok_or_else(|| miette::miette!("Assignment rhs has no value"))?;
 
-                if let ExprKind::Ident(sym) = &lhs.kind {
-                    let name = self.interner.resolve(*sym);
-                    if let Some(&(ptr, _ty)) = self.variables.get(name.as_str()) {
-                        self.builder.build_store(ptr, rhs_val)
-                            .map_err(|e| miette::miette!("Failed to store: {:?}", e))?;
-                        return Ok(Some(rhs_val));
+                match &lhs.kind {
+                    ExprKind::Ident(sym) => {
+                        let name = self.interner.resolve(*sym);
+                        if let Some(&(ptr, _ty)) = self.variables.get(name.as_str()) {
+                            self.builder.build_store(ptr, rhs_val)
+                                .map_err(|e| miette::miette!("Failed to store: {:?}", e))?;
+                            return Ok(Some(rhs_val));
+                        }
                     }
+                    ExprKind::Unary { op: UnaryOp::Deref, operand } => {
+                        // *ptr = value - store through pointer
+                        let ptr_val = self.compile_expr(operand, function)?
+                            .ok_or_else(|| miette::miette!("Deref target has no value"))?;
+                        if ptr_val.is_pointer_value() {
+                            self.builder.build_store(ptr_val.into_pointer_value(), rhs_val)
+                                .map_err(|e| miette::miette!("Failed to store through deref: {:?}", e))?;
+                            return Ok(Some(rhs_val));
+                        }
+                    }
+                    ExprKind::Field { expr, field } => {
+                        // struct.field = value - store to field
+                        if let ExprKind::Ident(sym) = &expr.kind {
+                            let name = self.interner.resolve(*sym);
+                            if let Some(&(ptr, ty)) = self.variables.get(name.as_str()) {
+                                if ty.is_struct_type() {
+                                    let field_name = self.interner.resolve(*field);
+                                    // Find field index - need struct info
+                                    // For now, just handle through load/modify/store
+                                    // This is a simplified approach
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
                 }
 
                 Ok(None)
@@ -967,14 +1618,102 @@ impl<'a, 'ctx> ModuleCompiler<'a, 'ctx> {
                 Ok(Some(tuple_val.into()))
             }
 
+            ExprKind::Array(elements) => {
+                // Compile each element
+                let mut values: Vec<BasicValueEnum> = vec![];
+                for elem in elements {
+                    if let Some(val) = self.compile_expr(elem, function)? {
+                        values.push(val);
+                    }
+                }
+
+                if values.is_empty() {
+                    return Ok(None);
+                }
+
+                // Get element type from first element
+                let elem_type = values[0].get_type();
+                let array_type = elem_type.array_type(values.len() as u32);
+
+                // Build the array value using insert_value
+                let mut array_val = array_type.get_undef();
+                for (i, val) in values.into_iter().enumerate() {
+                    array_val = self.builder
+                        .build_insert_value(array_val, val, i as u32, "arr_elem")
+                        .map_err(|e| miette::miette!("Failed to insert array element: {:?}", e))?
+                        .into_array_value();
+                }
+
+                Ok(Some(array_val.into()))
+            }
+
+            ExprKind::Index { expr, index } => {
+                // For array indexing, get the array variable pointer and type
+                let (array_ptr, array_ty) = if let ExprKind::Ident(sym) = &expr.kind {
+                    let name = self.interner.resolve(*sym);
+                    if let Some(&(ptr, ty)) = self.variables.get(name.as_str()) {
+                        if ty.is_array_type() {
+                            (ptr, ty.into_array_type())
+                        } else {
+                            return Err(miette::miette!("Cannot index non-array variable"));
+                        }
+                    } else {
+                        return Err(miette::miette!("Unknown variable for indexing"));
+                    }
+                } else {
+                    return Err(miette::miette!("Index expression requires identifier"));
+                };
+
+                // Compile the index
+                let index_val = self.compile_expr(index, function)?
+                    .ok_or_else(|| miette::miette!("Index expression has no index value"))?;
+                let index_int = index_val.into_int_value();
+
+                // Use GEP to get element pointer
+                let indices = [
+                    self.context.i32_type().const_int(0, false),
+                    index_int,
+                ];
+                let elem_ptr = unsafe {
+                    self.builder.build_gep(array_ty, array_ptr, &indices, "index_ptr")
+                        .map_err(|e| miette::miette!("Failed to build gep for index: {:?}", e))?
+                };
+
+                // Load the element
+                let elem_ty = array_ty.get_element_type();
+                let val = self.builder.build_load(elem_ty, elem_ptr, "index_val")
+                    .map_err(|e| miette::miette!("Failed to load indexed element: {:?}", e))?;
+                Ok(Some(val))
+            }
+
             ExprKind::Match { scrutinee, arms } => {
                 // Compile scrutinee
                 let scrutinee_val = self
                     .compile_expr(scrutinee, function)?
                     .ok_or_else(|| miette::miette!("Match scrutinee has no value"))?;
 
-                // We need the scrutinee to be an integer for switch
-                let scrutinee_int = scrutinee_val.into_int_value();
+                // Determine if this is an enum with data (struct type) or simple discriminant
+                let (scrutinee_int, scrutinee_struct_alloca) = if scrutinee_val.is_struct_value() {
+                    // Enum with data - extract discriminant from field 0
+                    let struct_val = scrutinee_val.into_struct_value();
+                    let struct_ty = struct_val.get_type();
+
+                    // Alloca to store the scrutinee so we can extract data later
+                    let alloca = self.builder.build_alloca(struct_ty, "scrutinee_alloca")
+                        .map_err(|e| miette::miette!("Failed to alloca scrutinee: {:?}", e))?;
+                    self.builder.build_store(alloca, struct_val)
+                        .map_err(|e| miette::miette!("Failed to store scrutinee: {:?}", e))?;
+
+                    // Extract discriminant
+                    let disc = self.builder.build_extract_value(struct_val, 0, "disc")
+                        .map_err(|e| miette::miette!("Failed to extract discriminant: {:?}", e))?
+                        .into_int_value();
+
+                    (disc, Some((alloca, struct_ty)))
+                } else {
+                    // Simple integer discriminant
+                    (scrutinee_val.into_int_value(), None)
+                };
 
                 // Create blocks for each arm and merge block
                 let merge_bb = self.context.append_basic_block(function, "match.merge");
@@ -997,9 +1736,46 @@ impl<'a, 'ctx> ModuleCompiler<'a, 'ctx> {
                 // Build switch cases
                 let mut cases = vec![];
                 for (i, arm) in arms.iter().enumerate() {
-                    if let fragile_hir::Pattern::Literal(fragile_hir::Literal::Int(value)) = &arm.pattern {
-                        let case_val = scrutinee_int.get_type().const_int(*value as u64, false);
-                        cases.push((case_val, arm_blocks[i]));
+                    match &arm.pattern {
+                        fragile_hir::Pattern::Literal(fragile_hir::Literal::Int(value)) => {
+                            let case_val = scrutinee_int.get_type().const_int(*value as u64, false);
+                            cases.push((case_val, arm_blocks[i]));
+                        }
+                        fragile_hir::Pattern::Variant { name, patterns: _ } => {
+                            // Look up discriminant for this variant
+                            // Parse name like "Color::Red" or "Option::Some" to get enum name and variant
+                            let name_str = self.interner.resolve(*name);
+                            let parts: Vec<&str> = name_str.split("::").collect();
+                            if parts.len() == 2 {
+                                let enum_name = self.interner.intern(parts[0]);
+                                let variant_name = self.interner.intern(parts[1]);
+
+                                // Try to find enum info - first check non-generic, then look for specializations
+                                let enum_info = if let Some(info) = self.enum_types.get(&enum_name) {
+                                    Some(info)
+                                } else if self.generic_enums.contains_key(&enum_name) {
+                                    // For generic enum, find any specialization that has this variant
+                                    let base_name = self.interner.resolve(enum_name);
+                                    self.enum_types
+                                        .iter()
+                                        .find(|(k, v)| {
+                                            let k_str = self.interner.resolve(**k);
+                                            k_str.starts_with(base_name.as_str()) && v.variant_discriminants.contains_key(&variant_name)
+                                        })
+                                        .map(|(_, v)| v)
+                                } else {
+                                    None
+                                };
+
+                                if let Some(info) = enum_info {
+                                    if let Some(&disc) = info.variant_discriminants.get(&variant_name) {
+                                        let case_val = scrutinee_int.get_type().const_int(disc as u64, false);
+                                        cases.push((case_val, arm_blocks[i]));
+                                    }
+                                }
+                            }
+                        }
+                        _ => {}
                     }
                 }
 
@@ -1007,17 +1783,148 @@ impl<'a, 'ctx> ModuleCompiler<'a, 'ctx> {
                 self.builder.build_switch(scrutinee_int, default_bb, &cases)
                     .map_err(|e| miette::miette!("Failed to build switch: {:?}", e))?;
 
-                // Compile each arm body
-                let mut incoming: Vec<(BasicValueEnum, inkwell::basic_block::BasicBlock)> = vec![];
+                // If no wildcard, add unreachable to the default block
+                if default_block.is_none() {
+                    self.builder.position_at_end(default_bb);
+                    self.builder.build_unreachable()
+                        .map_err(|e| miette::miette!("Failed to build unreachable: {:?}", e))?;
+                }
+
+                // First pass: compile all arm bodies to determine common type
+                let mut arm_results: Vec<Option<(BasicValueEnum, inkwell::basic_block::BasicBlock)>> = vec![];
                 for (i, arm) in arms.iter().enumerate() {
                     self.builder.position_at_end(arm_blocks[i]);
+
+                    // Bind pattern variables if this is a variant pattern with data
+                    if let fragile_hir::Pattern::Variant { name, patterns } = &arm.pattern {
+                        if !patterns.is_empty() {
+                            if let Some((alloca, struct_ty)) = scrutinee_struct_alloca {
+                                // Parse variant name to get enum info
+                                let name_str = self.interner.resolve(*name);
+                                let parts: Vec<&str> = name_str.split("::").collect();
+                                if parts.len() == 2 {
+                                    let enum_name = self.interner.intern(parts[0]);
+                                    let variant_name = self.interner.intern(parts[1]);
+
+                                    // Find enum info - first check non-generic, then look for specializations
+                                    let enum_info = if let Some(info) = self.enum_types.get(&enum_name) {
+                                        Some(info)
+                                    } else if self.generic_enums.contains_key(&enum_name) {
+                                        // For generic enum, find any specialization that has this variant
+                                        let base_name = self.interner.resolve(enum_name);
+                                        self.enum_types
+                                            .iter()
+                                            .find(|(k, v)| {
+                                                let k_str = self.interner.resolve(**k);
+                                                k_str.starts_with(base_name.as_str()) && v.variant_fields.contains_key(&variant_name)
+                                            })
+                                            .map(|(_, v)| v)
+                                    } else {
+                                        None
+                                    };
+
+                                    // Get the variant's field types
+                                    if let Some(enum_info) = enum_info {
+                                        if let Some(field_types) = enum_info.variant_fields.get(&variant_name) {
+                                            // For each pattern binding, extract the data
+                                            for (j, pattern) in patterns.iter().enumerate() {
+                                                if let fragile_hir::Pattern::Ident(binding_sym) = pattern {
+                                                    let binding_name = self.interner.resolve(*binding_sym);
+
+                                                    if j < field_types.len() {
+                                                        let field_ty = field_types[j];
+
+                                                        // GEP to payload field (field 1 of the enum struct)
+                                                        let payload_ptr = self.builder.build_struct_gep(struct_ty, alloca, 1, "payload_ptr")
+                                                            .map_err(|e| miette::miette!("Failed to GEP payload: {:?}", e))?;
+
+                                                        // Cast to the correct data type pointer
+                                                        let data_ptr = self.builder.build_pointer_cast(
+                                                            payload_ptr,
+                                                            field_ty.ptr_type(inkwell::AddressSpace::default()),
+                                                            "data_ptr"
+                                                        ).map_err(|e| miette::miette!("Failed to cast data ptr: {:?}", e))?;
+
+                                                        // Load the data
+                                                        let data_val = self.builder.build_load(field_ty, data_ptr, &binding_name)
+                                                            .map_err(|e| miette::miette!("Failed to load data: {:?}", e))?;
+
+                                                        // Create variable binding
+                                                        let var_alloca = self.builder.build_alloca(field_ty, &binding_name)
+                                                            .map_err(|e| miette::miette!("Failed to alloca binding: {:?}", e))?;
+                                                        self.builder.build_store(var_alloca, data_val)
+                                                            .map_err(|e| miette::miette!("Failed to store binding: {:?}", e))?;
+                                                        self.variables.insert(binding_name.to_string(), (var_alloca, field_ty));
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     if let Some(val) = self.compile_expr(&arm.body, function)? {
+                        let block_end = self.builder.get_insert_block().unwrap();
+                        arm_results.push(Some((val, block_end)));
+                    } else {
+                        arm_results.push(None);
+                    }
+                }
+
+                // Determine common type - prefer i32 if any arm returns i32
+                let mut common_type: Option<inkwell::types::BasicTypeEnum> = None;
+                for result in &arm_results {
+                    if let Some((val, _)) = result {
+                        if val.is_int_value() {
+                            let int_type = val.into_int_value().get_type();
+                            if int_type.get_bit_width() == 32 {
+                                common_type = Some(int_type.as_basic_type_enum());
+                                break;
+                            }
+                        }
+                        if common_type.is_none() {
+                            common_type = Some(val.get_type());
+                        }
+                    }
+                }
+
+                // Second pass: cast values to common type and add branches
+                let mut incoming: Vec<(BasicValueEnum, inkwell::basic_block::BasicBlock)> = vec![];
+                for (i, result) in arm_results.into_iter().enumerate() {
+                    self.builder.position_at_end(arm_blocks[i]);
+
+                    if let Some((val, _)) = result {
+                        // Cast to common type if needed
+                        let casted_val = if let Some(target_ty) = common_type {
+                            if val.get_type() != target_ty && val.is_int_value() && target_ty.is_int_type() {
+                                let int_val = val.into_int_value();
+                                let target_int_ty = target_ty.into_int_type();
+                                if int_val.get_type().get_bit_width() > target_int_ty.get_bit_width() {
+                                    self.builder.build_int_truncate(int_val, target_int_ty, "cast")
+                                        .map_err(|e| miette::miette!("Failed to truncate: {:?}", e))?
+                                        .as_basic_value_enum()
+                                } else if int_val.get_type().get_bit_width() < target_int_ty.get_bit_width() {
+                                    self.builder.build_int_s_extend(int_val, target_int_ty, "cast")
+                                        .map_err(|e| miette::miette!("Failed to extend: {:?}", e))?
+                                        .as_basic_value_enum()
+                                } else {
+                                    val
+                                }
+                            } else {
+                                val
+                            }
+                        } else {
+                            val
+                        };
+
                         if !self.current_block_has_terminator() {
                             self.builder.build_unconditional_branch(merge_bb)
                                 .map_err(|e| miette::miette!("Failed to build branch: {:?}", e))?;
                         }
                         let block_end = self.builder.get_insert_block().unwrap();
-                        incoming.push((val, block_end));
+                        incoming.push((casted_val, block_end));
                     } else if !self.current_block_has_terminator() {
                         self.builder.build_unconditional_branch(merge_bb)
                             .map_err(|e| miette::miette!("Failed to build branch: {:?}", e))?;
@@ -1035,7 +1942,8 @@ impl<'a, 'ctx> ModuleCompiler<'a, 'ctx> {
                     for (val, block) in &incoming {
                         phi.add_incoming(&[(val, *block)]);
                     }
-                    Ok(Some(phi.as_basic_value()))
+                    let result = phi.as_basic_value();
+                    Ok(Some(result))
                 }
             }
 
@@ -1125,29 +2033,139 @@ impl<'a, 'ctx> ModuleCompiler<'a, 'ctx> {
                 init,
                 mutability: _,
             } => {
-                if let fragile_hir::Pattern::Ident(sym) = pattern {
-                    let name = self.interner.resolve(*sym);
+                match pattern {
+                    fragile_hir::Pattern::Ident(sym) => {
+                        let name = self.interner.resolve(*sym);
 
-                    // Determine type from init or type annotation
-                    let llvm_ty = if let Some(init_expr) = init {
-                        let init_val = self.compile_expr(init_expr, function)?;
-                        if let Some(val) = init_val {
-                            let val_ty = val.get_type();
-                            let alloca = self.create_entry_alloca(function, &name, val_ty);
-                            self.builder.build_store(alloca, val)
-                                .map_err(|e| miette::miette!("Failed to store: {:?}", e))?;
-                            self.variables.insert(name.to_string(), (alloca, val_ty));
+                        // Determine type from type annotation first, then init
+                        let declared_ty = ty.as_ref().and_then(|t| self.lower_type(t));
+
+                        let llvm_ty = if let Some(init_expr) = init {
+                            // Track pointee type for reference expressions
+                            if let ExprKind::Unary { op: UnaryOp::AddrOf | UnaryOp::AddrOfMut, operand } = &init_expr.kind {
+                                // If taking a reference to an identifier, record its type
+                                if let ExprKind::Ident(ref_sym) = &operand.kind {
+                                    let ref_name = self.interner.resolve(*ref_sym);
+                                    if let Some(&(_, ref_ty)) = self.variables.get(ref_name.as_str()) {
+                                        self.pointer_element_types.insert(name.to_string(), ref_ty);
+                                    }
+                                }
+                            }
+
+                            let init_val = self.compile_expr(init_expr, function)?;
+                            if let Some(val) = init_val {
+                                // Use declared type if available, otherwise use inferred type
+                                let target_ty = declared_ty.unwrap_or_else(|| val.get_type());
+                                let alloca = self.create_entry_alloca(function, &name, target_ty);
+
+                                // Cast value if needed (e.g., i64 literal to i32)
+                                let store_val = if val.get_type() != target_ty && val.is_int_value() && target_ty.is_int_type() {
+                                    self.builder.build_int_cast(
+                                        val.into_int_value(),
+                                        target_ty.into_int_type(),
+                                        "cast"
+                                    ).map_err(|e| miette::miette!("Failed to cast: {:?}", e))?.into()
+                                } else {
+                                    val
+                                };
+
+                                self.builder.build_store(alloca, store_val)
+                                    .map_err(|e| miette::miette!("Failed to store: {:?}", e))?;
+                                self.variables.insert(name.to_string(), (alloca, target_ty));
+                            }
+                            return Ok(());
+                        } else {
+                            declared_ty
+                        };
+
+                        if let Some(llvm_ty) = llvm_ty {
+                            let alloca = self.create_entry_alloca(function, &name, llvm_ty);
+                            self.variables.insert(name.to_string(), (alloca, llvm_ty));
                         }
-                        return Ok(());
-                    } else if let Some(t) = ty {
-                        self.lower_type(t)
-                    } else {
-                        None
-                    };
+                    }
 
-                    if let Some(llvm_ty) = llvm_ty {
-                        let alloca = self.create_entry_alloca(function, &name, llvm_ty);
-                        self.variables.insert(name.to_string(), (alloca, llvm_ty));
+                    fragile_hir::Pattern::Tuple(patterns) => {
+                        // Destructure a tuple
+                        if let Some(init_expr) = init {
+                            let init_val = self.compile_expr(init_expr, function)?
+                                .ok_or_else(|| miette::miette!("Tuple destructuring init has no value"))?;
+
+                            // The init value should be a struct (tuple)
+                            if !init_val.is_struct_value() {
+                                return Err(miette::miette!("Cannot destructure non-tuple value"));
+                            }
+                            let tuple_val = init_val.into_struct_value();
+
+                            // Extract and bind each element
+                            for (i, pat) in patterns.iter().enumerate() {
+                                if let fragile_hir::Pattern::Ident(sym) = pat {
+                                    let name = self.interner.resolve(*sym);
+                                    let elem_val = self.builder
+                                        .build_extract_value(tuple_val, i as u32, &format!("tuple.{}", i))
+                                        .map_err(|e| miette::miette!("Failed to extract tuple element: {:?}", e))?;
+                                    let elem_ty = elem_val.get_type();
+                                    let alloca = self.create_entry_alloca(function, &name, elem_ty);
+                                    self.builder.build_store(alloca, elem_val)
+                                        .map_err(|e| miette::miette!("Failed to store tuple element: {:?}", e))?;
+                                    self.variables.insert(name.to_string(), (alloca, elem_ty));
+                                }
+                                // Skip wildcard patterns
+                            }
+                        }
+                    }
+
+                    fragile_hir::Pattern::Struct { name, fields } => {
+                        // Destructure a struct
+                        if let Some(init_expr) = init {
+                            let init_val = self.compile_expr(init_expr, function)?
+                                .ok_or_else(|| miette::miette!("Struct destructuring init has no value"))?;
+
+                            // The init value should be a struct
+                            if !init_val.is_struct_value() {
+                                return Err(miette::miette!("Cannot destructure non-struct value"));
+                            }
+                            let struct_val = init_val.into_struct_value();
+
+                            // Get struct info to find field indices
+                            let struct_info = self.struct_types.get(name)
+                                .ok_or_else(|| miette::miette!("Unknown struct type for destructuring"))?
+                                .clone();
+
+                            // Extract and bind each field
+                            for (field_name, pat) in fields {
+                                if let fragile_hir::Pattern::Ident(var_sym) = pat {
+                                    let field_idx = struct_info.field_indices.get(field_name)
+                                        .ok_or_else(|| {
+                                            let fn_str = self.interner.resolve(*field_name);
+                                            miette::miette!("Unknown field {} in struct", fn_str)
+                                        })?;
+
+                                    let field_name_str = self.interner.resolve(*field_name);
+                                    let elem_val = self.builder
+                                        .build_extract_value(struct_val, *field_idx, &format!("field.{}", field_name_str))
+                                        .map_err(|e| miette::miette!("Failed to extract struct field: {:?}", e))?;
+                                    let elem_ty = elem_val.get_type();
+
+                                    let var_name = self.interner.resolve(*var_sym);
+                                    let alloca = self.create_entry_alloca(function, &var_name, elem_ty);
+                                    self.builder.build_store(alloca, elem_val)
+                                        .map_err(|e| miette::miette!("Failed to store struct field: {:?}", e))?;
+                                    self.variables.insert(var_name.to_string(), (alloca, elem_ty));
+                                }
+                                // Skip wildcard patterns
+                            }
+                        }
+                    }
+
+                    fragile_hir::Pattern::Wildcard => {
+                        // Evaluate init for side effects but don't bind
+                        if let Some(init_expr) = init {
+                            self.compile_expr(init_expr, function)?;
+                        }
+                    }
+
+                    _ => {
+                        // Other patterns not yet supported
                     }
                 }
             }
@@ -1201,6 +2219,23 @@ impl<'a, 'ctx> ModuleCompiler<'a, 'ctx> {
         if lhs.is_int_value() && rhs.is_int_value() {
             let lhs_int = lhs.into_int_value();
             let rhs_int = rhs.into_int_value();
+
+            // If types don't match, cast the smaller one to the larger
+            let (lhs_int, rhs_int) = if lhs_int.get_type() != rhs_int.get_type() {
+                let lhs_bits = lhs_int.get_type().get_bit_width();
+                let rhs_bits = rhs_int.get_type().get_bit_width();
+                if lhs_bits > rhs_bits {
+                    let rhs_cast = self.builder.build_int_cast(rhs_int, lhs_int.get_type(), "cast")
+                        .map_err(|e| miette::miette!("Failed to cast rhs: {:?}", e))?;
+                    (lhs_int, rhs_cast)
+                } else {
+                    let lhs_cast = self.builder.build_int_cast(lhs_int, rhs_int.get_type(), "cast")
+                        .map_err(|e| miette::miette!("Failed to cast lhs: {:?}", e))?;
+                    (lhs_cast, rhs_int)
+                }
+            } else {
+                (lhs_int, rhs_int)
+            };
 
             let result = match op {
                 BinOp::Add => self.builder.build_int_add(lhs_int, rhs_int, "add"),
@@ -1361,7 +2396,33 @@ impl<'a, 'ctx> ModuleCompiler<'a, 'ctx> {
                     Err(miette::miette!("Cannot not this type"))
                 }
             }
-            _ => Ok(None), // TODO: Deref, AddrOf
+            UnaryOp::Deref => {
+                // Dereference a pointer
+                if val.is_pointer_value() {
+                    let ptr = val.into_pointer_value();
+                    // For now, assume i32 as the pointee type
+                    // TODO: Proper type tracking for pointers
+                    let i32_ty = self.context.i32_type();
+                    let result = self.builder.build_load(i32_ty, ptr, "deref")
+                        .map_err(|e| miette::miette!("Failed to build load: {:?}", e))?;
+                    Ok(Some(result))
+                } else {
+                    Err(miette::miette!("Cannot dereference non-pointer"))
+                }
+            }
+            UnaryOp::AddrOf | UnaryOp::AddrOfMut => {
+                // For address-of, we need an alloca to get a pointer
+                // This is a simplified implementation
+                if val.is_int_value() {
+                    let alloca = self.builder.build_alloca(val.get_type(), "addr_temp")
+                        .map_err(|e| miette::miette!("Failed to build alloca: {:?}", e))?;
+                    self.builder.build_store(alloca, val)
+                        .map_err(|e| miette::miette!("Failed to build store: {:?}", e))?;
+                    Ok(Some(alloca.into()))
+                } else {
+                    Err(miette::miette!("Cannot take address of this value type"))
+                }
+            }
         }
     }
 
@@ -1394,7 +2455,11 @@ impl<'a, 'ctx> ModuleCompiler<'a, 'ctx> {
                 Some(inner_ty.array_type(*size as u32).into())
             }
             Type::Named { name, .. } => {
-                // Look up struct type
+                // First check if it's a type alias
+                if let Some(aliased_ty) = self.type_aliases.get(name) {
+                    return self.lower_type(aliased_ty);
+                }
+                // Then look up struct type
                 self.struct_types
                     .get(name)
                     .map(|info| info.llvm_type.as_basic_type_enum())
@@ -1406,6 +2471,14 @@ impl<'a, 'ctx> ModuleCompiler<'a, 'ctx> {
                     .filter_map(|t| self.lower_type(t))
                     .collect();
                 Some(self.context.struct_type(&field_types, false).into())
+            }
+            Type::Slice { .. } => {
+                // Slices are fat pointers: { ptr, len }
+                // For now, represent as a struct with pointer and i64 length
+                let ptr_ty = self.context.ptr_type(AddressSpace::default());
+                let len_ty = self.context.i64_type();
+                let slice_ty = self.context.struct_type(&[ptr_ty.into(), len_ty.into()], false);
+                Some(slice_ty.into())
             }
             _ => None,
         }
@@ -1512,6 +2585,7 @@ impl<'a, 'ctx> ModuleCompiler<'a, 'ctx> {
                 let inner: Vec<_> = types.iter().map(|t| self.type_to_string(t)).collect();
                 format!("tuple_{}", inner.join("_"))
             }
+            Type::Slice { inner } => format!("slice_{}", self.type_to_string(inner)),
             _ => "unknown".to_string(),
         }
     }

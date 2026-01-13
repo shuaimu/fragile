@@ -1,9 +1,9 @@
 use fragile_common::{SourceFile, SourceId, Span, Symbol, SymbolInterner};
 use fragile_hir::{
-    Abi, Attribute, BinOp, EnumDef, EnumVariant, Expr, ExprKind, Field, FnDef, FnSig, ImplDef,
-    Item, ItemKind, Literal, MatchArm, ModDef, Module, Mutability, Param, Pattern, PrimitiveType,
-    SourceLang, Stmt, StmtKind, StructDef, TraitBound, TraitDef, TraitMethod, Type, TypeParam,
-    UseDef, Visibility,
+    Abi, AssociatedType, Attribute, BinOp, ConstDef, EnumDef, EnumVariant, Expr, ExprKind, Field,
+    FnDef, FnSig, ImplDef, Item, ItemKind, Literal, MatchArm, ModDef, Module, Mutability, Param,
+    Pattern, PrimitiveType, SourceLang, StaticDef, Stmt, StmtKind, StructDef, TraitBound, TraitDef,
+    TraitMethod, Type, TypeAlias, TypeParam, UseDef, Visibility,
 };
 use miette::Result;
 use tree_sitter::{Node, Tree};
@@ -184,6 +184,18 @@ impl<'a> LoweringContext<'a> {
                 let mod_def = self.lower_mod(node)?;
                 Ok(vec![Item::new(ItemKind::Mod(mod_def), span)])
             }
+            "const_item" => {
+                let const_def = self.lower_const(node)?;
+                Ok(vec![Item::new(ItemKind::Const(const_def), span)])
+            }
+            "static_item" => {
+                let static_def = self.lower_static(node)?;
+                Ok(vec![Item::new(ItemKind::Static(static_def), span)])
+            }
+            "type_item" => {
+                let type_alias = self.lower_type_alias(node)?;
+                Ok(vec![Item::new(ItemKind::TypeAlias(type_alias), span)])
+            }
             _ => Ok(vec![]), // Skip unknown nodes
         }
     }
@@ -296,6 +308,184 @@ impl<'a> LoweringContext<'a> {
         }
 
         Ok(path)
+    }
+
+    fn lower_const(&self, node: Node) -> Result<ConstDef> {
+        let span = self.span(node);
+
+        // Get visibility
+        let vis = self.lower_visibility(node);
+
+        // Get name (identifier)
+        let name_node = node
+            .children(&mut node.walk())
+            .find(|c| c.kind() == "identifier")
+            .ok_or_else(|| miette::miette!("Const missing name"))?;
+        let name = self.intern(self.text(name_node));
+
+        // Get type - it's after the :
+        let ty_node = node
+            .children(&mut node.walk())
+            .find(|c| {
+                c.kind() != "const"
+                    && c.kind() != "identifier"
+                    && c.kind() != "visibility_modifier"
+                    && c.kind() != ":"
+                    && c.kind() != "="
+                    && c.kind() != ";"
+                    && !self.is_expression_node(c.kind())
+            })
+            .ok_or_else(|| miette::miette!("Const missing type"))?;
+        let ty = self.lower_type(ty_node)?;
+
+        // Get value expression (the last meaningful child before ;)
+        let value_node = node
+            .children(&mut node.walk())
+            .filter(|c| self.is_expression_node(c.kind()))
+            .last()
+            .ok_or_else(|| miette::miette!("Const missing value"))?;
+        let value = self.lower_expr(value_node)?;
+
+        Ok(ConstDef {
+            name,
+            vis,
+            ty,
+            value,
+            span,
+        })
+    }
+
+    fn lower_static(&self, node: Node) -> Result<StaticDef> {
+        let span = self.span(node);
+
+        // Get visibility
+        let vis = self.lower_visibility(node);
+
+        // Check for mut
+        let mutability = if node
+            .children(&mut node.walk())
+            .any(|c| c.kind() == "mutable_specifier")
+        {
+            Mutability::Mutable
+        } else {
+            Mutability::Immutable
+        };
+
+        // Get name (identifier)
+        let name_node = node
+            .children(&mut node.walk())
+            .find(|c| c.kind() == "identifier")
+            .ok_or_else(|| miette::miette!("Static missing name"))?;
+        let name = self.intern(self.text(name_node));
+
+        // Get type - find type node (skip static, mut, identifier, etc.)
+        let ty_node = node
+            .children(&mut node.walk())
+            .find(|c| {
+                c.kind() != "static"
+                    && c.kind() != "mutable_specifier"
+                    && c.kind() != "identifier"
+                    && c.kind() != "visibility_modifier"
+                    && c.kind() != ":"
+                    && c.kind() != "="
+                    && c.kind() != ";"
+                    && !self.is_expression_node(c.kind())
+            })
+            .ok_or_else(|| miette::miette!("Static missing type"))?;
+        let ty = self.lower_type(ty_node)?;
+
+        // Get init expression (optional, but usually present)
+        let init = node
+            .children(&mut node.walk())
+            .filter(|c| self.is_expression_node(c.kind()))
+            .last()
+            .map(|value_node| self.lower_expr(value_node))
+            .transpose()?;
+
+        Ok(StaticDef {
+            name,
+            vis,
+            mutability,
+            ty,
+            init,
+            span,
+        })
+    }
+
+    fn lower_type_alias(&self, node: Node) -> Result<TypeAlias> {
+        let span = self.span(node);
+
+        // Get visibility
+        let vis = self.lower_visibility(node);
+
+        // Get name (type_identifier)
+        let name_node = node
+            .children(&mut node.walk())
+            .find(|c| c.kind() == "type_identifier")
+            .ok_or_else(|| miette::miette!("Type alias missing name"))?;
+        let name = self.intern(self.text(name_node));
+
+        // Get type parameters (optional)
+        let type_params = if let Some(type_params_node) = node
+            .children(&mut node.walk())
+            .find(|c| c.kind() == "type_parameters")
+        {
+            self.lower_type_parameters(type_params_node)?
+        } else {
+            vec![]
+        };
+
+        // Get the aliased type - find the type node after '='
+        // The name is a type_identifier before '=', and the aliased type is after '='
+        let mut found_equals = false;
+        let mut ty_node = None;
+        for c in node.children(&mut node.walk()) {
+            if c.kind() == "=" {
+                found_equals = true;
+                continue;
+            }
+            if found_equals && c.kind() != ";" {
+                ty_node = Some(c);
+                break;
+            }
+        }
+        let ty_node = ty_node.ok_or_else(|| miette::miette!("Type alias missing aliased type"))?;
+        let ty = self.lower_type(ty_node)?;
+
+        Ok(TypeAlias {
+            name,
+            vis,
+            type_params,
+            ty,
+            span,
+        })
+    }
+
+    fn is_expression_node(&self, kind: &str) -> bool {
+        matches!(
+            kind,
+            "integer_literal"
+                | "float_literal"
+                | "string_literal"
+                | "boolean_literal"
+                | "char_literal"
+                | "identifier"
+                | "binary_expression"
+                | "unary_expression"
+                | "call_expression"
+                | "field_expression"
+                | "index_expression"
+                | "reference_expression"
+                | "dereference_expression"
+                | "struct_expression"
+                | "tuple_expression"
+                | "array_expression"
+                | "closure_expression"
+                | "block"
+                | "if_expression"
+                | "match_expression"
+                | "parenthesized_expression"
+        )
     }
 
     fn lower_function_with_attrs(&self, node: Node, abi: Abi, attributes: Vec<Attribute>) -> Result<FnDef> {
@@ -498,6 +688,13 @@ impl<'a> LoweringContext<'a> {
             .ok_or_else(|| miette::miette!("Enum missing name"))?;
         let name = self.intern(self.text(name_node));
 
+        // Get type parameters (generics)
+        let type_params = if let Some(type_params_node) = node.child_by_field_name("type_parameters") {
+            self.lower_type_parameters(type_params_node)?
+        } else {
+            vec![]
+        };
+
         // Get variants from enum_variant_list (body)
         let mut variants = vec![];
         if let Some(body_node) = node.child_by_field_name("body") {
@@ -516,7 +713,7 @@ impl<'a> LoweringContext<'a> {
         Ok(EnumDef {
             name,
             vis,
-            type_params: vec![], // TODO: generics
+            type_params,
             variants,
             span,
         })
@@ -530,12 +727,29 @@ impl<'a> LoweringContext<'a> {
             .map(|n| self.intern(self.text(n)))
             .ok_or_else(|| miette::miette!("Enum variant missing name"))?;
 
-        // For now, we support simple unit variants (no fields)
-        // TODO: Support tuple variants and struct variants
+        // Check for tuple variant fields (e.g., Some(i32))
+        let mut fields = vec![];
+        if let Some(ordered_fields) = node.children(&mut node.walk()).find(|c| c.kind() == "ordered_field_declaration_list") {
+            let mut field_idx = 0;
+            for field_child in ordered_fields.children(&mut ordered_fields.walk()) {
+                // Each child should be a type (skip punctuation)
+                if field_child.kind() != "(" && field_child.kind() != ")" && field_child.kind() != "," {
+                    let ty = self.lower_type(field_child)?;
+                    // Tuple variant fields don't have names, use index as name
+                    let field_name = self.intern(&format!("__{}", field_idx));
+                    field_idx += 1;
+                    fields.push(Field {
+                        name: field_name,
+                        ty,
+                        is_public: false,
+                    });
+                }
+            }
+        }
 
         Ok(EnumVariant {
             name,
-            fields: vec![],
+            fields,
             discriminant: Some(default_discriminant),
         })
     }
@@ -543,12 +757,28 @@ impl<'a> LoweringContext<'a> {
     fn lower_impl(&self, node: Node) -> Result<ImplDef> {
         let span = self.span(node);
 
-        // Get the type being implemented (e.g., Point in `impl Point`)
-        let type_node = node
+        // Check if this is a trait impl (has 'for' keyword)
+        let has_for = node.children(&mut node.walk()).any(|c| c.kind() == "for");
+
+        // Collect type identifiers
+        let type_nodes: Vec<_> = node
             .children(&mut node.walk())
-            .find(|c| c.kind() == "type_identifier" || c.kind() == "generic_type")
-            .ok_or_else(|| miette::miette!("Impl missing type"))?;
-        let self_ty = self.lower_type(type_node)?;
+            .filter(|c| c.kind() == "type_identifier" || c.kind() == "generic_type")
+            .collect();
+
+        // Determine trait_ref and self_ty based on structure
+        let (trait_ref, self_ty) = if has_for && type_nodes.len() >= 2 {
+            // impl Trait for Type: first is trait, second is self_ty
+            let trait_name = self.intern(self.text(type_nodes[0]));
+            let self_ty = self.lower_type(type_nodes[1])?;
+            (Some(trait_name), self_ty)
+        } else if !type_nodes.is_empty() {
+            // impl Type: just self_ty
+            let self_ty = self.lower_type(type_nodes[0])?;
+            (None, self_ty)
+        } else {
+            return Err(miette::miette!("Impl missing type"));
+        };
 
         // Get methods from declaration_list
         let mut items = vec![];
@@ -558,16 +788,24 @@ impl<'a> LoweringContext<'a> {
         {
             let mut cursor = decl_list.walk();
             for child in decl_list.children(&mut cursor) {
-                if child.kind() == "function_item" {
-                    let fn_def = self.lower_method(child, &self_ty)?;
-                    items.push(Item::new(ItemKind::Function(fn_def), self.span(child)));
+                match child.kind() {
+                    "function_item" => {
+                        let fn_def = self.lower_method(child, &self_ty)?;
+                        items.push(Item::new(ItemKind::Function(fn_def), self.span(child)));
+                    }
+                    "type_item" => {
+                        // Associated type implementation: type Item = i32;
+                        let type_alias = self.lower_type_alias(child)?;
+                        items.push(Item::new(ItemKind::TypeAlias(type_alias), self.span(child)));
+                    }
+                    _ => {}
                 }
             }
         }
 
         Ok(ImplDef {
             type_params: vec![], // TODO: generics
-            trait_ref: None,     // TODO: trait impls
+            trait_ref,
             self_ty,
             items,
             span,
@@ -594,7 +832,8 @@ impl<'a> LoweringContext<'a> {
             vec![]
         };
 
-        // Get methods from declaration_list
+        // Get associated types and methods from declaration_list
+        let mut associated_types = vec![];
         let mut methods = vec![];
         if let Some(decl_list) = node
             .children(&mut node.walk())
@@ -602,8 +841,30 @@ impl<'a> LoweringContext<'a> {
         {
             let mut cursor = decl_list.walk();
             for child in decl_list.children(&mut cursor) {
-                if child.kind() == "function_signature_item" {
-                    methods.push(self.lower_trait_method(child)?);
+                match child.kind() {
+                    "function_signature_item" => {
+                        methods.push(self.lower_trait_method(child)?);
+                    }
+                    "associated_type" => {
+                        // Associated type without default: type Item;
+                        let type_name = child
+                            .children(&mut child.walk())
+                            .find(|c| c.kind() == "type_identifier")
+                            .ok_or_else(|| miette::miette!("Associated type missing name"))?;
+                        associated_types.push(AssociatedType {
+                            name: self.intern(self.text(type_name)),
+                            default_ty: None,
+                        });
+                    }
+                    "type_item" => {
+                        // Associated type with default: type Size = usize;
+                        let type_alias = self.lower_type_alias(child)?;
+                        associated_types.push(AssociatedType {
+                            name: type_alias.name,
+                            default_ty: Some(type_alias.ty),
+                        });
+                    }
+                    _ => {}
                 }
             }
         }
@@ -612,6 +873,7 @@ impl<'a> LoweringContext<'a> {
             name,
             vis,
             type_params,
+            associated_types,
             methods,
             span,
         })
@@ -841,12 +1103,20 @@ impl<'a> LoweringContext<'a> {
                 })
             }
             "pointer_type" => {
-                let mutable = node.child_by_field_name("mutable").is_some();
-                let inner = node
-                    .child_by_field_name("type")
-                    .map(|n| self.lower_type(n))
-                    .transpose()?
-                    .unwrap_or(Type::Error);
+                // pointer_type: * const/mut primitive_type
+                // Check for mutable specifier
+                let mutable = node.children(&mut node.walk())
+                    .any(|c| c.kind() == "mutable_specifier");
+                // Find the inner type (the last child that's a type)
+                let inner_node = node
+                    .children(&mut node.walk())
+                    .filter(|c| c.kind() != "*" && c.kind() != "const" && c.kind() != "mutable_specifier")
+                    .last();
+                let inner = if let Some(n) = inner_node {
+                    self.lower_type(n)?
+                } else {
+                    Type::Error
+                };
                 Ok(Type::Pointer {
                     inner: Box::new(inner),
                     mutability: if mutable {
@@ -857,19 +1127,35 @@ impl<'a> LoweringContext<'a> {
                 })
             }
             "array_type" => {
-                let inner = node
-                    .child_by_field_name("element")
-                    .map(|n| self.lower_type(n))
-                    .transpose()?
-                    .unwrap_or(Type::Error);
-                let size = node
-                    .child_by_field_name("length")
-                    .and_then(|n| self.text(n).parse().ok())
-                    .unwrap_or(0);
-                Ok(Type::Array {
-                    inner: Box::new(inner),
-                    size,
-                })
+                // Distinguish between:
+                // - Slice type [T]: 3 children: [ T ]
+                // - Array type [T; N]: 5 children: [ T ; N ]
+                let children: Vec<_> = node.children(&mut node.walk()).collect();
+                let has_semicolon = children.iter().any(|c| c.kind() == ";");
+
+                // Find the element type (first type child, skip '[')
+                let inner_node = children.iter()
+                    .find(|c| c.kind() != "[" && c.kind() != "]" && c.kind() != ";" && c.kind() != "integer_literal")
+                    .ok_or_else(|| miette::miette!("Array type missing element type"))?;
+                let inner = self.lower_type(*inner_node)?;
+
+                if has_semicolon {
+                    // Fixed-size array [T; N]
+                    let size = children.iter()
+                        .find(|c| c.kind() == "integer_literal")
+                        .map(|n| self.text(*n).parse().ok())
+                        .flatten()
+                        .unwrap_or(0);
+                    Ok(Type::Array {
+                        inner: Box::new(inner),
+                        size,
+                    })
+                } else {
+                    // Slice type [T]
+                    Ok(Type::Slice {
+                        inner: Box::new(inner),
+                    })
+                }
             }
             "tuple_type" => {
                 // Parse (T1, T2, ...)
@@ -906,6 +1192,23 @@ impl<'a> LoweringContext<'a> {
                 }
 
                 Ok(Type::Named { name, type_args })
+            }
+            "scoped_type_identifier" => {
+                // Handle scoped types like Self::Item, std::io::Error
+                // Collect path segments
+                let mut path_parts = vec![];
+                let mut cursor = node.walk();
+                for child in node.children(&mut cursor) {
+                    match child.kind() {
+                        "identifier" | "type_identifier" => {
+                            path_parts.push(self.text(child));
+                        }
+                        _ => {}
+                    }
+                }
+                let path = path_parts.join("::");
+                let name = self.intern(&path);
+                Ok(Type::Named { name, type_args: vec![] })
             }
             _ => {
                 // Try as named type
@@ -995,10 +1298,13 @@ impl<'a> LoweringContext<'a> {
         let mut final_expr = None;
 
         let mut cursor = node.walk();
-        // Filter out braces when collecting children
+        // Filter out braces and comments when collecting children
         let children: Vec<_> = node
             .children(&mut cursor)
-            .filter(|c| c.kind() != "{" && c.kind() != "}")
+            .filter(|c| {
+                c.kind() != "{" && c.kind() != "}" &&
+                c.kind() != "line_comment" && c.kind() != "block_comment"
+            })
             .collect();
 
         for (i, child) in children.iter().enumerate() {
@@ -1099,18 +1405,72 @@ impl<'a> LoweringContext<'a> {
                 }
                 Ok(Pattern::Tuple(patterns))
             }
+            "struct_pattern" => {
+                // Parse: Point { x, y } or Point { x: a, y: b }
+                let name_node = node.child(0)
+                    .ok_or_else(|| miette::miette!("Struct pattern missing name"))?;
+                let name = self.intern(self.text(name_node));
+
+                let mut fields = vec![];
+                let mut cursor = node.walk();
+                for child in node.children(&mut cursor) {
+                    if child.kind() == "field_pattern" {
+                        // field_pattern contains either:
+                        // - shorthand_field_identifier (just "x")
+                        // - identifier: pattern
+                        let field_children: Vec<_> = child.children(&mut child.walk()).collect();
+                        if field_children.len() == 1 {
+                            // Shorthand: just the field name
+                            let field_name = self.intern(self.text(field_children[0]));
+                            fields.push((field_name, Pattern::Ident(field_name)));
+                        } else if field_children.len() >= 3 {
+                            // Full form: name: pattern
+                            let field_name = self.intern(self.text(field_children[0]));
+                            let pattern = self.lower_pattern(field_children[2])?;
+                            fields.push((field_name, pattern));
+                        }
+                    }
+                }
+
+                Ok(Pattern::Struct { name, fields })
+            }
             "match_pattern" => {
                 // match_pattern wraps the actual pattern
                 let mut cursor = node.walk();
                 for child in node.children(&mut cursor) {
                     match child.kind() {
-                        "_" | "identifier" | "integer_literal" | "tuple_pattern" => {
+                        "_" | "identifier" | "integer_literal" | "tuple_pattern"
+                        | "tuple_struct_pattern" | "scoped_identifier" | "struct_pattern" => {
                             return self.lower_pattern(child);
                         }
                         _ => continue,
                     }
                 }
                 Ok(Pattern::Wildcard)
+            }
+            "tuple_struct_pattern" => {
+                // Enum variant with data: Option::Some(val)
+                // First child is the path (scoped_identifier or identifier)
+                // Remaining children (in parens) are the sub-patterns
+                let path_node = node.child(0)
+                    .ok_or_else(|| miette::miette!("Tuple struct pattern missing path"))?;
+                let name = self.intern(self.text(path_node));
+
+                let mut patterns = vec![];
+                let mut cursor = node.walk();
+                for child in node.children(&mut cursor) {
+                    if child.kind() != "(" && child.kind() != ")" && child.kind() != ","
+                        && child != path_node {
+                        patterns.push(self.lower_pattern(child)?);
+                    }
+                }
+
+                Ok(Pattern::Variant { name, patterns })
+            }
+            "scoped_identifier" => {
+                // Enum variant without data: Option::None
+                let name = self.intern(self.text(node));
+                Ok(Pattern::Variant { name, patterns: vec![] })
             }
             _ => {
                 // Default to identifier
@@ -1246,6 +1606,54 @@ impl<'a> LoweringContext<'a> {
                 }
             }
 
+            "reference_expression" => {
+                // &x or &mut x
+                let mutable = node.children(&mut node.walk())
+                    .any(|c| c.kind() == "mutable_specifier");
+                let inner = node
+                    .children(&mut node.walk())
+                    .filter(|c| c.kind() != "&" && c.kind() != "mutable_specifier")
+                    .next()
+                    .map(|n| self.lower_expr(n))
+                    .transpose()?
+                    .ok_or_else(|| miette::miette!("Reference expr missing value"))?;
+
+                if mutable {
+                    ExprKind::Unary {
+                        op: fragile_hir::UnaryOp::AddrOfMut,
+                        operand: Box::new(inner),
+                    }
+                } else {
+                    ExprKind::Unary {
+                        op: fragile_hir::UnaryOp::AddrOf,
+                        operand: Box::new(inner),
+                    }
+                }
+            }
+
+            "type_cast_expression" => {
+                // expr as Type
+                let value = node
+                    .children(&mut node.walk())
+                    .filter(|c| c.kind() != "as")
+                    .next()
+                    .map(|n| self.lower_expr(n))
+                    .transpose()?
+                    .ok_or_else(|| miette::miette!("Cast missing value"))?;
+                let target_type = node
+                    .children(&mut node.walk())
+                    .filter(|c| c.kind() != "as")
+                    .nth(1)
+                    .map(|n| self.lower_type(n))
+                    .transpose()?
+                    .ok_or_else(|| miette::miette!("Cast missing target type"))?;
+
+                ExprKind::Cast {
+                    expr: Box::new(value),
+                    ty: target_type,
+                }
+            }
+
             "call_expression" => {
                 let callee_node = node
                     .child_by_field_name("function")
@@ -1362,6 +1770,18 @@ impl<'a> LoweringContext<'a> {
                 return self.lower_block(node);
             }
 
+            "unsafe_block" => {
+                // Unsafe block is just a block with the unsafe keyword
+                // For codegen purposes, we treat it as a regular block
+                // The inner block is the second child (after 'unsafe' keyword)
+                if let Some(inner_block) = node.child_by_field_name("block") {
+                    return self.lower_block(inner_block);
+                } else if let Some(inner_block) = node.children(&mut node.walk()).find(|c| c.kind() == "block") {
+                    return self.lower_block(inner_block);
+                }
+                return Err(miette::miette!("Unsafe block missing inner block"));
+            }
+
             "parenthesized_expression" => {
                 if let Some(inner) = node.child(1) {
                     return self.lower_expr(inner);
@@ -1384,6 +1804,42 @@ impl<'a> LoweringContext<'a> {
                     }
                 }
                 ExprKind::Tuple(elements)
+            }
+
+            "array_expression" => {
+                // Parse [expr1, expr2, ...]
+                let mut elements = vec![];
+                let mut cursor = node.walk();
+                for child in node.children(&mut cursor) {
+                    match child.kind() {
+                        "[" | "]" | "," => continue,
+                        _ => {
+                            elements.push(self.lower_expr(child)?);
+                        }
+                    }
+                }
+                ExprKind::Array(elements)
+            }
+
+            "index_expression" => {
+                // Parse arr[index]
+                let children: Vec<_> = node.children(&mut node.walk()).collect();
+                // First child is the array/slice, find index after '['
+                let array_node = children.first()
+                    .ok_or_else(|| miette::miette!("Index expression missing array"))?;
+                let array_expr = self.lower_expr(*array_node)?;
+
+                // Find the index expression (between [ and ])
+                let index_node = children.iter()
+                    .skip_while(|c| c.kind() != "[")
+                    .find(|c| c.kind() != "[" && c.kind() != "]")
+                    .ok_or_else(|| miette::miette!("Index expression missing index"))?;
+                let index = self.lower_expr(*index_node)?;
+
+                ExprKind::Index {
+                    expr: Box::new(array_expr),
+                    index: Box::new(index),
+                }
             }
 
             "struct_expression" => {
@@ -1443,6 +1899,93 @@ impl<'a> LoweringContext<'a> {
 
             "closure_expression" => {
                 self.lower_closure(node)?
+            }
+
+            "loop_expression" => {
+                // Parse: loop { body }
+                let body_node = node
+                    .children(&mut node.walk())
+                    .find(|c| c.kind() == "block")
+                    .ok_or_else(|| miette::miette!("Loop missing body"))?;
+                let body = self.lower_block(body_node)?;
+                ExprKind::Loop {
+                    body: Box::new(body),
+                }
+            }
+
+            "while_expression" => {
+                // Parse: while cond { body }
+                let cond = node
+                    .child_by_field_name("condition")
+                    .map(|n| self.lower_expr(n))
+                    .transpose()?
+                    .ok_or_else(|| miette::miette!("While missing condition"))?;
+
+                let body_node = node
+                    .children(&mut node.walk())
+                    .find(|c| c.kind() == "block")
+                    .ok_or_else(|| miette::miette!("While missing body"))?;
+                let body = self.lower_block(body_node)?;
+
+                ExprKind::While {
+                    cond: Box::new(cond),
+                    body: Box::new(body),
+                }
+            }
+
+            "break_expression" => {
+                // Parse: break or break expr
+                let value = node
+                    .children(&mut node.walk())
+                    .find(|c| c.kind() != "break")
+                    .map(|n| self.lower_expr(n))
+                    .transpose()?;
+                ExprKind::Break(value.map(Box::new))
+            }
+
+            "continue_expression" => ExprKind::Continue,
+
+            "assignment_expression" => {
+                // Parse: lhs = rhs
+                let lhs_node = node.child(0)
+                    .ok_or_else(|| miette::miette!("Assignment missing lhs"))?;
+                let rhs_node = node.child(2)
+                    .ok_or_else(|| miette::miette!("Assignment missing rhs"))?;
+
+                let lhs = self.lower_expr(lhs_node)?;
+                let rhs = self.lower_expr(rhs_node)?;
+
+                ExprKind::Assign {
+                    lhs: Box::new(lhs),
+                    rhs: Box::new(rhs),
+                }
+            }
+
+            "compound_assignment_expr" => {
+                // Parse: lhs += rhs, lhs -= rhs, etc.
+                let lhs_node = node.child(0)
+                    .ok_or_else(|| miette::miette!("Compound assignment missing lhs"))?;
+                let op_node = node.child(1)
+                    .ok_or_else(|| miette::miette!("Compound assignment missing operator"))?;
+                let rhs_node = node.child(2)
+                    .ok_or_else(|| miette::miette!("Compound assignment missing rhs"))?;
+
+                let lhs = self.lower_expr(lhs_node)?;
+                let rhs = self.lower_expr(rhs_node)?;
+                let op = match self.text(op_node) {
+                    "+=" => BinOp::Add,
+                    "-=" => BinOp::Sub,
+                    "*=" => BinOp::Mul,
+                    "/=" => BinOp::Div,
+                    "%=" => BinOp::Rem,
+                    _ => return Err(miette::miette!("Unknown compound assignment operator")),
+                };
+
+                ExprKind::AssignOp {
+                    op,
+                    lhs: Box::new(lhs),
+                    rhs: Box::new(rhs),
+                }
             }
 
             _ => {

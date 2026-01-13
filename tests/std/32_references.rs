@@ -1,0 +1,11 @@
+// Test references and borrowing
+
+fn add(a: &i32, b: &i32) -> i32 {
+    *a + *b
+}
+
+fn main() -> i32 {
+    let x = 10;
+    let y = 22;
+    add(&x, &y)  // Should return 32
+}

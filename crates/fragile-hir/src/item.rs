@@ -102,6 +102,13 @@ pub struct EnumDef {
 }
 
 /// A trait/interface method.
+/// An associated type in a trait.
+#[derive(Debug, Clone)]
+pub struct AssociatedType {
+    pub name: Symbol,
+    pub default_ty: Option<Type>,
+}
+
 #[derive(Debug, Clone)]
 pub struct TraitMethod {
     pub name: Symbol,
@@ -115,6 +122,7 @@ pub struct TraitDef {
     pub name: Symbol,
     pub vis: Visibility,
     pub type_params: Vec<TypeParam>,
+    pub associated_types: Vec<AssociatedType>,
     pub methods: Vec<TraitMethod>,
     pub span: Span,
 }
