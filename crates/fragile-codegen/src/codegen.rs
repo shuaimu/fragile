@@ -204,6 +204,10 @@ struct ModuleCompiler<'a, 'ctx> {
     loop_context: Option<LoopContext<'ctx>>,
     /// Track pointee types for pointer variables (variable name -> element type)
     pointer_element_types: FxHashMap<String, BasicTypeEnum<'ctx>>,
+    /// Track captured variables for each closure (closure_name -> captured_var_names)
+    closure_captures: FxHashMap<String, Vec<String>>,
+    /// Map variable names to closure names for indirect closure calls
+    variable_to_closure: FxHashMap<String, String>,
 }
 
 /// Context for handling break statements in loops
@@ -236,6 +240,8 @@ impl<'a, 'ctx> ModuleCompiler<'a, 'ctx> {
             type_aliases: FxHashMap::default(),
             loop_context: None,
             pointer_element_types: FxHashMap::default(),
+            closure_captures: FxHashMap::default(),
+            variable_to_closure: FxHashMap::default(),
         }
     }
 
@@ -744,12 +750,13 @@ impl<'a, 'ctx> ModuleCompiler<'a, 'ctx> {
                 if let Some(body) = &fn_def.body {
                     let result = self.compile_expr(body, function)?;
 
-                    // Handle return
-                    if result.is_none() {
-                        self.builder.build_return(None)
-                            .map_err(|e| miette::miette!("Failed to build return: {:?}", e))?;
-                    } else if fn_def.sig.ret_ty != Type::unit() {
-                        if let Some(val) = result {
+                    // Add return if needed (check if block already has a terminator)
+                    let has_term = self.current_block_has_terminator();
+                    if !has_term {
+                        if fn_def.sig.ret_ty == Type::unit() {
+                            self.builder.build_return(None)
+                                .map_err(|e| miette::miette!("Failed to build return: {:?}", e))?;
+                        } else if let Some(val) = result {
                             // Cast return value if needed (e.g., i64 literal to i32 return type)
                             let ret_llvm_ty = self.lower_type(&fn_def.sig.ret_ty);
                             let return_val = if let Some(ret_ty) = ret_llvm_ty {
@@ -767,16 +774,143 @@ impl<'a, 'ctx> ModuleCompiler<'a, 'ctx> {
                             };
                             self.builder.build_return(Some(&return_val))
                                 .map_err(|e| miette::miette!("Failed to build return: {:?}", e))?;
+                        } else {
+                            self.builder.build_return(None)
+                                .map_err(|e| miette::miette!("Failed to build return: {:?}", e))?;
                         }
-                    } else {
-                        self.builder.build_return(None)
-                            .map_err(|e| miette::miette!("Failed to build return: {:?}", e))?;
                     }
                 }
             }
         }
 
         Ok(())
+    }
+
+    /// Collect free variables in an expression (variables used but not in bound set)
+    fn collect_free_vars(&self, expr: &Expr, bound: &mut std::collections::HashSet<String>) -> Vec<String> {
+        let mut free_vars = Vec::new();
+        self.collect_free_vars_inner(expr, bound, &mut free_vars);
+        // Deduplicate
+        free_vars.sort();
+        free_vars.dedup();
+        free_vars
+    }
+
+    fn collect_free_vars_inner(
+        &self,
+        expr: &Expr,
+        bound: &mut std::collections::HashSet<String>,
+        free: &mut Vec<String>,
+    ) {
+        match &expr.kind {
+            ExprKind::Ident(sym) => {
+                let name = self.interner.resolve(*sym).to_string();
+                if !bound.contains(&name) {
+                    free.push(name);
+                }
+            }
+            ExprKind::Binary { lhs, rhs, .. } => {
+                self.collect_free_vars_inner(lhs, bound, free);
+                self.collect_free_vars_inner(rhs, bound, free);
+            }
+            ExprKind::Unary { operand, .. } => {
+                self.collect_free_vars_inner(operand, bound, free);
+            }
+            ExprKind::Call { callee, args } => {
+                self.collect_free_vars_inner(callee, bound, free);
+                for arg in args {
+                    self.collect_free_vars_inner(arg, bound, free);
+                }
+            }
+            ExprKind::If { cond, then_branch, else_branch } => {
+                self.collect_free_vars_inner(cond, bound, free);
+                self.collect_free_vars_inner(then_branch, bound, free);
+                if let Some(else_br) = else_branch {
+                    self.collect_free_vars_inner(else_br, bound, free);
+                }
+            }
+            ExprKind::Block { stmts, expr: final_expr } => {
+                // Block introduces a new scope - variables defined here are bound
+                let mut inner_bound = bound.clone();
+                for stmt in stmts {
+                    if let StmtKind::Let { pattern, init, .. } = &stmt.kind {
+                        if let Some(init_expr) = init {
+                            self.collect_free_vars_inner(init_expr, &mut inner_bound, free);
+                        }
+                        // Add bound variable
+                        if let fragile_hir::Pattern::Ident(sym) = pattern {
+                            let name = self.interner.resolve(*sym).to_string();
+                            inner_bound.insert(name);
+                        }
+                    }
+                }
+                if let Some(fe) = final_expr {
+                    self.collect_free_vars_inner(fe, &mut inner_bound, free);
+                }
+            }
+            ExprKind::Lambda { params, body } => {
+                // Lambda parameters are bound in the body
+                let mut inner_bound = bound.clone();
+                for (param_sym, _) in params {
+                    let name = self.interner.resolve(*param_sym).to_string();
+                    inner_bound.insert(name);
+                }
+                self.collect_free_vars_inner(body, &mut inner_bound, free);
+            }
+            ExprKind::Assign { lhs, rhs } => {
+                self.collect_free_vars_inner(lhs, bound, free);
+                self.collect_free_vars_inner(rhs, bound, free);
+            }
+            ExprKind::Field { expr: e, .. } => {
+                self.collect_free_vars_inner(e, bound, free);
+            }
+            ExprKind::Index { expr: e, index } => {
+                self.collect_free_vars_inner(e, bound, free);
+                self.collect_free_vars_inner(index, bound, free);
+            }
+            ExprKind::Cast { expr: e, .. } => {
+                self.collect_free_vars_inner(e, bound, free);
+            }
+            ExprKind::Match { scrutinee, arms } => {
+                self.collect_free_vars_inner(scrutinee, bound, free);
+                for arm in arms {
+                    self.collect_free_vars_inner(&arm.body, bound, free);
+                }
+            }
+            ExprKind::Loop { body } => {
+                self.collect_free_vars_inner(body, bound, free);
+            }
+            ExprKind::While { cond, body } => {
+                self.collect_free_vars_inner(cond, bound, free);
+                self.collect_free_vars_inner(body, bound, free);
+            }
+            ExprKind::Return(Some(e)) | ExprKind::Break(Some(e)) => {
+                self.collect_free_vars_inner(e, bound, free);
+            }
+            ExprKind::Array(elems) => {
+                for elem in elems {
+                    self.collect_free_vars_inner(elem, bound, free);
+                }
+            }
+            ExprKind::Tuple(elems) => {
+                for elem in elems {
+                    self.collect_free_vars_inner(elem, bound, free);
+                }
+            }
+            ExprKind::Struct { fields, .. } => {
+                for (_, field_expr) in fields {
+                    self.collect_free_vars_inner(field_expr, bound, free);
+                }
+            }
+            ExprKind::MethodCall { receiver, args, .. } => {
+                self.collect_free_vars_inner(receiver, bound, free);
+                for arg in args {
+                    self.collect_free_vars_inner(arg, bound, free);
+                }
+            }
+            // Literals and other leaf nodes have no free variables
+            _ => {}
+        }
     }
 
     fn compile_expr(
@@ -807,6 +941,53 @@ impl<'a, 'ctx> ModuleCompiler<'a, 'ctx> {
                 let rhs_val = self
                     .compile_expr(rhs, function)?
                     .ok_or_else(|| miette::miette!("Binary rhs has no value"))?;
+
+                // Check if operands are struct types - try operator overloading
+                if lhs_val.is_struct_value() {
+                    // Find the struct type name
+                    let struct_type = lhs_val.into_struct_value().get_type();
+                    let type_name = self.find_struct_name_by_llvm_type(struct_type);
+
+                    if let Some(type_name) = type_name {
+                        // Map BinOp to method name
+                        let method_name = match op {
+                            BinOp::Add => "add",
+                            BinOp::Sub => "sub",
+                            BinOp::Mul => "mul",
+                            BinOp::Div => "div",
+                            BinOp::Rem => "rem",
+                            BinOp::Eq => "eq",
+                            BinOp::Ne => "ne",
+                            BinOp::Lt => "lt",
+                            BinOp::Le => "le",
+                            BinOp::Gt => "gt",
+                            BinOp::Ge => "ge",
+                            _ => return Err(miette::miette!("Unsupported operator for overloading")),
+                        };
+
+                        let mangled_name = format!("{}_{}", type_name, method_name);
+
+                        // Look for the operator method
+                        if let Some(&func) = self.functions.get(&mangled_name) {
+                            // Reload values since we moved them checking is_struct_value
+                            let lhs_val = self.compile_expr(lhs, function)?
+                                .ok_or_else(|| miette::miette!("Binary lhs has no value"))?;
+                            let rhs_val = self.compile_expr(rhs, function)?
+                                .ok_or_else(|| miette::miette!("Binary rhs has no value"))?;
+
+                            let args: Vec<BasicMetadataValueEnum> = vec![lhs_val.into(), rhs_val.into()];
+                            let call = self.builder.build_call(func, &args, "op_call")
+                                .map_err(|e| miette::miette!("Failed to call operator: {:?}", e))?;
+                            return match call.try_as_basic_value() {
+                                inkwell::values::ValueKind::Basic(v) => Ok(Some(v)),
+                                inkwell::values::ValueKind::Instruction(_) => Ok(None),
+                            };
+                        }
+                    }
+
+                    // Fall through to error - no operator found for struct type
+                    return Err(miette::miette!("No operator method found for struct type"));
+                }
 
                 self.compile_binary_op(*op, lhs_val, rhs_val)
             }
@@ -903,6 +1084,57 @@ impl<'a, 'ctx> ModuleCompiler<'a, 'ctx> {
                         return Ok(value);
                     }
 
+                    // Check if it's a closure stored in a variable (with captures)
+                    if let Some(closure_name) = self.variable_to_closure.get(name.as_str()).cloned() {
+                        if let Some(&closure_fn) = self.functions.get(&closure_name) {
+                            // Get captured variable names for this closure
+                            let capture_names = self.closure_captures.get(&closure_name).cloned().unwrap_or_default();
+
+                            // Build arguments: regular args + captured values
+                            let mut all_args = arg_vals.clone();
+
+                            // Load captured values from current scope and add as extra args
+                            for cap_name in &capture_names {
+                                if let Some(&(cap_ptr, cap_ty)) = self.variables.get(cap_name) {
+                                    let cap_val = self.builder.build_load(cap_ty, cap_ptr, &format!("cap_{}", cap_name))
+                                        .map_err(|e| miette::miette!("Failed to load capture: {:?}", e))?;
+                                    all_args.push(cap_val.into());
+                                }
+                            }
+
+                            // Cast arguments to match function parameter types
+                            let param_types = closure_fn.get_type().get_param_types();
+                            let casted_args: Vec<BasicMetadataValueEnum> = all_args
+                                .into_iter()
+                                .zip(param_types.iter())
+                                .map(|(arg, param_ty)| {
+                                    let arg_val: BasicValueEnum = arg.try_into().unwrap();
+                                    if arg_val.is_int_value() && param_ty.is_int_type() {
+                                        let arg_int = arg_val.into_int_value();
+                                        let param_int = param_ty.into_int_type();
+                                        if arg_int.get_type() != param_int {
+                                            self.builder.build_int_cast(arg_int, param_int, "arg_cast")
+                                                .map(|v| v.as_basic_value_enum().into())
+                                                .unwrap_or(arg_val.into())
+                                        } else {
+                                            arg_val.into()
+                                        }
+                                    } else {
+                                        arg_val.into()
+                                    }
+                                })
+                                .collect();
+
+                            let call = self.builder.build_call(closure_fn, &casted_args, "closure_call")
+                                .map_err(|e| miette::miette!("Failed to build closure call: {:?}", e))?;
+                            let value = match call.try_as_basic_value() {
+                                inkwell::values::ValueKind::Basic(v) => Some(v),
+                                inkwell::values::ValueKind::Instruction(_) => None,
+                            };
+                            return Ok(value);
+                        }
+                    }
+
                     // Check if it's a generic function that needs monomorphization
                     if self.generic_functions.contains_key(sym) {
                         let spec_fn = self.get_or_create_specialization(*sym, &arg_types, function)?;
@@ -992,10 +1224,20 @@ impl<'a, 'ctx> ModuleCompiler<'a, 'ctx> {
                             return Ok(Some(disc_val.as_basic_value_enum()));
                         }
                     } else {
-                        // Not an enum - treat as module path function call (e.g., math::add)
-                        let fn_name = self.interner.resolve(*variant);
+                        // Not an enum - check if it's a struct's associated function (e.g., Point::new)
+                        // or a module path function call (e.g., math::add)
+                        let enum_name_str = self.interner.resolve(*enum_name);
+                        let variant_str = self.interner.resolve(*variant);
 
-                        if let Some(&func) = self.functions.get(fn_name.as_str()) {
+                        // Check if enum_name is actually a struct (associated function call)
+                        let fn_name = if self.struct_types.contains_key(enum_name) {
+                            format!("{}_{}", enum_name_str, variant_str)
+                        } else {
+                            // Module path function call
+                            variant_str.to_string()
+                        };
+
+                        if let Some(&func) = self.functions.get(&fn_name) {
                             // Cast arguments to match function parameter types
                             let param_types = func.get_type().get_param_types();
                             let casted_args: Vec<BasicMetadataValueEnum> = arg_vals
@@ -1021,6 +1263,86 @@ impl<'a, 'ctx> ModuleCompiler<'a, 'ctx> {
 
                             let call = self.builder.build_call(func, &casted_args, "call")
                                 .map_err(|e| miette::miette!("Failed to build call: {:?}", e))?;
+                            let value = match call.try_as_basic_value() {
+                                inkwell::values::ValueKind::Basic(v) => Some(v),
+                                inkwell::values::ValueKind::Instruction(_) => None,
+                            };
+                            return Ok(value);
+                        }
+                    }
+                }
+
+                // Handle Field callee (C++ method calls like p.get_x())
+                if let ExprKind::Field { expr: receiver, field } = &callee.kind {
+                    // Compile receiver (the object we're calling the method on)
+                    let receiver_val = self
+                        .compile_expr(receiver, function)?
+                        .ok_or_else(|| miette::miette!("Method receiver has no value"))?;
+
+                    // Get field name for method lookup
+                    let method_name = self.interner.resolve(*field);
+
+                    // Try to determine the type name from the receiver
+                    let type_name = if let ExprKind::Ident(sym) = &receiver.kind {
+                        let var_name = self.interner.resolve(*sym);
+                        if let Some(&(_ptr, ty)) = self.variables.get(var_name.as_str()) {
+                            if ty.is_struct_type() {
+                                self.find_struct_name_by_llvm_type(ty.into_struct_type())
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    } else if receiver_val.is_struct_value() {
+                        self.find_struct_name_by_llvm_type(receiver_val.into_struct_value().get_type())
+                    } else {
+                        None
+                    };
+
+                    if let Some(type_name) = type_name {
+                        let mangled_name = format!("{}_{}", type_name, method_name);
+
+                        if let Some(&func) = self.functions.get(&mangled_name) {
+                            // Build args with receiver as first arg
+                            let mut call_args: Vec<BasicMetadataValueEnum> = vec![];
+
+                            // Get receiver's alloca if it's a variable
+                            if let ExprKind::Ident(sym) = &receiver.kind {
+                                let var_name = self.interner.resolve(*sym);
+                                if let Some(&(ptr, _)) = self.variables.get(var_name.as_str()) {
+                                    call_args.push(ptr.into());
+                                }
+                            }
+
+                            // Add the other arguments
+                            call_args.extend(arg_vals);
+
+                            // Cast args to match function parameter types
+                            let param_types = func.get_type().get_param_types();
+                            let casted_args: Vec<BasicMetadataValueEnum> = call_args
+                                .into_iter()
+                                .zip(param_types.iter())
+                                .map(|(arg, param_ty)| {
+                                    let arg_val: BasicValueEnum = arg.try_into().unwrap();
+                                    if arg_val.is_int_value() && param_ty.is_int_type() {
+                                        let arg_int = arg_val.into_int_value();
+                                        let param_int = param_ty.into_int_type();
+                                        if arg_int.get_type() != param_int {
+                                            self.builder.build_int_cast(arg_int, param_int, "arg_cast")
+                                                .map(|v| v.as_basic_value_enum().into())
+                                                .unwrap_or(arg_val.into())
+                                        } else {
+                                            arg_val.into()
+                                        }
+                                    } else {
+                                        arg_val.into()
+                                    }
+                                })
+                                .collect();
+
+                            let call = self.builder.build_call(func, &casted_args, "method_call")
+                                .map_err(|e| miette::miette!("Failed to build method call: {:?}", e))?;
                             let value = match call.try_as_basic_value() {
                                 inkwell::values::ValueKind::Basic(v) => Some(v),
                                 inkwell::values::ValueKind::Instruction(_) => None,
@@ -1254,7 +1576,27 @@ impl<'a, 'ctx> ModuleCompiler<'a, 'ctx> {
                 if let Some(val_expr) = value {
                     let val = self.compile_expr(val_expr, function)?;
                     if let Some(v) = val {
-                        self.builder.build_return(Some(&v))
+                        // Cast return value to match function return type if needed
+                        let ret_type = function.get_type().get_return_type();
+                        let cast_val = if let Some(expected_ty) = ret_type {
+                            if v.get_type() != expected_ty {
+                                // Cast integer types
+                                if v.is_int_value() && expected_ty.is_int_type() {
+                                    self.builder.build_int_cast(
+                                        v.into_int_value(),
+                                        expected_ty.into_int_type(),
+                                        "ret_cast"
+                                    ).map_err(|e| miette::miette!("Failed to cast return: {:?}", e))?.into()
+                                } else {
+                                    v
+                                }
+                            } else {
+                                v
+                            }
+                        } else {
+                            v
+                        };
+                        self.builder.build_return(Some(&cast_val))
                             .map_err(|e| miette::miette!("Failed to build return: {:?}", e))?;
                     } else {
                         self.builder.build_return(None)
@@ -1952,9 +2294,27 @@ impl<'a, 'ctx> ModuleCompiler<'a, 'ctx> {
                 let closure_name = format!("__closure_{}", self.closure_counter);
                 self.closure_counter += 1;
 
-                // For now, assume all parameters are i64 (simplified type inference)
-                // In a real implementation, we'd infer types from usage
-                let param_types: Vec<BasicMetadataTypeEnum> = params
+                // Collect captured variables (free vars that exist in current scope)
+                let mut bound: std::collections::HashSet<String> = params.iter()
+                    .map(|(sym, _)| self.interner.resolve(*sym).to_string())
+                    .collect();
+                let free_vars = self.collect_free_vars(body, &mut bound);
+
+                // Collect captures: variables from outer scope that are used in the closure
+                let captures: Vec<(String, BasicValueEnum<'ctx>, BasicTypeEnum<'ctx>)> = free_vars.iter()
+                    .filter_map(|name| {
+                        self.variables.get(name).map(|&(ptr, ty)| {
+                            // Load the current value of the captured variable
+                            let val = self.builder.build_load(ty, ptr, &format!("capture_{}", name))
+                                .expect("Failed to load captured var");
+                            (name.clone(), val, ty)
+                        })
+                    })
+                    .collect();
+                let capture_names: Vec<String> = captures.iter().map(|(n, _, _)| n.clone()).collect();
+
+                // Build parameter types: regular params + captured vars
+                let mut all_param_types: Vec<BasicMetadataTypeEnum> = params
                     .iter()
                     .map(|(_, ty)| {
                         if let Some(t) = ty {
@@ -1967,12 +2327,20 @@ impl<'a, 'ctx> ModuleCompiler<'a, 'ctx> {
                     })
                     .collect();
 
+                // Add captured variable types as extra parameters
+                for (_, _, ty) in &captures {
+                    all_param_types.push((*ty).into());
+                }
+
                 // Create the closure function type (returns i64 for now)
-                let fn_type = self.context.i64_type().fn_type(&param_types, false);
+                let fn_type = self.context.i64_type().fn_type(&all_param_types, false);
 
                 // Add the closure function to the module
                 let closure_fn = self.module.add_function(&closure_name, fn_type, None);
                 self.functions.insert(closure_name.clone(), closure_fn);
+
+                // Store captured variable names for this closure
+                self.closure_captures.insert(closure_name.clone(), capture_names);
 
                 // Save current state
                 let saved_block = self.builder.get_insert_block();
@@ -1982,7 +2350,7 @@ impl<'a, 'ctx> ModuleCompiler<'a, 'ctx> {
                 let entry = self.context.append_basic_block(closure_fn, "entry");
                 self.builder.position_at_end(entry);
 
-                // Set up parameters as variables
+                // Set up regular parameters as variables
                 for (i, (param_name, _)) in params.iter().enumerate() {
                     let name = self.interner.resolve(*param_name);
                     if let Some(param_val) = closure_fn.get_nth_param(i as u32) {
@@ -1991,6 +2359,18 @@ impl<'a, 'ctx> ModuleCompiler<'a, 'ctx> {
                         self.builder.build_store(alloca, param_val)
                             .map_err(|e| miette::miette!("Failed to store closure param: {:?}", e))?;
                         self.variables.insert(name.to_string(), (alloca, ty));
+                    }
+                }
+
+                // Set up captured variables as additional parameters
+                let num_regular_params = params.len();
+                for (i, (cap_name, _, cap_ty)) in captures.iter().enumerate() {
+                    let param_idx = (num_regular_params + i) as u32;
+                    if let Some(param_val) = closure_fn.get_nth_param(param_idx) {
+                        let alloca = self.create_entry_alloca(closure_fn, cap_name, *cap_ty);
+                        self.builder.build_store(alloca, param_val)
+                            .map_err(|e| miette::miette!("Failed to store captured var: {:?}", e))?;
+                        self.variables.insert(cap_name.clone(), (alloca, *cap_ty));
                     }
                 }
 
@@ -2052,6 +2432,14 @@ impl<'a, 'ctx> ModuleCompiler<'a, 'ctx> {
                                 }
                             }
 
+                            // Track closure assignments for later calls with captures
+                            let is_lambda = matches!(&init_expr.kind, ExprKind::Lambda { .. });
+                            let closure_name_before = if is_lambda {
+                                Some(format!("__closure_{}", self.closure_counter))
+                            } else {
+                                None
+                            };
+
                             let init_val = self.compile_expr(init_expr, function)?;
                             if let Some(val) = init_val {
                                 // Use declared type if available, otherwise use inferred type
@@ -2072,6 +2460,11 @@ impl<'a, 'ctx> ModuleCompiler<'a, 'ctx> {
                                 self.builder.build_store(alloca, store_val)
                                     .map_err(|e| miette::miette!("Failed to store: {:?}", e))?;
                                 self.variables.insert(name.to_string(), (alloca, target_ty));
+
+                                // Record variable->closure mapping if this was a lambda
+                                if let Some(closure_name) = closure_name_before {
+                                    self.variable_to_closure.insert(name.to_string(), closure_name);
+                                }
                             }
                             return Ok(());
                         } else {
@@ -2202,9 +2595,17 @@ impl<'a, 'ctx> ModuleCompiler<'a, 'ctx> {
                 let ty = self.context.i32_type();
                 Ok(Some(ty.const_int(*c as u64, false).into()))
             }
-            Literal::String(_s) => {
-                // TODO: String handling
-                Ok(None)
+            Literal::String(s) => {
+                // Create a global string constant with null terminator
+                let string_val = self.context.const_string(s.as_bytes(), true);
+                let global = self.module.add_global(string_val.get_type(), None, ".str");
+                global.set_initializer(&string_val);
+                global.set_constant(true);
+                global.set_unnamed_addr(true);
+
+                // Return pointer to the string data
+                let ptr = global.as_pointer_value();
+                Ok(Some(ptr.into()))
             }
             Literal::Unit => Ok(None),
         }
@@ -2424,6 +2825,16 @@ impl<'a, 'ctx> ModuleCompiler<'a, 'ctx> {
                 }
             }
         }
+    }
+
+    /// Find the struct name given an LLVM struct type
+    fn find_struct_name_by_llvm_type(&self, llvm_type: inkwell::types::StructType<'ctx>) -> Option<String> {
+        for (struct_sym, info) in &self.struct_types {
+            if info.llvm_type == llvm_type {
+                return Some(self.interner.resolve(*struct_sym).to_string());
+            }
+        }
+        None
     }
 
     fn lower_type(&self, ty: &Type) -> Option<BasicTypeEnum<'ctx>> {

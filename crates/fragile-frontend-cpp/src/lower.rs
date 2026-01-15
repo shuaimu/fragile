@@ -1,8 +1,8 @@
 use fragile_common::{SourceFile, Span, Symbol, SymbolInterner};
 use fragile_hir::{
-    Abi, BinOp, Expr, ExprKind, Field, FnDef, FnSig, Item, ItemKind, Literal, Module,
+    Abi, BinOp, Expr, ExprKind, Field, FnDef, FnSig, ImplDef, Item, ItemKind, Literal, Module,
     Mutability, Param, Pattern, PrimitiveType, SourceLang, Stmt, StmtKind,
-    StructDef, Type, Visibility,
+    StructDef, Type, TypeParam, Visibility,
 };
 use miette::Result;
 use tree_sitter::{Node, Tree};
@@ -45,7 +45,8 @@ impl<'a> LoweringContext<'a> {
 
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
-            if let Some(item) = self.lower_item(child)? {
+            let items = self.lower_item(child)?;
+            for item in items {
                 module.add_item(item);
             }
         }
@@ -53,13 +54,13 @@ impl<'a> LoweringContext<'a> {
         Ok(module)
     }
 
-    fn lower_item(&self, node: Node) -> Result<Option<Item>> {
+    fn lower_item(&self, node: Node) -> Result<Vec<Item>> {
         let span = self.span(node);
 
         match node.kind() {
             "function_definition" => {
                 let fn_def = self.lower_function(node)?;
-                Ok(Some(Item::new(ItemKind::Function(fn_def), span)))
+                Ok(vec![Item::new(ItemKind::Function(fn_def), span)])
             }
             "struct_specifier" => {
                 // Only lower if this is a struct definition (has field_declaration_list)
@@ -68,14 +69,21 @@ impl<'a> LoweringContext<'a> {
                         .children(&mut node.walk())
                         .any(|c| c.kind() == "field_declaration_list")
                 {
-                    let struct_def = self.lower_struct(node)?;
-                    Ok(Some(Item::new(ItemKind::Struct(struct_def), span)))
+                    self.lower_struct_with_methods(node)
                 } else {
-                    Ok(None) // Forward declaration, skip for now
+                    Ok(vec![]) // Forward declaration, skip for now
                 }
             }
+            "linkage_specification" => {
+                // extern "C" { ... }
+                self.lower_linkage_specification(node)
+            }
+            "template_declaration" => {
+                // template<typename T> function/struct
+                self.lower_template_declaration(node)
+            }
             // TODO: class, enum, etc.
-            _ => Ok(None),
+            _ => Ok(vec![]),
         }
     }
 
@@ -131,6 +139,407 @@ impl<'a> LoweringContext<'a> {
         })
     }
 
+    /// Lower a C++ struct that may contain methods, returning StructDef and ImplDef
+    fn lower_struct_with_methods(&self, node: Node) -> Result<Vec<Item>> {
+        let span = self.span(node);
+        let struct_def = self.lower_struct(node)?;
+        let struct_name = struct_def.name;
+
+        // Collect field names for implicit self.field access
+        let field_names: Vec<Symbol> = struct_def.fields.iter().map(|f| f.name).collect();
+
+        let mut items = vec![Item::new(ItemKind::Struct(struct_def), span)];
+
+        // Look for methods (function_definition) inside the struct
+        let mut methods = vec![];
+        if let Some(field_list) = node
+            .children(&mut node.walk())
+            .find(|c| c.kind() == "field_declaration_list")
+        {
+            let mut cursor = field_list.walk();
+            for child in field_list.children(&mut cursor) {
+                if child.kind() == "function_definition" {
+                    // This is a method - lower it with self parameter
+                    let method = self.lower_method(child, struct_name, &field_names)?;
+                    methods.push(Item::new(ItemKind::Function(method), self.span(child)));
+                }
+            }
+        }
+
+        // If we have methods, create an ImplDef
+        if !methods.is_empty() {
+            let impl_def = ImplDef {
+                type_params: vec![],
+                trait_ref: None,
+                self_ty: Type::Named { name: struct_name, type_args: vec![] },
+                items: methods,
+                span,
+            };
+            items.push(Item::new(ItemKind::Impl(impl_def), span));
+        }
+
+        Ok(items)
+    }
+
+    /// Lower extern "C" { ... } linkage specification
+    fn lower_linkage_specification(&self, node: Node) -> Result<Vec<Item>> {
+        let span = self.span(node);
+        let mut items = vec![];
+
+        // Check the linkage type (should be "C" for extern "C")
+        let is_c_linkage = node
+            .children(&mut node.walk())
+            .find(|c| c.kind() == "string_literal")
+            .map(|n| self.text(n).contains("C"))
+            .unwrap_or(false);
+
+        if !is_c_linkage {
+            return Ok(vec![]);
+        }
+
+        // Process declarations inside the block
+        if let Some(decl_list) = node
+            .children(&mut node.walk())
+            .find(|c| c.kind() == "declaration_list")
+        {
+            let mut cursor = decl_list.walk();
+            for child in decl_list.children(&mut cursor) {
+                if child.kind() == "declaration" {
+                    if let Some(fn_def) = self.lower_extern_function_decl(child)? {
+                        items.push(Item::new(ItemKind::Function(fn_def), self.span(child)));
+                    }
+                }
+            }
+        }
+
+        Ok(items)
+    }
+
+    /// Lower template<typename T> declarations
+    fn lower_template_declaration(&self, node: Node) -> Result<Vec<Item>> {
+        let span = self.span(node);
+
+        // Parse template parameters (template<typename T, typename U>)
+        let type_params = self.lower_template_parameters(node)?;
+
+        // Find the inner function_definition or struct
+        for child in node.children(&mut node.walk()) {
+            match child.kind() {
+                "function_definition" => {
+                    let mut fn_def = self.lower_template_function(child, &type_params)?;
+                    fn_def.type_params = type_params;
+                    return Ok(vec![Item::new(ItemKind::Function(fn_def), span)]);
+                }
+                // TODO: template struct
+                _ => {}
+            }
+        }
+
+        Ok(vec![])
+    }
+
+    /// Parse template parameter list <typename T, typename U>
+    fn lower_template_parameters(&self, node: Node) -> Result<Vec<TypeParam>> {
+        let mut params = vec![];
+
+        if let Some(param_list) = node
+            .children(&mut node.walk())
+            .find(|c| c.kind() == "template_parameter_list")
+        {
+            for child in param_list.children(&mut param_list.walk()) {
+                if child.kind() == "type_parameter_declaration" {
+                    // Get the type identifier (T, U, etc.)
+                    if let Some(name_node) = child
+                        .children(&mut child.walk())
+                        .find(|c| c.kind() == "type_identifier")
+                    {
+                        let name = self.intern(self.text(name_node));
+                        params.push(TypeParam {
+                            name,
+                            bounds: vec![],
+                        });
+                    }
+                }
+            }
+        }
+
+        Ok(params)
+    }
+
+    /// Lower a template function definition
+    fn lower_template_function(&self, node: Node, type_params: &[TypeParam]) -> Result<FnDef> {
+        let span = self.span(node);
+
+        // Get return type - may be a type parameter
+        let ret_ty = node
+            .children(&mut node.walk())
+            .find(|c| c.kind() == "primitive_type" || c.kind() == "type_identifier")
+            .map(|n| self.lower_type_with_params(n, type_params))
+            .transpose()?
+            .unwrap_or(Type::Primitive(PrimitiveType::I32));
+
+        // Get function name and parameters
+        let declarator = node
+            .child_by_field_name("declarator")
+            .ok_or_else(|| miette::miette!("Function missing declarator"))?;
+
+        let name = self.extract_function_name(declarator)?;
+        let params = self.extract_parameters_with_type_params(declarator, type_params)?;
+
+        // Get body
+        let body = if let Some(body_node) = node.child_by_field_name("body") {
+            Some(self.lower_compound_statement(body_node)?)
+        } else {
+            None
+        };
+
+        Ok(FnDef {
+            name,
+            vis: Visibility::Public,
+            sig: FnSig {
+                params,
+                ret_ty,
+                is_variadic: false,
+            },
+            type_params: vec![], // Will be set by caller
+            body,
+            source_lang: SourceLang::Cpp,
+            abi: Abi::Rust,
+            span,
+            attributes: vec![],
+        })
+    }
+
+    /// Lower a type, resolving template parameters to Type::Named
+    fn lower_type_with_params(&self, node: Node, _type_params: &[TypeParam]) -> Result<Type> {
+        match node.kind() {
+            "type_identifier" => {
+                let name = self.intern(self.text(node));
+                // Type parameters are represented as Type::Named
+                // The monomorphization system will substitute them
+                Ok(Type::Named {
+                    name,
+                    type_args: vec![],
+                })
+            }
+            "primitive_type" => self.lower_type(node),
+            _ => self.lower_type(node),
+        }
+    }
+
+    /// Extract parameters, resolving type parameters
+    fn extract_parameters_with_type_params(
+        &self,
+        declarator: Node,
+        type_params: &[TypeParam],
+    ) -> Result<Vec<Param>> {
+        let mut params = vec![];
+
+        if let Some(param_list) = declarator
+            .children(&mut declarator.walk())
+            .find(|c| c.kind() == "parameter_list")
+        {
+            let mut cursor = param_list.walk();
+            for child in param_list.children(&mut cursor) {
+                if child.kind() == "parameter_declaration" {
+                    // Get type (may be a type parameter)
+                    let ty = child
+                        .children(&mut child.walk())
+                        .find(|c| {
+                            c.kind() == "primitive_type"
+                                || c.kind() == "type_identifier"
+                                || c.kind() == "pointer_declarator"
+                        })
+                        .map(|n| self.lower_type_with_params(n, type_params))
+                        .transpose()?
+                        .unwrap_or(Type::Primitive(PrimitiveType::I32));
+
+                    // Get name
+                    let name = child
+                        .children(&mut child.walk())
+                        .find(|c| c.kind() == "identifier")
+                        .map(|n| self.intern(self.text(n)))
+                        .unwrap_or_else(|| self.intern("_"));
+
+                    params.push(Param {
+                        name,
+                        ty,
+                        mutability: Mutability::Immutable,
+                        span: self.span(child),
+                    });
+                }
+            }
+        }
+
+        Ok(params)
+    }
+
+    /// Lower an extern function declaration (no body)
+    fn lower_extern_function_decl(&self, node: Node) -> Result<Option<FnDef>> {
+        let span = self.span(node);
+
+        // Get return type
+        let ret_ty = node
+            .children(&mut node.walk())
+            .find(|c| c.kind() == "primitive_type" || c.kind() == "type_identifier")
+            .map(|n| self.lower_type(n))
+            .transpose()?
+            .unwrap_or(Type::Primitive(PrimitiveType::I32));
+
+        // Get function declarator
+        let declarator = node
+            .children(&mut node.walk())
+            .find(|c| c.kind() == "function_declarator");
+
+        let declarator = match declarator {
+            Some(d) => d,
+            None => return Ok(None), // Not a function declaration
+        };
+
+        // Get function name
+        let name = declarator
+            .children(&mut declarator.walk())
+            .find(|c| c.kind() == "identifier")
+            .map(|n| self.intern(self.text(n)))
+            .ok_or_else(|| miette::miette!("Extern function missing name"))?;
+
+        // Get parameters
+        let params = self.extract_parameters(declarator)?;
+
+        Ok(Some(FnDef {
+            name,
+            vis: Visibility::Public,
+            sig: FnSig {
+                params,
+                ret_ty,
+                is_variadic: false,
+            },
+            type_params: vec![],
+            body: None, // External function - no body
+            source_lang: SourceLang::Cpp,
+            abi: Abi::C, // Use C ABI
+            span,
+            attributes: vec![],
+        }))
+    }
+
+    /// Lower a method inside a struct
+    fn lower_method(&self, node: Node, struct_name: Symbol, field_names: &[Symbol]) -> Result<FnDef> {
+        let span = self.span(node);
+
+        // Get declarator (contains name and parameters)
+        let declarator = node
+            .child_by_field_name("declarator")
+            .ok_or_else(|| miette::miette!("Method missing declarator"))?;
+
+        // Get name
+        let method_name = self.extract_function_name(declarator)?;
+
+        // Get parameters
+        let mut params = self.extract_parameters(declarator)?;
+
+        // Add implicit 'self' parameter for methods
+        let self_param = Param {
+            name: self.intern("self"),
+            ty: Type::Reference {
+                inner: Box::new(Type::Named { name: struct_name, type_args: vec![] }),
+                mutability: Mutability::Immutable,
+            },
+            mutability: Mutability::Immutable,
+            span,
+        };
+        params.insert(0, self_param);
+
+        // Get return type
+        let ret_ty = if let Some(type_node) = node.child_by_field_name("type") {
+            self.lower_type(type_node)?
+        } else {
+            Type::Primitive(PrimitiveType::I32) // C++ default
+        };
+
+        // Get body
+        let body = if let Some(body_node) = node.child_by_field_name("body") {
+            let mut body_expr = self.lower_compound_statement(body_node)?;
+            // Transform bare field accesses to self.field
+            self.transform_field_accesses(&mut body_expr, field_names);
+            Some(body_expr)
+        } else {
+            None
+        };
+
+        // Don't mangle the name here - codegen's compile_impl_methods handles mangling
+        Ok(FnDef {
+            name: method_name,
+            vis: Visibility::Public,
+            sig: FnSig {
+                params,
+                ret_ty,
+                is_variadic: false,
+            },
+            type_params: vec![],
+            body,
+            source_lang: SourceLang::Cpp,
+            abi: Abi::Rust,
+            span,
+            attributes: vec![],
+        })
+    }
+
+    /// Transform bare identifier expressions that match field names to self.field
+    fn transform_field_accesses(&self, expr: &mut Expr, field_names: &[Symbol]) {
+        let self_sym = self.intern("self");
+
+        match &mut expr.kind {
+            ExprKind::Ident(sym) => {
+                // Check if this identifier is a field name
+                if field_names.contains(sym) {
+                    let self_expr = Box::new(Expr::new(ExprKind::Ident(self_sym), expr.span));
+                    expr.kind = ExprKind::Field { expr: self_expr, field: *sym };
+                }
+            }
+            ExprKind::Binary { lhs, rhs, .. } => {
+                self.transform_field_accesses(lhs, field_names);
+                self.transform_field_accesses(rhs, field_names);
+            }
+            ExprKind::Unary { operand, .. } => {
+                self.transform_field_accesses(operand, field_names);
+            }
+            ExprKind::Block { stmts, expr: final_expr } => {
+                for stmt in stmts {
+                    if let StmtKind::Expr(e) | StmtKind::Let { init: Some(e), .. } = &mut stmt.kind {
+                        self.transform_field_accesses(e, field_names);
+                    }
+                }
+                if let Some(e) = final_expr {
+                    self.transform_field_accesses(e, field_names);
+                }
+            }
+            ExprKind::Return(Some(e)) => {
+                self.transform_field_accesses(e, field_names);
+            }
+            ExprKind::Call { args, .. } => {
+                for arg in args {
+                    self.transform_field_accesses(arg, field_names);
+                }
+            }
+            ExprKind::If { cond, then_branch, else_branch } => {
+                self.transform_field_accesses(cond, field_names);
+                self.transform_field_accesses(then_branch, field_names);
+                if let Some(e) = else_branch {
+                    self.transform_field_accesses(e, field_names);
+                }
+            }
+            ExprKind::Assign { lhs, rhs } => {
+                self.transform_field_accesses(lhs, field_names);
+                self.transform_field_accesses(rhs, field_names);
+            }
+            ExprKind::Field { expr: e, .. } => {
+                self.transform_field_accesses(e, field_names);
+            }
+            _ => {}
+        }
+    }
+
     fn lower_function(&self, node: Node) -> Result<FnDef> {
         let span = self.span(node);
 
@@ -179,7 +588,8 @@ impl<'a> LoweringContext<'a> {
     fn extract_function_name(&self, declarator: Node) -> Result<Symbol> {
         // Navigate through declarator to find the identifier
         fn find_identifier<'a>(node: Node<'a>, text: &'a str) -> Option<&'a str> {
-            if node.kind() == "identifier" {
+            // For methods, name might be a field_identifier
+            if node.kind() == "identifier" || node.kind() == "field_identifier" {
                 return Some(node.utf8_text(text.as_bytes()).unwrap_or(""));
             }
             if let Some(decl) = node.child_by_field_name("declarator") {

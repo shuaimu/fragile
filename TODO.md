@@ -23,10 +23,10 @@
 - [x] Raw pointers and references
 - [x] Loops with break values
 - [x] Tuples
-- [ ] Closure captures (variables from enclosing scope)
-- [ ] Trait implementations (impl Trait for Type)
-- [ ] Associated functions (Type::new())
-- [ ] String/str types
+- [x] Closure captures (variables from enclosing scope)
+- [x] Trait implementations (impl Trait for Type)
+- [x] Associated functions (Type::new())
+- [x] String/str types (basic - string literals as *const i8)
 
 ## Phase 3: Type System
 - [x] Unified type representation (HIR Type enum)
@@ -52,7 +52,7 @@
 - [ ] Async/await
 - [ ] Goroutine support
 - [ ] C++ exceptions interop
-- [ ] Operator overloading
+- [x] Operator overloading
 
 ## Phase 6: Standard Library
 - [ ] libc bindings
