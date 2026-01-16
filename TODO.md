@@ -208,11 +208,14 @@ See [PLAN_CPP20_MAKO.md](PLAN_CPP20_MAKO.md) for detailed plan.
     - [x] `vendor/mako/src/rrr/reactor/fiber_impl.cc` - **PARSED**: 4640 functions
     - [x] `vendor/mako/src/rrr/reactor/reactor.cc` - **PARSED**: 4640 functions
     - [-] `vendor/mako/src/rrr/reactor/quorum_event.cc` - Cross-namespace inheritance: `janus::QuorumEvent` inherits from `rrr::Event` via `using rrr::Event;`. Clang semantic error on `test()` call [26:01:16, 12:00]. See docs/dev/plan_fix_stub_headers_quorum_event.md
-  - [-] All mako module - **15/155 files parsing (9.7%)** [26:01:16, 09:30]
+  - [-] All mako module - **18/155 files parsing (11.6%)** [26:01:16, 10:00]
     - [x] `vendor/mako/src/mako/vec/coroutine.cpp` - **PARSED**: 40 functions
     - [x] `vendor/mako/src/mako/vec/occ.cpp` - **PARSED**: 41 functions
     - [x] `vendor/mako/src/mako/lib/memory.cc` - **PARSED**: 17 functions
     - [x] `vendor/mako/src/mako/lib/lookup3.cc` - **PARSED**: 17 functions
+    - [x] `vendor/mako/src/mako/lib/promise.cc` - **PARSED**: 27 functions
+    - [x] `vendor/mako/src/mako/lib/timestamp.cc` - **PARSED**: 15 functions
+    - [x] `vendor/mako/src/mako/lib/transport.cc` - **PARSED**: 15 functions
     - [x] `vendor/mako/src/mako/lib/rust_wrapper.cc` - **PARSED**: 0 functions
     - [x] `vendor/mako/src/mako/db.cc` - **PARSED**: 0 functions (declarations only)
     - [x] `vendor/mako/src/mako/memory.cc` - **PARSED**: 33 functions
@@ -224,10 +227,12 @@ See [PLAN_CPP20_MAKO.md](PLAN_CPP20_MAKO.md) for detailed plan.
     - [x] `vendor/mako/src/mako/benchmarks/sto/Packer.cc` - **PARSED**: 75 functions
     - [x] `vendor/mako/src/mako/benchmarks/sto/TRcu.cc` - **PARSED**: 75 functions
     - [x] `vendor/mako/src/mako/benchmarks/sto/masstree-beta/memdebug.cc` - **PARSED**: 14 functions
-    - [x] F.3.4 Added stubs: cxxabi.h (demangling), typeinfo (RTTI), endian.h (byte order), deque, stack [26:01:16, 09:30]
+    - [x] F.3.4 Added stubs: cxxabi.h, typeinfo, endian.h, deque, stack, numa.h [26:01:16, 10:00]
     - [x] F.3.5 Fixed: cstdint types for x86_64, iostream/sstream traits, stdexcept includes, string getline
     - [x] F.3.6 Added parser support for preprocessor defines (CONFIG_H for masstree)
-    - [ ] Remaining files need: more STL stubs, fix include path issues
+    - [x] F.3.7 Fixed cstddef max_align_t to use clang's include guard
+    - [x] F.3.8 Fixed include paths: added mako/src/mako for lib/*.h includes
+    - [ ] Remaining files need: fix malloc.h conflicts, more STL stubs
   - [ ] Link and run tests
 
 ---
