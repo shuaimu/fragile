@@ -439,6 +439,8 @@ pub struct CppStruct {
     pub destructor: Option<CppDestructor>,
     /// Methods (member functions)
     pub methods: Vec<CppMethod>,
+    /// Member templates (template methods)
+    pub member_templates: Vec<CppMemberTemplate>,
     /// Friend declarations
     pub friends: Vec<CppFriend>,
 }
@@ -465,6 +467,8 @@ pub struct CppClassTemplate {
     pub destructor: Option<CppDestructor>,
     /// Methods (may reference template params)
     pub methods: Vec<CppMethod>,
+    /// Member templates (template methods, may reference both class and method template params)
+    pub member_templates: Vec<CppMemberTemplate>,
     /// Indices of template parameters that are parameter packs (variadic)
     pub parameter_pack_indices: Vec<usize>,
 }
@@ -493,6 +497,8 @@ pub struct CppClassTemplatePartialSpec {
     pub destructor: Option<CppDestructor>,
     /// Methods
     pub methods: Vec<CppMethod>,
+    /// Member templates
+    pub member_templates: Vec<CppMemberTemplate>,
     /// Indices of parameter packs
     pub parameter_pack_indices: Vec<usize>,
 }
@@ -542,6 +548,28 @@ pub struct CppMethod {
     pub access: AccessSpecifier,
     /// MIR body (if this is a definition)
     pub mir_body: Option<MirBody>,
+}
+
+/// A member template (template method inside a class).
+/// Represents `template<typename U> void process(U value);` inside a class.
+#[derive(Debug)]
+pub struct CppMemberTemplate {
+    /// Method name
+    pub name: String,
+    /// Template type parameters (e.g., ["U"])
+    pub template_params: Vec<String>,
+    /// Return type (may reference template params)
+    pub return_type: CppType,
+    /// Parameters (may reference template params)
+    pub params: Vec<(String, CppType)>,
+    /// Access specifier
+    pub access: AccessSpecifier,
+    /// Whether this is a static method
+    pub is_static: bool,
+    /// Indices of template parameters that are parameter packs
+    pub parameter_pack_indices: Vec<usize>,
+    /// Whether this is a definition (has body)
+    pub is_definition: bool,
 }
 
 /// A C++ constructor.

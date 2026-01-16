@@ -2814,3 +2814,123 @@ fn test_partial_spec_in_namespace() {
     assert_eq!(module.class_partial_specializations.len(), 1);
     assert_eq!(module.class_partial_specializations[0].namespace, vec!["ns"]);
 }
+
+// ============================================================================
+// Member Template Tests (Nested Templates)
+// ============================================================================
+
+/// Test basic member template in a non-template class.
+#[test]
+fn test_member_template_basic() {
+    let parser = ClangParser::new().unwrap();
+    let code = r#"
+        class Container {
+        public:
+            template<typename U>
+            void process(U value);
+        };
+    "#;
+
+    let ast = parser.parse_string(code, "test.cpp").unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    assert_eq!(module.structs.len(), 1);
+    let container = &module.structs[0];
+    assert_eq!(container.name, "Container");
+    assert_eq!(container.member_templates.len(), 1);
+
+    let member_tmpl = &container.member_templates[0];
+    assert_eq!(member_tmpl.name, "process");
+    assert_eq!(member_tmpl.template_params.len(), 1);
+    assert_eq!(member_tmpl.template_params[0], "U");
+    assert_eq!(member_tmpl.params.len(), 1);
+    assert_eq!(member_tmpl.params[0].0, "value");
+}
+
+/// Test member template in a class template.
+#[test]
+fn test_member_template_in_class_template() {
+    let parser = ClangParser::new().unwrap();
+    let code = r#"
+        template<typename T>
+        class Box {
+            T data;
+        public:
+            template<typename U>
+            U convert();
+        };
+    "#;
+
+    let ast = parser.parse_string(code, "test.cpp").unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    assert_eq!(module.class_templates.len(), 1);
+    let box_tmpl = &module.class_templates[0];
+    assert_eq!(box_tmpl.name, "Box");
+    assert_eq!(box_tmpl.template_params, vec!["T"]);
+    assert_eq!(box_tmpl.member_templates.len(), 1);
+
+    let member_tmpl = &box_tmpl.member_templates[0];
+    assert_eq!(member_tmpl.name, "convert");
+    assert_eq!(member_tmpl.template_params, vec!["U"]);
+    // Return type should reference template param U
+    match &member_tmpl.return_type {
+        CppType::TemplateParam { name, .. } => assert_eq!(name, "U"),
+        other => panic!("Expected TemplateParam for return type, got {:?}", other),
+    }
+}
+
+/// Test variadic member template (like Mako's bucket::construct).
+#[test]
+fn test_member_template_variadic() {
+    let parser = ClangParser::new().unwrap();
+    let code = r#"
+        class Bucket {
+        public:
+            template<typename... Args>
+            void construct(Args&&... args);
+        };
+    "#;
+
+    let ast = parser.parse_string(code, "test.cpp").unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    assert_eq!(module.structs.len(), 1);
+    let bucket = &module.structs[0];
+    assert_eq!(bucket.member_templates.len(), 1);
+
+    let member_tmpl = &bucket.member_templates[0];
+    assert_eq!(member_tmpl.name, "construct");
+    assert_eq!(member_tmpl.template_params, vec!["Args"]);
+    assert_eq!(member_tmpl.parameter_pack_indices, vec![0]);
+}
+
+/// Test member template with multiple template parameters.
+#[test]
+fn test_member_template_multiple_params() {
+    let parser = ClangParser::new().unwrap();
+    let code = r#"
+        template<typename T>
+        class Converter {
+        public:
+            template<typename U, typename V>
+            V transform(U input);
+        };
+    "#;
+
+    let ast = parser.parse_string(code, "test.cpp").unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    assert_eq!(module.class_templates.len(), 1);
+    let conv = &module.class_templates[0];
+    assert_eq!(conv.member_templates.len(), 1);
+
+    let member_tmpl = &conv.member_templates[0];
+    assert_eq!(member_tmpl.name, "transform");
+    assert_eq!(member_tmpl.template_params, vec!["U", "V"]);
+    assert_eq!(member_tmpl.params.len(), 1);
+}

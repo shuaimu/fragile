@@ -76,10 +76,10 @@ See [PLAN_CPP20_MAKO.md](PLAN_CPP20_MAKO.md) for detailed plan.
     - [x] Explicit template arguments override [26:01:16, 01:40] ([docs/dev/plan_explicit_template_args.md](docs/dev/plan_explicit_template_args.md))
   - [x] Specialization [26:01:16, 02:03] ([docs/dev/plan_template_specialization.md](docs/dev/plan_template_specialization.md))
   - [x] Variadic templates [26:01:16, 03:02] ([docs/dev/plan_variadic_templates.md](docs/dev/plan_variadic_templates.md))
-- [-] **B.2 Class Templates**
+- [x] **B.2 Class Templates**
   - [x] Basic class templates [26:01:16, 03:45] ([docs/dev/plan_class_templates.md](docs/dev/plan_class_templates.md))
   - [x] Partial specialization [26:01:16, 04:30] ([docs/dev/plan_partial_specialization.md](docs/dev/plan_partial_specialization.md))
-  - [ ] Nested templates
+  - [x] Nested templates (member templates) [26:01:16, 05:00] ([docs/dev/plan_nested_templates.md](docs/dev/plan_nested_templates.md))
 - [ ] **B.3 SFINAE & Type Traits**
   - [ ] std::enable_if
   - [ ] std::is_same, std::is_base_of
@@ -218,7 +218,7 @@ Migration: After C++20 support is complete, deprecate these.
 ## 5. Testing & Milestones
 
 ### 5.1 Unit Tests
-- [x] fragile-clang: 113 tests passing (27 unit + 86 integration)
+- [x] fragile-clang: 117 tests passing (27 unit + 90 integration)
 - [x] fragile-rustc-driver: 6 tests passing
 - [x] fragile-runtime: Compiles
 

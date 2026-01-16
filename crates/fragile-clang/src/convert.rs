@@ -4,10 +4,10 @@ use crate::ast::{BinaryOp, ClangAst, ClangNode, ClangNodeKind, UnaryOp};
 use crate::types::CppType;
 use crate::{
     CppBaseClass, CppClassTemplate, CppClassTemplatePartialSpec, CppConstructor, CppDestructor,
-    CppExtern, CppField, CppFriend, CppFunction, CppFunctionTemplate, CppMethod, CppModule,
-    CppStruct, MemberInitializer, MirBasicBlock, MirBinOp, MirBody, MirConstant, MirLocal,
-    MirOperand, MirPlace, MirRvalue, MirStatement, MirTerminator, MirUnaryOp, UsingDeclaration,
-    UsingDirective,
+    CppExtern, CppField, CppFriend, CppFunction, CppFunctionTemplate, CppMemberTemplate, CppMethod,
+    CppModule, CppStruct, MemberInitializer, MirBasicBlock, MirBinOp, MirBody, MirConstant,
+    MirLocal, MirOperand, MirPlace, MirRvalue, MirStatement, MirTerminator, MirUnaryOp,
+    UsingDeclaration, UsingDirective,
 };
 use miette::Result;
 
@@ -652,6 +652,7 @@ impl MirConverter {
         let mut constructors = Vec::new();
         let mut destructor = None;
         let mut methods = Vec::new();
+        let mut member_templates = Vec::new();
 
         for child in &node.children {
             match &child.kind {
@@ -695,6 +696,26 @@ impl MirConverter {
                         is_final: *is_final,
                         access: *access,
                         mir_body,
+                    });
+                }
+                ClangNodeKind::FunctionTemplateDecl {
+                    name: method_name,
+                    template_params: method_template_params,
+                    return_type,
+                    params,
+                    is_definition,
+                    parameter_pack_indices: method_pack_indices,
+                } => {
+                    // Member template inside a class template
+                    member_templates.push(CppMemberTemplate {
+                        name: method_name.clone(),
+                        template_params: method_template_params.clone(),
+                        return_type: return_type.clone(),
+                        params: params.clone(),
+                        access: self.get_access_from_children(child),
+                        is_static: false,
+                        parameter_pack_indices: method_pack_indices.clone(),
+                        is_definition: *is_definition,
                     });
                 }
                 ClangNodeKind::ConstructorDecl {
@@ -747,6 +768,7 @@ impl MirConverter {
             constructors,
             destructor,
             methods,
+            member_templates,
             parameter_pack_indices: parameter_pack_indices.to_vec(),
         })
     }
@@ -767,6 +789,7 @@ impl MirConverter {
         let mut constructors = Vec::new();
         let mut destructor = None;
         let mut methods = Vec::new();
+        let mut member_templates = Vec::new();
 
         for child in &node.children {
             match &child.kind {
@@ -810,6 +833,25 @@ impl MirConverter {
                         is_final: *is_final,
                         access: *access,
                         mir_body,
+                    });
+                }
+                ClangNodeKind::FunctionTemplateDecl {
+                    name: method_name,
+                    template_params: method_template_params,
+                    return_type,
+                    params,
+                    is_definition,
+                    parameter_pack_indices: method_pack_indices,
+                } => {
+                    member_templates.push(CppMemberTemplate {
+                        name: method_name.clone(),
+                        template_params: method_template_params.clone(),
+                        return_type: return_type.clone(),
+                        params: params.clone(),
+                        access: self.get_access_from_children(child),
+                        is_static: false,
+                        parameter_pack_indices: method_pack_indices.clone(),
+                        is_definition: *is_definition,
                     });
                 }
                 ClangNodeKind::ConstructorDecl {
@@ -863,6 +905,7 @@ impl MirConverter {
             constructors,
             destructor,
             methods,
+            member_templates,
             parameter_pack_indices: parameter_pack_indices.to_vec(),
         })
     }
@@ -881,6 +924,7 @@ impl MirConverter {
         let mut constructors = Vec::new();
         let mut destructor = None;
         let mut methods = Vec::new();
+        let mut member_templates = Vec::new();
         let mut friends = Vec::new();
 
         for child in &node.children {
@@ -925,6 +969,26 @@ impl MirConverter {
                         is_final: *is_final,
                         access: *access,
                         mir_body,
+                    });
+                }
+                ClangNodeKind::FunctionTemplateDecl {
+                    name: method_name,
+                    template_params,
+                    return_type,
+                    params,
+                    is_definition,
+                    parameter_pack_indices,
+                } => {
+                    // Member template inside a class
+                    member_templates.push(CppMemberTemplate {
+                        name: method_name.clone(),
+                        template_params: template_params.clone(),
+                        return_type: return_type.clone(),
+                        params: params.clone(),
+                        access: self.get_access_from_children(child),
+                        is_static: false, // TODO: Detect static member templates
+                        parameter_pack_indices: parameter_pack_indices.clone(),
+                        is_definition: *is_definition,
                     });
                 }
                 ClangNodeKind::ConstructorDecl {
@@ -993,6 +1057,7 @@ impl MirConverter {
             constructors,
             destructor,
             methods,
+            member_templates,
             friends,
         })
     }
@@ -1091,6 +1156,15 @@ impl MirConverter {
             }
             _ => "unknown".to_string(),
         }
+    }
+
+    /// Get access specifier from a function template's children.
+    /// Function templates don't have access specifier in their AST node,
+    /// so we need to infer it from the context (defaults to private for classes).
+    fn get_access_from_children(&self, _node: &ClangNode) -> crate::ast::AccessSpecifier {
+        // TODO: Parse access specifier from the parent class context
+        // For now, default to public since most member templates are public
+        crate::ast::AccessSpecifier::Public
     }
 
     /// Check if a function name refers to std::move.

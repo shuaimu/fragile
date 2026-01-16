@@ -163,6 +163,7 @@ mod tests {
             constructors: vec![],
             destructor: None,
             methods: vec![],
+            member_templates: vec![],
             friends: vec![],
         };
 
@@ -192,6 +193,7 @@ mod tests {
             constructors: vec![],
             destructor: None,
             methods: vec![],
+            member_templates: vec![],
             friends: vec![],
         };
 
