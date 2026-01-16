@@ -62,6 +62,16 @@ pub enum CppType {
         /// The base spelling of the type (may contain template param names)
         spelling: String,
     },
+    /// A template parameter pack (typename... Args).
+    /// Represents a variadic template parameter that can match zero or more types.
+    ParameterPack {
+        /// Parameter name (e.g., "Args")
+        name: String,
+        /// Template nesting depth (0 for outermost template)
+        depth: u32,
+        /// Index in the template parameter list (0-based)
+        index: u32,
+    },
 }
 
 impl CppType {
@@ -172,13 +182,18 @@ impl CppType {
                 // These need to be resolved during template instantiation
                 spelling.clone()
             }
+            CppType::ParameterPack { name, .. } => {
+                // Parameter packs need special handling during expansion
+                // For now, represent as the pack name with ... suffix
+                format!("{}...", name)
+            }
         }
     }
 
     /// Check if this type is or contains template parameters.
     pub fn is_dependent(&self) -> bool {
         match self {
-            CppType::TemplateParam { .. } | CppType::DependentType { .. } => true,
+            CppType::TemplateParam { .. } | CppType::DependentType { .. } | CppType::ParameterPack { .. } => true,
             CppType::Pointer { pointee, .. } => pointee.is_dependent(),
             CppType::Reference { referent, .. } => referent.is_dependent(),
             CppType::Array { element, .. } => element.is_dependent(),
@@ -198,6 +213,20 @@ impl CppType {
             depth,
             index,
         }
+    }
+
+    /// Create a template parameter pack type.
+    pub fn parameter_pack(name: &str, depth: u32, index: u32) -> Self {
+        CppType::ParameterPack {
+            name: name.to_string(),
+            depth,
+            index,
+        }
+    }
+
+    /// Check if this type is a parameter pack.
+    pub fn is_parameter_pack(&self) -> bool {
+        matches!(self, CppType::ParameterPack { .. })
     }
 
     /// Substitute template parameters with concrete types.
@@ -225,6 +254,12 @@ impl CppType {
                 } else {
                     self.clone()
                 }
+            }
+            CppType::ParameterPack { name, .. } => {
+                // Parameter packs require special expansion logic.
+                // For now, if a single type is provided, use it directly.
+                // Full pack expansion is more complex and handled elsewhere.
+                substitutions.get(name).cloned().unwrap_or_else(|| self.clone())
             }
             CppType::Pointer { pointee, is_const } => CppType::Pointer {
                 pointee: Box::new(pointee.substitute(substitutions)),

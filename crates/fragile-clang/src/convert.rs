@@ -161,6 +161,7 @@ impl MirConverter {
                 return_type,
                 params,
                 is_definition,
+                parameter_pack_indices,
             } => {
                 module.function_templates.push(CppFunctionTemplate {
                     name: name.clone(),
@@ -170,6 +171,7 @@ impl MirConverter {
                     params: params.clone(),
                     is_definition: *is_definition,
                     specializations: Vec::new(),
+                    parameter_pack_indices: parameter_pack_indices.clone(),
                 });
             }
             ClangNodeKind::TemplateTypeParmDecl { .. } => {

@@ -2300,6 +2300,7 @@ fn test_specialization_found() {
         })],
         is_definition: true,
         specializations: vec![],
+        parameter_pack_indices: vec![],
     };
 
     // Add specialization for int
@@ -2344,6 +2345,7 @@ fn test_specialization_used_in_instantiation() {
         })],
         is_definition: true,
         specializations: vec![],
+        parameter_pack_indices: vec![],
     };
 
     // Add specialization for int with custom name
@@ -2391,6 +2393,7 @@ fn test_specialization_with_explicit_args() {
         })],
         is_definition: true,
         specializations: vec![],
+        parameter_pack_indices: vec![],
     };
 
     // Add specialization for <int, double>
@@ -2424,4 +2427,93 @@ fn test_specialization_with_explicit_args() {
         )
         .expect("Instantiation failed");
     assert!(func.mangled_name.contains("i32") || func.mangled_name.contains("convert"));
+}
+
+// ============================================================================
+// Variadic Template Tests
+// ============================================================================
+
+/// Test that variadic template with parameter pack is detected.
+#[test]
+fn test_variadic_template_detected() {
+    let parser = ClangParser::new().unwrap();
+    let code = r#"
+        template<typename... Args>
+        void print(Args... args) {}
+    "#;
+
+    let ast = parser.parse_string(code, "test.cpp").unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    assert_eq!(module.function_templates.len(), 1);
+    let tmpl = &module.function_templates[0];
+    assert_eq!(tmpl.name, "print");
+    assert_eq!(tmpl.template_params, vec!["Args"]);
+
+    // Should have one parameter pack at index 0
+    assert!(tmpl.is_variadic());
+    assert_eq!(tmpl.parameter_pack_indices, vec![0]);
+    assert!(tmpl.is_pack_param(0));
+}
+
+/// Test variadic template with mixed params (regular + pack).
+#[test]
+fn test_variadic_template_mixed_params() {
+    let parser = ClangParser::new().unwrap();
+    let code = r#"
+        template<typename T, typename... Rest>
+        T first(T head, Rest... tail) { return head; }
+    "#;
+
+    let ast = parser.parse_string(code, "test.cpp").unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    assert_eq!(module.function_templates.len(), 1);
+    let tmpl = &module.function_templates[0];
+    assert_eq!(tmpl.name, "first");
+    assert_eq!(tmpl.template_params, vec!["T", "Rest"]);
+
+    // T at index 0 is not a pack, Rest at index 1 is a pack
+    assert!(tmpl.is_variadic());
+    assert_eq!(tmpl.parameter_pack_indices, vec![1]);
+    assert!(!tmpl.is_pack_param(0)); // T is not a pack
+    assert!(tmpl.is_pack_param(1));  // Rest is a pack
+}
+
+/// Test non-variadic template has empty pack indices.
+#[test]
+fn test_non_variadic_template() {
+    let parser = ClangParser::new().unwrap();
+    let code = r#"
+        template<typename T>
+        T identity(T x) { return x; }
+    "#;
+
+    let ast = parser.parse_string(code, "test.cpp").unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    assert_eq!(module.function_templates.len(), 1);
+    let tmpl = &module.function_templates[0];
+
+    // Should not be variadic
+    assert!(!tmpl.is_variadic());
+    assert!(tmpl.parameter_pack_indices.is_empty());
+}
+
+/// Test CppType::ParameterPack variant.
+#[test]
+fn test_parameter_pack_type() {
+    use fragile_clang::CppType;
+
+    let pack = CppType::parameter_pack("Args", 0, 0);
+    assert!(pack.is_parameter_pack());
+    assert!(pack.is_dependent());
+    assert_eq!(pack.to_rust_type_str(), "Args...");
+
+    // Regular template param is not a pack
+    let param = CppType::template_param("T", 0, 0);
+    assert!(!param.is_parameter_pack());
 }

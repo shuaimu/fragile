@@ -270,6 +270,8 @@ pub struct CppFunctionTemplate {
     pub is_definition: bool,
     /// Explicit specializations of this template
     pub specializations: Vec<CppTemplateSpecialization>,
+    /// Indices of template parameters that are parameter packs (variadic)
+    pub parameter_pack_indices: Vec<usize>,
 }
 
 /// An explicit specialization of a function template.
@@ -282,6 +284,16 @@ pub struct CppTemplateSpecialization {
 }
 
 impl CppFunctionTemplate {
+    /// Check if this template has any parameter packs (is variadic).
+    pub fn is_variadic(&self) -> bool {
+        !self.parameter_pack_indices.is_empty()
+    }
+
+    /// Check if a template parameter at the given index is a parameter pack.
+    pub fn is_pack_param(&self, index: usize) -> bool {
+        self.parameter_pack_indices.contains(&index)
+    }
+
     /// Find an explicit specialization matching the given type arguments.
     pub fn find_specialization(&self, args: &[CppType]) -> Option<&CppFunction> {
         self.specializations

@@ -75,7 +75,7 @@ See [PLAN_CPP20_MAKO.md](PLAN_CPP20_MAKO.md) for detailed plan.
     - [x] Deduction for pointers/references (T* → int*) [26:01:16, 01:32]
     - [x] Explicit template arguments override [26:01:16, 01:40] ([docs/dev/plan_explicit_template_args.md](docs/dev/plan_explicit_template_args.md))
   - [x] Specialization [26:01:16, 02:03] ([docs/dev/plan_template_specialization.md](docs/dev/plan_template_specialization.md))
-  - [ ] Variadic templates
+  - [x] Variadic templates [26:01:16, 03:02] ([docs/dev/plan_variadic_templates.md](docs/dev/plan_variadic_templates.md))
 - [ ] **B.2 Class Templates**
   - [ ] Basic class templates
   - [ ] Partial specialization
@@ -218,7 +218,7 @@ Migration: After C++20 support is complete, deprecate these.
 ## 5. Testing & Milestones
 
 ### 5.1 Unit Tests
-- [x] fragile-clang: 100 tests passing (27 unit + 73 integration)
+- [x] fragile-clang: 104 tests passing (27 unit + 77 integration)
 - [x] fragile-rustc-driver: 6 tests passing
 - [x] fragile-runtime: Compiles
 

@@ -81,14 +81,18 @@ pub enum ClangNodeKind {
         /// Parameters (may be dependent on template params)
         params: Vec<(String, CppType)>,
         is_definition: bool,
+        /// Indices of template parameters that are parameter packs (variadic)
+        parameter_pack_indices: Vec<usize>,
     },
-    /// Template type parameter (e.g., typename T)
+    /// Template type parameter (e.g., typename T or typename... Args)
     TemplateTypeParmDecl {
         name: String,
         /// Depth in nested template declarations
         depth: u32,
         /// Index within the template parameter list
         index: u32,
+        /// Whether this is a parameter pack (typename... Args)
+        is_pack: bool,
     },
     /// Parameter declaration
     ParmVarDecl {

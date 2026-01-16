@@ -243,7 +243,7 @@ impl ClangParser {
                 // CXCursor_FunctionTemplate = 30
                 30 => {
                     let name = cursor_spelling(cursor);
-                    let template_params = self.get_template_type_params(cursor);
+                    let (template_params, parameter_pack_indices) = self.get_template_type_params_with_packs(cursor);
 
                     // Get the templated function's type info
                     // Use template-aware type conversion to detect template parameters
@@ -265,17 +265,22 @@ impl ClangParser {
                         return_type,
                         params,
                         is_definition,
+                        parameter_pack_indices,
                     }
                 }
 
                 // CXCursor_TemplateTypeParameter = 27
                 27 => {
                     let name = cursor_spelling(cursor);
+                    // Check if this is a parameter pack (variadic template parameter)
+                    // The cursor is variadic if it represents "typename... Args"
+                    let is_pack = clang_sys::clang_Cursor_isVariadic(cursor) != 0;
                     // TODO: Extract proper depth and index from cursor
                     ClangNodeKind::TemplateTypeParmDecl {
                         name,
                         depth: 0,
                         index: 0,
+                        is_pack,
                     }
                 }
 
@@ -975,9 +980,31 @@ impl ClangParser {
     /// Get template type parameters from a function/class template cursor.
     /// Returns the names of the template type parameters (e.g., ["T", "U"]).
     fn get_template_type_params(&self, cursor: clang_sys::CXCursor) -> Vec<String> {
+        let (names, _) = self.get_template_type_params_with_packs(cursor);
+        names
+    }
+
+    /// Get template type parameters with pack info from a function/class template cursor.
+    /// Returns (parameter names, indices of parameter packs).
+    ///
+    /// Note: We need to tokenize each template type parameter's extent to detect "..."
+    /// because libclang doesn't expose isParameterPack() in its C API.
+    fn get_template_type_params_with_packs(&self, cursor: clang_sys::CXCursor) -> (Vec<String>, Vec<usize>) {
         unsafe {
-            let mut params: Vec<String> = Vec::new();
-            let params_ptr: *mut Vec<String> = &mut params;
+            // Get the translation unit for tokenization
+            let tu = clang_sys::clang_Cursor_getTranslationUnit(cursor);
+
+            struct ParamInfo {
+                names: Vec<String>,
+                pack_indices: Vec<usize>,
+                tu: clang_sys::CXTranslationUnit,
+            }
+            let mut info = ParamInfo {
+                names: Vec::new(),
+                pack_indices: Vec::new(),
+                tu,
+            };
+            let info_ptr: *mut ParamInfo = &mut info;
 
             extern "C" fn param_visitor(
                 child: clang_sys::CXCursor,
@@ -985,14 +1012,41 @@ impl ClangParser {
                 data: clang_sys::CXClientData,
             ) -> clang_sys::CXChildVisitResult {
                 unsafe {
-                    let params = &mut *(data as *mut Vec<String>);
+                    let info = &mut *(data as *mut ParamInfo);
                     let kind = clang_sys::clang_getCursorKind(child);
 
                     // CXCursor_TemplateTypeParameter = 27
                     if kind == 27 {
                         let name = cursor_spelling(child);
                         if !name.is_empty() {
-                            params.push(name);
+                            let index = info.names.len();
+
+                            // Tokenize the extent to detect "..." token
+                            let extent = clang_sys::clang_getCursorExtent(child);
+                            let mut tokens: *mut clang_sys::CXToken = ptr::null_mut();
+                            let mut num_tokens: u32 = 0;
+
+                            clang_sys::clang_tokenize(info.tu, extent, &mut tokens, &mut num_tokens);
+
+                            let mut is_pack = false;
+                            for i in 0..num_tokens {
+                                let token = *tokens.add(i as usize);
+                                let token_spelling = clang_sys::clang_getTokenSpelling(info.tu, token);
+                                let token_str = cx_string_to_string(token_spelling);
+                                if token_str == "..." {
+                                    is_pack = true;
+                                    break;
+                                }
+                            }
+
+                            if !tokens.is_null() {
+                                clang_sys::clang_disposeTokens(info.tu, tokens, num_tokens);
+                            }
+
+                            if is_pack {
+                                info.pack_indices.push(index);
+                            }
+                            info.names.push(name);
                         }
                     }
 
@@ -1000,9 +1054,9 @@ impl ClangParser {
                 }
             }
 
-            clang_sys::clang_visitChildren(cursor, param_visitor, params_ptr as clang_sys::CXClientData);
+            clang_sys::clang_visitChildren(cursor, param_visitor, info_ptr as clang_sys::CXClientData);
 
-            params
+            (info.names, info.pack_indices)
         }
     }
 
