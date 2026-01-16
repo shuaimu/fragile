@@ -55,4 +55,41 @@ int add_int(int a, int b) {
     return a + b;
 }
 
+// Integer minimum
+// Uses C++ name mangling: _ZN3rrr7min_intEii
+int min_int(int a, int b) {
+    return (a < b) ? a : b;
+}
+
+// Integer maximum
+// Uses C++ name mangling: _ZN3rrr7max_intEii
+int max_int(int a, int b) {
+    return (a > b) ? a : b;
+}
+
+// Clamp integer to range [min_val, max_val]
+// Uses C++ name mangling: _ZN3rrr9clamp_intEiii
+int clamp_int(int value, int min_val, int max_val) {
+    if (value < min_val) return min_val;
+    if (value > max_val) return max_val;
+    return value;
+}
+
+// Check if pointer is null
+// Uses C++ name mangling: _ZN3rrr7is_nullEPKv
+bool is_null(const void* ptr) {
+    return ptr == nullptr;
+}
+
+// String length without stdlib
+// Uses C++ name mangling: _ZN3rrr7str_lenEPKc
+int str_len(const char* str) {
+    int len = 0;
+    while (*str) {
+        len++;
+        str++;
+    }
+    return len;
+}
+
 } // namespace rrr

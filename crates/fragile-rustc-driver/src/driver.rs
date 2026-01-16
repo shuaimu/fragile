@@ -975,6 +975,11 @@ fn main() {
         // - rrr::startswith(const char*, const char*) -> _ZN3rrr10startswithEPKcS1_
         // - rrr::endswith(const char*, const char*) -> _ZN3rrr8endswithEPKcS1_
         // - rrr::add_int(int, int) -> _ZN3rrr7add_intEii
+        // - rrr::min_int(int, int) -> _ZN3rrr7min_intEii
+        // - rrr::max_int(int, int) -> _ZN3rrr7max_intEii
+        // - rrr::clamp_int(int, int, int) -> _ZN3rrr9clamp_intEiii
+        // - rrr::is_null(const void*) -> _ZN3rrr7is_nullEPKv
+        // - rrr::str_len(const char*) -> _ZN3rrr7str_lenEPKc
         let main_rs = temp_dir.path().join("main.rs");
         std::fs::write(&main_rs, r#"
 use std::ffi::CString;
@@ -988,6 +993,21 @@ extern "C" {
 
     #[link_name = "_ZN3rrr7add_intEii"]
     fn rrr_add_int(a: i32, b: i32) -> i32;
+
+    #[link_name = "_ZN3rrr7min_intEii"]
+    fn rrr_min_int(a: i32, b: i32) -> i32;
+
+    #[link_name = "_ZN3rrr7max_intEii"]
+    fn rrr_max_int(a: i32, b: i32) -> i32;
+
+    #[link_name = "_ZN3rrr9clamp_intEiii"]
+    fn rrr_clamp_int(value: i32, min_val: i32, max_val: i32) -> i32;
+
+    #[link_name = "_ZN3rrr7is_nullEPKv"]
+    fn rrr_is_null(ptr: *const std::ffi::c_void) -> bool;
+
+    #[link_name = "_ZN3rrr7str_lenEPKc"]
+    fn rrr_str_len(str: *const i8) -> i32;
 }
 
 fn main() {
@@ -1014,6 +1034,52 @@ fn main() {
     let sum = unsafe { rrr_add_int(10, 20) };
     println!("add_int(10, 20) = {}", sum);
     assert_eq!(sum, 30, "Expected add_int to return 30");
+
+    // Test min_int
+    let min = unsafe { rrr_min_int(5, 10) };
+    println!("min_int(5, 10) = {}", min);
+    assert_eq!(min, 5, "Expected min_int to return 5");
+
+    let min2 = unsafe { rrr_min_int(10, 5) };
+    assert_eq!(min2, 5, "Expected min_int(10, 5) to return 5");
+
+    // Test max_int
+    let max = unsafe { rrr_max_int(5, 10) };
+    println!("max_int(5, 10) = {}", max);
+    assert_eq!(max, 10, "Expected max_int to return 10");
+
+    // Test clamp_int
+    let clamped1 = unsafe { rrr_clamp_int(5, 0, 10) };
+    println!("clamp_int(5, 0, 10) = {}", clamped1);
+    assert_eq!(clamped1, 5, "Expected clamp_int to return 5 (in range)");
+
+    let clamped2 = unsafe { rrr_clamp_int(-5, 0, 10) };
+    println!("clamp_int(-5, 0, 10) = {}", clamped2);
+    assert_eq!(clamped2, 0, "Expected clamp_int to return 0 (below min)");
+
+    let clamped3 = unsafe { rrr_clamp_int(15, 0, 10) };
+    println!("clamp_int(15, 0, 10) = {}", clamped3);
+    assert_eq!(clamped3, 10, "Expected clamp_int to return 10 (above max)");
+
+    // Test is_null
+    let is_null_true = unsafe { rrr_is_null(std::ptr::null()) };
+    println!("is_null(null) = {}", is_null_true);
+    assert!(is_null_true, "Expected is_null(null) to return true");
+
+    let non_null: i32 = 42;
+    let is_null_false = unsafe { rrr_is_null(&non_null as *const i32 as *const std::ffi::c_void) };
+    println!("is_null(&42) = {}", is_null_false);
+    assert!(!is_null_false, "Expected is_null(&42) to return false");
+
+    // Test str_len
+    let len1 = unsafe { rrr_str_len(str1.as_ptr()) };
+    println!("str_len('hello world') = {}", len1);
+    assert_eq!(len1, 11, "Expected str_len to return 11");
+
+    let empty_str = CString::new("").unwrap();
+    let len2 = unsafe { rrr_str_len(empty_str.as_ptr()) };
+    println!("str_len('') = {}", len2);
+    assert_eq!(len2, 0, "Expected str_len('') to return 0");
 
     println!("All mako operations passed!");
 }

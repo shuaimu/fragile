@@ -520,7 +520,13 @@ Migration: After C++20 support is complete, deprecate these.
     - [x] M5.7.2: Build C++ object files [26:01:17] ([docs/dev/plan_m5_7_2_cpp_object_files.md](docs/dev/plan_m5_7_2_cpp_object_files.md))
     - [x] M5.7.3: Link Rust + C++ objects [26:01:17] ([docs/dev/plan_m5_7_3_link_rust_cpp.md](docs/dev/plan_m5_7_3_link_rust_cpp.md))
   - [x] M5.8: Run basic mako operations [26:01:17] ([docs/dev/plan_m5_8_basic_mako_ops.md](docs/dev/plan_m5_8_basic_mako_ops.md))
-- [ ] **M6**: Mako tests pass
+- [-] **M6**: Mako tests pass ([docs/dev/plan_m6_mako_tests.md](docs/dev/plan_m6_mako_tests.md))
+  - [x] M6.1: Extended mako_simple.cpp [26:01:17] - min_int, max_int, clamp_int, is_null, str_len
+  - [ ] M6.2: String utilities without STL
+  - [ ] M6.3: First real mako file (strop.cpp)
+  - [ ] M6.4: Simple mako test executable
+  - [ ] M6.5: Unit test harness
+  - [ ] M6.6+: Full test suite
 
 ---
 
@@ -531,8 +537,8 @@ Migration: After C++20 support is complete, deprecate these.
 Current status:
 - **rrr module**: 20/20 files parsing (100%) - all base, misc, reactor, rpc files parsing
 - **mako module**: 338/338 files tested (100%) - includes all memdb files, deptran files, consensus executors, masstree, benchmarks
-- **Total tests**: 596 fragile-clang (27 unit + 569 integration), 19 fragile-rustc-driver
-- **Milestones**: M1-M5 ✅ complete, M6 (tests) pending
+- **Total tests**: 596 fragile-clang (27 unit + 569 integration), 25 fragile-rustc-driver (with rustc-integration)
+- **Milestones**: M1-M5 ✅ complete, M6.1 ✅ complete, M6 (full tests) in progress
 - **Blocked files**: mongodb/server.cc (bsoncxx), persist_test.cc (undefined template), mtd.cc (epoll conflicts)
 
 Next steps:
@@ -542,4 +548,5 @@ Next steps:
 4. **C++ Object Compilation (M5.7.2)** - ✅ Completed [26:01:17] - CppCompiler module with clang integration
 5. **M5.7.3 Linking** - ✅ Completed [26:01:17] - run_rustc_with_objects with C++ runtime linking
 6. **M5.8 Run basic mako ops** - ✅ Completed [26:01:17] - rrr::startswith/endswith tests
-7. **M6 Mako tests pass** - Next: Run actual mako test suite
+7. **M6.1 Extended mako_simple** - ✅ Completed [26:01:17] - min/max/clamp/is_null/str_len
+8. **M6.2 String utilities** - Next: strcmp, strncpy equivalents
