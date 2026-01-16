@@ -211,6 +211,7 @@ impl MirConverter {
                     return_type: return_type.clone(),
                     params: params.clone(),
                     is_definition: *is_definition,
+                    is_noexcept: false, // TODO: extract from function declaration
                     specializations: Vec::new(),
                     parameter_pack_indices: parameter_pack_indices.clone(),
                     requires_clause: requires_clause.clone(),
@@ -362,6 +363,7 @@ impl MirConverter {
             namespace: namespace_context.to_vec(),
             params: params.to_vec(),
             return_type: return_type.clone(),
+            is_noexcept: false, // TODO: extract from function declaration
             mir_body,
         })
     }

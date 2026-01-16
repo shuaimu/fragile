@@ -2299,6 +2299,7 @@ fn test_specialization_found() {
             index: 0,
         })],
         is_definition: true,
+        is_noexcept: false,
         specializations: vec![],
         parameter_pack_indices: vec![],
         requires_clause: None,
@@ -2311,6 +2312,7 @@ fn test_specialization_found() {
         namespace: vec![],
         params: vec![("x".to_string(), CppType::Int { signed: true })],
         return_type: CppType::Int { signed: true },
+        is_noexcept: false,
         mir_body: MirBody::default(),
     };
     template.add_specialization(vec![CppType::Int { signed: true }], int_spec);
@@ -2345,6 +2347,7 @@ fn test_specialization_used_in_instantiation() {
             index: 0,
         })],
         is_definition: true,
+        is_noexcept: false,
         specializations: vec![],
         parameter_pack_indices: vec![],
         requires_clause: None,
@@ -2357,6 +2360,7 @@ fn test_specialization_used_in_instantiation() {
         namespace: vec![],
         params: vec![("x".to_string(), CppType::Int { signed: true })],
         return_type: CppType::Int { signed: true },
+        is_noexcept: false,
         mir_body: MirBody::default(),
     };
     template.add_specialization(vec![CppType::Int { signed: true }], int_spec);
@@ -2394,6 +2398,7 @@ fn test_specialization_with_explicit_args() {
             index: 1,
         })],
         is_definition: true,
+        is_noexcept: false,
         specializations: vec![],
         parameter_pack_indices: vec![],
         requires_clause: None,
@@ -2406,6 +2411,7 @@ fn test_specialization_with_explicit_args() {
         namespace: vec![],
         params: vec![("x".to_string(), CppType::Double)],
         return_type: CppType::Int { signed: true },
+        is_noexcept: false,
         mir_body: MirBody::default(),
     };
     template.add_specialization(

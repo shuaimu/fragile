@@ -158,7 +158,7 @@ See [PLAN_CPP20_MAKO.md](PLAN_CPP20_MAKO.md) for detailed plan.
 ### 1.5 Phase E: Advanced Features
 - [x] **E.1 Exceptions** [26:01:16, 03:55] ([docs/dev/plan_exception_support.md](docs/dev/plan_exception_support.md))
   - [x] try/catch/throw (TryStmt, CatchStmt, ThrowExpr AST nodes + parsing + MIR conversion)
-  - [ ] noexcept (future work)
+  - [x] noexcept specifier (is_noexcept field on CppFunction/CppFunctionTemplate) [26:01:16, 17:00]
   - [ ] Stack unwinding (requires runtime support)
 - [x] **E.2 RTTI** [26:01:16, 04:05] ([docs/dev/plan_rtti_support.md](docs/dev/plan_rtti_support.md))
   - [x] typeid (TypeidExpr AST node + parsing + MIR conversion)

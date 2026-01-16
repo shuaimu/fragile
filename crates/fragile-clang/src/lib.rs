@@ -261,6 +261,8 @@ pub struct CppFunction {
     pub params: Vec<(String, CppType)>,
     /// Return type
     pub return_type: CppType,
+    /// Whether the function is noexcept
+    pub is_noexcept: bool,
     /// MIR body (serialized for transfer to rustc driver)
     pub mir_body: MirBody,
 }
@@ -280,6 +282,8 @@ pub struct CppFunctionTemplate {
     pub params: Vec<(String, CppType)>,
     /// Whether this template has a definition
     pub is_definition: bool,
+    /// Whether the function is noexcept
+    pub is_noexcept: bool,
     /// Explicit specializations of this template
     pub specializations: Vec<CppTemplateSpecialization>,
     /// Indices of template parameters that are parameter packs (variadic)
@@ -357,6 +361,7 @@ impl CppFunctionTemplate {
                 .iter()
                 .map(|(name, ty)| (name.clone(), ty.substitute(substitutions)))
                 .collect(),
+            is_noexcept: self.is_noexcept,
             mir_body: MirBody::default(),
         }
     }

@@ -216,6 +216,7 @@ mod tests {
             namespace,
             params: vec![],
             return_type: CppType::int(),
+            is_noexcept: false,
             mir_body: MirBody::new(),
         }
     }

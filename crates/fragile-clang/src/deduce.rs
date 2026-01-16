@@ -289,6 +289,7 @@ mod tests {
                 .collect(),
             return_type,
             is_definition: true,
+            is_noexcept: false,
             specializations: vec![],
             parameter_pack_indices: vec![],
             requires_clause: None,
