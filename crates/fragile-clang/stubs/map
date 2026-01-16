@@ -184,6 +184,15 @@ public:
         return make_pair(iterator(n), true);
     }
 
+    // Range-based insert
+    template<typename InputIt>
+    void insert(InputIt first, InputIt last) {
+        while (first != last) {
+            insert(*first);
+            ++first;
+        }
+    }
+
     template<typename... Args>
     pair<iterator, bool> emplace(Args&&... args) {
         return insert(value_type(static_cast<Args&&>(args)...));

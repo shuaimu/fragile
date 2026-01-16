@@ -332,9 +332,16 @@ See [PLAN_CPP20_MAKO.md](PLAN_CPP20_MAKO.md) for detailed plan.
     - [x] F.3.35 Added multimap range-based erase(first, last) method
     - [x] F.3.36 Added std::hash<float>, std::hash<double> to functional stub
     - [x] F.3.37 Added enable_shared_from_this, dynamic_pointer_cast, static_pointer_cast, const_pointer_cast
+    - [x] F.3.38 Added std::map range-based insert(first, last) method
     - [x] `vendor/mako/src/deptran/multi_value.cc` - **PARSED**: 5031 functions [26:01:16]
     - [x] `vendor/mako/src/mako/benchmarks/ut/static_int.cc` - **PARSED**: 25 functions [26:01:16]
-    - [ ] Remaining files need: eRPC library stubs
+    - [x] `vendor/mako/src/deptran/2pl/scheduler.cc` - **PARSED**: 5035 functions [26:01:16]
+    - [x] `vendor/mako/src/deptran/2pl/tx.cc` - **PARSED**: 5035 functions [26:01:16]
+    - [x] `vendor/mako/src/bench/micro/workload.cc` - **PARSED**: 5035 functions [26:01:16]
+    - [x] `vendor/mako/src/bench/rw/workload.cc` - **PARSED**: 5035 functions [26:01:16]
+    - [x] `vendor/mako/src/bench/tpcc/workload.cc` - **PARSED**: 5035 functions [26:01:16]
+    - [x] `vendor/mako/src/bench/tpca/workload.cc` - **PARSED**: 5035 functions [26:01:16]
+    - [ ] Remaining files need: eRPC library stubs, rcc_rpc.h (generated RPC)
   - [ ] Link and run tests
 
 ---
@@ -400,7 +407,7 @@ Migration: After C++20 support is complete, deprecate these.
 ## 5. Testing & Milestones
 
 ### 5.1 Unit Tests
-- [x] fragile-clang: 357 tests passing (27 unit + 330 integration) - includes 10 coroutine + 7 exception + 6 RTTI + 8 promise type + 8 awaitable + 8 generator + 3 noexcept + 1 member access + 1 stack unwinding + 136 mako file tests [26:01:16]
+- [x] fragile-clang: 363 tests passing (27 unit + 336 integration) - includes 10 coroutine + 7 exception + 6 RTTI + 8 promise type + 8 awaitable + 8 generator + 3 noexcept + 1 member access + 1 stack unwinding + 142 mako file tests [26:01:16]
 - [x] fragile-rustc-driver: 6 tests passing
 - [x] fragile-runtime: Compiles
 
@@ -421,7 +428,7 @@ Migration: After C++20 support is complete, deprecate these.
 Current status:
 - **rrr module**: 20/20 files parsing (100%) - all base, misc, reactor, rpc files parsing
 - **mako module**: 117/338 files parsing (~35%) - includes all 12 memdb files, deptran, masstree, masstree-beta (all 28 files), all lib files
-- **Total tests**: 357 passing (fragile-clang integration tests)
+- **Total tests**: 363 passing (fragile-clang integration tests)
 - **Milestones**: M1 ✅, M2-M4 (parsing complete, compilation pending)
 
 Next steps:

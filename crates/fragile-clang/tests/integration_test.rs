@@ -15051,3 +15051,318 @@ fn test_mako_benchmark_static_int_cc() {
     }
 }
 
+/// Test parsing deptran/2pl/scheduler.cc - 2PL scheduler
+#[test]
+fn test_deptran_2pl_scheduler_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/deptran/2pl/scheduler.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: 2pl/scheduler.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let rusty_cpp_path = project_root.join("vendor/mako/third-party/rusty-cpp/include");
+
+    if !rusty_cpp_path.exists() {
+        println!("Skipping test: rusty-cpp submodule not initialized");
+        return;
+    }
+
+    let include_paths = vec![
+        project_root.join("vendor/mako/src").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/mako").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/memdb").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/rrr").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/deptran").to_string_lossy().to_string(),
+        rusty_cpp_path.to_string_lossy().to_string(),
+    ];
+
+    let system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let parser = ClangParser::with_paths(include_paths, system_include_paths)
+        .expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+            println!("deptran/2pl/scheduler.cc parsed successfully with {} functions", module.functions.len());
+            assert!(module.functions.len() >= 100, "Expected 2PL scheduler functions");
+        }
+        Err(e) => {
+            panic!("deptran/2pl/scheduler.cc should parse successfully: {:?}", e);
+        }
+    }
+}
+
+/// Test parsing deptran/2pl/tx.cc - 2PL transaction
+#[test]
+fn test_deptran_2pl_tx_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/deptran/2pl/tx.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: 2pl/tx.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let rusty_cpp_path = project_root.join("vendor/mako/third-party/rusty-cpp/include");
+
+    if !rusty_cpp_path.exists() {
+        println!("Skipping test: rusty-cpp submodule not initialized");
+        return;
+    }
+
+    let include_paths = vec![
+        project_root.join("vendor/mako/src").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/mako").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/memdb").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/rrr").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/deptran").to_string_lossy().to_string(),
+        rusty_cpp_path.to_string_lossy().to_string(),
+    ];
+
+    let system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let parser = ClangParser::with_paths(include_paths, system_include_paths)
+        .expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+            println!("deptran/2pl/tx.cc parsed successfully with {} functions", module.functions.len());
+            assert!(module.functions.len() >= 100, "Expected 2PL transaction functions");
+        }
+        Err(e) => {
+            panic!("deptran/2pl/tx.cc should parse successfully: {:?}", e);
+        }
+    }
+}
+
+/// Test parsing bench/micro/workload.cc - micro benchmark workload
+#[test]
+fn test_bench_micro_workload_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/bench/micro/workload.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: bench/micro/workload.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let rusty_cpp_path = project_root.join("vendor/mako/third-party/rusty-cpp/include");
+
+    if !rusty_cpp_path.exists() {
+        println!("Skipping test: rusty-cpp submodule not initialized");
+        return;
+    }
+
+    let include_paths = vec![
+        project_root.join("vendor/mako/src").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/mako").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/memdb").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/rrr").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/deptran").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/bench").to_string_lossy().to_string(),
+        rusty_cpp_path.to_string_lossy().to_string(),
+    ];
+
+    let system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let parser = ClangParser::with_paths(include_paths, system_include_paths)
+        .expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+            println!("bench/micro/workload.cc parsed successfully with {} functions", module.functions.len());
+            assert!(module.functions.len() >= 100, "Expected micro workload functions");
+        }
+        Err(e) => {
+            panic!("bench/micro/workload.cc should parse successfully: {:?}", e);
+        }
+    }
+}
+
+/// Test parsing bench/rw/workload.cc - read-write benchmark workload
+#[test]
+fn test_bench_rw_workload_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/bench/rw/workload.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: bench/rw/workload.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let rusty_cpp_path = project_root.join("vendor/mako/third-party/rusty-cpp/include");
+
+    if !rusty_cpp_path.exists() {
+        println!("Skipping test: rusty-cpp submodule not initialized");
+        return;
+    }
+
+    let include_paths = vec![
+        project_root.join("vendor/mako/src").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/mako").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/memdb").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/rrr").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/deptran").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/bench").to_string_lossy().to_string(),
+        rusty_cpp_path.to_string_lossy().to_string(),
+    ];
+
+    let system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let parser = ClangParser::with_paths(include_paths, system_include_paths)
+        .expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+            println!("bench/rw/workload.cc parsed successfully with {} functions", module.functions.len());
+            assert!(module.functions.len() >= 100, "Expected rw workload functions");
+        }
+        Err(e) => {
+            panic!("bench/rw/workload.cc should parse successfully: {:?}", e);
+        }
+    }
+}
+
+/// Test parsing bench/tpcc/workload.cc - TPC-C benchmark workload
+#[test]
+fn test_bench_tpcc_workload_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/bench/tpcc/workload.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: bench/tpcc/workload.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let rusty_cpp_path = project_root.join("vendor/mako/third-party/rusty-cpp/include");
+
+    if !rusty_cpp_path.exists() {
+        println!("Skipping test: rusty-cpp submodule not initialized");
+        return;
+    }
+
+    let include_paths = vec![
+        project_root.join("vendor/mako/src").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/mako").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/memdb").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/rrr").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/deptran").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/bench").to_string_lossy().to_string(),
+        rusty_cpp_path.to_string_lossy().to_string(),
+    ];
+
+    let system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let parser = ClangParser::with_paths(include_paths, system_include_paths)
+        .expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+            println!("bench/tpcc/workload.cc parsed successfully with {} functions", module.functions.len());
+            assert!(module.functions.len() >= 100, "Expected TPC-C workload functions");
+        }
+        Err(e) => {
+            panic!("bench/tpcc/workload.cc should parse successfully: {:?}", e);
+        }
+    }
+}
+
+/// Test parsing bench/tpca/workload.cc - TPC-A benchmark workload
+#[test]
+fn test_bench_tpca_workload_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/bench/tpca/workload.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: bench/tpca/workload.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let rusty_cpp_path = project_root.join("vendor/mako/third-party/rusty-cpp/include");
+
+    if !rusty_cpp_path.exists() {
+        println!("Skipping test: rusty-cpp submodule not initialized");
+        return;
+    }
+
+    let include_paths = vec![
+        project_root.join("vendor/mako/src").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/mako").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/memdb").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/rrr").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/deptran").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/bench").to_string_lossy().to_string(),
+        rusty_cpp_path.to_string_lossy().to_string(),
+    ];
+
+    let system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let parser = ClangParser::with_paths(include_paths, system_include_paths)
+        .expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+            println!("bench/tpca/workload.cc parsed successfully with {} functions", module.functions.len());
+            assert!(module.functions.len() >= 100, "Expected TPC-A workload functions");
+        }
+        Err(e) => {
+            panic!("bench/tpca/workload.cc should parse successfully: {:?}", e);
+        }
+    }
+}
