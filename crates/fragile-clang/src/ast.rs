@@ -43,6 +43,20 @@ pub enum AccessSpecifier {
     Protected,
 }
 
+/// C++ constructor kind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ConstructorKind {
+    /// Default constructor (no parameters or all defaulted)
+    Default,
+    /// Copy constructor (takes const T&)
+    Copy,
+    /// Move constructor (takes T&&)
+    Move,
+    /// Other constructor (parameterized, converting, etc.)
+    #[default]
+    Other,
+}
+
 /// Kinds of Clang AST nodes we care about.
 #[derive(Debug)]
 pub enum ClangNodeKind {
@@ -78,6 +92,20 @@ pub enum ClangNodeKind {
     FieldDecl {
         name: String,
         ty: CppType,
+        access: AccessSpecifier,
+    },
+    /// Constructor declaration
+    ConstructorDecl {
+        class_name: String,
+        params: Vec<(String, CppType)>,
+        is_definition: bool,
+        ctor_kind: ConstructorKind,
+        access: AccessSpecifier,
+    },
+    /// Destructor declaration
+    DestructorDecl {
+        class_name: String,
+        is_definition: bool,
         access: AccessSpecifier,
     },
     /// Namespace declaration

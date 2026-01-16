@@ -18,7 +18,7 @@ mod types;
 
 pub use parse::ClangParser;
 pub use convert::MirConverter;
-pub use ast::{AccessSpecifier, ClangAst, ClangNode, ClangNodeKind};
+pub use ast::{AccessSpecifier, ClangAst, ClangNode, ClangNodeKind, ConstructorKind};
 pub use types::CppType;
 
 use miette::Result;
@@ -113,8 +113,34 @@ pub struct CppStruct {
     pub namespace: Vec<String>,
     /// Fields with their types and access specifiers
     pub fields: Vec<(String, CppType, AccessSpecifier)>,
+    /// Constructors
+    pub constructors: Vec<CppConstructor>,
+    /// Destructor (at most one)
+    pub destructor: Option<CppDestructor>,
     /// Methods (converted to associated functions)
     pub methods: Vec<CppFunction>,
+}
+
+/// A C++ constructor.
+#[derive(Debug, Clone)]
+pub struct CppConstructor {
+    /// Constructor parameters
+    pub params: Vec<(String, CppType)>,
+    /// Constructor kind (default, copy, move, or other)
+    pub kind: ConstructorKind,
+    /// Access specifier
+    pub access: AccessSpecifier,
+    /// MIR body (if this is a definition)
+    pub mir_body: Option<MirBody>,
+}
+
+/// A C++ destructor.
+#[derive(Debug, Clone)]
+pub struct CppDestructor {
+    /// Access specifier
+    pub access: AccessSpecifier,
+    /// MIR body (if this is a definition)
+    pub mir_body: Option<MirBody>,
 }
 
 /// An extern declaration (function without body).

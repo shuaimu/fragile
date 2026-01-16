@@ -1,11 +1,11 @@
 //! Clang AST to MIR conversion.
 
-use crate::ast::{AccessSpecifier, BinaryOp, ClangAst, ClangNode, ClangNodeKind, UnaryOp};
+use crate::ast::{BinaryOp, ClangAst, ClangNode, ClangNodeKind, UnaryOp};
 use crate::types::CppType;
 use crate::{
-    CppExtern, CppFunction, CppModule, CppStruct, MirBasicBlock, MirBinOp, MirBody, MirConstant,
-    MirLocal, MirOperand, MirPlace, MirRvalue, MirStatement, MirTerminator, MirUnaryOp,
-    UsingDeclaration, UsingDirective,
+    CppConstructor, CppDestructor, CppExtern, CppFunction, CppModule, CppStruct, MirBasicBlock,
+    MirBinOp, MirBody, MirConstant, MirLocal, MirOperand, MirPlace, MirRvalue, MirStatement,
+    MirTerminator, MirUnaryOp, UsingDeclaration, UsingDirective,
 };
 use miette::Result;
 
@@ -520,10 +520,49 @@ impl MirConverter {
         namespace_context: &[String],
     ) -> Result<CppStruct> {
         let mut fields = Vec::new();
+        let mut constructors = Vec::new();
+        let mut destructor = None;
 
         for child in &node.children {
-            if let ClangNodeKind::FieldDecl { name: field_name, ty, access } = &child.kind {
-                fields.push((field_name.clone(), ty.clone(), *access));
+            match &child.kind {
+                ClangNodeKind::FieldDecl { name: field_name, ty, access } => {
+                    fields.push((field_name.clone(), ty.clone(), *access));
+                }
+                ClangNodeKind::ConstructorDecl {
+                    class_name: _,
+                    params,
+                    is_definition,
+                    ctor_kind,
+                    access,
+                } => {
+                    let mir_body = if *is_definition {
+                        Some(self.convert_constructor_body(child, params)?)
+                    } else {
+                        None
+                    };
+                    constructors.push(CppConstructor {
+                        params: params.clone(),
+                        kind: *ctor_kind,
+                        access: *access,
+                        mir_body,
+                    });
+                }
+                ClangNodeKind::DestructorDecl {
+                    class_name: _,
+                    is_definition,
+                    access,
+                } => {
+                    let mir_body = if *is_definition {
+                        Some(self.convert_destructor_body(child)?)
+                    } else {
+                        None
+                    };
+                    destructor = Some(CppDestructor {
+                        access: *access,
+                        mir_body,
+                    });
+                }
+                _ => {}
             }
         }
 
@@ -532,8 +571,65 @@ impl MirConverter {
             is_class,
             namespace: namespace_context.to_vec(),
             fields,
+            constructors,
+            destructor,
             methods: Vec::new(), // TODO: extract methods
         })
+    }
+
+    /// Convert a constructor body to MIR.
+    fn convert_constructor_body(
+        &self,
+        node: &ClangNode,
+        params: &[(String, CppType)],
+    ) -> Result<MirBody> {
+        let mut builder = FunctionBuilder::new();
+
+        // Local 0 is the return place (void for constructors)
+        builder.add_local(None, CppType::Void, false);
+
+        // Add parameters as locals
+        for (param_name, param_ty) in params {
+            builder.add_local(Some(param_name.clone()), param_ty.clone(), true);
+        }
+
+        // Find the compound statement (constructor body)
+        for child in &node.children {
+            if matches!(child.kind, ClangNodeKind::CompoundStmt) {
+                self.convert_compound_stmt(child, &mut builder)?;
+                break;
+            }
+        }
+
+        // If no explicit return, add one
+        if builder.current_statements.is_empty() && builder.blocks.is_empty() {
+            builder.finish_block(MirTerminator::Return);
+        }
+
+        Ok(builder.build())
+    }
+
+    /// Convert a destructor body to MIR.
+    fn convert_destructor_body(&self, node: &ClangNode) -> Result<MirBody> {
+        let mut builder = FunctionBuilder::new();
+
+        // Local 0 is the return place (void for destructors)
+        builder.add_local(None, CppType::Void, false);
+
+        // Find the compound statement (destructor body)
+        for child in &node.children {
+            if matches!(child.kind, ClangNodeKind::CompoundStmt) {
+                self.convert_compound_stmt(child, &mut builder)?;
+                break;
+            }
+        }
+
+        // If no explicit return, add one
+        if builder.current_statements.is_empty() && builder.blocks.is_empty() {
+            builder.finish_block(MirTerminator::Return);
+        }
+
+        Ok(builder.build())
     }
 }
 

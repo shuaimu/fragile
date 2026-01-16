@@ -1,7 +1,8 @@
 //! Clang AST parsing using libclang.
 
 use crate::ast::{
-    AccessSpecifier, BinaryOp, CastKind, ClangAst, ClangNode, ClangNodeKind, SourceLocation, UnaryOp,
+    AccessSpecifier, BinaryOp, CastKind, ClangAst, ClangNode, ClangNodeKind, ConstructorKind,
+    SourceLocation, UnaryOp,
 };
 use crate::types::CppType;
 use miette::{miette, Result};
@@ -271,6 +272,32 @@ impl ClangParser {
                     ClangNodeKind::FieldDecl { name, ty, access }
                 }
 
+                clang_sys::CXCursor_Constructor => {
+                    let class_name = self.get_parent_class_name(cursor);
+                    let params = self.extract_params(cursor);
+                    let is_definition = clang_sys::clang_isCursorDefinition(cursor) != 0;
+                    let ctor_kind = self.get_constructor_kind(cursor);
+                    let access = self.get_access_specifier(cursor);
+                    ClangNodeKind::ConstructorDecl {
+                        class_name,
+                        params,
+                        is_definition,
+                        ctor_kind,
+                        access,
+                    }
+                }
+
+                clang_sys::CXCursor_Destructor => {
+                    let class_name = self.get_parent_class_name(cursor);
+                    let is_definition = clang_sys::clang_isCursorDefinition(cursor) != 0;
+                    let access = self.get_access_specifier(cursor);
+                    ClangNodeKind::DestructorDecl {
+                        class_name,
+                        is_definition,
+                        access,
+                    }
+                }
+
                 clang_sys::CXCursor_Namespace => {
                     let name = cursor_spelling(cursor);
                     let name_opt = if name.is_empty() { None } else { Some(name) };
@@ -511,6 +538,44 @@ impl ClangParser {
                 clang_sys::CX_CXXPrivate => AccessSpecifier::Private,
                 _ => AccessSpecifier::Private, // Default to private for invalid/unknown
             }
+        }
+    }
+
+    /// Get the constructor kind for a constructor cursor.
+    fn get_constructor_kind(&self, cursor: clang_sys::CXCursor) -> ConstructorKind {
+        unsafe {
+            if clang_sys::clang_CXXConstructor_isDefaultConstructor(cursor) != 0 {
+                ConstructorKind::Default
+            } else if clang_sys::clang_CXXConstructor_isCopyConstructor(cursor) != 0 {
+                ConstructorKind::Copy
+            } else if clang_sys::clang_CXXConstructor_isMoveConstructor(cursor) != 0 {
+                ConstructorKind::Move
+            } else {
+                ConstructorKind::Other
+            }
+        }
+    }
+
+    /// Get the parent class name for a member cursor (constructor, destructor, method).
+    fn get_parent_class_name(&self, cursor: clang_sys::CXCursor) -> String {
+        unsafe {
+            let parent = clang_sys::clang_getCursorSemanticParent(cursor);
+            cursor_spelling(parent)
+        }
+    }
+
+    /// Extract function parameters from a cursor (function, constructor, etc.).
+    fn extract_params(&self, cursor: clang_sys::CXCursor) -> Vec<(String, CppType)> {
+        unsafe {
+            let num_args = clang_sys::clang_Cursor_getNumArguments(cursor);
+            let mut params = Vec::new();
+            for i in 0..num_args {
+                let arg = clang_sys::clang_Cursor_getArgument(cursor, i as u32);
+                let arg_name = cursor_spelling(arg);
+                let arg_type = clang_sys::clang_getCursorType(arg);
+                params.push((arg_name, self.convert_type(arg_type)));
+            }
+            params
         }
     }
 

@@ -154,6 +154,8 @@ mod tests {
                 ("x".to_string(), CppType::int(), AccessSpecifier::Public),
                 ("y".to_string(), CppType::int(), AccessSpecifier::Public),
             ],
+            constructors: vec![],
+            destructor: None,
             methods: vec![],
         };
 
@@ -178,6 +180,8 @@ mod tests {
                 ("private_field".to_string(), CppType::int(), AccessSpecifier::Private),
                 ("protected_field".to_string(), CppType::int(), AccessSpecifier::Protected),
             ],
+            constructors: vec![],
+            destructor: None,
             methods: vec![],
         };
 

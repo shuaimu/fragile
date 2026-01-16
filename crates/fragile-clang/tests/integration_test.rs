@@ -374,3 +374,219 @@ fn test_using_nested_namespace_conversion() {
     let using_dir = &module.using_directives[0];
     assert_eq!(using_dir.namespace, vec!["outer", "inner"]);
 }
+
+/// Test class with default constructor.
+#[test]
+fn test_default_constructor() {
+    use fragile_clang::{AccessSpecifier, ConstructorKind};
+
+    let parser = ClangParser::new().expect("Failed to create parser");
+
+    let source = r#"
+        class MyClass {
+        public:
+            int x;
+            MyClass() { x = 0; }
+        };
+    "#;
+
+    let ast = parser.parse_string(source, "ctor.cpp").expect("Failed to parse");
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    assert_eq!(module.structs.len(), 1);
+
+    let s = &module.structs[0];
+    assert_eq!(s.name, "MyClass");
+    assert_eq!(s.constructors.len(), 1);
+
+    let ctor = &s.constructors[0];
+    assert_eq!(ctor.kind, ConstructorKind::Default);
+    assert_eq!(ctor.access, AccessSpecifier::Public);
+    assert!(ctor.params.is_empty());
+    assert!(ctor.mir_body.is_some()); // Has definition
+}
+
+/// Test class with copy constructor.
+#[test]
+fn test_copy_constructor() {
+    use fragile_clang::{AccessSpecifier, ConstructorKind};
+
+    let parser = ClangParser::new().expect("Failed to create parser");
+
+    let source = r#"
+        class Copyable {
+        public:
+            int value;
+            Copyable(const Copyable& other) { value = other.value; }
+        };
+    "#;
+
+    let ast = parser.parse_string(source, "copy_ctor.cpp").expect("Failed to parse");
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    assert_eq!(module.structs.len(), 1);
+
+    let s = &module.structs[0];
+    assert_eq!(s.constructors.len(), 1);
+
+    let ctor = &s.constructors[0];
+    assert_eq!(ctor.kind, ConstructorKind::Copy);
+    assert_eq!(ctor.access, AccessSpecifier::Public);
+    assert_eq!(ctor.params.len(), 1); // const Copyable& other
+}
+
+/// Test class with move constructor.
+#[test]
+fn test_move_constructor() {
+    use fragile_clang::{AccessSpecifier, ConstructorKind};
+
+    let parser = ClangParser::new().expect("Failed to create parser");
+
+    let source = r#"
+        class Movable {
+        public:
+            int value;
+            Movable(Movable&& other) { value = other.value; }
+        };
+    "#;
+
+    let ast = parser.parse_string(source, "move_ctor.cpp").expect("Failed to parse");
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    assert_eq!(module.structs.len(), 1);
+
+    let s = &module.structs[0];
+    assert_eq!(s.constructors.len(), 1);
+
+    let ctor = &s.constructors[0];
+    assert_eq!(ctor.kind, ConstructorKind::Move);
+    assert_eq!(ctor.access, AccessSpecifier::Public);
+    assert_eq!(ctor.params.len(), 1); // Movable&& other
+}
+
+/// Test class with parameterized constructor.
+#[test]
+fn test_parameterized_constructor() {
+    use fragile_clang::{AccessSpecifier, ConstructorKind};
+
+    let parser = ClangParser::new().expect("Failed to create parser");
+
+    let source = r#"
+        class Point {
+        public:
+            int x;
+            int y;
+            Point(int a, int b) { x = a; y = b; }
+        };
+    "#;
+
+    let ast = parser.parse_string(source, "param_ctor.cpp").expect("Failed to parse");
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    assert_eq!(module.structs.len(), 1);
+
+    let s = &module.structs[0];
+    assert_eq!(s.constructors.len(), 1);
+
+    let ctor = &s.constructors[0];
+    assert_eq!(ctor.kind, ConstructorKind::Other); // Parameterized
+    assert_eq!(ctor.access, AccessSpecifier::Public);
+    assert_eq!(ctor.params.len(), 2);
+    assert_eq!(ctor.params[0].0, "a");
+    assert_eq!(ctor.params[1].0, "b");
+}
+
+/// Test class with multiple constructors.
+#[test]
+fn test_multiple_constructors() {
+    use fragile_clang::ConstructorKind;
+
+    let parser = ClangParser::new().expect("Failed to create parser");
+
+    let source = r#"
+        class MultiCtor {
+        public:
+            int value;
+            MultiCtor() { value = 0; }
+            MultiCtor(int v) { value = v; }
+            MultiCtor(const MultiCtor& other) { value = other.value; }
+        };
+    "#;
+
+    let ast = parser.parse_string(source, "multi_ctor.cpp").expect("Failed to parse");
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    assert_eq!(module.structs.len(), 1);
+
+    let s = &module.structs[0];
+    assert_eq!(s.constructors.len(), 3);
+
+    // Check we have default, parameterized, and copy constructors
+    let kinds: Vec<_> = s.constructors.iter().map(|c| c.kind).collect();
+    assert!(kinds.contains(&ConstructorKind::Default));
+    assert!(kinds.contains(&ConstructorKind::Copy));
+    assert!(kinds.contains(&ConstructorKind::Other)); // Parameterized
+}
+
+/// Test class with destructor.
+#[test]
+fn test_destructor() {
+    use fragile_clang::AccessSpecifier;
+
+    let parser = ClangParser::new().expect("Failed to create parser");
+
+    let source = r#"
+        class WithDestructor {
+        public:
+            int* ptr;
+            ~WithDestructor() { }
+        };
+    "#;
+
+    let ast = parser.parse_string(source, "dtor.cpp").expect("Failed to parse");
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    assert_eq!(module.structs.len(), 1);
+
+    let s = &module.structs[0];
+    assert!(s.destructor.is_some());
+
+    let dtor = s.destructor.as_ref().unwrap();
+    assert_eq!(dtor.access, AccessSpecifier::Public);
+    assert!(dtor.mir_body.is_some()); // Has definition
+}
+
+/// Test class with private constructor.
+#[test]
+fn test_private_constructor() {
+    use fragile_clang::AccessSpecifier;
+
+    let parser = ClangParser::new().expect("Failed to create parser");
+
+    let source = r#"
+        class Singleton {
+        private:
+            Singleton() {}
+        public:
+            int value;
+        };
+    "#;
+
+    let ast = parser.parse_string(source, "singleton.cpp").expect("Failed to parse");
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    assert_eq!(module.structs.len(), 1);
+
+    let s = &module.structs[0];
+    assert_eq!(s.constructors.len(), 1);
+
+    let ctor = &s.constructors[0];
+    assert_eq!(ctor.access, AccessSpecifier::Private);
+}
