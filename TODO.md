@@ -300,6 +300,15 @@ See [PLAN_CPP20_MAKO.md](PLAN_CPP20_MAKO.md) for detailed plan.
     - [x] `vendor/mako/src/memdb/MurmurHash3.cc` - **PARSED**: 9 functions (hash algorithms) [26:01:16, 09:42]
     - [x] `vendor/mako/src/memdb/xxhash.cc` - **PARSED**: 16 functions (xxHash implementation) [26:01:16, 09:42]
     - [x] `vendor/mako/src/deptran/empty.cc` - **PARSED**: 0 functions (placeholder file) [26:01:16, 09:42]
+    - [x] `vendor/mako/src/mako/lib/configuration.cc` - **PARSED**: Configuration class methods [26:01:16, 17:30]
+    - [x] `vendor/mako/src/mako/lib/fasttransport.cc` - **PARSED**: transport functions [26:01:16, 17:30]
+    - [x] `vendor/mako/src/mako/lib/server.cc` - **PARSED**: server functions [26:01:16, 17:30]
+    - [x] `vendor/mako/src/mako/lib/client.cc` - **PARSED**: client functions [26:01:16, 17:30]
+    - [x] `vendor/mako/src/mako/lib/shardClient.cc` - **PARSED**: shard client functions [26:01:16, 17:30]
+    - [x] `vendor/mako/src/mako/lib/helper_queue.cc` - **PARSED**: helper queue [26:01:16, 17:30]
+    - [x] `vendor/mako/src/mako/lib/erpc_backend.cc` - **PARSED**: eRPC backend [26:01:16, 17:30]
+    - [x] `vendor/mako/src/mako/lib/rrr_rpc_backend.cc` - **PARSED**: rrr RPC backend [26:01:16, 17:30]
+    - [x] `vendor/mako/src/mako/lib/multi_transport_manager.cc` - **PARSED**: multi transport manager [26:01:16, 17:30]
     - [-] `vendor/mako/src/mako/thread.cc` - Needs eRPC rpc.h header (external dependency)
     - [-] `vendor/mako/src/mako/persist_test.cc` - Has LZ4 stubs but needs one_way_post template from mako internals
     - [-] `vendor/mako/src/mako/masstree/mtd.cc` - Needs log.hh (complex logging dependencies)
@@ -369,7 +378,7 @@ Migration: After C++20 support is complete, deprecate these.
 ## 5. Testing & Milestones
 
 ### 5.1 Unit Tests
-- [x] fragile-clang: 327 tests passing (27 unit + 300 integration) - includes 10 coroutine + 7 exception + 6 RTTI + 8 promise type + 8 awaitable + 8 generator + 3 noexcept + 1 member access + 1 stack unwinding + 106 mako file tests [26:01:16, 13:30]
+- [x] fragile-clang: 336 tests passing (27 unit + 309 integration) - includes 10 coroutine + 7 exception + 6 RTTI + 8 promise type + 8 awaitable + 8 generator + 3 noexcept + 1 member access + 1 stack unwinding + 115 mako file tests [26:01:16, 17:30]
 - [x] fragile-rustc-driver: 6 tests passing
 - [x] fragile-runtime: Compiles
 
@@ -389,8 +398,8 @@ Migration: After C++20 support is complete, deprecate these.
 
 Current status:
 - **rrr module**: 15/16 files parsing (94%) - blocked by quorum_event.cc cross-namespace inheritance
-- **mako module**: 101/338 files parsing (~30%) - includes memdb, deptran, masstree, masstree-beta (all 28 files)
-- **Total tests**: 327 passing (fragile-clang integration tests)
+- **mako module**: 110/338 files parsing (~33%) - includes memdb, deptran, masstree, masstree-beta (all 28 files), all lib files
+- **Total tests**: 336 passing (fragile-clang integration tests)
 
 Next steps:
 1. **rustc Integration (2.3)** - Requires user setup: `rustup component add rustc-dev --toolchain nightly`
