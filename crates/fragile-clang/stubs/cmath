@@ -121,6 +121,11 @@ long long llrint(double x);
 
 double fmod(double x, double y);
 float fmodf(float x, float y);
+long double fmodl(long double x, long double y);
+
+double modf(double x, double* iptr);
+float modff(float x, float* iptr);
+long double modfl(long double x, long double* iptr);
 
 double remainder(double x, double y);
 double remquo(double x, double y, int* quo);
@@ -223,6 +228,10 @@ using std::round;
 using std::roundf;
 using std::fmod;
 using std::fmodf;
+using std::fmodl;
+using std::modf;
+using std::modff;
+using std::modfl;
 using std::fmax;
 using std::fmin;
 using std::isnan;
