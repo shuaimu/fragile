@@ -130,8 +130,19 @@ pub struct CppConstructor {
     pub kind: ConstructorKind,
     /// Access specifier
     pub access: AccessSpecifier,
+    /// Member initializer list
+    pub member_initializers: Vec<MemberInitializer>,
     /// MIR body (if this is a definition)
     pub mir_body: Option<MirBody>,
+}
+
+/// A C++ member initializer (e.g., `x(value)` in `: x(value)`).
+#[derive(Debug, Clone)]
+pub struct MemberInitializer {
+    /// The member being initialized
+    pub member_name: String,
+    /// Whether this was directly initialized (not default)
+    pub has_init: bool,
 }
 
 /// A C++ destructor.

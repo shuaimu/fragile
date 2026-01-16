@@ -108,6 +108,10 @@ pub enum ClangNodeKind {
         is_definition: bool,
         access: AccessSpecifier,
     },
+    /// Member reference (e.g., in member initializer lists)
+    MemberRef {
+        name: String,
+    },
     /// Namespace declaration
     NamespaceDecl {
         /// Namespace name (None for anonymous namespaces)

@@ -3,9 +3,9 @@
 use crate::ast::{BinaryOp, ClangAst, ClangNode, ClangNodeKind, UnaryOp};
 use crate::types::CppType;
 use crate::{
-    CppConstructor, CppDestructor, CppExtern, CppFunction, CppModule, CppStruct, MirBasicBlock,
-    MirBinOp, MirBody, MirConstant, MirLocal, MirOperand, MirPlace, MirRvalue, MirStatement,
-    MirTerminator, MirUnaryOp, UsingDeclaration, UsingDirective,
+    CppConstructor, CppDestructor, CppExtern, CppFunction, CppModule, CppStruct, MemberInitializer,
+    MirBasicBlock, MirBinOp, MirBody, MirConstant, MirLocal, MirOperand, MirPlace, MirRvalue,
+    MirStatement, MirTerminator, MirUnaryOp, UsingDeclaration, UsingDirective,
 };
 use miette::Result;
 
@@ -535,6 +535,9 @@ impl MirConverter {
                     ctor_kind,
                     access,
                 } => {
+                    // Extract member initializers from constructor children
+                    let member_initializers = self.extract_member_initializers(child);
+
                     let mir_body = if *is_definition {
                         Some(self.convert_constructor_body(child, params)?)
                     } else {
@@ -544,6 +547,7 @@ impl MirConverter {
                         params: params.clone(),
                         kind: *ctor_kind,
                         access: *access,
+                        member_initializers,
                         mir_body,
                     });
                 }
@@ -630,6 +634,26 @@ impl MirConverter {
         }
 
         Ok(builder.build())
+    }
+
+    /// Extract member initializers from a constructor node.
+    ///
+    /// In libclang, member initializers appear as MemberRef children of the constructor,
+    /// each followed by an expression (the initializer value).
+    fn extract_member_initializers(&self, ctor_node: &ClangNode) -> Vec<MemberInitializer> {
+        let mut initializers = Vec::new();
+
+        // Member initializers appear as MemberRef nodes in the constructor's children
+        for child in &ctor_node.children {
+            if let ClangNodeKind::MemberRef { name } = &child.kind {
+                initializers.push(MemberInitializer {
+                    member_name: name.clone(),
+                    has_init: true, // If we see a MemberRef, it's explicitly initialized
+                });
+            }
+        }
+
+        initializers
     }
 }
 

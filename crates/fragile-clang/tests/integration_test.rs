@@ -590,3 +590,90 @@ fn test_private_constructor() {
     let ctor = &s.constructors[0];
     assert_eq!(ctor.access, AccessSpecifier::Private);
 }
+
+/// Test class with member initializer list.
+#[test]
+fn test_member_initializer_list() {
+    let parser = ClangParser::new().expect("Failed to create parser");
+
+    let source = r#"
+        class Point {
+        public:
+            int x;
+            int y;
+            Point(int a, int b) : x(a), y(b) { }
+        };
+    "#;
+
+    let ast = parser.parse_string(source, "init_list.cpp").expect("Failed to parse");
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    assert_eq!(module.structs.len(), 1);
+
+    let s = &module.structs[0];
+    assert_eq!(s.constructors.len(), 1);
+
+    let ctor = &s.constructors[0];
+    assert_eq!(ctor.member_initializers.len(), 2);
+
+    // Check the member names
+    let init_names: Vec<_> = ctor.member_initializers.iter().map(|i| &i.member_name).collect();
+    assert!(init_names.contains(&&"x".to_string()));
+    assert!(init_names.contains(&&"y".to_string()));
+}
+
+/// Test class with single member initializer.
+#[test]
+fn test_single_member_initializer() {
+    let parser = ClangParser::new().expect("Failed to create parser");
+
+    let source = r#"
+        class Counter {
+        public:
+            int count;
+            Counter() : count(0) { }
+        };
+    "#;
+
+    let ast = parser.parse_string(source, "single_init.cpp").expect("Failed to parse");
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    assert_eq!(module.structs.len(), 1);
+
+    let s = &module.structs[0];
+    assert_eq!(s.constructors.len(), 1);
+
+    let ctor = &s.constructors[0];
+    assert_eq!(ctor.member_initializers.len(), 1);
+    assert_eq!(ctor.member_initializers[0].member_name, "count");
+    assert!(ctor.member_initializers[0].has_init);
+}
+
+/// Test constructor without member initializer list.
+#[test]
+fn test_no_member_initializer() {
+    let parser = ClangParser::new().expect("Failed to create parser");
+
+    let source = r#"
+        class Empty {
+        public:
+            int x;
+            Empty() { x = 0; }
+        };
+    "#;
+
+    let ast = parser.parse_string(source, "no_init.cpp").expect("Failed to parse");
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    assert_eq!(module.structs.len(), 1);
+
+    let s = &module.structs[0];
+    assert_eq!(s.constructors.len(), 1);
+
+    let ctor = &s.constructors[0];
+    // No member initializers - assignment happens in body
+    assert_eq!(ctor.member_initializers.len(), 0);
+}

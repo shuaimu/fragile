@@ -317,6 +317,11 @@ impl ClangParser {
                     ClangNodeKind::UsingDeclaration { qualified_name }
                 }
 
+                clang_sys::CXCursor_MemberRef => {
+                    let name = cursor_spelling(cursor);
+                    ClangNodeKind::MemberRef { name }
+                }
+
                 // Statements
                 clang_sys::CXCursor_CompoundStmt => ClangNodeKind::CompoundStmt,
                 clang_sys::CXCursor_ReturnStmt => ClangNodeKind::ReturnStmt,
@@ -874,5 +879,54 @@ mod tests {
             }
             _ => panic!("Expected UsingDirective"),
         }
+    }
+
+    #[test]
+    fn test_parse_constructor_with_initializer_list() {
+        let parser = ClangParser::new().unwrap();
+        let ast = parser
+            .parse_string(
+                r#"
+                class Test {
+                public:
+                    int x;
+                    int y;
+                    Test(int a, int b) : x(a), y(b) { }
+                };
+                "#,
+                "test.cpp",
+            )
+            .unwrap();
+
+        // Find the class
+        let class = ast.translation_unit.children.iter().find(|c| {
+            matches!(&c.kind, ClangNodeKind::RecordDecl { name, .. } if name == "Test")
+        });
+        assert!(class.is_some(), "Expected Test class");
+        let class = class.unwrap();
+
+        // Find the constructor
+        let ctor = class.children.iter().find(|c| {
+            matches!(&c.kind, ClangNodeKind::ConstructorDecl { .. })
+        });
+        assert!(ctor.is_some(), "Expected constructor");
+        let ctor = ctor.unwrap();
+
+        // Should have MemberRef nodes for x and y
+        let member_refs: Vec<_> = ctor.children.iter().filter(|c| {
+            matches!(&c.kind, ClangNodeKind::MemberRef { .. })
+        }).collect();
+        assert_eq!(member_refs.len(), 2, "Expected 2 MemberRef nodes for x and y");
+
+        // Verify the member names
+        let member_names: Vec<String> = member_refs.iter().filter_map(|c| {
+            if let ClangNodeKind::MemberRef { name } = &c.kind {
+                Some(name.clone())
+            } else {
+                None
+            }
+        }).collect();
+        assert!(member_names.contains(&"x".to_string()));
+        assert!(member_names.contains(&"y".to_string()));
     }
 }
