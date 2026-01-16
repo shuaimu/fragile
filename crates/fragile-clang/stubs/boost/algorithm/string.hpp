@@ -93,15 +93,34 @@ bool starts_with(const T& input, const T& test) {
     return std::equal(test.begin(), test.end(), input.begin());
 }
 
+// Overload for string with const char*
+inline bool starts_with(const std::string& input, const char* test) {
+    std::string test_str(test);
+    if (test_str.size() > input.size()) return false;
+    return std::equal(test_str.begin(), test_str.end(), input.begin());
+}
+
 template<typename T>
 bool ends_with(const T& input, const T& test) {
     if (test.size() > input.size()) return false;
     return std::equal(test.rbegin(), test.rend(), input.rbegin());
 }
 
+// Overload for string with const char*
+inline bool ends_with(const std::string& input, const char* test) {
+    std::string test_str(test);
+    if (test_str.size() > input.size()) return false;
+    return std::equal(test_str.rbegin(), test_str.rend(), input.rbegin());
+}
+
 template<typename T>
 bool contains(const T& input, const T& test) {
     return input.find(test) != T::npos;
+}
+
+// Overload for string with const char*
+inline bool contains(const std::string& input, const char* test) {
+    return input.find(test) != std::string::npos;
 }
 
 template<typename T>

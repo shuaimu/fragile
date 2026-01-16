@@ -379,6 +379,20 @@ See [PLAN_CPP20_MAKO.md](PLAN_CPP20_MAKO.md) for detailed plan.
     - [x] `vendor/mako/src/deptran/occ/scheduler.cc` - **PARSED**: 4756 functions (with error filtering) [26:01:16, 14:45]
     - [x] `vendor/mako/src/deptran/troad/troad.cc` - **PARSED**: 4756 functions (with error filtering) [26:01:16, 14:45]
     - [x] F.3.41 Added ignored_error_patterns for: QuorumEvent cross-namespace inheritance, rcc_rpc.h missing, incomplete types, override issues [26:01:16, 14:00]
+    - [x] `vendor/mako/src/deptran/config.cc` - **PARSED**: 4759 functions (with error filtering) [26:01:16, 18:45]
+    - [x] `vendor/mako/src/deptran/coordinator.cc` - **PARSED**: 4759 functions (with error filtering) [26:01:16, 18:45]
+    - [x] `vendor/mako/src/deptran/executor.cc` - **PARSED**: 4757 functions (with error filtering) [26:01:16, 18:45]
+    - [x] `vendor/mako/src/deptran/scheduler.cc` - **PARSED**: 4759 functions (with error filtering) [26:01:16, 18:45]
+    - [x] `vendor/mako/src/deptran/frame.cc` - **PARSED**: 4759 functions (with error filtering) [26:01:16, 18:45]
+    - [x] `vendor/mako/src/deptran/service.cc` - **PARSED**: 4759 functions (with error filtering) [26:01:16, 18:45]
+    - [x] `vendor/mako/src/deptran/workload.cc` - **PARSED**: 4759 functions (with error filtering) [26:01:16, 18:45]
+    - [x] `vendor/mako/src/deptran/sharding.cc` - **PARSED**: 4770 functions (with error filtering) [26:01:16, 18:45]
+    - [x] `vendor/mako/src/deptran/procedure.cc` - **PARSED**: 4763 functions (with error filtering) [26:01:16, 18:45]
+    - [x] `vendor/mako/src/deptran/communicator.cc` - **PARSED**: 4759 functions (with error filtering) [26:01:16, 18:45]
+    - [x] F.3.42 Improved yaml-cpp stub with iterator_value support (begin/end/subscript) [26:01:16, 18:45]
+    - [x] F.3.43 Added boost::algorithm::ends_with string/const char* overloads [26:01:16, 18:45]
+    - [x] F.3.44 Added std::map reverse_iterator, rbegin(), rend() [26:01:16, 18:45]
+    - [x] F.3.45 Added std::basic_string reverse_iterator, rbegin(), rend() [26:01:16, 18:45]
     - [-] `vendor/mako/src/deptran/mongodb/server.cc` - Needs bsoncxx (external dep)
     - [-] `vendor/mako/src/bench/micro/procedure.cc` - Needs more complex error filtering
     - [ ] Remaining files need: eRPC library stubs, bsoncxx
@@ -471,8 +485,8 @@ Migration: After C++20 support is complete, deprecate these.
 
 Current status:
 - **rrr module**: 20/20 files parsing (100%) - all base, misc, reactor, rpc files parsing
-- **mako module**: 163/338 files parsing (~48%) - includes all 12 memdb files, deptran (consensus executors, rcc, occ, classic, troad, carousel, tapir, janus, mencius), masstree, masstree-beta (all 28 files), all lib files
-- **Total tests**: 417 passing (fragile-clang integration tests)
+- **mako module**: 173/338 files parsing (~51%) - includes all 12 memdb files, deptran root-level files (config, coordinator, executor, scheduler, frame, service, workload, sharding, procedure, communicator), consensus executors (rcc, occ, classic, troad, carousel, tapir, janus, mencius), masstree, masstree-beta (all 28 files), all lib files
+- **Total tests**: 427 passing (fragile-clang integration tests)
 - **Milestones**: M1 ✅, M2-M4 (parsing complete, compilation pending)
 
 Next steps:

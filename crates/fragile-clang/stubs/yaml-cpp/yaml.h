@@ -203,12 +203,60 @@ public:
     Node operator[](const char* key) { return operator[](std::string(key)); }
     const Node operator[](const char* key) const { return operator[](std::string(key)); }
 
+    // Forward declaration for iterator
+    class iterator;
+    class const_iterator;
+
+    // Iterator pair for map iteration - yaml-cpp iterators dereference to a pair-like type
+    // This type must be usable as both a pair (with first/second) and as a Node
+    struct iterator_value {
+        Node first;   // key
+        Node second;  // value
+
+        iterator_value() = default;
+        iterator_value(const std::string& k, const Node& v) : first(k), second(v) {}
+        iterator_value(const Node& v) : first(), second(v) {}
+
+        // Allow treating the value like a Node for sequences
+        template<typename T>
+        T as() const { return second.as<T>(); }
+
+        template<typename T>
+        T as(const T& fallback) const { return second.as<T>(fallback); }
+
+        // Implicit conversion to Node (delegates to second)
+        operator Node() const { return second; }
+
+        // Node-like interface (delegates to second)
+        bool IsDefined() const { return second.IsDefined(); }
+        bool IsNull() const { return second.IsNull(); }
+        bool IsScalar() const { return second.IsScalar(); }
+        bool IsSequence() const { return second.IsSequence(); }
+        bool IsMap() const { return second.IsMap(); }
+        std::size_t size() const { return second.size(); }
+        explicit operator bool() const { return second.IsDefined(); }
+
+        // Iteration support - delegates to second (Node)
+        iterator begin();
+        iterator end();
+        const_iterator begin() const;
+        const_iterator end() const;
+
+        // Subscript access - delegates to second (Node)
+        Node operator[](std::size_t index) { return second[index]; }
+        const Node operator[](std::size_t index) const { return second[index]; }
+        Node operator[](const std::string& key) { return second[key]; }
+        const Node operator[](const std::string& key) const { return second[key]; }
+        Node operator[](const char* key) { return second[key]; }
+        const Node operator[](const char* key) const { return second[key]; }
+    };
+
     // Sequence iteration
     class iterator {
     public:
-        using value_type = Node;
-        using reference = Node&;
-        using pointer = Node*;
+        using value_type = iterator_value;
+        using reference = iterator_value;
+        using pointer = iterator_value*;
         using difference_type = std::ptrdiff_t;
         using iterator_category = std::forward_iterator_tag;
 
@@ -216,10 +264,21 @@ public:
         iterator(std::vector<Node>::iterator it) : seq_it_(it), is_seq_(true) {}
         iterator(std::map<std::string, Node>::iterator it) : map_it_(it), is_seq_(false) {}
 
-        Node operator*() {
-            if (is_seq_) return *seq_it_;
-            return map_it_->second;
+        iterator_value operator*() {
+            if (is_seq_) return iterator_value(*seq_it_);
+            return iterator_value(map_it_->first, map_it_->second);
         }
+
+        // Arrow operator returns proxy that provides first/second access
+        struct arrow_proxy {
+            iterator_value value;
+            iterator_value* operator->() { return &value; }
+        };
+        arrow_proxy operator->() {
+            if (is_seq_) return arrow_proxy{iterator_value(*seq_it_)};
+            return arrow_proxy{iterator_value(map_it_->first, map_it_->second)};
+        }
+
         iterator& operator++() {
             if (is_seq_) ++seq_it_;
             else ++map_it_;
@@ -238,8 +297,14 @@ public:
         bool operator!=(const iterator& other) const { return !(*this == other); }
 
         // For map iteration
-        std::string first() const { return is_seq_ ? "" : map_it_->first; }
-        Node second() const { return is_seq_ ? *seq_it_ : map_it_->second; }
+        Node first() const {
+            if (is_seq_) return Node();
+            return Node(map_it_->first);
+        }
+        Node second() const {
+            if (is_seq_) return *seq_it_;
+            return map_it_->second;
+        }
 
     private:
         std::vector<Node>::iterator seq_it_;
@@ -249,9 +314,9 @@ public:
 
     class const_iterator {
     public:
-        using value_type = const Node;
-        using reference = const Node&;
-        using pointer = const Node*;
+        using value_type = const iterator_value;
+        using reference = const iterator_value;
+        using pointer = const iterator_value*;
         using difference_type = std::ptrdiff_t;
         using iterator_category = std::forward_iterator_tag;
 
@@ -259,10 +324,20 @@ public:
         const_iterator(std::vector<Node>::const_iterator it) : seq_it_(it), is_seq_(true) {}
         const_iterator(std::map<std::string, Node>::const_iterator it) : map_it_(it), is_seq_(false) {}
 
-        const Node operator*() const {
-            if (is_seq_) return *seq_it_;
-            return map_it_->second;
+        iterator_value operator*() const {
+            if (is_seq_) return iterator_value(*seq_it_);
+            return iterator_value(map_it_->first, map_it_->second);
         }
+
+        struct arrow_proxy {
+            iterator_value value;
+            const iterator_value* operator->() const { return &value; }
+        };
+        arrow_proxy operator->() const {
+            if (is_seq_) return arrow_proxy{iterator_value(*seq_it_)};
+            return arrow_proxy{iterator_value(map_it_->first, map_it_->second)};
+        }
+
         const_iterator& operator++() {
             if (is_seq_) ++seq_it_;
             else ++map_it_;
@@ -280,8 +355,14 @@ public:
         }
         bool operator!=(const const_iterator& other) const { return !(*this == other); }
 
-        std::string first() const { return is_seq_ ? "" : map_it_->first; }
-        Node second() const { return is_seq_ ? *seq_it_ : map_it_->second; }
+        Node first() const {
+            if (is_seq_) return Node();
+            return Node(map_it_->first);
+        }
+        Node second() const {
+            if (is_seq_) return *seq_it_;
+            return map_it_->second;
+        }
 
     private:
         std::vector<Node>::const_iterator seq_it_;
@@ -337,6 +418,23 @@ private:
     mutable std::vector<Node> sequence_;
     mutable std::map<std::string, Node> map_;
 };
+
+// Implement iterator_value methods that depend on iterator definitions
+inline Node::iterator Node::iterator_value::begin() {
+    return second.begin();
+}
+
+inline Node::iterator Node::iterator_value::end() {
+    return second.end();
+}
+
+inline Node::const_iterator Node::iterator_value::begin() const {
+    return second.begin();
+}
+
+inline Node::const_iterator Node::iterator_value::end() const {
+    return second.end();
+}
 
 // Load functions
 inline Node Load(const std::string& input) {

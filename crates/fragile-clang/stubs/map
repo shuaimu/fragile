@@ -79,6 +79,53 @@ public:
         const node* node_;
     };
 
+    class reverse_iterator {
+    public:
+        reverse_iterator(node* n = nullptr) : node_(n) {}
+        reference operator*() { return node_->data; }
+        value_type* operator->() { return &node_->data; }
+        reverse_iterator& operator++() {
+            if (node_->left) {
+                node_ = node_->left;
+                while (node_->right) node_ = node_->right;
+            } else {
+                while (node_->parent && node_ == node_->parent->left)
+                    node_ = node_->parent;
+                node_ = node_->parent;
+            }
+            return *this;
+        }
+        reverse_iterator operator++(int) { reverse_iterator tmp = *this; ++(*this); return tmp; }
+        bool operator==(const reverse_iterator& other) const { return node_ == other.node_; }
+        bool operator!=(const reverse_iterator& other) const { return node_ != other.node_; }
+    private:
+        node* node_;
+    };
+
+    class const_reverse_iterator {
+    public:
+        const_reverse_iterator(const node* n = nullptr) : node_(n) {}
+        const_reverse_iterator(const reverse_iterator& it) : node_(it.node_) {}
+        const_reference operator*() const { return node_->data; }
+        const value_type* operator->() const { return &node_->data; }
+        const_reverse_iterator& operator++() {
+            if (node_->left) {
+                node_ = node_->left;
+                while (node_->right) node_ = node_->right;
+            } else {
+                while (node_->parent && node_ == node_->parent->left)
+                    node_ = node_->parent;
+                node_ = node_->parent;
+            }
+            return *this;
+        }
+        const_reverse_iterator operator++(int) { const_reverse_iterator tmp = *this; ++(*this); return tmp; }
+        bool operator==(const const_reverse_iterator& other) const { return node_ == other.node_; }
+        bool operator!=(const const_reverse_iterator& other) const { return node_ != other.node_; }
+    private:
+        const node* node_;
+    };
+
     // Constructors
     map() : root_(nullptr), size_(0) {}
 
@@ -143,6 +190,22 @@ public:
     iterator end() noexcept { return iterator(nullptr); }
     const_iterator end() const noexcept { return const_iterator(nullptr); }
     const_iterator cend() const noexcept { return const_iterator(nullptr); }
+
+    // Reverse iterators
+    reverse_iterator rbegin() noexcept {
+        node* n = root_;
+        while (n && n->right) n = n->right;
+        return reverse_iterator(n);
+    }
+    const_reverse_iterator rbegin() const noexcept {
+        const node* n = root_;
+        while (n && n->right) n = n->right;
+        return const_reverse_iterator(n);
+    }
+    const_reverse_iterator crbegin() const noexcept { return rbegin(); }
+    reverse_iterator rend() noexcept { return reverse_iterator(nullptr); }
+    const_reverse_iterator rend() const noexcept { return const_reverse_iterator(nullptr); }
+    const_reverse_iterator crend() const noexcept { return const_reverse_iterator(nullptr); }
 
     // Capacity
     bool empty() const noexcept { return size_ == 0; }
