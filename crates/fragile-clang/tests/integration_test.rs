@@ -17493,3 +17493,85 @@ fn test_mako_deptran_tapir_scheduler_cc() {
         }
     }
 }
+
+// Note: mencius/commo.cc, mencius/coordinator.cc, mencius/frame.cc need:
+// - RPC types (DepId, Profiling, MenciusProxy)
+// - condition_variable wait() with predicate
+// - vector push_back with rvalue
+
+/// Test parsing deptran/mencius/server.cc with error filtering
+#[test]
+fn test_mako_deptran_mencius_server_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/deptran/mencius/server.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: mencius/server.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let rusty_cpp_path = project_root.join("vendor/mako/third-party/rusty-cpp/include");
+
+    if !rusty_cpp_path.exists() {
+        println!("Skipping test: rusty-cpp submodule not initialized");
+        return;
+    }
+
+    let include_paths = vec![
+        project_root.join("vendor/mako/src").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/deptran").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/deptran/mencius").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/memdb").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/rrr").to_string_lossy().to_string(),
+        rusty_cpp_path.to_string_lossy().to_string(),
+    ];
+
+    let system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let ignored_errors = vec![
+        "cannot initialize object parameter of type".to_string(),
+        "rcc_rpc.h' file not found".to_string(),
+        "member access into incomplete type".to_string(),
+        "only virtual member functions can be marked 'override'".to_string(),
+        "expected class name".to_string(),
+    ];
+
+    let parser = ClangParser::with_paths_defines_and_ignored_errors(
+        include_paths,
+        system_include_paths,
+        vec![],
+        ignored_errors,
+    ).expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+            println!("deptran/mencius/server.cc parsed successfully with {} functions", module.functions.len());
+        }
+        Err(e) => {
+            panic!("deptran/mencius/server.cc should parse successfully: {:?}", e);
+        }
+    }
+}
+
+// Note: raft/frame.cc, raft/server.cc need:
+// - unique_ptr == nullptr operator
+// - std::stoull
+// - condition_variable wait() with predicate
+
+// Note: paxos/frame.cc, paxos/server.cc need:
+// - RPC types (ServerResponse, ClientResponse, DepId, etc.)
+// - std::alignment_of, ATOMIC_*_LOCK_FREE macros (concurrentqueue.h)
+
+// Note: fpga_raft/frame.cc, fpga_raft/server.cc need:
+// - Communicator inheritance conversion issues
+// - condition_variable wait() with predicate
+// - DepId incomplete type
