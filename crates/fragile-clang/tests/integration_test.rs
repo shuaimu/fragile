@@ -4255,3 +4255,103 @@ fn test_std_string_length_empty() {
     let test_fn = module.functions.iter().find(|f| f.display_name == "test_empty");
     assert!(test_fn.is_some(), "Expected to find test_empty function");
 }
+
+// ========== Smart Pointer Tests (C.2) ==========
+
+/// Test parsing code that uses std::unique_ptr.
+#[test]
+fn test_std_unique_ptr_basic() {
+    let parser = ClangParser::with_system_includes().unwrap();
+    let code = r#"
+        #include <memory>
+
+        int test_unique() {
+            std::unique_ptr<int> p = std::make_unique<int>(42);
+            int val = *p;
+            p.reset();
+            return val;
+        }
+    "#;
+
+    let ast = parser.parse_string(code, "test.cpp").unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).unwrap();
+
+    let test_fn = module.functions.iter().find(|f| f.display_name == "test_unique");
+    assert!(test_fn.is_some(), "Expected to find test_unique function");
+}
+
+/// Test std::unique_ptr with custom type.
+#[test]
+fn test_std_unique_ptr_custom_type() {
+    let parser = ClangParser::with_system_includes().unwrap();
+    let code = r#"
+        #include <memory>
+
+        struct Point { int x; int y; };
+
+        int test_unique_point() {
+            std::unique_ptr<Point> p = std::make_unique<Point>();
+            p->x = 10;
+            p->y = 20;
+            return p->x + p->y;
+        }
+    "#;
+
+    let ast = parser.parse_string(code, "test.cpp").unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).unwrap();
+
+    let test_fn = module.functions.iter().find(|f| f.display_name == "test_unique_point");
+    assert!(test_fn.is_some(), "Expected to find test_unique_point function");
+}
+
+/// Test std::shared_ptr basic usage.
+#[test]
+fn test_std_shared_ptr_basic() {
+    let parser = ClangParser::with_system_includes().unwrap();
+    let code = r#"
+        #include <memory>
+
+        int test_shared() {
+            std::shared_ptr<int> p1 = std::make_shared<int>(42);
+            std::shared_ptr<int> p2 = p1;  // copy (increases ref count)
+            int val = *p2;
+            long count = p1.use_count();
+            return val;
+        }
+    "#;
+
+    let ast = parser.parse_string(code, "test.cpp").unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).unwrap();
+
+    let test_fn = module.functions.iter().find(|f| f.display_name == "test_shared");
+    assert!(test_fn.is_some(), "Expected to find test_shared function");
+}
+
+/// Test std::weak_ptr basic usage.
+#[test]
+fn test_std_weak_ptr_basic() {
+    let parser = ClangParser::with_system_includes().unwrap();
+    let code = r#"
+        #include <memory>
+
+        int test_weak() {
+            std::shared_ptr<int> shared = std::make_shared<int>(42);
+            std::weak_ptr<int> weak = shared;
+
+            if (auto locked = weak.lock()) {
+                return *locked;
+            }
+            return 0;
+        }
+    "#;
+
+    let ast = parser.parse_string(code, "test.cpp").unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).unwrap();
+
+    let test_fn = module.functions.iter().find(|f| f.display_name == "test_weak");
+    assert!(test_fn.is_some(), "Expected to find test_weak function");
+}

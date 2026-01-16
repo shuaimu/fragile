@@ -112,9 +112,9 @@ See [PLAN_CPP20_MAKO.md](PLAN_CPP20_MAKO.md) for detailed plan.
   - [ ] std::optional, std::variant
 
 #### C.2 Smart Pointers
-- [ ] std::unique_ptr
-- [ ] std::shared_ptr
-- [ ] std::weak_ptr
+- [x] std::unique_ptr [26:01:16]
+- [x] std::shared_ptr [26:01:16]
+- [x] std::weak_ptr [26:01:16]
 
 #### C.3 Concurrency
 - [ ] std::thread
