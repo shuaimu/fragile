@@ -89,6 +89,66 @@ pub fn collect_cpp_def_ids<'tcx>(
 }
 
 // ============================================================================
+// Query Override Callback (Tasks 2.3.3.4 and 2.3.4)
+// ============================================================================
+
+/// Query override callback function.
+///
+/// This is the actual function that overrides rustc queries. It's a separate function
+/// (not a closure) because `override_queries` requires a function pointer.
+///
+/// # Architecture for Full Implementation
+///
+/// To enable full MIR injection and borrow check bypass:
+///
+/// 1. **Thread-Local Storage**: Store the C++ function registry in TLS:
+///    ```rust,ignore
+///    thread_local! {
+///        static CPP_REGISTRY: RefCell<Option<Arc<CppMirRegistry>>> = RefCell::new(None);
+///    }
+///    ```
+///
+/// 2. **mir_built Override**:
+///    ```rust,ignore
+///    let orig_mir_built = providers.queries.mir_built;
+///    providers.queries.mir_built = |tcx, def_id| {
+///        if is_cpp_function(tcx, def_id) {
+///            // Return converted C++ MIR
+///            return MirConvertCtx::new(tcx).convert_mir_body(...);
+///        }
+///        orig_mir_built(tcx, def_id)
+///    };
+///    ```
+///
+/// 3. **mir_borrowck Override** (bypass for C++ code):
+///    ```rust,ignore
+///    let orig_mir_borrowck = providers.queries.mir_borrowck;
+///    providers.queries.mir_borrowck = |tcx, def_id| {
+///        if is_cpp_function(tcx, def_id) {
+///            // Skip borrow checking - return empty result
+///            return tcx.arena.alloc(BorrowCheckResult::default());
+///        }
+///        orig_mir_borrowck(tcx, def_id)
+///    };
+///    ```
+fn override_queries_callback(
+    _session: &rustc_session::Session,
+    providers: &mut rustc_middle::util::Providers,
+) {
+    // Log that the callback was invoked
+    eprintln!("[fragile] Query override callback invoked");
+
+    // Store references to original providers for potential future use
+    let _orig_mir_built = providers.queries.mir_built;
+    let _orig_mir_borrowck = providers.queries.mir_borrowck;
+
+    // TODO: Implement query overrides when TLS for registry is set up
+    // For now, the infrastructure is in place and we use the original providers
+}
+
+// ============================================================================
+// FragileCallbacks Implementation
+// ============================================================================
 
 /// Callbacks implementation for Fragile compiler.
 ///
@@ -148,17 +208,7 @@ impl rustc_driver::Callbacks for FragileCallbacks {
         // Set up query overrides
         // Note: override_queries takes a fn pointer, not a closure, so we cannot capture state.
         // For now, we just install logging infrastructure.
-        config.override_queries = Some(|_session, providers| {
-            // Query override infrastructure is installed
-            // Full MIR injection requires:
-            // 1. Thread-local storage for registry access
-            // 2. mir_built override to inject C++ MIR
-            // 3. mir_borrowck override to skip borrow checking for C++ code
-            //
-            // These are tracked in TODO tasks 2.3.3.4 and 2.3.4
-            eprintln!("[fragile] Query override callback invoked");
-            let _ = providers;
-        });
+        config.override_queries = Some(override_queries_callback);
     }
 
     /// Called after the crate root has been parsed.
@@ -216,6 +266,10 @@ impl rustc_driver::Callbacks for FragileCallbacks {
         Compilation::Continue
     }
 }
+
+// ============================================================================
+// Run rustc function
+// ============================================================================
 
 /// Run rustc with the Fragile callbacks.
 ///

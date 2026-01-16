@@ -1,6 +1,6 @@
 # Fragile Language Specification
 
-**Fragile** is a unified programming language with three syntaxes: Rust, C++20, and Go.
+**Fragile** is a polyglot compiler that unifies Rust, C++20/23, and Go at the MIR level for seamless interoperability.
 
 ---
 
@@ -32,6 +32,7 @@
   - [Differences from Native Compilers](#differences-from-native-compilers)
   - [Migration Guide](#migration-guide)
   - [Ecosystem Compatibility](#ecosystem-compatibility)
+  - [Architecture Details](#architecture-details)
 
 ---
 
@@ -39,18 +40,33 @@
 
 ## Introduction
 
-Fragile is not three languages glued together. It is **one language** that accepts three different syntaxes. All code, regardless of which syntax it was written in, compiles to the same intermediate representation (IR) with identical semantics.
+Fragile is a polyglot compiler that compiles Rust, C++, and Go sources into a single binary. Rather than being "three languages glued together," Fragile leverages established compiler infrastructure (Clang for C++, rustc for Rust) and unifies them at the MIR (Mid-level Intermediate Representation) level.
 
 ```
-┌─────────────────────────────────────────┐
-│  User Code (.rs, .cpp, .go)             │  ← Any syntax
-├─────────────────────────────────────────┤
-│  Fragile HIR (Unified IR)               │  ← One representation
-├─────────────────────────────────────────┤
-│  LLVM IR                                │  ← One backend
-├─────────────────────────────────────────┤
-│  Native Code                            │  ← One binary
-└─────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────┐
+│                    User Code                                │
+│    .rs files      .cpp/.cc files       .go files           │
+└─────────┬─────────────┬─────────────────┬──────────────────┘
+          │             │                 │
+          ▼             ▼                 ▼
+    ┌──────────┐  ┌──────────┐     ┌──────────┐
+    │  rustc   │  │  Clang   │     │  go/ssa  │
+    │ Frontend │  │ Frontend │     │  (TBD)   │
+    └────┬─────┘  └────┬─────┘     └────┬─────┘
+         │             │                 │
+         └─────────────┼─────────────────┘
+                       ▼
+              ┌─────────────────┐
+              │    rustc MIR    │  ← Unified representation
+              └────────┬────────┘
+                       ▼
+              ┌─────────────────┐
+              │  rustc codegen  │
+              └────────┬────────┘
+                       ▼
+              ┌─────────────────┐
+              │     Binary      │
+              └─────────────────┘
 ```
 
 ### Why Fragile?
@@ -77,11 +93,12 @@ func main() {
 
 ### Key Features
 
-1. **Unified Memory Model**: All three syntaxes use ownership-based memory management
-2. **Unified Type System**: Types are shared across syntaxes
-3. **Zero-Cost Interop**: Cross-syntax function calls have no overhead
-4. **Full Ecosystem Access**: Use crates.io, Go modules, and C++ libraries
-5. **Single ABI**: Only C ABI is needed (for libc)
+1. **Production-Grade Frontends**: Uses Clang for C++ and rustc for Rust (not custom parsers)
+2. **Unified MIR**: All languages compile to rustc MIR for a single codegen path
+3. **Zero-Cost Interop**: Cross-language function calls have no FFI overhead
+4. **Full Ecosystem Access**: Use crates.io, C++ libraries, and Go modules (planned)
+5. **C++20/23 Support**: Full modern C++ including templates, concepts, and coroutines
+6. **Memory Model Per Language**: Rust uses ownership, C++ uses RAII, Go uses conservative GC
 
 ### Language Detection
 
@@ -95,13 +112,27 @@ func main() {
 
 ### Installation
 
-Prerequisites: LLVM 19, Rust 1.75+
+**Prerequisites:**
+- Rust 1.75+ (nightly recommended for rustc-dev features)
+- LLVM 19
+- Clang/libclang (for C++ support)
 
 ```bash
+# Ubuntu/Debian: Install dependencies
+sudo apt install libclang-dev llvm-dev
+
+# Clone and build
 git clone https://github.com/fragile-lang/fragile
 cd fragile
+
+# Set libclang path (required)
+export LIBCLANG_PATH=/usr/lib/x86_64-linux-gnu
+
+# Build
 cargo build --release
 ```
+
+**Note:** The `LIBCLANG_PATH` environment variable must be set for C++ compilation support.
 
 ### Your First Program
 
@@ -199,14 +230,18 @@ func factorial(n int32) int32 {
 
 All three compile to identical IR and produce identical machine code.
 
-### Semantic Unification
+### Semantic Preservation
 
-| Concept | Fragile Choice | Rationale |
-|---------|---------------|-----------|
-| Memory | Ownership (Rust) | Compile-time safety, no GC |
-| Errors | `Result<T, E>` | Explicit, composable |
-| Null | `Option<T>` | No null pointer exceptions |
-| Generics | Monomorphization | Zero-cost abstractions |
+Fragile preserves each language's native semantics rather than forcing a single model:
+
+| Concept | Rust | C++ | Go |
+|---------|------|-----|-----|
+| Memory | Ownership/borrow | RAII | Conservative GC |
+| Errors | `Result<T, E>` | Exceptions | `(T, error)` |
+| Null | `Option<T>` | `nullptr`/`optional` | `nil` |
+| Generics | Monomorphization | Templates | Type parameters |
+
+**Key Insight:** Rather than imposing one language's model on others, Fragile compiles each language with its native semantics. Interoperability is achieved at the MIR level.
 
 ### Source-First Ecosystem
 
@@ -217,63 +252,55 @@ Fragile compiles everything from source:
 
 ## Memory Model
 
-Fragile uses **ownership-based memory management** across all three syntaxes.
+Fragile supports **multiple memory management strategies** depending on the source language.
 
-### Ownership
+### Rust: Ownership
 
-Every value has exactly one owner. When the owner goes out of scope, the value is dropped.
+Rust code uses ownership-based memory management with compile-time borrow checking.
 
-**Rust** (native):
 ```rust
 let s = String::from("hello");
 let t = s;  // ownership moves to t
 // s is no longer valid
+
+let u = t.clone();  // Explicit copy
 ```
 
-**C++** (move semantics):
-```cpp
-std::string s = "hello";
-std::string t = std::move(s);  // In Fragile: implicit move
-// s is no longer valid
-```
-
-**Go** (implicit moves):
-```go
-s := "hello"
-t := s  // ownership moves (Fragile behavior)
-// s is no longer valid
-```
-
-### Key Difference: Assignment Always Moves
-
-| Language | Default Assignment | Fragile Behavior |
-|----------|-------------------|------------------|
-| Rust | Move | Move (same) |
-| C++ | Copy | Move (different) |
-| Go | Copy/Share | Move (different) |
-
-To copy, use `.clone()`:
-```rust
-let t = s.clone();  // Explicit copy
-```
-
-### Borrowing
-
-**Immutable borrows** (`&T`): Multiple readers, no writers
-```rust
-fn print_length(s: &String) { println!("{}", s.len()); }
-```
-
-**Mutable borrows** (`&mut T`): One writer, no readers
-```rust
-fn append_world(s: &mut String) { s.push_str(" world"); }
-```
-
-### Borrowing Rules
-
+**Borrowing Rules:**
 1. One mutable borrow OR multiple immutable borrows (not both)
 2. References must not outlive the data
 3. Data cannot be modified while immutably borrowed
+
+### C++: RAII
+
+C++ code uses standard RAII (Resource Acquisition Is Initialization) semantics. Destructors are called when objects go out of scope, just like in standard C++.
+
+```cpp
+std::string s1 = "hello";
+std::string s2 = s1;  // Copy (standard C++ behavior)
+std::string s3 = std::move(s1);  // Move (standard C++ behavior)
+// s1 is in moved-from state
+```
+
+**Key Point:** Fragile does not modify C++ copy/move semantics. C++ code behaves as standard C++ compilers would compile it.
+
+### Go: Conservative GC
+
+Go code uses a **conservative garbage collector** for memory management. This preserves Go's programming model where values can be freely copied and shared.
+
+```go
+s := "hello"
+t := s  // Both valid (Go semantics preserved)
+```
+
+**Note:** The conservative GC scans the stack and heap for potential pointers, enabling Go code to work naturally without ownership annotations.
+
+### Cross-Language Boundaries
+
+When calling between languages, memory ownership follows the callee's conventions:
+- Passing to Rust: Caller transfers ownership (Rust may borrow check)
+- Passing to C++: Standard C++ semantics apply
+- Passing to Go: GC will track the memory
 
 ## Type System
 
@@ -320,9 +347,9 @@ type Point struct { x, y float64 }
 
 ## Error Handling
 
-Fragile uses `Result<T, E>` for all error handling.
+Each language uses its **native error handling mechanism**.
 
-### Rust (Native)
+### Rust: Result<T, E>
 ```rust
 fn parse(s: &str) -> Result<i32, ParseError> {
     s.parse().map_err(|_| ParseError::InvalidFormat)
@@ -330,25 +357,43 @@ fn parse(s: &str) -> Result<i32, ParseError> {
 let n = parse("42")?;  // Propagate with ?
 ```
 
-### C++ (Exceptions → Result)
+### C++: Exceptions
 ```cpp
 int parse(const std::string& s) {
-    if (s.empty()) throw ParseError{"empty"};  // → Err(...)
-    return std::stoi(s);  // → Ok(...)
+    if (s.empty()) throw ParseError{"empty"};
+    return std::stoi(s);
 }
-// try-catch becomes match on Result
+
+// Standard try-catch works
+try {
+    int n = parse(input);
+} catch (const ParseError& e) {
+    // Handle error
+}
 ```
 
-### Go (Error Returns → Result)
+### Go: Error Returns
 ```go
 func parse(s string) (int, error) {
     if s == "" {
-        return 0, errors.New("empty")  // → Err(...)
+        return 0, errors.New("empty")
     }
-    return strconv.Atoi(s)  // → Ok(...)
+    return strconv.Atoi(s)
 }
-// if err != nil → match on Result
+
+// Standard Go error handling
+n, err := parse(input)
+if err != nil {
+    // Handle error
+}
 ```
+
+### Cross-Language Error Handling
+
+When calling between languages, errors follow the callee's conventions:
+- Rust → C++: Result::Err can be caught as exception (planned)
+- C++ → Rust: Exceptions convert to Result::Err (planned)
+- Go → Rust: (T, error) converts to Result<T, E> (planned)
 
 ---
 
@@ -376,68 +421,117 @@ use physics::Vector3;
 
 ## C++ Syntax
 
-C++20 syntax with semantic modifications.
+Fragile supports **C++20/23** with full semantic compatibility. C++ code is parsed using Clang, ensuring complete language support.
 
-### Key Differences from Standard C++
+### Supported Features
 
-| Standard C++ | Fragile C++ |
-|--------------|-------------|
-| Copy by default | Move by default |
-| Exceptions | Result types |
-| Multiple inheritance | Single + traits |
+| Category | Features |
+|----------|----------|
+| Core | Classes, inheritance, virtual functions, RTTI |
+| Templates | Function/class templates, SFINAE, concepts, variadic templates |
+| Memory | RAII, smart pointers, new/delete, placement new |
+| Modern | Coroutines (co_await), lambdas, ranges, modules |
+| Concurrency | std::thread, std::mutex, atomics, futures |
 
-### Ownership
+### Standard C++ Behavior
+
+C++ code in Fragile behaves exactly like standard C++:
+
 ```cpp
 std::string s1 = "hello";
-std::string s2 = s1;  // MOVES in Fragile
-std::string s3 = s1.clone();  // Explicit copy
+std::string s2 = s1;  // Copy (standard behavior)
+std::string s3 = std::move(s1);  // Move
+
+// Exceptions work normally
+try {
+    throw std::runtime_error("error");
+} catch (const std::exception& e) {
+    // ...
+}
 ```
 
-### Templates → Generics
+### Templates and Concepts
 ```cpp
 template<typename T>
 requires std::totally_ordered<T>
 T max(T a, T b) { return a > b ? a : b; }
+
+// Variadic templates
+template<typename... Args>
+void print_all(Args... args) { (std::cout << ... << args); }
 ```
 
-### Imports
+### Coroutines (C++20)
 ```cpp
-#include "math.rs"
-#include "utils.go"
+task<int> fetch_data() {
+    auto result = co_await async_fetch();
+    co_return result.value();
+}
 ```
+
+### Cross-Language Imports
+```cpp
+#include "math.rs"    // Import Rust module
+#include "utils.go"   // Import Go module (planned)
+```
+
+### Test Target: Mako
+
+Fragile's C++ support is validated against [Mako](https://github.com/makodb/mako), a C++23 distributed transactional database. This ensures real-world C++ code compiles correctly.
 
 ## Go Syntax
 
-Go syntax with ownership-based memory model.
+Go syntax with **conservative garbage collection**, preserving Go's programming model.
 
-### Key Differences from Standard Go
+### Key Design: Standard Go Semantics
 
-| Standard Go | Fragile Go |
-|-------------|------------|
-| Garbage collected | Ownership-based |
-| Copy/share | Move by default |
-| `nil` | `Option<T>` |
-| Goroutines | Async/await (planned) |
+| Feature | Standard Go | Fragile Go |
+|---------|-------------|------------|
+| Memory | GC | Conservative GC |
+| Assignment | Copy/share | Same (preserved) |
+| `nil` | Nil pointer | Same (preserved) |
+| Goroutines | Runtime scheduler | Planned |
 
-### Ownership
+### Standard Go Behavior
 ```go
 s1 := "hello"
-s2 := s1  // MOVES in Fragile
-s3 := s1.Clone()  // Explicit copy
+s2 := s1  // Both valid (standard Go behavior)
+
+// Nil works normally
+var p *int
+if p == nil {
+    // ...
+}
 ```
 
 ### Error Handling
 ```go
 func readFile(path string) (string, error) {
-    // (T, error) becomes Result<T, Error>
+    // Standard Go error handling preserved
+    if err != nil {
+        return "", err
+    }
+    return content, nil
 }
 ```
 
-### Imports
+### Cross-Language Imports
 ```go
-import "math.rs"
-import "physics.cpp"
+import "math.rs"       // Import Rust module
+import "physics.cpp"   // Import C++ module
 ```
+
+### Goroutines (Planned)
+
+Goroutine support is planned with integration into Fragile's async runtime. Standard `go` syntax will be supported:
+
+```go
+go func() {
+    // Concurrent execution
+}()
+```
+
+**Note:** Go support is currently under development. See the roadmap for status.
 
 ---
 
@@ -649,51 +743,92 @@ pub extern "C" fn my_function(x: i32) -> i32 { x * 2 }
 
 ## Differences from Native Compilers
 
-| Feature | Rust (rustc) | Fragile Rust | C++ (g++) | Fragile C++ | Go (gc) | Fragile Go |
-|---------|--------------|--------------|-----------|-------------|---------|------------|
-| Memory | Ownership | Same | Manual/RAII | Ownership | GC | Ownership |
-| Errors | Result | Same | Exceptions | Result | Error returns | Result |
-| Null | Option | Same | nullptr | Option | nil | Option |
-| Assignment | Move | Same | Copy | Move | Copy | Move |
+| Feature | rustc | Fragile Rust | g++/clang++ | Fragile C++ | Go gc | Fragile Go |
+|---------|-------|--------------|-------------|-------------|-------|------------|
+| Memory | Ownership | Same | RAII | Same | GC | Conservative GC |
+| Errors | Result | Same | Exceptions | Same | Error returns | Same |
+| Null | Option | Same | nullptr | Same | nil | Same |
+| Assignment | Move | Same | Copy | Same | Copy | Same |
 
-### What's Changed
+### Design Philosophy: Semantic Preservation
 
-- **C++ exceptions** → Result types
-- **C++ multiple inheritance** → Single inheritance + traits
-- **Go goroutines** → Async/await (planned)
-- **Go nil** → Option<T>
-- **Go GC** → Ownership
+Unlike earlier designs that unified semantics, Fragile now **preserves each language's native behavior**:
+
+- **Rust**: Full ownership/borrowing with rustc's borrow checker
+- **C++**: Standard C++ semantics (RAII, exceptions, copy/move)
+- **Go**: Conservative GC preserving Go's memory model
+
+### What's Different
+
+The key difference is the **compilation target**: all three frontends emit rustc MIR, enabling:
+- Unified binary output
+- Cross-language function calls without FFI
+- Shared optimizations through rustc's backend
+
+### Frontend Implementation
+
+| Language | Frontend | Parser |
+|----------|----------|--------|
+| Rust | rustc | Native rustc |
+| C++ | Clang | libclang |
+| Go | go/ssa | Planned |
 
 ## Migration Guide
 
 ### Migrating Rust Code
-Most Rust code works unchanged. Check:
-- Procedural macros (run via rustc)
-- Async runtime (different from tokio)
+
+Most Rust code works unchanged since Fragile uses rustc as the Rust frontend.
+
+**Fully supported:**
+- All stable Rust features
+- Ownership and borrowing
+- Traits and generics
+- Async/await
+
+**Considerations:**
+- Procedural macros: Supported (run via rustc)
+- Build scripts: Supported (standard cargo integration)
+- Inline assembly: Supported (target-dependent)
 
 ### Migrating C++ Code
-```cpp
-// Before: copy by default
-std::string s1 = "hello";
-std::string s2 = s1;  // Copies
 
-// After: move by default
+C++ code compiles with **standard C++ semantics**. No code changes required for most projects.
+
+```cpp
+// Standard C++ code works as-is
 std::string s1 = "hello";
-std::string s2 = s1;  // MOVES
-std::string s3 = s2.clone();  // Explicit copy
+std::string s2 = s1;  // Copy (unchanged)
+std::string s3 = std::move(s1);  // Move (unchanged)
 ```
+
+**Fully supported:**
+- C++20/23 features (requires compatible Clang)
+- Templates, concepts, coroutines
+- Exceptions, RTTI
+- STL containers
+
+**Considerations:**
+- Compiler-specific extensions: May need adjustments
+- Inline assembly: Target-dependent
 
 ### Migrating Go Code
-```go
-// Before: GC handles memory
-s := "hello"
-t := s  // Both valid
 
-// After: ownership
+Go code compiles with **standard Go semantics** using conservative GC.
+
+```go
+// Standard Go code works as-is
 s := "hello"
-t := s  // s invalid
-u := t.Clone()  // Explicit copy
+t := s  // Both valid (unchanged)
 ```
+
+**Supported (planned):**
+- Standard Go features
+- Goroutines and channels
+- Interface-based polymorphism
+
+**Considerations:**
+- CGo: Replaced by direct Fragile C++ integration
+- Runtime introspection: May have limitations
 
 ## Ecosystem Compatibility
 
@@ -723,6 +858,74 @@ tokio = { version = "1", features = ["full"] }
 abseil = { git = "https://github.com/abseil/abseil-cpp" }
 ```
 
+## Architecture Details
+
+### Why Clang + rustc?
+
+Fragile uses **production-grade frontends** rather than custom parsers:
+
+| Choice | Rationale |
+|--------|-----------|
+| Clang for C++ | Handles all C++ complexity (templates, SFINAE, concepts) |
+| rustc for Rust | Full borrow checking and Rust semantics |
+| go/ssa for Go | Planned: Leverages Go's type-checked SSA representation |
+
+### MIR as Unified IR
+
+All frontends emit **rustc MIR** (Mid-level Intermediate Representation):
+
+```
+C++ AST (Clang)  ─┐
+                  ├──▶ rustc MIR ──▶ LLVM IR ──▶ Binary
+Rust AST (rustc) ─┘
+```
+
+**Benefits:**
+- Single optimization pipeline (rustc → LLVM)
+- No ABI boundaries between languages
+- Unified debug info and profiling
+
+### Query System Override
+
+Fragile injects C++ MIR into rustc using query overrides:
+
+```rust
+// Simplified: how C++ MIR is injected
+fn mir_built(tcx, def_id) -> &Mir {
+    if is_cpp_function(def_id) {
+        cpp_mir_registry.get_mir(def_id)  // Return C++ MIR
+    } else {
+        original_mir_built(tcx, def_id)   // Normal Rust path
+    }
+}
+```
+
+### Runtime Support
+
+Some language features require runtime support:
+
+| Feature | Implementation |
+|---------|---------------|
+| C++ exceptions | `fragile_rt_throw()`, `fragile_rt_catch()` |
+| C++ RTTI | Type info structures compatible with Itanium ABI |
+| C++ vtables | Virtual dispatch via standard vtable layout |
+| Go GC | Conservative mark-and-sweep collector |
+
+### Build Flow
+
+```
+fragile build main.rs utils.cpp helpers.go
+    │
+    ├── Rust files ──▶ rustc frontend ──▶ Rust MIR
+    │
+    ├── C++ files ──▶ Clang parse ──▶ Convert to MIR ──▶ Inject into rustc
+    │
+    └── Go files ──▶ go/ssa (planned) ──▶ Convert to MIR ──▶ Inject into rustc
+    │
+    ▼
+rustc codegen (all MIR) ──▶ LLVM IR ──▶ Native binary
+```
+
 ---
 
-*Fragile: One language, three syntaxes, zero overhead.*
+*Fragile: Three languages, one compiler, zero FFI overhead.*
