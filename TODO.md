@@ -69,7 +69,11 @@ See [PLAN_CPP20_MAKO.md](PLAN_CPP20_MAKO.md) for detailed plan.
 ### 1.2 Phase B: Templates
 - [-] **B.1 Function Templates**
   - [x] Basic templates [26:01:16] ([docs/dev/plan_function_templates.md](docs/dev/plan_function_templates.md))
-  - [ ] Argument deduction
+  - [-] Argument deduction
+    - [x] Dependent type representation (CppType extensions) [26:01:16, 01:18] ([docs/dev/plan_dependent_types.md](docs/dev/plan_dependent_types.md))
+    - [ ] Basic deduction for simple types (T → int, T → double)
+    - [ ] Deduction for pointers/references (T* → int*)
+    - [ ] Explicit template arguments override
   - [ ] Specialization
   - [ ] Variadic templates
 - [ ] **B.2 Class Templates**
@@ -214,7 +218,7 @@ Migration: After C++20 support is complete, deprecate these.
 ## 5. Testing & Milestones
 
 ### 5.1 Unit Tests
-- [x] fragile-clang: 56 tests passing (7 unit + 49 integration)
+- [x] fragile-clang: 74 tests passing (16 unit + 58 integration)
 - [x] fragile-rustc-driver: 6 tests passing
 - [x] fragile-runtime: Compiles
 

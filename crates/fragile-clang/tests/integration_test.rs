@@ -1774,6 +1774,112 @@ fn test_std_forward_basic() {
             "Should parse function template or be empty if no instantiation");
 }
 
+/// Test template parameter types are correctly identified.
+#[test]
+fn test_template_param_types() {
+    use fragile_clang::CppType;
+
+    let parser = ClangParser::new().expect("Failed to create parser");
+
+    let source = r#"
+        template<typename T>
+        T identity(T x) { return x; }
+    "#;
+
+    let ast = parser.parse_string(source, "param_types.cpp").expect("Failed to parse");
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    assert_eq!(module.function_templates.len(), 1);
+    let tmpl = &module.function_templates[0];
+
+    // Return type should be TemplateParam
+    assert!(
+        matches!(&tmpl.return_type, CppType::TemplateParam { name, depth: 0, index: 0 } if name == "T"),
+        "Return type should be TemplateParam T, got {:?}",
+        tmpl.return_type
+    );
+
+    // Parameter type should be TemplateParam
+    assert_eq!(tmpl.params.len(), 1);
+    let (param_name, param_type) = &tmpl.params[0];
+    assert_eq!(param_name, "x");
+    assert!(
+        matches!(param_type, CppType::TemplateParam { name, depth: 0, index: 0 } if name == "T"),
+        "Parameter type should be TemplateParam T, got {:?}",
+        param_type
+    );
+}
+
+/// Test dependent types (e.g., const T&) are detected.
+#[test]
+fn test_dependent_types() {
+    let parser = ClangParser::new().expect("Failed to create parser");
+
+    let source = r#"
+        template<typename T>
+        void take_const_ref(const T& x);
+    "#;
+
+    let ast = parser.parse_string(source, "dependent.cpp").expect("Failed to parse");
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    assert_eq!(module.function_templates.len(), 1);
+    let tmpl = &module.function_templates[0];
+
+    // Parameter type should be DependentType or contain reference to T
+    assert_eq!(tmpl.params.len(), 1);
+    let (param_name, param_type) = &tmpl.params[0];
+    assert_eq!(param_name, "x");
+
+    // Check it's dependent (contains template param reference)
+    assert!(
+        param_type.is_dependent(),
+        "Parameter const T& should be dependent, got {:?}",
+        param_type
+    );
+}
+
+/// Test CppType::is_dependent method.
+#[test]
+fn test_is_dependent_method() {
+    use fragile_clang::CppType;
+
+    // Simple types are not dependent
+    assert!(!CppType::Int { signed: true }.is_dependent());
+    assert!(!CppType::Named("MyClass".to_string()).is_dependent());
+
+    // Template params are dependent
+    let tparam = CppType::TemplateParam {
+        name: "T".to_string(),
+        depth: 0,
+        index: 0,
+    };
+    assert!(tparam.is_dependent());
+
+    // DependentType is dependent
+    let dep = CppType::DependentType {
+        spelling: "const T&".to_string(),
+    };
+    assert!(dep.is_dependent());
+
+    // Pointer to template param is dependent
+    let ptr = CppType::Pointer {
+        pointee: Box::new(tparam.clone()),
+        is_const: false,
+    };
+    assert!(ptr.is_dependent());
+
+    // Reference to template param is dependent
+    let ref_ty = CppType::Reference {
+        referent: Box::new(tparam.clone()),
+        is_const: true,
+        is_rvalue: false,
+    };
+    assert!(ref_ty.is_dependent());
+}
+
 /// Test std::move with function call argument.
 #[test]
 fn test_std_move_in_call() {

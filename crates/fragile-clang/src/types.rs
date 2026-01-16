@@ -46,6 +46,22 @@ pub enum CppType {
         params: Vec<CppType>,
         is_variadic: bool,
     },
+    /// Template parameter type (used in function/class templates).
+    /// Represents a type that will be substituted during template instantiation.
+    TemplateParam {
+        /// Parameter name (e.g., "T", "U")
+        name: String,
+        /// Template nesting depth (0 for outermost template)
+        depth: u32,
+        /// Index in the template parameter list (0-based)
+        index: u32,
+    },
+    /// A dependent type that depends on template parameters.
+    /// Used for types like "const T&" where T is a template parameter.
+    DependentType {
+        /// The base spelling of the type (may contain template param names)
+        spelling: String,
+    },
 }
 
 impl CppType {
@@ -146,6 +162,41 @@ impl CppType {
                 };
                 format!("extern \"C\" fn({}) -> {}", params_joined, return_type.to_rust_type_str())
             }
+            CppType::TemplateParam { name, .. } => {
+                // Template parameters are represented by their name
+                // In Rust generics, this would be a generic type parameter
+                name.clone()
+            }
+            CppType::DependentType { spelling } => {
+                // Dependent types are preserved as their spelling
+                // These need to be resolved during template instantiation
+                spelling.clone()
+            }
+        }
+    }
+
+    /// Check if this type is or contains template parameters.
+    pub fn is_dependent(&self) -> bool {
+        match self {
+            CppType::TemplateParam { .. } | CppType::DependentType { .. } => true,
+            CppType::Pointer { pointee, .. } => pointee.is_dependent(),
+            CppType::Reference { referent, .. } => referent.is_dependent(),
+            CppType::Array { element, .. } => element.is_dependent(),
+            CppType::Function {
+                return_type,
+                params,
+                ..
+            } => return_type.is_dependent() || params.iter().any(|p| p.is_dependent()),
+            _ => false,
+        }
+    }
+
+    /// Create a template parameter type.
+    pub fn template_param(name: &str, depth: u32, index: u32) -> Self {
+        CppType::TemplateParam {
+            name: name.to_string(),
+            depth,
+            index,
         }
     }
 }

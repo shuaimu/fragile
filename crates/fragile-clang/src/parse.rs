@@ -245,18 +245,17 @@ impl ClangParser {
                     let name = cursor_spelling(cursor);
                     let template_params = self.get_template_type_params(cursor);
 
-                    // Get the templated function's type info from children
+                    // Get the templated function's type info
+                    // Use template-aware type conversion to detect template parameters
                     let cursor_type = clang_sys::clang_getCursorType(cursor);
-                    let return_type = self.convert_type(clang_sys::clang_getResultType(cursor_type));
+                    let return_type = self.convert_type_with_template_ctx(
+                        clang_sys::clang_getResultType(cursor_type),
+                        &template_params,
+                    );
 
-                    let num_args = clang_sys::clang_Cursor_getNumArguments(cursor);
-                    let mut params = Vec::new();
-                    for i in 0..num_args {
-                        let arg = clang_sys::clang_Cursor_getArgument(cursor, i as u32);
-                        let arg_name = cursor_spelling(arg);
-                        let arg_type = clang_sys::clang_getCursorType(arg);
-                        params.push((arg_name, self.convert_type(arg_type)));
-                    }
+                    // Extract params from ParmVarDecl children (clang_Cursor_getNumArguments
+                    // returns 0 for templates)
+                    let params = self.get_function_template_params(cursor, &template_params);
 
                     let is_definition = clang_sys::clang_isCursorDefinition(cursor) != 0;
 
@@ -829,6 +828,97 @@ impl ClangParser {
             clang_sys::clang_visitChildren(cursor, attr_visitor, info_ptr as clang_sys::CXClientData);
 
             (info.is_override, info.is_final)
+        }
+    }
+
+    /// Convert a type with template parameter awareness.
+    ///
+    /// If the type spelling matches a known template parameter, returns a
+    /// TemplateParam variant instead of Named.
+    fn convert_type_with_template_ctx(
+        &self,
+        ty: clang_sys::CXType,
+        template_params: &[String],
+    ) -> CppType {
+        unsafe {
+            let spelling = clang_sys::clang_getTypeSpelling(ty);
+            let type_name = cx_string_to_string(spelling);
+
+            // Check if this is a template parameter
+            if let Some(index) = template_params.iter().position(|p| p == &type_name) {
+                return CppType::TemplateParam {
+                    name: type_name,
+                    depth: 0,
+                    index: index as u32,
+                };
+            }
+
+            // Check for dependent types (types that contain template params)
+            let is_dependent = template_params.iter().any(|p| type_name.contains(p));
+
+            if is_dependent {
+                // For now, store dependent types with their full spelling
+                // A more sophisticated approach would parse and reconstruct the type
+                CppType::DependentType { spelling: type_name }
+            } else {
+                self.convert_type(ty)
+            }
+        }
+    }
+
+    /// Get function parameters from a function template cursor.
+    ///
+    /// For function templates, `clang_Cursor_getNumArguments` returns 0, so we need
+    /// to extract parameters from the ParmVarDecl children.
+    fn get_function_template_params(
+        &self,
+        cursor: clang_sys::CXCursor,
+        template_params: &[String],
+    ) -> Vec<(String, CppType)> {
+        unsafe {
+            struct ParamData<'a> {
+                params: Vec<(String, CppType)>,
+                parser: &'a ClangParser,
+                template_params: &'a [String],
+            }
+
+            let mut data = ParamData {
+                params: Vec::new(),
+                parser: self,
+                template_params,
+            };
+            let data_ptr: *mut ParamData = &mut data;
+
+            extern "C" fn param_visitor(
+                child: clang_sys::CXCursor,
+                _parent: clang_sys::CXCursor,
+                client_data: clang_sys::CXClientData,
+            ) -> clang_sys::CXChildVisitResult {
+                unsafe {
+                    let data = &mut *(client_data as *mut ParamData);
+                    let kind = clang_sys::clang_getCursorKind(child);
+
+                    // CXCursor_ParmDecl = 10
+                    if kind == 10 {
+                        let name = cursor_spelling(child);
+                        let ty = clang_sys::clang_getCursorType(child);
+                        let cpp_type = data
+                            .parser
+                            .convert_type_with_template_ctx(ty, data.template_params);
+                        data.params.push((name, cpp_type));
+                    }
+
+                    clang_sys::CXChildVisit_Continue
+                }
+            }
+
+            clang_sys::clang_visitChildren(
+                cursor,
+                param_visitor,
+                data_ptr as clang_sys::CXClientData,
+            );
+
+            data.params
         }
     }
 
