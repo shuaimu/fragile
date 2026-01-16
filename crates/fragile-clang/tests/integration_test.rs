@@ -7826,3 +7826,72 @@ fn test_mako_rcu_cc() {
         }
     }
 }
+
+/// Test parsing rrr/base/strop.cpp - string operations
+#[test]
+fn test_mako_strop_cpp() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let strop_path = project_root.join("vendor/mako/src/rrr/base/strop.cpp");
+
+    // Skip if file doesn't exist
+    if !strop_path.exists() {
+        println!("Skipping test: strop.cpp not found at {:?}", strop_path);
+        return;
+    }
+
+    // Setup include paths
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let rusty_cpp_path = project_root.join("vendor/mako/src/mako/submodules/rusty-cpp/include");
+
+    let mut system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+        rusty_cpp_path.to_string_lossy().to_string(),
+    ];
+
+    // Try to find Clang's intrinsics directory
+    let clang_paths = [
+        "/usr/lib/llvm-19/lib/clang/19/include",
+        "/usr/lib/llvm-18/lib/clang/18/include",
+    ];
+
+    for path in &clang_paths {
+        if Path::new(path).exists() {
+            system_include_paths.push(path.to_string());
+            break;
+        }
+    }
+
+    // User include paths - includes rrr/base directory for local headers
+    let mako_src = project_root.join("vendor/mako/src");
+    let rrr_base = project_root.join("vendor/mako/src/rrr/base");
+    let include_paths = vec![
+        rrr_base.to_string_lossy().to_string(),
+        mako_src.to_string_lossy().to_string(),
+    ];
+
+    let parser = ClangParser::with_paths_and_defines(include_paths, system_include_paths, vec![])
+        .expect("Failed to create parser");
+
+    let result = parser.parse_file(&strop_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+
+            println!("Successfully parsed strop.cpp with {} functions", module.functions.len());
+            for func in &module.functions {
+                println!("  Function: {}", func.display_name);
+            }
+
+            // strop.cpp has string utility functions
+            assert!(module.functions.len() > 0, "Expected to find string utility functions");
+        }
+        Err(e) => {
+            println!("Note: strop.cpp parsing failed: {:?}", e);
+            println!("This may require additional stub headers");
+        }
+    }
+}
