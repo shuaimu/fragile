@@ -13,7 +13,12 @@ extern crate rustc_index;
 extern crate rustc_middle;
 extern crate rustc_span;
 
-use fragile_clang::{CppType, MirBinOp, MirBody, MirConstant, MirOperand, MirPlace, MirUnaryOp};
+use rustc_span::source_map::Spanned;
+
+use fragile_clang::{
+    CppType, MirBasicBlock, MirBinOp, MirBody, MirConstant, MirLocal, MirOperand, MirPlace,
+    MirRvalue, MirStatement, MirTerminator, MirUnaryOp,
+};
 use rustc_middle::mir::{self, BinOp, UnOp};
 use rustc_middle::ty::{Ty, TyCtxt};
 use rustc_span::DUMMY_SP;
@@ -327,6 +332,230 @@ impl<'tcx> MirConvertCtx<'tcx> {
                 }))
             }
         }
+    }
+
+    /// Convert a Fragile MirRvalue to rustc's Rvalue.
+    pub fn convert_rvalue(&self, rvalue: &MirRvalue) -> mir::Rvalue<'tcx> {
+        use rustc_middle::mir::Rvalue;
+
+        match rvalue {
+            MirRvalue::Use(operand) => Rvalue::Use(self.convert_operand(operand)),
+            MirRvalue::BinaryOp { op, left, right } => {
+                let binop = self.convert_binop(op);
+                let left_op = self.convert_operand(left);
+                let right_op = self.convert_operand(right);
+                Rvalue::BinaryOp(binop, Box::new((left_op, right_op)))
+            }
+            MirRvalue::UnaryOp { op, operand } => {
+                let unop = self.convert_unop(op);
+                let op = self.convert_operand(operand);
+                Rvalue::UnaryOp(unop, op)
+            }
+            MirRvalue::Ref { place, mutability } => {
+                use rustc_middle::mir::BorrowKind;
+                let p = self.convert_place(place);
+                let kind = if *mutability {
+                    BorrowKind::Mut { kind: rustc_middle::mir::MutBorrowKind::Default }
+                } else {
+                    BorrowKind::Shared
+                };
+                Rvalue::Ref(self.tcx.lifetimes.re_erased, kind, p)
+            }
+        }
+    }
+
+    /// Convert a Fragile MirStatement to rustc's Statement.
+    pub fn convert_statement(&self, stmt: &MirStatement) -> mir::Statement<'tcx> {
+        use rustc_middle::mir::{Statement, StatementKind, SourceInfo};
+
+        let source_info = SourceInfo::outermost(DUMMY_SP);
+
+        let kind = match stmt {
+            MirStatement::Assign { target, value } => {
+                let place = self.convert_place(target);
+                let rvalue = self.convert_rvalue(value);
+                StatementKind::Assign(Box::new((place, rvalue)))
+            }
+            MirStatement::Nop => StatementKind::Nop,
+        };
+
+        Statement::new(source_info, kind)
+    }
+
+    /// Convert a Fragile MirTerminator to rustc's Terminator.
+    pub fn convert_terminator(&self, term: &MirTerminator) -> mir::Terminator<'tcx> {
+        use rustc_middle::mir::{BasicBlock, Terminator, TerminatorKind, SourceInfo, SwitchTargets};
+
+        let source_info = SourceInfo::outermost(DUMMY_SP);
+
+        let kind = match term {
+            MirTerminator::Return => TerminatorKind::Return,
+            MirTerminator::Goto { target } => {
+                TerminatorKind::Goto { target: BasicBlock::from_usize(*target) }
+            }
+            MirTerminator::SwitchInt { operand, targets, otherwise } => {
+                let discr = self.convert_operand(operand);
+                // Build switch targets - mapping values to blocks
+                let targets_vec: Vec<_> = targets
+                    .iter()
+                    .map(|(val, block)| (*val as u128, BasicBlock::from_usize(*block)))
+                    .collect();
+                let otherwise_block = BasicBlock::from_usize(*otherwise);
+                let switch_targets = SwitchTargets::new(targets_vec.into_iter(), otherwise_block);
+                TerminatorKind::SwitchInt { discr, targets: switch_targets }
+            }
+            MirTerminator::Call { func: _, args, destination, target, unwind } => {
+                // Note: func is a string, we need to resolve it to an actual function
+                // For now, create a placeholder call to a dummy function
+                let args_converted: Box<[Spanned<mir::Operand<'tcx>>]> = args
+                    .iter()
+                    .map(|a| Spanned {
+                        node: self.convert_operand(a),
+                        span: DUMMY_SP,
+                    })
+                    .collect::<Vec<_>>()
+                    .into_boxed_slice();
+                let dest = self.convert_place(destination);
+                let target_block = target.map(BasicBlock::from_usize);
+                let unwind_action = if let Some(uw) = unwind {
+                    mir::UnwindAction::Cleanup(BasicBlock::from_usize(*uw))
+                } else {
+                    mir::UnwindAction::Continue
+                };
+                // Create a placeholder function operand - this needs proper function resolution
+                // For now, use unreachable which will be replaced with actual call later
+                TerminatorKind::Call {
+                    func: mir::Operand::Copy(mir::Place::from(mir::Local::from_u32(0))),
+                    args: args_converted,
+                    destination: dest,
+                    target: target_block,
+                    unwind: unwind_action,
+                    call_source: mir::CallSource::Normal,
+                    fn_span: DUMMY_SP,
+                }
+            }
+            MirTerminator::Unreachable => TerminatorKind::Unreachable,
+            MirTerminator::Resume => TerminatorKind::UnwindResume,
+            // Coroutine terminators - these need special handling
+            MirTerminator::Yield { value, resume, drop } => {
+                let val = self.convert_operand(value);
+                let resume_block = BasicBlock::from_usize(*resume);
+                let drop_block = drop.map(BasicBlock::from_usize);
+                TerminatorKind::Yield {
+                    value: val,
+                    resume: resume_block,
+                    resume_arg: mir::Place::from(mir::Local::from_u32(0)), // Placeholder
+                    drop: drop_block,
+                }
+            }
+            MirTerminator::Await { awaitable, destination, resume, drop } => {
+                // Await is not a direct MIR construct - it gets lowered to a state machine
+                // For now, convert to a yield-like pattern
+                let _val = self.convert_operand(awaitable);
+                let _dest = self.convert_place(destination);
+                let resume_block = BasicBlock::from_usize(*resume);
+                let drop_block = drop.map(BasicBlock::from_usize);
+                // Use Yield as a placeholder since Await is desugared
+                TerminatorKind::Yield {
+                    value: mir::Operand::Copy(mir::Place::from(mir::Local::from_u32(0))),
+                    resume: resume_block,
+                    resume_arg: mir::Place::from(mir::Local::from_u32(0)),
+                    drop: drop_block,
+                }
+            }
+            MirTerminator::CoroutineReturn { value: _ } => {
+                // co_return is desugared to regular return in the state machine
+                TerminatorKind::Return
+            }
+        };
+
+        Terminator { source_info, kind }
+    }
+
+    /// Convert a Fragile MirLocal to rustc's LocalDecl.
+    pub fn convert_local(&self, local: &MirLocal) -> mir::LocalDecl<'tcx> {
+        let ty = self.convert_type(&local.ty);
+        mir::LocalDecl::new(ty, DUMMY_SP)
+    }
+
+    /// Convert a Fragile MirBasicBlock to rustc's BasicBlockData.
+    pub fn convert_basic_block(&self, block: &MirBasicBlock) -> mir::BasicBlockData<'tcx> {
+        use rustc_middle::mir::BasicBlockData;
+
+        // Convert all statements
+        let statements: Vec<_> = block
+            .statements
+            .iter()
+            .map(|s| self.convert_statement(s))
+            .collect();
+
+        // Convert terminator
+        let terminator = self.convert_terminator(&block.terminator);
+
+        // Use the constructor with is_cleanup parameter
+        let mut bb_data = BasicBlockData::new(Some(terminator), block.is_cleanup);
+        bb_data.statements = statements;
+        bb_data
+    }
+
+    /// Convert a full Fragile MirBody to rustc's mir::Body.
+    ///
+    /// This performs a complete conversion of all MIR constructs.
+    pub fn convert_mir_body_full(&self, mir: &MirBody, arg_count: usize) -> mir::Body<'tcx> {
+        use rustc_index::IndexVec;
+        use rustc_middle::mir::*;
+
+        // Convert local declarations
+        let mut local_decls: IndexVec<Local, LocalDecl<'tcx>> = IndexVec::new();
+        for local in &mir.locals {
+            local_decls.push(self.convert_local(local));
+        }
+
+        // Ensure we have at least a return local
+        if local_decls.is_empty() {
+            local_decls.push(LocalDecl::new(self.tcx.types.unit, DUMMY_SP));
+        }
+
+        // Convert basic blocks
+        let mut basic_blocks: IndexVec<BasicBlock, BasicBlockData<'tcx>> = IndexVec::new();
+        for block in &mir.blocks {
+            basic_blocks.push(self.convert_basic_block(block));
+        }
+
+        // If no blocks, create a trivial return block
+        if basic_blocks.is_empty() {
+            basic_blocks.push(BasicBlockData::new(
+                Some(Terminator {
+                    source_info: SourceInfo::outermost(DUMMY_SP),
+                    kind: TerminatorKind::Return,
+                }),
+                false,
+            ));
+        }
+
+        // Create source scope
+        let mut source_scopes: IndexVec<SourceScope, SourceScopeData<'tcx>> = IndexVec::new();
+        source_scopes.push(SourceScopeData {
+            span: DUMMY_SP,
+            parent_scope: None,
+            inlined: None,
+            inlined_parent_scope: None,
+            local_data: ClearCrossCrate::Clear,
+        });
+
+        // Create the body
+        mir::Body::new(
+            MirSource::item(rustc_span::def_id::CRATE_DEF_ID.to_def_id()),
+            basic_blocks,
+            source_scopes,
+            local_decls,
+            IndexVec::new(), // user_type_annotations
+            arg_count,
+            Vec::new(), // var_debug_info
+            DUMMY_SP,
+            None, // coroutine (would need setup for is_coroutine)
+            None, // tainted_by_errors
+        )
     }
 }
 

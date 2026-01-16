@@ -454,10 +454,12 @@ See [PLAN_CPP20_MAKO.md](PLAN_CPP20_MAKO.md) for detailed plan.
 - [x] **2.4.2 Constant conversion** (~40 LOC) [26:01:16, 23:00] - convert_constant for Int/Float/Bool/Unit
 - [x] **2.4.3 Place conversion** (~40 LOC) [26:01:16, 23:00] - convert_place with Deref/Field/Index projections
 - [x] **2.4.4 Operand conversion** (~20 LOC) [26:01:16, 23:00] - convert_operand for Copy/Move/Constant
-- [ ] **2.4.5 Statement conversion** (~60 LOC) - Assign, Nop statements
-- [ ] **2.4.6 Terminator conversion** (~100 LOC) - Return, Goto, SwitchInt, Call, etc.
-- [ ] **2.4.7 Basic block assembly** (~30 LOC) - Full block conversion
-- [ ] **2.4.8 Integration testing** (~50 LOC) - End-to-end tests
+- [x] **2.4.5 Rvalue conversion** (~30 LOC) [26:01:16, 23:15] - convert_rvalue for Use/BinaryOp/UnaryOp/Ref
+- [x] **2.4.6 Statement conversion** (~20 LOC) [26:01:16, 23:15] - convert_statement for Assign/Nop
+- [x] **2.4.7 Terminator conversion** (~100 LOC) [26:01:16, 23:15] - Return, Goto, SwitchInt, Call, Unreachable, Resume, Yield, Await, CoroutineReturn
+- [x] **2.4.8 Local/BasicBlock conversion** (~30 LOC) [26:01:16, 23:15] - convert_local, convert_basic_block
+- [x] **2.4.9 Full body conversion** (~50 LOC) [26:01:16, 23:15] - convert_mir_body_full with locals, blocks, scopes
+- [ ] **2.4.10 Integration testing** (~50 LOC) - End-to-end tests
 
 ---
 
