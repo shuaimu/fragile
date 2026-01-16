@@ -438,6 +438,92 @@ impl MirConverter {
                 }
             }
 
+            ClangNodeKind::ForStmt => {
+                // ForStmt children:
+                // [0] Init statement (DeclStmt or expression, may be empty)
+                // [1] Condition variable (optional, usually NULL/empty)
+                // [2] Condition expression (optional)
+                // [3] Increment expression (optional)
+                // [4] Body statement
+                //
+                // for (init; cond; incr) body
+                //
+                // MIR structure:
+                //   init
+                //   goto loop_header
+                // loop_header:
+                //   if cond goto loop_body else goto loop_exit
+                // loop_body:
+                //   body
+                //   incr
+                //   goto loop_header
+                // loop_exit:
+                //   ...
+
+                // Get the children, handling potential missing children
+                let init = node.children.get(0);
+                // Child 1 is condition variable declaration (rarely used)
+                let cond = node.children.get(2);
+                let incr = node.children.get(3);
+                let body = node.children.get(4);
+
+                // Execute init statement (if any)
+                if let Some(init_node) = init {
+                    // Only convert if it's not an empty/placeholder node
+                    if !matches!(init_node.kind, ClangNodeKind::Unknown(_)) {
+                        self.convert_stmt(init_node, builder)?;
+                    }
+                }
+
+                let loop_header = builder.new_block();
+                let loop_body = loop_header + 1;
+                let loop_exit = loop_body + 1;
+
+                // Jump to loop header
+                builder.finish_block(MirTerminator::Goto {
+                    target: loop_header,
+                });
+
+                // Loop header: evaluate condition
+                if let Some(cond_node) = cond {
+                    if !matches!(cond_node.kind, ClangNodeKind::Unknown(_)) {
+                        let cond_operand = self.convert_expr(cond_node, builder)?;
+                        builder.finish_block(MirTerminator::SwitchInt {
+                            operand: cond_operand,
+                            targets: vec![(1, loop_body)],
+                            otherwise: loop_exit,
+                        });
+                    } else {
+                        // No condition = infinite loop (always enter body)
+                        builder.finish_block(MirTerminator::Goto {
+                            target: loop_body,
+                        });
+                    }
+                } else {
+                    // No condition = infinite loop (always enter body)
+                    builder.finish_block(MirTerminator::Goto {
+                        target: loop_body,
+                    });
+                }
+
+                // Loop body
+                if let Some(body_node) = body {
+                    self.convert_stmt(body_node, builder)?;
+                }
+
+                // Increment expression (evaluated for side effects)
+                if let Some(incr_node) = incr {
+                    if !matches!(incr_node.kind, ClangNodeKind::Unknown(_)) {
+                        let _ = self.convert_expr(incr_node, builder)?;
+                    }
+                }
+
+                // Jump back to header
+                builder.finish_block(MirTerminator::Goto {
+                    target: loop_header,
+                });
+            }
+
             ClangNodeKind::BreakStmt => {
                 // TODO: Need to track loop context to know where to jump
                 builder.finish_block(MirTerminator::Unreachable);

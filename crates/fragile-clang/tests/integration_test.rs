@@ -3159,3 +3159,101 @@ fn test_type_trait_is_base_of() {
     // Non-class types: false
     assert_eq!(TypeTraitEvaluator::is_base_of(&CppType::int(), &CppType::Double), TypeTraitResult::Value(false));
 }
+
+// ============================================================================
+// For Statement Tests
+// ============================================================================
+
+/// Test basic for loop parsing.
+#[test]
+fn test_for_loop_basic() {
+    let parser = ClangParser::new().unwrap();
+    let code = r#"
+        int sum() {
+            int total = 0;
+            for (int i = 0; i < 10; i++) {
+                total += i;
+            }
+            return total;
+        }
+    "#;
+
+    let ast = parser.parse_string(code, "test.cpp").unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    // Should have one function
+    assert_eq!(module.functions.len(), 1);
+    let func = &module.functions[0];
+    assert_eq!(func.display_name, "sum");
+
+    // MIR body should have multiple basic blocks for the for loop
+    // Entry block, loop header, loop body, loop exit
+    assert!(func.mir_body.blocks.len() >= 3);
+}
+
+/// Test for loop with empty body.
+#[test]
+fn test_for_loop_empty_body() {
+    let parser = ClangParser::new().unwrap();
+    let code = r#"
+        void spin(int n) {
+            for (int i = 0; i < n; i++) {
+            }
+        }
+    "#;
+
+    let ast = parser.parse_string(code, "test.cpp").unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    assert_eq!(module.functions.len(), 1);
+    assert_eq!(module.functions[0].display_name, "spin");
+}
+
+/// Test for loop with multiple initializers (using expression).
+#[test]
+fn test_for_loop_expression_init() {
+    let parser = ClangParser::new().unwrap();
+    let code = r#"
+        int countdown(int n) {
+            int i;
+            for (i = n; i > 0; i--) {
+            }
+            return i;
+        }
+    "#;
+
+    let ast = parser.parse_string(code, "test.cpp").unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    assert_eq!(module.functions.len(), 1);
+    assert_eq!(module.functions[0].display_name, "countdown");
+}
+
+/// Test nested for loops.
+#[test]
+fn test_for_loop_nested() {
+    let parser = ClangParser::new().unwrap();
+    let code = r#"
+        int matrix_sum(int n) {
+            int sum = 0;
+            for (int i = 0; i < n; i++) {
+                for (int j = 0; j < n; j++) {
+                    sum += 1;
+                }
+            }
+            return sum;
+        }
+    "#;
+
+    let ast = parser.parse_string(code, "test.cpp").unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    assert_eq!(module.functions.len(), 1);
+    // Nested loops should have more blocks than a simple function
+    // (at least entry block + some loop structure)
+    assert!(module.functions[0].mir_body.blocks.len() >= 2);
+}

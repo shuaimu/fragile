@@ -80,13 +80,11 @@ See [PLAN_CPP20_MAKO.md](PLAN_CPP20_MAKO.md) for detailed plan.
   - [x] Basic class templates [26:01:16, 03:45] ([docs/dev/plan_class_templates.md](docs/dev/plan_class_templates.md))
   - [x] Partial specialization [26:01:16, 04:30] ([docs/dev/plan_partial_specialization.md](docs/dev/plan_partial_specialization.md))
   - [x] Nested templates (member templates) [26:01:16, 05:00] ([docs/dev/plan_nested_templates.md](docs/dev/plan_nested_templates.md))
-- [-] **B.3 SFINAE & Type Traits**
+- [x] **B.3 SFINAE & Type Traits**
   - [x] TypeProperties foundation [26:01:16, 05:30] ([docs/dev/plan_sfinae.md](docs/dev/plan_sfinae.md))
   - [x] TypeTraitExpr AST node [26:01:16, 06:15]
   - [x] TypeTraitEvaluator (is_integral, is_same, etc.) [26:01:16, 06:15]
-  - [ ] std::enable_if
-  - [ ] std::is_same, std::is_base_of
-  - [ ] std::conditional
+  - Note: std::enable_if, std::is_base_of (class hierarchy), std::conditional deferred to Phase C
 - [ ] **B.4 C++20 Concepts**
   - [ ] `requires` clauses
   - [ ] Concept definitions
@@ -175,7 +173,7 @@ See [PLAN_CPP20_MAKO.md](PLAN_CPP20_MAKO.md) for detailed plan.
 - [x] ReturnStmt
 - [x] IfStmt
 - [x] WhileStmt
-- [ ] ForStmt
+- [x] ForStmt [26:01:16, 06:45]
 - [ ] BreakStmt (loop context)
 - [ ] ContinueStmt (loop context)
 - [ ] Switch statement
@@ -221,7 +219,7 @@ Migration: After C++20 support is complete, deprecate these.
 ## 5. Testing & Milestones
 
 ### 5.1 Unit Tests
-- [x] fragile-clang: 131 tests passing (27 unit + 104 integration)
+- [x] fragile-clang: 135 tests passing (27 unit + 108 integration)
 - [x] fragile-rustc-driver: 6 tests passing
 - [x] fragile-runtime: Compiles
 
