@@ -212,7 +212,7 @@ See [PLAN_CPP20_MAKO.md](PLAN_CPP20_MAKO.md) for detailed plan.
     - [x] `vendor/mako/src/rrr/reactor/fiber_impl.cc` - **PARSED**: 4640 functions
     - [x] `vendor/mako/src/rrr/reactor/reactor.cc` - **PARSED**: 4640 functions
     - [-] `vendor/mako/src/rrr/reactor/quorum_event.cc` - Cross-namespace inheritance: `janus::QuorumEvent` inherits from `rrr::Event` via `using rrr::Event;`. Clang semantic error on `test()` call [26:01:16, 12:00]. See docs/dev/plan_fix_stub_headers_quorum_event.md
-  - [-] All mako module - **50/155 files parsing (32.3%)** [26:01:16, 21:00]
+  - [-] All mako module - **51/155 files parsing (32.9%)** [26:01:16, 22:00]
     - [x] `vendor/mako/src/mako/vec/coroutine.cpp` - **PARSED**: 40 functions
     - [x] `vendor/mako/src/mako/vec/occ.cpp` - **PARSED**: 41 functions
     - [x] `vendor/mako/src/mako/lib/memory.cc` - **PARSED**: 17 functions
@@ -274,6 +274,10 @@ See [PLAN_CPP20_MAKO.md](PLAN_CPP20_MAKO.md) for detailed plan.
     - [x] F.3.13 Added lz4.h, sys/uio.h, fcntl.h, getopt.h stubs for persist_test.cc (file not fully parsing due to mako internal deps) [26:01:16, 18:00]
     - [x] F.3.14 Fixed: string iterator constructor, set const_iterator, LZ4_create_size, tuple converting constructor [26:01:16, 21:00]
     - [x] F.3.15 Added: deque to vector transitive include, istringstream unsigned type operators [26:01:16, 21:00]
+    - [x] F.3.16 Fixed: timespec guard in time.h, sys/select.h includes time.h, arpa/inet.h includes netinet/in.h [26:01:16, 22:00]
+    - [x] F.3.17 Added: unordered_map iterator type aliases, numeric stub, is_object_v/is_signed_v/is_unsigned_v [26:01:16, 22:00]
+    - [x] F.3.18 Fixed: vector::assign SFINAE to exclude integers from iterator overload [26:01:16, 22:00]
+    - [x] `vendor/mako/src/mako/masstree/testrunner.cc` - **PARSED**: 107 functions [26:01:16, 22:00]
     - [-] `vendor/mako/src/mako/thread.cc` - Needs eRPC rpc.h header (external dependency)
     - [-] `vendor/mako/src/mako/persist_test.cc` - Has LZ4 stubs but needs one_way_post template from mako internals
     - [ ] Remaining files need: eRPC library stubs, more STL stubs
