@@ -73,6 +73,11 @@ fn main() {
         let mut include_paths = vec![];
         include_paths.push(mako_rrr_path.to_string_lossy().to_string());
         include_paths.push(mako_src_path.to_string_lossy().to_string());
+        // Add mako subdirectory for lib/xxx.h includes
+        let mako_mako_path = project_root.join("vendor/mako/src/mako");
+        if mako_mako_path.exists() {
+            include_paths.push(mako_mako_path.to_string_lossy().to_string());
+        }
         if rusty_cpp_path.exists() {
             include_paths.push(rusty_cpp_path.to_string_lossy().to_string());
         }

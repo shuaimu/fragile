@@ -16,11 +16,14 @@ using ptrdiff_t = long;
 // nullptr_t is already in cstdint
 using ::nullptr_t;
 
-// max_align_t
-struct max_align_t {
-    long long __ll;
-    long double __ld;
-};
+// max_align_t - use clang's include guard to avoid conflicts
+#ifndef __CLANG_MAX_ALIGN_T_DEFINED
+#define __CLANG_MAX_ALIGN_T_DEFINED
+typedef struct {
+    long long __clang_max_align_nonce1;
+    long double __clang_max_align_nonce2;
+} max_align_t;
+#endif
 
 // byte (C++17)
 enum class byte : unsigned char {};
