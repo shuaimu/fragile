@@ -389,10 +389,10 @@ Migration: After C++20 support is complete, deprecate these.
 
 Current status:
 - **rrr module**: 15/16 files parsing (94%) - blocked by quorum_event.cc cross-namespace inheritance
-- **mako module**: 63/155+ files parsing (~40%) - now includes memdb, deptran
-- **Total tests**: 267 passing (fragile-clang integration tests)
+- **mako module**: 74/155+ files parsing (~48%) - includes memdb, deptran, masstree-beta
+- **Total tests**: 313 passing (fragile-clang integration tests)
 
 Next steps:
 1. **rustc Integration (2.3)** - Requires user setup: `rustup component add rustc-dev --toolchain nightly`
-2. **Expand mako parsing** - Many remaining files need external library stubs (eRPC, YAML)
+2. **Expand mako parsing** - Many remaining files need external library stubs (eRPC, gflags, libevent, YAML)
 3. **Fix quorum_event.cc** - Cross-namespace inheritance issue with `janus::QuorumEvent : public rrr::Event`
