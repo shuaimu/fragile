@@ -394,5 +394,5 @@ Current status:
 
 Next steps:
 1. **rustc Integration (2.3)** - Requires user setup: `rustup component add rustc-dev --toolchain nightly`
-2. **Expand mako parsing** - Many remaining files need external library stubs (eRPC, gflags, libevent, YAML)
+2. **Expand mako parsing** - Many remaining files need external library stubs (eRPC, boost, YAML). Added stubs for: gflags, libevent, protobuf, gperftools, rocksdb
 3. **Fix quorum_event.cc** - Cross-namespace inheritance issue with `janus::QuorumEvent : public rrr::Event`
