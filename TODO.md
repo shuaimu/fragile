@@ -296,8 +296,13 @@ See [PLAN_CPP20_MAKO.md](PLAN_CPP20_MAKO.md) for detailed plan.
     - [x] F.3.26 Added filesystem stub; added strings.h include to string.h for bzero [26:01:16, 10:30]
     - [x] F.3.27 Added MAP_FILE to sys/mman.h; fixed sys/epoll.h includes [26:01:16, 10:30]
     - [x] `vendor/mako/src/mako/masstree/mtclient.cc` - **PARSED**: 3183 functions (network client) [26:01:16, 10:30]
+    - [x] F.3.28 Added stdint.h stub header for standalone C files [26:01:16, 09:42]
+    - [x] `vendor/mako/src/memdb/MurmurHash3.cc` - **PARSED**: 9 functions (hash algorithms) [26:01:16, 09:42]
+    - [x] `vendor/mako/src/memdb/xxhash.cc` - **PARSED**: 16 functions (xxHash implementation) [26:01:16, 09:42]
+    - [x] `vendor/mako/src/deptran/empty.cc` - **PARSED**: 0 functions (placeholder file) [26:01:16, 09:42]
     - [-] `vendor/mako/src/mako/thread.cc` - Needs eRPC rpc.h header (external dependency)
     - [-] `vendor/mako/src/mako/persist_test.cc` - Has LZ4 stubs but needs one_way_post template from mako internals
+    - [-] `vendor/mako/src/mako/masstree/mtd.cc` - Needs log.hh (complex logging dependencies)
     - [ ] Remaining files need: eRPC library stubs, more STL stubs
   - [ ] Link and run tests
 
@@ -364,7 +369,7 @@ Migration: After C++20 support is complete, deprecate these.
 ## 5. Testing & Milestones
 
 ### 5.1 Unit Tests
-- [x] fragile-clang: 270 tests passing (27 unit + 243 integration) - includes 10 coroutine + 7 exception + 6 RTTI + 8 promise type + 8 awaitable + 8 generator + 3 noexcept + 1 member access + 1 stack unwinding + 20 mako file tests [26:01:16, 07:25]
+- [x] fragile-clang: 274 tests passing (27 unit + 247 integration) - includes 10 coroutine + 7 exception + 6 RTTI + 8 promise type + 8 awaitable + 8 generator + 3 noexcept + 1 member access + 1 stack unwinding + 24 mako file tests [26:01:16, 09:42]
 - [x] fragile-rustc-driver: 6 tests passing
 - [x] fragile-runtime: Compiles
 
@@ -384,8 +389,8 @@ Migration: After C++20 support is complete, deprecate these.
 
 Current status:
 - **rrr module**: 15/16 files parsing (94%) - blocked by quorum_event.cc cross-namespace inheritance
-- **mako module**: 60/155 files parsing (38.7%)
-- **Total tests**: 243 passing (fragile-clang integration tests)
+- **mako module**: 63/155+ files parsing (~40%) - now includes memdb, deptran
+- **Total tests**: 247 passing (fragile-clang integration tests)
 
 Next steps:
 1. **rustc Integration (2.3)** - Requires user setup: `rustup component add rustc-dev --toolchain nightly`

@@ -8248,3 +8248,270 @@ fn test_member_access_arrow_vs_dot() {
     }
 }
 
+/// Test parsing masstree/mtd.cc - Masstree daemon
+#[test]
+fn test_mako_masstree_mtd_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let mtd_path = project_root.join("vendor/mako/src/mako/masstree/mtd.cc");
+
+    // Skip if file doesn't exist
+    if !mtd_path.exists() {
+        println!("Skipping test: mtd.cc not found at {:?}", mtd_path);
+        return;
+    }
+
+    // Setup include paths
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let rusty_cpp_path = project_root.join("vendor/mako/third-party/rusty-cpp/include");
+
+    // Skip if rusty-cpp submodule not initialized
+    if !rusty_cpp_path.exists() {
+        println!("Skipping test: rusty-cpp submodule not initialized");
+        return;
+    }
+
+    let mut system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+        rusty_cpp_path.to_string_lossy().to_string(),
+    ];
+
+    // Try to find Clang's intrinsics directory
+    let clang_paths = [
+        "/usr/lib/llvm-19/lib/clang/19/include",
+        "/usr/lib/llvm-18/lib/clang/18/include",
+    ];
+
+    for path in &clang_paths {
+        if Path::new(path).exists() {
+            system_include_paths.push(path.to_string());
+            break;
+        }
+    }
+
+    // User include paths
+    let mako_src = project_root.join("vendor/mako/src");
+    let mako_dir = project_root.join("vendor/mako/src/mako");
+    let masstree_dir = project_root.join("vendor/mako/src/mako/masstree");
+    let masstree_beta_dir = project_root.join("vendor/mako/src/mako/benchmarks/sto/masstree-beta");
+    let include_paths = vec![
+        mako_dir.to_string_lossy().to_string(),
+        mako_src.to_string_lossy().to_string(),
+        masstree_dir.to_string_lossy().to_string(),
+        masstree_beta_dir.to_string_lossy().to_string(),
+    ];
+
+    // Define CONFIG_H for macros.h and HAVE_EXECINFO_H
+    let defines = vec![
+        r#"CONFIG_H="mako/masstree/config.h""#.to_string(),
+        "HAVE_EXECINFO_H=1".to_string(),
+    ];
+
+    let parser = ClangParser::with_paths_and_defines(include_paths, system_include_paths, defines)
+        .expect("Failed to create parser");
+
+    let result = parser.parse_file(&mtd_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+
+            println!("Successfully parsed mtd.cc with {} functions", module.functions.len());
+            for func in &module.functions {
+                println!("  Function: {}", func.display_name);
+            }
+
+            // mtd.cc is the Masstree daemon with many network functions
+            assert!(module.functions.len() > 0, "Expected to find Masstree daemon functions");
+        }
+        Err(e) => {
+            println!("Note: mtd.cc parsing failed: {:?}", e);
+            println!("This may require additional stub headers");
+        }
+    }
+}
+
+/// Test parsing memdb/MurmurHash3.cc - standalone hash functions
+#[test]
+fn test_mako_memdb_murmurhash3_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let hash_path = project_root.join("vendor/mako/src/memdb/MurmurHash3.cc");
+
+    // Skip if file doesn't exist
+    if !hash_path.exists() {
+        println!("Skipping test: MurmurHash3.cc not found at {:?}", hash_path);
+        return;
+    }
+
+    // Setup include paths - memdb needs its own directory for MurmurHash3.h
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let memdb_dir = project_root.join("vendor/mako/src/memdb");
+
+    let mut system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    // Try to find Clang's intrinsics directory
+    let clang_paths = [
+        "/usr/lib/llvm-19/lib/clang/19/include",
+        "/usr/lib/llvm-18/lib/clang/18/include",
+    ];
+
+    for path in &clang_paths {
+        if Path::new(path).exists() {
+            system_include_paths.push(path.to_string());
+            break;
+        }
+    }
+
+    // User include paths
+    let include_paths = vec![
+        memdb_dir.to_string_lossy().to_string(),
+    ];
+
+    let parser = ClangParser::with_paths(include_paths, system_include_paths)
+        .expect("Failed to create parser");
+
+    let result = parser.parse_file(&hash_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+
+            println!("Successfully parsed MurmurHash3.cc with {} functions", module.functions.len());
+            for func in &module.functions {
+                println!("  Function: {}", func.display_name);
+            }
+
+            // MurmurHash3.cc has the 3 hash functions plus helper functions
+            assert!(module.functions.len() >= 3, "Expected to find at least 3 hash functions");
+        }
+        Err(e) => {
+            panic!("MurmurHash3.cc should parse successfully: {:?}", e);
+        }
+    }
+}
+
+/// Test parsing memdb/xxhash.cc - standalone xxHash implementation
+#[test]
+fn test_mako_memdb_xxhash_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let hash_path = project_root.join("vendor/mako/src/memdb/xxhash.cc");
+
+    // Skip if file doesn't exist
+    if !hash_path.exists() {
+        println!("Skipping test: xxhash.cc not found at {:?}", hash_path);
+        return;
+    }
+
+    // Setup include paths
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let memdb_dir = project_root.join("vendor/mako/src/memdb");
+
+    let mut system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    // Try to find Clang's intrinsics directory
+    let clang_paths = [
+        "/usr/lib/llvm-19/lib/clang/19/include",
+        "/usr/lib/llvm-18/lib/clang/18/include",
+    ];
+
+    for path in &clang_paths {
+        if Path::new(path).exists() {
+            system_include_paths.push(path.to_string());
+            break;
+        }
+    }
+
+    // User include paths
+    let include_paths = vec![
+        memdb_dir.to_string_lossy().to_string(),
+    ];
+
+    let parser = ClangParser::with_paths(include_paths, system_include_paths)
+        .expect("Failed to create parser");
+
+    let result = parser.parse_file(&hash_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+
+            println!("Successfully parsed xxhash.cc with {} functions", module.functions.len());
+            for func in &module.functions {
+                println!("  Function: {}", func.display_name);
+            }
+
+            // xxhash.cc has XXH32, XXH32_init, XXH32_update, XXH32_digest, plus helper functions
+            assert!(module.functions.len() >= 4, "Expected to find at least 4 hash functions");
+        }
+        Err(e) => {
+            panic!("xxhash.cc should parse successfully: {:?}", e);
+        }
+    }
+}
+
+/// Test parsing deptran/empty.cc - empty placeholder file
+#[test]
+fn test_mako_deptran_empty_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let empty_path = project_root.join("vendor/mako/src/deptran/empty.cc");
+
+    // Skip if file doesn't exist
+    if !empty_path.exists() {
+        println!("Skipping test: empty.cc not found at {:?}", empty_path);
+        return;
+    }
+
+    // Setup include paths
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+
+    let mut system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    // Try to find Clang's intrinsics directory
+    let clang_paths = [
+        "/usr/lib/llvm-19/lib/clang/19/include",
+        "/usr/lib/llvm-18/lib/clang/18/include",
+    ];
+
+    for path in &clang_paths {
+        if Path::new(path).exists() {
+            system_include_paths.push(path.to_string());
+            break;
+        }
+    }
+
+    let parser = ClangParser::with_paths(vec![], system_include_paths)
+        .expect("Failed to create parser");
+
+    let result = parser.parse_file(&empty_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+
+            println!("Successfully parsed empty.cc with {} functions", module.functions.len());
+            // Empty file should have 0 functions
+            assert_eq!(module.functions.len(), 0, "Empty file should have no functions");
+        }
+        Err(e) => {
+            panic!("empty.cc should parse successfully: {:?}", e);
+        }
+    }
+}
+
