@@ -105,10 +105,72 @@ impl Default for FragileDriver {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::stubs::generate_rust_stubs;
+    use fragile_clang::{CppFunction, CppType, MirBody};
 
     #[test]
     fn test_driver_creation() {
         let driver = FragileDriver::new();
         assert_eq!(driver.mir_registry.function_count(), 0);
+    }
+
+    #[test]
+    fn test_driver_register_module() {
+        let driver = FragileDriver::new();
+
+        // Create a mock C++ module with an add function
+        let mut module = CppModule::new();
+        module.functions.push(CppFunction {
+            mangled_name: "_Z3addii".to_string(),
+            display_name: "add".to_string(),
+            namespace: Vec::new(),
+            params: vec![
+                ("a".to_string(), CppType::int()),
+                ("b".to_string(), CppType::int()),
+            ],
+            return_type: CppType::int(),
+            is_noexcept: false,
+            mir_body: MirBody::new(),
+        });
+
+        driver.register_cpp_module(&module);
+
+        assert_eq!(driver.mir_registry.function_count(), 1);
+        assert!(driver.mir_registry.is_cpp_function("_Z3addii"));
+    }
+
+    #[test]
+    fn test_driver_pipeline_without_rustc() {
+        // Test the full pipeline without actually invoking rustc
+        let driver = FragileDriver::new();
+
+        // Create a C++ module
+        let mut module = CppModule::new();
+        module.functions.push(CppFunction {
+            mangled_name: "_Z3addii".to_string(),
+            display_name: "add".to_string(),
+            namespace: Vec::new(),
+            params: vec![
+                ("a".to_string(), CppType::int()),
+                ("b".to_string(), CppType::int()),
+            ],
+            return_type: CppType::int(),
+            is_noexcept: false,
+            mir_body: MirBody::new(),
+        });
+
+        // Register the module
+        driver.register_cpp_module(&module);
+
+        // Generate stubs
+        let stubs = generate_rust_stubs(&[module]);
+        assert!(stubs.contains("extern \"C\""));
+        assert!(stubs.contains("add"));
+
+        // The compile step would require rustc-integration feature
+        // For now, verify the registry is populated
+        assert_eq!(driver.mir_registry.function_count(), 1);
+        let names = driver.mir_registry.function_names();
+        assert!(names.contains(&"_Z3addii".to_string()));
     }
 }
