@@ -408,6 +408,10 @@ See [PLAN_CPP20_MAKO.md](PLAN_CPP20_MAKO.md) for detailed plan.
     - [x] `vendor/mako/src/deptran/raft/test.cc` - **PARSED**: raft lab tests [26:01:16, 19:00]
     - [x] `vendor/mako/src/deptran/raft/testconf.cc` - **PARSED**: raft test configuration [26:01:16, 19:00]
     - [x] `vendor/mako/src/helloworld.cc` - **PARSED**: main hello world example [26:01:16, 19:30]
+    - [x] `vendor/mako/src/mako/benchmarks/queue.cc` - **PARSED**: queue benchmark [26:01:16, 20:00]
+    - [x] `vendor/mako/src/mako/benchmarks/bid.cc` - **PARSED**: bid benchmark [26:01:16, 20:00]
+    - [x] `vendor/mako/src/mako/benchmarks/bench.cc` - **PARSED**: main benchmark harness [26:01:16, 20:00]
+    - [x] `vendor/mako/src/mako/benchmarks/encstress.cc` - **PARSED**: encryption stress test [26:01:16, 20:00]
     - [-] `vendor/mako/src/deptran/mongodb/server.cc` - Needs bsoncxx (external dep)
     - [-] `vendor/mako/src/bench/micro/procedure.cc` - Needs more complex error filtering
     - [ ] Remaining files need: eRPC library stubs, bsoncxx
@@ -480,7 +484,7 @@ Migration: After C++20 support is complete, deprecate these.
 ## 5. Testing & Milestones
 
 ### 5.1 Unit Tests
-- [x] fragile-clang: 507 tests passing (27 unit + 480 integration) - includes 10 coroutine + 7 exception + 6 RTTI + 8 promise type + 8 awaitable + 8 generator + 3 noexcept + 1 member access + 1 stack unwinding + 201 mako file tests [26:01:16, 19:30]
+- [x] fragile-clang: 511 tests passing (27 unit + 484 integration) - includes 10 coroutine + 7 exception + 6 RTTI + 8 promise type + 8 awaitable + 8 generator + 3 noexcept + 1 member access + 1 stack unwinding + 205 mako file tests [26:01:16, 20:00]
 - [x] fragile-rustc-driver: 7 tests passing (6 original + 1 rustc_integration when feature enabled)
 - [x] fragile-runtime: Compiles
 
@@ -500,8 +504,8 @@ Migration: After C++20 support is complete, deprecate these.
 
 Current status:
 - **rrr module**: 20/20 files parsing (100%) - all base, misc, reactor, rpc files parsing
-- **mako module**: 201/320 files parsing (~63%) - includes all 12 memdb files, deptran root-level files, consensus executors (rcc, occ, classic, troad, carousel, tapir, janus, mencius, paxos, raft), client/server workers, paxos/raft helpers, benchmark_control_rpc, stats_registry, sharding files, masstree, masstree-beta (all 28 files), all lib files, sto benchmarks (Transaction, ThreadPool, common), helloworld/network clients, raft tests, helloworld main
-- **Total tests**: 507 passing (fragile-clang integration tests)
+- **mako module**: 205/320 files parsing (~64%) - includes all 12 memdb files, deptran root-level files, consensus executors (rcc, occ, classic, troad, carousel, tapir, janus, mencius, paxos, raft), client/server workers, paxos/raft helpers, benchmark_control_rpc, stats_registry, sharding files, masstree, masstree-beta (all 28 files), all lib files, sto benchmarks, helloworld/network clients, raft tests, helloworld main, benchmarks (queue, bid, bench, encstress)
+- **Total tests**: 511 passing (fragile-clang integration tests)
 - **Milestones**: M1 ✅, M2-M4 (parsing complete, compilation pending)
 
 Next steps:

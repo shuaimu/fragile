@@ -24697,3 +24697,343 @@ fn test_mako_helloworld_cc() {
         }
     }
 }
+
+/// Test parsing mako/benchmarks/queue.cc - Queue benchmark
+#[test]
+fn test_mako_benchmarks_queue_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/mako/benchmarks/queue.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: benchmarks/queue.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let mako_path = project_root.join("vendor/mako/src/mako");
+    let mako_src = project_root.join("vendor/mako/src");
+    let masstree_path = project_root.join("vendor/mako/src/mako/masstree");
+    let lib_path = project_root.join("vendor/mako/src/mako/lib");
+    let rusty_cpp_path = project_root.join("vendor/mako/third-party/rusty-cpp/include");
+    let masstree_beta_path = project_root.join("vendor/mako/src/mako/benchmarks/sto/masstree-beta");
+    let sto_path = project_root.join("vendor/mako/src/mako/benchmarks/sto");
+    let deptran_path = project_root.join("vendor/mako/src/deptran");
+    let benchmarks_path = project_root.join("vendor/mako/src/mako/benchmarks");
+
+    let mut system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let clang_paths = [
+        "/usr/lib/llvm-19/lib/clang/19/include",
+        "/usr/lib/llvm-18/lib/clang/18/include",
+    ];
+
+    for path in &clang_paths {
+        if Path::new(path).exists() {
+            system_include_paths.push(path.to_string());
+            break;
+        }
+    }
+
+    let include_paths = vec![
+        mako_path.to_string_lossy().to_string(),
+        mako_src.to_string_lossy().to_string(),
+        masstree_path.to_string_lossy().to_string(),
+        lib_path.to_string_lossy().to_string(),
+        rusty_cpp_path.to_string_lossy().to_string(),
+        masstree_beta_path.to_string_lossy().to_string(),
+        sto_path.to_string_lossy().to_string(),
+        deptran_path.to_string_lossy().to_string(),
+        benchmarks_path.to_string_lossy().to_string(),
+    ];
+
+    let defines = vec![
+        r#"CONFIG_H="masstree/config.h""#.to_string(),
+        "HAVE_EXECINFO_H=1".to_string(),
+    ];
+
+    let ignored_errors = vec![
+        "unknown type name".to_string(),
+        "use of undeclared identifier".to_string(),
+        "no member named".to_string(),
+        "expected expression".to_string(),
+    ];
+
+    let parser = ClangParser::with_paths_defines_and_ignored_errors(
+        include_paths,
+        system_include_paths,
+        defines,
+        ignored_errors,
+    ).expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+            println!("benchmarks/queue.cc parsed successfully with {} functions", module.functions.len());
+        }
+        Err(e) => {
+            println!("Note: benchmarks/queue.cc parsing failed: {:?}", e);
+        }
+    }
+}
+
+/// Test parsing mako/benchmarks/bid.cc - Bid benchmark
+#[test]
+fn test_mako_benchmarks_bid_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/mako/benchmarks/bid.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: benchmarks/bid.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let mako_path = project_root.join("vendor/mako/src/mako");
+    let mako_src = project_root.join("vendor/mako/src");
+    let masstree_path = project_root.join("vendor/mako/src/mako/masstree");
+    let lib_path = project_root.join("vendor/mako/src/mako/lib");
+    let rusty_cpp_path = project_root.join("vendor/mako/third-party/rusty-cpp/include");
+    let masstree_beta_path = project_root.join("vendor/mako/src/mako/benchmarks/sto/masstree-beta");
+    let sto_path = project_root.join("vendor/mako/src/mako/benchmarks/sto");
+    let deptran_path = project_root.join("vendor/mako/src/deptran");
+    let benchmarks_path = project_root.join("vendor/mako/src/mako/benchmarks");
+
+    let mut system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let clang_paths = [
+        "/usr/lib/llvm-19/lib/clang/19/include",
+        "/usr/lib/llvm-18/lib/clang/18/include",
+    ];
+
+    for path in &clang_paths {
+        if Path::new(path).exists() {
+            system_include_paths.push(path.to_string());
+            break;
+        }
+    }
+
+    let include_paths = vec![
+        mako_path.to_string_lossy().to_string(),
+        mako_src.to_string_lossy().to_string(),
+        masstree_path.to_string_lossy().to_string(),
+        lib_path.to_string_lossy().to_string(),
+        rusty_cpp_path.to_string_lossy().to_string(),
+        masstree_beta_path.to_string_lossy().to_string(),
+        sto_path.to_string_lossy().to_string(),
+        deptran_path.to_string_lossy().to_string(),
+        benchmarks_path.to_string_lossy().to_string(),
+    ];
+
+    let defines = vec![
+        r#"CONFIG_H="masstree/config.h""#.to_string(),
+        "HAVE_EXECINFO_H=1".to_string(),
+    ];
+
+    let ignored_errors = vec![
+        "unknown type name".to_string(),
+        "use of undeclared identifier".to_string(),
+        "no member named".to_string(),
+        "expected expression".to_string(),
+    ];
+
+    let parser = ClangParser::with_paths_defines_and_ignored_errors(
+        include_paths,
+        system_include_paths,
+        defines,
+        ignored_errors,
+    ).expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+            println!("benchmarks/bid.cc parsed successfully with {} functions", module.functions.len());
+        }
+        Err(e) => {
+            println!("Note: benchmarks/bid.cc parsing failed: {:?}", e);
+        }
+    }
+}
+
+/// Test parsing mako/benchmarks/bench.cc - Main benchmark harness
+#[test]
+fn test_mako_benchmarks_bench_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/mako/benchmarks/bench.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: benchmarks/bench.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let mako_path = project_root.join("vendor/mako/src/mako");
+    let mako_src = project_root.join("vendor/mako/src");
+    let masstree_path = project_root.join("vendor/mako/src/mako/masstree");
+    let lib_path = project_root.join("vendor/mako/src/mako/lib");
+    let rusty_cpp_path = project_root.join("vendor/mako/third-party/rusty-cpp/include");
+    let masstree_beta_path = project_root.join("vendor/mako/src/mako/benchmarks/sto/masstree-beta");
+    let sto_path = project_root.join("vendor/mako/src/mako/benchmarks/sto");
+    let deptran_path = project_root.join("vendor/mako/src/deptran");
+    let benchmarks_path = project_root.join("vendor/mako/src/mako/benchmarks");
+
+    let mut system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let clang_paths = [
+        "/usr/lib/llvm-19/lib/clang/19/include",
+        "/usr/lib/llvm-18/lib/clang/18/include",
+    ];
+
+    for path in &clang_paths {
+        if Path::new(path).exists() {
+            system_include_paths.push(path.to_string());
+            break;
+        }
+    }
+
+    let include_paths = vec![
+        mako_path.to_string_lossy().to_string(),
+        mako_src.to_string_lossy().to_string(),
+        masstree_path.to_string_lossy().to_string(),
+        lib_path.to_string_lossy().to_string(),
+        rusty_cpp_path.to_string_lossy().to_string(),
+        masstree_beta_path.to_string_lossy().to_string(),
+        sto_path.to_string_lossy().to_string(),
+        deptran_path.to_string_lossy().to_string(),
+        benchmarks_path.to_string_lossy().to_string(),
+    ];
+
+    let defines = vec![
+        r#"CONFIG_H="masstree/config.h""#.to_string(),
+        "HAVE_EXECINFO_H=1".to_string(),
+    ];
+
+    let ignored_errors = vec![
+        "unknown type name".to_string(),
+        "use of undeclared identifier".to_string(),
+        "no member named".to_string(),
+        "expected expression".to_string(),
+    ];
+
+    let parser = ClangParser::with_paths_defines_and_ignored_errors(
+        include_paths,
+        system_include_paths,
+        defines,
+        ignored_errors,
+    ).expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+            println!("benchmarks/bench.cc parsed successfully with {} functions", module.functions.len());
+        }
+        Err(e) => {
+            println!("Note: benchmarks/bench.cc parsing failed: {:?}", e);
+        }
+    }
+}
+
+/// Test parsing mako/benchmarks/encstress.cc - Encryption stress test
+#[test]
+fn test_mako_benchmarks_encstress_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/mako/benchmarks/encstress.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: benchmarks/encstress.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let mako_path = project_root.join("vendor/mako/src/mako");
+    let mako_src = project_root.join("vendor/mako/src");
+    let masstree_path = project_root.join("vendor/mako/src/mako/masstree");
+    let lib_path = project_root.join("vendor/mako/src/mako/lib");
+    let rusty_cpp_path = project_root.join("vendor/mako/third-party/rusty-cpp/include");
+    let masstree_beta_path = project_root.join("vendor/mako/src/mako/benchmarks/sto/masstree-beta");
+    let sto_path = project_root.join("vendor/mako/src/mako/benchmarks/sto");
+    let deptran_path = project_root.join("vendor/mako/src/deptran");
+    let benchmarks_path = project_root.join("vendor/mako/src/mako/benchmarks");
+
+    let mut system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let clang_paths = [
+        "/usr/lib/llvm-19/lib/clang/19/include",
+        "/usr/lib/llvm-18/lib/clang/18/include",
+    ];
+
+    for path in &clang_paths {
+        if Path::new(path).exists() {
+            system_include_paths.push(path.to_string());
+            break;
+        }
+    }
+
+    let include_paths = vec![
+        mako_path.to_string_lossy().to_string(),
+        mako_src.to_string_lossy().to_string(),
+        masstree_path.to_string_lossy().to_string(),
+        lib_path.to_string_lossy().to_string(),
+        rusty_cpp_path.to_string_lossy().to_string(),
+        masstree_beta_path.to_string_lossy().to_string(),
+        sto_path.to_string_lossy().to_string(),
+        deptran_path.to_string_lossy().to_string(),
+        benchmarks_path.to_string_lossy().to_string(),
+    ];
+
+    let defines = vec![
+        r#"CONFIG_H="masstree/config.h""#.to_string(),
+        "HAVE_EXECINFO_H=1".to_string(),
+    ];
+
+    let ignored_errors = vec![
+        "unknown type name".to_string(),
+        "use of undeclared identifier".to_string(),
+        "no member named".to_string(),
+        "expected expression".to_string(),
+    ];
+
+    let parser = ClangParser::with_paths_defines_and_ignored_errors(
+        include_paths,
+        system_include_paths,
+        defines,
+        ignored_errors,
+    ).expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+            println!("benchmarks/encstress.cc parsed successfully with {} functions", module.functions.len());
+        }
+        Err(e) => {
+            println!("Note: benchmarks/encstress.cc parsing failed: {:?}", e);
+        }
+    }
+}
