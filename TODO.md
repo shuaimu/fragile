@@ -36,7 +36,7 @@ See [PLAN_CPP20_MAKO.md](PLAN_CPP20_MAKO.md) for detailed plan.
 - [-] **A.1 Namespaces**
   - [x] `namespace foo { }` declarations [26:01:15, 23:35] ([docs/dev/plan_namespace_declarations.md](docs/dev/plan_namespace_declarations.md))
   - [x] Nested namespaces `foo::bar` [26:01:15, 23:35] (included in above)
-  - [ ] `using namespace`
+  - [x] `using namespace` [26:01:15, 23:41] ([docs/dev/plan_using_namespace.md](docs/dev/plan_using_namespace.md))
   - [ ] Name resolution
 - [ ] **A.2 Classes Complete**
   - [x] Field declarations
@@ -214,7 +214,7 @@ Migration: After C++20 support is complete, deprecate these.
 ## 5. Testing & Milestones
 
 ### 5.1 Unit Tests
-- [x] fragile-clang: 12 tests passing (4 unit + 8 integration)
+- [x] fragile-clang: 17 tests passing (6 unit + 11 integration)
 - [x] fragile-rustc-driver: 5 tests passing
 - [x] fragile-runtime: Compiles
 

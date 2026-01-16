@@ -276,6 +276,19 @@ impl ClangParser {
                     ClangNodeKind::NamespaceDecl { name: name_opt }
                 }
 
+                clang_sys::CXCursor_UsingDirective => {
+                    // For UsingDirective, the child nodes contain a NamespaceRef
+                    // that points to the nominated namespace
+                    let namespace = self.get_using_directive_namespace(cursor);
+                    ClangNodeKind::UsingDirective { namespace }
+                }
+
+                clang_sys::CXCursor_UsingDeclaration => {
+                    // Get the qualified name from the using declaration
+                    let qualified_name = self.get_qualified_name(cursor);
+                    ClangNodeKind::UsingDeclaration { qualified_name }
+                }
+
                 // Statements
                 clang_sys::CXCursor_CompoundStmt => ClangNodeKind::CompoundStmt,
                 clang_sys::CXCursor_ReturnStmt => ClangNodeKind::ReturnStmt,
@@ -486,6 +499,116 @@ impl ClangParser {
         // For now, default to Minus - will be fixed in Phase 2
         UnaryOp::Minus
     }
+
+    /// Get the namespace path from a UsingDirective cursor by examining its children.
+    fn get_using_directive_namespace(&self, cursor: clang_sys::CXCursor) -> Vec<String> {
+        unsafe {
+            // The using directive has NamespaceRef children pointing to the namespace(s)
+            // We need to visit children and collect namespace names
+            let mut namespace_path = Vec::new();
+            let namespace_path_ptr: *mut Vec<String> = &mut namespace_path;
+
+            extern "C" fn namespace_visitor(
+                child: clang_sys::CXCursor,
+                _parent: clang_sys::CXCursor,
+                data: clang_sys::CXClientData,
+            ) -> clang_sys::CXChildVisitResult {
+                unsafe {
+                    let path = &mut *(data as *mut Vec<String>);
+                    let kind = clang_sys::clang_getCursorKind(child);
+
+                    if kind == clang_sys::CXCursor_NamespaceRef {
+                        let name = cursor_spelling(child);
+                        if !name.is_empty() {
+                            path.push(name);
+                        }
+                    }
+
+                    clang_sys::CXChildVisit_Continue
+                }
+            }
+
+            clang_sys::clang_visitChildren(cursor, namespace_visitor, namespace_path_ptr as clang_sys::CXClientData);
+
+            namespace_path
+        }
+    }
+
+    /// Get the namespace path from a UsingDirective cursor.
+    #[allow(dead_code)]
+    fn get_namespace_path(&self, cursor: clang_sys::CXCursor) -> Vec<String> {
+        unsafe {
+            // Get the nominated namespace from the using directive
+            let referenced = clang_sys::clang_getCursorReferenced(cursor);
+            if clang_sys::clang_Cursor_isNull(referenced) != 0 {
+                return Vec::new();
+            }
+
+            // Build the namespace path by traversing semantic parents
+            self.build_namespace_path(referenced)
+        }
+    }
+
+    /// Get the qualified name from a UsingDeclaration cursor.
+    fn get_qualified_name(&self, cursor: clang_sys::CXCursor) -> Vec<String> {
+        unsafe {
+            // Get the referenced declaration
+            let referenced = clang_sys::clang_getCursorReferenced(cursor);
+            if clang_sys::clang_Cursor_isNull(referenced) != 0 {
+                return Vec::new();
+            }
+
+            // Build the qualified name path
+            self.build_namespace_path(referenced)
+        }
+    }
+
+    /// Build a namespace path by traversing semantic parents.
+    /// Returns the full qualified path for the given cursor.
+    fn build_namespace_path(&self, cursor: clang_sys::CXCursor) -> Vec<String> {
+        unsafe {
+            let mut path = Vec::new();
+            let mut current = cursor;
+
+            // First, add the cursor itself if it's a namespace
+            let kind = clang_sys::clang_getCursorKind(current);
+            if kind == clang_sys::CXCursor_Namespace {
+                let name = cursor_spelling(current);
+                if !name.is_empty() {
+                    path.push(name);
+                }
+            }
+
+            // Traverse up through parents to build the full path
+            loop {
+                // Move to parent
+                let parent = clang_sys::clang_getCursorSemanticParent(current);
+                let parent_kind = clang_sys::clang_getCursorKind(parent);
+
+                // Stop at translation unit or if parent is same as current
+                if parent_kind == clang_sys::CXCursor_TranslationUnit
+                    || clang_sys::clang_Cursor_isNull(parent) != 0
+                    || clang_sys::clang_equalCursors(current, parent) != 0
+                {
+                    break;
+                }
+
+                // Add parent namespace to path
+                if parent_kind == clang_sys::CXCursor_Namespace {
+                    let name = cursor_spelling(parent);
+                    if !name.is_empty() {
+                        path.push(name);
+                    }
+                }
+
+                current = parent;
+            }
+
+            // Reverse to get outermost first (outer::inner -> ["outer", "inner"])
+            path.reverse();
+            path
+        }
+    }
 }
 
 impl Drop for ClangParser {
@@ -608,6 +731,69 @@ mod tests {
                 assert!(name.is_none(), "Expected anonymous namespace");
             }
             _ => panic!("Expected NamespaceDecl"),
+        }
+    }
+
+    #[test]
+    fn test_parse_using_namespace() {
+        let parser = ClangParser::new().unwrap();
+        let ast = parser
+            .parse_string(
+                r#"
+                namespace foo {
+                    int x;
+                }
+                using namespace foo;
+                "#,
+                "test.cpp",
+            )
+            .unwrap();
+
+        // Should have namespace and using directive as children
+        assert!(ast.translation_unit.children.len() >= 2);
+
+        // Find the using directive
+        let using_dir = ast.translation_unit.children.iter().find(|c| {
+            matches!(&c.kind, ClangNodeKind::UsingDirective { .. })
+        });
+
+        assert!(using_dir.is_some(), "Expected UsingDirective");
+        match &using_dir.unwrap().kind {
+            ClangNodeKind::UsingDirective { namespace } => {
+                assert_eq!(namespace, &vec!["foo"]);
+            }
+            _ => panic!("Expected UsingDirective"),
+        }
+    }
+
+    #[test]
+    fn test_parse_using_nested_namespace() {
+        let parser = ClangParser::new().unwrap();
+        let ast = parser
+            .parse_string(
+                r#"
+                namespace outer {
+                    namespace inner {
+                        int x;
+                    }
+                }
+                using namespace outer::inner;
+                "#,
+                "test.cpp",
+            )
+            .unwrap();
+
+        // Find the using directive
+        let using_dir = ast.translation_unit.children.iter().find(|c| {
+            matches!(&c.kind, ClangNodeKind::UsingDirective { .. })
+        });
+
+        assert!(using_dir.is_some(), "Expected UsingDirective");
+        match &using_dir.unwrap().kind {
+            ClangNodeKind::UsingDirective { namespace } => {
+                assert_eq!(namespace, &vec!["outer", "inner"]);
+            }
+            _ => panic!("Expected UsingDirective"),
         }
     }
 }

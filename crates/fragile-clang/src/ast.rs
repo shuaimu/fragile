@@ -72,6 +72,16 @@ pub enum ClangNodeKind {
         /// Namespace name (None for anonymous namespaces)
         name: Option<String>,
     },
+    /// Using namespace directive (e.g., `using namespace std;`)
+    UsingDirective {
+        /// The namespace path being imported (e.g., ["std"] or ["rrr", "base"])
+        namespace: Vec<String>,
+    },
+    /// Using declaration (e.g., `using std::cout;`)
+    UsingDeclaration {
+        /// The fully qualified name being imported
+        qualified_name: Vec<String>,
+    },
 
     // Statements
     /// Compound statement (block)

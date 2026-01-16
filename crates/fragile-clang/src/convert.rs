@@ -5,6 +5,7 @@ use crate::types::CppType;
 use crate::{
     CppExtern, CppFunction, CppModule, CppStruct, MirBasicBlock, MirBinOp, MirBody, MirConstant,
     MirLocal, MirOperand, MirPlace, MirRvalue, MirStatement, MirTerminator, MirUnaryOp,
+    UsingDeclaration, UsingDirective,
 };
 use miette::Result;
 
@@ -160,6 +161,18 @@ impl MirConverter {
             } => {
                 let struct_def = self.convert_struct(node, name, namespace_context)?;
                 module.structs.push(struct_def);
+            }
+            ClangNodeKind::UsingDirective { namespace } => {
+                module.using_directives.push(UsingDirective {
+                    namespace: namespace.clone(),
+                    scope: namespace_context.to_vec(),
+                });
+            }
+            ClangNodeKind::UsingDeclaration { qualified_name } => {
+                module.using_declarations.push(UsingDeclaration {
+                    qualified_name: qualified_name.clone(),
+                    scope: namespace_context.to_vec(),
+                });
             }
             _ => {
                 // Skip other declarations for now

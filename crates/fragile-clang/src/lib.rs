@@ -43,6 +43,28 @@ pub struct CppModule {
     pub structs: Vec<CppStruct>,
     /// Extern declarations (no body)
     pub externs: Vec<CppExtern>,
+    /// Using namespace directives (for name resolution)
+    pub using_directives: Vec<UsingDirective>,
+    /// Using declarations (specific name imports)
+    pub using_declarations: Vec<UsingDeclaration>,
+}
+
+/// A using namespace directive.
+#[derive(Debug, Clone)]
+pub struct UsingDirective {
+    /// The namespace path being imported (e.g., ["std"] or ["rrr", "base"])
+    pub namespace: Vec<String>,
+    /// Scope where this directive appears (e.g., ["outer"] if inside namespace outer)
+    pub scope: Vec<String>,
+}
+
+/// A using declaration for a specific name.
+#[derive(Debug, Clone)]
+pub struct UsingDeclaration {
+    /// The fully qualified name being imported (e.g., ["std", "cout"])
+    pub qualified_name: Vec<String>,
+    /// Scope where this declaration appears
+    pub scope: Vec<String>,
 }
 
 impl CppModule {
@@ -51,6 +73,8 @@ impl CppModule {
             functions: Vec::new(),
             structs: Vec::new(),
             externs: Vec::new(),
+            using_directives: Vec::new(),
+            using_declarations: Vec::new(),
         }
     }
 }

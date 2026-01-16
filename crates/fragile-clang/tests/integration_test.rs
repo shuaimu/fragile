@@ -229,3 +229,75 @@ fn test_anonymous_namespace() {
     // Anonymous namespace results in empty namespace path
     assert!(func.namespace.is_empty());
 }
+
+/// Test using namespace directive conversion.
+#[test]
+fn test_using_namespace_conversion() {
+    let parser = ClangParser::new().expect("Failed to create parser");
+
+    let source = r#"
+        namespace foo {
+            int x;
+        }
+        using namespace foo;
+    "#;
+
+    let ast = parser.parse_string(source, "using.cpp").expect("Failed to parse");
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    assert_eq!(module.using_directives.len(), 1);
+
+    let using_dir = &module.using_directives[0];
+    assert_eq!(using_dir.namespace, vec!["foo"]);
+    assert!(using_dir.scope.is_empty()); // Global scope
+}
+
+/// Test using namespace in nested scope.
+#[test]
+fn test_using_namespace_in_scope() {
+    let parser = ClangParser::new().expect("Failed to create parser");
+
+    let source = r#"
+        namespace foo {
+            int x;
+        }
+        namespace bar {
+            using namespace foo;
+        }
+    "#;
+
+    let ast = parser.parse_string(source, "using_scope.cpp").expect("Failed to parse");
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    assert_eq!(module.using_directives.len(), 1);
+
+    let using_dir = &module.using_directives[0];
+    assert_eq!(using_dir.namespace, vec!["foo"]);
+    assert_eq!(using_dir.scope, vec!["bar"]); // Inside namespace bar
+}
+
+/// Test using nested namespace.
+#[test]
+fn test_using_nested_namespace_conversion() {
+    let parser = ClangParser::new().expect("Failed to create parser");
+
+    let source = r#"
+        namespace outer {
+            namespace inner {
+                int x;
+            }
+        }
+        using namespace outer::inner;
+    "#;
+
+    let ast = parser.parse_string(source, "using_nested.cpp").expect("Failed to parse");
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    assert_eq!(module.using_directives.len(), 1);
+
+    let using_dir = &module.using_directives[0];
+    assert_eq!(using_dir.namespace, vec!["outer", "inner"]);
+}
