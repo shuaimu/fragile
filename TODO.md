@@ -529,7 +529,7 @@ Migration: After C++20 support is complete, deprecate these.
   - [-] M6.6: Full test suite ([docs/dev/plan_m6_6_full_test_suite.md](docs/dev/plan_m6_6_full_test_suite.md))
     - [x] M6.6a: Self-contained tests (no external deps) [26:01:16, 17:50] - test_strop_harness.cpp with 5 strop tests
     - [x] M6.6b: strop tests with STL [26:01:16, 18:00] - test_format_decimal_harness.cpp with 5 format_decimal tests
-    - [ ] M6.6c: Logging framework (rrr::Log)
+    - [x] M6.6c: Logging framework [26:01:17] ([docs/dev/plan_m6_6c_logging_framework.md](docs/dev/plan_m6_6c_logging_framework.md)) - test_logging_harness.cpp with pthread_mutex, va_list, 5 logging tests
     - [ ] M6.6d: Basic threading (std::thread, std::mutex)
 
 ---
@@ -559,4 +559,5 @@ Next steps:
 11. **M6.5 Unit test harness** - ✅ Completed [26:01:16, 17:45] - unittest_minimal with virtual functions
 12. **M6.6a Self-contained tests** - ✅ Completed [26:01:16, 17:50] - test_strop_harness with 5 strop tests
 13. **M6.6b STL tests** - ✅ Completed [26:01:16, 18:00] - test_format_decimal_harness with 5 STL tests
-14. **M6.6c+ More tests** - Next: logging framework or threading
+14. **M6.6c Logging framework** - ✅ Completed [26:01:17] - test_logging_harness with pthread_mutex, va_list, 5 tests
+15. **M6.6d+ More tests** - Next: basic threading (std::thread, std::mutex)

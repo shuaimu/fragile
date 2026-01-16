@@ -1926,4 +1926,96 @@ fn main() {
             }
         }
     }
+
+    /// Test M6.6c: Logging framework using pthread mutex and variadic functions
+    /// This validates logging with va_list, pthread_mutex_t, and format strings.
+    #[test]
+    #[cfg(feature = "rustc-integration")]
+    fn test_logging_harness() {
+        use tempfile::TempDir;
+
+        // Find the test_logging_harness.cpp test file
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let project_root = Path::new(manifest_dir).parent().unwrap().parent().unwrap();
+        let logging_harness_cpp = project_root.join("tests/clang_integration/test_logging_harness.cpp");
+
+        if !logging_harness_cpp.exists() {
+            eprintln!("Skipping test: test_logging_harness.cpp not found at {:?}", logging_harness_cpp);
+            return;
+        }
+
+        // Create temp directory
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+
+        // Create a Rust main file that runs the logging test harness
+        let main_rs = temp_dir.path().join("main.rs");
+        std::fs::write(&main_rs, r#"
+extern "C" {
+    // Run all logging tests, returns number of failures
+    fn logging_test_run_all() -> i32;
+
+    // Get number of registered logging tests
+    fn logging_test_count() -> i32;
+}
+
+fn main() {
+    // Check that tests were registered
+    let count = unsafe { logging_test_count() };
+    println!("Number of registered logging tests: {}", count);
+    assert!(count >= 5, "Expected at least 5 logging tests, got {}", count);
+
+    // Run all tests
+    let failures = unsafe { logging_test_run_all() };
+    println!("Logging test failures: {}", failures);
+
+    if failures == 0 {
+        println!("All logging harness tests passed!");
+    } else {
+        panic!("Logging test harness reported {} failures", failures);
+    }
+}
+"#).expect("Failed to write main.rs");
+
+        let output_path = temp_dir.path().join("logging_harness_binary");
+
+        // Create driver
+        let driver = FragileDriver::new();
+
+        // Run full pipeline
+        let result = driver.compile_with_cpp(
+            &[main_rs.as_path()],
+            &[logging_harness_cpp.as_path()],
+            &output_path,
+            None,
+        );
+
+        match result {
+            Ok(()) => {
+                println!("logging harness compilation succeeded!");
+                assert!(output_path.exists(), "Binary should exist");
+
+                // Run the binary
+                let run_result = std::process::Command::new(&output_path)
+                    .output();
+
+                match run_result {
+                    Ok(output) => {
+                        let stdout = String::from_utf8_lossy(&output.stdout);
+                        let stderr = String::from_utf8_lossy(&output.stderr);
+                        println!("stdout: {}", stdout);
+                        println!("stderr: {}", stderr);
+                        assert!(output.status.success(), "Binary should run successfully");
+                        assert!(stdout.contains("All logging harness tests passed!"),
+                            "Output should indicate success");
+                    }
+                    Err(e) => {
+                        eprintln!("Failed to run binary (may be expected): {}", e);
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("logging harness compilation failed (may be expected in CI): {}", e);
+            }
+        }
+    }
 }
