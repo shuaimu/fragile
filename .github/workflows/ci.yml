@@ -1,0 +1,98 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  CARGO_TERM_COLOR: always
+  LIBCLANG_PATH: /usr/lib/x86_64-linux-gnu
+
+jobs:
+  # Basic build and test with stable Rust
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: recursive
+
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libclang-dev llvm-dev
+
+    - name: Setup Rust stable
+      uses: dtolnay/rust-action@stable
+
+    - name: Build
+      run: cargo build --verbose
+
+    - name: Run tests
+      run: cargo test --verbose
+
+  # Tests with nightly Rust and rustc-dev (for full integration)
+  test-nightly:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: recursive
+
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libclang-dev llvm-dev
+
+    - name: Setup Rust nightly
+      uses: dtolnay/rust-action@nightly
+      with:
+        components: rustc-dev, llvm-tools-preview
+
+    - name: Build with rustc-integration feature
+      run: cargo build --package fragile-rustc-driver --features rustc-integration --verbose
+
+    - name: Run tests without rustc-integration
+      run: cargo test --verbose
+
+    - name: Run rustc-integration tests
+      run: cargo test --package fragile-rustc-driver --features rustc-integration --verbose
+
+  # Clippy lints
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: recursive
+
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libclang-dev llvm-dev
+
+    - name: Setup Rust stable
+      uses: dtolnay/rust-action@stable
+      with:
+        components: clippy
+
+    - name: Run clippy
+      run: cargo clippy -- -D warnings
+      continue-on-error: true  # Don't fail build on clippy warnings for now
+
+  # Format check
+  fmt:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Setup Rust stable
+      uses: dtolnay/rust-action@stable
+      with:
+        components: rustfmt
+
+    - name: Check formatting
+      run: cargo fmt --all -- --check
+      continue-on-error: true  # Don't fail build on formatting for now
