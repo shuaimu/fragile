@@ -841,20 +841,70 @@ impl ClangParser {
         template_params: &[String],
     ) -> CppType {
         unsafe {
+            let kind = ty.kind;
+
+            // First, handle structural types (pointers, references, arrays) by
+            // recursively processing the inner type with template context
+            match kind {
+                clang_sys::CXType_Pointer => {
+                    let pointee = clang_sys::clang_getPointeeType(ty);
+                    let is_const = clang_sys::clang_isConstQualifiedType(pointee) != 0;
+                    return CppType::Pointer {
+                        pointee: Box::new(self.convert_type_with_template_ctx(pointee, template_params)),
+                        is_const,
+                    };
+                }
+
+                clang_sys::CXType_LValueReference | clang_sys::CXType_RValueReference => {
+                    let referent = clang_sys::clang_getPointeeType(ty);
+                    let is_const = clang_sys::clang_isConstQualifiedType(referent) != 0;
+                    let is_rvalue = kind == clang_sys::CXType_RValueReference;
+                    return CppType::Reference {
+                        referent: Box::new(self.convert_type_with_template_ctx(referent, template_params)),
+                        is_const,
+                        is_rvalue,
+                    };
+                }
+
+                clang_sys::CXType_ConstantArray => {
+                    let element = clang_sys::clang_getArrayElementType(ty);
+                    let size = clang_sys::clang_getArraySize(ty) as usize;
+                    return CppType::Array {
+                        element: Box::new(self.convert_type_with_template_ctx(element, template_params)),
+                        size: Some(size),
+                    };
+                }
+
+                clang_sys::CXType_IncompleteArray => {
+                    let element = clang_sys::clang_getArrayElementType(ty);
+                    return CppType::Array {
+                        element: Box::new(self.convert_type_with_template_ctx(element, template_params)),
+                        size: None,
+                    };
+                }
+
+                _ => {}
+            }
+
+            // For non-structural types, check the spelling
             let spelling = clang_sys::clang_getTypeSpelling(ty);
             let type_name = cx_string_to_string(spelling);
 
+            // Strip "const " prefix for matching purposes
+            // The const qualifier is already captured in the parent type
+            let base_name = type_name.trim_start_matches("const ").to_string();
+
             // Check if this is a template parameter
-            if let Some(index) = template_params.iter().position(|p| p == &type_name) {
+            if let Some(index) = template_params.iter().position(|p| p == &base_name) {
                 return CppType::TemplateParam {
-                    name: type_name,
+                    name: base_name,
                     depth: 0,
                     index: index as u32,
                 };
             }
 
             // Check for dependent types (types that contain template params)
-            let is_dependent = template_params.iter().any(|p| type_name.contains(p));
+            let is_dependent = template_params.iter().any(|p| base_name.contains(p));
 
             if is_dependent {
                 // For now, store dependent types with their full spelling

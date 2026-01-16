@@ -2108,3 +2108,81 @@ fn test_deduction_conflict() {
 
     assert!(matches!(result, Err(DeductionError::Conflict { .. })));
 }
+
+/// Test deduction with pointer parameter.
+#[test]
+fn test_deduce_pointer_type() {
+    use fragile_clang::{CppType, TypeDeducer};
+
+    let parser = ClangParser::new().expect("Failed to create parser");
+
+    let source = r#"
+        template<typename T>
+        void process(T* ptr);
+    "#;
+
+    let ast = parser.parse_string(source, "deduce_ptr.cpp").expect("Failed to parse");
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    let template = &module.function_templates[0];
+
+    // Deduce T from int* argument
+    let arg_types = vec![CppType::Pointer {
+        pointee: Box::new(CppType::Int { signed: true }),
+        is_const: false,
+    }];
+    let result = TypeDeducer::deduce(template, &arg_types).expect("Deduction failed");
+
+    assert_eq!(result.get("T"), Some(&CppType::Int { signed: true }));
+}
+
+/// Test deduction with const reference parameter.
+#[test]
+fn test_deduce_const_ref_type() {
+    use fragile_clang::{CppType, TypeDeducer};
+
+    let parser = ClangParser::new().expect("Failed to create parser");
+
+    let source = r#"
+        template<typename T>
+        void print(const T& x);
+    "#;
+
+    let ast = parser.parse_string(source, "deduce_cref.cpp").expect("Failed to parse");
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    let template = &module.function_templates[0];
+
+    // Deduce T from int argument (const T& binds to lvalue)
+    let arg_types = vec![CppType::Int { signed: true }];
+    let result = TypeDeducer::deduce(template, &arg_types).expect("Deduction failed");
+
+    assert_eq!(result.get("T"), Some(&CppType::Int { signed: true }));
+}
+
+/// Test deduction with rvalue reference parameter.
+#[test]
+fn test_deduce_rvalue_ref_type() {
+    use fragile_clang::{CppType, TypeDeducer};
+
+    let parser = ClangParser::new().expect("Failed to create parser");
+
+    let source = r#"
+        template<typename T>
+        void consume(T&& x);
+    "#;
+
+    let ast = parser.parse_string(source, "deduce_rref.cpp").expect("Failed to parse");
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    let template = &module.function_templates[0];
+
+    // Deduce T from double argument (T&& binds to rvalue)
+    let arg_types = vec![CppType::Double];
+    let result = TypeDeducer::deduce(template, &arg_types).expect("Deduction failed");
+
+    assert_eq!(result.get("T"), Some(&CppType::Double));
+}
