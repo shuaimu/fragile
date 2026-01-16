@@ -16,12 +16,14 @@ mod convert;
 mod ast;
 mod types;
 mod resolve;
+mod deduce;
 
 pub use parse::ClangParser;
 pub use convert::MirConverter;
 pub use ast::{AccessSpecifier, ClangAst, ClangNode, ClangNodeKind, ConstructorKind};
 pub use types::CppType;
 pub use resolve::NameResolver;
+pub use deduce::{DeductionError, TypeDeducer};
 
 use miette::Result;
 use std::path::Path;
@@ -266,6 +268,65 @@ pub struct CppFunctionTemplate {
     pub params: Vec<(String, CppType)>,
     /// Whether this template has a definition
     pub is_definition: bool,
+}
+
+impl CppFunctionTemplate {
+    /// Instantiate this template with concrete type substitutions.
+    ///
+    /// Given a mapping of template parameter names to concrete types,
+    /// produces a concrete function with all template parameters replaced.
+    ///
+    /// # Example
+    /// ```ignore
+    /// // template<typename T> T identity(T x);
+    /// // instantiate with T = int → int identity(int x);
+    /// ```
+    pub fn instantiate(
+        &self,
+        substitutions: &std::collections::HashMap<String, CppType>,
+    ) -> CppFunction {
+        // Generate a mangled name that includes the template arguments
+        let type_args: Vec<String> = self
+            .template_params
+            .iter()
+            .filter_map(|p| substitutions.get(p).map(|t| t.to_rust_type_str()))
+            .collect();
+        let mangled_suffix = if type_args.is_empty() {
+            String::new()
+        } else {
+            format!("<{}>", type_args.join(", "))
+        };
+
+        CppFunction {
+            mangled_name: format!("{}{}", self.name, mangled_suffix),
+            display_name: self.name.clone(),
+            namespace: self.namespace.clone(),
+            return_type: self.return_type.substitute(substitutions),
+            params: self
+                .params
+                .iter()
+                .map(|(name, ty)| (name.clone(), ty.substitute(substitutions)))
+                .collect(),
+            mir_body: MirBody::default(),
+        }
+    }
+
+    /// Deduce template arguments from call argument types and instantiate.
+    ///
+    /// This is a convenience method that combines deduction and instantiation.
+    ///
+    /// # Example
+    /// ```ignore
+    /// // template<typename T> T identity(T x);
+    /// // identity(42) → deduces T = int, instantiates to int identity(int x)
+    /// ```
+    pub fn deduce_and_instantiate(
+        &self,
+        arg_types: &[CppType],
+    ) -> std::result::Result<CppFunction, DeductionError> {
+        let substitutions = TypeDeducer::deduce(self, arg_types)?;
+        Ok(self.instantiate(&substitutions))
+    }
 }
 
 /// A C++ struct/class definition.

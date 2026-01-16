@@ -1916,3 +1916,195 @@ fn test_std_move_in_call() {
 
     assert!(has_call_with_move, "consume should be called with a Move operand");
 }
+
+// ============================================================================
+// Type Deduction Tests
+// ============================================================================
+
+/// Test basic type deduction with simple int type.
+#[test]
+fn test_deduce_simple_int_type() {
+    use fragile_clang::{CppType, TypeDeducer};
+
+    let parser = ClangParser::new().expect("Failed to create parser");
+
+    let source = r#"
+        template<typename T>
+        T identity(T x) { return x; }
+    "#;
+
+    let ast = parser.parse_string(source, "deduce_int.cpp").expect("Failed to parse");
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    assert_eq!(module.function_templates.len(), 1);
+    let template = &module.function_templates[0];
+
+    // Deduce T from int argument
+    let arg_types = vec![CppType::Int { signed: true }];
+    let result = TypeDeducer::deduce(template, &arg_types).expect("Deduction failed");
+
+    assert_eq!(result.len(), 1);
+    assert_eq!(result.get("T"), Some(&CppType::Int { signed: true }));
+}
+
+/// Test type deduction with double type.
+#[test]
+fn test_deduce_double_type() {
+    use fragile_clang::{CppType, TypeDeducer};
+
+    let parser = ClangParser::new().expect("Failed to create parser");
+
+    let source = r#"
+        template<typename T>
+        T square(T x) { return x * x; }
+    "#;
+
+    let ast = parser.parse_string(source, "deduce_double.cpp").expect("Failed to parse");
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    let template = &module.function_templates[0];
+
+    // Deduce T from double argument
+    let arg_types = vec![CppType::Double];
+    let result = TypeDeducer::deduce(template, &arg_types).expect("Deduction failed");
+
+    assert_eq!(result.get("T"), Some(&CppType::Double));
+}
+
+/// Test instantiation of a template function.
+#[test]
+fn test_instantiate_function_template() {
+    use fragile_clang::CppType;
+    use std::collections::HashMap;
+
+    let parser = ClangParser::new().expect("Failed to create parser");
+
+    let source = r#"
+        template<typename T>
+        T identity(T x) { return x; }
+    "#;
+
+    let ast = parser.parse_string(source, "instantiate.cpp").expect("Failed to parse");
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    let template = &module.function_templates[0];
+
+    // Instantiate with T = int
+    let mut subst = HashMap::new();
+    subst.insert("T".to_string(), CppType::Int { signed: true });
+    let func = template.instantiate(&subst);
+
+    assert_eq!(func.display_name, "identity");
+    assert_eq!(func.return_type, CppType::Int { signed: true });
+    assert_eq!(func.params.len(), 1);
+    assert_eq!(func.params[0].1, CppType::Int { signed: true });
+}
+
+/// Test deduce_and_instantiate convenience method.
+#[test]
+fn test_deduce_and_instantiate() {
+    use fragile_clang::CppType;
+
+    let parser = ClangParser::new().expect("Failed to create parser");
+
+    let source = r#"
+        template<typename T>
+        T identity(T x) { return x; }
+    "#;
+
+    let ast = parser.parse_string(source, "deduce_inst.cpp").expect("Failed to parse");
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    let template = &module.function_templates[0];
+
+    // Deduce and instantiate with double
+    let arg_types = vec![CppType::Double];
+    let func = template.deduce_and_instantiate(&arg_types).expect("Deduction failed");
+
+    assert_eq!(func.return_type, CppType::Double);
+    assert_eq!(func.params[0].1, CppType::Double);
+    assert!(func.mangled_name.contains("f64"), "Mangled name should contain type: {}", func.mangled_name);
+}
+
+/// Test CppType::substitute method.
+#[test]
+fn test_substitute_template_param() {
+    use fragile_clang::CppType;
+    use std::collections::HashMap;
+
+    let mut subst = HashMap::new();
+    subst.insert("T".to_string(), CppType::Int { signed: true });
+
+    // Direct template param
+    let ty = CppType::TemplateParam {
+        name: "T".to_string(),
+        depth: 0,
+        index: 0,
+    };
+    assert_eq!(ty.substitute(&subst), CppType::Int { signed: true });
+
+    // Pointer to template param: T* → int*
+    let ptr_ty = CppType::Pointer {
+        pointee: Box::new(CppType::TemplateParam {
+            name: "T".to_string(),
+            depth: 0,
+            index: 0,
+        }),
+        is_const: false,
+    };
+    assert_eq!(
+        ptr_ty.substitute(&subst),
+        CppType::Pointer {
+            pointee: Box::new(CppType::Int { signed: true }),
+            is_const: false,
+        }
+    );
+
+    // Reference to template param: T& → int&
+    let ref_ty = CppType::Reference {
+        referent: Box::new(CppType::TemplateParam {
+            name: "T".to_string(),
+            depth: 0,
+            index: 0,
+        }),
+        is_const: false,
+        is_rvalue: false,
+    };
+    assert_eq!(
+        ref_ty.substitute(&subst),
+        CppType::Reference {
+            referent: Box::new(CppType::Int { signed: true }),
+            is_const: false,
+            is_rvalue: false,
+        }
+    );
+}
+
+/// Test deduction error when types conflict.
+#[test]
+fn test_deduction_conflict() {
+    use fragile_clang::{CppType, DeductionError, TypeDeducer};
+
+    let parser = ClangParser::new().expect("Failed to create parser");
+
+    let source = r#"
+        template<typename T>
+        T max(T a, T b) { return a > b ? a : b; }
+    "#;
+
+    let ast = parser.parse_string(source, "conflict.cpp").expect("Failed to parse");
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    let template = &module.function_templates[0];
+
+    // Try to deduce with conflicting types: int and double
+    let arg_types = vec![CppType::Int { signed: true }, CppType::Double];
+    let result = TypeDeducer::deduce(template, &arg_types);
+
+    assert!(matches!(result, Err(DeductionError::Conflict { .. })));
+}

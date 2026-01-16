@@ -199,4 +199,61 @@ impl CppType {
             index,
         }
     }
+
+    /// Substitute template parameters with concrete types.
+    ///
+    /// Given a mapping of template parameter names to concrete types,
+    /// returns a new type with all template parameters replaced.
+    ///
+    /// # Example
+    /// ```ignore
+    /// // T* with T = int becomes int*
+    /// let ty = CppType::Pointer { pointee: CppType::TemplateParam { name: "T", ... } };
+    /// let subst = HashMap::from([("T".to_string(), CppType::Int { signed: true })]);
+    /// let result = ty.substitute(&subst); // int*
+    /// ```
+    pub fn substitute(&self, substitutions: &std::collections::HashMap<String, CppType>) -> CppType {
+        match self {
+            CppType::TemplateParam { name, .. } => {
+                substitutions.get(name).cloned().unwrap_or_else(|| self.clone())
+            }
+            CppType::DependentType { spelling } => {
+                // Try to find a template param in the spelling and substitute
+                // This is a simplified approach
+                if let Some(replacement) = substitutions.get(spelling) {
+                    replacement.clone()
+                } else {
+                    self.clone()
+                }
+            }
+            CppType::Pointer { pointee, is_const } => CppType::Pointer {
+                pointee: Box::new(pointee.substitute(substitutions)),
+                is_const: *is_const,
+            },
+            CppType::Reference {
+                referent,
+                is_const,
+                is_rvalue,
+            } => CppType::Reference {
+                referent: Box::new(referent.substitute(substitutions)),
+                is_const: *is_const,
+                is_rvalue: *is_rvalue,
+            },
+            CppType::Array { element, size } => CppType::Array {
+                element: Box::new(element.substitute(substitutions)),
+                size: *size,
+            },
+            CppType::Function {
+                return_type,
+                params,
+                is_variadic,
+            } => CppType::Function {
+                return_type: Box::new(return_type.substitute(substitutions)),
+                params: params.iter().map(|p| p.substitute(substitutions)).collect(),
+                is_variadic: *is_variadic,
+            },
+            // Non-dependent types remain unchanged
+            _ => self.clone(),
+        }
+    }
 }
