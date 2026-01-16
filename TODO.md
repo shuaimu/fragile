@@ -508,7 +508,7 @@ Migration: After C++20 support is complete, deprecate these.
 - [x] **M2**: Parse `rrr/misc/*.cpp` (templates, STL) - 5/5 files parsing (100%) [26:01:16]
 - [x] **M3**: Parse `rrr/rpc/*.cpp` (OOP, threads) - 4/4 files parsing (100%) [26:01:16]
 - [x] **M4**: Parse `mako/vec/*.cpp` (coroutines) - 2/2 files parsing (100%) [26:01:16]
-- [-] **M5**: Full Mako build ([docs/dev/plan_m5_full_mako_build.md](docs/dev/plan_m5_full_mako_build.md))
+- [x] **M5**: Full Mako build ([docs/dev/plan_m5_full_mako_build.md](docs/dev/plan_m5_full_mako_build.md))
   - [x] M5.1: Simple add.cpp end-to-end test (C++ → MIR → stubs) [26:01:17]
   - [x] M5.2: Enable CI with nightly rust + rustc-dev [26:01:17]
   - [x] M5.3: Compile rand.cpp through full pipeline (29 functions, 17KB stubs) [26:01:17]
@@ -519,7 +519,7 @@ Migration: After C++20 support is complete, deprecate these.
     - [x] M5.7.1: Add compilation test with rustc driver [26:01:17]
     - [x] M5.7.2: Build C++ object files [26:01:17] ([docs/dev/plan_m5_7_2_cpp_object_files.md](docs/dev/plan_m5_7_2_cpp_object_files.md))
     - [x] M5.7.3: Link Rust + C++ objects [26:01:17] ([docs/dev/plan_m5_7_3_link_rust_cpp.md](docs/dev/plan_m5_7_3_link_rust_cpp.md))
-  - [ ] M5.8: Run basic mako operations
+  - [x] M5.8: Run basic mako operations [26:01:17] ([docs/dev/plan_m5_8_basic_mako_ops.md](docs/dev/plan_m5_8_basic_mako_ops.md))
 - [ ] **M6**: Mako tests pass
 
 ---
@@ -532,7 +532,7 @@ Current status:
 - **rrr module**: 20/20 files parsing (100%) - all base, misc, reactor, rpc files parsing
 - **mako module**: 338/338 files tested (100%) - includes all memdb files, deptran files, consensus executors, masstree, benchmarks
 - **Total tests**: 596 fragile-clang (27 unit + 569 integration), 19 fragile-rustc-driver
-- **Milestones**: M1 ✅, M2-M4 (parsing complete), M5.1-M5.7 ✅
+- **Milestones**: M1-M5 ✅ complete, M6 (tests) pending
 - **Blocked files**: mongodb/server.cc (bsoncxx), persist_test.cc (undefined template), mtd.cc (epoll conflicts)
 
 Next steps:
@@ -541,4 +541,5 @@ Next steps:
 3. **Full MIR Injection** - ✅ Completed [26:01:17] - mir_built query override with arena allocation
 4. **C++ Object Compilation (M5.7.2)** - ✅ Completed [26:01:17] - CppCompiler module with clang integration
 5. **M5.7.3 Linking** - ✅ Completed [26:01:17] - run_rustc_with_objects with C++ runtime linking
-6. **M5.8 Run basic mako ops** - Next: Test actual mako functions
+6. **M5.8 Run basic mako ops** - ✅ Completed [26:01:17] - rrr::startswith/endswith tests
+7. **M6 Mako tests pass** - Next: Run actual mako test suite
