@@ -3508,3 +3508,191 @@ fn test_nested_loops_break() {
     // Check that we have at least some blocks generated
     assert!(func.mir_body.blocks.len() >= 1, "Function should have at least one block");
 }
+
+// ============================================================================
+// Binary and Unary Operator Extraction Tests
+// ============================================================================
+
+#[test]
+fn test_binary_operator_arithmetic() {
+    let parser = ClangParser::new().unwrap();
+    let code = r#"
+        int arithmetic(int a, int b) {
+            int sum = a + b;
+            int diff = a - b;
+            int prod = a * b;
+            int quot = a / b;
+            int rem = a % b;
+            return sum + diff + prod + quot + rem;
+        }
+    "#;
+
+    let ast = parser.parse_string(code, "test.cpp").unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    assert_eq!(module.functions.len(), 1);
+    assert_eq!(module.functions[0].display_name, "arithmetic");
+    // Should generate multiple basic blocks with arithmetic operations
+    assert!(module.functions[0].mir_body.blocks.len() >= 1);
+}
+
+#[test]
+fn test_binary_operator_comparison() {
+    let parser = ClangParser::new().unwrap();
+    let code = r#"
+        bool compare(int a, int b) {
+            bool eq = a == b;
+            bool ne = a != b;
+            bool lt = a < b;
+            bool le = a <= b;
+            bool gt = a > b;
+            bool ge = a >= b;
+            return eq && ne && lt && le && gt && ge;
+        }
+    "#;
+
+    let ast = parser.parse_string(code, "test.cpp").unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    assert_eq!(module.functions.len(), 1);
+    assert_eq!(module.functions[0].display_name, "compare");
+}
+
+#[test]
+fn test_binary_operator_bitwise() {
+    let parser = ClangParser::new().unwrap();
+    let code = r#"
+        int bitwise(int a, int b) {
+            int band = a & b;
+            int bor = a | b;
+            int bxor = a ^ b;
+            int shl = a << 2;
+            int shr = a >> 2;
+            return band + bor + bxor + shl + shr;
+        }
+    "#;
+
+    let ast = parser.parse_string(code, "test.cpp").unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    assert_eq!(module.functions.len(), 1);
+    assert_eq!(module.functions[0].display_name, "bitwise");
+}
+
+#[test]
+fn test_binary_operator_logical() {
+    let parser = ClangParser::new().unwrap();
+    let code = r#"
+        bool logical(bool a, bool b) {
+            bool land = a && b;
+            bool lor = a || b;
+            return land || lor;
+        }
+    "#;
+
+    let ast = parser.parse_string(code, "test.cpp").unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    assert_eq!(module.functions.len(), 1);
+    assert_eq!(module.functions[0].display_name, "logical");
+}
+
+#[test]
+fn test_binary_operator_assignment() {
+    let parser = ClangParser::new().unwrap();
+    let code = r#"
+        int assignments(int x) {
+            x = 10;
+            x += 5;
+            x -= 2;
+            x *= 3;
+            x /= 2;
+            return x;
+        }
+    "#;
+
+    let ast = parser.parse_string(code, "test.cpp").unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    assert_eq!(module.functions.len(), 1);
+    assert_eq!(module.functions[0].display_name, "assignments");
+}
+
+#[test]
+fn test_unary_operator_arithmetic() {
+    let parser = ClangParser::new().unwrap();
+    let code = r#"
+        int unary_arith(int x) {
+            int neg = -x;
+            int pos = +x;
+            return neg + pos;
+        }
+    "#;
+
+    let ast = parser.parse_string(code, "test.cpp").unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    assert_eq!(module.functions.len(), 1);
+    assert_eq!(module.functions[0].display_name, "unary_arith");
+}
+
+#[test]
+fn test_unary_operator_logical() {
+    let parser = ClangParser::new().unwrap();
+    let code = r#"
+        bool unary_logical(bool x) {
+            return !x;
+        }
+    "#;
+
+    let ast = parser.parse_string(code, "test.cpp").unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    assert_eq!(module.functions.len(), 1);
+    assert_eq!(module.functions[0].display_name, "unary_logical");
+}
+
+#[test]
+fn test_unary_operator_bitwise() {
+    let parser = ClangParser::new().unwrap();
+    let code = r#"
+        int unary_bitwise(int x) {
+            return ~x;
+        }
+    "#;
+
+    let ast = parser.parse_string(code, "test.cpp").unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    assert_eq!(module.functions.len(), 1);
+    assert_eq!(module.functions[0].display_name, "unary_bitwise");
+}
+
+#[test]
+fn test_unary_operator_increment_decrement() {
+    let parser = ClangParser::new().unwrap();
+    let code = r#"
+        int inc_dec(int x) {
+            int a = ++x;
+            int b = x++;
+            int c = --x;
+            int d = x--;
+            return a + b + c + d;
+        }
+    "#;
+
+    let ast = parser.parse_string(code, "test.cpp").unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    assert_eq!(module.functions.len(), 1);
+    assert_eq!(module.functions[0].display_name, "inc_dec");
+}

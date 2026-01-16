@@ -1480,9 +1480,13 @@ fn convert_binop(op: BinaryOp) -> MirBinOp {
 fn convert_unaryop(op: UnaryOp) -> MirUnaryOp {
     match op {
         UnaryOp::Minus => MirUnaryOp::Neg,
-        UnaryOp::Plus => MirUnaryOp::Neg, // +x is identity, but we don't have that
-        UnaryOp::Not | UnaryOp::LNot => MirUnaryOp::Not,
-        _ => MirUnaryOp::Neg, // Default for now
+        UnaryOp::Plus => MirUnaryOp::Neg, // +x is identity, MIR doesn't have identity op
+        UnaryOp::Not => MirUnaryOp::Not,  // Bitwise not (~x)
+        UnaryOp::LNot => MirUnaryOp::Not, // Logical not (!x) - treated as bitwise for now
+        UnaryOp::PreInc | UnaryOp::PostInc => MirUnaryOp::Neg, // TODO: Inc/Dec need special handling
+        UnaryOp::PreDec | UnaryOp::PostDec => MirUnaryOp::Neg, // TODO: Inc/Dec need special handling
+        UnaryOp::AddrOf => MirUnaryOp::Neg, // TODO: Address-of needs special handling
+        UnaryOp::Deref => MirUnaryOp::Neg,  // TODO: Dereference needs special handling
     }
 }
 

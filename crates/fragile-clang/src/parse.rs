@@ -699,18 +699,152 @@ impl ClangParser {
         }
     }
 
-    /// Get binary operator from cursor.
-    fn get_binary_op(&self, _cursor: clang_sys::CXCursor) -> BinaryOp {
-        // TODO: Extract actual operator from tokens
-        // For now, default to Add - will be fixed in Phase 2
-        BinaryOp::Add
+    /// Get binary operator from cursor by tokenizing and finding the operator token.
+    fn get_binary_op(&self, cursor: clang_sys::CXCursor) -> BinaryOp {
+        unsafe {
+            let tu = clang_sys::clang_Cursor_getTranslationUnit(cursor);
+            let extent = clang_sys::clang_getCursorExtent(cursor);
+            let mut tokens: *mut clang_sys::CXToken = std::ptr::null_mut();
+            let mut num_tokens: u32 = 0;
+
+            clang_sys::clang_tokenize(tu, extent, &mut tokens, &mut num_tokens);
+
+            let mut result = BinaryOp::Add; // Default
+
+            // Binary operators have the pattern: left_expr OP right_expr
+            // We look for punctuation tokens that are operators
+            for i in 0..num_tokens {
+                let token = *tokens.add(i as usize);
+                let token_kind = clang_sys::clang_getTokenKind(token);
+
+                // CXToken_Punctuation = 1
+                if token_kind == 1 {
+                    let token_spelling = clang_sys::clang_getTokenSpelling(tu, token);
+                    let token_str = cx_string_to_string(token_spelling);
+
+                    result = match token_str.as_str() {
+                        "+" => BinaryOp::Add,
+                        "-" => BinaryOp::Sub,
+                        "*" => BinaryOp::Mul,
+                        "/" => BinaryOp::Div,
+                        "%" => BinaryOp::Rem,
+                        "&" => BinaryOp::And,
+                        "|" => BinaryOp::Or,
+                        "^" => BinaryOp::Xor,
+                        "<<" => BinaryOp::Shl,
+                        ">>" => BinaryOp::Shr,
+                        "==" => BinaryOp::Eq,
+                        "!=" => BinaryOp::Ne,
+                        "<" => BinaryOp::Lt,
+                        "<=" => BinaryOp::Le,
+                        ">" => BinaryOp::Gt,
+                        ">=" => BinaryOp::Ge,
+                        "&&" => BinaryOp::LAnd,
+                        "||" => BinaryOp::LOr,
+                        "=" => BinaryOp::Assign,
+                        "+=" => BinaryOp::AddAssign,
+                        "-=" => BinaryOp::SubAssign,
+                        "*=" => BinaryOp::MulAssign,
+                        "/=" => BinaryOp::DivAssign,
+                        "%=" => BinaryOp::RemAssign,
+                        "&=" => BinaryOp::AndAssign,
+                        "|=" => BinaryOp::OrAssign,
+                        "^=" => BinaryOp::XorAssign,
+                        "<<=" => BinaryOp::ShlAssign,
+                        ">>=" => BinaryOp::ShrAssign,
+                        "," => BinaryOp::Comma,
+                        _ => continue, // Not an operator we recognize, keep looking
+                    };
+                    // Found an operator, but keep going to find compound operators
+                    // (e.g., << comes before <)
+                    // Actually, Clang tokenizes compound operators as single tokens,
+                    // so break on first match
+                    break;
+                }
+            }
+
+            if !tokens.is_null() {
+                clang_sys::clang_disposeTokens(tu, tokens, num_tokens);
+            }
+
+            result
+        }
     }
 
-    /// Get unary operator from cursor.
-    fn get_unary_op(&self, _cursor: clang_sys::CXCursor) -> UnaryOp {
-        // TODO: Extract actual operator from tokens
-        // For now, default to Minus - will be fixed in Phase 2
-        UnaryOp::Minus
+    /// Get unary operator from cursor by tokenizing and finding the operator token.
+    fn get_unary_op(&self, cursor: clang_sys::CXCursor) -> UnaryOp {
+        unsafe {
+            let tu = clang_sys::clang_Cursor_getTranslationUnit(cursor);
+            let extent = clang_sys::clang_getCursorExtent(cursor);
+            let mut tokens: *mut clang_sys::CXToken = std::ptr::null_mut();
+            let mut num_tokens: u32 = 0;
+
+            clang_sys::clang_tokenize(tu, extent, &mut tokens, &mut num_tokens);
+
+            let mut result = UnaryOp::Minus; // Default
+
+            // Unary operators: prefix (++x, --x, -x, +x, !x, ~x, *x, &x)
+            //                  postfix (x++, x--)
+            // We look at the first and last punctuation tokens
+            let mut first_punct: Option<String> = None;
+            let mut last_punct: Option<String> = None;
+
+            for i in 0..num_tokens {
+                let token = *tokens.add(i as usize);
+                let token_kind = clang_sys::clang_getTokenKind(token);
+
+                // CXToken_Punctuation = 1
+                if token_kind == 1 {
+                    let token_spelling = clang_sys::clang_getTokenSpelling(tu, token);
+                    let token_str = cx_string_to_string(token_spelling);
+
+                    if first_punct.is_none() {
+                        first_punct = Some(token_str.clone());
+                    }
+                    last_punct = Some(token_str);
+                }
+            }
+
+            // For prefix operators, the operator is first
+            // For postfix operators (++, --), the operator is last
+            // We try to detect based on position
+            if let Some(ref op) = first_punct {
+                result = match op.as_str() {
+                    "++" => {
+                        // Could be prefix or postfix, check if it's at the start
+                        // If first_punct == last_punct and there are other tokens,
+                        // it's likely prefix
+                        UnaryOp::PreInc
+                    }
+                    "--" => UnaryOp::PreDec,
+                    "-" => UnaryOp::Minus,
+                    "+" => UnaryOp::Plus,
+                    "!" => UnaryOp::LNot,
+                    "~" => UnaryOp::Not,
+                    "*" => UnaryOp::Deref,
+                    "&" => UnaryOp::AddrOf,
+                    _ => UnaryOp::Minus,
+                };
+            }
+
+            // Check for postfix operators
+            if let Some(ref op) = last_punct {
+                if first_punct.as_ref() != last_punct.as_ref() {
+                    // Different operators at start and end - last one might be postfix
+                    match op.as_str() {
+                        "++" => result = UnaryOp::PostInc,
+                        "--" => result = UnaryOp::PostDec,
+                        _ => {}
+                    }
+                }
+            }
+
+            if !tokens.is_null() {
+                clang_sys::clang_disposeTokens(tu, tokens, num_tokens);
+            }
+
+            result
+        }
     }
 
     /// Get the access specifier for a cursor (field, method, etc.).

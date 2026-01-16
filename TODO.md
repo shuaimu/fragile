@@ -165,8 +165,8 @@ See [PLAN_CPP20_MAKO.md](PLAN_CPP20_MAKO.md) for detailed plan.
 - [x] FloatingLiteral → Constant
 - [x] BoolLiteral → Constant
 - [x] DeclRefExpr → Operand
-- [ ] BinaryOperator → extract actual op
-- [ ] UnaryOperator → extract actual op
+- [x] BinaryOperator → extract actual op [26:01:16, 07:30]
+- [x] UnaryOperator → extract actual op [26:01:16, 07:30]
 - [x] CallExpr → Call terminator
 
 ### 2.2 Control Flow
@@ -219,7 +219,7 @@ Migration: After C++20 support is complete, deprecate these.
 ## 5. Testing & Milestones
 
 ### 5.1 Unit Tests
-- [x] fragile-clang: 143 tests passing (27 unit + 116 integration)
+- [x] fragile-clang: 152 tests passing (27 unit + 125 integration)
 - [x] fragile-rustc-driver: 6 tests passing
 - [x] fragile-runtime: Compiles
 
