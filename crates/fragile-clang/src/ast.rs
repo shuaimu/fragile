@@ -353,6 +353,33 @@ pub enum ClangNodeKind {
         template_args: Vec<CppType>,
     },
 
+    // C++20 Coroutines
+
+    /// co_await expression (C++20 coroutine)
+    /// Suspends execution until the awaitable is ready.
+    CoawaitExpr {
+        /// Type of the operand being awaited
+        operand_ty: CppType,
+        /// Result type of the await expression
+        result_ty: CppType,
+    },
+
+    /// co_yield expression (C++20 coroutine)
+    /// Yields a value and suspends the coroutine.
+    CoyieldExpr {
+        /// Type of the value being yielded
+        value_ty: CppType,
+        /// Result type of the yield expression (from yield_value)
+        result_ty: CppType,
+    },
+
+    /// co_return statement (C++20 coroutine)
+    /// Returns from a coroutine, optionally with a value.
+    CoreturnStmt {
+        /// Type of the returned value (None for `co_return;`)
+        value_ty: Option<CppType>,
+    },
+
     /// Unknown or unhandled node kind
     Unknown(String),
 }

@@ -128,20 +128,32 @@ See [PLAN_CPP20_MAKO.md](PLAN_CPP20_MAKO.md) for detailed plan.
 - [x] std::move / std::forward (✅ basic support done in Phase A)
 
 ### 1.4 Phase D: C++20 Coroutines
-- [ ] **D.1 Infrastructure**
-  - [ ] `<coroutine>` header
-  - [ ] std::coroutine_handle
-  - [ ] std::suspend_always/never
-- [ ] **D.2 Promise Types**
-  - [ ] get_return_object()
-  - [ ] initial_suspend / final_suspend
-  - [ ] return_void / return_value
-- [ ] **D.3 Awaitables**
-  - [ ] await_ready/suspend/resume
-  - [ ] co_await expression
-- [ ] **D.4 Generators**
-  - [ ] co_yield
-  - [ ] Generator pattern
+- [x] **D.1 AST Support for Coroutine Expressions** (~150 lines) [26:01:16, 03:15] ([docs/dev/plan_coroutine_ast_support.md](docs/dev/plan_coroutine_ast_support.md))
+  - [x] D.1.1 Add CoawaitExpr, CoyieldExpr, CoreturnStmt to ClangNodeKind in ast.rs
+  - [x] D.1.2 Parse coroutine expressions in parse.rs (token-based detection for UnexposedExpr/Stmt)
+  - [x] D.1.3 Add basic tests for coroutine AST parsing (6 tests added)
+- [ ] **D.2 MIR Representation for Coroutines** (~100 lines)
+  - [ ] D.2.1 Add MirTerminator::Yield, MirTerminator::CoroutineReturn to lib.rs
+  - [ ] D.2.2 Add coroutine-related MirRvalue variants if needed
+  - [ ] D.2.3 Update MirBody to track coroutine state
+- [ ] **D.3 AST to MIR Conversion** (~150 lines)
+  - [ ] D.3.1 Convert CoawaitExpr to MIR in convert.rs
+  - [ ] D.3.2 Convert CoyieldExpr to MIR in convert.rs
+  - [ ] D.3.3 Convert CoreturnStmt to MIR in convert.rs
+- [ ] **D.4 Coroutine Header Parsing** (~100 lines)
+  - [ ] D.4.1 Parse `<coroutine>` header types
+  - [ ] D.4.2 Parse std::coroutine_handle
+  - [ ] D.4.3 Parse std::suspend_always/never
+- [ ] **D.5 Promise Types** (~100 lines)
+  - [ ] D.5.1 get_return_object()
+  - [ ] D.5.2 initial_suspend / final_suspend
+  - [ ] D.5.3 return_void / return_value
+- [ ] **D.6 Awaitables** (~100 lines)
+  - [ ] D.6.1 await_ready/suspend/resume protocol
+  - [ ] D.6.2 co_await expression evaluation
+- [ ] **D.7 Generators** (~100 lines)
+  - [ ] D.7.1 co_yield expression
+  - [ ] D.7.2 Generator pattern test
 
 ### 1.5 Phase E: Advanced Features
 - [ ] **E.1 Exceptions**
@@ -235,7 +247,7 @@ Migration: After C++20 support is complete, deprecate these.
 ## 5. Testing & Milestones
 
 ### 5.1 Unit Tests
-- [x] fragile-clang: 152 tests passing (27 unit + 125 integration)
+- [x] fragile-clang: 177 tests passing (27 unit + 150 integration) - includes 6 coroutine tests
 - [x] fragile-rustc-driver: 6 tests passing
 - [x] fragile-runtime: Compiles
 

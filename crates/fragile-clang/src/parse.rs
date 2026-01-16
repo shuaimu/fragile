@@ -726,6 +726,28 @@ impl ClangParser {
                     }
                 }
 
+                // C++20 Coroutines - libclang maps these to UnexposedExpr/UnexposedStmt
+                // We detect them by tokenizing and looking for co_await, co_yield, co_return keywords
+                clang_sys::CXCursor_UnexposedExpr => {
+                    if let Some(coroutine_kind) = self.try_parse_coroutine_expr(cursor) {
+                        coroutine_kind
+                    } else {
+                        // Fall back to Unknown for non-coroutine unexposed expressions
+                        let kind_spelling = clang_sys::clang_getCursorKindSpelling(kind);
+                        ClangNodeKind::Unknown(cx_string_to_string(kind_spelling))
+                    }
+                }
+
+                clang_sys::CXCursor_UnexposedStmt => {
+                    if let Some(coroutine_kind) = self.try_parse_coroutine_stmt(cursor) {
+                        coroutine_kind
+                    } else {
+                        // Fall back to Unknown for non-coroutine unexposed statements
+                        let kind_spelling = clang_sys::clang_getCursorKindSpelling(kind);
+                        ClangNodeKind::Unknown(cx_string_to_string(kind_spelling))
+                    }
+                }
+
                 _ => {
                     let kind_spelling = clang_sys::clang_getCursorKindSpelling(kind);
                     ClangNodeKind::Unknown(cx_string_to_string(kind_spelling))
@@ -976,6 +998,134 @@ impl ClangParser {
             }
 
             result
+        }
+    }
+
+    /// Try to parse a coroutine expression (co_await or co_yield) from an UnexposedExpr.
+    /// Returns Some(ClangNodeKind) if this is a coroutine expression, None otherwise.
+    fn try_parse_coroutine_expr(&self, cursor: clang_sys::CXCursor) -> Option<ClangNodeKind> {
+        unsafe {
+            let tu = clang_sys::clang_Cursor_getTranslationUnit(cursor);
+            let extent = clang_sys::clang_getCursorExtent(cursor);
+            let mut tokens: *mut clang_sys::CXToken = ptr::null_mut();
+            let mut num_tokens: u32 = 0;
+
+            clang_sys::clang_tokenize(tu, extent, &mut tokens, &mut num_tokens);
+
+            if tokens.is_null() || num_tokens == 0 {
+                return None;
+            }
+
+            // Get the first token to check for co_await or co_yield
+            let first_token = *tokens;
+            let first_spelling = clang_sys::clang_getTokenSpelling(tu, first_token);
+            let first_str = cx_string_to_string(first_spelling);
+
+            let result = match first_str.as_str() {
+                "co_await" => {
+                    // Get the result type from the cursor type
+                    let result_ty = self.convert_type(clang_sys::clang_getCursorType(cursor));
+                    // For operand type, we'll use the result type as a placeholder
+                    // In practice, we'd need to examine the child expression
+                    let operand_ty = self.get_coroutine_operand_type(cursor);
+                    Some(ClangNodeKind::CoawaitExpr {
+                        operand_ty,
+                        result_ty,
+                    })
+                }
+                "co_yield" => {
+                    // Get the result type from the cursor type
+                    let result_ty = self.convert_type(clang_sys::clang_getCursorType(cursor));
+                    // For value type, examine the child expression
+                    let value_ty = self.get_coroutine_operand_type(cursor);
+                    Some(ClangNodeKind::CoyieldExpr { value_ty, result_ty })
+                }
+                _ => None,
+            };
+
+            if !tokens.is_null() {
+                clang_sys::clang_disposeTokens(tu, tokens, num_tokens);
+            }
+
+            result
+        }
+    }
+
+    /// Try to parse a coroutine statement (co_return) from an UnexposedStmt.
+    /// Returns Some(ClangNodeKind) if this is a coroutine statement, None otherwise.
+    fn try_parse_coroutine_stmt(&self, cursor: clang_sys::CXCursor) -> Option<ClangNodeKind> {
+        unsafe {
+            let tu = clang_sys::clang_Cursor_getTranslationUnit(cursor);
+            let extent = clang_sys::clang_getCursorExtent(cursor);
+            let mut tokens: *mut clang_sys::CXToken = ptr::null_mut();
+            let mut num_tokens: u32 = 0;
+
+            clang_sys::clang_tokenize(tu, extent, &mut tokens, &mut num_tokens);
+
+            if tokens.is_null() || num_tokens == 0 {
+                return None;
+            }
+
+            // Get the first token to check for co_return
+            let first_token = *tokens;
+            let first_spelling = clang_sys::clang_getTokenSpelling(tu, first_token);
+            let first_str = cx_string_to_string(first_spelling);
+
+            let result = if first_str == "co_return" {
+                // Check if there's a value being returned
+                // If num_tokens > 2 (co_return + ; + something), there's a value
+                let value_ty = if num_tokens > 2 {
+                    Some(self.get_coroutine_operand_type(cursor))
+                } else {
+                    None
+                };
+                Some(ClangNodeKind::CoreturnStmt { value_ty })
+            } else {
+                None
+            };
+
+            if !tokens.is_null() {
+                clang_sys::clang_disposeTokens(tu, tokens, num_tokens);
+            }
+
+            result
+        }
+    }
+
+    /// Get the operand type for a coroutine expression by examining its first child.
+    fn get_coroutine_operand_type(&self, cursor: clang_sys::CXCursor) -> CppType {
+        unsafe {
+            // Visit children to find the operand expression
+            struct OperandTypeData {
+                ty: CppType,
+                parser: *const ClangParser,
+            }
+
+            extern "C" fn find_operand_type(
+                child: clang_sys::CXCursor,
+                _parent: clang_sys::CXCursor,
+                data: clang_sys::CXClientData,
+            ) -> clang_sys::CXChildVisitResult {
+                unsafe {
+                    let data = &mut *(data as *mut OperandTypeData);
+                    let child_type = clang_sys::clang_getCursorType(child);
+                    data.ty = (*data.parser).convert_type(child_type);
+                    clang_sys::CXChildVisit_Break
+                }
+            }
+
+            let mut data = OperandTypeData {
+                ty: CppType::Void,
+                parser: self as *const ClangParser,
+            };
+
+            clang_sys::clang_visitChildren(
+                cursor,
+                find_operand_type,
+                &mut data as *mut OperandTypeData as clang_sys::CXClientData,
+            );
+
+            data.ty
         }
     }
 
