@@ -4,6 +4,7 @@
 
 #include "types.h"
 #include "../cstdint"
+#include "../cstring"  // Many socket programs use memset/strcpy
 
 // Socket types
 #define SOCK_STREAM 1

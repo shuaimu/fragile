@@ -1,0 +1,167 @@
+// Minimal system_error stub for fragile parsing
+#ifndef _FRAGILE_SYSTEM_ERROR_
+#define _FRAGILE_SYSTEM_ERROR_
+
+#include "stdexcept"
+#include "string"
+
+namespace std {
+
+// Forward declarations
+class error_code;
+class error_condition;
+class error_category;
+
+// Error category base class
+class error_category {
+public:
+    constexpr error_category() noexcept = default;
+    virtual ~error_category() = default;
+    error_category(const error_category&) = delete;
+    error_category& operator=(const error_category&) = delete;
+
+    virtual const char* name() const noexcept = 0;
+    virtual string message(int ev) const = 0;
+    virtual error_condition default_error_condition(int ev) const noexcept;
+    virtual bool equivalent(int code, const error_condition& condition) const noexcept;
+    virtual bool equivalent(const error_code& code, int condition) const noexcept;
+
+    bool operator==(const error_category& rhs) const noexcept { return this == &rhs; }
+    bool operator!=(const error_category& rhs) const noexcept { return this != &rhs; }
+    bool operator<(const error_category& rhs) const noexcept { return this < &rhs; }
+};
+
+// System and generic category functions
+const error_category& system_category() noexcept;
+const error_category& generic_category() noexcept;
+
+// Error code class
+class error_code {
+public:
+    error_code() noexcept : val_(0), cat_(&system_category()) {}
+    error_code(int val, const error_category& cat) noexcept : val_(val), cat_(&cat) {}
+    template<class ErrorCodeEnum>
+    error_code(ErrorCodeEnum e) noexcept;
+
+    void assign(int val, const error_category& cat) noexcept {
+        val_ = val;
+        cat_ = &cat;
+    }
+    template<class ErrorCodeEnum>
+    error_code& operator=(ErrorCodeEnum e) noexcept;
+
+    void clear() noexcept {
+        val_ = 0;
+        cat_ = &system_category();
+    }
+
+    int value() const noexcept { return val_; }
+    const error_category& category() const noexcept { return *cat_; }
+    error_condition default_error_condition() const noexcept;
+    string message() const { return cat_->message(val_); }
+    explicit operator bool() const noexcept { return val_ != 0; }
+
+private:
+    int val_;
+    const error_category* cat_;
+};
+
+// Error condition class
+class error_condition {
+public:
+    error_condition() noexcept : val_(0), cat_(&generic_category()) {}
+    error_condition(int val, const error_category& cat) noexcept : val_(val), cat_(&cat) {}
+    template<class ErrorConditionEnum>
+    error_condition(ErrorConditionEnum e) noexcept;
+
+    void assign(int val, const error_category& cat) noexcept {
+        val_ = val;
+        cat_ = &cat;
+    }
+    template<class ErrorConditionEnum>
+    error_condition& operator=(ErrorConditionEnum e) noexcept;
+
+    void clear() noexcept {
+        val_ = 0;
+        cat_ = &generic_category();
+    }
+
+    int value() const noexcept { return val_; }
+    const error_category& category() const noexcept { return *cat_; }
+    string message() const { return cat_->message(val_); }
+    explicit operator bool() const noexcept { return val_ != 0; }
+
+private:
+    int val_;
+    const error_category* cat_;
+};
+
+// Comparison operators
+inline bool operator==(const error_code& lhs, const error_code& rhs) noexcept {
+    return lhs.category() == rhs.category() && lhs.value() == rhs.value();
+}
+inline bool operator==(const error_code& lhs, const error_condition& rhs) noexcept {
+    return lhs.category().equivalent(lhs.value(), rhs) ||
+           rhs.category().equivalent(lhs, rhs.value());
+}
+inline bool operator==(const error_condition& lhs, const error_code& rhs) noexcept {
+    return rhs == lhs;
+}
+inline bool operator==(const error_condition& lhs, const error_condition& rhs) noexcept {
+    return lhs.category() == rhs.category() && lhs.value() == rhs.value();
+}
+inline bool operator!=(const error_code& lhs, const error_code& rhs) noexcept {
+    return !(lhs == rhs);
+}
+inline bool operator!=(const error_code& lhs, const error_condition& rhs) noexcept {
+    return !(lhs == rhs);
+}
+inline bool operator!=(const error_condition& lhs, const error_code& rhs) noexcept {
+    return !(lhs == rhs);
+}
+inline bool operator!=(const error_condition& lhs, const error_condition& rhs) noexcept {
+    return !(lhs == rhs);
+}
+inline bool operator<(const error_code& lhs, const error_code& rhs) noexcept {
+    return lhs.category() < rhs.category() ||
+           (lhs.category() == rhs.category() && lhs.value() < rhs.value());
+}
+inline bool operator<(const error_condition& lhs, const error_condition& rhs) noexcept {
+    return lhs.category() < rhs.category() ||
+           (lhs.category() == rhs.category() && lhs.value() < rhs.value());
+}
+
+// system_error exception class
+class system_error : public runtime_error {
+public:
+    system_error(error_code ec, const string& what_arg)
+        : runtime_error(what_arg + ": " + ec.message()), code_(ec) {}
+    system_error(error_code ec, const char* what_arg)
+        : runtime_error(string(what_arg) + ": " + ec.message()), code_(ec) {}
+    system_error(error_code ec)
+        : runtime_error(ec.message()), code_(ec) {}
+    system_error(int ev, const error_category& ecat, const string& what_arg)
+        : system_error(error_code(ev, ecat), what_arg) {}
+    system_error(int ev, const error_category& ecat, const char* what_arg)
+        : system_error(error_code(ev, ecat), what_arg) {}
+    system_error(int ev, const error_category& ecat)
+        : system_error(error_code(ev, ecat)) {}
+
+    const error_code& code() const noexcept { return code_; }
+
+private:
+    error_code code_;
+};
+
+// Helper function to create error_code from errno
+inline error_code make_error_code(int e) noexcept {
+    return error_code(e, system_category());
+}
+
+inline error_condition make_error_condition(int e) noexcept {
+    return error_condition(e, generic_category());
+}
+
+} // namespace std
+
+#endif // _FRAGILE_SYSTEM_ERROR_

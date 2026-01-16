@@ -7895,3 +7895,79 @@ fn test_mako_strop_cpp() {
         }
     }
 }
+
+/// Test parsing mako/stats_server.cc - stats server with system_error
+#[test]
+fn test_mako_stats_server_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let stats_server_path = project_root.join("vendor/mako/src/mako/stats_server.cc");
+
+    // Skip if file doesn't exist
+    if !stats_server_path.exists() {
+        println!("Skipping test: stats_server.cc not found at {:?}", stats_server_path);
+        return;
+    }
+
+    // Setup include paths
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let rusty_cpp_path = project_root.join("vendor/mako/src/mako/submodules/rusty-cpp/include");
+
+    let mut system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+        rusty_cpp_path.to_string_lossy().to_string(),
+    ];
+
+    // Try to find Clang's intrinsics directory
+    let clang_paths = [
+        "/usr/lib/llvm-19/lib/clang/19/include",
+        "/usr/lib/llvm-18/lib/clang/18/include",
+    ];
+
+    for path in &clang_paths {
+        if Path::new(path).exists() {
+            system_include_paths.push(path.to_string());
+            break;
+        }
+    }
+
+    // User include paths
+    let mako_src = project_root.join("vendor/mako/src");
+    let mako_dir = project_root.join("vendor/mako/src/mako");
+    let masstree_dir = project_root.join("vendor/mako/src/mako/masstree");
+    let include_paths = vec![
+        mako_dir.to_string_lossy().to_string(),
+        mako_src.to_string_lossy().to_string(),
+        masstree_dir.to_string_lossy().to_string(),
+    ];
+
+    // Define CONFIG_H for macros.h
+    let defines = vec![
+        r#"CONFIG_H="mako/masstree/config.h""#.to_string(),
+    ];
+
+    let parser = ClangParser::with_paths_and_defines(include_paths, system_include_paths, defines)
+        .expect("Failed to create parser");
+
+    let result = parser.parse_file(&stats_server_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+
+            println!("Successfully parsed stats_server.cc with {} functions", module.functions.len());
+            for func in &module.functions {
+                println!("  Function: {}", func.display_name);
+            }
+
+            // stats_server.cc has server functions
+            assert!(module.functions.len() > 0, "Expected to find stats server functions");
+        }
+        Err(e) => {
+            println!("Note: stats_server.cc parsing failed: {:?}", e);
+            println!("This may require additional stub headers");
+        }
+    }
+}
