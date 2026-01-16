@@ -523,4 +523,6 @@ Current status:
 
 Next steps:
 1. **rustc Integration (2.3)** - ✅ Completed [26:01:16, 17:00] - Query override infrastructure in place
-2. **Expand mako parsing** - Many remaining files need external library stubs (eRPC, boost, YAML, bsoncxx). Added stubs for: gflags, libevent, protobuf, gperftools, rocksdb, boost, yaml-cpp
+2. **MIR Conversion (2.4)** - ✅ Core completed [26:01:16, 23:15] - ~290 LOC of conversion code, all MIR constructs supported
+3. **Integration Testing (2.4.10)** - Wire up end-to-end compilation with rustc
+4. **Expand mako parsing** - Some files need external library stubs (eRPC, bsoncxx)
