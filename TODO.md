@@ -353,7 +353,11 @@ See [PLAN_CPP20_MAKO.md](PLAN_CPP20_MAKO.md) for detailed plan.
     - [x] `vendor/mako/src/deptran/mencius/exec.cc` - **PARSED**: 4747 functions [26:01:16, 12:45]
     - [x] `vendor/mako/src/deptran/extern_c/frame.cc` - **PARSED**: 4754 functions [26:01:16, 12:45]
     - [x] `vendor/mako/src/deptran/extern_c/sched.cc` - **PARSED**: 4754 functions [26:01:16, 12:45]
+    - [x] `vendor/mako/src/deptran/rcc/row.cc` - **PARSED**: 4750 functions [26:01:16, 13:00]
+    - [x] `vendor/mako/src/deptran/occ/tx.cc` - **PARSED**: 4750 functions [26:01:16, 13:00]
+    - [x] `vendor/mako/src/bench/tpcc_real_dist/procedure.cc` - **PARSED**: 4754 functions [26:01:16, 13:00]
     - [-] `vendor/mako/src/deptran/mongodb/server.cc` - Needs bsoncxx and rcc_rpc.h (external deps)
+    - [-] `vendor/mako/src/bench/micro/procedure.cc` - Needs communicator.h → rcc_rpc.h (generated RPC)
     - [ ] Remaining files need: eRPC library stubs, rcc_rpc.h (generated RPC), bsoncxx
   - [ ] Link and run tests
 
@@ -420,7 +424,7 @@ Migration: After C++20 support is complete, deprecate these.
 ## 5. Testing & Milestones
 
 ### 5.1 Unit Tests
-- [x] fragile-clang: 381 tests passing (27 unit + 354 integration) - includes 10 coroutine + 7 exception + 6 RTTI + 8 promise type + 8 awaitable + 8 generator + 3 noexcept + 1 member access + 1 stack unwinding + 160 mako file tests [26:01:16]
+- [x] fragile-clang: 384 tests passing (27 unit + 357 integration) - includes 10 coroutine + 7 exception + 6 RTTI + 8 promise type + 8 awaitable + 8 generator + 3 noexcept + 1 member access + 1 stack unwinding + 163 mako file tests [26:01:16]
 - [x] fragile-rustc-driver: 6 tests passing
 - [x] fragile-runtime: Compiles
 
@@ -440,8 +444,8 @@ Migration: After C++20 support is complete, deprecate these.
 
 Current status:
 - **rrr module**: 20/20 files parsing (100%) - all base, misc, reactor, rpc files parsing
-- **mako module**: 127/338 files parsing (~38%) - includes all 12 memdb files, deptran (consensus executors), masstree, masstree-beta (all 28 files), all lib files
-- **Total tests**: 381 passing (fragile-clang integration tests)
+- **mako module**: 130/338 files parsing (~39%) - includes all 12 memdb files, deptran (consensus executors, rcc, occ), masstree, masstree-beta (all 28 files), all lib files
+- **Total tests**: 384 passing (fragile-clang integration tests)
 - **Milestones**: M1 ✅, M2-M4 (parsing complete, compilation pending)
 
 Next steps:
