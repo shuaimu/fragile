@@ -1,12 +1,18 @@
 // Minimal pthread.h stub for fragile parsing
-#ifndef _FRAGILE_PTHREAD_H_
-#define _FRAGILE_PTHREAD_H_
+// Uses same include guard as system header to avoid conflicts
+#ifndef _PTHREAD_H
+#define _PTHREAD_H
 
 #include "cstdint"
 #include "sched.h"
+#include "time.h"  // For timespec
 
-// pthread types
+// pthread types - use conditional to avoid redefinition
+#ifndef __pthread_t_defined
 typedef unsigned long pthread_t;
+#define __pthread_t_defined
+#endif
+
 typedef int pthread_attr_t;
 typedef int pthread_mutex_t;
 typedef int pthread_mutexattr_t;
@@ -21,30 +27,32 @@ typedef int pthread_key_t;
 typedef int pthread_once_t;
 
 // Thread constants
+#ifndef PTHREAD_CREATE_JOINABLE
 #define PTHREAD_CREATE_JOINABLE 0
 #define PTHREAD_CREATE_DETACHED 1
 #define PTHREAD_MUTEX_NORMAL 0
 #define PTHREAD_MUTEX_RECURSIVE 1
 #define PTHREAD_MUTEX_ERRORCHECK 2
 #define PTHREAD_MUTEX_DEFAULT PTHREAD_MUTEX_NORMAL
+#endif
 
 // Static initializers
+#ifndef PTHREAD_MUTEX_INITIALIZER
 #define PTHREAD_MUTEX_INITIALIZER 0
 #define PTHREAD_COND_INITIALIZER 0
 #define PTHREAD_RWLOCK_INITIALIZER 0
 #define PTHREAD_ONCE_INIT 0
+#endif
 
 // Cancel state constants
+#ifndef PTHREAD_CANCEL_ENABLE
 #define PTHREAD_CANCEL_ENABLE 0
 #define PTHREAD_CANCEL_DISABLE 1
 #define PTHREAD_CANCEL_DEFERRED 0
 #define PTHREAD_CANCEL_ASYNCHRONOUS 1
+#endif
 
-// timespec for timed operations
-struct timespec {
-    long tv_sec;   // seconds
-    long tv_nsec;  // nanoseconds
-};
+// timespec already defined in time.h
 
 extern "C" {
 
@@ -108,4 +116,4 @@ void pthread_testcancel(void);
 
 }
 
-#endif // _FRAGILE_PTHREAD_H_
+#endif // _PTHREAD_H

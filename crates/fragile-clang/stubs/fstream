@@ -7,30 +7,6 @@
 
 namespace std {
 
-// Base class for file stream state
-class ios_base {
-public:
-    using openmode = int;
-    static constexpr openmode in = 0x01;
-    static constexpr openmode out = 0x02;
-    static constexpr openmode ate = 0x04;
-    static constexpr openmode app = 0x08;
-    static constexpr openmode trunc = 0x10;
-    static constexpr openmode binary = 0x20;
-
-    using seekdir = int;
-    static constexpr seekdir beg = 0;
-    static constexpr seekdir cur = 1;
-    static constexpr seekdir end = 2;
-
-    bool good() const { return true; }
-    bool eof() const { return false; }
-    bool fail() const { return false; }
-    bool bad() const { return false; }
-    bool operator!() const { return fail(); }
-    explicit operator bool() const { return !fail(); }
-};
-
 // Basic filebuf stub
 template<typename CharT>
 class basic_filebuf {
@@ -38,7 +14,7 @@ public:
     basic_filebuf() = default;
     ~basic_filebuf() = default;
 
-    basic_filebuf* open(const char* filename, ios_base::openmode mode) { return this; }
+    basic_filebuf* open(const char* filename, ios_base::openmode mode) { (void)filename; (void)mode; return this; }
     basic_filebuf* open(const string& filename, ios_base::openmode mode) { return open(filename.c_str(), mode); }
     basic_filebuf* close() { return this; }
     bool is_open() const { return true; }
@@ -47,29 +23,30 @@ public:
 using filebuf = basic_filebuf<char>;
 using wfilebuf = basic_filebuf<wchar_t>;
 
-// Input file stream
+// Input file stream - inherits from basic_istream
 template<typename CharT>
-class basic_ifstream : public ios_base {
+class basic_ifstream : public basic_istream<CharT> {
 public:
+    using openmode = typename ios_base::openmode;
+    using seekdir = typename ios_base::seekdir;
+
     basic_ifstream() = default;
-    explicit basic_ifstream(const char* filename, openmode mode = in) {}
-    explicit basic_ifstream(const string& filename, openmode mode = in) {}
+    explicit basic_ifstream(const char* filename, openmode mode = ios_base::in) { (void)filename; (void)mode; }
+    explicit basic_ifstream(const string& filename, openmode mode = ios_base::in) { (void)filename; (void)mode; }
     ~basic_ifstream() = default;
 
-    void open(const char* filename, openmode mode = in) {}
-    void open(const string& filename, openmode mode = in) {}
+    void open(const char* filename, openmode mode = ios_base::in) { (void)filename; (void)mode; }
+    void open(const string& filename, openmode mode = ios_base::in) { open(filename.c_str(), mode); }
     bool is_open() const { return true; }
     void close() {}
 
-    basic_ifstream& read(CharT* s, streamsize n) { return *this; }
+    basic_ifstream& read(CharT* s, streamsize n) { (void)s; (void)n; return *this; }
     streamsize gcount() const { return 0; }
-    basic_ifstream& getline(CharT* s, streamsize n) { return *this; }
-    basic_ifstream& getline(CharT* s, streamsize n, CharT delim) { return *this; }
-    int get() { return -1; }
-    basic_ifstream& get(CharT& c) { return *this; }
+    basic_ifstream& getline(CharT* s, streamsize n) { (void)s; (void)n; return *this; }
+    basic_ifstream& getline(CharT* s, streamsize n, CharT delim) { (void)s; (void)n; (void)delim; return *this; }
 
-    basic_ifstream& seekg(streampos pos) { return *this; }
-    basic_ifstream& seekg(streamoff off, seekdir dir) { return *this; }
+    basic_ifstream& seekg(streampos pos) { (void)pos; return *this; }
+    basic_ifstream& seekg(streamoff off, seekdir dir) { (void)off; (void)dir; return *this; }
     streampos tellg() { return 0; }
 
     basic_filebuf<CharT>* rdbuf() const { return nullptr; }
@@ -78,62 +55,53 @@ public:
 using ifstream = basic_ifstream<char>;
 using wifstream = basic_ifstream<wchar_t>;
 
-// Output file stream
+// Output file stream - inherits from basic_ostream
 template<typename CharT>
-class basic_ofstream : public ios_base {
+class basic_ofstream : public basic_ostream<CharT> {
 public:
+    using openmode = typename ios_base::openmode;
+    using seekdir = typename ios_base::seekdir;
+
     basic_ofstream() = default;
-    explicit basic_ofstream(const char* filename, openmode mode = out) {}
-    explicit basic_ofstream(const string& filename, openmode mode = out) {}
+    explicit basic_ofstream(const char* filename, openmode mode = ios_base::out) { (void)filename; (void)mode; }
+    explicit basic_ofstream(const string& filename, openmode mode = ios_base::out) { (void)filename; (void)mode; }
     ~basic_ofstream() = default;
 
-    void open(const char* filename, openmode mode = out) {}
-    void open(const string& filename, openmode mode = out) {}
+    void open(const char* filename, openmode mode = ios_base::out) { (void)filename; (void)mode; }
+    void open(const string& filename, openmode mode = ios_base::out) { open(filename.c_str(), mode); }
     bool is_open() const { return true; }
     void close() {}
 
-    basic_ofstream& write(const CharT* s, streamsize n) { return *this; }
-    basic_ofstream& put(CharT c) { return *this; }
+    basic_ofstream& write(const CharT* s, streamsize n) { (void)s; (void)n; return *this; }
+    basic_ofstream& put(CharT c) { (void)c; return *this; }
     basic_ofstream& flush() { return *this; }
 
-    basic_ofstream& seekp(streampos pos) { return *this; }
-    basic_ofstream& seekp(streamoff off, seekdir dir) { return *this; }
+    basic_ofstream& seekp(streampos pos) { (void)pos; return *this; }
+    basic_ofstream& seekp(streamoff off, seekdir dir) { (void)off; (void)dir; return *this; }
     streampos tellp() { return 0; }
 
     basic_filebuf<CharT>* rdbuf() const { return nullptr; }
 
-    // Operator<< overloads
-    basic_ofstream& operator<<(const char* s) { return *this; }
-    basic_ofstream& operator<<(const string& s) { return *this; }
-    basic_ofstream& operator<<(char c) { return *this; }
-    basic_ofstream& operator<<(int n) { return *this; }
-    basic_ofstream& operator<<(unsigned int n) { return *this; }
-    basic_ofstream& operator<<(long n) { return *this; }
-    basic_ofstream& operator<<(unsigned long n) { return *this; }
-    basic_ofstream& operator<<(long long n) { return *this; }
-    basic_ofstream& operator<<(unsigned long long n) { return *this; }
-    basic_ofstream& operator<<(double n) { return *this; }
-    basic_ofstream& operator<<(float n) { return *this; }
-    basic_ofstream& operator<<(bool b) { return *this; }
-    basic_ofstream& operator<<(const void* p) { return *this; }
-    // Manipulators
-    basic_ofstream& operator<<(basic_ofstream& (*pf)(basic_ofstream&)) { return pf(*this); }
+    // Operator<< overloads (in addition to inherited ones from basic_ostream)
+    using basic_ostream<CharT>::operator<<;
 };
 
 using ofstream = basic_ofstream<char>;
 using wofstream = basic_ofstream<wchar_t>;
 
-// Input/output file stream
+// Input/output file stream - inherits from basic_iostream
 template<typename CharT>
-class basic_fstream : public ios_base {
+class basic_fstream : public basic_iostream<CharT> {
 public:
+    using openmode = typename ios_base::openmode;
+
     basic_fstream() = default;
-    explicit basic_fstream(const char* filename, openmode mode = in | out) {}
-    explicit basic_fstream(const string& filename, openmode mode = in | out) {}
+    explicit basic_fstream(const char* filename, openmode mode = ios_base::in | ios_base::out) { (void)filename; (void)mode; }
+    explicit basic_fstream(const string& filename, openmode mode = ios_base::in | ios_base::out) { (void)filename; (void)mode; }
     ~basic_fstream() = default;
 
-    void open(const char* filename, openmode mode = in | out) {}
-    void open(const string& filename, openmode mode = in | out) {}
+    void open(const char* filename, openmode mode = ios_base::in | ios_base::out) { (void)filename; (void)mode; }
+    void open(const string& filename, openmode mode = ios_base::in | ios_base::out) { open(filename.c_str(), mode); }
     bool is_open() const { return true; }
     void close() {}
 

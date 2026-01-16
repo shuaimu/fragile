@@ -133,15 +133,12 @@ void call_once(once_flag& flag, Callable&& f, Args&&... args) {
 template<typename... Mutexes>
 class scoped_lock {
 public:
-    explicit scoped_lock(Mutexes&... m) : mutexes_(m...) {}
+    explicit scoped_lock(Mutexes&...) {}
     ~scoped_lock() {}
     scoped_lock(const scoped_lock&) = delete;
     scoped_lock& operator=(const scoped_lock&) = delete;
 private:
-    // We just store a tuple, actual implementation would lock all
-    // For parsing purposes, this is sufficient
-    int dummy_;
-    // Using a simple approach since we don't need real functionality
+    // For parsing purposes, this stub just needs to compile
     [[maybe_unused]] int placeholder_;
 };
 

@@ -1,14 +1,19 @@
 // Minimal time.h stub for fragile parsing
-#ifndef _FRAGILE_TIME_H_
-#define _FRAGILE_TIME_H_
+// Uses same include guard as system header to avoid conflicts
+#ifndef _TIME_H
+#define _TIME_H
 
 #include "cstdint"
 #include "cerrno"  // Common to need errno with time functions
 
 // clockid_t for clock_gettime
+#ifndef __clockid_t_defined
 typedef int clockid_t;
+#define __clockid_t_defined
+#endif
 
 // Clock identifiers
+#ifndef CLOCK_REALTIME
 #define CLOCK_REALTIME           0
 #define CLOCK_MONOTONIC          1
 #define CLOCK_PROCESS_CPUTIME_ID 2
@@ -17,17 +22,25 @@ typedef int clockid_t;
 #define CLOCK_REALTIME_COARSE    5
 #define CLOCK_MONOTONIC_COARSE   6
 #define CLOCK_BOOTTIME           7
+#endif
 
 // time_t
+#ifndef __time_t_defined
 typedef long time_t;
+#define __time_t_defined
+#endif
 
-// timespec structure
+// timespec structure - use conditional to avoid conflict with system headers
+#ifndef __timespec_defined
 struct timespec {
     time_t tv_sec;   // Seconds
     long   tv_nsec;  // Nanoseconds
 };
+#define __timespec_defined
+#endif
 
 // tm structure for broken-down time
+#ifndef __tm_defined
 struct tm {
     int tm_sec;    // Seconds (0-60)
     int tm_min;    // Minutes (0-59)
@@ -39,6 +52,8 @@ struct tm {
     int tm_yday;   // Day of year (0-365)
     int tm_isdst;  // Daylight saving time flag
 };
+#define __tm_defined
+#endif
 
 // Time functions
 extern "C" {
@@ -67,4 +82,4 @@ int nanosleep(const struct timespec* req, struct timespec* rem);
 
 }
 
-#endif // _FRAGILE_TIME_H_
+#endif // _TIME_H

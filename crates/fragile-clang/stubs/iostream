@@ -7,6 +7,11 @@
 
 namespace std {
 
+// Stream position and size types
+using streamsize = long;
+using streampos = long;
+using streamoff = long;
+
 // Forward declarations
 class ios_base;
 template<typename CharT, typename Traits = void> class basic_ios;

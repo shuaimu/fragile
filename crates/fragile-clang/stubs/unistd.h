@@ -1,6 +1,7 @@
 // Minimal unistd.h stub for fragile parsing (POSIX API)
-#ifndef _FRAGILE_UNISTD_H_
-#define _FRAGILE_UNISTD_H_
+// Uses same include guard as system header to avoid conflicts
+#ifndef _UNISTD_H
+#define _UNISTD_H
 
 #include "cstdint"
 
@@ -14,14 +15,38 @@
 #define NULL nullptr
 #endif
 
-// Types
+// Types (using conditional defines to avoid redefinition)
+#ifndef __pid_t_defined
 typedef int pid_t;
+#define __pid_t_defined
+#endif
+
+#ifndef __uid_t_defined
 typedef unsigned int uid_t;
+#define __uid_t_defined
+#endif
+
+#ifndef __gid_t_defined
 typedef unsigned int gid_t;
+#define __gid_t_defined
+#endif
+
+#ifndef __ssize_t_defined
 typedef long ssize_t;
+#define __ssize_t_defined
+#endif
+
+#ifndef __off_t_defined
 typedef long off_t;
+#define __off_t_defined
+#endif
+
+#ifndef __useconds_t_defined
 typedef unsigned int useconds_t;
-typedef int intptr_t;
+#define __useconds_t_defined
+#endif
+
+// Note: intptr_t is defined in cstdint, don't redefine it
 
 extern "C" {
 
@@ -72,7 +97,7 @@ int faccessat(int dirfd, const char* pathname, int mode, int flags);
 int link(const char* oldpath, const char* newpath);
 int unlink(const char* pathname);
 int rmdir(const char* pathname);
-int rename(const char* oldpath, const char* newpath);
+// Note: rename is in cstdio, don't redeclare
 int symlink(const char* target, const char* linkpath);
 ssize_t readlink(const char* pathname, char* buf, size_t bufsiz);
 int truncate(const char* path, off_t length);
@@ -208,4 +233,4 @@ extern int optind, opterr, optopt;
 
 }
 
-#endif // _FRAGILE_UNISTD_H_
+#endif // _UNISTD_H

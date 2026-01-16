@@ -1,6 +1,7 @@
 // Minimal sys/types.h stub for fragile parsing
-#ifndef _FRAGILE_SYS_TYPES_H_
-#define _FRAGILE_SYS_TYPES_H_
+// Uses same include guard as system header to avoid conflicts
+#ifndef _SYS_TYPES_H
+#define _SYS_TYPES_H
 
 #include "../cstdint"
 
@@ -27,8 +28,8 @@ typedef unsigned short sa_family_t;
 typedef int key_t;
 
 // 64-bit variants
-typedef long long off64_t;
+typedef long off64_t;  // Match system header type
 typedef unsigned long long ino64_t;
 typedef long long blkcnt64_t;
 
-#endif // _FRAGILE_SYS_TYPES_H_
+#endif // _SYS_TYPES_H
