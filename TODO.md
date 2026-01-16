@@ -151,9 +151,9 @@ See [PLAN_CPP20_MAKO.md](PLAN_CPP20_MAKO.md) for detailed plan.
 - [x] **D.6 Awaitables** (~100 lines) [26:01:16, 04:40] ([docs/dev/plan_awaitables.md](docs/dev/plan_awaitables.md))
   - [x] D.6.1 await_ready/suspend/resume protocol (8 tests added)
   - [x] D.6.2 co_await expression evaluation with custom awaitables
-- [ ] **D.7 Generators** (~100 lines)
-  - [ ] D.7.1 co_yield expression
-  - [ ] D.7.2 Generator pattern test
+- [x] **D.7 Generators** (~100 lines) [26:01:16, 04:50] ([docs/dev/plan_generators.md](docs/dev/plan_generators.md))
+  - [x] D.7.1 co_yield expression (8 tests added)
+  - [x] D.7.2 Generator pattern test (fibonacci, countdown, range)
 
 ### 1.5 Phase E: Advanced Features
 - [x] **E.1 Exceptions** [26:01:16, 03:55] ([docs/dev/plan_exception_support.md](docs/dev/plan_exception_support.md))
@@ -247,7 +247,7 @@ Migration: After C++20 support is complete, deprecate these.
 ## 5. Testing & Milestones
 
 ### 5.1 Unit Tests
-- [x] fragile-clang: 210 tests passing (27 unit + 183 integration) - includes 10 coroutine + 7 exception + 6 RTTI + 8 promise type + 8 awaitable tests
+- [x] fragile-clang: 218 tests passing (27 unit + 191 integration) - includes 10 coroutine + 7 exception + 6 RTTI + 8 promise type + 8 awaitable + 8 generator tests
 - [x] fragile-rustc-driver: 6 tests passing
 - [x] fragile-runtime: Compiles
 
