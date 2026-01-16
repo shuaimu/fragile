@@ -1,0 +1,17 @@
+[package]
+name = "fragile-runtime"
+description = "Runtime library for C++ feature support in Fragile compiler"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+# We use libc for platform-specific operations
+libc.workspace = true
+
+[features]
+default = ["std"]
+std = []

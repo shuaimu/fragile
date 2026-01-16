@@ -1,0 +1,281 @@
+//! Clang AST representation.
+//!
+//! This module provides a simplified view of the Clang AST that's easier to
+//! work with for MIR conversion.
+
+use crate::types::CppType;
+
+/// A parsed Clang AST.
+#[derive(Debug)]
+pub struct ClangAst {
+    /// Root translation unit
+    pub translation_unit: ClangNode,
+}
+
+/// A node in the Clang AST.
+#[derive(Debug)]
+pub struct ClangNode {
+    /// Kind of this node
+    pub kind: ClangNodeKind,
+    /// Child nodes
+    pub children: Vec<ClangNode>,
+    /// Source location info (for error messages)
+    pub location: SourceLocation,
+}
+
+/// Source location for error reporting.
+#[derive(Debug, Clone, Default)]
+pub struct SourceLocation {
+    pub file: Option<String>,
+    pub line: u32,
+    pub column: u32,
+}
+
+/// Kinds of Clang AST nodes we care about.
+#[derive(Debug)]
+pub enum ClangNodeKind {
+    /// Translation unit (root)
+    TranslationUnit,
+
+    // Declarations
+    /// Function declaration/definition
+    FunctionDecl {
+        name: String,
+        return_type: CppType,
+        params: Vec<(String, CppType)>,
+        is_definition: bool,
+    },
+    /// Parameter declaration
+    ParmVarDecl {
+        name: String,
+        ty: CppType,
+    },
+    /// Variable declaration
+    VarDecl {
+        name: String,
+        ty: CppType,
+        has_init: bool,
+    },
+    /// Struct/class declaration
+    RecordDecl {
+        name: String,
+        is_class: bool,
+        fields: Vec<(String, CppType)>,
+    },
+    /// Field declaration
+    FieldDecl {
+        name: String,
+        ty: CppType,
+    },
+    /// Namespace declaration
+    NamespaceDecl {
+        /// Namespace name (None for anonymous namespaces)
+        name: Option<String>,
+    },
+
+    // Statements
+    /// Compound statement (block)
+    CompoundStmt,
+    /// Return statement
+    ReturnStmt,
+    /// If statement
+    IfStmt,
+    /// While statement
+    WhileStmt,
+    /// For statement
+    ForStmt,
+    /// Declaration statement
+    DeclStmt,
+    /// Expression statement
+    ExprStmt,
+    /// Break statement
+    BreakStmt,
+    /// Continue statement
+    ContinueStmt,
+
+    // Expressions
+    /// Integer literal
+    IntegerLiteral(i128),
+    /// Floating-point literal
+    FloatingLiteral(f64),
+    /// Boolean literal
+    BoolLiteral(bool),
+    /// String literal
+    StringLiteral(String),
+    /// Reference to a declared entity
+    DeclRefExpr {
+        name: String,
+        ty: CppType,
+    },
+    /// Binary operator
+    BinaryOperator {
+        op: BinaryOp,
+        ty: CppType,
+    },
+    /// Unary operator
+    UnaryOperator {
+        op: UnaryOp,
+        ty: CppType,
+    },
+    /// Function call
+    CallExpr {
+        ty: CppType,
+    },
+    /// Member access (a.b or a->b)
+    MemberExpr {
+        member_name: String,
+        is_arrow: bool,
+        ty: CppType,
+    },
+    /// Array subscript (a[i])
+    ArraySubscriptExpr {
+        ty: CppType,
+    },
+    /// Cast expression
+    CastExpr {
+        cast_kind: CastKind,
+        ty: CppType,
+    },
+    /// Conditional operator (a ? b : c)
+    ConditionalOperator {
+        ty: CppType,
+    },
+    /// Parenthesized expression
+    ParenExpr {
+        ty: CppType,
+    },
+    /// Implicit cast (inserted by compiler)
+    ImplicitCastExpr {
+        cast_kind: CastKind,
+        ty: CppType,
+    },
+
+    /// Unknown or unhandled node kind
+    Unknown(String),
+}
+
+/// Binary operators.
+#[derive(Debug, Clone, Copy)]
+pub enum BinaryOp {
+    // Arithmetic
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Rem,
+    // Bitwise
+    And,
+    Or,
+    Xor,
+    Shl,
+    Shr,
+    // Comparison
+    Eq,
+    Ne,
+    Lt,
+    Le,
+    Gt,
+    Ge,
+    // Logical
+    LAnd,
+    LOr,
+    // Assignment
+    Assign,
+    AddAssign,
+    SubAssign,
+    MulAssign,
+    DivAssign,
+    RemAssign,
+    AndAssign,
+    OrAssign,
+    XorAssign,
+    ShlAssign,
+    ShrAssign,
+    // Comma
+    Comma,
+}
+
+/// Unary operators.
+#[derive(Debug, Clone, Copy)]
+pub enum UnaryOp {
+    /// Prefix increment (++x)
+    PreInc,
+    /// Prefix decrement (--x)
+    PreDec,
+    /// Postfix increment (x++)
+    PostInc,
+    /// Postfix decrement (x--)
+    PostDec,
+    /// Address-of (&x)
+    AddrOf,
+    /// Dereference (*x)
+    Deref,
+    /// Unary plus (+x)
+    Plus,
+    /// Unary minus (-x)
+    Minus,
+    /// Bitwise not (~x)
+    Not,
+    /// Logical not (!x)
+    LNot,
+}
+
+/// Cast kinds.
+#[derive(Debug, Clone, Copy)]
+pub enum CastKind {
+    /// No-op cast (e.g., const removal for value)
+    NoOp,
+    /// Integral conversion (e.g., int to long)
+    IntegralCast,
+    /// Floating-point conversion
+    FloatingCast,
+    /// Float to int
+    FloatingToIntegral,
+    /// Int to float
+    IntegralToFloating,
+    /// Pointer to int
+    PointerToIntegral,
+    /// Int to pointer
+    IntegralToPointer,
+    /// Pointer to pointer
+    BitCast,
+    /// Array to pointer decay
+    ArrayToPointerDecay,
+    /// Function to pointer decay
+    FunctionToPointerDecay,
+    /// L-value to r-value conversion
+    LValueToRValue,
+    /// Null pointer to type
+    NullToPointer,
+    /// Unknown/other cast
+    Other,
+}
+
+impl ClangNode {
+    /// Create a new node with the given kind.
+    pub fn new(kind: ClangNodeKind) -> Self {
+        Self {
+            kind,
+            children: Vec::new(),
+            location: SourceLocation::default(),
+        }
+    }
+
+    /// Add a child node.
+    pub fn with_child(mut self, child: ClangNode) -> Self {
+        self.children.push(child);
+        self
+    }
+
+    /// Add multiple child nodes.
+    pub fn with_children(mut self, children: Vec<ClangNode>) -> Self {
+        self.children = children;
+        self
+    }
+
+    /// Set the source location.
+    pub fn with_location(mut self, location: SourceLocation) -> Self {
+        self.location = location;
+        self
+    }
+}

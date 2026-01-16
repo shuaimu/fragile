@@ -1,0 +1,25 @@
+[package]
+name = "fragile-rustc-driver"
+description = "Custom rustc driver with MIR injection for Fragile compiler"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# This crate requires nightly Rust with rustc-dev component
+# Run: rustup component add rustc-dev llvm-tools-preview --toolchain nightly
+
+[dependencies]
+# Internal crates
+fragile-clang = { path = "../fragile-clang" }
+
+# Error handling
+miette.workspace = true
+thiserror.workspace = true
+
+# Utilities
+rustc-hash.workspace = true
+
+[features]
+# Enable rustc integration (requires nightly + rustc-dev component)
+# When disabled, the crate provides stub implementations for testing
+rustc-integration = []

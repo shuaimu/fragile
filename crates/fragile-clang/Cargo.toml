@@ -1,0 +1,21 @@
+[package]
+name = "fragile-clang"
+description = "Clang AST parsing and MIR conversion for Fragile compiler"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+# Clang bindings - using clang-sys for low-level access
+clang-sys.workspace = true
+
+# Error handling
+miette.workspace = true
+thiserror.workspace = true
+
+# Utilities
+smol_str.workspace = true
+rustc-hash.workspace = true
+
+[dev-dependencies]
+fragile-rustc-driver.workspace = true
