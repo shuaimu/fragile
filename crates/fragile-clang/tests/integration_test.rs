@@ -3888,3 +3888,47 @@ fn test_concept_with_type_requirement() {
     let concept = &module.concepts[0];
     assert_eq!(concept.name, "HasValueType");
 }
+
+// ============================================================================
+// Header Include Path Tests
+// ============================================================================
+
+/// Test that parser can be created with system include paths.
+#[test]
+fn test_parser_with_system_includes() {
+    let parser = ClangParser::with_system_includes().unwrap();
+    // Just verify it creates successfully
+    let code = r#"
+        int main() { return 0; }
+    "#;
+    let ast = parser.parse_string(code, "test.cpp").unwrap();
+    assert!(ast.translation_unit.children.len() >= 1);
+}
+
+/// Test parsing code that includes a system header.
+/// This tests that header search paths are working.
+#[test]
+fn test_parse_with_std_header() {
+    let parser = ClangParser::with_system_includes().unwrap();
+    let code = r#"
+        #include <cstddef>
+        size_t get_size() { return 42; }
+    "#;
+
+    // This should not error with "file not found"
+    let result = parser.parse_string(code, "test.cpp");
+    assert!(result.is_ok(), "Failed to parse code with <cstddef>: {:?}", result.err());
+}
+
+/// Test that custom include paths work.
+#[test]
+fn test_parser_with_custom_include_paths() {
+    let custom_paths = vec!["/tmp".to_string()];
+    let parser = ClangParser::with_include_paths(custom_paths).unwrap();
+
+    let code = r#"
+        int main() { return 0; }
+    "#;
+    let ast = parser.parse_string(code, "test.cpp").unwrap();
+    assert!(ast.translation_unit.children.len() >= 1);
+}

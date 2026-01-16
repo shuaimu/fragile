@@ -94,25 +94,38 @@ See [PLAN_CPP20_MAKO.md](PLAN_CPP20_MAKO.md) for detailed plan.
   - Note: B.4.6 Standard concepts (std::integral, std::same_as) deferred to Phase C (Standard Library)
 
 ### 1.3 Phase C: Standard Library
-- [ ] **C.1 Containers**
-  - [ ] std::vector
-  - [ ] std::string
+
+#### C.0 Infrastructure (prerequisite)
+- [x] **C.0.1 Header search path support** - ClangParser include paths for STL headers [26:01:16, 03:05]
+- [ ] **C.0.2 Type alias support** - Parse and track `using` type aliases (e.g., `std::vector<T>::iterator`)
+
+#### C.1 Containers
+- [ ] **C.1.1 std::vector (basic)**
+  - [ ] Parse vector template from `<vector>` header
+  - [ ] Support push_back, pop_back, size, operator[]
+  - [ ] Support begin(), end() iterators
+- [ ] **C.1.2 std::string**
+  - [ ] Parse string from `<string>` header
+  - [ ] Basic operations (c_str(), size(), operator[])
+- [ ] **C.1.3 Other containers** (deferred)
   - [ ] std::map / std::unordered_map
-  - [ ] std::optional
-  - [ ] std::variant
-- [ ] **C.2 Smart Pointers**
-  - [ ] std::unique_ptr
-  - [ ] std::shared_ptr
-  - [ ] std::weak_ptr
-- [ ] **C.3 Concurrency**
-  - [ ] std::thread
-  - [ ] std::mutex / std::lock_guard
-  - [ ] std::condition_variable
-  - [ ] std::atomic
-- [ ] **C.4 Utilities**
-  - [ ] std::function
-  - [ ] std::chrono
-  - [ ] std::move / std::forward
+  - [ ] std::optional, std::variant
+
+#### C.2 Smart Pointers
+- [ ] std::unique_ptr
+- [ ] std::shared_ptr
+- [ ] std::weak_ptr
+
+#### C.3 Concurrency
+- [ ] std::thread
+- [ ] std::mutex / std::lock_guard
+- [ ] std::condition_variable
+- [ ] std::atomic
+
+#### C.4 Utilities
+- [ ] std::function
+- [ ] std::chrono
+- [ ] std::move / std::forward (✅ basic support done in Phase A)
 
 ### 1.4 Phase D: C++20 Coroutines
 - [ ] **D.1 Infrastructure**

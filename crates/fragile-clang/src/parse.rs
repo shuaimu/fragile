@@ -13,18 +13,82 @@ use std::ptr;
 /// Parser that uses libclang to parse C++ source files.
 pub struct ClangParser {
     index: clang_sys::CXIndex,
+    /// Additional include paths for header files
+    include_paths: Vec<String>,
 }
 
 impl ClangParser {
-    /// Create a new Clang parser.
+    /// Create a new Clang parser with default settings.
     pub fn new() -> Result<Self> {
+        Self::with_include_paths(Vec::new())
+    }
+
+    /// Create a new Clang parser with custom include paths.
+    pub fn with_include_paths(include_paths: Vec<String>) -> Result<Self> {
         unsafe {
             let index = clang_sys::clang_createIndex(0, 0);
             if index.is_null() {
                 return Err(miette!("Failed to create clang index"));
             }
-            Ok(Self { index })
+            Ok(Self {
+                index,
+                include_paths,
+            })
         }
+    }
+
+    /// Create a Clang parser with system C++ standard library include paths.
+    /// This enables parsing code that includes headers like `<vector>`, `<string>`.
+    pub fn with_system_includes() -> Result<Self> {
+        // Common include paths for C++ standard library
+        let system_paths = Self::detect_system_include_paths();
+        Self::with_include_paths(system_paths)
+    }
+
+    /// Detect system C++ include paths by querying clang.
+    fn detect_system_include_paths() -> Vec<String> {
+        // Common paths for libstdc++ (GCC) and libc++ (LLVM)
+        let possible_paths = vec![
+            // GCC libstdc++ paths (common on Linux)
+            "/usr/include/c++/14".to_string(),
+            "/usr/include/c++/13".to_string(),
+            "/usr/include/c++/12".to_string(),
+            "/usr/include/c++/11".to_string(),
+            "/usr/lib/gcc/x86_64-linux-gnu/14/include".to_string(),
+            "/usr/lib/gcc/x86_64-linux-gnu/13/include".to_string(),
+            // Platform-specific includes
+            "/usr/include/x86_64-linux-gnu/c++/14".to_string(),
+            "/usr/include/x86_64-linux-gnu/c++/13".to_string(),
+            "/usr/include/x86_64-linux-gnu".to_string(),
+            // Standard includes
+            "/usr/include".to_string(),
+            "/usr/local/include".to_string(),
+            // LLVM/Clang includes
+            "/usr/lib/llvm-19/lib/clang/19/include".to_string(),
+            "/usr/lib/llvm-18/lib/clang/18/include".to_string(),
+        ];
+
+        // Filter to only existing paths
+        possible_paths
+            .into_iter()
+            .filter(|p| std::path::Path::new(p).exists())
+            .collect()
+    }
+
+    /// Build compiler arguments including include paths.
+    fn build_compiler_args(&self) -> Vec<CString> {
+        let mut args = vec![
+            CString::new("-x").unwrap(),
+            CString::new("c++").unwrap(),
+            CString::new("-std=c++20").unwrap(),
+        ];
+
+        // Add include paths
+        for path in &self.include_paths {
+            args.push(CString::new(format!("-I{}", path)).unwrap());
+        }
+
+        args
     }
 
     /// Parse a C++ source file into a Clang AST.
@@ -33,12 +97,8 @@ impl ClangParser {
         let c_path = CString::new(path_str.as_ref())
             .map_err(|_| miette!("Invalid path: {}", path_str))?;
 
-        // Compiler arguments for C++ parsing
-        let args: Vec<CString> = vec![
-            CString::new("-x").unwrap(),
-            CString::new("c++").unwrap(),
-            CString::new("-std=c++20").unwrap(),
-        ];
+        // Compiler arguments including include paths
+        let args = self.build_compiler_args();
         let c_args: Vec<*const i8> = args.iter().map(|s| s.as_ptr()).collect();
 
         unsafe {
@@ -98,12 +158,8 @@ impl ClangParser {
             Length: source.len() as u64,
         };
 
-        // Compiler arguments
-        let args: Vec<CString> = vec![
-            CString::new("-x").unwrap(),
-            CString::new("c++").unwrap(),
-            CString::new("-std=c++20").unwrap(),
-        ];
+        // Compiler arguments including include paths
+        let args = self.build_compiler_args();
         let c_args: Vec<*const i8> = args.iter().map(|s| s.as_ptr()).collect();
 
         unsafe {
