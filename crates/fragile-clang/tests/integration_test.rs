@@ -8140,3 +8140,69 @@ fn test_noexcept_conditional() {
     assert!(tmpl.is_noexcept, "noexcept(expr) should have is_noexcept=true");
 }
 
+/// Test arrow (->) vs dot (.) member access detection in AST.
+#[test]
+fn test_member_access_arrow_vs_dot() {
+    let parser = ClangParser::new().expect("Failed to create parser");
+
+    let source = r#"
+        struct Point {
+            int x;
+            int y;
+        };
+
+        void test_dot(Point p) {
+            int a = p.x;
+            int b = p.y;
+        }
+
+        void test_arrow(Point* p) {
+            int a = p->x;
+            int b = p->y;
+        }
+    "#;
+
+    let ast = parser.parse_string(source, "member_access.cpp").expect("Failed to parse");
+
+    // Find the function bodies and check member access expressions
+    fn find_member_exprs(node: &fragile_clang::ClangNode) -> Vec<(String, bool)> {
+        let mut result = Vec::new();
+        if let fragile_clang::ClangNodeKind::MemberExpr { member_name, is_arrow, .. } = &node.kind {
+            result.push((member_name.clone(), *is_arrow));
+        }
+        for child in &node.children {
+            result.extend(find_member_exprs(child));
+        }
+        result
+    }
+
+    // Find test_dot function - should have dot access (is_arrow = false)
+    fn find_function<'a>(node: &'a fragile_clang::ClangNode, name: &str) -> Option<&'a fragile_clang::ClangNode> {
+        if let fragile_clang::ClangNodeKind::FunctionDecl { name: fn_name, .. } = &node.kind {
+            if fn_name == name {
+                return Some(node);
+            }
+        }
+        for child in &node.children {
+            if let Some(found) = find_function(child, name) {
+                return Some(found);
+            }
+        }
+        None
+    }
+
+    let dot_fn = find_function(&ast.translation_unit, "test_dot").expect("test_dot not found");
+    let dot_members = find_member_exprs(dot_fn);
+    assert_eq!(dot_members.len(), 2, "test_dot should have 2 member accesses");
+    for (name, is_arrow) in &dot_members {
+        assert!(!is_arrow, "Member {} in test_dot should use dot access, not arrow", name);
+    }
+
+    let arrow_fn = find_function(&ast.translation_unit, "test_arrow").expect("test_arrow not found");
+    let arrow_members = find_member_exprs(arrow_fn);
+    assert_eq!(arrow_members.len(), 2, "test_arrow should have 2 member accesses");
+    for (name, is_arrow) in &arrow_members {
+        assert!(is_arrow, "Member {} in test_arrow should use arrow access, not dot", name);
+    }
+}
+

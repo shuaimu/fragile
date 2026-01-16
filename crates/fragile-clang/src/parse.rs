@@ -381,6 +381,35 @@ impl ClangParser {
         }
     }
 
+    /// Check if a member reference expression uses arrow (->) or dot (.) access.
+    fn is_arrow_access(&self, cursor: clang_sys::CXCursor) -> bool {
+        unsafe {
+            let tu = clang_sys::clang_Cursor_getTranslationUnit(cursor);
+            let extent = clang_sys::clang_getCursorExtent(cursor);
+            let mut tokens: *mut clang_sys::CXToken = ptr::null_mut();
+            let mut num_tokens: u32 = 0;
+
+            clang_sys::clang_tokenize(tu, extent, &mut tokens, &mut num_tokens);
+
+            let mut is_arrow = false;
+            for i in 0..num_tokens {
+                let token = *tokens.add(i as usize);
+                let spelling = clang_sys::clang_getTokenSpelling(tu, token);
+                let token_str = cx_string_to_string(spelling);
+                if token_str == "->" {
+                    is_arrow = true;
+                    break;
+                }
+            }
+
+            if !tokens.is_null() {
+                clang_sys::clang_disposeTokens(tu, tokens, num_tokens);
+            }
+
+            is_arrow
+        }
+    }
+
     /// Convert a Clang cursor kind to our AST node kind.
     fn convert_cursor_kind(
         &self,
@@ -810,8 +839,8 @@ impl ClangParser {
                 clang_sys::CXCursor_MemberRefExpr => {
                     let member_name = cursor_spelling(cursor);
                     let ty = self.convert_type(clang_sys::clang_getCursorType(cursor));
-                    // Check if arrow or dot
-                    let is_arrow = false; // TODO: determine from cursor
+                    // Check if arrow or dot using token-based detection
+                    let is_arrow = self.is_arrow_access(cursor);
                     ClangNodeKind::MemberExpr {
                         member_name,
                         is_arrow,
