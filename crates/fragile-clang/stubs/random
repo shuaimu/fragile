@@ -1,0 +1,89 @@
+// Minimal random stub for fragile parsing
+// Provides basic random number generator types
+
+#ifndef _FRAGILE_RANDOM_
+#define _FRAGILE_RANDOM_
+
+#include "cstdint"
+
+namespace std {
+
+// Mersenne Twister engine
+class mt19937 {
+public:
+    using result_type = uint32_t;
+
+    static constexpr result_type min() { return 0; }
+    static constexpr result_type max() { return 0xFFFFFFFF; }
+
+    mt19937() = default;
+    explicit mt19937(result_type seed) { (void)seed; }
+
+    void seed(result_type s = 0) { (void)s; }
+    result_type operator()() { return 0; }
+    void discard(unsigned long long n) { (void)n; }
+};
+
+class mt19937_64 {
+public:
+    using result_type = uint64_t;
+
+    static constexpr result_type min() { return 0; }
+    static constexpr result_type max() { return 0xFFFFFFFFFFFFFFFFULL; }
+
+    mt19937_64() = default;
+    explicit mt19937_64(result_type seed) { (void)seed; }
+
+    void seed(result_type s = 0) { (void)s; }
+    result_type operator()() { return 0; }
+    void discard(unsigned long long n) { (void)n; }
+};
+
+// Distribution templates (minimal)
+template<typename IntType = int>
+class uniform_int_distribution {
+public:
+    using result_type = IntType;
+    using param_type = void*;  // Stub
+
+    uniform_int_distribution() = default;
+    uniform_int_distribution(IntType a, IntType b) { (void)a; (void)b; }
+
+    template<typename Generator>
+    result_type operator()(Generator& g) { return static_cast<result_type>(g()); }
+
+    result_type min() const { return 0; }
+    result_type max() const { return 0; }
+};
+
+template<typename RealType = double>
+class uniform_real_distribution {
+public:
+    using result_type = RealType;
+    using param_type = void*;  // Stub
+
+    uniform_real_distribution() = default;
+    uniform_real_distribution(RealType a, RealType b) { (void)a; (void)b; }
+
+    template<typename Generator>
+    result_type operator()(Generator& g) { (void)g; return 0.0; }
+
+    result_type min() const { return 0.0; }
+    result_type max() const { return 1.0; }
+};
+
+// Random device (stub)
+class random_device {
+public:
+    using result_type = unsigned int;
+
+    random_device() = default;
+
+    result_type operator()() { return 0; }
+    static constexpr result_type min() { return 0; }
+    static constexpr result_type max() { return 0xFFFFFFFF; }
+};
+
+} // namespace std
+
+#endif // _FRAGILE_RANDOM_

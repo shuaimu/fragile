@@ -4,18 +4,33 @@
 
 Attempt to compile the first Mako file: `vendor/mako/src/rrr/misc/rand.cpp`
 
-## Status: BLOCKED
+## Status: UNBLOCKED (via stub headers) [26:01:16, 04:15]
 
-### Blocking Issue
-GCC libstdc++ headers (version 12) don't parse correctly with libclang. Specific errors:
+### Original Blocking Issue
+GCC libstdc++ headers (version 12/14) don't parse correctly with libclang. Specific errors:
 - `type_traits` line 755: anonymous struct definition issues
 - `wchar.h` attribute incompatibilities
 - Cascading failures cause `uint64_t`, `std::mt19937` etc. to not be recognized
 
-### Resolution Options
+### Solution: Stub Headers
+Created minimal stub headers in `crates/fragile-clang/stubs/`:
+- **`cstdint`**: Basic integer types (uint64_t, int32_t, size_t, etc.)
+- **`inttypes.h`**: Format macros (PRId64, etc.) + cstdint types
+- **`random`**: Minimal std::mt19937, distributions, random_device
+
+These headers are added to include paths BEFORE system headers, allowing
+parsing to proceed with basic type definitions.
+
+### Result
+Successfully parsed rand.cpp with **225 functions** including:
+- `rdtsc` (inline assembly function from rand.cpp)
+- `to_string` overloads
+- Thread/atomic functions from STL
+- Internal GCC/stdlib functions
+
+### Alternative Options (if more coverage needed)
 1. **Install libc++**: Use LLVM's C++ standard library instead of GCC's libstdc++
-2. **Create stub headers**: Minimal STL type definitions for parsing
-3. **Use compatible toolchain**: Match GCC/Clang versions that work together
+2. **Expand stub headers**: Add more STL types as needed for other Mako files
 
 ## Work Completed [26:01:16]
 

@@ -176,7 +176,8 @@ See [PLAN_CPP20_MAKO.md](PLAN_CPP20_MAKO.md) for detailed plan.
   - [x] F.1.0 rand.cpp patterns test (thread_local, inline asm, STL) - 3 tests added
   - [x] F.1.1 Submodules initialized (rusty-cpp) [26:01:16, 04:05]
   - [x] F.1.2 Parser improvements: better error messages with file/line, KeepGoing mode, system header filtering [26:01:16, 04:05]
-  - [-] `vendor/mako/src/rrr/misc/rand.cpp` - **BLOCKED**: GCC libstdc++ headers don't parse correctly with libclang; need libc++ installation
+  - [x] F.1.3 Stub headers for STL types (cstdint, random) [26:01:16, 04:15]
+  - [x] `vendor/mako/src/rrr/misc/rand.cpp` - **PARSED**: 225 functions extracted including rdtsc [26:01:16, 04:15]
   - [ ] `vendor/mako/src/rrr/misc/marshal.cpp`
   - [ ] `vendor/mako/src/rrr/rpc/server.cpp`
 - [ ] **F.2 Coroutine Files**

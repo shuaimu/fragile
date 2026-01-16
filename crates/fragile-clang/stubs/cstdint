@@ -1,0 +1,48 @@
+// Minimal cstdint stub for fragile parsing
+// This provides basic integer types when system headers don't work with libclang
+
+#ifndef _FRAGILE_CSTDINT_
+#define _FRAGILE_CSTDINT_
+
+namespace std {
+    using int8_t = signed char;
+    using int16_t = short;
+    using int32_t = int;
+    using int64_t = long long;
+
+    using uint8_t = unsigned char;
+    using uint16_t = unsigned short;
+    using uint32_t = unsigned int;
+    using uint64_t = unsigned long long;
+
+    using size_t = unsigned long;
+    using ptrdiff_t = long;
+    using intptr_t = long;
+    using uintptr_t = unsigned long;
+
+    using int_fast8_t = int8_t;
+    using int_fast16_t = int16_t;
+    using int_fast32_t = int32_t;
+    using int_fast64_t = int64_t;
+
+    using uint_fast8_t = uint8_t;
+    using uint_fast16_t = uint16_t;
+    using uint_fast32_t = uint32_t;
+    using uint_fast64_t = uint64_t;
+}
+
+// Also define in global namespace (C compatibility)
+using int8_t = std::int8_t;
+using int16_t = std::int16_t;
+using int32_t = std::int32_t;
+using int64_t = std::int64_t;
+using uint8_t = std::uint8_t;
+using uint16_t = std::uint16_t;
+using uint32_t = std::uint32_t;
+using uint64_t = std::uint64_t;
+using size_t = std::size_t;
+using ptrdiff_t = std::ptrdiff_t;
+using intptr_t = std::intptr_t;
+using uintptr_t = std::uintptr_t;
+
+#endif // _FRAGILE_CSTDINT_
