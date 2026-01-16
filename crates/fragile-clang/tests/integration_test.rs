@@ -2274,3 +2274,154 @@ fn test_deduce_instantiate_with_explicit() {
     assert_eq!(func.return_type, CppType::Int { signed: true });
     assert_eq!(func.params[0].1, CppType::Float);
 }
+
+// ============================================================================
+// Template Specialization Tests
+// ============================================================================
+
+/// Test that specializations can be added and found.
+#[test]
+fn test_specialization_found() {
+    use fragile_clang::{CppType, CppFunction, CppFunctionTemplate, MirBody};
+
+    let mut template = CppFunctionTemplate {
+        name: "identity".to_string(),
+        namespace: vec![],
+        template_params: vec!["T".to_string()],
+        return_type: CppType::TemplateParam {
+            name: "T".to_string(),
+            depth: 0,
+            index: 0,
+        },
+        params: vec![("x".to_string(), CppType::TemplateParam {
+            name: "T".to_string(),
+            depth: 0,
+            index: 0,
+        })],
+        is_definition: true,
+        specializations: vec![],
+    };
+
+    // Add specialization for int
+    let int_spec = CppFunction {
+        mangled_name: "identity_int".to_string(),
+        display_name: "identity<int>".to_string(),
+        namespace: vec![],
+        params: vec![("x".to_string(), CppType::Int { signed: true })],
+        return_type: CppType::Int { signed: true },
+        mir_body: MirBody::default(),
+    };
+    template.add_specialization(vec![CppType::Int { signed: true }], int_spec);
+
+    // Should find the specialization
+    let found = template.find_specialization(&[CppType::Int { signed: true }]);
+    assert!(found.is_some());
+    assert_eq!(found.unwrap().display_name, "identity<int>");
+
+    // Should not find for double
+    let not_found = template.find_specialization(&[CppType::Double]);
+    assert!(not_found.is_none());
+}
+
+/// Test that specialization is used during instantiation.
+#[test]
+fn test_specialization_used_in_instantiation() {
+    use fragile_clang::{CppType, CppFunction, CppFunctionTemplate, MirBody};
+
+    let mut template = CppFunctionTemplate {
+        name: "identity".to_string(),
+        namespace: vec![],
+        template_params: vec!["T".to_string()],
+        return_type: CppType::TemplateParam {
+            name: "T".to_string(),
+            depth: 0,
+            index: 0,
+        },
+        params: vec![("x".to_string(), CppType::TemplateParam {
+            name: "T".to_string(),
+            depth: 0,
+            index: 0,
+        })],
+        is_definition: true,
+        specializations: vec![],
+    };
+
+    // Add specialization for int with custom name
+    let int_spec = CppFunction {
+        mangled_name: "identity_int_specialized".to_string(),
+        display_name: "identity<int>".to_string(),
+        namespace: vec![],
+        params: vec![("x".to_string(), CppType::Int { signed: true })],
+        return_type: CppType::Int { signed: true },
+        mir_body: MirBody::default(),
+    };
+    template.add_specialization(vec![CppType::Int { signed: true }], int_spec);
+
+    // Instantiate with int - should use specialization
+    let func = template
+        .deduce_and_instantiate(&[CppType::Int { signed: true }])
+        .expect("Instantiation failed");
+    assert_eq!(func.mangled_name, "identity_int_specialized");
+
+    // Instantiate with double - should use primary template
+    let func = template
+        .deduce_and_instantiate(&[CppType::Double])
+        .expect("Instantiation failed");
+    assert!(func.mangled_name.contains("f64")); // Primary template generates name with type
+}
+
+/// Test specialization with explicit template args.
+#[test]
+fn test_specialization_with_explicit_args() {
+    use fragile_clang::{CppType, CppFunction, CppFunctionTemplate, MirBody};
+
+    let mut template = CppFunctionTemplate {
+        name: "convert".to_string(),
+        namespace: vec![],
+        template_params: vec!["T".to_string(), "U".to_string()],
+        return_type: CppType::TemplateParam {
+            name: "T".to_string(),
+            depth: 0,
+            index: 0,
+        },
+        params: vec![("x".to_string(), CppType::TemplateParam {
+            name: "U".to_string(),
+            depth: 0,
+            index: 1,
+        })],
+        is_definition: true,
+        specializations: vec![],
+    };
+
+    // Add specialization for <int, double>
+    let spec = CppFunction {
+        mangled_name: "convert_int_double".to_string(),
+        display_name: "convert<int, double>".to_string(),
+        namespace: vec![],
+        params: vec![("x".to_string(), CppType::Double)],
+        return_type: CppType::Int { signed: true },
+        mir_body: MirBody::default(),
+    };
+    template.add_specialization(
+        vec![CppType::Int { signed: true }, CppType::Double],
+        spec,
+    );
+
+    // Explicit T = int, deduce U = double - should use specialization
+    let func = template
+        .deduce_and_instantiate_with_explicit(
+            &[CppType::Int { signed: true }],
+            &[CppType::Double],
+        )
+        .expect("Instantiation failed");
+    assert_eq!(func.mangled_name, "convert_int_double");
+
+    // Different types - should use primary template
+    let func = template
+        .deduce_and_instantiate_with_explicit(
+            &[CppType::Int { signed: true }],
+            &[CppType::Float],
+        )
+        .expect("Instantiation failed");
+    assert!(func.mangled_name.contains("i32") || func.mangled_name.contains("convert"));
+}

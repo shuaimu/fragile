@@ -237,7 +237,7 @@ impl Default for CppModule {
 }
 
 /// A C++ function with its MIR body.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CppFunction {
     /// Mangled name for linking
     pub mangled_name: String,
@@ -268,9 +268,33 @@ pub struct CppFunctionTemplate {
     pub params: Vec<(String, CppType)>,
     /// Whether this template has a definition
     pub is_definition: bool,
+    /// Explicit specializations of this template
+    pub specializations: Vec<CppTemplateSpecialization>,
+}
+
+/// An explicit specialization of a function template.
+#[derive(Debug)]
+pub struct CppTemplateSpecialization {
+    /// Template arguments for this specialization (e.g., [Int] for identity<int>)
+    pub args: Vec<CppType>,
+    /// The specialized function implementation
+    pub function: CppFunction,
 }
 
 impl CppFunctionTemplate {
+    /// Find an explicit specialization matching the given type arguments.
+    pub fn find_specialization(&self, args: &[CppType]) -> Option<&CppFunction> {
+        self.specializations
+            .iter()
+            .find(|spec| spec.args == args)
+            .map(|spec| &spec.function)
+    }
+
+    /// Add an explicit specialization to this template.
+    pub fn add_specialization(&mut self, args: Vec<CppType>, function: CppFunction) {
+        self.specializations.push(CppTemplateSpecialization { args, function });
+    }
+
     /// Instantiate this template with concrete type substitutions.
     ///
     /// Given a mapping of template parameter names to concrete types,
@@ -314,17 +338,31 @@ impl CppFunctionTemplate {
     /// Deduce template arguments from call argument types and instantiate.
     ///
     /// This is a convenience method that combines deduction and instantiation.
+    /// If an explicit specialization matches the deduced types, it is used instead.
     ///
     /// # Example
     /// ```ignore
     /// // template<typename T> T identity(T x);
-    /// // identity(42) → deduces T = int, instantiates to int identity(int x)
+    /// // identity(42) → deduces T = int, uses specialization if available
     /// ```
     pub fn deduce_and_instantiate(
         &self,
         arg_types: &[CppType],
     ) -> std::result::Result<CppFunction, DeductionError> {
         let substitutions = TypeDeducer::deduce(self, arg_types)?;
+
+        // Build ordered type args for specialization lookup
+        let type_args: Vec<CppType> = self
+            .template_params
+            .iter()
+            .filter_map(|p| substitutions.get(p).cloned())
+            .collect();
+
+        // Check for explicit specialization first
+        if let Some(spec) = self.find_specialization(&type_args) {
+            return Ok(spec.clone());
+        }
+
         Ok(self.instantiate(&substitutions))
     }
 
@@ -332,6 +370,7 @@ impl CppFunctionTemplate {
     ///
     /// Explicit arguments are applied first (in template parameter order),
     /// then remaining parameters are deduced from call arguments.
+    /// If an explicit specialization matches, it is used instead.
     ///
     /// # Example
     /// ```ignore
@@ -344,6 +383,19 @@ impl CppFunctionTemplate {
         call_arg_types: &[CppType],
     ) -> std::result::Result<CppFunction, DeductionError> {
         let substitutions = TypeDeducer::deduce_with_explicit(self, explicit_args, call_arg_types)?;
+
+        // Build ordered type args for specialization lookup
+        let type_args: Vec<CppType> = self
+            .template_params
+            .iter()
+            .filter_map(|p| substitutions.get(p).cloned())
+            .collect();
+
+        // Check for explicit specialization first
+        if let Some(spec) = self.find_specialization(&type_args) {
+            return Ok(spec.clone());
+        }
+
         Ok(self.instantiate(&substitutions))
     }
 }

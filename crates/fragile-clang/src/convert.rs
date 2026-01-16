@@ -169,6 +169,7 @@ impl MirConverter {
                     return_type: return_type.clone(),
                     params: params.clone(),
                     is_definition: *is_definition,
+                    specializations: Vec::new(),
                 });
             }
             ClangNodeKind::TemplateTypeParmDecl { .. } => {

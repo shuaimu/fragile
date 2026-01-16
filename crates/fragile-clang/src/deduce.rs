@@ -289,6 +289,7 @@ mod tests {
                 .collect(),
             return_type,
             is_definition: true,
+            specializations: vec![],
         }
     }
 
