@@ -278,6 +278,33 @@ impl MirConverter {
                     scope: namespace_context.to_vec(),
                 });
             }
+            ClangNodeKind::TypeAliasDecl { name, underlying_type } => {
+                module.type_aliases.push(crate::CppTypeAlias {
+                    name: name.clone(),
+                    namespace: namespace_context.to_vec(),
+                    underlying_type: underlying_type.clone(),
+                    is_template: false,
+                    template_params: Vec::new(),
+                });
+            }
+            ClangNodeKind::TypedefDecl { name, underlying_type } => {
+                module.type_aliases.push(crate::CppTypeAlias {
+                    name: name.clone(),
+                    namespace: namespace_context.to_vec(),
+                    underlying_type: underlying_type.clone(),
+                    is_template: false,
+                    template_params: Vec::new(),
+                });
+            }
+            ClangNodeKind::TypeAliasTemplateDecl { name, template_params, underlying_type } => {
+                module.type_aliases.push(crate::CppTypeAlias {
+                    name: name.clone(),
+                    namespace: namespace_context.to_vec(),
+                    underlying_type: underlying_type.clone(),
+                    is_template: true,
+                    template_params: template_params.clone(),
+                });
+            }
             _ => {
                 // Skip other declarations for now
             }

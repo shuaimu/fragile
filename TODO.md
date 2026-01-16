@@ -97,7 +97,7 @@ See [PLAN_CPP20_MAKO.md](PLAN_CPP20_MAKO.md) for detailed plan.
 
 #### C.0 Infrastructure (prerequisite)
 - [x] **C.0.1 Header search path support** - ClangParser include paths for STL headers [26:01:16, 03:05]
-- [ ] **C.0.2 Type alias support** - Parse and track `using` type aliases (e.g., `std::vector<T>::iterator`)
+- [x] **C.0.2 Type alias support** - Parse and track `using` type aliases (e.g., `std::vector<T>::iterator`) [26:01:16]
 
 #### C.1 Containers
 - [ ] **C.1.1 std::vector (basic)**

@@ -62,6 +62,8 @@ pub struct CppModule {
     pub using_declarations: Vec<UsingDeclaration>,
     /// Concept definitions (C++20)
     pub concepts: Vec<CppConceptDecl>,
+    /// Type aliases (using declarations and typedefs)
+    pub type_aliases: Vec<CppTypeAlias>,
 }
 
 /// A using namespace directive.
@@ -94,6 +96,7 @@ impl CppModule {
             using_directives: Vec::new(),
             using_declarations: Vec::new(),
             concepts: Vec::new(),
+            type_aliases: Vec::new(),
         }
     }
 
@@ -648,6 +651,22 @@ pub struct CppConceptDecl {
     pub template_params: Vec<String>,
     /// The constraint expression as text (for display/debugging)
     pub constraint_expr: String,
+}
+
+/// A C++ type alias (using or typedef).
+/// Represents `using IntAlias = int;` or `typedef int IntAlias;`
+#[derive(Debug, Clone)]
+pub struct CppTypeAlias {
+    /// Alias name (e.g., "IntAlias")
+    pub name: String,
+    /// Namespace path (e.g., ["std"] for std::string)
+    pub namespace: Vec<String>,
+    /// The underlying type being aliased
+    pub underlying_type: CppType,
+    /// Whether this is a template alias
+    pub is_template: bool,
+    /// Template type parameters (only for template aliases)
+    pub template_params: Vec<String>,
 }
 
 /// Serialized MIR body that can be transferred to rustc driver.

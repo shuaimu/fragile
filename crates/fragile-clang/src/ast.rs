@@ -206,6 +206,29 @@ pub enum ClangNodeKind {
         /// The fully qualified name being imported
         qualified_name: Vec<String>,
     },
+    /// Type alias declaration (e.g., `using IntAlias = int;`)
+    TypeAliasDecl {
+        /// The alias name
+        name: String,
+        /// The underlying type
+        underlying_type: CppType,
+    },
+    /// Type alias template declaration (e.g., `template<typename T> using Ptr = T*;`)
+    TypeAliasTemplateDecl {
+        /// The alias name
+        name: String,
+        /// Template type parameters
+        template_params: Vec<String>,
+        /// The underlying type (may reference template params)
+        underlying_type: CppType,
+    },
+    /// Typedef declaration (old C-style, e.g., `typedef int IntAlias;`)
+    TypedefDecl {
+        /// The typedef name
+        name: String,
+        /// The underlying type
+        underlying_type: CppType,
+    },
 
     // Statements
     /// Compound statement (block)

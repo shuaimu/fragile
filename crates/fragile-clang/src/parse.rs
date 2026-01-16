@@ -509,6 +509,39 @@ impl ClangParser {
                     ClangNodeKind::UsingDeclaration { qualified_name }
                 }
 
+                // CXCursor_TypeAliasDecl = 36 (using X = Y;)
+                clang_sys::CXCursor_TypeAliasDecl => {
+                    let name = cursor_spelling(cursor);
+                    let underlying_type = self.get_typedef_underlying_type(cursor);
+                    ClangNodeKind::TypeAliasDecl { name, underlying_type }
+                }
+
+                // CXCursor_TypedefDecl = 20 (typedef Y X;)
+                clang_sys::CXCursor_TypedefDecl => {
+                    let name = cursor_spelling(cursor);
+                    // Skip implicit/builtin typedefs (like __int128_t)
+                    let loc = clang_sys::clang_getCursorLocation(cursor);
+                    if clang_sys::clang_Location_isFromMainFile(loc) == 0 {
+                        // Not from main file, likely a builtin typedef
+                        ClangNodeKind::Unknown("implicit_typedef".to_string())
+                    } else {
+                        let underlying_type = self.get_typedef_underlying_type(cursor);
+                        ClangNodeKind::TypedefDecl { name, underlying_type }
+                    }
+                }
+
+                // CXCursor_TypeAliasTemplateDecl = 601 (template<typename T> using X = Y<T>;)
+                601 => {
+                    let name = cursor_spelling(cursor);
+                    let template_params = self.get_template_type_params(cursor);
+                    let underlying_type = self.get_type_alias_template_underlying_type(cursor, &template_params);
+                    ClangNodeKind::TypeAliasTemplateDecl {
+                        name,
+                        template_params,
+                        underlying_type,
+                    }
+                }
+
                 clang_sys::CXCursor_MemberRef => {
                     let name = cursor_spelling(cursor);
                     ClangNodeKind::MemberRef { name }
@@ -1739,6 +1772,70 @@ impl ClangParser {
             }
 
             (concept_name, template_args)
+        }
+    }
+
+    // ========== Type Alias Support ==========
+
+    /// Get the underlying type of a typedef or type alias declaration.
+    fn get_typedef_underlying_type(&self, cursor: clang_sys::CXCursor) -> CppType {
+        unsafe {
+            let typedef_type = clang_sys::clang_getTypedefDeclUnderlyingType(cursor);
+            self.convert_type(typedef_type)
+        }
+    }
+
+    /// Get the underlying type of a type alias template declaration.
+    /// This needs special handling because the underlying type may reference template parameters.
+    fn get_type_alias_template_underlying_type(
+        &self,
+        cursor: clang_sys::CXCursor,
+        template_params: &[String],
+    ) -> CppType {
+        unsafe {
+            // For type alias templates, we need to find the TypeAliasDecl child
+            // and get its underlying type with template parameter context
+            struct AliasInfo {
+                underlying_type: Option<CppType>,
+                parser: *const ClangParser,
+                template_params: *const [String],
+            }
+
+            let mut info = AliasInfo {
+                underlying_type: None,
+                parser: self,
+                template_params: template_params,
+            };
+            let info_ptr: *mut AliasInfo = &mut info;
+
+            extern "C" fn alias_visitor(
+                child: clang_sys::CXCursor,
+                _parent: clang_sys::CXCursor,
+                data: clang_sys::CXClientData,
+            ) -> clang_sys::CXChildVisitResult {
+                unsafe {
+                    let info = &mut *(data as *mut AliasInfo);
+                    let kind = clang_sys::clang_getCursorKind(child);
+
+                    // CXCursor_TypeAliasDecl = 36
+                    if kind == clang_sys::CXCursor_TypeAliasDecl {
+                        let typedef_type = clang_sys::clang_getTypedefDeclUnderlyingType(child);
+                        let parser = &*info.parser;
+                        let template_params = &*info.template_params;
+                        info.underlying_type = Some(parser.convert_type_with_template_ctx(
+                            typedef_type,
+                            template_params,
+                        ));
+                        return clang_sys::CXChildVisit_Break;
+                    }
+
+                    clang_sys::CXChildVisit_Continue
+                }
+            }
+
+            clang_sys::clang_visitChildren(cursor, alias_visitor, info_ptr as clang_sys::CXClientData);
+
+            info.underlying_type.unwrap_or(CppType::Void)
         }
     }
 }

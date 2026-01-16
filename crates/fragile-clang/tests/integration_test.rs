@@ -3932,3 +3932,168 @@ fn test_parser_with_custom_include_paths() {
     let ast = parser.parse_string(code, "test.cpp").unwrap();
     assert!(ast.translation_unit.children.len() >= 1);
 }
+
+// ========== Type Alias Tests (C.0.2) ==========
+
+/// Test parsing a simple type alias using 'using'.
+#[test]
+fn test_type_alias_using() {
+    let parser = ClangParser::new().unwrap();
+    let code = r#"
+        using IntAlias = int;
+        using FloatPtr = float*;
+    "#;
+
+    let ast = parser.parse_string(code, "test.cpp").unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).unwrap();
+
+    assert_eq!(module.type_aliases.len(), 2, "Expected 2 type aliases");
+
+    let alias1 = &module.type_aliases[0];
+    assert_eq!(alias1.name, "IntAlias");
+    assert_eq!(alias1.underlying_type, CppType::Int { signed: true });
+    assert!(!alias1.is_template);
+
+    let alias2 = &module.type_aliases[1];
+    assert_eq!(alias2.name, "FloatPtr");
+    assert!(matches!(alias2.underlying_type, CppType::Pointer { .. }));
+    assert!(!alias2.is_template);
+}
+
+/// Test parsing a typedef (old-style C type alias).
+#[test]
+fn test_typedef() {
+    let parser = ClangParser::new().unwrap();
+    let code = r#"
+        typedef int Integer;
+        typedef const char* CString;
+    "#;
+
+    let ast = parser.parse_string(code, "test.cpp").unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).unwrap();
+
+    assert_eq!(module.type_aliases.len(), 2, "Expected 2 typedefs");
+
+    let alias1 = &module.type_aliases[0];
+    assert_eq!(alias1.name, "Integer");
+    assert_eq!(alias1.underlying_type, CppType::Int { signed: true });
+    assert!(!alias1.is_template);
+
+    let alias2 = &module.type_aliases[1];
+    assert_eq!(alias2.name, "CString");
+    assert!(matches!(alias2.underlying_type, CppType::Pointer { .. }));
+    assert!(!alias2.is_template);
+}
+
+/// Test parsing a type alias template.
+#[test]
+fn test_type_alias_template() {
+    let parser = ClangParser::new().unwrap();
+    let code = r#"
+        template<typename T>
+        using Ptr = T*;
+
+        template<typename T, typename U>
+        struct Pair { T first; U second; };
+
+        template<typename T>
+        using PairOfT = Pair<T, T>;
+    "#;
+
+    let ast = parser.parse_string(code, "test.cpp").unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).unwrap();
+
+    // Should have at least 2 template aliases: Ptr and PairOfT
+    let template_aliases: Vec<_> = module.type_aliases.iter().filter(|a| a.is_template).collect();
+    assert!(template_aliases.len() >= 2, "Expected at least 2 template aliases, got {}", template_aliases.len());
+
+    // Find the Ptr alias
+    let ptr_alias = template_aliases.iter().find(|a| a.name == "Ptr");
+    assert!(ptr_alias.is_some(), "Expected to find Ptr template alias");
+    let ptr_alias = ptr_alias.unwrap();
+    assert!(ptr_alias.is_template);
+    assert_eq!(ptr_alias.template_params.len(), 1);
+    assert_eq!(ptr_alias.template_params[0], "T");
+}
+
+/// Test type alias in namespace.
+#[test]
+fn test_type_alias_in_namespace() {
+    let parser = ClangParser::new().unwrap();
+    let code = r#"
+        namespace myns {
+            using MyInt = int;
+            typedef double MyDouble;
+        }
+    "#;
+
+    let ast = parser.parse_string(code, "test.cpp").unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).unwrap();
+
+    assert_eq!(module.type_aliases.len(), 2, "Expected 2 type aliases");
+
+    for alias in &module.type_aliases {
+        assert_eq!(alias.namespace, vec!["myns".to_string()], "Expected alias in myns namespace");
+    }
+
+    let my_int = module.type_aliases.iter().find(|a| a.name == "MyInt");
+    assert!(my_int.is_some());
+    assert_eq!(my_int.unwrap().underlying_type, CppType::Int { signed: true });
+
+    let my_double = module.type_aliases.iter().find(|a| a.name == "MyDouble");
+    assert!(my_double.is_some());
+    assert_eq!(my_double.unwrap().underlying_type, CppType::Double);
+}
+
+/// Test type alias with reference types.
+#[test]
+fn test_type_alias_reference() {
+    let parser = ClangParser::new().unwrap();
+    let code = r#"
+        using IntRef = int&;
+        using ConstIntRef = const int&;
+    "#;
+
+    let ast = parser.parse_string(code, "test.cpp").unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).unwrap();
+
+    assert_eq!(module.type_aliases.len(), 2, "Expected 2 type aliases");
+
+    let int_ref = &module.type_aliases[0];
+    assert_eq!(int_ref.name, "IntRef");
+    assert!(matches!(int_ref.underlying_type, CppType::Reference { is_rvalue: false, is_const: false, .. }));
+
+    let const_int_ref = &module.type_aliases[1];
+    assert_eq!(const_int_ref.name, "ConstIntRef");
+    assert!(matches!(const_int_ref.underlying_type, CppType::Reference { is_rvalue: false, is_const: true, .. }));
+}
+
+/// Test type alias with struct type.
+#[test]
+fn test_type_alias_struct() {
+    let parser = ClangParser::new().unwrap();
+    let code = r#"
+        struct Point { int x; int y; };
+        using PointAlias = Point;
+        typedef Point PointTypedef;
+    "#;
+
+    let ast = parser.parse_string(code, "test.cpp").unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).unwrap();
+
+    assert_eq!(module.type_aliases.len(), 2, "Expected 2 type aliases");
+
+    let point_alias = &module.type_aliases[0];
+    assert_eq!(point_alias.name, "PointAlias");
+    assert!(matches!(&point_alias.underlying_type, CppType::Named(name) if name == "Point"));
+
+    let point_typedef = &module.type_aliases[1];
+    assert_eq!(point_typedef.name, "PointTypedef");
+    assert!(matches!(&point_typedef.underlying_type, CppType::Named(name) if name == "Point"));
+}
