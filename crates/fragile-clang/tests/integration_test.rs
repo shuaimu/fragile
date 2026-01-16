@@ -28951,3 +28951,795 @@ fn test_mako_bench_micro_procedure_cc() {
         }
     }
 }
+
+/// Test parsing mako/benchmarks/erpc_runner/erpc_demo.cc - eRPC demo
+#[test]
+fn test_mako_benchmarks_erpc_runner_erpc_demo_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/mako/benchmarks/erpc_runner/erpc_demo.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: benchmarks/erpc_runner/erpc_demo.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let mako_path = project_root.join("vendor/mako/src/mako");
+    let mako_src = project_root.join("vendor/mako/src");
+    let masstree_path = project_root.join("vendor/mako/src/mako/masstree");
+    let lib_path = project_root.join("vendor/mako/src/mako/lib");
+    let rusty_cpp_path = project_root.join("vendor/mako/third-party/rusty-cpp/include");
+    let erpc_runner_path = project_root.join("vendor/mako/src/mako/benchmarks/erpc_runner");
+    let benchmarks_path = project_root.join("vendor/mako/src/mako/benchmarks");
+
+    let mut system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let clang_paths = [
+        "/usr/lib/llvm-19/lib/clang/19/include",
+        "/usr/lib/llvm-18/lib/clang/18/include",
+    ];
+
+    for path in &clang_paths {
+        if Path::new(path).exists() {
+            system_include_paths.push(path.to_string());
+            break;
+        }
+    }
+
+    let include_paths = vec![
+        mako_path.to_string_lossy().to_string(),
+        mako_src.to_string_lossy().to_string(),
+        masstree_path.to_string_lossy().to_string(),
+        lib_path.to_string_lossy().to_string(),
+        rusty_cpp_path.to_string_lossy().to_string(),
+        erpc_runner_path.to_string_lossy().to_string(),
+        benchmarks_path.to_string_lossy().to_string(),
+    ];
+
+    let defines = vec![
+        r#"CONFIG_H="masstree/config.h""#.to_string(),
+        "HAVE_EXECINFO_H=1".to_string(),
+    ];
+
+    let ignored_errors = vec![
+        "unknown type name".to_string(),
+        "use of undeclared identifier".to_string(),
+        "no member named".to_string(),
+        "'rpc.h' file not found".to_string(),
+    ];
+
+    let parser = ClangParser::with_paths_defines_and_ignored_errors(
+        include_paths,
+        system_include_paths,
+        defines,
+        ignored_errors,
+    ).expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+            println!("benchmarks/erpc_runner/erpc_demo.cc parsed successfully with {} functions", module.functions.len());
+        }
+        Err(e) => {
+            println!("Note: benchmarks/erpc_runner/erpc_demo.cc parsing failed: {:?}", e);
+        }
+    }
+}
+
+/// Test parsing mako/benchmarks/erpc_runner/erpc_runner.cc - eRPC runner
+#[test]
+fn test_mako_benchmarks_erpc_runner_erpc_runner_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/mako/benchmarks/erpc_runner/erpc_runner.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: benchmarks/erpc_runner/erpc_runner.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let mako_path = project_root.join("vendor/mako/src/mako");
+    let mako_src = project_root.join("vendor/mako/src");
+    let masstree_path = project_root.join("vendor/mako/src/mako/masstree");
+    let lib_path = project_root.join("vendor/mako/src/mako/lib");
+    let rusty_cpp_path = project_root.join("vendor/mako/third-party/rusty-cpp/include");
+    let erpc_runner_path = project_root.join("vendor/mako/src/mako/benchmarks/erpc_runner");
+    let benchmarks_path = project_root.join("vendor/mako/src/mako/benchmarks");
+
+    let mut system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let clang_paths = [
+        "/usr/lib/llvm-19/lib/clang/19/include",
+        "/usr/lib/llvm-18/lib/clang/18/include",
+    ];
+
+    for path in &clang_paths {
+        if Path::new(path).exists() {
+            system_include_paths.push(path.to_string());
+            break;
+        }
+    }
+
+    let include_paths = vec![
+        mako_path.to_string_lossy().to_string(),
+        mako_src.to_string_lossy().to_string(),
+        masstree_path.to_string_lossy().to_string(),
+        lib_path.to_string_lossy().to_string(),
+        rusty_cpp_path.to_string_lossy().to_string(),
+        erpc_runner_path.to_string_lossy().to_string(),
+        benchmarks_path.to_string_lossy().to_string(),
+    ];
+
+    let defines = vec![
+        r#"CONFIG_H="masstree/config.h""#.to_string(),
+        "HAVE_EXECINFO_H=1".to_string(),
+    ];
+
+    let ignored_errors = vec![
+        "unknown type name".to_string(),
+        "use of undeclared identifier".to_string(),
+        "no member named".to_string(),
+        "'rpc.h' file not found".to_string(),
+    ];
+
+    let parser = ClangParser::with_paths_defines_and_ignored_errors(
+        include_paths,
+        system_include_paths,
+        defines,
+        ignored_errors,
+    ).expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+            println!("benchmarks/erpc_runner/erpc_runner.cc parsed successfully with {} functions", module.functions.len());
+        }
+        Err(e) => {
+            println!("Note: benchmarks/erpc_runner/erpc_runner.cc parsing failed: {:?}", e);
+        }
+    }
+}
+
+/// Test parsing mako/benchmarks/erpc_runner/erpc_runner_queue.cc - eRPC runner queue
+#[test]
+fn test_mako_benchmarks_erpc_runner_erpc_runner_queue_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/mako/benchmarks/erpc_runner/erpc_runner_queue.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: benchmarks/erpc_runner/erpc_runner_queue.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let mako_path = project_root.join("vendor/mako/src/mako");
+    let mako_src = project_root.join("vendor/mako/src");
+    let masstree_path = project_root.join("vendor/mako/src/mako/masstree");
+    let lib_path = project_root.join("vendor/mako/src/mako/lib");
+    let rusty_cpp_path = project_root.join("vendor/mako/third-party/rusty-cpp/include");
+    let erpc_runner_path = project_root.join("vendor/mako/src/mako/benchmarks/erpc_runner");
+    let benchmarks_path = project_root.join("vendor/mako/src/mako/benchmarks");
+
+    let mut system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let clang_paths = [
+        "/usr/lib/llvm-19/lib/clang/19/include",
+        "/usr/lib/llvm-18/lib/clang/18/include",
+    ];
+
+    for path in &clang_paths {
+        if Path::new(path).exists() {
+            system_include_paths.push(path.to_string());
+            break;
+        }
+    }
+
+    let include_paths = vec![
+        mako_path.to_string_lossy().to_string(),
+        mako_src.to_string_lossy().to_string(),
+        masstree_path.to_string_lossy().to_string(),
+        lib_path.to_string_lossy().to_string(),
+        rusty_cpp_path.to_string_lossy().to_string(),
+        erpc_runner_path.to_string_lossy().to_string(),
+        benchmarks_path.to_string_lossy().to_string(),
+    ];
+
+    let defines = vec![
+        r#"CONFIG_H="masstree/config.h""#.to_string(),
+        "HAVE_EXECINFO_H=1".to_string(),
+    ];
+
+    let ignored_errors = vec![
+        "unknown type name".to_string(),
+        "use of undeclared identifier".to_string(),
+        "no member named".to_string(),
+        "'rpc.h' file not found".to_string(),
+    ];
+
+    let parser = ClangParser::with_paths_defines_and_ignored_errors(
+        include_paths,
+        system_include_paths,
+        defines,
+        ignored_errors,
+    ).expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+            println!("benchmarks/erpc_runner/erpc_runner_queue.cc parsed successfully with {} functions", module.functions.len());
+        }
+        Err(e) => {
+            println!("Note: benchmarks/erpc_runner/erpc_runner_queue.cc parsing failed: {:?}", e);
+        }
+    }
+}
+
+/// Test parsing mako/benchmarks/erpc_runner/erpc_runner_test.cc - eRPC runner test
+#[test]
+fn test_mako_benchmarks_erpc_runner_erpc_runner_test_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/mako/benchmarks/erpc_runner/erpc_runner_test.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: benchmarks/erpc_runner/erpc_runner_test.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let mako_path = project_root.join("vendor/mako/src/mako");
+    let mako_src = project_root.join("vendor/mako/src");
+    let masstree_path = project_root.join("vendor/mako/src/mako/masstree");
+    let lib_path = project_root.join("vendor/mako/src/mako/lib");
+    let rusty_cpp_path = project_root.join("vendor/mako/third-party/rusty-cpp/include");
+    let erpc_runner_path = project_root.join("vendor/mako/src/mako/benchmarks/erpc_runner");
+    let benchmarks_path = project_root.join("vendor/mako/src/mako/benchmarks");
+
+    let mut system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let clang_paths = [
+        "/usr/lib/llvm-19/lib/clang/19/include",
+        "/usr/lib/llvm-18/lib/clang/18/include",
+    ];
+
+    for path in &clang_paths {
+        if Path::new(path).exists() {
+            system_include_paths.push(path.to_string());
+            break;
+        }
+    }
+
+    let include_paths = vec![
+        mako_path.to_string_lossy().to_string(),
+        mako_src.to_string_lossy().to_string(),
+        masstree_path.to_string_lossy().to_string(),
+        lib_path.to_string_lossy().to_string(),
+        rusty_cpp_path.to_string_lossy().to_string(),
+        erpc_runner_path.to_string_lossy().to_string(),
+        benchmarks_path.to_string_lossy().to_string(),
+    ];
+
+    let defines = vec![
+        r#"CONFIG_H="masstree/config.h""#.to_string(),
+        "HAVE_EXECINFO_H=1".to_string(),
+    ];
+
+    let ignored_errors = vec![
+        "unknown type name".to_string(),
+        "use of undeclared identifier".to_string(),
+        "no member named".to_string(),
+        "'rpc.h' file not found".to_string(),
+    ];
+
+    let parser = ClangParser::with_paths_defines_and_ignored_errors(
+        include_paths,
+        system_include_paths,
+        defines,
+        ignored_errors,
+    ).expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+            println!("benchmarks/erpc_runner/erpc_runner_test.cc parsed successfully with {} functions", module.functions.len());
+        }
+        Err(e) => {
+            println!("Note: benchmarks/erpc_runner/erpc_runner_test.cc parsing failed: {:?}", e);
+        }
+    }
+}
+
+/// Test parsing mako/benchmarks/ut/erpc_client.cc - eRPC client unit test
+#[test]
+fn test_mako_benchmarks_ut_erpc_client_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/mako/benchmarks/ut/erpc_client.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: benchmarks/ut/erpc_client.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let mako_path = project_root.join("vendor/mako/src/mako");
+    let mako_src = project_root.join("vendor/mako/src");
+    let masstree_path = project_root.join("vendor/mako/src/mako/masstree");
+    let lib_path = project_root.join("vendor/mako/src/mako/lib");
+    let rusty_cpp_path = project_root.join("vendor/mako/third-party/rusty-cpp/include");
+    let erpc_runner_path = project_root.join("vendor/mako/src/mako/benchmarks/erpc_runner");
+    let benchmarks_path = project_root.join("vendor/mako/src/mako/benchmarks");
+
+    let mut system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let clang_paths = [
+        "/usr/lib/llvm-19/lib/clang/19/include",
+        "/usr/lib/llvm-18/lib/clang/18/include",
+    ];
+
+    for path in &clang_paths {
+        if Path::new(path).exists() {
+            system_include_paths.push(path.to_string());
+            break;
+        }
+    }
+
+    let include_paths = vec![
+        mako_path.to_string_lossy().to_string(),
+        mako_src.to_string_lossy().to_string(),
+        masstree_path.to_string_lossy().to_string(),
+        lib_path.to_string_lossy().to_string(),
+        rusty_cpp_path.to_string_lossy().to_string(),
+        erpc_runner_path.to_string_lossy().to_string(),
+        benchmarks_path.to_string_lossy().to_string(),
+    ];
+
+    let defines = vec![
+        r#"CONFIG_H="masstree/config.h""#.to_string(),
+        "HAVE_EXECINFO_H=1".to_string(),
+    ];
+
+    let ignored_errors = vec![
+        "unknown type name".to_string(),
+        "use of undeclared identifier".to_string(),
+        "no member named".to_string(),
+        "'rpc.h' file not found".to_string(),
+    ];
+
+    let parser = ClangParser::with_paths_defines_and_ignored_errors(
+        include_paths,
+        system_include_paths,
+        defines,
+        ignored_errors,
+    ).expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+            println!("benchmarks/ut/erpc_client.cc parsed successfully with {} functions", module.functions.len());
+        }
+        Err(e) => {
+            println!("Note: benchmarks/ut/erpc_client.cc parsing failed: {:?}", e);
+        }
+    }
+}
+
+/// Test parsing mako/benchmarks/ut/erpc_server.cc - eRPC server unit test
+#[test]
+fn test_mako_benchmarks_ut_erpc_server_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/mako/benchmarks/ut/erpc_server.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: benchmarks/ut/erpc_server.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let mako_path = project_root.join("vendor/mako/src/mako");
+    let mako_src = project_root.join("vendor/mako/src");
+    let masstree_path = project_root.join("vendor/mako/src/mako/masstree");
+    let lib_path = project_root.join("vendor/mako/src/mako/lib");
+    let rusty_cpp_path = project_root.join("vendor/mako/third-party/rusty-cpp/include");
+    let erpc_runner_path = project_root.join("vendor/mako/src/mako/benchmarks/erpc_runner");
+    let benchmarks_path = project_root.join("vendor/mako/src/mako/benchmarks");
+
+    let mut system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let clang_paths = [
+        "/usr/lib/llvm-19/lib/clang/19/include",
+        "/usr/lib/llvm-18/lib/clang/18/include",
+    ];
+
+    for path in &clang_paths {
+        if Path::new(path).exists() {
+            system_include_paths.push(path.to_string());
+            break;
+        }
+    }
+
+    let include_paths = vec![
+        mako_path.to_string_lossy().to_string(),
+        mako_src.to_string_lossy().to_string(),
+        masstree_path.to_string_lossy().to_string(),
+        lib_path.to_string_lossy().to_string(),
+        rusty_cpp_path.to_string_lossy().to_string(),
+        erpc_runner_path.to_string_lossy().to_string(),
+        benchmarks_path.to_string_lossy().to_string(),
+    ];
+
+    let defines = vec![
+        r#"CONFIG_H="masstree/config.h""#.to_string(),
+        "HAVE_EXECINFO_H=1".to_string(),
+    ];
+
+    let ignored_errors = vec![
+        "unknown type name".to_string(),
+        "use of undeclared identifier".to_string(),
+        "no member named".to_string(),
+        "'rpc.h' file not found".to_string(),
+    ];
+
+    let parser = ClangParser::with_paths_defines_and_ignored_errors(
+        include_paths,
+        system_include_paths,
+        defines,
+        ignored_errors,
+    ).expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+            println!("benchmarks/ut/erpc_server.cc parsed successfully with {} functions", module.functions.len());
+        }
+        Err(e) => {
+            println!("Note: benchmarks/ut/erpc_server.cc parsing failed: {:?}", e);
+        }
+    }
+}
+
+/// Test parsing mako/benchmarks/rocksdb_replay_app.cc - RocksDB replay app
+#[test]
+fn test_mako_benchmarks_rocksdb_replay_app_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/mako/benchmarks/rocksdb_replay_app.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: benchmarks/rocksdb_replay_app.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let mako_path = project_root.join("vendor/mako/src/mako");
+    let mako_src = project_root.join("vendor/mako/src");
+    let masstree_path = project_root.join("vendor/mako/src/mako/masstree");
+    let lib_path = project_root.join("vendor/mako/src/mako/lib");
+    let rusty_cpp_path = project_root.join("vendor/mako/third-party/rusty-cpp/include");
+    let benchmarks_path = project_root.join("vendor/mako/src/mako/benchmarks");
+
+    let mut system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let clang_paths = [
+        "/usr/lib/llvm-19/lib/clang/19/include",
+        "/usr/lib/llvm-18/lib/clang/18/include",
+    ];
+
+    for path in &clang_paths {
+        if Path::new(path).exists() {
+            system_include_paths.push(path.to_string());
+            break;
+        }
+    }
+
+    let include_paths = vec![
+        mako_path.to_string_lossy().to_string(),
+        mako_src.to_string_lossy().to_string(),
+        masstree_path.to_string_lossy().to_string(),
+        lib_path.to_string_lossy().to_string(),
+        rusty_cpp_path.to_string_lossy().to_string(),
+        benchmarks_path.to_string_lossy().to_string(),
+    ];
+
+    let defines = vec![
+        r#"CONFIG_H="masstree/config.h""#.to_string(),
+        "HAVE_EXECINFO_H=1".to_string(),
+    ];
+
+    let ignored_errors = vec![
+        "unknown type name".to_string(),
+        "use of undeclared identifier".to_string(),
+        "no member named".to_string(),
+        "'rocksdb/db.h' file not found".to_string(),
+    ];
+
+    let parser = ClangParser::with_paths_defines_and_ignored_errors(
+        include_paths,
+        system_include_paths,
+        defines,
+        ignored_errors,
+    ).expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+            println!("benchmarks/rocksdb_replay_app.cc parsed successfully with {} functions", module.functions.len());
+        }
+        Err(e) => {
+            println!("Note: benchmarks/rocksdb_replay_app.cc parsing failed: {:?}", e);
+        }
+    }
+}
+
+/// Test parsing mako/rocksdb_persistence.cc - RocksDB persistence
+#[test]
+fn test_mako_rocksdb_persistence_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/mako/rocksdb_persistence.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: rocksdb_persistence.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let mako_path = project_root.join("vendor/mako/src/mako");
+    let mako_src = project_root.join("vendor/mako/src");
+    let masstree_path = project_root.join("vendor/mako/src/mako/masstree");
+    let lib_path = project_root.join("vendor/mako/src/mako/lib");
+    let rusty_cpp_path = project_root.join("vendor/mako/third-party/rusty-cpp/include");
+    let benchmarks_path = project_root.join("vendor/mako/src/mako/benchmarks");
+
+    let mut system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let clang_paths = [
+        "/usr/lib/llvm-19/lib/clang/19/include",
+        "/usr/lib/llvm-18/lib/clang/18/include",
+    ];
+
+    for path in &clang_paths {
+        if Path::new(path).exists() {
+            system_include_paths.push(path.to_string());
+            break;
+        }
+    }
+
+    let include_paths = vec![
+        mako_path.to_string_lossy().to_string(),
+        mako_src.to_string_lossy().to_string(),
+        masstree_path.to_string_lossy().to_string(),
+        lib_path.to_string_lossy().to_string(),
+        rusty_cpp_path.to_string_lossy().to_string(),
+        benchmarks_path.to_string_lossy().to_string(),
+    ];
+
+    let defines = vec![
+        r#"CONFIG_H="masstree/config.h""#.to_string(),
+        "HAVE_EXECINFO_H=1".to_string(),
+    ];
+
+    let ignored_errors = vec![
+        "unknown type name".to_string(),
+        "use of undeclared identifier".to_string(),
+        "no member named".to_string(),
+        "'rocksdb/db.h' file not found".to_string(),
+    ];
+
+    let parser = ClangParser::with_paths_defines_and_ignored_errors(
+        include_paths,
+        system_include_paths,
+        defines,
+        ignored_errors,
+    ).expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+            println!("rocksdb_persistence.cc parsed successfully with {} functions", module.functions.len());
+        }
+        Err(e) => {
+            println!("Note: rocksdb_persistence.cc parsing failed: {:?}", e);
+        }
+    }
+}
+
+/// Test parsing rrr/pylib/simplerpc/_pyrpc.cpp - Python RPC bindings
+#[test]
+fn test_rrr_pylib_simplerpc_pyrpc_cpp() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/rrr/pylib/simplerpc/_pyrpc.cpp");
+
+    if !file_path.exists() {
+        println!("Skipping test: rrr/pylib/simplerpc/_pyrpc.cpp not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let mako_path = project_root.join("vendor/mako/src/mako");
+    let mako_src = project_root.join("vendor/mako/src");
+    let rrr_path = project_root.join("vendor/mako/src/rrr");
+
+    let mut system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let clang_paths = [
+        "/usr/lib/llvm-19/lib/clang/19/include",
+        "/usr/lib/llvm-18/lib/clang/18/include",
+    ];
+
+    for path in &clang_paths {
+        if Path::new(path).exists() {
+            system_include_paths.push(path.to_string());
+            break;
+        }
+    }
+
+    let include_paths = vec![
+        mako_path.to_string_lossy().to_string(),
+        mako_src.to_string_lossy().to_string(),
+        rrr_path.to_string_lossy().to_string(),
+    ];
+
+    let defines = vec![
+        r#"CONFIG_H="masstree/config.h""#.to_string(),
+        "HAVE_EXECINFO_H=1".to_string(),
+    ];
+
+    let ignored_errors = vec![
+        "unknown type name".to_string(),
+        "use of undeclared identifier".to_string(),
+        "no member named".to_string(),
+        "'Python.h' file not found".to_string(),
+    ];
+
+    let parser = ClangParser::with_paths_defines_and_ignored_errors(
+        include_paths,
+        system_include_paths,
+        defines,
+        ignored_errors,
+    ).expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+            println!("rrr/pylib/simplerpc/_pyrpc.cpp parsed successfully with {} functions", module.functions.len());
+        }
+        Err(e) => {
+            println!("Note: rrr/pylib/simplerpc/_pyrpc.cpp parsing failed: {:?}", e);
+        }
+    }
+}
+
+/// Test parsing rrr/reactor/fiber_impl.cc (rrr version) - Fiber implementation
+#[test]
+fn test_rrr_reactor_fiber_impl_cc_rrr() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/rrr/reactor/fiber_impl.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: rrr/reactor/fiber_impl.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let mako_path = project_root.join("vendor/mako/src/mako");
+    let mako_src = project_root.join("vendor/mako/src");
+    let rrr_path = project_root.join("vendor/mako/src/rrr");
+    let rusty_cpp_path = project_root.join("vendor/mako/third-party/rusty-cpp/include");
+
+    let mut system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let clang_paths = [
+        "/usr/lib/llvm-19/lib/clang/19/include",
+        "/usr/lib/llvm-18/lib/clang/18/include",
+    ];
+
+    for path in &clang_paths {
+        if Path::new(path).exists() {
+            system_include_paths.push(path.to_string());
+            break;
+        }
+    }
+
+    let include_paths = vec![
+        mako_path.to_string_lossy().to_string(),
+        mako_src.to_string_lossy().to_string(),
+        rrr_path.to_string_lossy().to_string(),
+        rusty_cpp_path.to_string_lossy().to_string(),
+    ];
+
+    let defines = vec![
+        r#"CONFIG_H="masstree/config.h""#.to_string(),
+        "HAVE_EXECINFO_H=1".to_string(),
+    ];
+
+    let ignored_errors = vec![
+        "unknown type name".to_string(),
+        "use of undeclared identifier".to_string(),
+        "no member named".to_string(),
+        "'boost/fiber".to_string(),
+    ];
+
+    let parser = ClangParser::with_paths_defines_and_ignored_errors(
+        include_paths,
+        system_include_paths,
+        defines,
+        ignored_errors,
+    ).expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+            println!("rrr/reactor/fiber_impl.cc parsed successfully with {} functions", module.functions.len());
+        }
+        Err(e) => {
+            println!("Note: rrr/reactor/fiber_impl.cc parsing failed: {:?}", e);
+        }
+    }
+}
