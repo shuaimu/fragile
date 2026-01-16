@@ -124,7 +124,7 @@ See [PLAN_CPP20_MAKO.md](PLAN_CPP20_MAKO.md) for detailed plan.
 
 #### C.4 Utilities
 - [x] std::function [26:01:16]
-- [ ] std::chrono
+- [x] std::chrono [26:01:16]
 - [x] std::move / std::forward (✅ basic support done in Phase A)
 
 ### 1.4 Phase D: C++20 Coroutines

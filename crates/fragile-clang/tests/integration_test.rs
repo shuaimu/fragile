@@ -4489,3 +4489,51 @@ fn test_std_function_void() {
     let test_fn = module.functions.iter().find(|f| f.display_name == "test_void_fn");
     assert!(test_fn.is_some(), "Expected to find test_void_fn function");
 }
+
+// ========== std::chrono Tests (C.4) ==========
+
+/// Test parsing code that uses std::chrono.
+#[test]
+fn test_std_chrono_duration() {
+    let parser = ClangParser::with_system_includes().unwrap();
+    let code = r#"
+        #include <chrono>
+
+        long get_duration() {
+            using namespace std::chrono;
+            auto start = steady_clock::now();
+            auto end = steady_clock::now();
+            auto elapsed = duration_cast<milliseconds>(end - start);
+            return elapsed.count();
+        }
+    "#;
+
+    let ast = parser.parse_string(code, "test.cpp").unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).unwrap();
+
+    let test_fn = module.functions.iter().find(|f| f.display_name == "get_duration");
+    assert!(test_fn.is_some(), "Expected to find get_duration function");
+}
+
+/// Test std::chrono time points.
+#[test]
+fn test_std_chrono_time_point() {
+    let parser = ClangParser::with_system_includes().unwrap();
+    let code = r#"
+        #include <chrono>
+
+        bool is_elapsed(int ms) {
+            using namespace std::chrono;
+            auto deadline = steady_clock::now() + milliseconds(ms);
+            return steady_clock::now() >= deadline;
+        }
+    "#;
+
+    let ast = parser.parse_string(code, "test.cpp").unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).unwrap();
+
+    let test_fn = module.functions.iter().find(|f| f.display_name == "is_elapsed");
+    assert!(test_fn.is_some(), "Expected to find is_elapsed function");
+}
