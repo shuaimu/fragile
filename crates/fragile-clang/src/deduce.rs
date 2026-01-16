@@ -30,6 +30,8 @@ pub enum DeductionError {
 pub struct TypeDeducer {
     /// Accumulated deductions: template param name → deduced type.
     deductions: HashMap<String, CppType>,
+    /// Params that were set from explicit args (authoritative, cannot be overridden).
+    explicit_params: std::collections::HashSet<String>,
 }
 
 impl TypeDeducer {
@@ -37,6 +39,7 @@ impl TypeDeducer {
     pub fn new() -> Self {
         Self {
             deductions: HashMap::new(),
+            explicit_params: std::collections::HashSet::new(),
         }
     }
 
@@ -64,6 +67,53 @@ impl TypeDeducer {
         }
 
         // Check that all template parameters were deduced
+        let missing: Vec<String> = template
+            .template_params
+            .iter()
+            .filter(|p| !deducer.deductions.contains_key(*p))
+            .cloned()
+            .collect();
+
+        if !missing.is_empty() {
+            return Err(DeductionError::InsufficientArguments { missing });
+        }
+
+        Ok(deducer.deductions)
+    }
+
+    /// Deduce template arguments with some explicitly provided.
+    ///
+    /// Explicit arguments are applied first in template parameter order,
+    /// then remaining parameters are deduced from call arguments.
+    ///
+    /// # Example
+    /// ```ignore
+    /// template<typename T, typename U> T convert(U x);
+    /// convert<int>(3.14); // T = int (explicit), U = double (deduced)
+    /// ```
+    pub fn deduce_with_explicit(
+        template: &CppFunctionTemplate,
+        explicit_args: &[CppType],
+        call_arg_types: &[CppType],
+    ) -> Result<HashMap<String, CppType>, DeductionError> {
+        let mut deducer = Self::new();
+
+        // First, apply explicit template arguments (these are authoritative)
+        for (i, explicit_type) in explicit_args.iter().enumerate() {
+            if let Some(param_name) = template.template_params.get(i) {
+                deducer.deductions.insert(param_name.clone(), explicit_type.clone());
+                deducer.explicit_params.insert(param_name.clone());
+            }
+        }
+
+        // Then deduce remaining from call arguments
+        for (i, (_, param_type)) in template.params.iter().enumerate() {
+            if let Some(arg_type) = call_arg_types.get(i) {
+                deducer.deduce_from_types(param_type, arg_type)?;
+            }
+        }
+
+        // Check that all template parameters were determined
         let missing: Vec<String> = template
             .template_params
             .iter()
@@ -151,6 +201,11 @@ impl TypeDeducer {
 
     /// Record a deduction, checking for conflicts.
     fn record_deduction(&mut self, name: &str, deduced_type: CppType) -> Result<(), DeductionError> {
+        // Skip if this param was set explicitly (explicit args take precedence)
+        if self.explicit_params.contains(name) {
+            return Ok(());
+        }
+
         if let Some(existing) = self.deductions.get(name) {
             if existing != &deduced_type {
                 return Err(DeductionError::Conflict {
@@ -382,5 +437,80 @@ mod tests {
         let result = TypeDeducer::deduce(&template, &arg_types).unwrap();
 
         assert_eq!(result.get("T"), Some(&CppType::Int { signed: true }));
+    }
+
+    #[test]
+    fn test_explicit_single_arg() {
+        // template<typename T> T identity(T x);
+        // identity<int>(42); // T = int (explicit), no deduction needed
+        let template = make_template(
+            "identity",
+            vec!["T"],
+            vec![("x", CppType::template_param("T", 0, 0))],
+            CppType::template_param("T", 0, 0),
+        );
+
+        let explicit_args = vec![CppType::Int { signed: true }];
+        let call_args = vec![CppType::Int { signed: true }];
+        let result = TypeDeducer::deduce_with_explicit(&template, &explicit_args, &call_args).unwrap();
+
+        assert_eq!(result.get("T"), Some(&CppType::Int { signed: true }));
+    }
+
+    #[test]
+    fn test_explicit_with_deduction() {
+        // template<typename T, typename U> T convert(U x);
+        // convert<int>(3.14); // T = int (explicit), U = double (deduced)
+        let template = make_template(
+            "convert",
+            vec!["T", "U"],
+            vec![("x", CppType::template_param("U", 0, 1))],
+            CppType::template_param("T", 0, 0),
+        );
+
+        let explicit_args = vec![CppType::Int { signed: true }]; // Only T is explicit
+        let call_args = vec![CppType::Double]; // U is deduced from this
+        let result = TypeDeducer::deduce_with_explicit(&template, &explicit_args, &call_args).unwrap();
+
+        assert_eq!(result.get("T"), Some(&CppType::Int { signed: true }));
+        assert_eq!(result.get("U"), Some(&CppType::Double));
+    }
+
+    #[test]
+    fn test_explicit_overrides_deduction() {
+        // template<typename T> T identity(T x);
+        // identity<double>(42); // T = double (explicit overrides what would be deduced as int)
+        let template = make_template(
+            "identity",
+            vec!["T"],
+            vec![("x", CppType::template_param("T", 0, 0))],
+            CppType::template_param("T", 0, 0),
+        );
+
+        let explicit_args = vec![CppType::Double]; // Explicit double
+        let call_args = vec![CppType::Int { signed: true }]; // Would deduce int
+        let result = TypeDeducer::deduce_with_explicit(&template, &explicit_args, &call_args).unwrap();
+
+        // Explicit wins
+        assert_eq!(result.get("T"), Some(&CppType::Double));
+    }
+
+    #[test]
+    fn test_explicit_all_args() {
+        // template<typename T, typename U> T convert(U x);
+        // convert<int, double>(3.14); // Both explicit
+        let template = make_template(
+            "convert",
+            vec!["T", "U"],
+            vec![("x", CppType::template_param("U", 0, 1))],
+            CppType::template_param("T", 0, 0),
+        );
+
+        let explicit_args = vec![CppType::Int { signed: true }, CppType::Double];
+        let call_args = vec![CppType::Float]; // Would deduce float, but U is explicit
+        let result = TypeDeducer::deduce_with_explicit(&template, &explicit_args, &call_args).unwrap();
+
+        assert_eq!(result.get("T"), Some(&CppType::Int { signed: true }));
+        assert_eq!(result.get("U"), Some(&CppType::Double));
     }
 }

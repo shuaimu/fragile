@@ -327,6 +327,25 @@ impl CppFunctionTemplate {
         let substitutions = TypeDeducer::deduce(self, arg_types)?;
         Ok(self.instantiate(&substitutions))
     }
+
+    /// Deduce template arguments with some explicit and instantiate.
+    ///
+    /// Explicit arguments are applied first (in template parameter order),
+    /// then remaining parameters are deduced from call arguments.
+    ///
+    /// # Example
+    /// ```ignore
+    /// // template<typename T, typename U> T convert(U x);
+    /// // convert<int>(3.14) → T = int (explicit), U = double (deduced)
+    /// ```
+    pub fn deduce_and_instantiate_with_explicit(
+        &self,
+        explicit_args: &[CppType],
+        call_arg_types: &[CppType],
+    ) -> std::result::Result<CppFunction, DeductionError> {
+        let substitutions = TypeDeducer::deduce_with_explicit(self, explicit_args, call_arg_types)?;
+        Ok(self.instantiate(&substitutions))
+    }
 }
 
 /// A C++ struct/class definition.

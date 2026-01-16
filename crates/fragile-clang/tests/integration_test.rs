@@ -2186,3 +2186,91 @@ fn test_deduce_rvalue_ref_type() {
 
     assert_eq!(result.get("T"), Some(&CppType::Double));
 }
+
+// ============================================================================
+// Explicit Template Arguments Tests
+// ============================================================================
+
+/// Test explicit template argument with single param.
+#[test]
+fn test_explicit_template_arg() {
+    use fragile_clang::{CppType, TypeDeducer};
+
+    let parser = ClangParser::new().expect("Failed to create parser");
+
+    let source = r#"
+        template<typename T>
+        T identity(T x) { return x; }
+    "#;
+
+    let ast = parser.parse_string(source, "explicit.cpp").expect("Failed to parse");
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    let template = &module.function_templates[0];
+
+    // Explicit T = double, call arg is int
+    let explicit_args = vec![CppType::Double];
+    let call_args = vec![CppType::Int { signed: true }];
+    let result = TypeDeducer::deduce_with_explicit(template, &explicit_args, &call_args)
+        .expect("Deduction failed");
+
+    // Explicit wins
+    assert_eq!(result.get("T"), Some(&CppType::Double));
+}
+
+/// Test explicit with mixed deduction.
+#[test]
+fn test_explicit_with_mixed_deduction() {
+    use fragile_clang::{CppType, TypeDeducer};
+
+    let parser = ClangParser::new().expect("Failed to create parser");
+
+    let source = r#"
+        template<typename T, typename U>
+        T convert(U x) { return static_cast<T>(x); }
+    "#;
+
+    let ast = parser.parse_string(source, "explicit_mixed.cpp").expect("Failed to parse");
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    let template = &module.function_templates[0];
+
+    // T = int (explicit), U = double (deduced)
+    let explicit_args = vec![CppType::Int { signed: true }];
+    let call_args = vec![CppType::Double];
+    let result = TypeDeducer::deduce_with_explicit(template, &explicit_args, &call_args)
+        .expect("Deduction failed");
+
+    assert_eq!(result.get("T"), Some(&CppType::Int { signed: true }));
+    assert_eq!(result.get("U"), Some(&CppType::Double));
+}
+
+/// Test deduce_and_instantiate_with_explicit method.
+#[test]
+fn test_deduce_instantiate_with_explicit() {
+    use fragile_clang::CppType;
+
+    let parser = ClangParser::new().expect("Failed to create parser");
+
+    let source = r#"
+        template<typename T, typename U>
+        T convert(U x) { return static_cast<T>(x); }
+    "#;
+
+    let ast = parser.parse_string(source, "explicit_inst.cpp").expect("Failed to parse");
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    let template = &module.function_templates[0];
+
+    // Instantiate with T = int (explicit), U = float (deduced)
+    let explicit_args = vec![CppType::Int { signed: true }];
+    let call_args = vec![CppType::Float];
+    let func = template.deduce_and_instantiate_with_explicit(&explicit_args, &call_args)
+        .expect("Instantiation failed");
+
+    assert_eq!(func.return_type, CppType::Int { signed: true });
+    assert_eq!(func.params[0].1, CppType::Float);
+}
