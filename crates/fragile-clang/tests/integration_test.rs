@@ -16718,3 +16718,10 @@ fn test_mako_deptran_rcc_tx_cc() {
         }
     }
 }
+
+// Note: troad/scheduler.cc needs communicator.h → QuorumEvent issues
+// Note: troad/commo.cc needs QuorumEvent issues
+// Note: raft/service.cc needs rcc_rpc.h (override specifier issue)
+// Note: mencius/service.cc needs communicator.h → QuorumEvent issues
+
+// Note: bench/tpca/payment.cc needs communicator.h via workload.h → QuorumEvent issues
