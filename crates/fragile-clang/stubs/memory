@@ -278,11 +278,56 @@ unique_ptr<T> make_unique(Args&&... args) {
     return unique_ptr<T>(new T(static_cast<Args&&>(args)...));
 }
 
+// static_pointer_cast
+template<typename T, typename U>
+shared_ptr<T> static_pointer_cast(const shared_ptr<U>& r) noexcept {
+    return shared_ptr<T>(static_cast<T*>(r.get()));
+}
+
+// dynamic_pointer_cast
+template<typename T, typename U>
+shared_ptr<T> dynamic_pointer_cast(const shared_ptr<U>& r) noexcept {
+    if (T* p = dynamic_cast<T*>(r.get())) {
+        return shared_ptr<T>(p);
+    }
+    return shared_ptr<T>();
+}
+
+// const_pointer_cast
+template<typename T, typename U>
+shared_ptr<T> const_pointer_cast(const shared_ptr<U>& r) noexcept {
+    return shared_ptr<T>(const_cast<T*>(r.get()));
+}
+
 // addressof
 template<typename T>
 T* addressof(T& arg) noexcept {
     return reinterpret_cast<T*>(&const_cast<char&>(reinterpret_cast<const volatile char&>(arg)));
 }
+
+// enable_shared_from_this - base class for objects that want to create shared_ptr to themselves
+template<typename T>
+class enable_shared_from_this {
+protected:
+    constexpr enable_shared_from_this() noexcept = default;
+    enable_shared_from_this(const enable_shared_from_this&) noexcept = default;
+    enable_shared_from_this& operator=(const enable_shared_from_this&) noexcept { return *this; }
+    ~enable_shared_from_this() = default;
+
+public:
+    shared_ptr<T> shared_from_this() {
+        return shared_ptr<T>(static_cast<T*>(this));
+    }
+    shared_ptr<const T> shared_from_this() const {
+        return shared_ptr<const T>(static_cast<const T*>(this));
+    }
+    weak_ptr<T> weak_from_this() noexcept {
+        return weak_ptr<T>(shared_from_this());
+    }
+    weak_ptr<const T> weak_from_this() const noexcept {
+        return weak_ptr<const T>(shared_from_this());
+    }
+};
 
 } // namespace std
 

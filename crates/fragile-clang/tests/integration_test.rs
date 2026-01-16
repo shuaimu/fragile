@@ -14901,3 +14901,54 @@ fn test_mako_memdb_table_cc() {
     }
 }
 
+/// Test parsing deptran/multi_value.cc - multi-value types
+#[test]
+fn test_mako_deptran_multi_value_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/deptran/multi_value.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: multi_value.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let rusty_cpp_path = project_root.join("vendor/mako/third-party/rusty-cpp/include");
+
+    if !rusty_cpp_path.exists() {
+        println!("Skipping test: rusty-cpp submodule not initialized");
+        return;
+    }
+
+    let include_paths = vec![
+        project_root.join("vendor/mako/src").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/deptran").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/memdb").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/rrr").to_string_lossy().to_string(),
+        rusty_cpp_path.to_string_lossy().to_string(),
+    ];
+
+    let system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let parser = ClangParser::with_paths(include_paths, system_include_paths)
+        .expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+            println!("deptran/multi_value.cc parsed successfully with {} functions", module.functions.len());
+            assert!(module.functions.len() >= 100, "Expected multi-value functions");
+        }
+        Err(e) => {
+            panic!("deptran/multi_value.cc should parse successfully: {:?}", e);
+        }
+    }
+}
+

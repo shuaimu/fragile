@@ -209,6 +209,26 @@ struct hash<T*> {
     size_t operator()(T* v) const noexcept { return reinterpret_cast<size_t>(v); }
 };
 
+template<>
+struct hash<float> {
+    size_t operator()(float v) const noexcept {
+        // Simple hash for float: reinterpret as integer
+        union { float f; unsigned int i; } u;
+        u.f = v;
+        return static_cast<size_t>(u.i);
+    }
+};
+
+template<>
+struct hash<double> {
+    size_t operator()(double v) const noexcept {
+        // Simple hash for double: reinterpret as integer
+        union { double d; unsigned long long i; } u;
+        u.d = v;
+        return static_cast<size_t>(u.i);
+    }
+};
+
 // invoke (C++17) - call a callable with arguments
 template<typename F, typename... Args>
 auto invoke(F&& f, Args&&... args)
