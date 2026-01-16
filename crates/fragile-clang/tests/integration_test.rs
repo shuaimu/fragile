@@ -28882,59 +28882,46 @@ fn test_mako_bench_micro_procedure_cc() {
     }
 
     let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
-    let mako_path = project_root.join("vendor/mako/src/mako");
-    let mako_src = project_root.join("vendor/mako/src");
-    let bench_path = project_root.join("vendor/mako/src/bench");
-    let masstree_path = project_root.join("vendor/mako/src/mako/masstree");
-    let lib_path = project_root.join("vendor/mako/src/mako/lib");
     let rusty_cpp_path = project_root.join("vendor/mako/third-party/rusty-cpp/include");
-    let masstree_beta_path = project_root.join("vendor/mako/src/mako/benchmarks/sto/masstree-beta");
-    let sto_path = project_root.join("vendor/mako/src/mako/benchmarks/sto");
-    let benchmarks_path = project_root.join("vendor/mako/src/mako/benchmarks");
 
-    let mut system_include_paths = vec![
-        stubs_path.to_string_lossy().to_string(),
-    ];
-
-    let clang_paths = [
-        "/usr/lib/llvm-19/lib/clang/19/include",
-        "/usr/lib/llvm-18/lib/clang/18/include",
-    ];
-
-    for path in &clang_paths {
-        if Path::new(path).exists() {
-            system_include_paths.push(path.to_string());
-            break;
-        }
+    if !rusty_cpp_path.exists() {
+        println!("Skipping test: rusty-cpp submodule not initialized");
+        return;
     }
 
     let include_paths = vec![
-        mako_path.to_string_lossy().to_string(),
-        mako_src.to_string_lossy().to_string(),
-        bench_path.to_string_lossy().to_string(),
-        masstree_path.to_string_lossy().to_string(),
-        lib_path.to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/mako").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/memdb").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/rrr").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/deptran").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/bench").to_string_lossy().to_string(),
         rusty_cpp_path.to_string_lossy().to_string(),
-        masstree_beta_path.to_string_lossy().to_string(),
-        sto_path.to_string_lossy().to_string(),
-        benchmarks_path.to_string_lossy().to_string(),
     ];
 
-    let defines = vec![
-        r#"CONFIG_H="masstree/config.h""#.to_string(),
-        "HAVE_EXECINFO_H=1".to_string(),
+    let system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
     ];
 
     let ignored_errors = vec![
-        "unknown type name".to_string(),
-        "use of undeclared identifier".to_string(),
-        "no member named".to_string(),
+        "cannot initialize object parameter of type".to_string(),
+        "rcc_rpc.h' file not found".to_string(),
+        "member access into incomplete type".to_string(),
+        "only virtual member functions can be marked 'override'".to_string(),
+        "expected class name".to_string(),
+        "unknown type name 'DepId'".to_string(),
+        "unknown type name 'Profiling'".to_string(),
+        "unknown type name 'ServerResponse'".to_string(),
+        "unknown type name 'ClientResponse'".to_string(),
+        "unknown type name 'TxDispatchRequest'".to_string(),
+        "invalid operands to binary expression".to_string(),
+        "allocation of incomplete type".to_string(),
     ];
 
     let parser = ClangParser::with_paths_defines_and_ignored_errors(
         include_paths,
         system_include_paths,
-        defines,
+        vec![],
         ignored_errors,
     ).expect("Failed to create parser");
 
@@ -28945,9 +28932,10 @@ fn test_mako_bench_micro_procedure_cc() {
             let converter = MirConverter::new();
             let module = converter.convert(ast).unwrap();
             println!("bench/micro/procedure.cc parsed successfully with {} functions", module.functions.len());
+            assert!(module.functions.len() >= 5, "Expected micro procedure functions");
         }
         Err(e) => {
-            println!("Note: bench/micro/procedure.cc parsing failed: {:?}", e);
+            panic!("bench/micro/procedure.cc should parse successfully: {:?}", e);
         }
     }
 }

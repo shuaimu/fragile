@@ -413,7 +413,7 @@ See [PLAN_CPP20_MAKO.md](PLAN_CPP20_MAKO.md) for detailed plan.
     - [x] `vendor/mako/src/mako/benchmarks/bench.cc` - **PARSED**: main benchmark harness [26:01:16, 20:00]
     - [x] `vendor/mako/src/mako/benchmarks/encstress.cc` - **PARSED**: encryption stress test [26:01:16, 20:00]
     - [-] `vendor/mako/src/deptran/mongodb/server.cc` - Needs bsoncxx (external dep)
-    - [-] `vendor/mako/src/bench/micro/procedure.cc` - Needs more complex error filtering
+    - [x] `vendor/mako/src/bench/micro/procedure.cc` - **PARSED**: 4759 functions (micro benchmark procedure) [26:01:16, 22:50]
     - [ ] Remaining files need: eRPC library stubs, bsoncxx
   - [ ] Link and run tests
 
