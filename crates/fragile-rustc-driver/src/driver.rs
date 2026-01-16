@@ -705,9 +705,9 @@ mod tests {
         let module = fragile_clang::compile_cpp_file(&add_cpp)
             .expect("Failed to parse add.cpp");
 
-        // Verify we got the add function
-        assert!(module.functions.iter().any(|f| f.display_name == "add"),
-            "Expected to find 'add' function in module");
+        // Verify we got the add_cpp function
+        assert!(module.functions.iter().any(|f| f.display_name == "add_cpp"),
+            "Expected to find 'add_cpp' function in module");
 
         // Create driver and register module
         let driver = FragileDriver::new();
@@ -726,7 +726,9 @@ mod tests {
 // Include the generated C++ stubs
 mod cpp_stubs {
     extern "C" {
-        pub fn add(a: i32, b: i32) -> i32;
+        // C++ mangled name for add_cpp(int, int) -> int
+        #[link_name = "_Z7add_cppii"]
+        pub fn add_cpp(a: i32, b: i32) -> i32;
     }
 }
 
