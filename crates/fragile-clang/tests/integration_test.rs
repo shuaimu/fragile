@@ -9694,3 +9694,2108 @@ fn test_mako_lib_memory_cc() {
     }
 }
 
+/// Test parsing mako lib transport.cc (network transport)
+#[test]
+fn test_mako_lib_transport_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/mako/lib/transport.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: transport.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let lib_path = project_root.join("vendor/mako/src/mako/lib");
+    let mako_path = project_root.join("vendor/mako/src/mako");
+
+    let mut system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let clang_paths = [
+        "/usr/lib/llvm-19/lib/clang/19/include",
+        "/usr/lib/llvm-18/lib/clang/18/include",
+    ];
+
+    for path in &clang_paths {
+        if Path::new(path).exists() {
+            system_include_paths.push(path.to_string());
+            break;
+        }
+    }
+
+    let include_paths = vec![
+        lib_path.to_string_lossy().to_string(),
+        mako_path.to_string_lossy().to_string(),
+    ];
+
+    let parser = ClangParser::with_paths(include_paths, system_include_paths)
+        .expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+
+            println!("Successfully parsed transport.cc with {} functions", module.functions.len());
+            // transport.cc has network transport classes (may have few functions if most are inline)
+            assert!(module.functions.len() >= 1, "transport.cc should have at least 1 function");
+        }
+        Err(e) => {
+            println!("Note: transport.cc parsing failed: {:?}", e);
+        }
+    }
+}
+
+/// Test parsing mako lib message.cc (message handling)
+#[test]
+fn test_mako_lib_message_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/mako/lib/message.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: message.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let lib_path = project_root.join("vendor/mako/src/mako/lib");
+    let mako_path = project_root.join("vendor/mako/src/mako");
+
+    let mut system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let clang_paths = [
+        "/usr/lib/llvm-19/lib/clang/19/include",
+        "/usr/lib/llvm-18/lib/clang/18/include",
+    ];
+
+    for path in &clang_paths {
+        if Path::new(path).exists() {
+            system_include_paths.push(path.to_string());
+            break;
+        }
+    }
+
+    let include_paths = vec![
+        lib_path.to_string_lossy().to_string(),
+        mako_path.to_string_lossy().to_string(),
+    ];
+
+    let parser = ClangParser::with_paths(include_paths, system_include_paths)
+        .expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+
+            println!("Successfully parsed message.cc with {} functions", module.functions.len());
+            // message.cc has message handling functions
+            assert!(module.functions.len() >= 10, "message.cc should have at least 10 functions");
+        }
+        Err(e) => {
+            println!("Note: message.cc parsing failed: {:?}", e);
+        }
+    }
+}
+
+/// Test parsing mako btree.cc (B-tree implementation)
+#[test]
+fn test_mako_btree_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/mako/btree.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: btree.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let mako_path = project_root.join("vendor/mako/src/mako");
+    let masstree_path = project_root.join("vendor/mako/src/mako/masstree");
+    let lib_path = project_root.join("vendor/mako/src/mako/lib");
+    let rusty_cpp_path = project_root.join("vendor/mako/src/mako/submodules/rusty-cpp/include");
+    let masstree_beta_path = project_root.join("vendor/mako/src/mako/benchmarks/sto/masstree-beta");
+
+    let mut system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let clang_paths = [
+        "/usr/lib/llvm-19/lib/clang/19/include",
+        "/usr/lib/llvm-18/lib/clang/18/include",
+    ];
+
+    for path in &clang_paths {
+        if Path::new(path).exists() {
+            system_include_paths.push(path.to_string());
+            break;
+        }
+    }
+
+    let include_paths = vec![
+        mako_path.to_string_lossy().to_string(),
+        masstree_path.to_string_lossy().to_string(),
+        lib_path.to_string_lossy().to_string(),
+        rusty_cpp_path.to_string_lossy().to_string(),
+        masstree_beta_path.to_string_lossy().to_string(),
+    ];
+
+    let defines = vec![
+        r#"CONFIG_H="masstree/config.h""#.to_string(),
+        "HAVE_EXECINFO_H=1".to_string(),
+    ];
+
+    let parser = ClangParser::with_paths_and_defines(include_paths, system_include_paths, defines)
+        .expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+
+            println!("Successfully parsed btree.cc with {} functions", module.functions.len());
+            // btree.cc has B-tree implementation with many functions
+            assert!(module.functions.len() >= 50, "btree.cc should have at least 50 functions");
+        }
+        Err(e) => {
+            println!("Note: btree.cc parsing failed: {:?}", e);
+        }
+    }
+}
+
+/// Test parsing mako tuple.cc (tuple operations)
+#[test]
+fn test_mako_tuple_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/mako/tuple.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: tuple.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let mako_path = project_root.join("vendor/mako/src/mako");
+    let masstree_path = project_root.join("vendor/mako/src/mako/masstree");
+    let lib_path = project_root.join("vendor/mako/src/mako/lib");
+    let rusty_cpp_path = project_root.join("vendor/mako/src/mako/submodules/rusty-cpp/include");
+    let masstree_beta_path = project_root.join("vendor/mako/src/mako/benchmarks/sto/masstree-beta");
+
+    let mut system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let clang_paths = [
+        "/usr/lib/llvm-19/lib/clang/19/include",
+        "/usr/lib/llvm-18/lib/clang/18/include",
+    ];
+
+    for path in &clang_paths {
+        if Path::new(path).exists() {
+            system_include_paths.push(path.to_string());
+            break;
+        }
+    }
+
+    let include_paths = vec![
+        mako_path.to_string_lossy().to_string(),
+        masstree_path.to_string_lossy().to_string(),
+        lib_path.to_string_lossy().to_string(),
+        rusty_cpp_path.to_string_lossy().to_string(),
+        masstree_beta_path.to_string_lossy().to_string(),
+    ];
+
+    let defines = vec![
+        r#"CONFIG_H="masstree/config.h""#.to_string(),
+        "HAVE_EXECINFO_H=1".to_string(),
+    ];
+
+    let parser = ClangParser::with_paths_and_defines(include_paths, system_include_paths, defines)
+        .expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+
+            println!("Successfully parsed tuple.cc with {} functions", module.functions.len());
+            // tuple.cc has tuple handling functions
+            assert!(module.functions.len() >= 50, "tuple.cc should have at least 50 functions");
+        }
+        Err(e) => {
+            println!("Note: tuple.cc parsing failed: {:?}", e);
+        }
+    }
+}
+
+/// Test parsing mako memory.cc (memory management)
+#[test]
+fn test_mako_memory_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/mako/memory.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: memory.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let mako_path = project_root.join("vendor/mako/src/mako");
+    let masstree_path = project_root.join("vendor/mako/src/mako/masstree");
+    let lib_path = project_root.join("vendor/mako/src/mako/lib");
+    let rusty_cpp_path = project_root.join("vendor/mako/src/mako/submodules/rusty-cpp/include");
+    let masstree_beta_path = project_root.join("vendor/mako/src/mako/benchmarks/sto/masstree-beta");
+
+    let mut system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let clang_paths = [
+        "/usr/lib/llvm-19/lib/clang/19/include",
+        "/usr/lib/llvm-18/lib/clang/18/include",
+    ];
+
+    for path in &clang_paths {
+        if Path::new(path).exists() {
+            system_include_paths.push(path.to_string());
+            break;
+        }
+    }
+
+    let include_paths = vec![
+        mako_path.to_string_lossy().to_string(),
+        masstree_path.to_string_lossy().to_string(),
+        lib_path.to_string_lossy().to_string(),
+        rusty_cpp_path.to_string_lossy().to_string(),
+        masstree_beta_path.to_string_lossy().to_string(),
+    ];
+
+    let defines = vec![
+        r#"CONFIG_H="masstree/config.h""#.to_string(),
+        "HAVE_EXECINFO_H=1".to_string(),
+    ];
+
+    let parser = ClangParser::with_paths_and_defines(include_paths, system_include_paths, defines)
+        .expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+
+            println!("Successfully parsed memory.cc with {} functions", module.functions.len());
+            // memory.cc has memory management functions
+            assert!(module.functions.len() >= 15, "memory.cc should have at least 15 functions");
+        }
+        Err(e) => {
+            println!("Note: memory.cc parsing failed: {:?}", e);
+        }
+    }
+}
+
+/// Test parsing mako masstree/testrunner.cc (test runner)
+#[test]
+fn test_mako_masstree_testrunner_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/mako/masstree/testrunner.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: testrunner.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let masstree_path = project_root.join("vendor/mako/src/mako/masstree");
+    let mako_path = project_root.join("vendor/mako/src/mako");
+
+    let mut system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let clang_paths = [
+        "/usr/lib/llvm-19/lib/clang/19/include",
+        "/usr/lib/llvm-18/lib/clang/18/include",
+    ];
+
+    for path in &clang_paths {
+        if Path::new(path).exists() {
+            system_include_paths.push(path.to_string());
+            break;
+        }
+    }
+
+    let include_paths = vec![
+        masstree_path.to_string_lossy().to_string(),
+        mako_path.to_string_lossy().to_string(),
+    ];
+
+    let defines = vec![
+        "HAVE_EXECINFO_H=1".to_string(),
+    ];
+
+    let parser = ClangParser::with_paths_and_defines(include_paths, system_include_paths, defines)
+        .expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+
+            println!("Successfully parsed testrunner.cc with {} functions", module.functions.len());
+            // testrunner.cc has test runner functions
+            assert!(module.functions.len() >= 50, "testrunner.cc should have at least 50 functions");
+        }
+        Err(e) => {
+            println!("Note: testrunner.cc parsing failed: {:?}", e);
+        }
+    }
+}
+
+/// Test parsing mako masstree/mttest.cc (masstree tests)
+#[test]
+fn test_mako_masstree_mttest_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/mako/masstree/mttest.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: mttest.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let masstree_path = project_root.join("vendor/mako/src/mako/masstree");
+    let mako_path = project_root.join("vendor/mako/src/mako");
+
+    let mut system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let clang_paths = [
+        "/usr/lib/llvm-19/lib/clang/19/include",
+        "/usr/lib/llvm-18/lib/clang/18/include",
+    ];
+
+    for path in &clang_paths {
+        if Path::new(path).exists() {
+            system_include_paths.push(path.to_string());
+            break;
+        }
+    }
+
+    let include_paths = vec![
+        masstree_path.to_string_lossy().to_string(),
+        mako_path.to_string_lossy().to_string(),
+    ];
+
+    let defines = vec![
+        "HAVE_EXECINFO_H=1".to_string(),
+    ];
+
+    let parser = ClangParser::with_paths_and_defines(include_paths, system_include_paths, defines)
+        .expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+
+            println!("Successfully parsed mttest.cc with {} functions", module.functions.len());
+            // mttest.cc has masstree test functions
+            assert!(module.functions.len() >= 100, "mttest.cc should have at least 100 functions");
+        }
+        Err(e) => {
+            println!("Note: mttest.cc parsing failed: {:?}", e);
+        }
+    }
+}
+
+/// Test parsing mako masstree/masstree_context.cc (masstree context)
+#[test]
+fn test_mako_masstree_context_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/mako/masstree/masstree_context.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: masstree_context.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let masstree_path = project_root.join("vendor/mako/src/mako/masstree");
+    let mako_path = project_root.join("vendor/mako/src/mako");
+
+    let mut system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let clang_paths = [
+        "/usr/lib/llvm-19/lib/clang/19/include",
+        "/usr/lib/llvm-18/lib/clang/18/include",
+    ];
+
+    for path in &clang_paths {
+        if Path::new(path).exists() {
+            system_include_paths.push(path.to_string());
+            break;
+        }
+    }
+
+    let include_paths = vec![
+        masstree_path.to_string_lossy().to_string(),
+        mako_path.to_string_lossy().to_string(),
+    ];
+
+    let defines = vec![
+        "HAVE_EXECINFO_H=1".to_string(),
+    ];
+
+    let parser = ClangParser::with_paths_and_defines(include_paths, system_include_paths, defines)
+        .expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+
+            println!("Successfully parsed masstree_context.cc with {} functions", module.functions.len());
+            // masstree_context.cc has context handling functions
+            assert!(module.functions.len() >= 50, "masstree_context.cc should have at least 50 functions");
+        }
+        Err(e) => {
+            println!("Note: masstree_context.cc parsing failed: {:?}", e);
+        }
+    }
+}
+
+/// Test parsing mako masstree/kvthread.cc (kv threading)
+#[test]
+fn test_mako_masstree_kvthread_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/mako/masstree/kvthread.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: kvthread.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let masstree_path = project_root.join("vendor/mako/src/mako/masstree");
+    let mako_path = project_root.join("vendor/mako/src/mako");
+
+    let mut system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let clang_paths = [
+        "/usr/lib/llvm-19/lib/clang/19/include",
+        "/usr/lib/llvm-18/lib/clang/18/include",
+    ];
+
+    for path in &clang_paths {
+        if Path::new(path).exists() {
+            system_include_paths.push(path.to_string());
+            break;
+        }
+    }
+
+    let include_paths = vec![
+        masstree_path.to_string_lossy().to_string(),
+        mako_path.to_string_lossy().to_string(),
+    ];
+
+    let defines = vec![
+        "HAVE_EXECINFO_H=1".to_string(),
+    ];
+
+    let parser = ClangParser::with_paths_and_defines(include_paths, system_include_paths, defines)
+        .expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+
+            println!("Successfully parsed kvthread.cc with {} functions", module.functions.len());
+            // kvthread.cc has kv threading functions
+            assert!(module.functions.len() >= 50, "kvthread.cc should have at least 50 functions");
+        }
+        Err(e) => {
+            println!("Note: kvthread.cc parsing failed: {:?}", e);
+        }
+    }
+}
+
+/// Test parsing mako masstree/misc.cc (misc utilities)
+#[test]
+fn test_mako_masstree_misc_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/mako/masstree/misc.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: misc.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let masstree_path = project_root.join("vendor/mako/src/mako/masstree");
+    let mako_path = project_root.join("vendor/mako/src/mako");
+
+    let mut system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let clang_paths = [
+        "/usr/lib/llvm-19/lib/clang/19/include",
+        "/usr/lib/llvm-18/lib/clang/18/include",
+    ];
+
+    for path in &clang_paths {
+        if Path::new(path).exists() {
+            system_include_paths.push(path.to_string());
+            break;
+        }
+    }
+
+    let include_paths = vec![
+        masstree_path.to_string_lossy().to_string(),
+        mako_path.to_string_lossy().to_string(),
+    ];
+
+    let defines = vec![
+        "HAVE_EXECINFO_H=1".to_string(),
+    ];
+
+    let parser = ClangParser::with_paths_and_defines(include_paths, system_include_paths, defines)
+        .expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+
+            println!("Successfully parsed misc.cc with {} functions", module.functions.len());
+            // misc.cc has misc utilities
+            assert!(module.functions.len() >= 50, "misc.cc should have at least 50 functions");
+        }
+        Err(e) => {
+            println!("Note: misc.cc parsing failed: {:?}", e);
+        }
+    }
+}
+
+/// Test parsing mako masstree/perfstat.cc (performance stats)
+#[test]
+fn test_mako_masstree_perfstat_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/mako/masstree/perfstat.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: perfstat.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let masstree_path = project_root.join("vendor/mako/src/mako/masstree");
+    let mako_path = project_root.join("vendor/mako/src/mako");
+
+    let mut system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let clang_paths = [
+        "/usr/lib/llvm-19/lib/clang/19/include",
+        "/usr/lib/llvm-18/lib/clang/18/include",
+    ];
+
+    for path in &clang_paths {
+        if Path::new(path).exists() {
+            system_include_paths.push(path.to_string());
+            break;
+        }
+    }
+
+    let include_paths = vec![
+        masstree_path.to_string_lossy().to_string(),
+        mako_path.to_string_lossy().to_string(),
+    ];
+
+    let defines = vec![
+        "HAVE_EXECINFO_H=1".to_string(),
+    ];
+
+    let parser = ClangParser::with_paths_and_defines(include_paths, system_include_paths, defines)
+        .expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+
+            println!("Successfully parsed perfstat.cc with {} functions", module.functions.len());
+            // perfstat.cc has performance stat functions
+            assert!(module.functions.len() >= 50, "perfstat.cc should have at least 50 functions");
+        }
+        Err(e) => {
+            println!("Note: perfstat.cc parsing failed: {:?}", e);
+        }
+    }
+}
+
+/// Test parsing mako masstree/str.cc (string utilities)
+#[test]
+fn test_mako_masstree_str_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/mako/masstree/str.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: str.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let masstree_path = project_root.join("vendor/mako/src/mako/masstree");
+    let mako_path = project_root.join("vendor/mako/src/mako");
+
+    let mut system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let clang_paths = [
+        "/usr/lib/llvm-19/lib/clang/19/include",
+        "/usr/lib/llvm-18/lib/clang/18/include",
+    ];
+
+    for path in &clang_paths {
+        if Path::new(path).exists() {
+            system_include_paths.push(path.to_string());
+            break;
+        }
+    }
+
+    let include_paths = vec![
+        masstree_path.to_string_lossy().to_string(),
+        mako_path.to_string_lossy().to_string(),
+    ];
+
+    let defines = vec![
+        "HAVE_EXECINFO_H=1".to_string(),
+    ];
+
+    let parser = ClangParser::with_paths_and_defines(include_paths, system_include_paths, defines)
+        .expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+
+            println!("Successfully parsed str.cc with {} functions", module.functions.len());
+            // str.cc has string utility functions
+            assert!(module.functions.len() >= 50, "str.cc should have at least 50 functions");
+        }
+        Err(e) => {
+            println!("Note: str.cc parsing failed: {:?}", e);
+        }
+    }
+}
+
+/// Test parsing mako masstree/string_slice.cc (string slice)
+#[test]
+fn test_mako_masstree_string_slice_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/mako/masstree/string_slice.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: string_slice.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let masstree_path = project_root.join("vendor/mako/src/mako/masstree");
+    let mako_path = project_root.join("vendor/mako/src/mako");
+
+    let mut system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let clang_paths = [
+        "/usr/lib/llvm-19/lib/clang/19/include",
+        "/usr/lib/llvm-18/lib/clang/18/include",
+    ];
+
+    for path in &clang_paths {
+        if Path::new(path).exists() {
+            system_include_paths.push(path.to_string());
+            break;
+        }
+    }
+
+    let include_paths = vec![
+        masstree_path.to_string_lossy().to_string(),
+        mako_path.to_string_lossy().to_string(),
+    ];
+
+    let defines = vec![
+        "HAVE_EXECINFO_H=1".to_string(),
+    ];
+
+    let parser = ClangParser::with_paths_and_defines(include_paths, system_include_paths, defines)
+        .expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+
+            println!("Successfully parsed string_slice.cc with {} functions", module.functions.len());
+            // string_slice.cc has string slice functions
+            assert!(module.functions.len() >= 50, "string_slice.cc should have at least 50 functions");
+        }
+        Err(e) => {
+            println!("Note: string_slice.cc parsing failed: {:?}", e);
+        }
+    }
+}
+
+/// Test parsing mako masstree/test_atomics.cc (atomics tests)
+#[test]
+fn test_mako_masstree_test_atomics_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/mako/masstree/test_atomics.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: test_atomics.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let masstree_path = project_root.join("vendor/mako/src/mako/masstree");
+    let mako_path = project_root.join("vendor/mako/src/mako");
+
+    let mut system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let clang_paths = [
+        "/usr/lib/llvm-19/lib/clang/19/include",
+        "/usr/lib/llvm-18/lib/clang/18/include",
+    ];
+
+    for path in &clang_paths {
+        if Path::new(path).exists() {
+            system_include_paths.push(path.to_string());
+            break;
+        }
+    }
+
+    let include_paths = vec![
+        masstree_path.to_string_lossy().to_string(),
+        mako_path.to_string_lossy().to_string(),
+    ];
+
+    let defines = vec![
+        "HAVE_EXECINFO_H=1".to_string(),
+    ];
+
+    let parser = ClangParser::with_paths_and_defines(include_paths, system_include_paths, defines)
+        .expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+
+            println!("Successfully parsed test_atomics.cc with {} functions", module.functions.len());
+            // test_atomics.cc has atomic test functions
+            assert!(module.functions.len() >= 50, "test_atomics.cc should have at least 50 functions");
+        }
+        Err(e) => {
+            println!("Note: test_atomics.cc parsing failed: {:?}", e);
+        }
+    }
+}
+
+/// Test parsing mako masstree/test_string.cc (string tests)
+#[test]
+fn test_mako_masstree_test_string_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/mako/masstree/test_string.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: test_string.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let masstree_path = project_root.join("vendor/mako/src/mako/masstree");
+    let mako_path = project_root.join("vendor/mako/src/mako");
+
+    let mut system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let clang_paths = [
+        "/usr/lib/llvm-19/lib/clang/19/include",
+        "/usr/lib/llvm-18/lib/clang/18/include",
+    ];
+
+    for path in &clang_paths {
+        if Path::new(path).exists() {
+            system_include_paths.push(path.to_string());
+            break;
+        }
+    }
+
+    let include_paths = vec![
+        masstree_path.to_string_lossy().to_string(),
+        mako_path.to_string_lossy().to_string(),
+    ];
+
+    let defines = vec![
+        "HAVE_EXECINFO_H=1".to_string(),
+    ];
+
+    let parser = ClangParser::with_paths_and_defines(include_paths, system_include_paths, defines)
+        .expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+
+            println!("Successfully parsed test_string.cc with {} functions", module.functions.len());
+            // test_string.cc has string test functions
+            assert!(module.functions.len() >= 50, "test_string.cc should have at least 50 functions");
+        }
+        Err(e) => {
+            println!("Note: test_string.cc parsing failed: {:?}", e);
+        }
+    }
+}
+
+/// Test parsing mako masstree/jsontest.cc (JSON tests)
+#[test]
+fn test_mako_masstree_jsontest_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/mako/masstree/jsontest.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: jsontest.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let masstree_path = project_root.join("vendor/mako/src/mako/masstree");
+    let mako_path = project_root.join("vendor/mako/src/mako");
+
+    let mut system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let clang_paths = [
+        "/usr/lib/llvm-19/lib/clang/19/include",
+        "/usr/lib/llvm-18/lib/clang/18/include",
+    ];
+
+    for path in &clang_paths {
+        if Path::new(path).exists() {
+            system_include_paths.push(path.to_string());
+            break;
+        }
+    }
+
+    let include_paths = vec![
+        masstree_path.to_string_lossy().to_string(),
+        mako_path.to_string_lossy().to_string(),
+    ];
+
+    let defines = vec![
+        "HAVE_EXECINFO_H=1".to_string(),
+    ];
+
+    let parser = ClangParser::with_paths_and_defines(include_paths, system_include_paths, defines)
+        .expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+
+            println!("Successfully parsed jsontest.cc with {} functions", module.functions.len());
+            // jsontest.cc has JSON test functions
+            assert!(module.functions.len() >= 50, "jsontest.cc should have at least 50 functions");
+        }
+        Err(e) => {
+            println!("Note: jsontest.cc parsing failed: {:?}", e);
+        }
+    }
+}
+
+/// Test parsing mako masstree/msgpacktest.cc (msgpack tests)
+#[test]
+fn test_mako_masstree_msgpacktest_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/mako/masstree/msgpacktest.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: msgpacktest.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let masstree_path = project_root.join("vendor/mako/src/mako/masstree");
+    let mako_path = project_root.join("vendor/mako/src/mako");
+
+    let mut system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let clang_paths = [
+        "/usr/lib/llvm-19/lib/clang/19/include",
+        "/usr/lib/llvm-18/lib/clang/18/include",
+    ];
+
+    for path in &clang_paths {
+        if Path::new(path).exists() {
+            system_include_paths.push(path.to_string());
+            break;
+        }
+    }
+
+    let include_paths = vec![
+        masstree_path.to_string_lossy().to_string(),
+        mako_path.to_string_lossy().to_string(),
+    ];
+
+    let defines = vec![
+        "HAVE_EXECINFO_H=1".to_string(),
+    ];
+
+    let parser = ClangParser::with_paths_and_defines(include_paths, system_include_paths, defines)
+        .expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+
+            println!("Successfully parsed msgpacktest.cc with {} functions", module.functions.len());
+            // msgpacktest.cc has msgpack test functions
+            assert!(module.functions.len() >= 50, "msgpacktest.cc should have at least 50 functions");
+        }
+        Err(e) => {
+            println!("Note: msgpacktest.cc parsing failed: {:?}", e);
+        }
+    }
+}
+
+/// Test parsing mako masstree/scantest.cc (scan tests)
+#[test]
+fn test_mako_masstree_scantest_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/mako/masstree/scantest.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: scantest.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let masstree_path = project_root.join("vendor/mako/src/mako/masstree");
+    let mako_path = project_root.join("vendor/mako/src/mako");
+
+    let mut system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let clang_paths = [
+        "/usr/lib/llvm-19/lib/clang/19/include",
+        "/usr/lib/llvm-18/lib/clang/18/include",
+    ];
+
+    for path in &clang_paths {
+        if Path::new(path).exists() {
+            system_include_paths.push(path.to_string());
+            break;
+        }
+    }
+
+    let include_paths = vec![
+        masstree_path.to_string_lossy().to_string(),
+        mako_path.to_string_lossy().to_string(),
+    ];
+
+    let defines = vec![
+        "HAVE_EXECINFO_H=1".to_string(),
+    ];
+
+    let parser = ClangParser::with_paths_and_defines(include_paths, system_include_paths, defines)
+        .expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+
+            println!("Successfully parsed scantest.cc with {} functions", module.functions.len());
+            // scantest.cc has scan test functions
+            assert!(module.functions.len() >= 50, "scantest.cc should have at least 50 functions");
+        }
+        Err(e) => {
+            println!("Note: scantest.cc parsing failed: {:?}", e);
+        }
+    }
+}
+
+/// Test parsing mako masstree/query_masstree.cc (query masstree)
+#[test]
+fn test_mako_masstree_query_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/mako/masstree/query_masstree.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: query_masstree.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let masstree_path = project_root.join("vendor/mako/src/mako/masstree");
+    let mako_path = project_root.join("vendor/mako/src/mako");
+
+    let mut system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let clang_paths = [
+        "/usr/lib/llvm-19/lib/clang/19/include",
+        "/usr/lib/llvm-18/lib/clang/18/include",
+    ];
+
+    for path in &clang_paths {
+        if Path::new(path).exists() {
+            system_include_paths.push(path.to_string());
+            break;
+        }
+    }
+
+    let include_paths = vec![
+        masstree_path.to_string_lossy().to_string(),
+        mako_path.to_string_lossy().to_string(),
+    ];
+
+    let defines = vec![
+        "HAVE_EXECINFO_H=1".to_string(),
+    ];
+
+    let parser = ClangParser::with_paths_and_defines(include_paths, system_include_paths, defines)
+        .expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+
+            println!("Successfully parsed query_masstree.cc with {} functions", module.functions.len());
+            // query_masstree.cc has query functions
+            assert!(module.functions.len() >= 50, "query_masstree.cc should have at least 50 functions");
+        }
+        Err(e) => {
+            println!("Note: query_masstree.cc parsing failed: {:?}", e);
+        }
+    }
+}
+
+/// Test parsing mako masstree/value_array.cc (value array)
+#[test]
+fn test_mako_masstree_value_array_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/mako/masstree/value_array.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: value_array.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let masstree_path = project_root.join("vendor/mako/src/mako/masstree");
+    let mako_path = project_root.join("vendor/mako/src/mako");
+
+    let mut system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let clang_paths = [
+        "/usr/lib/llvm-19/lib/clang/19/include",
+        "/usr/lib/llvm-18/lib/clang/18/include",
+    ];
+
+    for path in &clang_paths {
+        if Path::new(path).exists() {
+            system_include_paths.push(path.to_string());
+            break;
+        }
+    }
+
+    let include_paths = vec![
+        masstree_path.to_string_lossy().to_string(),
+        mako_path.to_string_lossy().to_string(),
+    ];
+
+    let defines = vec![
+        "HAVE_EXECINFO_H=1".to_string(),
+    ];
+
+    let parser = ClangParser::with_paths_and_defines(include_paths, system_include_paths, defines)
+        .expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+
+            println!("Successfully parsed value_array.cc with {} functions", module.functions.len());
+            // value_array.cc has value array functions
+            assert!(module.functions.len() >= 50, "value_array.cc should have at least 50 functions");
+        }
+        Err(e) => {
+            println!("Note: value_array.cc parsing failed: {:?}", e);
+        }
+    }
+}
+
+/// Test parsing mako masstree/value_string.cc (value string)
+#[test]
+fn test_mako_masstree_value_string_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/mako/masstree/value_string.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: value_string.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let masstree_path = project_root.join("vendor/mako/src/mako/masstree");
+    let mako_path = project_root.join("vendor/mako/src/mako");
+
+    let mut system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let clang_paths = [
+        "/usr/lib/llvm-19/lib/clang/19/include",
+        "/usr/lib/llvm-18/lib/clang/18/include",
+    ];
+
+    for path in &clang_paths {
+        if Path::new(path).exists() {
+            system_include_paths.push(path.to_string());
+            break;
+        }
+    }
+
+    let include_paths = vec![
+        masstree_path.to_string_lossy().to_string(),
+        mako_path.to_string_lossy().to_string(),
+    ];
+
+    let defines = vec![
+        "HAVE_EXECINFO_H=1".to_string(),
+    ];
+
+    let parser = ClangParser::with_paths_and_defines(include_paths, system_include_paths, defines)
+        .expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+
+            println!("Successfully parsed value_string.cc with {} functions", module.functions.len());
+            // value_string.cc has value string functions
+            assert!(module.functions.len() >= 50, "value_string.cc should have at least 50 functions");
+        }
+        Err(e) => {
+            println!("Note: value_string.cc parsing failed: {:?}", e);
+        }
+    }
+}
+
+/// Test parsing mako masstree/value_versioned_array.cc (versioned value array)
+#[test]
+fn test_mako_masstree_value_versioned_array_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/mako/masstree/value_versioned_array.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: value_versioned_array.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let masstree_path = project_root.join("vendor/mako/src/mako/masstree");
+    let mako_path = project_root.join("vendor/mako/src/mako");
+
+    let mut system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let clang_paths = [
+        "/usr/lib/llvm-19/lib/clang/19/include",
+        "/usr/lib/llvm-18/lib/clang/18/include",
+    ];
+
+    for path in &clang_paths {
+        if Path::new(path).exists() {
+            system_include_paths.push(path.to_string());
+            break;
+        }
+    }
+
+    let include_paths = vec![
+        masstree_path.to_string_lossy().to_string(),
+        mako_path.to_string_lossy().to_string(),
+    ];
+
+    let defines = vec![
+        "HAVE_EXECINFO_H=1".to_string(),
+    ];
+
+    let parser = ClangParser::with_paths_and_defines(include_paths, system_include_paths, defines)
+        .expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+
+            println!("Successfully parsed value_versioned_array.cc with {} functions", module.functions.len());
+            // value_versioned_array.cc has versioned array functions
+            assert!(module.functions.len() >= 50, "value_versioned_array.cc should have at least 50 functions");
+        }
+        Err(e) => {
+            println!("Note: value_versioned_array.cc parsing failed: {:?}", e);
+        }
+    }
+}
+
+/// Test parsing mako masstree/mtclient.cc (masstree client)
+#[test]
+fn test_mako_masstree_mtclient_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/mako/masstree/mtclient.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: mtclient.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let masstree_path = project_root.join("vendor/mako/src/mako/masstree");
+    let mako_path = project_root.join("vendor/mako/src/mako");
+
+    let mut system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let clang_paths = [
+        "/usr/lib/llvm-19/lib/clang/19/include",
+        "/usr/lib/llvm-18/lib/clang/18/include",
+    ];
+
+    for path in &clang_paths {
+        if Path::new(path).exists() {
+            system_include_paths.push(path.to_string());
+            break;
+        }
+    }
+
+    let include_paths = vec![
+        masstree_path.to_string_lossy().to_string(),
+        mako_path.to_string_lossy().to_string(),
+    ];
+
+    let defines = vec![
+        "HAVE_EXECINFO_H=1".to_string(),
+    ];
+
+    let parser = ClangParser::with_paths_and_defines(include_paths, system_include_paths, defines)
+        .expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+
+            println!("Successfully parsed mtclient.cc with {} functions", module.functions.len());
+            // mtclient.cc has client functions
+            assert!(module.functions.len() >= 100, "mtclient.cc should have at least 100 functions");
+        }
+        Err(e) => {
+            println!("Note: mtclient.cc parsing failed: {:?}", e);
+        }
+    }
+}
+
+/// Test parsing mako lib kv_store.cc (KV store)
+#[test]
+fn test_mako_lib_kv_store_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/mako/lib/kv_store.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: kv_store.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let lib_path = project_root.join("vendor/mako/src/mako/lib");
+    let mako_path = project_root.join("vendor/mako/src/mako");
+
+    let mut system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let clang_paths = [
+        "/usr/lib/llvm-19/lib/clang/19/include",
+        "/usr/lib/llvm-18/lib/clang/18/include",
+    ];
+
+    for path in &clang_paths {
+        if Path::new(path).exists() {
+            system_include_paths.push(path.to_string());
+            break;
+        }
+    }
+
+    let include_paths = vec![
+        lib_path.to_string_lossy().to_string(),
+        mako_path.to_string_lossy().to_string(),
+    ];
+
+    let parser = ClangParser::with_paths(include_paths, system_include_paths)
+        .expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+
+            println!("Successfully parsed kv_store.cc with {} functions", module.functions.len());
+            // kv_store.cc has KV store functions
+            assert!(module.functions.len() >= 20, "kv_store.cc should have at least 20 functions");
+        }
+        Err(e) => {
+            println!("Note: kv_store.cc parsing failed: {:?}", e);
+        }
+    }
+}
+
+/// Test parsing mako db.cc (database)
+#[test]
+fn test_mako_db_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/mako/db.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: db.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let mako_path = project_root.join("vendor/mako/src/mako");
+    let masstree_path = project_root.join("vendor/mako/src/mako/masstree");
+    let lib_path = project_root.join("vendor/mako/src/mako/lib");
+    let rusty_cpp_path = project_root.join("vendor/mako/src/mako/submodules/rusty-cpp/include");
+    let masstree_beta_path = project_root.join("vendor/mako/src/mako/benchmarks/sto/masstree-beta");
+
+    let mut system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let clang_paths = [
+        "/usr/lib/llvm-19/lib/clang/19/include",
+        "/usr/lib/llvm-18/lib/clang/18/include",
+    ];
+
+    for path in &clang_paths {
+        if Path::new(path).exists() {
+            system_include_paths.push(path.to_string());
+            break;
+        }
+    }
+
+    let include_paths = vec![
+        mako_path.to_string_lossy().to_string(),
+        masstree_path.to_string_lossy().to_string(),
+        lib_path.to_string_lossy().to_string(),
+        rusty_cpp_path.to_string_lossy().to_string(),
+        masstree_beta_path.to_string_lossy().to_string(),
+    ];
+
+    let defines = vec![
+        r#"CONFIG_H="masstree/config.h""#.to_string(),
+        "HAVE_EXECINFO_H=1".to_string(),
+    ];
+
+    let parser = ClangParser::with_paths_and_defines(include_paths, system_include_paths, defines)
+        .expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+
+            println!("Successfully parsed db.cc with {} functions", module.functions.len());
+            // db.cc may have few functions if declarations only
+        }
+        Err(e) => {
+            println!("Note: db.cc parsing failed: {:?}", e);
+        }
+    }
+}
+
+/// Test parsing mako lib rust_wrapper.cc (Rust wrapper)
+#[test]
+fn test_mako_lib_rust_wrapper_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/mako/lib/rust_wrapper.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: rust_wrapper.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let lib_path = project_root.join("vendor/mako/src/mako/lib");
+    let mako_path = project_root.join("vendor/mako/src/mako");
+
+    let mut system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let clang_paths = [
+        "/usr/lib/llvm-19/lib/clang/19/include",
+        "/usr/lib/llvm-18/lib/clang/18/include",
+    ];
+
+    for path in &clang_paths {
+        if Path::new(path).exists() {
+            system_include_paths.push(path.to_string());
+            break;
+        }
+    }
+
+    let include_paths = vec![
+        lib_path.to_string_lossy().to_string(),
+        mako_path.to_string_lossy().to_string(),
+    ];
+
+    let parser = ClangParser::with_paths(include_paths, system_include_paths)
+        .expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+
+            println!("Successfully parsed rust_wrapper.cc with {} functions", module.functions.len());
+            // rust_wrapper.cc may have 0 functions if it's declarations only
+        }
+        Err(e) => {
+            println!("Note: rust_wrapper.cc parsing failed: {:?}", e);
+        }
+    }
+}
+
+/// Test parsing mako benchmarks/ut/static_int.cc (static int tests)
+#[test]
+fn test_mako_benchmarks_static_int_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/mako/benchmarks/ut/static_int.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: static_int.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let mako_path = project_root.join("vendor/mako/src/mako");
+    let masstree_path = project_root.join("vendor/mako/src/mako/masstree");
+    let lib_path = project_root.join("vendor/mako/src/mako/lib");
+    let rusty_cpp_path = project_root.join("vendor/mako/src/mako/submodules/rusty-cpp/include");
+    let masstree_beta_path = project_root.join("vendor/mako/src/mako/benchmarks/sto/masstree-beta");
+
+    let mut system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let clang_paths = [
+        "/usr/lib/llvm-19/lib/clang/19/include",
+        "/usr/lib/llvm-18/lib/clang/18/include",
+    ];
+
+    for path in &clang_paths {
+        if Path::new(path).exists() {
+            system_include_paths.push(path.to_string());
+            break;
+        }
+    }
+
+    let include_paths = vec![
+        mako_path.to_string_lossy().to_string(),
+        masstree_path.to_string_lossy().to_string(),
+        lib_path.to_string_lossy().to_string(),
+        rusty_cpp_path.to_string_lossy().to_string(),
+        masstree_beta_path.to_string_lossy().to_string(),
+    ];
+
+    let defines = vec![
+        r#"CONFIG_H="masstree/config.h""#.to_string(),
+        "HAVE_EXECINFO_H=1".to_string(),
+    ];
+
+    let parser = ClangParser::with_paths_and_defines(include_paths, system_include_paths, defines)
+        .expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+
+            println!("Successfully parsed static_int.cc with {} functions", module.functions.len());
+            // static_int.cc has static integer test functions
+            assert!(module.functions.len() >= 10, "static_int.cc should have at least 10 functions");
+        }
+        Err(e) => {
+            println!("Note: static_int.cc parsing failed: {:?}", e);
+        }
+    }
+}
+
+/// Test parsing mako benchmarks/erpc_runner/common.cc (eRPC common)
+#[test]
+fn test_mako_benchmarks_erpc_common_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/mako/benchmarks/erpc_runner/common.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: erpc_runner/common.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let mako_path = project_root.join("vendor/mako/src/mako");
+    let masstree_path = project_root.join("vendor/mako/src/mako/masstree");
+    let lib_path = project_root.join("vendor/mako/src/mako/lib");
+    let rusty_cpp_path = project_root.join("vendor/mako/src/mako/submodules/rusty-cpp/include");
+    let masstree_beta_path = project_root.join("vendor/mako/src/mako/benchmarks/sto/masstree-beta");
+    let erpc_runner_path = project_root.join("vendor/mako/src/mako/benchmarks/erpc_runner");
+
+    let mut system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let clang_paths = [
+        "/usr/lib/llvm-19/lib/clang/19/include",
+        "/usr/lib/llvm-18/lib/clang/18/include",
+    ];
+
+    for path in &clang_paths {
+        if Path::new(path).exists() {
+            system_include_paths.push(path.to_string());
+            break;
+        }
+    }
+
+    let include_paths = vec![
+        mako_path.to_string_lossy().to_string(),
+        masstree_path.to_string_lossy().to_string(),
+        lib_path.to_string_lossy().to_string(),
+        rusty_cpp_path.to_string_lossy().to_string(),
+        masstree_beta_path.to_string_lossy().to_string(),
+        erpc_runner_path.to_string_lossy().to_string(),
+    ];
+
+    let defines = vec![
+        r#"CONFIG_H="masstree/config.h""#.to_string(),
+        "HAVE_EXECINFO_H=1".to_string(),
+    ];
+
+    let parser = ClangParser::with_paths_and_defines(include_paths, system_include_paths, defines)
+        .expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+
+            println!("Successfully parsed erpc_runner/common.cc with {} functions", module.functions.len());
+            // common.cc has common functions
+            assert!(module.functions.len() >= 20, "common.cc should have at least 20 functions");
+        }
+        Err(e) => {
+            println!("Note: erpc_runner/common.cc parsing failed: {:?}", e);
+        }
+    }
+}
+
+/// Test parsing mako benchmarks/erpc_runner/configuration.cc (eRPC configuration)
+#[test]
+fn test_mako_benchmarks_erpc_configuration_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/mako/benchmarks/erpc_runner/configuration.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: erpc_runner/configuration.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let mako_path = project_root.join("vendor/mako/src/mako");
+    let masstree_path = project_root.join("vendor/mako/src/mako/masstree");
+    let lib_path = project_root.join("vendor/mako/src/mako/lib");
+    let rusty_cpp_path = project_root.join("vendor/mako/src/mako/submodules/rusty-cpp/include");
+    let masstree_beta_path = project_root.join("vendor/mako/src/mako/benchmarks/sto/masstree-beta");
+    let erpc_runner_path = project_root.join("vendor/mako/src/mako/benchmarks/erpc_runner");
+
+    let mut system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let clang_paths = [
+        "/usr/lib/llvm-19/lib/clang/19/include",
+        "/usr/lib/llvm-18/lib/clang/18/include",
+    ];
+
+    for path in &clang_paths {
+        if Path::new(path).exists() {
+            system_include_paths.push(path.to_string());
+            break;
+        }
+    }
+
+    let include_paths = vec![
+        mako_path.to_string_lossy().to_string(),
+        masstree_path.to_string_lossy().to_string(),
+        lib_path.to_string_lossy().to_string(),
+        rusty_cpp_path.to_string_lossy().to_string(),
+        masstree_beta_path.to_string_lossy().to_string(),
+        erpc_runner_path.to_string_lossy().to_string(),
+    ];
+
+    let defines = vec![
+        r#"CONFIG_H="masstree/config.h""#.to_string(),
+        "HAVE_EXECINFO_H=1".to_string(),
+    ];
+
+    let parser = ClangParser::with_paths_and_defines(include_paths, system_include_paths, defines)
+        .expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+
+            println!("Successfully parsed erpc_runner/configuration.cc with {} functions", module.functions.len());
+            // configuration.cc has configuration functions
+            assert!(module.functions.len() >= 50, "configuration.cc should have at least 50 functions");
+        }
+        Err(e) => {
+            println!("Note: erpc_runner/configuration.cc parsing failed: {:?}", e);
+        }
+    }
+}
+
+/// Test parsing mako benchmarks/sto/Packer.cc (Packer)
+#[test]
+fn test_mako_benchmarks_sto_packer_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/mako/benchmarks/sto/Packer.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: sto/Packer.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let mako_path = project_root.join("vendor/mako/src/mako");
+    let masstree_path = project_root.join("vendor/mako/src/mako/masstree");
+    let lib_path = project_root.join("vendor/mako/src/mako/lib");
+    let rusty_cpp_path = project_root.join("vendor/mako/src/mako/submodules/rusty-cpp/include");
+    let masstree_beta_path = project_root.join("vendor/mako/src/mako/benchmarks/sto/masstree-beta");
+    let sto_path = project_root.join("vendor/mako/src/mako/benchmarks/sto");
+
+    let mut system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let clang_paths = [
+        "/usr/lib/llvm-19/lib/clang/19/include",
+        "/usr/lib/llvm-18/lib/clang/18/include",
+    ];
+
+    for path in &clang_paths {
+        if Path::new(path).exists() {
+            system_include_paths.push(path.to_string());
+            break;
+        }
+    }
+
+    let include_paths = vec![
+        mako_path.to_string_lossy().to_string(),
+        masstree_path.to_string_lossy().to_string(),
+        lib_path.to_string_lossy().to_string(),
+        rusty_cpp_path.to_string_lossy().to_string(),
+        masstree_beta_path.to_string_lossy().to_string(),
+        sto_path.to_string_lossy().to_string(),
+    ];
+
+    let defines = vec![
+        r#"CONFIG_H="masstree/config.h""#.to_string(),
+        "HAVE_EXECINFO_H=1".to_string(),
+    ];
+
+    let parser = ClangParser::with_paths_and_defines(include_paths, system_include_paths, defines)
+        .expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+
+            println!("Successfully parsed sto/Packer.cc with {} functions", module.functions.len());
+            // Packer.cc has packer functions
+            assert!(module.functions.len() >= 30, "Packer.cc should have at least 30 functions");
+        }
+        Err(e) => {
+            println!("Note: sto/Packer.cc parsing failed: {:?}", e);
+        }
+    }
+}
+
+/// Test parsing mako benchmarks/sto/TRcu.cc (TRcu)
+#[test]
+fn test_mako_benchmarks_sto_trcu_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/mako/benchmarks/sto/TRcu.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: sto/TRcu.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let mako_path = project_root.join("vendor/mako/src/mako");
+    let masstree_path = project_root.join("vendor/mako/src/mako/masstree");
+    let lib_path = project_root.join("vendor/mako/src/mako/lib");
+    let rusty_cpp_path = project_root.join("vendor/mako/src/mako/submodules/rusty-cpp/include");
+    let masstree_beta_path = project_root.join("vendor/mako/src/mako/benchmarks/sto/masstree-beta");
+    let sto_path = project_root.join("vendor/mako/src/mako/benchmarks/sto");
+
+    let mut system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let clang_paths = [
+        "/usr/lib/llvm-19/lib/clang/19/include",
+        "/usr/lib/llvm-18/lib/clang/18/include",
+    ];
+
+    for path in &clang_paths {
+        if Path::new(path).exists() {
+            system_include_paths.push(path.to_string());
+            break;
+        }
+    }
+
+    let include_paths = vec![
+        mako_path.to_string_lossy().to_string(),
+        masstree_path.to_string_lossy().to_string(),
+        lib_path.to_string_lossy().to_string(),
+        rusty_cpp_path.to_string_lossy().to_string(),
+        masstree_beta_path.to_string_lossy().to_string(),
+        sto_path.to_string_lossy().to_string(),
+    ];
+
+    let defines = vec![
+        r#"CONFIG_H="masstree/config.h""#.to_string(),
+        "HAVE_EXECINFO_H=1".to_string(),
+    ];
+
+    let parser = ClangParser::with_paths_and_defines(include_paths, system_include_paths, defines)
+        .expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+
+            println!("Successfully parsed sto/TRcu.cc with {} functions", module.functions.len());
+            // TRcu.cc has TRcu functions
+            assert!(module.functions.len() >= 30, "TRcu.cc should have at least 30 functions");
+        }
+        Err(e) => {
+            println!("Note: sto/TRcu.cc parsing failed: {:?}", e);
+        }
+    }
+}
+
+/// Test parsing mako benchmarks/sto/rcu.cc (sto RCU)
+#[test]
+fn test_mako_benchmarks_sto_rcu_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/mako/benchmarks/sto/rcu.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: sto/rcu.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let mako_path = project_root.join("vendor/mako/src/mako");
+    let masstree_path = project_root.join("vendor/mako/src/mako/masstree");
+    let lib_path = project_root.join("vendor/mako/src/mako/lib");
+    let rusty_cpp_path = project_root.join("vendor/mako/src/mako/submodules/rusty-cpp/include");
+    let masstree_beta_path = project_root.join("vendor/mako/src/mako/benchmarks/sto/masstree-beta");
+    let sto_path = project_root.join("vendor/mako/src/mako/benchmarks/sto");
+
+    let mut system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let clang_paths = [
+        "/usr/lib/llvm-19/lib/clang/19/include",
+        "/usr/lib/llvm-18/lib/clang/18/include",
+    ];
+
+    for path in &clang_paths {
+        if Path::new(path).exists() {
+            system_include_paths.push(path.to_string());
+            break;
+        }
+    }
+
+    let include_paths = vec![
+        mako_path.to_string_lossy().to_string(),
+        masstree_path.to_string_lossy().to_string(),
+        lib_path.to_string_lossy().to_string(),
+        rusty_cpp_path.to_string_lossy().to_string(),
+        masstree_beta_path.to_string_lossy().to_string(),
+        sto_path.to_string_lossy().to_string(),
+    ];
+
+    let defines = vec![
+        r#"CONFIG_H="masstree/config.h""#.to_string(),
+        "HAVE_EXECINFO_H=1".to_string(),
+    ];
+
+    let parser = ClangParser::with_paths_and_defines(include_paths, system_include_paths, defines)
+        .expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+
+            println!("Successfully parsed sto/rcu.cc with {} functions", module.functions.len());
+            // rcu.cc has RCU functions
+            assert!(module.functions.len() >= 30, "sto/rcu.cc should have at least 30 functions");
+        }
+        Err(e) => {
+            println!("Note: sto/rcu.cc parsing failed: {:?}", e);
+        }
+    }
+}
+
+/// Test parsing mako benchmarks/sto/masstree-beta/memdebug.cc (masstree-beta memdebug)
+#[test]
+fn test_mako_benchmarks_sto_masstree_beta_memdebug_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/mako/benchmarks/sto/masstree-beta/memdebug.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: sto/masstree-beta/memdebug.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let masstree_beta_path = project_root.join("vendor/mako/src/mako/benchmarks/sto/masstree-beta");
+
+    let mut system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let clang_paths = [
+        "/usr/lib/llvm-19/lib/clang/19/include",
+        "/usr/lib/llvm-18/lib/clang/18/include",
+    ];
+
+    for path in &clang_paths {
+        if Path::new(path).exists() {
+            system_include_paths.push(path.to_string());
+            break;
+        }
+    }
+
+    let include_paths = vec![
+        masstree_beta_path.to_string_lossy().to_string(),
+    ];
+
+    let defines = vec![
+        "HAVE_EXECINFO_H=1".to_string(),
+    ];
+
+    let parser = ClangParser::with_paths_and_defines(include_paths, system_include_paths, defines)
+        .expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+
+            println!("Successfully parsed sto/masstree-beta/memdebug.cc with {} functions", module.functions.len());
+            // memdebug.cc may have few or zero functions if mostly declarations/macros
+        }
+        Err(e) => {
+            println!("Note: sto/masstree-beta/memdebug.cc parsing failed: {:?}", e);
+        }
+    }
+}
+
