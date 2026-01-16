@@ -8,6 +8,7 @@
 // These extern crate declarations are needed for rustc crates
 // They're found via the sysroot, not Cargo.toml
 extern crate rustc_ast;
+extern crate rustc_data_structures;
 extern crate rustc_driver;
 extern crate rustc_hir;
 extern crate rustc_interface;
@@ -18,9 +19,11 @@ extern crate rustc_span;
 use crate::mir_convert::MirConvertCtx;
 use crate::queries::CppMirRegistry;
 use miette::{miette, Result};
+use rustc_data_structures::steal::Steal;
 use rustc_driver::Compilation;
 use rustc_hir as hir;
 use rustc_interface::interface::{Compiler, Config};
+use rustc_middle::mir;
 use rustc_middle::ty::TyCtxt;
 use rustc_span::def_id::LocalDefId;
 use std::cell::RefCell;
@@ -197,27 +200,51 @@ fn override_queries_callback(
         names_count
     );
 
-    // Store references to original providers for potential future use
-    let _orig_mir_built = providers.queries.mir_built;
-    let _orig_mir_borrowck = providers.queries.mir_borrowck;
+    // Store original providers for fallback
+    let orig_mir_built = providers.queries.mir_built;
 
-    // NOTE: Actual MIR injection is complex because:
-    // 1. mir_built query signature requires returning &'tcx mir::Body<'tcx>
-    // 2. The body must be arena-allocated via TyCtxt
-    // 3. We need to map DefId -> function name -> MirBody -> converted mir::Body
-    //
-    // The current infrastructure:
-    // - TLS stores the CppMirRegistry
-    // - MirConvertCtx can convert MirBody to mir::Body
-    // - collect_cpp_def_ids can find extern functions with matching link_name
-    //
-    // To fully wire up mir_built override, we need:
-    // - A way to get TyCtxt in the query provider (it's passed to the query)
-    // - Arena allocation for the converted body
-    // - Proper handling of generic parameters
-    //
-    // For now, the infrastructure is in place and detection works in after_analysis.
-    eprintln!("[fragile] Query override infrastructure ready for {} C++ functions", function_count);
+    // Override mir_built query to inject C++ MIR
+    providers.queries.mir_built = |tcx, def_id| {
+        // Check if this is a C++ function by looking at link_name
+        let cpp_function_name = CPP_FUNCTION_NAMES.with(|names| {
+            let names_set = names.borrow();
+            get_cpp_link_name(tcx, def_id).filter(|name| names_set.contains(name))
+        });
+
+        if let Some(link_name) = cpp_function_name {
+            eprintln!("[fragile] mir_built called for C++ function: {}", link_name);
+
+            // Get the MIR body from the registry
+            let mir_body = CPP_REGISTRY.with(|r| {
+                r.borrow().as_ref().and_then(|reg| reg.get_mir(&link_name))
+            });
+
+            if let Some(cpp_mir) = mir_body {
+                eprintln!("[fragile] Found C++ MIR body for {}, converting...", link_name);
+
+                // Convert the fragile MIR to rustc MIR
+                let ctx = MirConvertCtx::new(tcx);
+
+                // Count arguments from the MIR (locals 1..=arg_count are arguments)
+                // For now, use a simple heuristic: count non-return locals as potential args
+                let arg_count = cpp_mir.locals.len().saturating_sub(1);
+                let rustc_body = ctx.convert_mir_body_full(&cpp_mir, arg_count);
+
+                eprintln!("[fragile] Converted MIR body for {} ({} locals, {} blocks)",
+                    link_name, rustc_body.local_decls.len(), rustc_body.basic_blocks.len());
+
+                // Arena-allocate and wrap in Steal
+                return tcx.arena.alloc(Steal::new(rustc_body));
+            } else {
+                eprintln!("[fragile] No MIR body found for {}, using fallback", link_name);
+            }
+        }
+
+        // Fall back to original rustc mir_built for non-C++ functions
+        orig_mir_built(tcx, def_id)
+    };
+
+    eprintln!("[fragile] Query override installed for {} C++ functions", function_count);
 }
 
 // ============================================================================

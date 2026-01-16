@@ -84,16 +84,23 @@ The infrastructure for passing state to rustc query callbacks is complete:
    - `clear_cpp_registry()`: Called in `run_rustc()` after compilation
 
 3. **Query Override**:
-   - `override_queries_callback`: Logs registry status, infrastructure ready
-   - Full MIR injection deferred (requires arena allocation via TyCtxt)
+   - `override_queries_callback`: Installs custom `mir_built` query provider
+   - Full MIR injection implemented with arena allocation
 
-### Remaining for Full MIR Injection
+### mir_built Query Override ✅
 
-To fully wire up `mir_built` query override:
+Full MIR injection is now implemented:
 
-1. **Arena Allocation**: MIR bodies must be arena-allocated via `TyCtxt.arena.alloc()`
-2. **Function Resolution**: Map DefId → link_name → MirBody → converted mir::Body
-3. **Generic Parameters**: Handle function templates
+1. **Function Detection**: Check `#[link_name]` attribute against registered C++ function names
+2. **MIR Lookup**: Retrieve fragile MIR body from `CppMirRegistry` via TLS
+3. **MIR Conversion**: Use `MirConvertCtx::convert_mir_body_full()` to convert to rustc MIR
+4. **Arena Allocation**: Allocate body via `tcx.arena.alloc(Steal::new(body))`
+5. **Fallback**: Non-C++ functions use original `mir_built` provider
+
+### Remaining Work
+
+1. **Generic Parameters**: Handle function templates with type substitution
+2. **Borrow Check Bypass**: Override `mir_borrowck` for C++ functions (optional, since extern fns don't require it)
 
 ### End-to-End Testing
 

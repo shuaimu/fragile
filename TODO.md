@@ -524,5 +524,6 @@ Current status:
 Next steps:
 1. **rustc Integration (2.3)** - ✅ Completed [26:01:16, 17:00] - Query override infrastructure in place
 2. **MIR Conversion (2.4)** - ✅ Completed [26:01:17] - ~290 LOC of conversion code, TLS wiring complete
-3. **Full MIR Injection** - Wire up arena-allocated MIR bodies in query override
+3. **Full MIR Injection** - ✅ Completed [26:01:17] - mir_built query override with arena allocation
 4. **Expand mako parsing** - Some files need external library stubs (eRPC, bsoncxx)
+5. **End-to-end testing** - Test with nightly rustc + rustc-dev component
