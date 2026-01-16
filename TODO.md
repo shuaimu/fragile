@@ -517,7 +517,7 @@ Migration: After C++20 support is complete, deprecate these.
 Current status:
 - **rrr module**: 20/20 files parsing (100%) - all base, misc, reactor, rpc files parsing
 - **mako module**: 338/338 files tested (100%) - includes all memdb files, deptran files, consensus executors, masstree, benchmarks
-- **Total tests**: 596 fragile-clang (27 unit + 569 integration), 9 fragile-rustc-driver with feature
+- **Total tests**: 596 fragile-clang (27 unit + 569 integration), 11 fragile-rustc-driver with feature
 - **Milestones**: M1 ✅, M2-M4 (parsing complete, compilation pending)
 - **Blocked files**: mongodb/server.cc (bsoncxx), thread.cc (eRPC), persist_test.cc (undefined template), mtd.cc (epoll conflicts)
 
