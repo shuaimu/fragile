@@ -504,9 +504,10 @@ Migration: After C++20 support is complete, deprecate these.
 
 Current status:
 - **rrr module**: 20/20 files parsing (100%) - all base, misc, reactor, rpc files parsing
-- **mako module**: 282/320 files parsing (~88%) - includes all 12 memdb files, deptran root-level files, consensus executors (rcc, occ, classic, troad, carousel, tapir, janus, mencius, paxos, raft), client/server workers, paxos/raft helpers, benchmark_control_rpc, stats_registry, sharding files, masstree, masstree-beta (all 28 files), all lib files, sto tests (unit tests + data structure tests), helloworld/network clients, raft tests, helloworld main, benchmarks
-- **Total tests**: 539 passing (fragile-clang integration tests)
+- **mako module**: 338/338 files tested (100%) - includes all memdb files, deptran files, consensus executors, masstree, benchmarks
+- **Total tests**: 569 passing (fragile-clang integration tests)
 - **Milestones**: M1 ✅, M2-M4 (parsing complete, compilation pending)
+- **Blocked files**: mongodb/server.cc (bsoncxx), thread.cc (eRPC), persist_test.cc (undefined template), mtd.cc (epoll conflicts)
 
 Next steps:
 1. **rustc Integration (2.3)** - ✅ Completed [26:01:16, 17:00] - Query override infrastructure in place
