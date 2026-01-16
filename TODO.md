@@ -212,7 +212,7 @@ See [PLAN_CPP20_MAKO.md](PLAN_CPP20_MAKO.md) for detailed plan.
     - [x] `vendor/mako/src/rrr/reactor/fiber_impl.cc` - **PARSED**: 4640 functions
     - [x] `vendor/mako/src/rrr/reactor/reactor.cc` - **PARSED**: 4640 functions
     - [-] `vendor/mako/src/rrr/reactor/quorum_event.cc` - Cross-namespace inheritance: `janus::QuorumEvent` inherits from `rrr::Event` via `using rrr::Event;`. Clang semantic error on `test()` call [26:01:16, 12:00]. See docs/dev/plan_fix_stub_headers_quorum_event.md
-  - [-] All mako module - **28/155 files parsing (18.1%)** [26:01:16, 17:00]
+  - [-] All mako module - **39/155 files parsing (25.2%)** [26:01:16, 17:00]
     - [x] `vendor/mako/src/mako/vec/coroutine.cpp` - **PARSED**: 40 functions
     - [x] `vendor/mako/src/mako/vec/occ.cpp` - **PARSED**: 41 functions
     - [x] `vendor/mako/src/mako/lib/memory.cc` - **PARSED**: 17 functions
@@ -241,6 +241,17 @@ See [PLAN_CPP20_MAKO.md](PLAN_CPP20_MAKO.md) for detailed plan.
     - [x] `vendor/mako/src/mako/benchmarks/sto/masstree-beta/memdebug.cc` - **PARSED**: 14 functions
     - [x] `vendor/mako/src/mako/stats_server.cc` - **PARSED**: 141 functions (stats server with system_error) [26:01:16, 17:00]
     - [x] `vendor/mako/src/mako/stats_client.cc` - **PARSED**: 142 functions (stats client with main) [26:01:16, 17:00]
+    - [x] `vendor/mako/src/mako/lib/kv_store.cc` - **PARSED**: 39 functions (KV store with regex) [26:01:16, 19:00]
+    - [x] `vendor/mako/src/mako/benchmarks/ut/static_int.cc` - **PARSED**: 25 functions (static integer tests) [26:01:16, 19:00]
+    - [x] `vendor/mako/src/mako/masstree/file.cc` - **PARSED**: 123 functions [26:01:16, 19:30]
+    - [x] `vendor/mako/src/mako/masstree/jsontest.cc` - **PARSED**: 150 functions [26:01:16, 19:30]
+    - [x] `vendor/mako/src/mako/masstree/kvio.cc` - **PARSED**: 120 functions [26:01:16, 19:30]
+    - [x] `vendor/mako/src/mako/masstree/msgpack.cc` - **PARSED**: 177 functions [26:01:16, 19:30]
+    - [x] `vendor/mako/src/mako/masstree/msgpacktest.cc` - **PARSED**: 190 functions [26:01:16, 19:30]
+    - [x] `vendor/mako/src/mako/masstree/str.cc` - **PARSED**: 98 functions [26:01:16, 19:30]
+    - [x] `vendor/mako/src/mako/masstree/straccum.cc` - **PARSED**: 121 functions [26:01:16, 19:30]
+    - [x] `vendor/mako/src/mako/masstree/string.cc` - **PARSED**: 130 functions [26:01:16, 19:30]
+    - [x] `vendor/mako/src/mako/masstree/test_string.cc` - **PARSED**: 117 functions [26:01:16, 19:30]
     - [x] F.3.4 Added stubs: cxxabi.h, typeinfo, endian.h, deque, stack, numa.h [26:01:16, 10:00]
     - [x] F.3.5 Fixed: cstdint types for x86_64, iostream/sstream traits, stdexcept includes, string getline
     - [x] F.3.6 Added parser support for preprocessor defines (CONFIG_H for masstree)
@@ -339,7 +350,7 @@ Migration: After C++20 support is complete, deprecate these.
 
 Current status:
 - **rrr module**: 15/16 files parsing (94%) - blocked by quorum_event.cc cross-namespace inheritance
-- **mako module**: 28/155 files parsing (18.1%)
+- **mako module**: 39/155 files parsing (25.2%)
 - **Total tests**: 270 passing (27 unit + 243 integration)
 
 Next steps:
