@@ -94,9 +94,15 @@ impl FunctionBuilder {
 
     /// Finish the current block with a terminator.
     fn finish_block(&mut self, terminator: MirTerminator) -> usize {
+        self.finish_block_with_cleanup(terminator, false)
+    }
+
+    /// Finish the current block with a terminator, optionally marking as cleanup.
+    fn finish_block_with_cleanup(&mut self, terminator: MirTerminator, is_cleanup: bool) -> usize {
         let block = MirBasicBlock {
             statements: std::mem::take(&mut self.current_statements),
             terminator,
+            is_cleanup,
         };
         let idx = self.blocks.len();
         self.blocks.push(block);
@@ -922,6 +928,7 @@ impl MirConverter {
                         args,
                         destination: destination.clone(),
                         target: Some(next_block),
+                        unwind: None, // TODO: Generate cleanup blocks for stack unwinding
                     });
 
                     Ok(MirOperand::Copy(destination))

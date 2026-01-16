@@ -5398,6 +5398,48 @@ fn test_exception_ast_throw_node() {
     assert!(has_throw.is_some(), "Expected to find ThrowExpr node in AST");
 }
 
+/// Test that MIR basic blocks have is_cleanup field for stack unwinding.
+#[test]
+fn test_stack_unwinding_mir_fields() {
+    let parser = ClangParser::new().unwrap();
+    let code = r#"
+        int might_throw() {
+            return 42;
+        }
+
+        int test_call() {
+            return might_throw();
+        }
+    "#;
+
+    let result = parser.parse_string(code, "test.cpp");
+    assert!(result.is_ok(), "Failed to parse: {:?}", result.err());
+
+    let ast = result.unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).unwrap();
+
+    // Find the test_call function
+    let test_fn = module.functions.iter().find(|f| f.display_name == "test_call");
+    assert!(test_fn.is_some(), "Expected to find test_call function");
+
+    let func = test_fn.unwrap();
+
+    // Check that all blocks have is_cleanup field (should be false for normal blocks)
+    for block in &func.mir_body.blocks {
+        assert!(!block.is_cleanup, "Normal block should not be cleanup");
+    }
+
+    // Check that Call terminator has unwind field
+    let has_call_with_unwind = func.mir_body.blocks.iter().any(|block| {
+        matches!(
+            &block.terminator,
+            MirTerminator::Call { unwind, .. } if unwind.is_none()
+        )
+    });
+    assert!(has_call_with_unwind, "Expected to find Call terminator with unwind field");
+}
+
 // ========== C++ RTTI Tests (E.2) ==========
 
 /// Test parsing typeid expression.

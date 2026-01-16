@@ -711,6 +711,8 @@ pub struct MirBasicBlock {
     pub statements: Vec<MirStatement>,
     /// Terminator instruction
     pub terminator: MirTerminator,
+    /// Whether this is a cleanup block (landing pad for unwinding)
+    pub is_cleanup: bool,
 }
 
 /// A statement in MIR (no control flow).
@@ -744,9 +746,13 @@ pub enum MirTerminator {
         args: Vec<MirOperand>,
         destination: MirPlace,
         target: Option<usize>,
+        /// Cleanup block for unwinding (stack unwinding support)
+        unwind: Option<usize>,
     },
     /// Unreachable
     Unreachable,
+    /// Resume unwinding (used in cleanup blocks after running destructors)
+    Resume,
 
     // C++20 Coroutine terminators
 

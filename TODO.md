@@ -159,7 +159,11 @@ See [PLAN_CPP20_MAKO.md](PLAN_CPP20_MAKO.md) for detailed plan.
 - [x] **E.1 Exceptions** [26:01:16, 03:55] ([docs/dev/plan_exception_support.md](docs/dev/plan_exception_support.md))
   - [x] try/catch/throw (TryStmt, CatchStmt, ThrowExpr AST nodes + parsing + MIR conversion)
   - [x] noexcept specifier (is_noexcept field on CppFunction/CppFunctionTemplate) [26:01:16, 17:00]
-  - [ ] Stack unwinding (requires runtime support)
+  - [x] Stack unwinding infrastructure [26:01:16, 07:25] ([docs/dev/plan_stack_unwinding.md](docs/dev/plan_stack_unwinding.md))
+    - Added `is_cleanup` field to MirBasicBlock for cleanup blocks
+    - Added `unwind` field to MirTerminator::Call for unwinding paths
+    - Added MirTerminator::Resume for continuing unwinding
+    - Full cleanup block generation deferred (requires destructor tracking)
 - [x] **E.2 RTTI** [26:01:16, 04:05] ([docs/dev/plan_rtti_support.md](docs/dev/plan_rtti_support.md))
   - [x] typeid (TypeidExpr AST node + parsing + MIR conversion)
   - [x] dynamic_cast (DynamicCastExpr AST node + parsing + MIR conversion)
@@ -315,7 +319,7 @@ Migration: After C++20 support is complete, deprecate these.
 ## 5. Testing & Milestones
 
 ### 5.1 Unit Tests
-- [x] fragile-clang: 269 tests passing (27 unit + 242 integration) - includes 10 coroutine + 7 exception + 6 RTTI + 8 promise type + 8 awaitable + 8 generator + 3 noexcept + 1 member access + 20 mako file tests [26:01:16, 19:00]
+- [x] fragile-clang: 270 tests passing (27 unit + 243 integration) - includes 10 coroutine + 7 exception + 6 RTTI + 8 promise type + 8 awaitable + 8 generator + 3 noexcept + 1 member access + 1 stack unwinding + 20 mako file tests [26:01:16, 07:25]
 - [x] fragile-rustc-driver: 6 tests passing
 - [x] fragile-runtime: Compiles
 
