@@ -209,11 +209,11 @@ See [PLAN_CPP20_MAKO.md](PLAN_CPP20_MAKO.md) for detailed plan.
 - [x] BreakStmt (loop context) [26:01:16, 07:15]
 - [x] ContinueStmt (loop context) [26:01:16, 07:15]
 
-### 2.3 rustc Integration
-- [ ] Nightly + rustc-dev setup
-- [ ] Callbacks trait
-- [ ] mir_built query override
-- [ ] mir_borrowck bypass for C++
+### 2.3 rustc Integration ([docs/dev/plan_rustc_integration.md](docs/dev/plan_rustc_integration.md))
+- [ ] **2.3.1 Nightly + rustc-dev setup** (requires user: `rustup component add rustc-dev --toolchain nightly`)
+- [ ] **2.3.2 Callbacks trait** (~100 LOC) - Implement `rustc_driver::Callbacks` for `FragileCallbacks`
+- [ ] **2.3.3 mir_built query override** (~80 LOC) - Inject C++ MIR for extern stubs
+- [ ] **2.3.4 mir_borrowck bypass** (~50 LOC) - Skip borrow checking for C++ functions
 
 ---
 

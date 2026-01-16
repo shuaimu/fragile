@@ -6714,15 +6714,16 @@ fn test_mako_rand_cpp_actual() {
     include_paths.push(rusty_cpp_path.to_string_lossy().to_string());
 
     // Add GCC C++ standard library headers
+    // Use GCC 14 paths explicitly (matches clang's selected GCC installation)
     let gcc_paths = vec![
+        // GCC 14 C++ library (matches clang's selected installation)
         "/usr/include/c++/14",
+        "/usr/include/x86_64-linux-gnu/c++/14",
+        "/usr/include/c++/14/backward",
+        // Fallback to older versions
         "/usr/include/c++/13",
         "/usr/include/c++/12",
-        "/usr/include/c++/11",
         "/usr/lib/gcc/x86_64-linux-gnu/14/include",
-        "/usr/lib/gcc/x86_64-linux-gnu/13/include",
-        "/usr/include/x86_64-linux-gnu/c++/14",
-        "/usr/include/x86_64-linux-gnu/c++/13",
         "/usr/include/x86_64-linux-gnu",
         "/usr/include",
         "/usr/local/include",
