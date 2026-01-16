@@ -15,6 +15,7 @@ extern crate rustc_middle;
 extern crate rustc_session;
 extern crate rustc_span;
 
+use crate::mir_convert::MirConvertCtx;
 use crate::queries::CppMirRegistry;
 use miette::{miette, Result};
 use rustc_driver::Compilation;
@@ -22,10 +23,47 @@ use rustc_hir as hir;
 use rustc_interface::interface::{Compiler, Config};
 use rustc_middle::ty::TyCtxt;
 use rustc_span::def_id::LocalDefId;
+use std::cell::RefCell;
 use std::collections::HashSet;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+
+// ============================================================================
+// Thread-Local Storage for C++ Registry
+// ============================================================================
+
+thread_local! {
+    /// Thread-local storage for the C++ MIR registry.
+    ///
+    /// This is necessary because `override_queries` takes a function pointer,
+    /// not a closure, so we cannot capture state directly. Instead, we store
+    /// the registry in TLS and access it from the query override functions.
+    static CPP_REGISTRY: RefCell<Option<Arc<CppMirRegistry>>> = const { RefCell::new(None) };
+
+    /// Thread-local storage for C++ function names as a HashSet for quick lookup.
+    static CPP_FUNCTION_NAMES: RefCell<HashSet<String>> = const { RefCell::new(HashSet::new()) };
+}
+
+/// Set the C++ registry for the current thread.
+fn set_cpp_registry(registry: Arc<CppMirRegistry>, function_names: Vec<String>) {
+    CPP_REGISTRY.with(|r| {
+        *r.borrow_mut() = Some(registry);
+    });
+    CPP_FUNCTION_NAMES.with(|names| {
+        *names.borrow_mut() = function_names.into_iter().collect();
+    });
+}
+
+/// Clear the C++ registry for the current thread.
+fn clear_cpp_registry() {
+    CPP_REGISTRY.with(|r| {
+        *r.borrow_mut() = None;
+    });
+    CPP_FUNCTION_NAMES.with(|names| {
+        names.borrow_mut().clear();
+    });
+}
 
 // ============================================================================
 // DefId to Function Name Mapping (Task 2.3.3.1)
@@ -138,12 +176,48 @@ fn override_queries_callback(
     // Log that the callback was invoked
     eprintln!("[fragile] Query override callback invoked");
 
+    // Check if we have a C++ registry
+    let (has_registry, function_count) = CPP_REGISTRY.with(|r| {
+        let borrow = r.borrow();
+        match borrow.as_ref() {
+            Some(reg) => (true, reg.function_count()),
+            None => (false, 0),
+        }
+    });
+
+    if !has_registry {
+        eprintln!("[fragile] No C++ registry set, using default providers");
+        return;
+    }
+
+    let names_count = CPP_FUNCTION_NAMES.with(|n| n.borrow().len());
+    eprintln!(
+        "[fragile] Query override active with {} registered C++ functions ({} names)",
+        function_count,
+        names_count
+    );
+
     // Store references to original providers for potential future use
     let _orig_mir_built = providers.queries.mir_built;
     let _orig_mir_borrowck = providers.queries.mir_borrowck;
 
-    // TODO: Implement query overrides when TLS for registry is set up
-    // For now, the infrastructure is in place and we use the original providers
+    // NOTE: Actual MIR injection is complex because:
+    // 1. mir_built query signature requires returning &'tcx mir::Body<'tcx>
+    // 2. The body must be arena-allocated via TyCtxt
+    // 3. We need to map DefId -> function name -> MirBody -> converted mir::Body
+    //
+    // The current infrastructure:
+    // - TLS stores the CppMirRegistry
+    // - MirConvertCtx can convert MirBody to mir::Body
+    // - collect_cpp_def_ids can find extern functions with matching link_name
+    //
+    // To fully wire up mir_built override, we need:
+    // - A way to get TyCtxt in the query provider (it's passed to the query)
+    // - Arena allocation for the converted body
+    // - Proper handling of generic parameters
+    //
+    // For now, the infrastructure is in place and detection works in after_analysis.
+    eprintln!("[fragile] Query override infrastructure ready for {} C++ functions", function_count);
 }
 
 // ============================================================================
@@ -205,9 +279,15 @@ impl rustc_driver::Callbacks for FragileCallbacks {
             function_count
         );
 
+        // Set up thread-local storage with the C++ registry
+        // This allows the query override function (which takes fn pointer, not closure)
+        // to access the registry.
+        set_cpp_registry(
+            Arc::clone(&self.mir_registry),
+            self.cpp_function_names.clone(),
+        );
+
         // Set up query overrides
-        // Note: override_queries takes a fn pointer, not a closure, so we cannot capture state.
-        // For now, we just install logging infrastructure.
         config.override_queries = Some(override_queries_callback);
     }
 
@@ -323,6 +403,9 @@ pub fn run_rustc(
         rustc_driver::run_compiler(&args, &mut callbacks)
     });
 
+    // Always clear the TLS registry after compilation
+    clear_cpp_registry();
+
     match result {
         Ok(()) => {
             eprintln!("[fragile] Compilation successful");
@@ -341,5 +424,70 @@ mod tests {
         let registry = Arc::new(CppMirRegistry::new());
         let callbacks = FragileCallbacks::new(registry);
         assert!(callbacks.cpp_function_names.is_empty());
+    }
+
+    #[test]
+    fn test_tls_registry_lifecycle() {
+        // Test that TLS registry can be set and cleared
+        let registry = Arc::new(CppMirRegistry::new());
+        let function_names = vec!["test_func".to_string(), "another_func".to_string()];
+
+        // Initially no registry
+        let has_registry_before = CPP_REGISTRY.with(|r| r.borrow().is_some());
+        assert!(!has_registry_before, "Registry should not be set initially");
+
+        // Set the registry
+        set_cpp_registry(Arc::clone(&registry), function_names.clone());
+
+        // Verify registry is set
+        let has_registry_after = CPP_REGISTRY.with(|r| r.borrow().is_some());
+        assert!(has_registry_after, "Registry should be set after set_cpp_registry");
+
+        // Verify function names are set
+        let names_count = CPP_FUNCTION_NAMES.with(|n| n.borrow().len());
+        assert_eq!(names_count, 2, "Should have 2 function names");
+
+        // Verify specific names are present
+        let has_test_func = CPP_FUNCTION_NAMES.with(|n| n.borrow().contains("test_func"));
+        assert!(has_test_func, "Should contain test_func");
+
+        // Clear the registry
+        clear_cpp_registry();
+
+        // Verify registry is cleared
+        let has_registry_final = CPP_REGISTRY.with(|r| r.borrow().is_some());
+        assert!(!has_registry_final, "Registry should be cleared");
+
+        let names_count_final = CPP_FUNCTION_NAMES.with(|n| n.borrow().len());
+        assert_eq!(names_count_final, 0, "Function names should be cleared");
+    }
+
+    #[test]
+    fn test_callbacks_with_functions() {
+        // Create a registry with a function
+        let registry = Arc::new(CppMirRegistry::new());
+
+        // Register a mock module
+        use fragile_clang::{CppFunction, CppModule, CppType, MirBody};
+        let mut module = CppModule::new();
+        module.functions.push(CppFunction {
+            mangled_name: "_Z3addii".to_string(),
+            display_name: "add".to_string(),
+            namespace: Vec::new(),
+            params: vec![
+                ("a".to_string(), CppType::int()),
+                ("b".to_string(), CppType::int()),
+            ],
+            return_type: CppType::int(),
+            is_noexcept: false,
+            mir_body: MirBody::new(),
+        });
+        registry.register_module(&module);
+
+        // Create callbacks
+        let callbacks = FragileCallbacks::new(Arc::clone(&registry));
+
+        assert_eq!(callbacks.cpp_function_names.len(), 1);
+        assert!(callbacks.cpp_function_names.contains(&"_Z3addii".to_string()));
     }
 }
