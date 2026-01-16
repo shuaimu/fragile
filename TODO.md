@@ -407,8 +407,8 @@ See [PLAN_CPP20_MAKO.md](PLAN_CPP20_MAKO.md) for detailed plan.
 - [x] ContinueStmt (loop context) [26:01:16, 07:15]
 
 ### 2.3 rustc Integration ([docs/dev/plan_rustc_integration.md](docs/dev/plan_rustc_integration.md))
-- [ ] **2.3.1 Nightly + rustc-dev setup** (requires user: `rustup component add rustc-dev --toolchain nightly`)
-- [ ] **2.3.2 Callbacks trait** (~100 LOC) - Implement `rustc_driver::Callbacks` for `FragileCallbacks`
+- [x] **2.3.1 Nightly + rustc-dev setup** [26:01:16, 15:00] - Added build.rs, Cargo.toml updates, feature gating
+- [x] **2.3.2 Callbacks trait** (~100 LOC) [26:01:16, 15:00] - Implemented `FragileCallbacks` with `rustc_driver::Callbacks` trait
 - [ ] **2.3.3 mir_built query override** (~80 LOC) - Inject C++ MIR for extern stubs
 - [ ] **2.3.4 mir_borrowck bypass** (~50 LOC) - Skip borrow checking for C++ functions
 
@@ -448,7 +448,7 @@ Migration: After C++20 support is complete, deprecate these.
 
 ### 5.1 Unit Tests
 - [x] fragile-clang: 406 tests passing (27 unit + 379 integration) - includes 10 coroutine + 7 exception + 6 RTTI + 8 promise type + 8 awaitable + 8 generator + 3 noexcept + 1 member access + 1 stack unwinding + 185 mako file tests [26:01:16]
-- [x] fragile-rustc-driver: 6 tests passing
+- [x] fragile-rustc-driver: 7 tests passing (6 original + 1 rustc_integration when feature enabled)
 - [x] fragile-runtime: Compiles
 
 ### 5.2 Mako Milestones

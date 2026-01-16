@@ -2,7 +2,9 @@
 
 use crate::queries::CppMirRegistry;
 use fragile_clang::CppModule;
-use miette::{miette, Result};
+#[cfg(not(feature = "rustc-integration"))]
+use miette::miette;
+use miette::Result;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -26,6 +28,11 @@ impl FragileDriver {
     /// Register a C++ module for MIR injection.
     pub fn register_cpp_module(&self, module: &CppModule) {
         self.mir_registry.register_module(module);
+    }
+
+    /// Get a reference to the MIR registry.
+    pub fn mir_registry(&self) -> &Arc<CppMirRegistry> {
+        &self.mir_registry
     }
 
     /// Compile Rust files with injected C++ MIR.
@@ -80,36 +87,12 @@ impl FragileDriver {
         cpp_stubs: &str,
         output: &Path,
     ) -> Result<()> {
-        // This would use rustc_driver and rustc_interface
-        // to set up custom query overrides.
-        //
-        // Example structure (actual implementation needs nightly):
-        //
-        // ```
-        // extern crate rustc_driver;
-        // extern crate rustc_interface;
-        //
-        // struct FragileCallbacks {
-        //     mir_registry: Arc<CppMirRegistry>,
-        // }
-        //
-        // impl rustc_driver::Callbacks for FragileCallbacks {
-        //     fn config(&mut self, config: &mut rustc_interface::Config) {
-        //         config.override_queries = Some(|_session, providers| {
-        //             let orig_mir_built = providers.mir_built;
-        //             providers.mir_built = |tcx, def_id| {
-        //                 if is_cpp_function(tcx, def_id) {
-        //                     get_cpp_mir(def_id)
-        //                 } else {
-        //                     orig_mir_built(tcx, def_id)
-        //                 }
-        //             };
-        //         });
-        //     }
-        // }
-        // ```
-
-        todo!("Implement rustc integration")
+        crate::rustc_integration::run_rustc(
+            rust_files,
+            cpp_stubs,
+            output,
+            Arc::clone(&self.mir_registry),
+        )
     }
 }
 

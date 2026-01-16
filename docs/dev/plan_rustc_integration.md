@@ -4,21 +4,28 @@
 
 Integrate Fragile's C++ MIR with rustc's compilation pipeline by implementing custom query overrides.
 
-## Status: REQUIRES NIGHTLY SETUP
+## Status: TASKS 2.3.1 AND 2.3.2 COMPLETE
 
-### Blocking Prerequisites
-1. **Nightly Rust toolchain**: `rustup toolchain install nightly`
-2. **rustc-dev component**: `rustup component add rustc-dev llvm-tools-preview --toolchain nightly`
-3. **Switch to nightly**: `rustup default nightly` or use `cargo +nightly`
+### Completed Setup
+1. **Nightly Rust toolchain**: `rustup toolchain install nightly` ✅
+2. **rustc-dev component**: `rustup component add rustc-dev llvm-tools-preview --toolchain nightly` ✅
+3. **Building**: `cargo +nightly build --features rustc-integration` ✅
+
+### Files Modified/Created
+- `crates/fragile-rustc-driver/Cargo.toml` - Added `tempfile` dep, updated comments
+- `crates/fragile-rustc-driver/build.rs` - Created: finds rustc sysroot and sets link paths
+- `crates/fragile-rustc-driver/src/lib.rs` - Added `#![feature(rustc_private)]` for feature gate
+- `crates/fragile-rustc-driver/src/rustc_integration.rs` - Created: `FragileCallbacks` implementation
 
 ## Architecture
 
 ### Current Implementation (fragile-rustc-driver)
 
-The crate has 3 fully implemented modules:
+The crate has 4 modules:
 - **queries.rs**: `CppMirRegistry` stores C++ functions and their MIR bodies
 - **stubs.rs**: Generates Rust `extern "C"` stubs for C++ functions
-- **driver.rs**: Skeleton that needs rustc Callbacks implementation
+- **driver.rs**: `FragileDriver` that delegates to rustc_integration when feature enabled
+- **rustc_integration.rs** (new): `FragileCallbacks` implementing `rustc_driver::Callbacks`
 
 ### Target Architecture
 
@@ -51,38 +58,53 @@ The crate has 3 fully implemented modules:
 
 ## Implementation Tasks
 
-### Task 2.3.1: Nightly + rustc-dev Setup (~0 LOC)
-**Effort**: Environment setup only
+### Task 2.3.1: Nightly + rustc-dev Setup ✅ DONE
+**Effort**: Environment setup + build infrastructure
 
-1. Install nightly: `rustup toolchain install nightly`
-2. Add components: `rustup component add rustc-dev llvm-tools-preview --toolchain nightly`
-3. Update Cargo.toml to conditionally enable rustc crates
+1. Install nightly: `rustup toolchain install nightly` ✅
+2. Add components: `rustup component add rustc-dev llvm-tools-preview --toolchain nightly` ✅
+3. Created `build.rs` to find rustc sysroot and set library paths ✅
+4. Added `#![feature(rustc_private)]` to lib.rs (conditionally) ✅
+5. Added `tempfile` dependency for temporary stub file handling ✅
 
-### Task 2.3.2: Callbacks Trait Implementation (~100 LOC)
-**File**: `crates/fragile-rustc-driver/src/driver.rs`
+### Task 2.3.2: Callbacks Trait Implementation ✅ DONE
+**File**: `crates/fragile-rustc-driver/src/rustc_integration.rs`
+
+Created `FragileCallbacks` struct with full `rustc_driver::Callbacks` implementation:
 
 ```rust
-#[cfg(feature = "rustc-integration")]
+// Actual implementation (from rustc_integration.rs)
+extern crate rustc_ast;
 extern crate rustc_driver;
-#[cfg(feature = "rustc-integration")]
 extern crate rustc_interface;
-#[cfg(feature = "rustc-integration")]
 extern crate rustc_middle;
+extern crate rustc_session;
+extern crate rustc_span;
 
-#[cfg(feature = "rustc-integration")]
-struct FragileCallbacks {
-    mir_registry: Arc<CppMirRegistry>,
-    cpp_stubs_path: PathBuf,
+pub struct FragileCallbacks {
+    pub mir_registry: Arc<CppMirRegistry>,
+    pub stubs_path: Option<PathBuf>,
+    pub cpp_function_names: Vec<String>,
 }
 
-#[cfg(feature = "rustc-integration")]
 impl rustc_driver::Callbacks for FragileCallbacks {
-    fn config(&mut self, config: &mut rustc_interface::Config) {
-        // Add cpp_stubs.rs to the compilation
-        // Override queries
+    fn config(&mut self, config: &mut Config) {
+        // Set up override_queries for MIR injection (infrastructure ready)
+        config.override_queries = Some(|_session, providers| {
+            // Query override logic goes here
+        });
     }
+
+    fn after_crate_root_parsing(&mut self, ...) -> Compilation { ... }
+    fn after_expansion<'tcx>(&mut self, ...) -> Compilation { ... }
+    fn after_analysis<'tcx>(&mut self, ...) -> Compilation { ... }
 }
 ```
+
+Also created `run_rustc()` function to:
+1. Create temporary file for C++ stubs
+2. Build rustc argument list
+3. Call `rustc_driver::run_compiler()` with our callbacks
 
 ### Task 2.3.3: mir_built Query Override (~80 LOC)
 **File**: `crates/fragile-rustc-driver/src/driver.rs`

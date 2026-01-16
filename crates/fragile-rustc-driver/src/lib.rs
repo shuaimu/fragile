@@ -5,6 +5,9 @@
 //! - Overrides the `mir_borrowck` query to skip borrow checking for C++ code
 //! - Uses rustc's standard codegen pipeline
 //!
+
+// Enable rustc_private feature when building with rustc-integration
+#![cfg_attr(feature = "rustc-integration", feature(rustc_private))]
 //! # Architecture
 //!
 //! ```text
@@ -65,6 +68,8 @@
 
 mod driver;
 mod queries;
+#[cfg(feature = "rustc-integration")]
+mod rustc_integration;
 mod stubs;
 
 pub use driver::FragileDriver;
