@@ -12579,3 +12579,815 @@ fn test_mako_sto_masstree_beta_checkpoint_cc() {
     }
 }
 
+/// Test parsing masstree-beta/jsontest.cc (sto masstree beta json test)
+#[test]
+fn test_mako_sto_masstree_beta_jsontest_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/mako/benchmarks/sto/masstree-beta/jsontest.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: sto/masstree-beta/jsontest.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let masstree_beta_path = project_root.join("vendor/mako/src/mako/benchmarks/sto/masstree-beta");
+
+    let mut system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let clang_paths = [
+        "/usr/lib/llvm-19/lib/clang/19/include",
+        "/usr/lib/llvm-18/lib/clang/18/include",
+    ];
+
+    for path in &clang_paths {
+        if Path::new(path).exists() {
+            system_include_paths.push(path.to_string());
+            break;
+        }
+    }
+
+    let include_paths = vec![
+        masstree_beta_path.to_string_lossy().to_string(),
+    ];
+
+    let defines = vec![
+        "HAVE_EXECINFO_H=1".to_string(),
+    ];
+
+    let parser = ClangParser::with_paths_and_defines(include_paths, system_include_paths, defines)
+        .expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+
+            println!("Successfully parsed sto/masstree-beta/jsontest.cc with {} functions", module.functions.len());
+        }
+        Err(e) => {
+            println!("Note: sto/masstree-beta/jsontest.cc parsing failed: {:?}", e);
+        }
+    }
+}
+
+/// Test parsing masstree-beta/mtclient.cc (sto masstree beta client)
+#[test]
+fn test_mako_sto_masstree_beta_mtclient_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/mako/benchmarks/sto/masstree-beta/mtclient.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: sto/masstree-beta/mtclient.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let masstree_beta_path = project_root.join("vendor/mako/src/mako/benchmarks/sto/masstree-beta");
+
+    let mut system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let clang_paths = [
+        "/usr/lib/llvm-19/lib/clang/19/include",
+        "/usr/lib/llvm-18/lib/clang/18/include",
+    ];
+
+    for path in &clang_paths {
+        if Path::new(path).exists() {
+            system_include_paths.push(path.to_string());
+            break;
+        }
+    }
+
+    let include_paths = vec![
+        masstree_beta_path.to_string_lossy().to_string(),
+    ];
+
+    let defines = vec![
+        "HAVE_EXECINFO_H=1".to_string(),
+    ];
+
+    let parser = ClangParser::with_paths_and_defines(include_paths, system_include_paths, defines)
+        .expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+
+            println!("Successfully parsed sto/masstree-beta/mtclient.cc with {} functions", module.functions.len());
+        }
+        Err(e) => {
+            println!("Note: sto/masstree-beta/mtclient.cc parsing failed: {:?}", e);
+        }
+    }
+}
+
+/// Test parsing masstree-beta/mtd.cc (sto masstree beta daemon)
+#[test]
+fn test_mako_sto_masstree_beta_mtd_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/mako/benchmarks/sto/masstree-beta/mtd.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: sto/masstree-beta/mtd.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let masstree_beta_path = project_root.join("vendor/mako/src/mako/benchmarks/sto/masstree-beta");
+
+    let mut system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let clang_paths = [
+        "/usr/lib/llvm-19/lib/clang/19/include",
+        "/usr/lib/llvm-18/lib/clang/18/include",
+    ];
+
+    for path in &clang_paths {
+        if Path::new(path).exists() {
+            system_include_paths.push(path.to_string());
+            break;
+        }
+    }
+
+    let include_paths = vec![
+        masstree_beta_path.to_string_lossy().to_string(),
+    ];
+
+    let defines = vec![
+        "HAVE_EXECINFO_H=1".to_string(),
+    ];
+
+    let parser = ClangParser::with_paths_and_defines(include_paths, system_include_paths, defines)
+        .expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+
+            println!("Successfully parsed sto/masstree-beta/mtd.cc with {} functions", module.functions.len());
+        }
+        Err(e) => {
+            println!("Note: sto/masstree-beta/mtd.cc parsing failed: {:?}", e);
+        }
+    }
+}
+
+/// Test parsing masstree-beta/mttest.cc (sto masstree beta test)
+#[test]
+fn test_mako_sto_masstree_beta_mttest_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/mako/benchmarks/sto/masstree-beta/mttest.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: sto/masstree-beta/mttest.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let masstree_beta_path = project_root.join("vendor/mako/src/mako/benchmarks/sto/masstree-beta");
+
+    let mut system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let clang_paths = [
+        "/usr/lib/llvm-19/lib/clang/19/include",
+        "/usr/lib/llvm-18/lib/clang/18/include",
+    ];
+
+    for path in &clang_paths {
+        if Path::new(path).exists() {
+            system_include_paths.push(path.to_string());
+            break;
+        }
+    }
+
+    let include_paths = vec![
+        masstree_beta_path.to_string_lossy().to_string(),
+    ];
+
+    let defines = vec![
+        "HAVE_EXECINFO_H=1".to_string(),
+    ];
+
+    let parser = ClangParser::with_paths_and_defines(include_paths, system_include_paths, defines)
+        .expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+
+            println!("Successfully parsed sto/masstree-beta/mttest.cc with {} functions", module.functions.len());
+        }
+        Err(e) => {
+            println!("Note: sto/masstree-beta/mttest.cc parsing failed: {:?}", e);
+        }
+    }
+}
+
+/// Test parsing masstree-beta/query_masstree.cc (sto masstree beta query)
+#[test]
+fn test_mako_sto_masstree_beta_query_masstree_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/mako/benchmarks/sto/masstree-beta/query_masstree.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: sto/masstree-beta/query_masstree.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let masstree_beta_path = project_root.join("vendor/mako/src/mako/benchmarks/sto/masstree-beta");
+
+    let mut system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let clang_paths = [
+        "/usr/lib/llvm-19/lib/clang/19/include",
+        "/usr/lib/llvm-18/lib/clang/18/include",
+    ];
+
+    for path in &clang_paths {
+        if Path::new(path).exists() {
+            system_include_paths.push(path.to_string());
+            break;
+        }
+    }
+
+    let include_paths = vec![
+        masstree_beta_path.to_string_lossy().to_string(),
+    ];
+
+    let defines = vec![
+        "HAVE_EXECINFO_H=1".to_string(),
+    ];
+
+    let parser = ClangParser::with_paths_and_defines(include_paths, system_include_paths, defines)
+        .expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+
+            println!("Successfully parsed sto/masstree-beta/query_masstree.cc with {} functions", module.functions.len());
+        }
+        Err(e) => {
+            println!("Note: sto/masstree-beta/query_masstree.cc parsing failed: {:?}", e);
+        }
+    }
+}
+
+/// Test parsing masstree-beta/scantest.cc (sto masstree beta scan test)
+#[test]
+fn test_mako_sto_masstree_beta_scantest_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/mako/benchmarks/sto/masstree-beta/scantest.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: sto/masstree-beta/scantest.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let masstree_beta_path = project_root.join("vendor/mako/src/mako/benchmarks/sto/masstree-beta");
+
+    let mut system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let clang_paths = [
+        "/usr/lib/llvm-19/lib/clang/19/include",
+        "/usr/lib/llvm-18/lib/clang/18/include",
+    ];
+
+    for path in &clang_paths {
+        if Path::new(path).exists() {
+            system_include_paths.push(path.to_string());
+            break;
+        }
+    }
+
+    let include_paths = vec![
+        masstree_beta_path.to_string_lossy().to_string(),
+    ];
+
+    let defines = vec![
+        "HAVE_EXECINFO_H=1".to_string(),
+    ];
+
+    let parser = ClangParser::with_paths_and_defines(include_paths, system_include_paths, defines)
+        .expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+
+            println!("Successfully parsed sto/masstree-beta/scantest.cc with {} functions", module.functions.len());
+        }
+        Err(e) => {
+            println!("Note: sto/masstree-beta/scantest.cc parsing failed: {:?}", e);
+        }
+    }
+}
+
+/// Test parsing masstree-beta/string_slice.cc (sto masstree beta string slice)
+#[test]
+fn test_mako_sto_masstree_beta_string_slice_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/mako/benchmarks/sto/masstree-beta/string_slice.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: sto/masstree-beta/string_slice.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let masstree_beta_path = project_root.join("vendor/mako/src/mako/benchmarks/sto/masstree-beta");
+
+    let mut system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let clang_paths = [
+        "/usr/lib/llvm-19/lib/clang/19/include",
+        "/usr/lib/llvm-18/lib/clang/18/include",
+    ];
+
+    for path in &clang_paths {
+        if Path::new(path).exists() {
+            system_include_paths.push(path.to_string());
+            break;
+        }
+    }
+
+    let include_paths = vec![
+        masstree_beta_path.to_string_lossy().to_string(),
+    ];
+
+    let defines = vec![
+        "HAVE_EXECINFO_H=1".to_string(),
+    ];
+
+    let parser = ClangParser::with_paths_and_defines(include_paths, system_include_paths, defines)
+        .expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+
+            println!("Successfully parsed sto/masstree-beta/string_slice.cc with {} functions", module.functions.len());
+        }
+        Err(e) => {
+            println!("Note: sto/masstree-beta/string_slice.cc parsing failed: {:?}", e);
+        }
+    }
+}
+
+/// Test parsing masstree-beta/test_atomics.cc (sto masstree beta atomics test)
+#[test]
+fn test_mako_sto_masstree_beta_test_atomics_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/mako/benchmarks/sto/masstree-beta/test_atomics.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: sto/masstree-beta/test_atomics.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let masstree_beta_path = project_root.join("vendor/mako/src/mako/benchmarks/sto/masstree-beta");
+
+    let mut system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let clang_paths = [
+        "/usr/lib/llvm-19/lib/clang/19/include",
+        "/usr/lib/llvm-18/lib/clang/18/include",
+    ];
+
+    for path in &clang_paths {
+        if Path::new(path).exists() {
+            system_include_paths.push(path.to_string());
+            break;
+        }
+    }
+
+    let include_paths = vec![
+        masstree_beta_path.to_string_lossy().to_string(),
+    ];
+
+    let defines = vec![
+        "HAVE_EXECINFO_H=1".to_string(),
+    ];
+
+    let parser = ClangParser::with_paths_and_defines(include_paths, system_include_paths, defines)
+        .expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+
+            println!("Successfully parsed sto/masstree-beta/test_atomics.cc with {} functions", module.functions.len());
+        }
+        Err(e) => {
+            println!("Note: sto/masstree-beta/test_atomics.cc parsing failed: {:?}", e);
+        }
+    }
+}
+
+/// Test parsing masstree-beta/testrunner.cc (sto masstree beta test runner)
+#[test]
+fn test_mako_sto_masstree_beta_testrunner_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/mako/benchmarks/sto/masstree-beta/testrunner.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: sto/masstree-beta/testrunner.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let masstree_beta_path = project_root.join("vendor/mako/src/mako/benchmarks/sto/masstree-beta");
+
+    let mut system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let clang_paths = [
+        "/usr/lib/llvm-19/lib/clang/19/include",
+        "/usr/lib/llvm-18/lib/clang/18/include",
+    ];
+
+    for path in &clang_paths {
+        if Path::new(path).exists() {
+            system_include_paths.push(path.to_string());
+            break;
+        }
+    }
+
+    let include_paths = vec![
+        masstree_beta_path.to_string_lossy().to_string(),
+    ];
+
+    let defines = vec![
+        "HAVE_EXECINFO_H=1".to_string(),
+    ];
+
+    let parser = ClangParser::with_paths_and_defines(include_paths, system_include_paths, defines)
+        .expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+
+            println!("Successfully parsed sto/masstree-beta/testrunner.cc with {} functions", module.functions.len());
+        }
+        Err(e) => {
+            println!("Note: sto/masstree-beta/testrunner.cc parsing failed: {:?}", e);
+        }
+    }
+}
+
+/// Test parsing masstree-beta/test_string.cc (sto masstree beta string test)
+#[test]
+fn test_mako_sto_masstree_beta_test_string_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/mako/benchmarks/sto/masstree-beta/test_string.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: sto/masstree-beta/test_string.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let masstree_beta_path = project_root.join("vendor/mako/src/mako/benchmarks/sto/masstree-beta");
+
+    let mut system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let clang_paths = [
+        "/usr/lib/llvm-19/lib/clang/19/include",
+        "/usr/lib/llvm-18/lib/clang/18/include",
+    ];
+
+    for path in &clang_paths {
+        if Path::new(path).exists() {
+            system_include_paths.push(path.to_string());
+            break;
+        }
+    }
+
+    let include_paths = vec![
+        masstree_beta_path.to_string_lossy().to_string(),
+    ];
+
+    let defines = vec![
+        "HAVE_EXECINFO_H=1".to_string(),
+    ];
+
+    let parser = ClangParser::with_paths_and_defines(include_paths, system_include_paths, defines)
+        .expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+
+            println!("Successfully parsed sto/masstree-beta/test_string.cc with {} functions", module.functions.len());
+        }
+        Err(e) => {
+            println!("Note: sto/masstree-beta/test_string.cc parsing failed: {:?}", e);
+        }
+    }
+}
+
+/// Test parsing masstree-beta/value_array.cc (sto masstree beta value array)
+#[test]
+fn test_mako_sto_masstree_beta_value_array_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/mako/benchmarks/sto/masstree-beta/value_array.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: sto/masstree-beta/value_array.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let masstree_beta_path = project_root.join("vendor/mako/src/mako/benchmarks/sto/masstree-beta");
+
+    let mut system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let clang_paths = [
+        "/usr/lib/llvm-19/lib/clang/19/include",
+        "/usr/lib/llvm-18/lib/clang/18/include",
+    ];
+
+    for path in &clang_paths {
+        if Path::new(path).exists() {
+            system_include_paths.push(path.to_string());
+            break;
+        }
+    }
+
+    let include_paths = vec![
+        masstree_beta_path.to_string_lossy().to_string(),
+    ];
+
+    let defines = vec![
+        "HAVE_EXECINFO_H=1".to_string(),
+    ];
+
+    let parser = ClangParser::with_paths_and_defines(include_paths, system_include_paths, defines)
+        .expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+
+            println!("Successfully parsed sto/masstree-beta/value_array.cc with {} functions", module.functions.len());
+        }
+        Err(e) => {
+            println!("Note: sto/masstree-beta/value_array.cc parsing failed: {:?}", e);
+        }
+    }
+}
+
+/// Test parsing masstree-beta/value_string.cc (sto masstree beta value string)
+#[test]
+fn test_mako_sto_masstree_beta_value_string_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/mako/benchmarks/sto/masstree-beta/value_string.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: sto/masstree-beta/value_string.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let masstree_beta_path = project_root.join("vendor/mako/src/mako/benchmarks/sto/masstree-beta");
+
+    let mut system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let clang_paths = [
+        "/usr/lib/llvm-19/lib/clang/19/include",
+        "/usr/lib/llvm-18/lib/clang/18/include",
+    ];
+
+    for path in &clang_paths {
+        if Path::new(path).exists() {
+            system_include_paths.push(path.to_string());
+            break;
+        }
+    }
+
+    let include_paths = vec![
+        masstree_beta_path.to_string_lossy().to_string(),
+    ];
+
+    let defines = vec![
+        "HAVE_EXECINFO_H=1".to_string(),
+    ];
+
+    let parser = ClangParser::with_paths_and_defines(include_paths, system_include_paths, defines)
+        .expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+
+            println!("Successfully parsed sto/masstree-beta/value_string.cc with {} functions", module.functions.len());
+        }
+        Err(e) => {
+            println!("Note: sto/masstree-beta/value_string.cc parsing failed: {:?}", e);
+        }
+    }
+}
+
+/// Test parsing masstree-beta/value_versioned_array.cc (sto masstree beta value versioned array)
+#[test]
+fn test_mako_sto_masstree_beta_value_versioned_array_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/mako/benchmarks/sto/masstree-beta/value_versioned_array.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: sto/masstree-beta/value_versioned_array.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let masstree_beta_path = project_root.join("vendor/mako/src/mako/benchmarks/sto/masstree-beta");
+
+    let mut system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let clang_paths = [
+        "/usr/lib/llvm-19/lib/clang/19/include",
+        "/usr/lib/llvm-18/lib/clang/18/include",
+    ];
+
+    for path in &clang_paths {
+        if Path::new(path).exists() {
+            system_include_paths.push(path.to_string());
+            break;
+        }
+    }
+
+    let include_paths = vec![
+        masstree_beta_path.to_string_lossy().to_string(),
+    ];
+
+    let defines = vec![
+        "HAVE_EXECINFO_H=1".to_string(),
+    ];
+
+    let parser = ClangParser::with_paths_and_defines(include_paths, system_include_paths, defines)
+        .expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+
+            println!("Successfully parsed sto/masstree-beta/value_versioned_array.cc with {} functions", module.functions.len());
+        }
+        Err(e) => {
+            println!("Note: sto/masstree-beta/value_versioned_array.cc parsing failed: {:?}", e);
+        }
+    }
+}
+
+/// Test parsing masstree-beta/msgpacktest.cc (sto masstree beta msgpack test)
+#[test]
+fn test_mako_sto_masstree_beta_msgpacktest_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/mako/benchmarks/sto/masstree-beta/msgpacktest.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: sto/masstree-beta/msgpacktest.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let masstree_beta_path = project_root.join("vendor/mako/src/mako/benchmarks/sto/masstree-beta");
+
+    let mut system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let clang_paths = [
+        "/usr/lib/llvm-19/lib/clang/19/include",
+        "/usr/lib/llvm-18/lib/clang/18/include",
+    ];
+
+    for path in &clang_paths {
+        if Path::new(path).exists() {
+            system_include_paths.push(path.to_string());
+            break;
+        }
+    }
+
+    let include_paths = vec![
+        masstree_beta_path.to_string_lossy().to_string(),
+    ];
+
+    let defines = vec![
+        "HAVE_EXECINFO_H=1".to_string(),
+    ];
+
+    let parser = ClangParser::with_paths_and_defines(include_paths, system_include_paths, defines)
+        .expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+
+            println!("Successfully parsed sto/masstree-beta/msgpacktest.cc with {} functions", module.functions.len());
+        }
+        Err(e) => {
+            println!("Note: sto/masstree-beta/msgpacktest.cc parsing failed: {:?}", e);
+        }
+    }
+}
+
