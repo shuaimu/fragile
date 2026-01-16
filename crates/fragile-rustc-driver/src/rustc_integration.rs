@@ -9,6 +9,7 @@
 // They're found via the sysroot, not Cargo.toml
 extern crate rustc_ast;
 extern crate rustc_driver;
+extern crate rustc_hir;
 extern crate rustc_interface;
 extern crate rustc_middle;
 extern crate rustc_session;
@@ -17,11 +18,77 @@ extern crate rustc_span;
 use crate::queries::CppMirRegistry;
 use miette::{miette, Result};
 use rustc_driver::Compilation;
+use rustc_hir as hir;
 use rustc_interface::interface::{Compiler, Config};
 use rustc_middle::ty::TyCtxt;
+use rustc_span::def_id::LocalDefId;
+use std::collections::HashSet;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+
+// ============================================================================
+// DefId to Function Name Mapping (Task 2.3.3.1)
+// ============================================================================
+
+/// Get the link_name (symbol_name) for a function from its codegen attributes.
+///
+/// This function looks at the `#[link_name = "..."]` attribute on extern functions
+/// which is stored in the `symbol_name` field of CodegenFnAttrs.
+pub fn get_cpp_link_name<'tcx>(tcx: TyCtxt<'tcx>, def_id: LocalDefId) -> Option<String> {
+    // Get codegen function attributes which includes symbol_name (from #[link_name])
+    let attrs = tcx.codegen_fn_attrs(def_id);
+
+    // symbol_name contains the value from #[link_name = "..."] or #[export_name = "..."]
+    attrs.symbol_name.map(|sym| sym.to_string())
+}
+
+/// Check if a DefId is a C++ function by checking its link_name against the registry.
+pub fn is_cpp_function<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    def_id: LocalDefId,
+    cpp_function_names: &HashSet<String>,
+) -> bool {
+    if let Some(link_name) = get_cpp_link_name(tcx, def_id) {
+        cpp_function_names.contains(&link_name)
+    } else {
+        false
+    }
+}
+
+/// Collect all DefIds that correspond to C++ functions.
+///
+/// This scans all items in the crate and identifies those with #[link_name]
+/// attributes that match registered C++ functions.
+pub fn collect_cpp_def_ids<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    cpp_function_names: &HashSet<String>,
+) -> Vec<(LocalDefId, String)> {
+    let mut result = Vec::new();
+
+    // Get the HIR crate
+    let hir_crate = tcx.hir_crate(());
+
+    // Iterate over all items in the crate through module tree
+    for owner in hir_crate.owners.iter() {
+        if let hir::MaybeOwner::Owner(owner_info) = owner {
+            // Check if this is a foreign item (extern function)
+            if let hir::OwnerNode::ForeignItem(foreign_item) = owner_info.node() {
+                let def_id = foreign_item.owner_id.def_id;
+
+                if let Some(link_name) = get_cpp_link_name(tcx, def_id) {
+                    if cpp_function_names.contains(&link_name) {
+                        result.push((def_id, link_name));
+                    }
+                }
+            }
+        }
+    }
+
+    result
+}
+
+// ============================================================================
 
 /// Callbacks implementation for Fragile compiler.
 ///

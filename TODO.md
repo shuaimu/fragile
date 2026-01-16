@@ -409,7 +409,11 @@ See [PLAN_CPP20_MAKO.md](PLAN_CPP20_MAKO.md) for detailed plan.
 ### 2.3 rustc Integration ([docs/dev/plan_rustc_integration.md](docs/dev/plan_rustc_integration.md))
 - [x] **2.3.1 Nightly + rustc-dev setup** [26:01:16, 15:00] - Added build.rs, Cargo.toml updates, feature gating
 - [x] **2.3.2 Callbacks trait** (~100 LOC) [26:01:16, 15:00] - Implemented `FragileCallbacks` with `rustc_driver::Callbacks` trait
-- [ ] **2.3.3 mir_built query override** (~80 LOC) - Inject C++ MIR for extern stubs
+- [-] **2.3.3 mir_built query override** - Inject C++ MIR for extern stubs
+  - [x] 2.3.3.1 DefId to function name mapping (~50 LOC) [26:01:16, 15:30] - get_cpp_link_name, is_cpp_function, collect_cpp_def_ids
+  - [ ] 2.3.3.2 MIR format conversion module (~200 LOC) - Convert our MirBody to rustc's mir::Body
+  - [ ] 2.3.3.3 Type conversion (~100 LOC) - Convert CppType to rustc's Ty
+  - [ ] 2.3.3.4 Query override wiring (~50 LOC) - Wire up the override in config()
 - [ ] **2.3.4 mir_borrowck bypass** (~50 LOC) - Skip borrow checking for C++ functions
 
 ---
