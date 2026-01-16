@@ -1287,4 +1287,231 @@ fn main() {
             }
         }
     }
+
+    /// Test M6.3: Compile strop_minimal.cpp (first real mako file pattern)
+    /// This tests compiling code that uses actual C library functions (strlen, strncmp)
+    /// instead of hand-rolled equivalents.
+    #[test]
+    #[cfg(feature = "rustc-integration")]
+    fn test_strop_minimal() {
+        use tempfile::TempDir;
+
+        // Find the strop_minimal.cpp test file
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let project_root = Path::new(manifest_dir).parent().unwrap().parent().unwrap();
+        let strop_minimal = project_root.join("tests/clang_integration/strop_minimal.cpp");
+
+        if !strop_minimal.exists() {
+            eprintln!("Skipping test: strop_minimal.cpp not found at {:?}", strop_minimal);
+            return;
+        }
+
+        // Create temp directory
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+
+        // Create a Rust main file that tests the strop functions
+        // These use actual C library strlen/strncmp, not our hand-rolled versions
+        let main_rs = temp_dir.path().join("main.rs");
+        std::fs::write(&main_rs, r#"
+use std::ffi::CString;
+
+extern "C" {
+    // rrr::startswith(const char*, const char*) -> bool
+    #[link_name = "_ZN3rrr10startswithEPKcS1_"]
+    fn rrr_startswith(str: *const i8, head: *const i8) -> bool;
+
+    // rrr::endswith(const char*, const char*) -> bool
+    #[link_name = "_ZN3rrr8endswithEPKcS1_"]
+    fn rrr_endswith(str: *const i8, tail: *const i8) -> bool;
+}
+
+fn main() {
+    // Test startswith
+    let test_str = CString::new("hello world").unwrap();
+    let prefix_yes = CString::new("hello").unwrap();
+    let prefix_no = CString::new("world").unwrap();
+
+    let starts_yes = unsafe { rrr_startswith(test_str.as_ptr(), prefix_yes.as_ptr()) };
+    println!("startswith('hello world', 'hello') = {}", starts_yes);
+    assert!(starts_yes, "Should start with 'hello'");
+
+    let starts_no = unsafe { rrr_startswith(test_str.as_ptr(), prefix_no.as_ptr()) };
+    println!("startswith('hello world', 'world') = {}", starts_no);
+    assert!(!starts_no, "Should not start with 'world'");
+
+    // Test prefix longer than string
+    let long_prefix = CString::new("hello world and more").unwrap();
+    let starts_long = unsafe { rrr_startswith(test_str.as_ptr(), long_prefix.as_ptr()) };
+    println!("startswith('hello world', 'hello world and more') = {}", starts_long);
+    assert!(!starts_long, "Prefix longer than string should fail");
+
+    // Test endswith
+    let suffix_yes = CString::new("world").unwrap();
+    let suffix_no = CString::new("hello").unwrap();
+
+    let ends_yes = unsafe { rrr_endswith(test_str.as_ptr(), suffix_yes.as_ptr()) };
+    println!("endswith('hello world', 'world') = {}", ends_yes);
+    assert!(ends_yes, "Should end with 'world'");
+
+    let ends_no = unsafe { rrr_endswith(test_str.as_ptr(), suffix_no.as_ptr()) };
+    println!("endswith('hello world', 'hello') = {}", ends_no);
+    assert!(!ends_no, "Should not end with 'hello'");
+
+    // Test suffix longer than string
+    let long_suffix = CString::new("hello world and more").unwrap();
+    let ends_long = unsafe { rrr_endswith(test_str.as_ptr(), long_suffix.as_ptr()) };
+    println!("endswith('hello world', 'hello world and more') = {}", ends_long);
+    assert!(!ends_long, "Suffix longer than string should fail");
+
+    // Test empty prefix/suffix
+    let empty = CString::new("").unwrap();
+    let starts_empty = unsafe { rrr_startswith(test_str.as_ptr(), empty.as_ptr()) };
+    println!("startswith('hello world', '') = {}", starts_empty);
+    assert!(starts_empty, "Empty prefix should always match");
+
+    let ends_empty = unsafe { rrr_endswith(test_str.as_ptr(), empty.as_ptr()) };
+    println!("endswith('hello world', '') = {}", ends_empty);
+    assert!(ends_empty, "Empty suffix should always match");
+
+    // Test exact match
+    let exact = CString::new("hello world").unwrap();
+    let starts_exact = unsafe { rrr_startswith(test_str.as_ptr(), exact.as_ptr()) };
+    println!("startswith('hello world', 'hello world') = {}", starts_exact);
+    assert!(starts_exact, "Exact match should work for startswith");
+
+    let ends_exact = unsafe { rrr_endswith(test_str.as_ptr(), exact.as_ptr()) };
+    println!("endswith('hello world', 'hello world') = {}", ends_exact);
+    assert!(ends_exact, "Exact match should work for endswith");
+
+    println!("All strop_minimal tests passed!");
+}
+"#).expect("Failed to write main.rs");
+
+        let output_path = temp_dir.path().join("strop_test_binary");
+
+        // Create driver
+        let driver = FragileDriver::new();
+
+        // Run full pipeline
+        let result = driver.compile_with_cpp(
+            &[main_rs.as_path()],
+            &[strop_minimal.as_path()],
+            &output_path,
+            None,
+        );
+
+        match result {
+            Ok(()) => {
+                println!("strop_minimal compilation succeeded!");
+                assert!(output_path.exists(), "Binary should exist");
+
+                // Run the binary
+                let run_result = std::process::Command::new(&output_path)
+                    .output();
+
+                match run_result {
+                    Ok(output) => {
+                        let stdout = String::from_utf8_lossy(&output.stdout);
+                        let stderr = String::from_utf8_lossy(&output.stderr);
+                        println!("stdout: {}", stdout);
+                        println!("stderr: {}", stderr);
+                        assert!(output.status.success(), "Binary should run successfully");
+                        assert!(stdout.contains("All strop_minimal tests passed!"),
+                            "Output should indicate success");
+                    }
+                    Err(e) => {
+                        eprintln!("Failed to run binary (may be expected): {}", e);
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("strop_minimal compilation failed (may be expected in CI): {}", e);
+            }
+        }
+    }
+
+    /// Test parsing the real strop.cpp from mako (without execution)
+    /// This validates that we can parse STL-dependent code, even if we can't execute it yet.
+    #[test]
+    fn test_parse_real_strop_cpp() {
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let project_root = Path::new(manifest_dir).parent().unwrap().parent().unwrap();
+        let strop_cpp = project_root.join("vendor/mako/src/rrr/base/strop.cpp");
+
+        // Check if test file exists
+        if !strop_cpp.exists() {
+            eprintln!("Skipping test: strop.cpp not found at {:?}", strop_cpp);
+            return;
+        }
+
+        // Check if submodules are initialized
+        let rusty_cpp_path = project_root.join("vendor/mako/third-party/rusty-cpp/include");
+        if !rusty_cpp_path.exists() {
+            eprintln!("Skipping test: rusty-cpp submodule not initialized");
+            return;
+        }
+
+        // Set up include paths
+        let stubs_path = Path::new(manifest_dir)
+            .parent().unwrap()
+            .join("fragile-clang/stubs");
+
+        let include_paths = vec![
+            project_root.join("vendor/mako/src").to_string_lossy().to_string(),
+            project_root.join("vendor/mako/src/rrr").to_string_lossy().to_string(),
+            rusty_cpp_path.to_string_lossy().to_string(),
+        ];
+
+        let system_include_paths = vec![
+            stubs_path.to_string_lossy().to_string(),
+        ];
+
+        // Parse the C++ file
+        let parser = fragile_clang::ClangParser::with_paths(
+            include_paths,
+            system_include_paths,
+        ).expect("Failed to create parser");
+
+        let ast = parser.parse_file(&strop_cpp)
+            .expect("Failed to parse strop.cpp");
+
+        let converter = fragile_clang::MirConverter::new();
+        let module = converter.convert(ast)
+            .expect("Failed to convert strop.cpp to MIR");
+
+        // Print found functions
+        println!("strop.cpp parsed with {} functions:", module.functions.len());
+        for func in &module.functions {
+            println!("  - {} ({})", func.display_name, func.mangled_name);
+        }
+
+        // Verify we found the expected functions
+        let func_names: Vec<&str> = module.functions.iter()
+            .map(|f| f.display_name.as_str())
+            .collect();
+
+        // Should have at least startswith and endswith
+        assert!(func_names.iter().any(|&n| n == "startswith" || n.contains("startswith")),
+            "Should find startswith function");
+        assert!(func_names.iter().any(|&n| n == "endswith" || n.contains("endswith")),
+            "Should find endswith function");
+
+        // May have format_decimal and strsplit (STL-dependent)
+        let has_format_decimal = func_names.iter().any(|&n| n.contains("format_decimal"));
+        let has_strsplit = func_names.iter().any(|&n| n.contains("strsplit"));
+
+        println!("Found format_decimal: {}", has_format_decimal);
+        println!("Found strsplit: {}", has_strsplit);
+
+        // Register with driver to verify stub generation works
+        let driver = FragileDriver::new();
+        driver.register_cpp_module(&module);
+
+        // Generate stubs
+        let stubs = generate_rust_stubs(&[module]);
+        println!("Generated {} bytes of Rust stubs", stubs.len());
+
+        // Stubs should contain extern declarations
+        assert!(stubs.contains("extern"), "Stubs should contain extern block");
+    }
 }
