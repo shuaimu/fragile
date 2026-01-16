@@ -81,9 +81,15 @@ impl ClangParser {
             CString::new("-x").unwrap(),
             CString::new("c++").unwrap(),
             CString::new("-std=c++20").unwrap(),
+            // Suppress some warnings that may cause issues with system headers
+            CString::new("-w").unwrap(),
+            // Don't limit the number of errors
+            CString::new("-ferror-limit=0").unwrap(),
+            // Disable builtin limits on stack depth for templates
+            CString::new("-ftemplate-depth=1024").unwrap(),
         ];
 
-        // Add include paths
+        // Add include paths - user paths first
         for path in &self.include_paths {
             args.push(CString::new(format!("-I{}", path)).unwrap());
         }
@@ -102,6 +108,11 @@ impl ClangParser {
         let c_args: Vec<*const i8> = args.iter().map(|s| s.as_ptr()).collect();
 
         unsafe {
+            // Use DetailedPreprocessingRecord to get better AST coverage,
+            // and KeepGoing to continue past errors in system headers
+            let options = clang_sys::CXTranslationUnit_DetailedPreprocessingRecord
+                | clang_sys::CXTranslationUnit_KeepGoing;
+
             let tu = clang_sys::clang_parseTranslationUnit(
                 self.index,
                 c_path.as_ptr(),
@@ -109,15 +120,17 @@ impl ClangParser {
                 c_args.len() as i32,
                 ptr::null_mut(),
                 0,
-                clang_sys::CXTranslationUnit_None,
+                options,
             );
 
             if tu.is_null() {
                 return Err(miette!("Failed to parse file: {}", path_str));
             }
 
-            // Check for errors
+            // Check for errors - only fail on errors in user code, not system headers
             let num_diagnostics = clang_sys::clang_getNumDiagnostics(tu);
+            let mut user_errors = Vec::new();
+
             for i in 0..num_diagnostics {
                 let diag = clang_sys::clang_getDiagnostic(tu, i);
                 let severity = clang_sys::clang_getDiagnosticSeverity(diag);
@@ -125,11 +138,48 @@ impl ClangParser {
                 if severity >= clang_sys::CXDiagnostic_Error {
                     let spelling = clang_sys::clang_getDiagnosticSpelling(diag);
                     let msg = cx_string_to_string(spelling);
-                    clang_sys::clang_disposeDiagnostic(diag);
-                    clang_sys::clang_disposeTranslationUnit(tu);
-                    return Err(miette!("Clang error: {}", msg));
+
+                    // Get location for better error reporting
+                    let location = clang_sys::clang_getDiagnosticLocation(diag);
+                    let mut file: clang_sys::CXFile = ptr::null_mut();
+                    let mut line: u32 = 0;
+                    let mut column: u32 = 0;
+                    let mut offset: u32 = 0;
+                    clang_sys::clang_getExpansionLocation(
+                        location,
+                        &mut file,
+                        &mut line,
+                        &mut column,
+                        &mut offset,
+                    );
+
+                    let file_name = if !file.is_null() {
+                        let fname = clang_sys::clang_getFileName(file);
+                        cx_string_to_string(fname)
+                    } else {
+                        String::from("<unknown>")
+                    };
+
+                    // Check if this error is from a system header
+                    let is_system_header = clang_sys::clang_Location_isInSystemHeader(location) != 0;
+
+                    if !is_system_header {
+                        user_errors.push(format!(
+                            "{}:{}:{}: {}",
+                            file_name, line, column, msg
+                        ));
+                    }
                 }
                 clang_sys::clang_disposeDiagnostic(diag);
+            }
+
+            // Only fail if there are errors in user code
+            if !user_errors.is_empty() {
+                clang_sys::clang_disposeTranslationUnit(tu);
+                return Err(miette!(
+                    "Clang errors in user code:\n{}",
+                    user_errors.join("\n")
+                ));
             }
 
             // Get the cursor for the translation unit
