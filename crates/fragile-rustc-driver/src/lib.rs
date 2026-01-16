@@ -71,7 +71,6 @@ pub use driver::FragileDriver;
 pub use queries::CppMirRegistry;
 pub use stubs::generate_rust_stubs;
 
-use fragile_clang::CppModule;
 use miette::Result;
 use std::path::Path;
 

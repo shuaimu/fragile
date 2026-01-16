@@ -1,6 +1,6 @@
 //! Query overrides for C++ MIR injection.
 
-use fragile_clang::{CppFunction, CppModule, MirBody};
+use fragile_clang::{CppModule, MirBody};
 use rustc_hash::FxHashMap;
 use std::sync::RwLock;
 
@@ -169,6 +169,7 @@ mod tests {
                 ("b".to_string(), CppType::int()),
             ],
             return_type: CppType::int(),
+            is_noexcept: false,
             mir_body: MirBody::new(),
         });
 

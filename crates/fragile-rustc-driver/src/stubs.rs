@@ -137,6 +137,7 @@ mod tests {
                 ("b".to_string(), CppType::int()),
             ],
             return_type: CppType::int(),
+            is_noexcept: false,
             mir_body: MirBody::new(),
         };
 
@@ -218,6 +219,7 @@ mod tests {
                 ("b".to_string(), CppType::int()),
             ],
             return_type: CppType::int(),
+            is_noexcept: false,
             mir_body: MirBody::new(),
         });
 
