@@ -117,10 +117,10 @@ See [PLAN_CPP20_MAKO.md](PLAN_CPP20_MAKO.md) for detailed plan.
 - [x] std::weak_ptr [26:01:16]
 
 #### C.3 Concurrency
-- [ ] std::thread
-- [ ] std::mutex / std::lock_guard
-- [ ] std::condition_variable
-- [ ] std::atomic
+- [x] std::thread [26:01:16]
+- [x] std::mutex / std::lock_guard [26:01:16]
+- [x] std::condition_variable [26:01:16]
+- [x] std::atomic [26:01:16]
 
 #### C.4 Utilities
 - [x] std::function [26:01:16]

@@ -4537,3 +4537,110 @@ fn test_std_chrono_time_point() {
     let test_fn = module.functions.iter().find(|f| f.display_name == "is_elapsed");
     assert!(test_fn.is_some(), "Expected to find is_elapsed function");
 }
+
+// ========== Concurrency Tests (C.3) ==========
+
+/// Test parsing code that uses std::thread.
+#[test]
+fn test_std_thread_basic() {
+    let parser = ClangParser::with_system_includes().unwrap();
+    let code = r#"
+        #include <thread>
+
+        void thread_work() {}
+
+        void test_thread() {
+            std::thread t(thread_work);
+            t.join();
+        }
+    "#;
+
+    let ast = parser.parse_string(code, "test.cpp").unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).unwrap();
+
+    let test_fn = module.functions.iter().find(|f| f.display_name == "test_thread");
+    assert!(test_fn.is_some(), "Expected to find test_thread function");
+}
+
+/// Test std::mutex and std::lock_guard.
+#[test]
+fn test_std_mutex_lock_guard() {
+    let parser = ClangParser::with_system_includes().unwrap();
+    let code = r#"
+        #include <mutex>
+
+        std::mutex g_mutex;
+        int counter = 0;
+
+        void increment() {
+            std::lock_guard<std::mutex> lock(g_mutex);
+            counter++;
+        }
+    "#;
+
+    let ast = parser.parse_string(code, "test.cpp").unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).unwrap();
+
+    let test_fn = module.functions.iter().find(|f| f.display_name == "increment");
+    assert!(test_fn.is_some(), "Expected to find increment function");
+}
+
+/// Test std::atomic.
+#[test]
+fn test_std_atomic() {
+    let parser = ClangParser::with_system_includes().unwrap();
+    let code = r#"
+        #include <atomic>
+
+        std::atomic<int> counter{0};
+
+        int test_atomic() {
+            counter++;
+            return counter.load();
+        }
+    "#;
+
+    let ast = parser.parse_string(code, "test.cpp").unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).unwrap();
+
+    let test_fn = module.functions.iter().find(|f| f.display_name == "test_atomic");
+    assert!(test_fn.is_some(), "Expected to find test_atomic function");
+}
+
+/// Test std::condition_variable.
+#[test]
+fn test_std_condition_variable() {
+    let parser = ClangParser::with_system_includes().unwrap();
+    let code = r#"
+        #include <mutex>
+        #include <condition_variable>
+
+        std::mutex mtx;
+        std::condition_variable cv;
+        bool ready = false;
+
+        void wait_for_signal() {
+            std::unique_lock<std::mutex> lock(mtx);
+            cv.wait(lock, []{ return ready; });
+        }
+
+        void signal() {
+            std::lock_guard<std::mutex> lock(mtx);
+            ready = true;
+            cv.notify_one();
+        }
+    "#;
+
+    let ast = parser.parse_string(code, "test.cpp").unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).unwrap();
+
+    let wait_fn = module.functions.iter().find(|f| f.display_name == "wait_for_signal");
+    assert!(wait_fn.is_some(), "Expected to find wait_for_signal function");
+
+    let signal_fn = module.functions.iter().find(|f| f.display_name == "signal");
+    assert!(signal_fn.is_some(), "Expected to find signal function");
+}
