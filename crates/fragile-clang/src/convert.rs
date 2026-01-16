@@ -513,6 +513,34 @@ impl MirConverter {
                 if let Some(func_ref) = node.children.first() {
                     let func_name = Self::extract_function_name(func_ref);
 
+                    // Handle std::move as a builtin - it's just a cast to rvalue reference
+                    if Self::is_std_move(&func_name) {
+                        if let Some(arg) = node.children.get(1) {
+                            let operand = self.convert_expr(arg, builder)?;
+                            // Convert Copy operand to Move operand
+                            return Ok(match operand {
+                                MirOperand::Copy(place) => MirOperand::Move(place),
+                                other => other,
+                            });
+                        }
+                        // No argument - return unit
+                        return Ok(MirOperand::Constant(MirConstant::Unit));
+                    }
+
+                    // Handle std::forward as a builtin - conditionally moves or copies
+                    if Self::is_std_forward(&func_name) {
+                        if let Some(arg) = node.children.get(1) {
+                            let operand = self.convert_expr(arg, builder)?;
+                            // For now, treat forward like move since we don't track reference collapsing
+                            // A more complete implementation would check the template argument
+                            return Ok(match operand {
+                                MirOperand::Copy(place) => MirOperand::Move(place),
+                                other => other,
+                            });
+                        }
+                        return Ok(MirOperand::Constant(MirConstant::Unit));
+                    }
+
                     let mut args = Vec::new();
                     for arg_node in node.children.iter().skip(1) {
                         args.push(self.convert_expr(arg_node, builder)?);
@@ -554,8 +582,18 @@ impl MirConverter {
                 }
             }
 
+            ClangNodeKind::Unknown(_) => {
+                // Unknown/UnexposedExpr nodes often wrap other expressions
+                // Unwrap and recurse into the child
+                if let Some(inner) = node.children.first() {
+                    self.convert_expr(inner, builder)
+                } else {
+                    Ok(MirOperand::Constant(MirConstant::Unit))
+                }
+            }
+
             _ => {
-                // Unknown expression - return unit
+                // Truly unknown expression - return unit
                 Ok(MirOperand::Constant(MirConstant::Unit))
             }
         }
@@ -785,6 +823,22 @@ impl MirConverter {
             }
             _ => "unknown".to_string(),
         }
+    }
+
+    /// Check if a function name refers to std::move.
+    ///
+    /// std::move is just a cast to rvalue reference, not a real function call.
+    /// We treat it as a builtin for efficiency.
+    fn is_std_move(name: &str) -> bool {
+        name == "std::move" || name == "move"
+    }
+
+    /// Check if a function name refers to std::forward.
+    ///
+    /// std::forward conditionally casts to rvalue reference based on the
+    /// template argument. We treat it as a builtin for efficiency.
+    fn is_std_forward(name: &str) -> bool {
+        name == "std::forward" || name == "forward"
     }
 }
 

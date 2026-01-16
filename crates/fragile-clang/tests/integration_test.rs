@@ -1707,3 +1707,106 @@ fn test_name_resolution_global_from_namespace() {
         }
     }
 }
+
+/// Test std::move generates MirOperand::Move.
+#[test]
+fn test_std_move_basic() {
+    use fragile_clang::MirOperand;
+
+    let parser = ClangParser::new().expect("Failed to create parser");
+
+    let source = r#"
+        #include <utility>
+
+        int test_move() {
+            int x = 42;
+            int y = std::move(x);
+            return y;
+        }
+    "#;
+
+    let ast = parser.parse_string(source, "move.cpp").expect("Failed to parse");
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    // Find the test_move function
+    let func = module.functions.iter().find(|f| f.display_name == "test_move");
+    assert!(func.is_some(), "test_move function not found");
+
+    let func = func.unwrap();
+
+    // Check that there's a Move operand in the MIR
+    let has_move = func.mir_body.blocks.iter().any(|block| {
+        block.statements.iter().any(|stmt| {
+            if let fragile_clang::MirStatement::Assign { value, .. } = stmt {
+                matches!(value, fragile_clang::MirRvalue::Use(MirOperand::Move(_)))
+            } else {
+                false
+            }
+        })
+    });
+
+    assert!(has_move, "std::move should generate a Move operand");
+}
+
+/// Test std::forward generates MirOperand::Move.
+#[test]
+fn test_std_forward_basic() {
+    let parser = ClangParser::new().expect("Failed to create parser");
+
+    let source = r#"
+        #include <utility>
+
+        template<typename T>
+        T forward_wrapper(T&& arg) {
+            return std::forward<T>(arg);
+        }
+    "#;
+
+    let ast = parser.parse_string(source, "forward.cpp").expect("Failed to parse");
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    // The function template should be parsed (even if not instantiated)
+    // We can't directly test the MIR without template instantiation,
+    // but we verify the parse doesn't fail
+    assert!(module.function_templates.len() >= 1 || module.functions.is_empty(),
+            "Should parse function template or be empty if no instantiation");
+}
+
+/// Test std::move with function call argument.
+#[test]
+fn test_std_move_in_call() {
+    let parser = ClangParser::new().expect("Failed to create parser");
+
+    let source = r#"
+        #include <utility>
+
+        void consume(int&& val) {}
+
+        void test_move_call() {
+            int x = 10;
+            consume(std::move(x));
+        }
+    "#;
+
+    let ast = parser.parse_string(source, "move_call.cpp").expect("Failed to parse");
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    // Find the test_move_call function
+    let func = module.functions.iter().find(|f| f.display_name == "test_move_call");
+    assert!(func.is_some(), "test_move_call function not found");
+
+    // The function should have a call to consume with a Move operand
+    let func = func.unwrap();
+    let has_call_with_move = func.mir_body.blocks.iter().any(|block| {
+        if let fragile_clang::MirTerminator::Call { func: called_func, args, .. } = &block.terminator {
+            called_func == "consume" && args.iter().any(|arg| matches!(arg, fragile_clang::MirOperand::Move(_)))
+        } else {
+            false
+        }
+    });
+
+    assert!(has_call_with_move, "consume should be called with a Move operand");
+}

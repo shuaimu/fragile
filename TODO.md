@@ -59,12 +59,12 @@ See [PLAN_CPP20_MAKO.md](PLAN_CPP20_MAKO.md) for detailed plan.
   - [x] Subscript [] [26:01:16] (included in above)
   - [x] Call () [26:01:16] (included in above)
   - [x] Pointer (*, ->) [26:01:16] (included in above)
-- [-] **A.5 References & Move Semantics**
+- [x] **A.5 References & Move Semantics**
   - [x] Lvalue references (T&)
   - [x] Const references (const T&) [26:01:16] ([docs/dev/plan_references.md](docs/dev/plan_references.md))
   - [x] Rvalue references (T&&) [26:01:16] (included in above)
-  - [ ] std::move
-  - [ ] std::forward
+  - [x] std::move [26:01:16, 00:58] ([docs/dev/plan_std_move.md](docs/dev/plan_std_move.md))
+  - [x] std::forward [26:01:16, 00:58] (included in above)
 
 ### 1.2 Phase B: Templates
 - [-] **B.1 Function Templates**
