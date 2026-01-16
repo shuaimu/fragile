@@ -54,6 +54,15 @@ constexpr ToDuration duration_cast(const duration<Rep, Period>& d) {
     return ToDuration(static_cast<typename ToDuration::rep>(d.count()));
 }
 
+// Forward declaration for time_point_cast
+template<typename Clock, typename Duration> class time_point;
+
+// time_point_cast
+template<typename ToDuration, typename Clock, typename Duration>
+constexpr time_point<Clock, ToDuration> time_point_cast(const time_point<Clock, Duration>& t) {
+    return time_point<Clock, ToDuration>(duration_cast<ToDuration>(t.time_since_epoch()));
+}
+
 // Time point
 template<typename Clock, typename Duration = typename Clock::duration>
 class time_point {

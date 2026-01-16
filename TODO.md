@@ -212,7 +212,7 @@ See [PLAN_CPP20_MAKO.md](PLAN_CPP20_MAKO.md) for detailed plan.
     - [x] `vendor/mako/src/rrr/reactor/fiber_impl.cc` - **PARSED**: 4640 functions
     - [x] `vendor/mako/src/rrr/reactor/reactor.cc` - **PARSED**: 4640 functions
     - [-] `vendor/mako/src/rrr/reactor/quorum_event.cc` - Cross-namespace inheritance: `janus::QuorumEvent` inherits from `rrr::Event` via `using rrr::Event;`. Clang semantic error on `test()` call [26:01:16, 12:00]. See docs/dev/plan_fix_stub_headers_quorum_event.md
-  - [-] All mako module - **59/155 files parsing (38.1%)** [26:01:16, 10:00]
+  - [-] All mako module - **60/155 files parsing (38.7%)** [26:01:16, 10:00]
     - [x] `vendor/mako/src/mako/vec/coroutine.cpp` - **PARSED**: 40 functions
     - [x] `vendor/mako/src/mako/vec/occ.cpp` - **PARSED**: 41 functions
     - [x] `vendor/mako/src/mako/lib/memory.cc` - **PARSED**: 17 functions
@@ -291,6 +291,11 @@ See [PLAN_CPP20_MAKO.md](PLAN_CPP20_MAKO.md) for detailed plan.
     - [x] F.3.21 Added SIGBUS and other signals to csignal [26:01:16, 10:00]
     - [x] F.3.22 Added fdopen/fileno to cstdio [26:01:16, 10:00]
     - [x] F.3.23 Added HAVE_EXECINFO_H define to mako test examples [26:01:16, 10:00]
+    - [x] F.3.24 Added masstree-beta include path for log.hh; added eRPC include path for rpc.h [26:01:16, 10:30]
+    - [x] F.3.25 Added vector reverse iterators (rbegin/rend); added map operator==; added time_point_cast to chrono [26:01:16, 10:30]
+    - [x] F.3.26 Added filesystem stub; added strings.h include to string.h for bzero [26:01:16, 10:30]
+    - [x] F.3.27 Added MAP_FILE to sys/mman.h; fixed sys/epoll.h includes [26:01:16, 10:30]
+    - [x] `vendor/mako/src/mako/masstree/mtclient.cc` - **PARSED**: 3183 functions (network client) [26:01:16, 10:30]
     - [-] `vendor/mako/src/mako/thread.cc` - Needs eRPC rpc.h header (external dependency)
     - [-] `vendor/mako/src/mako/persist_test.cc` - Has LZ4 stubs but needs one_way_post template from mako internals
     - [ ] Remaining files need: eRPC library stubs, more STL stubs
@@ -379,7 +384,7 @@ Migration: After C++20 support is complete, deprecate these.
 
 Current status:
 - **rrr module**: 15/16 files parsing (94%) - blocked by quorum_event.cc cross-namespace inheritance
-- **mako module**: 59/155 files parsing (38.1%)
+- **mako module**: 60/155 files parsing (38.7%)
 - **Total tests**: 243 passing (fragile-clang integration tests)
 
 Next steps:

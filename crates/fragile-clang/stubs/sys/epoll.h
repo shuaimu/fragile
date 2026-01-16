@@ -4,8 +4,9 @@
 #ifndef _SYS_EPOLL_H
 #define _SYS_EPOLL_H
 
-#include <stdint.h>
-#include <sys/types.h>
+#include "../cstdint"
+#include "types.h"
+#include "../csignal"  // For sigset_t
 
 #ifdef __cplusplus
 extern "C" {

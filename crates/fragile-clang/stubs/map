@@ -237,6 +237,23 @@ public:
         return find(key) != end() ? 1 : 0;
     }
 
+    // Comparison operators
+    bool operator==(const map& other) const {
+        if (size_ != other.size_) return false;
+        auto it1 = begin();
+        auto it2 = other.begin();
+        while (it1 != end()) {
+            if (it1->first != it2->first || it1->second != it2->second) return false;
+            ++it1;
+            ++it2;
+        }
+        return true;
+    }
+
+    bool operator!=(const map& other) const {
+        return !(*this == other);
+    }
+
 private:
     void clear_recursive(node* n) {
         if (n) {

@@ -22,6 +22,8 @@ fn main() {
     let mako_mako_path = project_root.join("vendor/mako/src/mako");
     let rusty_cpp_path = project_root.join("vendor/mako/third-party/rusty-cpp/include");
     let sto_path = project_root.join("vendor/mako/src/mako/benchmarks/sto");
+    let masstree_beta_path = project_root.join("vendor/mako/third-party/erpc/third_party/masstree-beta");
+    let erpc_path = project_root.join("vendor/mako/third-party/erpc/src");
 
     let mut system_include_paths = vec![];
     if stubs_path.exists() {
@@ -49,6 +51,12 @@ fn main() {
     }
     if sto_path.exists() {
         include_paths.push(sto_path.to_string_lossy().to_string());
+    }
+    if masstree_beta_path.exists() {
+        include_paths.push(masstree_beta_path.to_string_lossy().to_string());
+    }
+    if erpc_path.exists() {
+        include_paths.push(erpc_path.to_string_lossy().to_string());
     }
     let defines = vec![
         r#"CONFIG_H="mako/masstree/config.h""#.to_string(),

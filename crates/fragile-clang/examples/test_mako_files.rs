@@ -86,6 +86,16 @@ fn main() {
         if sto_path.exists() {
             include_paths.push(sto_path.to_string_lossy().to_string());
         }
+        // Add masstree-beta for log.hh and other masstree headers
+        let masstree_beta_path = project_root.join("vendor/mako/third-party/erpc/third_party/masstree-beta");
+        if masstree_beta_path.exists() {
+            include_paths.push(masstree_beta_path.to_string_lossy().to_string());
+        }
+        // Add eRPC library for rpc.h
+        let erpc_path = project_root.join("vendor/mako/third-party/erpc/src");
+        if erpc_path.exists() {
+            include_paths.push(erpc_path.to_string_lossy().to_string());
+        }
         // Defines needed for mako/masstree
         let defines = vec![
             r#"CONFIG_H="mako/masstree/config.h""#.to_string(),

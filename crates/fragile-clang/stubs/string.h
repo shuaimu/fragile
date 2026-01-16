@@ -4,6 +4,7 @@
 #define _FRAGILE_STRING_H_
 
 #include "cstring"
+#include "strings.h"  // For bzero, bcopy, etc.
 
 // POSIX extensions not in standard cstring
 extern "C" {
