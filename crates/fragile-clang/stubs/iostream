@@ -1,0 +1,233 @@
+// Minimal iostream stub for fragile parsing
+#ifndef _FRAGILE_IOSTREAM_
+#define _FRAGILE_IOSTREAM_
+
+#include "cstdint"
+#include "string"
+
+namespace std {
+
+// Forward declarations
+class ios_base;
+template<typename CharT, typename Traits = void> class basic_ios;
+template<typename CharT, typename Traits = void> class basic_ostream;
+template<typename CharT, typename Traits = void> class basic_istream;
+template<typename CharT, typename Traits = void> class basic_iostream;
+
+// ios_base
+class ios_base {
+public:
+    using fmtflags = unsigned int;
+    using iostate = unsigned int;
+    using openmode = unsigned int;
+    using seekdir = int;
+
+    static constexpr fmtflags boolalpha = 1 << 0;
+    static constexpr fmtflags dec = 1 << 1;
+    static constexpr fmtflags fixed = 1 << 2;
+    static constexpr fmtflags hex = 1 << 3;
+    static constexpr fmtflags oct = 1 << 4;
+    static constexpr fmtflags scientific = 1 << 5;
+    static constexpr fmtflags showbase = 1 << 6;
+    static constexpr fmtflags showpoint = 1 << 7;
+    static constexpr fmtflags showpos = 1 << 8;
+    static constexpr fmtflags skipws = 1 << 9;
+    static constexpr fmtflags left = 1 << 10;
+    static constexpr fmtflags right = 1 << 11;
+    static constexpr fmtflags internal = 1 << 12;
+
+    static constexpr iostate goodbit = 0;
+    static constexpr iostate badbit = 1 << 0;
+    static constexpr iostate eofbit = 1 << 1;
+    static constexpr iostate failbit = 1 << 2;
+
+    static constexpr openmode app = 1 << 0;
+    static constexpr openmode ate = 1 << 1;
+    static constexpr openmode binary = 1 << 2;
+    static constexpr openmode in = 1 << 3;
+    static constexpr openmode out = 1 << 4;
+    static constexpr openmode trunc = 1 << 5;
+
+    static constexpr seekdir beg = 0;
+    static constexpr seekdir cur = 1;
+    static constexpr seekdir end = 2;
+
+protected:
+    ios_base() = default;
+    ~ios_base() = default;
+};
+
+// basic_ios
+template<typename CharT, typename Traits>
+class basic_ios : public ios_base {
+public:
+    using char_type = CharT;
+    using traits_type = Traits;
+
+    explicit operator bool() const { return !fail(); }
+    bool operator!() const { return fail(); }
+
+    iostate rdstate() const { return state_; }
+    void setstate(iostate state) { state_ |= state; }
+    void clear(iostate state = goodbit) { state_ = state; }
+
+    bool good() const { return state_ == goodbit; }
+    bool eof() const { return (state_ & eofbit) != 0; }
+    bool fail() const { return (state_ & (failbit | badbit)) != 0; }
+    bool bad() const { return (state_ & badbit) != 0; }
+
+protected:
+    basic_ios() : state_(goodbit) {}
+    iostate state_ = goodbit;
+};
+
+// basic_ostream
+template<typename CharT, typename Traits>
+class basic_ostream : public basic_ios<CharT, Traits> {
+public:
+    using char_type = CharT;
+    using traits_type = Traits;
+
+    basic_ostream() = default;
+    virtual ~basic_ostream() = default;
+
+    basic_ostream& operator<<(bool v) { (void)v; return *this; }
+    basic_ostream& operator<<(short v) { (void)v; return *this; }
+    basic_ostream& operator<<(unsigned short v) { (void)v; return *this; }
+    basic_ostream& operator<<(int v) { (void)v; return *this; }
+    basic_ostream& operator<<(unsigned int v) { (void)v; return *this; }
+    basic_ostream& operator<<(long v) { (void)v; return *this; }
+    basic_ostream& operator<<(unsigned long v) { (void)v; return *this; }
+    basic_ostream& operator<<(long long v) { (void)v; return *this; }
+    basic_ostream& operator<<(unsigned long long v) { (void)v; return *this; }
+    basic_ostream& operator<<(float v) { (void)v; return *this; }
+    basic_ostream& operator<<(double v) { (void)v; return *this; }
+    basic_ostream& operator<<(long double v) { (void)v; return *this; }
+    basic_ostream& operator<<(const void* p) { (void)p; return *this; }
+    basic_ostream& operator<<(const char* s) { (void)s; return *this; }
+    basic_ostream& operator<<(char c) { (void)c; return *this; }
+    basic_ostream& operator<<(signed char c) { (void)c; return *this; }
+    basic_ostream& operator<<(unsigned char c) { (void)c; return *this; }
+
+    basic_ostream& operator<<(basic_ostream& (*pf)(basic_ostream&)) {
+        return pf(*this);
+    }
+
+    basic_ostream& put(char_type c) { (void)c; return *this; }
+    basic_ostream& write(const char_type* s, size_t n) { (void)s; (void)n; return *this; }
+    basic_ostream& flush() { return *this; }
+};
+
+// basic_istream
+template<typename CharT, typename Traits>
+class basic_istream : public basic_ios<CharT, Traits> {
+public:
+    using char_type = CharT;
+    using traits_type = Traits;
+    using int_type = int;
+
+    basic_istream() = default;
+    virtual ~basic_istream() = default;
+
+    basic_istream& operator>>(bool& v) { (void)v; return *this; }
+    basic_istream& operator>>(short& v) { (void)v; return *this; }
+    basic_istream& operator>>(unsigned short& v) { (void)v; return *this; }
+    basic_istream& operator>>(int& v) { (void)v; return *this; }
+    basic_istream& operator>>(unsigned int& v) { (void)v; return *this; }
+    basic_istream& operator>>(long& v) { (void)v; return *this; }
+    basic_istream& operator>>(unsigned long& v) { (void)v; return *this; }
+    basic_istream& operator>>(long long& v) { (void)v; return *this; }
+    basic_istream& operator>>(unsigned long long& v) { (void)v; return *this; }
+    basic_istream& operator>>(float& v) { (void)v; return *this; }
+    basic_istream& operator>>(double& v) { (void)v; return *this; }
+    basic_istream& operator>>(long double& v) { (void)v; return *this; }
+    basic_istream& operator>>(void*& p) { (void)p; return *this; }
+    basic_istream& operator>>(char* s) { (void)s; return *this; }
+    basic_istream& operator>>(char& c) { (void)c; return *this; }
+    basic_istream& operator>>(signed char& c) { (void)c; return *this; }
+    basic_istream& operator>>(unsigned char& c) { (void)c; return *this; }
+
+    basic_istream& operator>>(basic_istream& (*pf)(basic_istream&)) {
+        return pf(*this);
+    }
+
+    int_type get() { return -1; }
+    basic_istream& get(char_type& c) { (void)c; return *this; }
+    basic_istream& get(char_type* s, size_t n) { (void)s; (void)n; return *this; }
+    basic_istream& getline(char_type* s, size_t n) { (void)s; (void)n; return *this; }
+    basic_istream& read(char_type* s, size_t n) { (void)s; (void)n; return *this; }
+    size_t gcount() const { return 0; }
+    int_type peek() { return -1; }
+    basic_istream& ignore(size_t n = 1, int_type delim = -1) { (void)n; (void)delim; return *this; }
+};
+
+// basic_iostream
+template<typename CharT, typename Traits>
+class basic_iostream : public basic_istream<CharT, Traits>, public basic_ostream<CharT, Traits> {
+public:
+    basic_iostream() = default;
+    virtual ~basic_iostream() = default;
+};
+
+// Type aliases
+using ios = basic_ios<char>;
+using ostream = basic_ostream<char>;
+using istream = basic_istream<char>;
+using iostream = basic_iostream<char>;
+
+using wios = basic_ios<wchar_t>;
+using wostream = basic_ostream<wchar_t>;
+using wistream = basic_istream<wchar_t>;
+using wiostream = basic_iostream<wchar_t>;
+
+// Global streams (extern declarations)
+extern ostream cout;
+extern ostream cerr;
+extern ostream clog;
+extern istream cin;
+
+extern wostream wcout;
+extern wostream wcerr;
+extern wostream wclog;
+extern wistream wcin;
+
+// Manipulators
+template<typename CharT, typename Traits>
+basic_ostream<CharT, Traits>& endl(basic_ostream<CharT, Traits>& os) {
+    os.put('\n');
+    os.flush();
+    return os;
+}
+
+template<typename CharT, typename Traits>
+basic_ostream<CharT, Traits>& ends(basic_ostream<CharT, Traits>& os) {
+    os.put('\0');
+    return os;
+}
+
+template<typename CharT, typename Traits>
+basic_ostream<CharT, Traits>& flush(basic_ostream<CharT, Traits>& os) {
+    os.flush();
+    return os;
+}
+
+// String stream operators
+template<typename CharT, typename Traits, typename Alloc>
+basic_ostream<CharT, Traits>& operator<<(
+    basic_ostream<CharT, Traits>& os,
+    const basic_string<CharT, char_traits<CharT>, Alloc>& str) {
+    os.write(str.c_str(), str.size());
+    return os;
+}
+
+template<typename CharT, typename Traits, typename Alloc>
+basic_istream<CharT, Traits>& operator>>(
+    basic_istream<CharT, Traits>& is,
+    basic_string<CharT, char_traits<CharT>, Alloc>& str) {
+    (void)str;
+    return is;
+}
+
+} // namespace std
+
+#endif // _FRAGILE_IOSTREAM_

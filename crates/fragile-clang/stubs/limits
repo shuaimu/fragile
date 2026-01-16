@@ -1,0 +1,298 @@
+// Minimal limits stub for fragile parsing
+#ifndef _FRAGILE_LIMITS_
+#define _FRAGILE_LIMITS_
+
+#include "cstdint"
+#include "algorithm"
+
+namespace std {
+
+// Numeric limits base template
+template<typename T>
+class numeric_limits {
+public:
+    static constexpr bool is_specialized = false;
+    static constexpr bool is_signed = false;
+    static constexpr bool is_integer = false;
+    static constexpr bool is_exact = false;
+    static constexpr bool has_infinity = false;
+    static constexpr bool has_quiet_NaN = false;
+    static constexpr bool has_signaling_NaN = false;
+    static constexpr bool has_denorm_loss = false;
+    static constexpr bool is_iec559 = false;
+    static constexpr bool is_bounded = false;
+    static constexpr bool is_modulo = false;
+    static constexpr bool traps = false;
+    static constexpr bool tinyness_before = false;
+    static constexpr int digits = 0;
+    static constexpr int digits10 = 0;
+    static constexpr int max_digits10 = 0;
+    static constexpr int radix = 0;
+    static constexpr int min_exponent = 0;
+    static constexpr int min_exponent10 = 0;
+    static constexpr int max_exponent = 0;
+    static constexpr int max_exponent10 = 0;
+
+    static constexpr T min() noexcept { return T(); }
+    static constexpr T max() noexcept { return T(); }
+    static constexpr T lowest() noexcept { return T(); }
+    static constexpr T epsilon() noexcept { return T(); }
+    static constexpr T round_error() noexcept { return T(); }
+    static constexpr T infinity() noexcept { return T(); }
+    static constexpr T quiet_NaN() noexcept { return T(); }
+    static constexpr T signaling_NaN() noexcept { return T(); }
+    static constexpr T denorm_min() noexcept { return T(); }
+};
+
+// Specialization for bool
+template<>
+class numeric_limits<bool> {
+public:
+    static constexpr bool is_specialized = true;
+    static constexpr bool is_signed = false;
+    static constexpr bool is_integer = true;
+    static constexpr int digits = 1;
+    static constexpr int digits10 = 0;
+
+    static constexpr bool min() noexcept { return false; }
+    static constexpr bool max() noexcept { return true; }
+    static constexpr bool lowest() noexcept { return false; }
+};
+
+// Specialization for char
+template<>
+class numeric_limits<char> {
+public:
+    static constexpr bool is_specialized = true;
+    static constexpr bool is_signed = true;
+    static constexpr bool is_integer = true;
+    static constexpr int digits = 7;
+    static constexpr int digits10 = 2;
+
+    static constexpr char min() noexcept { return -128; }
+    static constexpr char max() noexcept { return 127; }
+    static constexpr char lowest() noexcept { return -128; }
+};
+
+// Specialization for signed char
+template<>
+class numeric_limits<signed char> {
+public:
+    static constexpr bool is_specialized = true;
+    static constexpr bool is_signed = true;
+    static constexpr bool is_integer = true;
+    static constexpr int digits = 7;
+    static constexpr int digits10 = 2;
+
+    static constexpr signed char min() noexcept { return -128; }
+    static constexpr signed char max() noexcept { return 127; }
+    static constexpr signed char lowest() noexcept { return -128; }
+};
+
+// Specialization for unsigned char
+template<>
+class numeric_limits<unsigned char> {
+public:
+    static constexpr bool is_specialized = true;
+    static constexpr bool is_signed = false;
+    static constexpr bool is_integer = true;
+    static constexpr int digits = 8;
+    static constexpr int digits10 = 2;
+
+    static constexpr unsigned char min() noexcept { return 0; }
+    static constexpr unsigned char max() noexcept { return 255; }
+    static constexpr unsigned char lowest() noexcept { return 0; }
+};
+
+// Specialization for short
+template<>
+class numeric_limits<short> {
+public:
+    static constexpr bool is_specialized = true;
+    static constexpr bool is_signed = true;
+    static constexpr bool is_integer = true;
+    static constexpr int digits = 15;
+    static constexpr int digits10 = 4;
+
+    static constexpr short min() noexcept { return -32768; }
+    static constexpr short max() noexcept { return 32767; }
+    static constexpr short lowest() noexcept { return -32768; }
+};
+
+// Specialization for unsigned short
+template<>
+class numeric_limits<unsigned short> {
+public:
+    static constexpr bool is_specialized = true;
+    static constexpr bool is_signed = false;
+    static constexpr bool is_integer = true;
+    static constexpr int digits = 16;
+    static constexpr int digits10 = 4;
+
+    static constexpr unsigned short min() noexcept { return 0; }
+    static constexpr unsigned short max() noexcept { return 65535; }
+    static constexpr unsigned short lowest() noexcept { return 0; }
+};
+
+// Specialization for int
+template<>
+class numeric_limits<int> {
+public:
+    static constexpr bool is_specialized = true;
+    static constexpr bool is_signed = true;
+    static constexpr bool is_integer = true;
+    static constexpr int digits = 31;
+    static constexpr int digits10 = 9;
+
+    static constexpr int min() noexcept { return -2147483648; }
+    static constexpr int max() noexcept { return 2147483647; }
+    static constexpr int lowest() noexcept { return -2147483648; }
+};
+
+// Specialization for unsigned int
+template<>
+class numeric_limits<unsigned int> {
+public:
+    static constexpr bool is_specialized = true;
+    static constexpr bool is_signed = false;
+    static constexpr bool is_integer = true;
+    static constexpr int digits = 32;
+    static constexpr int digits10 = 9;
+
+    static constexpr unsigned int min() noexcept { return 0; }
+    static constexpr unsigned int max() noexcept { return 4294967295U; }
+    static constexpr unsigned int lowest() noexcept { return 0; }
+};
+
+// Specialization for long
+template<>
+class numeric_limits<long> {
+public:
+    static constexpr bool is_specialized = true;
+    static constexpr bool is_signed = true;
+    static constexpr bool is_integer = true;
+    static constexpr int digits = 63;
+    static constexpr int digits10 = 18;
+
+    static constexpr long min() noexcept { return -9223372036854775807L - 1; }
+    static constexpr long max() noexcept { return 9223372036854775807L; }
+    static constexpr long lowest() noexcept { return -9223372036854775807L - 1; }
+};
+
+// Specialization for unsigned long
+template<>
+class numeric_limits<unsigned long> {
+public:
+    static constexpr bool is_specialized = true;
+    static constexpr bool is_signed = false;
+    static constexpr bool is_integer = true;
+    static constexpr int digits = 64;
+    static constexpr int digits10 = 19;
+
+    static constexpr unsigned long min() noexcept { return 0; }
+    static constexpr unsigned long max() noexcept { return 18446744073709551615UL; }
+    static constexpr unsigned long lowest() noexcept { return 0; }
+};
+
+// Specialization for long long
+template<>
+class numeric_limits<long long> {
+public:
+    static constexpr bool is_specialized = true;
+    static constexpr bool is_signed = true;
+    static constexpr bool is_integer = true;
+    static constexpr int digits = 63;
+    static constexpr int digits10 = 18;
+
+    static constexpr long long min() noexcept { return -9223372036854775807LL - 1; }
+    static constexpr long long max() noexcept { return 9223372036854775807LL; }
+    static constexpr long long lowest() noexcept { return -9223372036854775807LL - 1; }
+};
+
+// Specialization for unsigned long long
+template<>
+class numeric_limits<unsigned long long> {
+public:
+    static constexpr bool is_specialized = true;
+    static constexpr bool is_signed = false;
+    static constexpr bool is_integer = true;
+    static constexpr int digits = 64;
+    static constexpr int digits10 = 19;
+
+    static constexpr unsigned long long min() noexcept { return 0; }
+    static constexpr unsigned long long max() noexcept { return 18446744073709551615ULL; }
+    static constexpr unsigned long long lowest() noexcept { return 0; }
+};
+
+// Specialization for float
+template<>
+class numeric_limits<float> {
+public:
+    static constexpr bool is_specialized = true;
+    static constexpr bool is_signed = true;
+    static constexpr bool is_integer = false;
+    static constexpr bool is_exact = false;
+    static constexpr bool has_infinity = true;
+    static constexpr bool has_quiet_NaN = true;
+    static constexpr bool is_iec559 = true;
+    static constexpr int digits = 24;
+    static constexpr int digits10 = 6;
+    static constexpr int max_digits10 = 9;
+
+    static constexpr float min() noexcept { return 1.17549435e-38F; }
+    static constexpr float max() noexcept { return 3.40282347e+38F; }
+    static constexpr float lowest() noexcept { return -3.40282347e+38F; }
+    static constexpr float epsilon() noexcept { return 1.19209290e-07F; }
+    static constexpr float infinity() noexcept { return __builtin_huge_valf(); }
+    static constexpr float quiet_NaN() noexcept { return __builtin_nanf(""); }
+};
+
+// Specialization for double
+template<>
+class numeric_limits<double> {
+public:
+    static constexpr bool is_specialized = true;
+    static constexpr bool is_signed = true;
+    static constexpr bool is_integer = false;
+    static constexpr bool is_exact = false;
+    static constexpr bool has_infinity = true;
+    static constexpr bool has_quiet_NaN = true;
+    static constexpr bool is_iec559 = true;
+    static constexpr int digits = 53;
+    static constexpr int digits10 = 15;
+    static constexpr int max_digits10 = 17;
+
+    static constexpr double min() noexcept { return 2.2250738585072014e-308; }
+    static constexpr double max() noexcept { return 1.7976931348623157e+308; }
+    static constexpr double lowest() noexcept { return -1.7976931348623157e+308; }
+    static constexpr double epsilon() noexcept { return 2.2204460492503131e-16; }
+    static constexpr double infinity() noexcept { return __builtin_huge_val(); }
+    static constexpr double quiet_NaN() noexcept { return __builtin_nan(""); }
+};
+
+// Specialization for long double
+template<>
+class numeric_limits<long double> {
+public:
+    static constexpr bool is_specialized = true;
+    static constexpr bool is_signed = true;
+    static constexpr bool is_integer = false;
+    static constexpr bool is_exact = false;
+    static constexpr bool has_infinity = true;
+    static constexpr bool has_quiet_NaN = true;
+    static constexpr bool is_iec559 = true;
+    static constexpr int digits = 64;
+    static constexpr int digits10 = 18;
+    static constexpr int max_digits10 = 21;
+
+    static constexpr long double min() noexcept { return 3.36210314311209350626e-4932L; }
+    static constexpr long double max() noexcept { return 1.18973149535723176502e+4932L; }
+    static constexpr long double lowest() noexcept { return -1.18973149535723176502e+4932L; }
+    static constexpr long double epsilon() noexcept { return 1.08420217248550443401e-19L; }
+    static constexpr long double infinity() noexcept { return __builtin_huge_vall(); }
+    static constexpr long double quiet_NaN() noexcept { return __builtin_nanl(""); }
+};
+
+} // namespace std
+
+#endif // _FRAGILE_LIMITS_

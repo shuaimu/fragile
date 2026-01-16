@@ -1,0 +1,65 @@
+// Minimal sstream stub for fragile parsing
+#ifndef _FRAGILE_SSTREAM_
+#define _FRAGILE_SSTREAM_
+
+#include "cstdint"
+#include "string"
+
+namespace std {
+
+// Basic streambuf stub
+template<typename CharT, typename Traits = void>
+class basic_streambuf {
+public:
+    virtual ~basic_streambuf() = default;
+};
+
+// Basic stringstream
+template<typename CharT, typename Traits = void, typename Allocator = void>
+class basic_stringstream {
+public:
+    using string_type = basic_string<CharT>;
+
+    basic_stringstream() = default;
+    explicit basic_stringstream(const string_type& str) { (void)str; }
+
+    string_type str() const { return string_type(); }
+    void str(const string_type& s) { (void)s; }
+
+    basic_stringstream& operator<<(const char* s) { (void)s; return *this; }
+    basic_stringstream& operator<<(const string_type& s) { (void)s; return *this; }
+    basic_stringstream& operator<<(int n) { (void)n; return *this; }
+    basic_stringstream& operator<<(long n) { (void)n; return *this; }
+    basic_stringstream& operator<<(long long n) { (void)n; return *this; }
+    basic_stringstream& operator<<(unsigned int n) { (void)n; return *this; }
+    basic_stringstream& operator<<(unsigned long n) { (void)n; return *this; }
+    basic_stringstream& operator<<(unsigned long long n) { (void)n; return *this; }
+    basic_stringstream& operator<<(double n) { (void)n; return *this; }
+    basic_stringstream& operator<<(float n) { (void)n; return *this; }
+    basic_stringstream& operator<<(bool b) { (void)b; return *this; }
+    basic_stringstream& operator<<(void* p) { (void)p; return *this; }
+};
+
+template<typename CharT, typename Traits = void, typename Allocator = void>
+class basic_ostringstream : public basic_stringstream<CharT, Traits, Allocator> {
+public:
+    using basic_stringstream<CharT, Traits, Allocator>::basic_stringstream;
+};
+
+template<typename CharT, typename Traits = void, typename Allocator = void>
+class basic_istringstream : public basic_stringstream<CharT, Traits, Allocator> {
+public:
+    using basic_stringstream<CharT, Traits, Allocator>::basic_stringstream;
+};
+
+using stringstream = basic_stringstream<char>;
+using ostringstream = basic_ostringstream<char>;
+using istringstream = basic_istringstream<char>;
+
+using wstringstream = basic_stringstream<wchar_t>;
+using wostringstream = basic_ostringstream<wchar_t>;
+using wistringstream = basic_istringstream<wchar_t>;
+
+} // namespace std
+
+#endif // _FRAGILE_SSTREAM_

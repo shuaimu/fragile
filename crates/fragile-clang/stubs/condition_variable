@@ -1,0 +1,142 @@
+// Minimal condition_variable stub for fragile parsing
+#ifndef _FRAGILE_CONDITION_VARIABLE_
+#define _FRAGILE_CONDITION_VARIABLE_
+
+#include "mutex"
+#include "chrono"
+
+namespace std {
+
+// cv_status for timed waits
+enum class cv_status {
+    no_timeout,
+    timeout
+};
+
+class condition_variable {
+public:
+    condition_variable() = default;
+    ~condition_variable() = default;
+
+    condition_variable(const condition_variable&) = delete;
+    condition_variable& operator=(const condition_variable&) = delete;
+
+    // Notify one waiting thread
+    void notify_one() noexcept {}
+
+    // Notify all waiting threads
+    void notify_all() noexcept {}
+
+    // Wait unconditionally
+    void wait(unique_lock<mutex>& lock) {}
+
+    // Wait with predicate
+    template<typename Predicate>
+    void wait(unique_lock<mutex>& lock, Predicate pred) {
+        while (!pred()) {
+            wait(lock);
+        }
+    }
+
+    // Wait until time point
+    template<typename Clock, typename Duration>
+    cv_status wait_until(unique_lock<mutex>& lock,
+                         const chrono::time_point<Clock, Duration>& abs_time) {
+        return cv_status::no_timeout;
+    }
+
+    // Wait until time point with predicate
+    template<typename Clock, typename Duration, typename Predicate>
+    bool wait_until(unique_lock<mutex>& lock,
+                    const chrono::time_point<Clock, Duration>& abs_time,
+                    Predicate pred) {
+        while (!pred()) {
+            if (wait_until(lock, abs_time) == cv_status::timeout) {
+                return pred();
+            }
+        }
+        return true;
+    }
+
+    // Wait for duration
+    template<typename Rep, typename Period>
+    cv_status wait_for(unique_lock<mutex>& lock,
+                       const chrono::duration<Rep, Period>& rel_time) {
+        return cv_status::no_timeout;
+    }
+
+    // Wait for duration with predicate
+    template<typename Rep, typename Period, typename Predicate>
+    bool wait_for(unique_lock<mutex>& lock,
+                  const chrono::duration<Rep, Period>& rel_time,
+                  Predicate pred) {
+        return wait_until(lock,
+                          chrono::steady_clock::now() + rel_time,
+                          static_cast<Predicate&&>(pred));
+    }
+
+    using native_handle_type = void*;
+    native_handle_type native_handle() { return nullptr; }
+};
+
+class condition_variable_any {
+public:
+    condition_variable_any() = default;
+    ~condition_variable_any() = default;
+
+    condition_variable_any(const condition_variable_any&) = delete;
+    condition_variable_any& operator=(const condition_variable_any&) = delete;
+
+    void notify_one() noexcept {}
+    void notify_all() noexcept {}
+
+    template<typename Lock>
+    void wait(Lock& lock) {}
+
+    template<typename Lock, typename Predicate>
+    void wait(Lock& lock, Predicate pred) {
+        while (!pred()) {
+            wait(lock);
+        }
+    }
+
+    template<typename Lock, typename Clock, typename Duration>
+    cv_status wait_until(Lock& lock,
+                         const chrono::time_point<Clock, Duration>& abs_time) {
+        return cv_status::no_timeout;
+    }
+
+    template<typename Lock, typename Clock, typename Duration, typename Predicate>
+    bool wait_until(Lock& lock,
+                    const chrono::time_point<Clock, Duration>& abs_time,
+                    Predicate pred) {
+        while (!pred()) {
+            if (wait_until(lock, abs_time) == cv_status::timeout) {
+                return pred();
+            }
+        }
+        return true;
+    }
+
+    template<typename Lock, typename Rep, typename Period>
+    cv_status wait_for(Lock& lock,
+                       const chrono::duration<Rep, Period>& rel_time) {
+        return cv_status::no_timeout;
+    }
+
+    template<typename Lock, typename Rep, typename Period, typename Predicate>
+    bool wait_for(Lock& lock,
+                  const chrono::duration<Rep, Period>& rel_time,
+                  Predicate pred) {
+        return wait_until(lock,
+                          chrono::steady_clock::now() + rel_time,
+                          static_cast<Predicate&&>(pred));
+    }
+};
+
+// Helper for notifying on scope exit
+void notify_all_at_thread_exit(condition_variable& cond, unique_lock<mutex> lock);
+
+} // namespace std
+
+#endif // _FRAGILE_CONDITION_VARIABLE_

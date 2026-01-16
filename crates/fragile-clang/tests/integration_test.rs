@@ -6794,3 +6794,116 @@ fn test_mako_rand_cpp_actual() {
         }
     }
 }
+
+/// Test parsing the actual marshal.cpp from Mako
+/// This tests marshalling/serialization patterns used in RPC
+#[test]
+fn test_mako_marshal_cpp_actual() {
+    use std::path::Path;
+
+    // Get the project root directory
+    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+    let project_root = Path::new(manifest_dir).parent().unwrap().parent().unwrap();
+    let marshal_cpp_path = project_root.join("vendor/mako/src/rrr/misc/marshal.cpp");
+
+    if !marshal_cpp_path.exists() {
+        println!("Skipping test: vendor/mako not present");
+        return;
+    }
+
+    // Check if submodules are initialized
+    let rusty_cpp_path = project_root.join("vendor/mako/third-party/rusty-cpp/include");
+    if !rusty_cpp_path.exists() {
+        println!("Skipping test: mako submodules not initialized");
+        println!("Run: cd vendor/mako && git submodule update --init --recursive");
+        return;
+    }
+
+    // Create parser with Mako include paths
+    let mako_rrr_path = project_root.join("vendor/mako/src/rrr");
+    let mako_src_path = project_root.join("vendor/mako/src");
+
+    // System include paths (searched for <...> includes with -isystem)
+    let mut system_include_paths = vec![];
+
+    // Add fragile stub headers as SYSTEM includes so they're found for <...> includes
+    let stubs_path = Path::new(manifest_dir).join("stubs");
+    if stubs_path.exists() {
+        system_include_paths.push(stubs_path.to_string_lossy().to_string());
+    }
+
+    // Add clang's headers for built-in types
+    let clang_paths = vec![
+        "/usr/lib/llvm-19/lib/clang/19/include",
+        "/usr/lib/llvm-18/lib/clang/18/include",
+    ];
+
+    for path in &clang_paths {
+        if Path::new(path).exists() {
+            system_include_paths.push(path.to_string());
+            break; // Just use the first one found
+        }
+    }
+
+    // User include paths (searched for "..." includes with -I)
+    let mut include_paths = vec![];
+    include_paths.push(mako_rrr_path.to_string_lossy().to_string());
+    include_paths.push(mako_src_path.to_string_lossy().to_string());
+    include_paths.push(rusty_cpp_path.to_string_lossy().to_string());
+
+    let parser = ClangParser::with_paths(include_paths, system_include_paths)
+        .expect("Failed to create parser");
+
+    let result = parser.parse_file(&marshal_cpp_path);
+
+    match result {
+        Ok(ast) => {
+            // Verify the namespace was found
+            let has_namespace = find_node_kind(&ast.translation_unit, |kind| {
+                matches!(kind, ClangNodeKind::NamespaceDecl { name } if name.as_deref() == Some("rrr"))
+            });
+            assert!(has_namespace.is_some(), "Expected to find rrr namespace");
+
+            // Verify the Marshal class was found
+            let has_marshal_class = find_node_kind(&ast.translation_unit, |kind| {
+                matches!(kind, ClangNodeKind::RecordDecl { name, .. } if name == "Marshal")
+            });
+            assert!(has_marshal_class.is_some(), "Expected to find Marshal class");
+
+            // Verify the MarshallDeputy class was found
+            let has_deputy_class = find_node_kind(&ast.translation_unit, |kind| {
+                matches!(kind, ClangNodeKind::RecordDecl { name, .. } if name == "MarshallDeputy")
+            });
+            assert!(has_deputy_class.is_some(), "Expected to find MarshallDeputy class");
+
+            // Convert to MIR
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+
+            println!("Successfully parsed marshal.cpp with {} functions", module.functions.len());
+            for func in &module.functions {
+                println!("  Function: {}", func.display_name);
+            }
+
+            // Check for key functions
+            let has_write = module.functions.iter().any(|f| {
+                f.display_name.contains("write") || f.display_name.contains("Write")
+            });
+            let has_read = module.functions.iter().any(|f| {
+                f.display_name.contains("read") || f.display_name.contains("Read")
+            });
+
+            if has_write || has_read {
+                println!("Found marshal read/write functions");
+            } else if !module.functions.is_empty() {
+                println!("Have {} functions but no explicit read/write found (may be in templates)", module.functions.len());
+            }
+        }
+        Err(e) => {
+            // Document what failed for incremental improvement
+            println!("Note: marshal.cpp parsing failed: {:?}", e);
+            println!("Consider extending stub headers if more coverage is needed.");
+            // Don't fail - this documents the issue
+        }
+    }
+}

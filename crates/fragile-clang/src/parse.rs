@@ -13,8 +13,10 @@ use std::ptr;
 /// Parser that uses libclang to parse C++ source files.
 pub struct ClangParser {
     index: clang_sys::CXIndex,
-    /// Additional include paths for header files
+    /// Additional include paths for header files (searched with -I)
     include_paths: Vec<String>,
+    /// System include paths (searched with -isystem for angle-bracket includes)
+    system_include_paths: Vec<String>,
 }
 
 impl ClangParser {
@@ -25,6 +27,13 @@ impl ClangParser {
 
     /// Create a new Clang parser with custom include paths.
     pub fn with_include_paths(include_paths: Vec<String>) -> Result<Self> {
+        Self::with_paths(include_paths, Vec::new())
+    }
+
+    /// Create a new Clang parser with both regular and system include paths.
+    /// System paths use -isystem and are searched for angle-bracket includes (<...>).
+    /// Regular paths use -I and are searched for quoted includes ("...").
+    pub fn with_paths(include_paths: Vec<String>, system_include_paths: Vec<String>) -> Result<Self> {
         unsafe {
             let index = clang_sys::clang_createIndex(0, 0);
             if index.is_null() {
@@ -33,6 +42,7 @@ impl ClangParser {
             Ok(Self {
                 index,
                 include_paths,
+                system_include_paths,
             })
         }
     }
@@ -89,7 +99,19 @@ impl ClangParser {
             CString::new("-ftemplate-depth=1024").unwrap(),
         ];
 
-        // Add include paths - user paths first
+        // If we have system include paths configured, disable the default C++ includes
+        // so our stubs are used instead of system headers
+        if !self.system_include_paths.is_empty() {
+            args.push(CString::new("-nostdinc++").unwrap());
+        }
+
+        // Add system include paths first (-isystem for angle-bracket includes)
+        for path in &self.system_include_paths {
+            args.push(CString::new("-isystem").unwrap());
+            args.push(CString::new(path.as_str()).unwrap());
+        }
+
+        // Add user include paths (-I for quoted includes)
         for path in &self.include_paths {
             args.push(CString::new(format!("-I{}", path)).unwrap());
         }

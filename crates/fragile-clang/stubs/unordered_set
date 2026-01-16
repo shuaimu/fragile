@@ -1,0 +1,255 @@
+// Minimal unordered_set stub for fragile parsing
+#ifndef _FRAGILE_UNORDERED_SET_
+#define _FRAGILE_UNORDERED_SET_
+
+#include "cstdint"
+#include "utility"
+#include "functional"
+#include "initializer_list"
+
+namespace std {
+
+template<typename Key, typename Hash = hash<Key>,
+         typename KeyEqual = equal_to<Key>, typename Allocator = void>
+class unordered_set {
+public:
+    using key_type = Key;
+    using value_type = Key;
+    using size_type = size_t;
+    using difference_type = long;
+    using hasher = Hash;
+    using key_equal = KeyEqual;
+    using reference = value_type&;
+    using const_reference = const value_type&;
+
+private:
+    static constexpr size_type BUCKET_COUNT = 16;
+
+    struct node {
+        value_type data;
+        node* next;
+        node(const Key& k) : data(k), next(nullptr) {}
+    };
+
+    node* buckets_[BUCKET_COUNT] = {};
+    size_type size_ = 0;
+    hasher hash_;
+    key_equal equal_;
+
+    size_type bucket_index(const Key& key) const {
+        return hash_(key) % BUCKET_COUNT;
+    }
+
+public:
+    class iterator {
+    public:
+        iterator() : set_(nullptr), bucket_(0), node_(nullptr) {}
+        iterator(unordered_set* s, size_type b, node* n) : set_(s), bucket_(b), node_(n) {}
+
+        const_reference operator*() const { return node_->data; }
+        const value_type* operator->() const { return &node_->data; }
+
+        iterator& operator++() {
+            if (node_->next) {
+                node_ = node_->next;
+            } else {
+                ++bucket_;
+                while (bucket_ < BUCKET_COUNT && !set_->buckets_[bucket_]) {
+                    ++bucket_;
+                }
+                node_ = bucket_ < BUCKET_COUNT ? set_->buckets_[bucket_] : nullptr;
+            }
+            return *this;
+        }
+
+        iterator operator++(int) { iterator tmp = *this; ++(*this); return tmp; }
+        bool operator==(const iterator& other) const { return node_ == other.node_; }
+        bool operator!=(const iterator& other) const { return node_ != other.node_; }
+
+    private:
+        unordered_set* set_;
+        size_type bucket_;
+        node* node_;
+        friend class unordered_set;
+    };
+
+    using const_iterator = iterator;
+
+    // Constructors
+    unordered_set() = default;
+
+    unordered_set(const unordered_set& other) {
+        for (const auto& v : other) insert(v);
+    }
+
+    unordered_set(unordered_set&& other) noexcept : size_(other.size_) {
+        for (size_type i = 0; i < BUCKET_COUNT; ++i) {
+            buckets_[i] = other.buckets_[i];
+            other.buckets_[i] = nullptr;
+        }
+        other.size_ = 0;
+    }
+
+    unordered_set(std::initializer_list<value_type> init) {
+        for (const auto& v : init) insert(v);
+    }
+
+    template<typename InputIt>
+    unordered_set(InputIt first, InputIt last) {
+        for (; first != last; ++first) insert(*first);
+    }
+
+    ~unordered_set() { clear(); }
+
+    // Assignment
+    unordered_set& operator=(const unordered_set& other) {
+        if (this != &other) {
+            clear();
+            for (const auto& v : other) insert(v);
+        }
+        return *this;
+    }
+
+    unordered_set& operator=(unordered_set&& other) noexcept {
+        if (this != &other) {
+            clear();
+            for (size_type i = 0; i < BUCKET_COUNT; ++i) {
+                buckets_[i] = other.buckets_[i];
+                other.buckets_[i] = nullptr;
+            }
+            size_ = other.size_;
+            other.size_ = 0;
+        }
+        return *this;
+    }
+
+    // Iterators
+    iterator begin() noexcept {
+        for (size_type i = 0; i < BUCKET_COUNT; ++i) {
+            if (buckets_[i]) return iterator(this, i, buckets_[i]);
+        }
+        return end();
+    }
+
+    const_iterator begin() const noexcept {
+        for (size_type i = 0; i < BUCKET_COUNT; ++i) {
+            if (buckets_[i]) return const_iterator(const_cast<unordered_set*>(this), i, buckets_[i]);
+        }
+        return end();
+    }
+
+    const_iterator cbegin() const noexcept { return begin(); }
+    iterator end() noexcept { return iterator(this, BUCKET_COUNT, nullptr); }
+    const_iterator end() const noexcept { return const_iterator(const_cast<unordered_set*>(this), BUCKET_COUNT, nullptr); }
+    const_iterator cend() const noexcept { return end(); }
+
+    // Capacity
+    bool empty() const noexcept { return size_ == 0; }
+    size_type size() const noexcept { return size_; }
+
+    // Modifiers
+    void clear() noexcept {
+        for (size_type i = 0; i < BUCKET_COUNT; ++i) {
+            node* n = buckets_[i];
+            while (n) {
+                node* next = n->next;
+                delete n;
+                n = next;
+            }
+            buckets_[i] = nullptr;
+        }
+        size_ = 0;
+    }
+
+    pair<iterator, bool> insert(const value_type& value) {
+        size_type idx = bucket_index(value);
+        node* n = buckets_[idx];
+        while (n) {
+            if (equal_(n->data, value)) {
+                return make_pair(iterator(this, idx, n), false);
+            }
+            n = n->next;
+        }
+        node* new_node = new node(value);
+        new_node->next = buckets_[idx];
+        buckets_[idx] = new_node;
+        ++size_;
+        return make_pair(iterator(this, idx, new_node), true);
+    }
+
+    template<typename... Args>
+    pair<iterator, bool> emplace(Args&&... args) {
+        return insert(value_type(static_cast<Args&&>(args)...));
+    }
+
+    iterator erase(const_iterator pos) {
+        size_type idx = bucket_index(*pos);
+        node* prev = nullptr;
+        node* n = buckets_[idx];
+        while (n && !equal_(n->data, *pos)) {
+            prev = n;
+            n = n->next;
+        }
+        if (n) {
+            if (prev) prev->next = n->next;
+            else buckets_[idx] = n->next;
+            delete n;
+            --size_;
+        }
+        return end();
+    }
+
+    size_type erase(const Key& key) {
+        auto it = find(key);
+        if (it != end()) {
+            erase(it);
+            return 1;
+        }
+        return 0;
+    }
+
+    // Lookup
+    iterator find(const Key& key) {
+        size_type idx = bucket_index(key);
+        node* n = buckets_[idx];
+        while (n) {
+            if (equal_(n->data, key)) {
+                return iterator(this, idx, n);
+            }
+            n = n->next;
+        }
+        return end();
+    }
+
+    const_iterator find(const Key& key) const {
+        size_type idx = bucket_index(key);
+        node* n = buckets_[idx];
+        while (n) {
+            if (equal_(n->data, key)) {
+                return const_iterator(const_cast<unordered_set*>(this), idx, n);
+            }
+            n = n->next;
+        }
+        return end();
+    }
+
+    size_type count(const Key& key) const {
+        return find(key) != end() ? 1 : 0;
+    }
+
+    // Hash policy
+    float load_factor() const { return static_cast<float>(size_) / BUCKET_COUNT; }
+    size_type bucket_count() const noexcept { return BUCKET_COUNT; }
+};
+
+// unordered_multiset (minimal stub)
+template<typename Key, typename Hash = hash<Key>,
+         typename KeyEqual = equal_to<Key>, typename Allocator = void>
+class unordered_multiset : public unordered_set<Key, Hash, KeyEqual, Allocator> {
+public:
+    using unordered_set<Key, Hash, KeyEqual, Allocator>::unordered_set;
+};
+
+} // namespace std
+
+#endif // _FRAGILE_UNORDERED_SET_

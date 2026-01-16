@@ -1,0 +1,135 @@
+// Minimal cstdio stub for fragile parsing
+#ifndef _FRAGILE_CSTDIO_
+#define _FRAGILE_CSTDIO_
+
+#include "cstdint"
+
+// FILE type (opaque)
+struct FILE;
+
+// Standard streams
+extern FILE* stdin;
+extern FILE* stdout;
+extern FILE* stderr;
+
+// Buffer size macros
+#define BUFSIZ 8192
+#define EOF (-1)
+#define FOPEN_MAX 16
+#define FILENAME_MAX 4096
+#define L_tmpnam 20
+#define TMP_MAX 238328
+
+// Seek origins
+#define SEEK_SET 0
+#define SEEK_CUR 1
+#define SEEK_END 2
+
+// fpos_t type
+typedef long fpos_t;
+
+namespace std {
+
+using ::FILE;
+using ::fpos_t;
+
+// File operations
+FILE* fopen(const char* filename, const char* mode);
+FILE* freopen(const char* filename, const char* mode, FILE* stream);
+int fclose(FILE* stream);
+int fflush(FILE* stream);
+void setbuf(FILE* stream, char* buffer);
+int setvbuf(FILE* stream, char* buffer, int mode, size_t size);
+
+// Wide character file operations
+FILE* wfopen(const wchar_t* filename, const wchar_t* mode);
+
+// Direct input/output
+size_t fread(void* buffer, size_t size, size_t count, FILE* stream);
+size_t fwrite(const void* buffer, size_t size, size_t count, FILE* stream);
+
+// Character input/output
+int fgetc(FILE* stream);
+int getc(FILE* stream);
+char* fgets(char* str, int count, FILE* stream);
+int fputc(int ch, FILE* stream);
+int putc(int ch, FILE* stream);
+int fputs(const char* str, FILE* stream);
+int getchar();
+int putchar(int ch);
+int puts(const char* str);
+int ungetc(int ch, FILE* stream);
+
+// Formatted input/output
+int scanf(const char* format, ...);
+int fscanf(FILE* stream, const char* format, ...);
+int sscanf(const char* buffer, const char* format, ...);
+int printf(const char* format, ...);
+int fprintf(FILE* stream, const char* format, ...);
+int sprintf(char* buffer, const char* format, ...);
+int snprintf(char* buffer, size_t buf_size, const char* format, ...);
+
+// vprintf family
+int vprintf(const char* format, __builtin_va_list vlist);
+int vfprintf(FILE* stream, const char* format, __builtin_va_list vlist);
+int vsprintf(char* buffer, const char* format, __builtin_va_list vlist);
+int vsnprintf(char* buffer, size_t buf_size, const char* format, __builtin_va_list vlist);
+int vscanf(const char* format, __builtin_va_list vlist);
+int vfscanf(FILE* stream, const char* format, __builtin_va_list vlist);
+int vsscanf(const char* buffer, const char* format, __builtin_va_list vlist);
+
+// File positioning
+long ftell(FILE* stream);
+int fgetpos(FILE* stream, fpos_t* pos);
+int fseek(FILE* stream, long offset, int origin);
+int fsetpos(FILE* stream, const fpos_t* pos);
+void rewind(FILE* stream);
+
+// Error handling
+void clearerr(FILE* stream);
+int feof(FILE* stream);
+int ferror(FILE* stream);
+void perror(const char* str);
+
+// File operations
+int remove(const char* filename);
+int rename(const char* old_filename, const char* new_filename);
+FILE* tmpfile();
+char* tmpnam(char* filename);
+
+} // namespace std
+
+// C-style global functions
+using std::fopen;
+using std::freopen;
+using std::fclose;
+using std::fflush;
+using std::fread;
+using std::fwrite;
+using std::fgetc;
+using std::getc;
+using std::fgets;
+using std::fputc;
+using std::putc;
+using std::fputs;
+using std::getchar;
+using std::putchar;
+using std::puts;
+using std::ungetc;
+using std::scanf;
+using std::fscanf;
+using std::sscanf;
+using std::printf;
+using std::fprintf;
+using std::sprintf;
+using std::snprintf;
+using std::ftell;
+using std::fseek;
+using std::rewind;
+using std::feof;
+using std::ferror;
+using std::perror;
+using std::remove;
+using std::rename;
+
+#endif // _FRAGILE_CSTDIO_

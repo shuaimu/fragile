@@ -1,0 +1,47 @@
+// Minimal initializer_list stub for fragile parsing
+#ifndef _FRAGILE_INITIALIZER_LIST_
+#define _FRAGILE_INITIALIZER_LIST_
+
+#include "cstdint"
+
+namespace std {
+
+template<typename T>
+class initializer_list {
+public:
+    using value_type = T;
+    using reference = const T&;
+    using const_reference = const T&;
+    using size_type = size_t;
+    using iterator = const T*;
+    using const_iterator = const T*;
+
+    constexpr initializer_list() noexcept : begin_(nullptr), size_(0) {}
+
+    constexpr size_type size() const noexcept { return size_; }
+    constexpr const_iterator begin() const noexcept { return begin_; }
+    constexpr const_iterator end() const noexcept { return begin_ + size_; }
+
+private:
+    // These are initialized by the compiler
+    iterator begin_;
+    size_type size_;
+
+    // Private constructor used by compiler
+    constexpr initializer_list(const_iterator b, size_type s) noexcept
+        : begin_(b), size_(s) {}
+};
+
+template<typename T>
+constexpr const T* begin(initializer_list<T> il) noexcept {
+    return il.begin();
+}
+
+template<typename T>
+constexpr const T* end(initializer_list<T> il) noexcept {
+    return il.end();
+}
+
+} // namespace std
+
+#endif // _FRAGILE_INITIALIZER_LIST_

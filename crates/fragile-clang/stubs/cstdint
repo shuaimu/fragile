@@ -4,6 +4,12 @@
 #ifndef _FRAGILE_CSTDINT_
 #define _FRAGILE_CSTDINT_
 
+// nullptr_t needs to be defined before other types
+namespace std {
+    using nullptr_t = decltype(nullptr);
+}
+using nullptr_t = std::nullptr_t;
+
 namespace std {
     using int8_t = signed char;
     using int16_t = short;

@@ -1,0 +1,104 @@
+// Minimal utility stub for fragile parsing
+#ifndef _FRAGILE_UTILITY_
+#define _FRAGILE_UTILITY_
+
+#include "cstdint"
+#include "type_traits"
+
+namespace std {
+
+// move
+template<typename T>
+constexpr remove_reference_t<T>&& move(T&& t) noexcept {
+    return static_cast<remove_reference_t<T>&&>(t);
+}
+
+// forward
+template<typename T>
+constexpr T&& forward(remove_reference_t<T>& t) noexcept {
+    return static_cast<T&&>(t);
+}
+
+template<typename T>
+constexpr T&& forward(remove_reference_t<T>&& t) noexcept {
+    return static_cast<T&&>(t);
+}
+
+// pair
+template<typename T1, typename T2>
+struct pair {
+    using first_type = T1;
+    using second_type = T2;
+
+    T1 first;
+    T2 second;
+
+    pair() : first(), second() {}
+    pair(const T1& a, const T2& b) : first(a), second(b) {}
+
+    template<typename U1, typename U2>
+    pair(U1&& a, U2&& b) : first(static_cast<U1&&>(a)), second(static_cast<U2&&>(b)) {}
+
+    template<typename U1, typename U2>
+    pair(const pair<U1, U2>& p) : first(p.first), second(p.second) {}
+
+    template<typename U1, typename U2>
+    pair(pair<U1, U2>&& p) : first(static_cast<U1&&>(p.first)), second(static_cast<U2&&>(p.second)) {}
+
+    pair(const pair&) = default;
+    pair(pair&&) = default;
+    pair& operator=(const pair&) = default;
+    pair& operator=(pair&&) = default;
+
+    bool operator==(const pair& other) const {
+        return first == other.first && second == other.second;
+    }
+
+    bool operator!=(const pair& other) const {
+        return !(*this == other);
+    }
+
+    bool operator<(const pair& other) const {
+        return first < other.first || (!(other.first < first) && second < other.second);
+    }
+};
+
+// make_pair
+template<typename T1, typename T2>
+pair<T1, T2> make_pair(T1&& a, T2&& b) {
+    return pair<T1, T2>(static_cast<T1&&>(a), static_cast<T2&&>(b));
+}
+
+// swap
+template<typename T>
+void swap(T& a, T& b) noexcept {
+    T tmp = static_cast<T&&>(a);
+    a = static_cast<T&&>(b);
+    b = static_cast<T&&>(tmp);
+}
+
+// declval
+template<typename T>
+T&& declval() noexcept;
+
+// integer_sequence
+template<typename T, T... Ints>
+struct integer_sequence {
+    using value_type = T;
+    static constexpr size_t size() noexcept { return sizeof...(Ints); }
+};
+
+template<size_t... Ints>
+using index_sequence = integer_sequence<size_t, Ints...>;
+
+// exchange
+template<typename T, typename U = T>
+T exchange(T& obj, U&& new_value) {
+    T old_value = static_cast<T&&>(obj);
+    obj = static_cast<U&&>(new_value);
+    return old_value;
+}
+
+} // namespace std
+
+#endif // _FRAGILE_UTILITY_

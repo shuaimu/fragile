@@ -1,0 +1,141 @@
+// Minimal chrono stub for fragile parsing
+#ifndef _FRAGILE_CHRONO_
+#define _FRAGILE_CHRONO_
+
+#include "cstdint"
+
+namespace std {
+namespace chrono {
+
+// Duration
+template<typename Rep, typename Period = void>
+class duration {
+public:
+    using rep = Rep;
+    using period = Period;
+
+    constexpr duration() = default;
+    constexpr explicit duration(const Rep& r) : rep_(r) {}
+
+    template<typename Rep2, typename Period2>
+    constexpr duration(const duration<Rep2, Period2>& d) : rep_(static_cast<Rep>(d.count())) {}
+
+    constexpr rep count() const { return rep_; }
+
+    constexpr duration operator+() const { return *this; }
+    constexpr duration operator-() const { return duration(-rep_); }
+
+    duration& operator++() { ++rep_; return *this; }
+    duration operator++(int) { return duration(rep_++); }
+    duration& operator--() { --rep_; return *this; }
+    duration operator--(int) { return duration(rep_--); }
+
+    duration& operator+=(const duration& d) { rep_ += d.count(); return *this; }
+    duration& operator-=(const duration& d) { rep_ -= d.count(); return *this; }
+    duration& operator*=(const rep& r) { rep_ *= r; return *this; }
+    duration& operator/=(const rep& r) { rep_ /= r; return *this; }
+
+private:
+    rep rep_{};
+};
+
+// Common duration types
+using nanoseconds = duration<long long>;
+using microseconds = duration<long long>;
+using milliseconds = duration<long long>;
+using seconds = duration<long long>;
+using minutes = duration<long long>;
+using hours = duration<long long>;
+
+// duration_cast
+template<typename ToDuration, typename Rep, typename Period>
+constexpr ToDuration duration_cast(const duration<Rep, Period>& d) {
+    return ToDuration(static_cast<typename ToDuration::rep>(d.count()));
+}
+
+// Time point
+template<typename Clock, typename Duration = typename Clock::duration>
+class time_point {
+public:
+    using clock = Clock;
+    using duration = Duration;
+    using rep = typename duration::rep;
+    using period = typename duration::period;
+
+    constexpr time_point() : d_() {}
+    constexpr explicit time_point(const duration& d) : d_(d) {}
+
+    template<typename Duration2>
+    constexpr time_point(const time_point<Clock, Duration2>& t)
+        : d_(t.time_since_epoch()) {}
+
+    constexpr duration time_since_epoch() const { return d_; }
+
+    time_point& operator+=(const duration& d) { d_ += d; return *this; }
+    time_point& operator-=(const duration& d) { d_ -= d; return *this; }
+
+private:
+    duration d_;
+};
+
+// Clocks
+class system_clock {
+public:
+    using duration = chrono::milliseconds;
+    using rep = duration::rep;
+    using period = duration::period;
+    using time_point = chrono::time_point<system_clock>;
+
+    static constexpr bool is_steady = false;
+
+    static time_point now() noexcept { return time_point(); }
+};
+
+class steady_clock {
+public:
+    using duration = chrono::nanoseconds;
+    using rep = duration::rep;
+    using period = duration::period;
+    using time_point = chrono::time_point<steady_clock>;
+
+    static constexpr bool is_steady = true;
+
+    static time_point now() noexcept { return time_point(); }
+};
+
+class high_resolution_clock {
+public:
+    using duration = chrono::nanoseconds;
+    using rep = duration::rep;
+    using period = duration::period;
+    using time_point = chrono::time_point<high_resolution_clock>;
+
+    static constexpr bool is_steady = true;
+
+    static time_point now() noexcept { return time_point(); }
+};
+
+// Duration arithmetic operators (non-member)
+template<typename Rep1, typename Period1, typename Rep2, typename Period2>
+constexpr duration<long long> operator-(const duration<Rep1, Period1>& lhs,
+                                        const duration<Rep2, Period2>& rhs) {
+    return duration<long long>(lhs.count() - rhs.count());
+}
+
+template<typename Rep1, typename Period1, typename Rep2, typename Period2>
+constexpr duration<long long> operator+(const duration<Rep1, Period1>& lhs,
+                                        const duration<Rep2, Period2>& rhs) {
+    return duration<long long>(lhs.count() + rhs.count());
+}
+
+// Time point operators
+template<typename Clock, typename Dur1, typename Dur2>
+constexpr duration<long long> operator-(const time_point<Clock, Dur1>& lhs,
+                                        const time_point<Clock, Dur2>& rhs) {
+    return duration<long long>(lhs.time_since_epoch().count() - rhs.time_since_epoch().count());
+}
+
+} // namespace chrono
+} // namespace std
+
+#endif // _FRAGILE_CHRONO_

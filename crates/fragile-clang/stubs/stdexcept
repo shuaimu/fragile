@@ -1,0 +1,92 @@
+// Minimal stdexcept stub for fragile parsing
+#ifndef _FRAGILE_STDEXCEPT_
+#define _FRAGILE_STDEXCEPT_
+
+#include "string"
+
+namespace std {
+
+class exception {
+public:
+    exception() noexcept = default;
+    exception(const exception&) noexcept = default;
+    exception& operator=(const exception&) noexcept = default;
+    virtual ~exception() noexcept = default;
+    virtual const char* what() const noexcept { return "exception"; }
+};
+
+class logic_error : public exception {
+public:
+    explicit logic_error(const string& what_arg) : msg_(what_arg) {}
+    explicit logic_error(const char* what_arg) : msg_(what_arg) {}
+    logic_error(const logic_error&) = default;
+    logic_error& operator=(const logic_error&) = default;
+    virtual ~logic_error() noexcept = default;
+    virtual const char* what() const noexcept override { return msg_.c_str(); }
+private:
+    string msg_;
+};
+
+class invalid_argument : public logic_error {
+public:
+    explicit invalid_argument(const string& what_arg) : logic_error(what_arg) {}
+    explicit invalid_argument(const char* what_arg) : logic_error(what_arg) {}
+};
+
+class domain_error : public logic_error {
+public:
+    explicit domain_error(const string& what_arg) : logic_error(what_arg) {}
+    explicit domain_error(const char* what_arg) : logic_error(what_arg) {}
+};
+
+class length_error : public logic_error {
+public:
+    explicit length_error(const string& what_arg) : logic_error(what_arg) {}
+    explicit length_error(const char* what_arg) : logic_error(what_arg) {}
+};
+
+class out_of_range : public logic_error {
+public:
+    explicit out_of_range(const string& what_arg) : logic_error(what_arg) {}
+    explicit out_of_range(const char* what_arg) : logic_error(what_arg) {}
+};
+
+class runtime_error : public exception {
+public:
+    explicit runtime_error(const string& what_arg) : msg_(what_arg) {}
+    explicit runtime_error(const char* what_arg) : msg_(what_arg) {}
+    runtime_error(const runtime_error&) = default;
+    runtime_error& operator=(const runtime_error&) = default;
+    virtual ~runtime_error() noexcept = default;
+    virtual const char* what() const noexcept override { return msg_.c_str(); }
+private:
+    string msg_;
+};
+
+class range_error : public runtime_error {
+public:
+    explicit range_error(const string& what_arg) : runtime_error(what_arg) {}
+    explicit range_error(const char* what_arg) : runtime_error(what_arg) {}
+};
+
+class overflow_error : public runtime_error {
+public:
+    explicit overflow_error(const string& what_arg) : runtime_error(what_arg) {}
+    explicit overflow_error(const char* what_arg) : runtime_error(what_arg) {}
+};
+
+class underflow_error : public runtime_error {
+public:
+    explicit underflow_error(const string& what_arg) : runtime_error(what_arg) {}
+    explicit underflow_error(const char* what_arg) : runtime_error(what_arg) {}
+};
+
+class bad_exception : public exception {
+public:
+    bad_exception() noexcept = default;
+    virtual const char* what() const noexcept override { return "bad exception"; }
+};
+
+} // namespace std
+
+#endif // _FRAGILE_STDEXCEPT_

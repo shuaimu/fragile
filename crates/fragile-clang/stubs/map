@@ -1,0 +1,262 @@
+// Minimal map stub for fragile parsing
+#ifndef _FRAGILE_MAP_
+#define _FRAGILE_MAP_
+
+#include "cstdint"
+#include "utility"
+#include "initializer_list"
+
+namespace std {
+
+template<typename Key, typename T, typename Compare = void, typename Allocator = void>
+class map {
+public:
+    using key_type = Key;
+    using mapped_type = T;
+    using value_type = pair<const Key, T>;
+    using size_type = size_t;
+    using difference_type = long;
+    using key_compare = Compare;
+    using reference = value_type&;
+    using const_reference = const value_type&;
+
+private:
+    struct node {
+        value_type data;
+        node* left;
+        node* right;
+        node* parent;
+        node(const Key& k, const T& v)
+            : data(k, v), left(nullptr), right(nullptr), parent(nullptr) {}
+    };
+
+public:
+    class iterator {
+    public:
+        iterator(node* n = nullptr) : node_(n) {}
+        reference operator*() { return node_->data; }
+        value_type* operator->() { return &node_->data; }
+        iterator& operator++() {
+            if (node_->right) {
+                node_ = node_->right;
+                while (node_->left) node_ = node_->left;
+            } else {
+                while (node_->parent && node_ == node_->parent->right)
+                    node_ = node_->parent;
+                node_ = node_->parent;
+            }
+            return *this;
+        }
+        iterator operator++(int) { iterator tmp = *this; ++(*this); return tmp; }
+        bool operator==(const iterator& other) const { return node_ == other.node_; }
+        bool operator!=(const iterator& other) const { return node_ != other.node_; }
+    private:
+        node* node_;
+        friend class map;
+    };
+
+    class const_iterator {
+    public:
+        const_iterator(const node* n = nullptr) : node_(n) {}
+        const_iterator(const iterator& it) : node_(it.node_) {}
+        const_reference operator*() const { return node_->data; }
+        const value_type* operator->() const { return &node_->data; }
+        const_iterator& operator++() {
+            if (node_->right) {
+                node_ = node_->right;
+                while (node_->left) node_ = node_->left;
+            } else {
+                while (node_->parent && node_ == node_->parent->right)
+                    node_ = node_->parent;
+                node_ = node_->parent;
+            }
+            return *this;
+        }
+        const_iterator operator++(int) { const_iterator tmp = *this; ++(*this); return tmp; }
+        bool operator==(const const_iterator& other) const { return node_ == other.node_; }
+        bool operator!=(const const_iterator& other) const { return node_ != other.node_; }
+    private:
+        const node* node_;
+    };
+
+    // Constructors
+    map() : root_(nullptr), size_(0) {}
+
+    map(const map& other) : root_(nullptr), size_(0) {
+        for (const auto& p : other) insert(p);
+    }
+
+    map(map&& other) noexcept : root_(other.root_), size_(other.size_) {
+        other.root_ = nullptr;
+        other.size_ = 0;
+    }
+
+    map(std::initializer_list<value_type> init) : root_(nullptr), size_(0) {
+        for (const auto& p : init) insert(p);
+    }
+
+    ~map() { clear(); }
+
+    // Assignment
+    map& operator=(const map& other) {
+        if (this != &other) {
+            clear();
+            for (const auto& p : other) insert(p);
+        }
+        return *this;
+    }
+
+    map& operator=(map&& other) noexcept {
+        if (this != &other) {
+            clear();
+            root_ = other.root_;
+            size_ = other.size_;
+            other.root_ = nullptr;
+            other.size_ = 0;
+        }
+        return *this;
+    }
+
+    // Element access
+    T& operator[](const Key& key) {
+        auto it = find(key);
+        if (it != end()) return it->second;
+        auto result = insert(value_type(key, T()));
+        return result.first->second;
+    }
+
+    T& at(const Key& key) { return find(key)->second; }
+    const T& at(const Key& key) const { return find(key)->second; }
+
+    // Iterators
+    iterator begin() noexcept {
+        node* n = root_;
+        while (n && n->left) n = n->left;
+        return iterator(n);
+    }
+    const_iterator begin() const noexcept {
+        const node* n = root_;
+        while (n && n->left) n = n->left;
+        return const_iterator(n);
+    }
+    const_iterator cbegin() const noexcept { return begin(); }
+    iterator end() noexcept { return iterator(nullptr); }
+    const_iterator end() const noexcept { return const_iterator(nullptr); }
+    const_iterator cend() const noexcept { return const_iterator(nullptr); }
+
+    // Capacity
+    bool empty() const noexcept { return size_ == 0; }
+    size_type size() const noexcept { return size_; }
+
+    // Modifiers
+    void clear() noexcept {
+        clear_recursive(root_);
+        root_ = nullptr;
+        size_ = 0;
+    }
+
+    pair<iterator, bool> insert(const value_type& value) {
+        if (!root_) {
+            root_ = new node(value.first, value.second);
+            ++size_;
+            return make_pair(iterator(root_), true);
+        }
+        node* current = root_;
+        node* parent = nullptr;
+        while (current) {
+            parent = current;
+            if (value.first < current->data.first) {
+                current = current->left;
+            } else if (current->data.first < value.first) {
+                current = current->right;
+            } else {
+                return make_pair(iterator(current), false);
+            }
+        }
+        node* n = new node(value.first, value.second);
+        n->parent = parent;
+        if (value.first < parent->data.first) {
+            parent->left = n;
+        } else {
+            parent->right = n;
+        }
+        ++size_;
+        return make_pair(iterator(n), true);
+    }
+
+    template<typename... Args>
+    pair<iterator, bool> emplace(Args&&... args) {
+        return insert(value_type(static_cast<Args&&>(args)...));
+    }
+
+    iterator erase(const_iterator pos) {
+        // Simplified erase - just mark as removed
+        --size_;
+        return end();
+    }
+
+    size_type erase(const Key& key) {
+        auto it = find(key);
+        if (it != end()) {
+            erase(it);
+            return 1;
+        }
+        return 0;
+    }
+
+    // Lookup
+    iterator find(const Key& key) {
+        node* current = root_;
+        while (current) {
+            if (key < current->data.first) {
+                current = current->left;
+            } else if (current->data.first < key) {
+                current = current->right;
+            } else {
+                return iterator(current);
+            }
+        }
+        return end();
+    }
+
+    const_iterator find(const Key& key) const {
+        const node* current = root_;
+        while (current) {
+            if (key < current->data.first) {
+                current = current->left;
+            } else if (current->data.first < key) {
+                current = current->right;
+            } else {
+                return const_iterator(current);
+            }
+        }
+        return end();
+    }
+
+    size_type count(const Key& key) const {
+        return find(key) != end() ? 1 : 0;
+    }
+
+private:
+    void clear_recursive(node* n) {
+        if (n) {
+            clear_recursive(n->left);
+            clear_recursive(n->right);
+            delete n;
+        }
+    }
+
+    node* root_;
+    size_type size_;
+};
+
+// multimap (minimal stub)
+template<typename Key, typename T, typename Compare = void, typename Allocator = void>
+class multimap : public map<Key, T, Compare, Allocator> {
+public:
+    using map<Key, T, Compare, Allocator>::map;
+};
+
+} // namespace std
+
+#endif // _FRAGILE_MAP_

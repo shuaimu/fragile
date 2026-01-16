@@ -1,0 +1,342 @@
+// Minimal string stub for fragile parsing
+#ifndef _FRAGILE_STRING_
+#define _FRAGILE_STRING_
+
+#include "cstdint"
+
+namespace std {
+
+// Forward declarations
+template<typename T> struct hash;
+template<typename CharT> struct char_traits;
+
+template<>
+struct char_traits<char> {
+    using char_type = char;
+    using int_type = int;
+    using pos_type = long;
+    using off_type = long;
+
+    static size_t length(const char* s) {
+        size_t len = 0;
+        while (s[len]) ++len;
+        return len;
+    }
+
+    static int compare(const char* s1, const char* s2, size_t n) {
+        for (size_t i = 0; i < n; ++i) {
+            if (s1[i] < s2[i]) return -1;
+            if (s1[i] > s2[i]) return 1;
+        }
+        return 0;
+    }
+
+    static char* copy(char* dest, const char* src, size_t n) {
+        for (size_t i = 0; i < n; ++i) dest[i] = src[i];
+        return dest;
+    }
+
+    static char* assign(char* s, size_t n, char c) {
+        for (size_t i = 0; i < n; ++i) s[i] = c;
+        return s;
+    }
+};
+
+// basic_string
+template<typename CharT, typename Traits = char_traits<CharT>, typename Allocator = void>
+class basic_string {
+public:
+    using traits_type = Traits;
+    using value_type = CharT;
+    using size_type = size_t;
+    using difference_type = long;
+    using reference = CharT&;
+    using const_reference = const CharT&;
+    using pointer = CharT*;
+    using const_pointer = const CharT*;
+    using iterator = CharT*;
+    using const_iterator = const CharT*;
+
+    static constexpr size_type npos = static_cast<size_type>(-1);
+
+    // Constructors
+    basic_string() : data_(nullptr), size_(0), capacity_(0) {}
+
+    basic_string(const CharT* s) {
+        size_ = Traits::length(s);
+        capacity_ = size_ + 1;
+        data_ = new CharT[capacity_];
+        Traits::copy(data_, s, size_);
+        data_[size_] = CharT();
+    }
+
+    basic_string(const CharT* s, size_type n) : size_(n), capacity_(n + 1) {
+        data_ = new CharT[capacity_];
+        Traits::copy(data_, s, n);
+        data_[size_] = CharT();
+    }
+
+    basic_string(size_type n, CharT c) : size_(n), capacity_(n + 1) {
+        data_ = new CharT[capacity_];
+        Traits::assign(data_, n, c);
+        data_[size_] = CharT();
+    }
+
+    basic_string(const basic_string& other) : size_(other.size_), capacity_(other.capacity_) {
+        data_ = new CharT[capacity_];
+        Traits::copy(data_, other.data_, size_);
+        data_[size_] = CharT();
+    }
+
+    basic_string(basic_string&& other) noexcept
+        : data_(other.data_), size_(other.size_), capacity_(other.capacity_) {
+        other.data_ = nullptr;
+        other.size_ = 0;
+        other.capacity_ = 0;
+    }
+
+    ~basic_string() { delete[] data_; }
+
+    // Assignment
+    basic_string& operator=(const basic_string& other) {
+        if (this != &other) {
+            delete[] data_;
+            size_ = other.size_;
+            capacity_ = other.capacity_;
+            data_ = new CharT[capacity_];
+            Traits::copy(data_, other.data_, size_);
+            data_[size_] = CharT();
+        }
+        return *this;
+    }
+
+    basic_string& operator=(basic_string&& other) noexcept {
+        if (this != &other) {
+            delete[] data_;
+            data_ = other.data_;
+            size_ = other.size_;
+            capacity_ = other.capacity_;
+            other.data_ = nullptr;
+            other.size_ = 0;
+            other.capacity_ = 0;
+        }
+        return *this;
+    }
+
+    basic_string& operator=(const CharT* s) {
+        delete[] data_;
+        size_ = Traits::length(s);
+        capacity_ = size_ + 1;
+        data_ = new CharT[capacity_];
+        Traits::copy(data_, s, size_);
+        data_[size_] = CharT();
+        return *this;
+    }
+
+    // Element access
+    reference operator[](size_type pos) { return data_[pos]; }
+    const_reference operator[](size_type pos) const { return data_[pos]; }
+    reference at(size_type pos) { return data_[pos]; }
+    const_reference at(size_type pos) const { return data_[pos]; }
+    reference front() { return data_[0]; }
+    const_reference front() const { return data_[0]; }
+    reference back() { return data_[size_ - 1]; }
+    const_reference back() const { return data_[size_ - 1]; }
+    const CharT* data() const noexcept { return data_; }
+    const CharT* c_str() const noexcept { return data_ ? data_ : ""; }
+
+    // Iterators
+    iterator begin() noexcept { return data_; }
+    const_iterator begin() const noexcept { return data_; }
+    const_iterator cbegin() const noexcept { return data_; }
+    iterator end() noexcept { return data_ + size_; }
+    const_iterator end() const noexcept { return data_ + size_; }
+    const_iterator cend() const noexcept { return data_ + size_; }
+
+    // Capacity
+    bool empty() const noexcept { return size_ == 0; }
+    size_type size() const noexcept { return size_; }
+    size_type length() const noexcept { return size_; }
+    size_type capacity() const noexcept { return capacity_; }
+
+    void reserve(size_type new_cap) {
+        if (new_cap > capacity_) {
+            CharT* new_data = new CharT[new_cap];
+            if (data_) {
+                Traits::copy(new_data, data_, size_);
+                delete[] data_;
+            }
+            data_ = new_data;
+            capacity_ = new_cap;
+        }
+    }
+
+    void resize(size_type count) { resize(count, CharT()); }
+    void resize(size_type count, CharT ch) {
+        if (count > capacity_) reserve(count + 1);
+        if (count > size_) {
+            Traits::assign(data_ + size_, count - size_, ch);
+        }
+        size_ = count;
+        if (data_) data_[size_] = CharT();
+    }
+
+    void clear() noexcept { size_ = 0; if (data_) data_[0] = CharT(); }
+
+    // Modifiers
+    basic_string& operator+=(const basic_string& str) {
+        return append(str);
+    }
+
+    basic_string& operator+=(const CharT* s) {
+        return append(s);
+    }
+
+    basic_string& operator+=(CharT c) {
+        push_back(c);
+        return *this;
+    }
+
+    basic_string& append(const basic_string& str) {
+        return append(str.data_, str.size_);
+    }
+
+    basic_string& append(const CharT* s) {
+        return append(s, Traits::length(s));
+    }
+
+    basic_string& append(const CharT* s, size_type n) {
+        size_type new_size = size_ + n;
+        if (new_size >= capacity_) reserve(new_size * 2 + 1);
+        Traits::copy(data_ + size_, s, n);
+        size_ = new_size;
+        data_[size_] = CharT();
+        return *this;
+    }
+
+    void push_back(CharT c) {
+        if (size_ + 1 >= capacity_) reserve((capacity_ ? capacity_ * 2 : 16));
+        data_[size_++] = c;
+        data_[size_] = CharT();
+    }
+
+    void pop_back() { if (size_ > 0) { --size_; data_[size_] = CharT(); } }
+
+    // String operations
+    int compare(const basic_string& str) const {
+        size_type len = size_ < str.size_ ? size_ : str.size_;
+        int r = Traits::compare(data_, str.data_, len);
+        if (r != 0) return r;
+        if (size_ < str.size_) return -1;
+        if (size_ > str.size_) return 1;
+        return 0;
+    }
+
+    basic_string substr(size_type pos = 0, size_type count = npos) const {
+        if (count == npos || pos + count > size_) count = size_ - pos;
+        return basic_string(data_ + pos, count);
+    }
+
+    size_type find(const basic_string& str, size_type pos = 0) const {
+        return find(str.data_, pos, str.size_);
+    }
+
+    size_type find(const CharT* s, size_type pos, size_type count) const {
+        if (count == 0) return pos;
+        if (pos + count > size_) return npos;
+        for (size_type i = pos; i <= size_ - count; ++i) {
+            if (Traits::compare(data_ + i, s, count) == 0) return i;
+        }
+        return npos;
+    }
+
+    size_type find(const CharT* s, size_type pos = 0) const {
+        return find(s, pos, Traits::length(s));
+    }
+
+    size_type find(CharT c, size_type pos = 0) const {
+        for (size_type i = pos; i < size_; ++i) {
+            if (data_[i] == c) return i;
+        }
+        return npos;
+    }
+
+    // Comparison operators
+    bool operator==(const basic_string& other) const { return compare(other) == 0; }
+    bool operator!=(const basic_string& other) const { return compare(other) != 0; }
+    bool operator<(const basic_string& other) const { return compare(other) < 0; }
+    bool operator<=(const basic_string& other) const { return compare(other) <= 0; }
+    bool operator>(const basic_string& other) const { return compare(other) > 0; }
+    bool operator>=(const basic_string& other) const { return compare(other) >= 0; }
+
+    bool operator==(const CharT* s) const { return compare(basic_string(s)) == 0; }
+    bool operator!=(const CharT* s) const { return compare(basic_string(s)) != 0; }
+
+private:
+    CharT* data_;
+    size_type size_;
+    size_type capacity_;
+};
+
+using string = basic_string<char>;
+using wstring = basic_string<wchar_t>;
+
+// Concatenation
+template<typename CharT, typename Traits, typename Alloc>
+basic_string<CharT, Traits, Alloc> operator+(
+    const basic_string<CharT, Traits, Alloc>& lhs,
+    const basic_string<CharT, Traits, Alloc>& rhs) {
+    basic_string<CharT, Traits, Alloc> result(lhs);
+    result += rhs;
+    return result;
+}
+
+template<typename CharT, typename Traits, typename Alloc>
+basic_string<CharT, Traits, Alloc> operator+(
+    const basic_string<CharT, Traits, Alloc>& lhs,
+    const CharT* rhs) {
+    basic_string<CharT, Traits, Alloc> result(lhs);
+    result += rhs;
+    return result;
+}
+
+template<typename CharT, typename Traits, typename Alloc>
+basic_string<CharT, Traits, Alloc> operator+(
+    const CharT* lhs,
+    const basic_string<CharT, Traits, Alloc>& rhs) {
+    basic_string<CharT, Traits, Alloc> result(lhs);
+    result += rhs;
+    return result;
+}
+
+// to_string
+inline string to_string(int value) { return string("0"); }
+inline string to_string(long value) { return string("0"); }
+inline string to_string(long long value) { return string("0"); }
+inline string to_string(unsigned value) { return string("0"); }
+inline string to_string(unsigned long value) { return string("0"); }
+inline string to_string(unsigned long long value) { return string("0"); }
+inline string to_string(float value) { return string("0.0"); }
+inline string to_string(double value) { return string("0.0"); }
+inline string to_string(long double value) { return string("0.0"); }
+
+// stoi, stol, etc. (minimal stubs)
+inline int stoi(const string& str, size_t* pos = nullptr, int base = 10) { (void)str; (void)pos; (void)base; return 0; }
+inline long stol(const string& str, size_t* pos = nullptr, int base = 10) { (void)str; (void)pos; (void)base; return 0; }
+inline long long stoll(const string& str, size_t* pos = nullptr, int base = 10) { (void)str; (void)pos; (void)base; return 0; }
+
+// hash specialization for string
+template<>
+struct hash<string> {
+    size_t operator()(const string& s) const noexcept {
+        size_t h = 0;
+        for (size_t i = 0; i < s.size(); ++i) {
+            h = h * 31 + static_cast<size_t>(s[i]);
+        }
+        return h;
+    }
+};
+
+} // namespace std
+
+#endif // _FRAGILE_STRING_

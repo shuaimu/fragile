@@ -1,0 +1,191 @@
+// Minimal functional stub for fragile parsing
+#ifndef _FRAGILE_FUNCTIONAL_
+#define _FRAGILE_FUNCTIONAL_
+
+#include "cstdint"
+
+namespace std {
+
+// Type-erased function wrapper (minimal stub)
+template<typename>
+class function;
+
+template<typename R, typename... Args>
+class function<R(Args...)> {
+private:
+    // Type-erased callable interface (must be defined before use)
+    struct callable_base {
+        virtual ~callable_base() = default;
+        virtual R invoke(Args...) = 0;
+        virtual callable_base* clone() const = 0;
+    };
+
+    template<typename F>
+    struct callable_impl : callable_base {
+        F func_;
+        callable_impl(F f) : func_(f) {}
+        R invoke(Args... args) override { return func_(args...); }
+        callable_base* clone() const override { return new callable_impl(func_); }
+    };
+
+    callable_base* callable_;
+
+public:
+    function() noexcept : callable_(nullptr) {}
+    function(nullptr_t) noexcept : callable_(nullptr) {}
+
+    // Copy from any callable
+    template<typename F>
+    function(F f) : callable_(new callable_impl<F>(f)) {}
+
+    // Copy constructor
+    function(const function& other) : callable_(other.callable_ ? other.callable_->clone() : nullptr) {}
+
+    // Move constructor
+    function(function&& other) noexcept : callable_(other.callable_) {
+        other.callable_ = nullptr;
+    }
+
+    ~function() { delete callable_; }
+
+    // Copy assignment
+    function& operator=(const function& other) {
+        if (this != &other) {
+            delete callable_;
+            callable_ = other.callable_ ? other.callable_->clone() : nullptr;
+        }
+        return *this;
+    }
+
+    // Move assignment
+    function& operator=(function&& other) noexcept {
+        if (this != &other) {
+            delete callable_;
+            callable_ = other.callable_;
+            other.callable_ = nullptr;
+        }
+        return *this;
+    }
+
+    function& operator=(nullptr_t) noexcept {
+        delete callable_;
+        callable_ = nullptr;
+        return *this;
+    }
+
+    // Invoke
+    R operator()(Args... args) const {
+        return callable_->invoke(args...);
+    }
+
+    explicit operator bool() const noexcept {
+        return callable_ != nullptr;
+    }
+};
+
+// Reference wrapper
+template<typename T>
+class reference_wrapper {
+    T* ptr_;  // Declare first so it's visible in decltype expressions
+
+public:
+    using type = T;
+
+    reference_wrapper(T& ref) noexcept : ptr_(&ref) {}
+    reference_wrapper(T&&) = delete;
+    reference_wrapper(const reference_wrapper&) noexcept = default;
+
+    reference_wrapper& operator=(const reference_wrapper&) noexcept = default;
+
+    operator T&() const noexcept { return *ptr_; }
+    T& get() const noexcept { return *ptr_; }
+
+    // Simplified operator() without trailing return type
+    template<typename... FArgs>
+    auto operator()(FArgs&&... args) const {
+        return (*ptr_)(static_cast<FArgs&&>(args)...);
+    }
+};
+
+template<typename T>
+reference_wrapper<T> ref(T& t) noexcept { return reference_wrapper<T>(t); }
+
+template<typename T>
+reference_wrapper<const T> cref(const T& t) noexcept { return reference_wrapper<const T>(t); }
+
+// less, greater, etc. for ordered containers
+template<typename T = void>
+struct less {
+    constexpr bool operator()(const T& a, const T& b) const { return a < b; }
+};
+
+template<>
+struct less<void> {
+    template<typename T, typename U>
+    constexpr auto operator()(T&& a, U&& b) const -> decltype(a < b) { return a < b; }
+};
+
+template<typename T = void>
+struct greater {
+    constexpr bool operator()(const T& a, const T& b) const { return a > b; }
+};
+
+template<>
+struct greater<void> {
+    template<typename T, typename U>
+    constexpr auto operator()(T&& a, U&& b) const -> decltype(a > b) { return a > b; }
+};
+
+template<typename T = void>
+struct equal_to {
+    constexpr bool operator()(const T& a, const T& b) const { return a == b; }
+};
+
+template<>
+struct equal_to<void> {
+    template<typename T, typename U>
+    constexpr auto operator()(T&& a, U&& b) const -> decltype(a == b) { return a == b; }
+};
+
+// Hash (minimal)
+template<typename T>
+struct hash;
+
+template<>
+struct hash<int> {
+    size_t operator()(int v) const noexcept { return static_cast<size_t>(v); }
+};
+
+template<>
+struct hash<unsigned int> {
+    size_t operator()(unsigned int v) const noexcept { return static_cast<size_t>(v); }
+};
+
+template<>
+struct hash<long> {
+    size_t operator()(long v) const noexcept { return static_cast<size_t>(v); }
+};
+
+template<>
+struct hash<unsigned long> {
+    size_t operator()(unsigned long v) const noexcept { return static_cast<size_t>(v); }
+};
+
+template<>
+struct hash<long long> {
+    size_t operator()(long long v) const noexcept { return static_cast<size_t>(v); }
+};
+
+template<>
+struct hash<unsigned long long> {
+    size_t operator()(unsigned long long v) const noexcept { return static_cast<size_t>(v); }
+};
+
+template<typename T>
+struct hash<T*> {
+    size_t operator()(T* v) const noexcept { return reinterpret_cast<size_t>(v); }
+};
+
+} // namespace std
+
+#endif // _FRAGILE_FUNCTIONAL_

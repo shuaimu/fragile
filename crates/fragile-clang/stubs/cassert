@@ -1,0 +1,17 @@
+// Minimal cassert stub for fragile parsing
+#ifndef _FRAGILE_CASSERT_
+#define _FRAGILE_CASSERT_
+
+// Note: assert is typically a macro, not in std namespace
+// This is a minimal stub that defines assert as a no-op for parsing purposes
+
+#ifdef NDEBUG
+#define assert(condition) ((void)0)
+#else
+#define assert(condition) ((void)0)  // Simplified for parsing
+#endif
+
+// Static assert is a language feature, not from cassert
+// But some code expects it to be available after including cassert
+
+#endif // _FRAGILE_CASSERT_
