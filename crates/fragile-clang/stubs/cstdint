@@ -55,8 +55,9 @@ namespace std {
     using uint_least64_t = uint64_t;
 
     // Greatest-width integer types
-    using intmax_t = long long;
-    using uintmax_t = unsigned long long;
+    // On x86_64 Linux, intmax_t is 'long' (matches system stdint.h's __intmax_t)
+    using intmax_t = long;
+    using uintmax_t = unsigned long;
 }
 
 // Also define in global namespace (C compatibility)

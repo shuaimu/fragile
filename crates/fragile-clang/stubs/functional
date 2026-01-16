@@ -7,6 +7,22 @@
 
 namespace std {
 
+// Deprecated in C++11, removed in C++17, but still used by some code
+// unary_function - base class for unary function objects (deprecated)
+template<typename Arg, typename Result>
+struct unary_function {
+    using argument_type = Arg;
+    using result_type = Result;
+};
+
+// binary_function - base class for binary function objects (deprecated)
+template<typename Arg1, typename Arg2, typename Result>
+struct binary_function {
+    using first_argument_type = Arg1;
+    using second_argument_type = Arg2;
+    using result_type = Result;
+};
+
 // Type-erased function wrapper (minimal stub)
 template<typename>
 class function;

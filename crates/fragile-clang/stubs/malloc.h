@@ -5,16 +5,14 @@
 // Provides memory allocation functions beyond cstdlib
 
 #include <cstddef>
+#include <cstdlib>  // Get basic malloc/free/realloc/calloc from cstdlib to avoid redeclaration
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-// Basic allocation (also in cstdlib, but included here for completeness)
-void* malloc(size_t size);
-void free(void* ptr);
-void* realloc(void* ptr, size_t size);
-void* calloc(size_t nmemb, size_t size);
+// Basic allocation is already provided by cstdlib
+// (malloc, free, realloc, calloc)
 
 // Extended allocation functions
 void* memalign(size_t alignment, size_t size);
