@@ -341,7 +341,14 @@ See [PLAN_CPP20_MAKO.md](PLAN_CPP20_MAKO.md) for detailed plan.
     - [x] `vendor/mako/src/bench/rw/workload.cc` - **PARSED**: 5035 functions [26:01:16]
     - [x] `vendor/mako/src/bench/tpcc/workload.cc` - **PARSED**: 5035 functions [26:01:16]
     - [x] `vendor/mako/src/bench/tpca/workload.cc` - **PARSED**: 5035 functions [26:01:16]
-    - [ ] Remaining files need: eRPC library stubs, rcc_rpc.h (generated RPC)
+    - [x] F.3.39 Added boost stubs (any.hpp, foreach.hpp, algorithm/string.hpp, filesystem.hpp) [26:01:16, 12:25]
+    - [x] F.3.40 Added yaml-cpp stub header [26:01:16, 12:25]
+    - [x] `vendor/mako/src/deptran/txn_reg.cc` - **PARSED**: 0 functions (empty file) [26:01:16, 12:25]
+    - [x] `vendor/mako/src/deptran/troad/tx.cc` - **PARSED**: 4754 functions [26:01:16, 12:25]
+    - [x] `vendor/mako/src/deptran/janus/tx.cc` - **PARSED**: 4754 functions [26:01:16, 12:25]
+    - [x] `vendor/mako/src/deptran/rcc/graph_marshaler.cc` - **PARSED**: 4754 functions [26:01:16, 12:25]
+    - [-] `vendor/mako/src/deptran/mongodb/server.cc` - Needs bsoncxx and rcc_rpc.h (external deps)
+    - [ ] Remaining files need: eRPC library stubs, rcc_rpc.h (generated RPC), bsoncxx
   - [ ] Link and run tests
 
 ---
@@ -407,7 +414,7 @@ Migration: After C++20 support is complete, deprecate these.
 ## 5. Testing & Milestones
 
 ### 5.1 Unit Tests
-- [x] fragile-clang: 371 tests passing (27 unit + 344 integration) - includes 10 coroutine + 7 exception + 6 RTTI + 8 promise type + 8 awaitable + 8 generator + 3 noexcept + 1 member access + 1 stack unwinding + 150 mako file tests [26:01:16]
+- [x] fragile-clang: 375 tests passing (27 unit + 348 integration) - includes 10 coroutine + 7 exception + 6 RTTI + 8 promise type + 8 awaitable + 8 generator + 3 noexcept + 1 member access + 1 stack unwinding + 154 mako file tests [26:01:16]
 - [x] fragile-rustc-driver: 6 tests passing
 - [x] fragile-runtime: Compiles
 
@@ -427,10 +434,10 @@ Migration: After C++20 support is complete, deprecate these.
 
 Current status:
 - **rrr module**: 20/20 files parsing (100%) - all base, misc, reactor, rpc files parsing
-- **mako module**: 117/338 files parsing (~35%) - includes all 12 memdb files, deptran, masstree, masstree-beta (all 28 files), all lib files
-- **Total tests**: 371 passing (fragile-clang integration tests)
+- **mako module**: 121/338 files parsing (~36%) - includes all 12 memdb files, deptran, masstree, masstree-beta (all 28 files), all lib files
+- **Total tests**: 375 passing (fragile-clang integration tests)
 - **Milestones**: M1 ✅, M2-M4 (parsing complete, compilation pending)
 
 Next steps:
 1. **rustc Integration (2.3)** - Requires user setup: `rustup component add rustc-dev --toolchain nightly`
-2. **Expand mako parsing** - Many remaining files need external library stubs (eRPC, boost, YAML). Added stubs for: gflags, libevent, protobuf, gperftools, rocksdb
+2. **Expand mako parsing** - Many remaining files need external library stubs (eRPC, boost, YAML, bsoncxx). Added stubs for: gflags, libevent, protobuf, gperftools, rocksdb, boost, yaml-cpp
