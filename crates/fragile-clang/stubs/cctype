@@ -2,9 +2,9 @@
 #ifndef _FRAGILE_CCTYPE_
 #define _FRAGILE_CCTYPE_
 
-namespace std {
-
-// Character classification functions
+// Character classification functions - C-style in global namespace
+// Note: These are declared, not defined, as they're typically library functions
+extern "C" {
 int isalnum(int ch);
 int isalpha(int ch);
 int islower(int ch);
@@ -17,27 +17,26 @@ int isspace(int ch);
 int isblank(int ch);
 int isprint(int ch);
 int ispunct(int ch);
-
-// Character conversion functions
 int tolower(int ch);
 int toupper(int ch);
-
 }
 
-// C-style global namespace functions (for ::tolower etc.)
-inline int isalnum(int ch) { return std::isalnum(ch); }
-inline int isalpha(int ch) { return std::isalpha(ch); }
-inline int islower(int ch) { return std::islower(ch); }
-inline int isupper(int ch) { return std::isupper(ch); }
-inline int isdigit(int ch) { return std::isdigit(ch); }
-inline int isxdigit(int ch) { return std::isxdigit(ch); }
-inline int iscntrl(int ch) { return std::iscntrl(ch); }
-inline int isgraph(int ch) { return std::isgraph(ch); }
-inline int isspace(int ch) { return std::isspace(ch); }
-inline int isblank(int ch) { return std::isblank(ch); }
-inline int isprint(int ch) { return std::isprint(ch); }
-inline int ispunct(int ch) { return std::ispunct(ch); }
-inline int tolower(int ch) { return std::tolower(ch); }
-inline int toupper(int ch) { return std::toupper(ch); }
+namespace std {
+// C++ versions just forward to C versions
+using ::isalnum;
+using ::isalpha;
+using ::islower;
+using ::isupper;
+using ::isdigit;
+using ::isxdigit;
+using ::iscntrl;
+using ::isgraph;
+using ::isspace;
+using ::isblank;
+using ::isprint;
+using ::ispunct;
+using ::tolower;
+using ::toupper;
+}
 
 #endif // _FRAGILE_CCTYPE_
