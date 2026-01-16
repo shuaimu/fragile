@@ -500,7 +500,7 @@ Migration: After C++20 support is complete, deprecate these.
 
 ### 5.1 Unit Tests
 - [x] fragile-clang: 596 tests passing (27 unit + 569 integration) - includes 10 coroutine + 7 exception + 6 RTTI + 8 promise type + 8 awaitable + 8 generator + 3 noexcept + 1 member access + 1 stack unwinding + 338 mako file tests (100% coverage) [26:01:16, 22:40]
-- [x] fragile-rustc-driver: 13 tests passing with rustc-integration feature (10 base + 3 rustc_integration tests)
+- [x] fragile-rustc-driver: 14 tests passing with rustc-integration feature (11 base + 3 rustc_integration tests)
 - [x] fragile-runtime: Compiles
 
 ### 5.2 Mako Milestones
@@ -512,7 +512,7 @@ Migration: After C++20 support is complete, deprecate these.
   - [x] M5.1: Simple add.cpp end-to-end test (C++ → MIR → stubs) [26:01:17]
   - [x] M5.2: Enable CI with nightly rust + rustc-dev [26:01:17]
   - [x] M5.3: Compile rand.cpp through full pipeline (29 functions, 17KB stubs) [26:01:17]
-  - [ ] M5.4: Compile rrr/misc/*.cpp
+  - [x] M5.4: Compile rrr/misc/*.cpp (4 files: 4781 functions, 639KB stubs) [26:01:17]
   - [ ] M5.5: Compile rrr/rpc/*.cpp
   - [ ] M5.6: Compile mako/vec/*.cpp
   - [ ] M5.7: Link all components into executable
@@ -528,7 +528,7 @@ Migration: After C++20 support is complete, deprecate these.
 Current status:
 - **rrr module**: 20/20 files parsing (100%) - all base, misc, reactor, rpc files parsing
 - **mako module**: 338/338 files tested (100%) - includes all memdb files, deptran files, consensus executors, masstree, benchmarks
-- **Total tests**: 596 fragile-clang (27 unit + 569 integration), 11 fragile-rustc-driver with feature
+- **Total tests**: 596 fragile-clang (27 unit + 569 integration), 14 fragile-rustc-driver with feature
 - **Milestones**: M1 ✅, M2-M4 (parsing complete, compilation pending)
 - **Blocked files**: mongodb/server.cc (bsoncxx), persist_test.cc (undefined template), mtd.cc (epoll conflicts)
 

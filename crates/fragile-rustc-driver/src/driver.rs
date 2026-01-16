@@ -294,4 +294,91 @@ mod tests {
         println!("Generated {} bytes of Rust stubs", stubs.len());
         println!("First 500 chars of stubs:\n{}", &stubs[..stubs.len().min(500)]);
     }
+
+    /// End-to-end test: Parse all rrr/misc/*.cpp files, generate stubs, register modules.
+    /// Tests: alock.cpp, marshal.cpp, rand.cpp, recorder.cpp
+    #[test]
+    fn test_end_to_end_rrr_misc() {
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let project_root = Path::new(manifest_dir).parent().unwrap().parent().unwrap();
+        let misc_dir = project_root.join("vendor/mako/src/rrr/misc");
+
+        // Check if directory exists
+        if !misc_dir.exists() {
+            eprintln!("Skipping test: rrr/misc not found at {:?}", misc_dir);
+            return;
+        }
+
+        // Check if submodules are initialized
+        let rusty_cpp_path = project_root.join("vendor/mako/third-party/rusty-cpp/include");
+        if !rusty_cpp_path.exists() {
+            eprintln!("Skipping test: rusty-cpp submodule not initialized");
+            return;
+        }
+
+        // Set up include paths
+        let stubs_path = Path::new(manifest_dir)
+            .parent().unwrap()
+            .join("fragile-clang/stubs");
+
+        let include_paths = vec![
+            project_root.join("vendor/mako/src").to_string_lossy().to_string(),
+            project_root.join("vendor/mako/src/rrr").to_string_lossy().to_string(),
+            rusty_cpp_path.to_string_lossy().to_string(),
+        ];
+
+        let system_include_paths = vec![
+            stubs_path.to_string_lossy().to_string(),
+        ];
+
+        // Files to test
+        let files = ["alock.cpp", "marshal.cpp", "rand.cpp", "recorder.cpp"];
+        let mut all_modules = Vec::new();
+        let driver = FragileDriver::new();
+
+        for file in &files {
+            let cpp_file = misc_dir.join(file);
+            if !cpp_file.exists() {
+                eprintln!("  Skipping {}: not found", file);
+                continue;
+            }
+
+            // Parse the C++ file
+            let parser = fragile_clang::ClangParser::with_paths(
+                include_paths.clone(),
+                system_include_paths.clone(),
+            ).expect("Failed to create parser");
+
+            let ast = parser.parse_file(&cpp_file)
+                .expect(&format!("Failed to parse {}", file));
+
+            let converter = fragile_clang::MirConverter::new();
+            let module = converter.convert(ast)
+                .expect(&format!("Failed to convert {} to MIR", file));
+
+            println!("{}: {} functions", file, module.functions.len());
+
+            // Register with driver
+            driver.register_cpp_module(&module);
+            all_modules.push(module);
+        }
+
+        // Verify we parsed all files
+        assert_eq!(all_modules.len(), 4, "Should have parsed all 4 files");
+
+        // Generate combined stubs
+        let stubs = generate_rust_stubs(&all_modules);
+        assert!(stubs.contains("extern"), "Stubs should contain extern block");
+
+        // Verify total function count
+        let total_functions: usize = all_modules.iter().map(|m| m.functions.len()).sum();
+        println!("Total functions from rrr/misc: {}", total_functions);
+        println!("Total registered in driver: {}", driver.mir_registry.function_count());
+        println!("Generated {} bytes of Rust stubs", stubs.len());
+
+        // Should have substantial functions from all files
+        assert!(total_functions >= 100, "Expected at least 100 functions from rrr/misc");
+        assert!(driver.mir_registry.function_count() >= 100,
+            "Driver should have registered at least 100 functions");
+    }
 }
