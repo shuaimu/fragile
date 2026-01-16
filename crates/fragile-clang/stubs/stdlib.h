@@ -22,6 +22,15 @@ using std::strtoul;
 using std::strtod;
 using std::rand;
 using std::srand;
+
+// BSD random number functions
+extern "C" {
+long random(void);
+void srandom(unsigned int seed);
+char* initstate(unsigned int seed, char* state, size_t n);
+char* setstate(char* state);
+}
+
 using std::qsort;
 using std::bsearch;
 using std::abs;
