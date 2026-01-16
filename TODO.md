@@ -465,7 +465,7 @@ Migration: After C++20 support is complete, deprecate these.
 ## 5. Testing & Milestones
 
 ### 5.1 Unit Tests
-- [x] fragile-clang: 417 tests passing (27 unit + 390 integration) - includes 10 coroutine + 7 exception + 6 RTTI + 8 promise type + 8 awaitable + 8 generator + 3 noexcept + 1 member access + 1 stack unwinding + 196 mako file tests [26:01:16]
+- [x] fragile-clang: 438 tests passing (27 unit + 411 integration) - includes 10 coroutine + 7 exception + 6 RTTI + 8 promise type + 8 awaitable + 8 generator + 3 noexcept + 1 member access + 1 stack unwinding + 181 mako file tests [26:01:16]
 - [x] fragile-rustc-driver: 7 tests passing (6 original + 1 rustc_integration when feature enabled)
 - [x] fragile-runtime: Compiles
 
@@ -485,8 +485,8 @@ Migration: After C++20 support is complete, deprecate these.
 
 Current status:
 - **rrr module**: 20/20 files parsing (100%) - all base, misc, reactor, rpc files parsing
-- **mako module**: 173/338 files parsing (~51%) - includes all 12 memdb files, deptran root-level files (config, coordinator, executor, scheduler, frame, service, workload, sharding, procedure, communicator), consensus executors (rcc, occ, classic, troad, carousel, tapir, janus, mencius), masstree, masstree-beta (all 28 files), all lib files
-- **Total tests**: 427 passing (fragile-clang integration tests)
+- **mako module**: 181/320 files parsing (~57%) - includes all 12 memdb files, deptran root-level files (config, coordinator, executor, scheduler, frame, service, workload, sharding, procedure, communicator), consensus executors (rcc, occ, classic, troad, carousel, tapir, janus, mencius, paxos, raft), client/server workers, replication_helper, RW_command, shard_router, masstree, masstree-beta (all 28 files), all lib files
+- **Total tests**: 438 passing (fragile-clang integration tests)
 - **Milestones**: M1 ✅, M2-M4 (parsing complete, compilation pending)
 
 Next steps:
