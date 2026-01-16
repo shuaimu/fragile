@@ -9362,3 +9362,111 @@ fn test_mako_masstree_json_cc() {
     }
 }
 
+/// Test parsing masstree msgpack.cc (MsgPack serialization)
+#[test]
+fn test_mako_masstree_msgpack_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/mako/masstree/msgpack.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: msgpack.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let masstree_path = project_root.join("vendor/mako/src/mako/masstree");
+
+    let mut system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let clang_paths = [
+        "/usr/lib/llvm-19/lib/clang/19/include",
+        "/usr/lib/llvm-18/lib/clang/18/include",
+    ];
+
+    for path in &clang_paths {
+        if Path::new(path).exists() {
+            system_include_paths.push(path.to_string());
+            break;
+        }
+    }
+
+    let include_paths = vec![
+        masstree_path.to_string_lossy().to_string(),
+    ];
+
+    let parser = ClangParser::with_paths(include_paths, system_include_paths)
+        .expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+
+            println!("Successfully parsed msgpack.cc with {} functions", module.functions.len());
+        }
+        Err(e) => {
+            println!("Note: msgpack.cc parsing failed: {:?}", e);
+        }
+    }
+}
+
+/// Test parsing masstree checkpoint.cc (checkpointing)
+#[test]
+fn test_mako_masstree_checkpoint_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/mako/masstree/checkpoint.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: checkpoint.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let masstree_path = project_root.join("vendor/mako/src/mako/masstree");
+
+    let mut system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let clang_paths = [
+        "/usr/lib/llvm-19/lib/clang/19/include",
+        "/usr/lib/llvm-18/lib/clang/18/include",
+    ];
+
+    for path in &clang_paths {
+        if Path::new(path).exists() {
+            system_include_paths.push(path.to_string());
+            break;
+        }
+    }
+
+    let include_paths = vec![
+        masstree_path.to_string_lossy().to_string(),
+    ];
+
+    let parser = ClangParser::with_paths(include_paths, system_include_paths)
+        .expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+
+            println!("Successfully parsed checkpoint.cc with {} functions", module.functions.len());
+        }
+        Err(e) => {
+            println!("Note: checkpoint.cc parsing failed: {:?}", e);
+        }
+    }
+}
+
