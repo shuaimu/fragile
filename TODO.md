@@ -144,10 +144,10 @@ See [PLAN_CPP20_MAKO.md](PLAN_CPP20_MAKO.md) for detailed plan.
   - [x] D.4.1 Parse `<coroutine>` header types (already working via existing infrastructure)
   - [x] D.4.2 Parse std::coroutine_handle (4 tests added)
   - [x] D.4.3 Parse std::suspend_always/never (4 tests added)
-- [ ] **D.5 Promise Types** (~100 lines)
-  - [ ] D.5.1 get_return_object()
-  - [ ] D.5.2 initial_suspend / final_suspend
-  - [ ] D.5.3 return_void / return_value
+- [x] **D.5 Promise Types** (~100 lines) [26:01:16, 04:25] ([docs/dev/plan_promise_types.md](docs/dev/plan_promise_types.md))
+  - [x] D.5.1 get_return_object() (8 tests added)
+  - [x] D.5.2 initial_suspend / final_suspend
+  - [x] D.5.3 return_void / return_value / yield_value / unhandled_exception
 - [ ] **D.6 Awaitables** (~100 lines)
   - [ ] D.6.1 await_ready/suspend/resume protocol
   - [ ] D.6.2 co_await expression evaluation
@@ -160,9 +160,9 @@ See [PLAN_CPP20_MAKO.md](PLAN_CPP20_MAKO.md) for detailed plan.
   - [x] try/catch/throw (TryStmt, CatchStmt, ThrowExpr AST nodes + parsing + MIR conversion)
   - [ ] noexcept (future work)
   - [ ] Stack unwinding (requires runtime support)
-- [ ] **E.2 RTTI**
-  - [ ] typeid
-  - [ ] dynamic_cast
+- [x] **E.2 RTTI** [26:01:16, 04:05] ([docs/dev/plan_rtti_support.md](docs/dev/plan_rtti_support.md))
+  - [x] typeid (TypeidExpr AST node + parsing + MIR conversion)
+  - [x] dynamic_cast (DynamicCastExpr AST node + parsing + MIR conversion)
 - [x] **E.3 Lambdas** [26:01:16]
   - [x] Basic lambdas
   - [x] Captures (value/reference)
@@ -247,7 +247,7 @@ Migration: After C++20 support is complete, deprecate these.
 ## 5. Testing & Milestones
 
 ### 5.1 Unit Tests
-- [x] fragile-clang: 188 tests passing (27 unit + 161 integration) - includes 10 coroutine tests + 7 exception tests
+- [x] fragile-clang: 202 tests passing (27 unit + 175 integration) - includes 10 coroutine + 7 exception + 6 RTTI + 8 promise type tests
 - [x] fragile-rustc-driver: 6 tests passing
 - [x] fragile-runtime: Compiles
 

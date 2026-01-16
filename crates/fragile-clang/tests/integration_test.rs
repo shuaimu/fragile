@@ -5391,3 +5391,451 @@ fn test_exception_ast_throw_node() {
 
     assert!(has_throw.is_some(), "Expected to find ThrowExpr node in AST");
 }
+
+// ========== C++ RTTI Tests (E.2) ==========
+
+/// Test parsing typeid expression.
+#[test]
+fn test_rtti_typeid() {
+    let parser = ClangParser::with_system_includes().unwrap();
+    let code = r#"
+        #include <typeinfo>
+
+        void test_typeid() {
+            int x = 42;
+            const std::type_info& ti = typeid(x);
+        }
+    "#;
+
+    let result = parser.parse_string(code, "test.cpp");
+    assert!(result.is_ok(), "Failed to parse typeid: {:?}", result.err());
+
+    let ast = result.unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).unwrap();
+
+    let test_fn = module.functions.iter().find(|f| f.display_name == "test_typeid");
+    assert!(test_fn.is_some(), "Expected to find test_typeid function");
+}
+
+/// Test parsing typeid with type (not expression).
+#[test]
+fn test_rtti_typeid_type() {
+    let parser = ClangParser::with_system_includes().unwrap();
+    let code = r#"
+        #include <typeinfo>
+
+        void test_typeid_type() {
+            const std::type_info& ti = typeid(int);
+        }
+    "#;
+
+    let result = parser.parse_string(code, "test.cpp");
+    assert!(result.is_ok(), "Failed to parse typeid(type): {:?}", result.err());
+
+    let ast = result.unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).unwrap();
+
+    let test_fn = module.functions.iter().find(|f| f.display_name == "test_typeid_type");
+    assert!(test_fn.is_some(), "Expected to find test_typeid_type function");
+}
+
+/// Test parsing dynamic_cast.
+#[test]
+fn test_rtti_dynamic_cast() {
+    let parser = ClangParser::new().unwrap();
+    let code = r#"
+        class Base { public: virtual ~Base() {} };
+        class Derived : public Base {};
+
+        void test_dynamic_cast(Base* b) {
+            Derived* d = dynamic_cast<Derived*>(b);
+        }
+    "#;
+
+    let result = parser.parse_string(code, "test.cpp");
+    assert!(result.is_ok(), "Failed to parse dynamic_cast: {:?}", result.err());
+
+    let ast = result.unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).unwrap();
+
+    let test_fn = module.functions.iter().find(|f| f.display_name == "test_dynamic_cast");
+    assert!(test_fn.is_some(), "Expected to find test_dynamic_cast function");
+}
+
+/// Test parsing dynamic_cast with reference.
+#[test]
+fn test_rtti_dynamic_cast_reference() {
+    let parser = ClangParser::new().unwrap();
+    let code = r#"
+        class Base { public: virtual ~Base() {} };
+        class Derived : public Base {};
+
+        void test_dynamic_cast_ref(Base& b) {
+            Derived& d = dynamic_cast<Derived&>(b);
+        }
+    "#;
+
+    let result = parser.parse_string(code, "test.cpp");
+    assert!(result.is_ok(), "Failed to parse dynamic_cast reference: {:?}", result.err());
+
+    let ast = result.unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).unwrap();
+
+    let test_fn = module.functions.iter().find(|f| f.display_name == "test_dynamic_cast_ref");
+    assert!(test_fn.is_some(), "Expected to find test_dynamic_cast_ref function");
+}
+
+/// Test that TypeidExpr AST node is properly created.
+#[test]
+fn test_rtti_ast_typeid_node() {
+    let parser = ClangParser::with_system_includes().unwrap();
+    let code = r#"
+        #include <typeinfo>
+
+        void test_typeid_node() {
+            int x = 1;
+            const std::type_info& ti = typeid(x);
+        }
+    "#;
+
+    let result = parser.parse_string(code, "test.cpp");
+    assert!(result.is_ok(), "Failed to parse: {:?}", result.err());
+
+    let ast = result.unwrap();
+
+    // Search the AST for TypeidExpr node
+    let has_typeid = find_node_kind(&ast.translation_unit, |kind| {
+        matches!(kind, ClangNodeKind::TypeidExpr { .. })
+    });
+
+    assert!(has_typeid.is_some(), "Expected to find TypeidExpr node in AST");
+}
+
+/// Test that DynamicCastExpr AST node is properly created.
+#[test]
+fn test_rtti_ast_dynamic_cast_node() {
+    let parser = ClangParser::new().unwrap();
+    let code = r#"
+        class Base { public: virtual ~Base() {} };
+        class Derived : public Base {};
+
+        void test_dynamic_cast_node(Base* b) {
+            Derived* d = dynamic_cast<Derived*>(b);
+        }
+    "#;
+
+    let result = parser.parse_string(code, "test.cpp");
+    assert!(result.is_ok(), "Failed to parse: {:?}", result.err());
+
+    let ast = result.unwrap();
+
+    // Search the AST for DynamicCastExpr node
+    let has_dynamic_cast = find_node_kind(&ast.translation_unit, |kind| {
+        matches!(kind, ClangNodeKind::DynamicCastExpr { .. })
+    });
+
+    assert!(has_dynamic_cast.is_some(), "Expected to find DynamicCastExpr node in AST");
+}
+
+// ========== C++20 Coroutine Promise Types Tests (D.5) ==========
+
+/// Test parsing promise type with get_return_object method.
+#[test]
+fn test_promise_type_get_return_object() {
+    let parser = ClangParser::with_system_includes().unwrap();
+    let code = r#"
+        #include <coroutine>
+
+        struct Task {
+            struct promise_type {
+                Task get_return_object() { return {}; }
+                std::suspend_never initial_suspend() { return {}; }
+                std::suspend_never final_suspend() noexcept { return {}; }
+                void return_void() {}
+                void unhandled_exception() {}
+            };
+        };
+
+        Task simple_coro() {
+            co_return;
+        }
+    "#;
+
+    let result = parser.parse_string(code, "test.cpp");
+    assert!(result.is_ok(), "Failed to parse promise type: {:?}", result.err());
+
+    let ast = result.unwrap();
+
+    // Find the promise_type struct - it should contain get_return_object method
+    let has_method = find_node_kind(&ast.translation_unit, |kind| {
+        matches!(kind, ClangNodeKind::CXXMethodDecl { name, return_type, .. }
+            if name == "get_return_object" && matches!(return_type, CppType::Named(n) if n == "Task"))
+    });
+
+    assert!(has_method.is_some(), "Expected to find get_return_object method in promise_type");
+}
+
+/// Test parsing promise type with initial_suspend method.
+#[test]
+fn test_promise_type_initial_suspend() {
+    let parser = ClangParser::with_system_includes().unwrap();
+    let code = r#"
+        #include <coroutine>
+
+        struct Task {
+            struct promise_type {
+                Task get_return_object() { return {}; }
+                std::suspend_always initial_suspend() { return {}; }
+                std::suspend_always final_suspend() noexcept { return {}; }
+                void return_void() {}
+                void unhandled_exception() {}
+            };
+        };
+
+        Task test_coro() {
+            co_return;
+        }
+    "#;
+
+    let result = parser.parse_string(code, "test.cpp");
+    assert!(result.is_ok(), "Failed to parse initial_suspend: {:?}", result.err());
+
+    let ast = result.unwrap();
+
+    // Find initial_suspend method
+    let has_method = find_node_kind(&ast.translation_unit, |kind| {
+        matches!(kind, ClangNodeKind::CXXMethodDecl { name, .. } if name == "initial_suspend")
+    });
+
+    assert!(has_method.is_some(), "Expected to find initial_suspend method in promise_type");
+}
+
+/// Test parsing promise type with final_suspend method (noexcept).
+#[test]
+fn test_promise_type_final_suspend() {
+    let parser = ClangParser::with_system_includes().unwrap();
+    let code = r#"
+        #include <coroutine>
+
+        struct Task {
+            struct promise_type {
+                Task get_return_object() { return {}; }
+                std::suspend_never initial_suspend() { return {}; }
+                std::suspend_always final_suspend() noexcept { return {}; }
+                void return_void() {}
+                void unhandled_exception() {}
+            };
+        };
+
+        Task test_final() {
+            co_return;
+        }
+    "#;
+
+    let result = parser.parse_string(code, "test.cpp");
+    assert!(result.is_ok(), "Failed to parse final_suspend: {:?}", result.err());
+
+    let ast = result.unwrap();
+
+    // Find final_suspend method
+    let has_method = find_node_kind(&ast.translation_unit, |kind| {
+        matches!(kind, ClangNodeKind::CXXMethodDecl { name, .. } if name == "final_suspend")
+    });
+
+    assert!(has_method.is_some(), "Expected to find final_suspend method in promise_type");
+}
+
+/// Test parsing promise type with return_void method.
+#[test]
+fn test_promise_type_return_void() {
+    let parser = ClangParser::with_system_includes().unwrap();
+    let code = r#"
+        #include <coroutine>
+
+        struct VoidTask {
+            struct promise_type {
+                VoidTask get_return_object() { return {}; }
+                std::suspend_never initial_suspend() { return {}; }
+                std::suspend_never final_suspend() noexcept { return {}; }
+                void return_void() {}
+                void unhandled_exception() {}
+            };
+        };
+
+        VoidTask void_coro() {
+            co_return;
+        }
+    "#;
+
+    let result = parser.parse_string(code, "test.cpp");
+    assert!(result.is_ok(), "Failed to parse return_void: {:?}", result.err());
+
+    let ast = result.unwrap();
+
+    // Find return_void method
+    let has_method = find_node_kind(&ast.translation_unit, |kind| {
+        matches!(kind, ClangNodeKind::CXXMethodDecl { name, return_type, .. }
+            if name == "return_void" && matches!(return_type, CppType::Void))
+    });
+
+    assert!(has_method.is_some(), "Expected to find return_void method in promise_type");
+}
+
+/// Test parsing promise type with return_value method.
+#[test]
+fn test_promise_type_return_value() {
+    let parser = ClangParser::with_system_includes().unwrap();
+    let code = r#"
+        #include <coroutine>
+
+        struct ValueTask {
+            int result;
+            struct promise_type {
+                int value;
+                ValueTask get_return_object() { return {}; }
+                std::suspend_never initial_suspend() { return {}; }
+                std::suspend_never final_suspend() noexcept { return {}; }
+                void return_value(int v) { value = v; }
+                void unhandled_exception() {}
+            };
+        };
+
+        ValueTask value_coro() {
+            co_return 42;
+        }
+    "#;
+
+    let result = parser.parse_string(code, "test.cpp");
+    assert!(result.is_ok(), "Failed to parse return_value: {:?}", result.err());
+
+    let ast = result.unwrap();
+
+    // Find return_value method with int parameter
+    let has_method = find_node_kind(&ast.translation_unit, |kind| {
+        matches!(kind, ClangNodeKind::CXXMethodDecl { name, params, .. }
+            if name == "return_value" && params.len() == 1)
+    });
+
+    assert!(has_method.is_some(), "Expected to find return_value method in promise_type");
+}
+
+/// Test parsing promise type with yield_value method.
+#[test]
+fn test_promise_type_yield_value() {
+    let parser = ClangParser::with_system_includes().unwrap();
+    let code = r#"
+        #include <coroutine>
+
+        struct Generator {
+            struct promise_type {
+                int current_value;
+                Generator get_return_object() { return {}; }
+                std::suspend_always initial_suspend() { return {}; }
+                std::suspend_always final_suspend() noexcept { return {}; }
+                void return_void() {}
+                void unhandled_exception() {}
+                std::suspend_always yield_value(int value) {
+                    current_value = value;
+                    return {};
+                }
+            };
+        };
+
+        Generator gen() {
+            co_yield 1;
+            co_yield 2;
+        }
+    "#;
+
+    let result = parser.parse_string(code, "test.cpp");
+    assert!(result.is_ok(), "Failed to parse yield_value: {:?}", result.err());
+
+    let ast = result.unwrap();
+
+    // Find yield_value method
+    let has_method = find_node_kind(&ast.translation_unit, |kind| {
+        matches!(kind, ClangNodeKind::CXXMethodDecl { name, params, .. }
+            if name == "yield_value" && params.len() == 1)
+    });
+
+    assert!(has_method.is_some(), "Expected to find yield_value method in promise_type");
+}
+
+/// Test parsing unhandled_exception method in promise type.
+#[test]
+fn test_promise_type_unhandled_exception() {
+    let parser = ClangParser::with_system_includes().unwrap();
+    let code = r#"
+        #include <coroutine>
+
+        struct SafeTask {
+            struct promise_type {
+                SafeTask get_return_object() { return {}; }
+                std::suspend_never initial_suspend() { return {}; }
+                std::suspend_never final_suspend() noexcept { return {}; }
+                void return_void() {}
+                void unhandled_exception() noexcept {}
+            };
+        };
+
+        SafeTask safe_coro() {
+            co_return;
+        }
+    "#;
+
+    let result = parser.parse_string(code, "test.cpp");
+    assert!(result.is_ok(), "Failed to parse unhandled_exception: {:?}", result.err());
+
+    let ast = result.unwrap();
+
+    // Find unhandled_exception method
+    let has_method = find_node_kind(&ast.translation_unit, |kind| {
+        matches!(kind, ClangNodeKind::CXXMethodDecl { name, .. } if name == "unhandled_exception")
+    });
+
+    assert!(has_method.is_some(), "Expected to find unhandled_exception method in promise_type");
+}
+
+/// Test complete promise type with all methods parsed correctly.
+#[test]
+fn test_promise_type_complete() {
+    let parser = ClangParser::with_system_includes().unwrap();
+    let code = r#"
+        #include <coroutine>
+
+        struct CompleteTask {
+            struct promise_type {
+                int result;
+                CompleteTask get_return_object() { return {}; }
+                std::suspend_always initial_suspend() { return {}; }
+                std::suspend_always final_suspend() noexcept { return {}; }
+                void return_value(int v) { result = v; }
+                void unhandled_exception() {}
+                std::suspend_always yield_value(int value) {
+                    result = value;
+                    return {};
+                }
+            };
+        };
+
+        CompleteTask complete_coro() {
+            co_yield 10;
+            co_return 42;
+        }
+    "#;
+
+    let result = parser.parse_string(code, "test.cpp");
+    assert!(result.is_ok(), "Failed to parse complete promise type: {:?}", result.err());
+
+    let ast = result.unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).unwrap();
+
+    // Verify the coroutine function is correctly parsed
+    let coro_fn = module.functions.iter().find(|f| f.display_name == "complete_coro");
+    assert!(coro_fn.is_some(), "Expected to find complete_coro function");
+}
