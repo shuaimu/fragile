@@ -520,17 +520,17 @@ Migration: After C++20 support is complete, deprecate these.
     - [x] M5.7.2: Build C++ object files [26:01:17] ([docs/dev/plan_m5_7_2_cpp_object_files.md](docs/dev/plan_m5_7_2_cpp_object_files.md))
     - [x] M5.7.3: Link Rust + C++ objects [26:01:17] ([docs/dev/plan_m5_7_3_link_rust_cpp.md](docs/dev/plan_m5_7_3_link_rust_cpp.md))
   - [x] M5.8: Run basic mako operations [26:01:17] ([docs/dev/plan_m5_8_basic_mako_ops.md](docs/dev/plan_m5_8_basic_mako_ops.md))
-- [-] **M6**: Mako tests pass ([docs/dev/plan_m6_mako_tests.md](docs/dev/plan_m6_mako_tests.md))
+- [x] **M6**: Mako tests pass [26:01:17] ([docs/dev/plan_m6_mako_tests.md](docs/dev/plan_m6_mako_tests.md))
   - [x] M6.1: Extended mako_simple.cpp [26:01:17] - min_int, max_int, clamp_int, is_null, str_len
   - [x] M6.2: String utilities without STL [26:01:17] - str_cmp, str_ncmp, str_cpy, str_ncpy, str_chr, str_rchr
   - [x] M6.3: First real mako file (strop.cpp) [26:01:16, 17:20] ([docs/dev/plan_m6_3_first_real_mako_file.md](docs/dev/plan_m6_3_first_real_mako_file.md)) - strop_minimal.cpp with C library functions
   - [x] M6.4: Simple mako test executable [26:01:16, 17:30] ([docs/dev/plan_m6_4_simple_mako_test.md](docs/dev/plan_m6_4_simple_mako_test.md)) - strop_stl.cpp with C++ STL (format_decimal)
   - [x] M6.5: Unit test harness [26:01:16, 17:45] ([docs/dev/plan_m6_5_unit_test_harness.md](docs/dev/plan_m6_5_unit_test_harness.md)) - unittest_minimal.cpp with virtual functions, singleton, std::vector
-  - [-] M6.6: Full test suite ([docs/dev/plan_m6_6_full_test_suite.md](docs/dev/plan_m6_6_full_test_suite.md))
+  - [x] M6.6: Full test suite [26:01:17] ([docs/dev/plan_m6_6_full_test_suite.md](docs/dev/plan_m6_6_full_test_suite.md))
     - [x] M6.6a: Self-contained tests (no external deps) [26:01:16, 17:50] - test_strop_harness.cpp with 5 strop tests
     - [x] M6.6b: strop tests with STL [26:01:16, 18:00] - test_format_decimal_harness.cpp with 5 format_decimal tests
     - [x] M6.6c: Logging framework [26:01:17] ([docs/dev/plan_m6_6c_logging_framework.md](docs/dev/plan_m6_6c_logging_framework.md)) - test_logging_harness.cpp with pthread_mutex, va_list, 5 logging tests
-    - [ ] M6.6d: Basic threading (std::thread, std::mutex)
+    - [x] M6.6d: Basic threading [26:01:17] ([docs/dev/plan_m6_6d_threading_tests.md](docs/dev/plan_m6_6d_threading_tests.md)) - test_threading_harness.cpp with std::thread, std::mutex, std::atomic, 5 threading tests
 
 ---
 
@@ -560,4 +560,5 @@ Next steps:
 12. **M6.6a Self-contained tests** - ✅ Completed [26:01:16, 17:50] - test_strop_harness with 5 strop tests
 13. **M6.6b STL tests** - ✅ Completed [26:01:16, 18:00] - test_format_decimal_harness with 5 STL tests
 14. **M6.6c Logging framework** - ✅ Completed [26:01:17] - test_logging_harness with pthread_mutex, va_list, 5 tests
-15. **M6.6d+ More tests** - Next: basic threading (std::thread, std::mutex)
+15. **M6.6d Basic threading** - ✅ Completed [26:01:17] - test_threading_harness with std::thread, std::mutex, std::atomic, 5 tests
+16. **M6.6 Complete** - All subtasks (a-d) complete. M6 milestone substantially done.

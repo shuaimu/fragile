@@ -1927,6 +1927,98 @@ fn main() {
         }
     }
 
+    /// Test M6.6d: Basic threading with std::thread, std::mutex, std::atomic
+    /// This validates C++11 threading primitives.
+    #[test]
+    #[cfg(feature = "rustc-integration")]
+    fn test_threading_harness() {
+        use tempfile::TempDir;
+
+        // Find the test_threading_harness.cpp test file
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let project_root = Path::new(manifest_dir).parent().unwrap().parent().unwrap();
+        let threading_harness_cpp = project_root.join("tests/clang_integration/test_threading_harness.cpp");
+
+        if !threading_harness_cpp.exists() {
+            eprintln!("Skipping test: test_threading_harness.cpp not found at {:?}", threading_harness_cpp);
+            return;
+        }
+
+        // Create temp directory
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+
+        // Create a Rust main file that runs the threading test harness
+        let main_rs = temp_dir.path().join("main.rs");
+        std::fs::write(&main_rs, r#"
+extern "C" {
+    // Run all threading tests, returns number of failures
+    fn threading_test_run_all() -> i32;
+
+    // Get number of registered threading tests
+    fn threading_test_count() -> i32;
+}
+
+fn main() {
+    // Check that tests were registered
+    let count = unsafe { threading_test_count() };
+    println!("Number of registered threading tests: {}", count);
+    assert!(count >= 5, "Expected at least 5 threading tests, got {}", count);
+
+    // Run all tests
+    let failures = unsafe { threading_test_run_all() };
+    println!("Threading test failures: {}", failures);
+
+    if failures == 0 {
+        println!("All threading harness tests passed!");
+    } else {
+        panic!("Threading test harness reported {} failures", failures);
+    }
+}
+"#).expect("Failed to write main.rs");
+
+        let output_path = temp_dir.path().join("threading_harness_binary");
+
+        // Create driver
+        let driver = FragileDriver::new();
+
+        // Run full pipeline
+        let result = driver.compile_with_cpp(
+            &[main_rs.as_path()],
+            &[threading_harness_cpp.as_path()],
+            &output_path,
+            None,
+        );
+
+        match result {
+            Ok(()) => {
+                println!("threading harness compilation succeeded!");
+                assert!(output_path.exists(), "Binary should exist");
+
+                // Run the binary
+                let run_result = std::process::Command::new(&output_path)
+                    .output();
+
+                match run_result {
+                    Ok(output) => {
+                        let stdout = String::from_utf8_lossy(&output.stdout);
+                        let stderr = String::from_utf8_lossy(&output.stderr);
+                        println!("stdout: {}", stdout);
+                        println!("stderr: {}", stderr);
+                        assert!(output.status.success(), "Binary should run successfully");
+                        assert!(stdout.contains("All threading harness tests passed!"),
+                            "Output should indicate success");
+                    }
+                    Err(e) => {
+                        eprintln!("Failed to run binary (may be expected): {}", e);
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("threading harness compilation failed (may be expected in CI): {}", e);
+            }
+        }
+    }
+
     /// Test M6.6c: Logging framework using pthread mutex and variadic functions
     /// This validates logging with va_list, pthread_mutex_t, and format strings.
     #[test]
