@@ -291,4 +291,176 @@ impl CppType {
             _ => self.clone(),
         }
     }
+
+    /// Get the type properties for SFINAE/type trait evaluation.
+    /// Returns None for dependent types (template parameters).
+    pub fn properties(&self) -> Option<TypeProperties> {
+        match self {
+            // Template parameters have unknown properties
+            CppType::TemplateParam { .. }
+            | CppType::DependentType { .. }
+            | CppType::ParameterPack { .. } => None,
+
+            CppType::Void => Some(TypeProperties {
+                is_integral: false,
+                is_signed: false,
+                is_floating_point: false,
+                is_scalar: false,
+                is_pointer: false,
+                is_reference: false,
+                is_trivially_copyable: true,
+                is_trivially_destructible: true,
+            }),
+
+            CppType::Bool => Some(TypeProperties {
+                is_integral: true,
+                is_signed: false,
+                is_floating_point: false,
+                is_scalar: true,
+                is_pointer: false,
+                is_reference: false,
+                is_trivially_copyable: true,
+                is_trivially_destructible: true,
+            }),
+
+            CppType::Char { signed } => Some(TypeProperties {
+                is_integral: true,
+                is_signed: *signed,
+                is_floating_point: false,
+                is_scalar: true,
+                is_pointer: false,
+                is_reference: false,
+                is_trivially_copyable: true,
+                is_trivially_destructible: true,
+            }),
+
+            CppType::Short { signed }
+            | CppType::Int { signed }
+            | CppType::Long { signed }
+            | CppType::LongLong { signed } => Some(TypeProperties {
+                is_integral: true,
+                is_signed: *signed,
+                is_floating_point: false,
+                is_scalar: true,
+                is_pointer: false,
+                is_reference: false,
+                is_trivially_copyable: true,
+                is_trivially_destructible: true,
+            }),
+
+            CppType::Float | CppType::Double => Some(TypeProperties {
+                is_integral: false,
+                is_signed: true, // Floating point types are always signed
+                is_floating_point: true,
+                is_scalar: true,
+                is_pointer: false,
+                is_reference: false,
+                is_trivially_copyable: true,
+                is_trivially_destructible: true,
+            }),
+
+            CppType::Pointer { .. } => Some(TypeProperties {
+                is_integral: false,
+                is_signed: false,
+                is_floating_point: false,
+                is_scalar: true,
+                is_pointer: true,
+                is_reference: false,
+                is_trivially_copyable: true,
+                is_trivially_destructible: true,
+            }),
+
+            CppType::Reference { .. } => Some(TypeProperties {
+                is_integral: false,
+                is_signed: false,
+                is_floating_point: false,
+                is_scalar: false,
+                is_pointer: false,
+                is_reference: true,
+                is_trivially_copyable: false,
+                is_trivially_destructible: true,
+            }),
+
+            CppType::Array { .. } => Some(TypeProperties {
+                is_integral: false,
+                is_signed: false,
+                is_floating_point: false,
+                is_scalar: false,
+                is_pointer: false,
+                is_reference: false,
+                // Arrays of trivially copyable types are trivially copyable
+                is_trivially_copyable: false, // Conservative default
+                is_trivially_destructible: true,
+            }),
+
+            CppType::Named(_) => Some(TypeProperties {
+                is_integral: false,
+                is_signed: false,
+                is_floating_point: false,
+                is_scalar: false,
+                is_pointer: false,
+                is_reference: false,
+                // Named types need lookup to determine properties
+                is_trivially_copyable: false, // Conservative default
+                is_trivially_destructible: false, // Conservative default
+            }),
+
+            CppType::Function { .. } => Some(TypeProperties {
+                is_integral: false,
+                is_signed: false,
+                is_floating_point: false,
+                is_scalar: false,
+                is_pointer: false,
+                is_reference: false,
+                is_trivially_copyable: false,
+                is_trivially_destructible: true,
+            }),
+        }
+    }
+
+    /// Check if this is an integral type (bool, char, short, int, long, long long).
+    pub fn is_integral(&self) -> Option<bool> {
+        self.properties().map(|p| p.is_integral)
+    }
+
+    /// Check if this is a signed type.
+    pub fn is_signed(&self) -> Option<bool> {
+        self.properties().map(|p| p.is_signed)
+    }
+
+    /// Check if this is a scalar type (arithmetic types, pointers, enum types).
+    pub fn is_scalar(&self) -> Option<bool> {
+        self.properties().map(|p| p.is_scalar)
+    }
+
+    /// Check if this is a floating point type (float, double).
+    pub fn is_floating_point(&self) -> Option<bool> {
+        self.properties().map(|p| p.is_floating_point)
+    }
+
+    /// Check if this is an arithmetic type (integral or floating point).
+    pub fn is_arithmetic(&self) -> Option<bool> {
+        self.properties().map(|p| p.is_integral || p.is_floating_point)
+    }
+}
+
+/// Type properties for SFINAE and type trait evaluation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TypeProperties {
+    /// True for bool, char, short, int, long, long long (signed or unsigned)
+    pub is_integral: bool,
+    /// True for signed types, false for unsigned
+    pub is_signed: bool,
+    /// True for float, double, long double
+    pub is_floating_point: bool,
+    /// True for arithmetic types and pointers
+    pub is_scalar: bool,
+    /// True for pointer types
+    pub is_pointer: bool,
+    /// True for reference types (lvalue or rvalue)
+    pub is_reference: bool,
+    /// True if the type can be safely memcpy'd
+    pub is_trivially_copyable: bool,
+    /// True if the destructor is trivial
+    pub is_trivially_destructible: bool,
 }

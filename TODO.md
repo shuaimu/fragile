@@ -80,7 +80,8 @@ See [PLAN_CPP20_MAKO.md](PLAN_CPP20_MAKO.md) for detailed plan.
   - [x] Basic class templates [26:01:16, 03:45] ([docs/dev/plan_class_templates.md](docs/dev/plan_class_templates.md))
   - [x] Partial specialization [26:01:16, 04:30] ([docs/dev/plan_partial_specialization.md](docs/dev/plan_partial_specialization.md))
   - [x] Nested templates (member templates) [26:01:16, 05:00] ([docs/dev/plan_nested_templates.md](docs/dev/plan_nested_templates.md))
-- [ ] **B.3 SFINAE & Type Traits**
+- [-] **B.3 SFINAE & Type Traits**
+  - [x] TypeProperties foundation [26:01:16, 05:30] ([docs/dev/plan_sfinae.md](docs/dev/plan_sfinae.md))
   - [ ] std::enable_if
   - [ ] std::is_same, std::is_base_of
   - [ ] std::conditional
@@ -218,7 +219,7 @@ Migration: After C++20 support is complete, deprecate these.
 ## 5. Testing & Milestones
 
 ### 5.1 Unit Tests
-- [x] fragile-clang: 117 tests passing (27 unit + 90 integration)
+- [x] fragile-clang: 124 tests passing (27 unit + 97 integration)
 - [x] fragile-rustc-driver: 6 tests passing
 - [x] fragile-runtime: Compiles
 

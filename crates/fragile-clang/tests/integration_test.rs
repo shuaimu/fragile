@@ -2934,3 +2934,99 @@ fn test_member_template_multiple_params() {
     assert_eq!(member_tmpl.template_params, vec!["U", "V"]);
     assert_eq!(member_tmpl.params.len(), 1);
 }
+
+// ============================================================================
+// Type Properties Tests (SFINAE Foundation)
+// ============================================================================
+
+/// Test type properties for integral types.
+#[test]
+fn test_type_properties_integral() {
+    // Signed int
+    let int_type = CppType::Int { signed: true };
+    let props = int_type.properties().unwrap();
+    assert!(props.is_integral);
+    assert!(props.is_signed);
+    assert!(props.is_scalar);
+    assert!(!props.is_floating_point);
+    assert!(props.is_trivially_copyable);
+
+    // Unsigned int
+    let uint_type = CppType::Int { signed: false };
+    let props = uint_type.properties().unwrap();
+    assert!(props.is_integral);
+    assert!(!props.is_signed);
+    assert!(props.is_scalar);
+
+    // Bool is integral but not signed
+    let bool_type = CppType::Bool;
+    let props = bool_type.properties().unwrap();
+    assert!(props.is_integral);
+    assert!(!props.is_signed);
+    assert!(props.is_scalar);
+}
+
+/// Test type properties for floating point types.
+#[test]
+fn test_type_properties_floating() {
+    let double_type = CppType::Double;
+    let props = double_type.properties().unwrap();
+    assert!(!props.is_integral);
+    assert!(props.is_signed);
+    assert!(props.is_floating_point);
+    assert!(props.is_scalar);
+    assert!(props.is_trivially_copyable);
+
+    let float_type = CppType::Float;
+    let props = float_type.properties().unwrap();
+    assert!(!props.is_integral);
+    assert!(props.is_floating_point);
+    assert!(props.is_scalar);
+}
+
+/// Test type properties for pointer types.
+#[test]
+fn test_type_properties_pointer() {
+    let ptr_type = CppType::int().ptr();
+    let props = ptr_type.properties().unwrap();
+    assert!(!props.is_integral);
+    assert!(!props.is_floating_point);
+    assert!(props.is_scalar);
+    assert!(props.is_pointer);
+    assert!(props.is_trivially_copyable);
+}
+
+/// Test type properties for reference types.
+#[test]
+fn test_type_properties_reference() {
+    let ref_type = CppType::int().ref_();
+    let props = ref_type.properties().unwrap();
+    assert!(!props.is_integral);
+    assert!(!props.is_scalar);
+    assert!(props.is_reference);
+    assert!(!props.is_trivially_copyable);
+}
+
+/// Test that template parameters have no properties (dependent).
+#[test]
+fn test_type_properties_template_param() {
+    let template_type = CppType::template_param("T", 0, 0);
+    assert!(template_type.properties().is_none());
+    assert!(template_type.is_integral().is_none());
+}
+
+/// Test is_integral helper method.
+#[test]
+fn test_is_integral_helper() {
+    assert_eq!(CppType::int().is_integral(), Some(true));
+    assert_eq!(CppType::Double.is_integral(), Some(false));
+    assert_eq!(CppType::template_param("T", 0, 0).is_integral(), None);
+}
+
+/// Test is_arithmetic helper method.
+#[test]
+fn test_is_arithmetic_helper() {
+    assert_eq!(CppType::int().is_arithmetic(), Some(true));
+    assert_eq!(CppType::Double.is_arithmetic(), Some(true));
+    assert_eq!(CppType::int().ptr().is_arithmetic(), Some(false));
+}
