@@ -1593,3 +1593,117 @@ fn test_function_template_declaration() {
     assert_eq!(tmpl.template_params[0], "T");
     assert!(!tmpl.is_definition);
 }
+
+/// Test name resolution for function calls within the same namespace.
+#[test]
+fn test_name_resolution_same_namespace() {
+    use fragile_clang::MirTerminator;
+
+    let parser = ClangParser::new().expect("Failed to create parser");
+
+    let source = r#"
+        namespace foo {
+            int helper() {
+                return 42;
+            }
+
+            int caller() {
+                return helper();
+            }
+        }
+    "#;
+
+    let ast = parser.parse_string(source, "same_ns.cpp").expect("Failed to parse");
+    let converter = MirConverter::new();
+    let mut module = converter.convert(ast).expect("Failed to convert");
+
+    // Before resolution, function name is unqualified
+    let caller = module.functions.iter().find(|f| f.display_name == "caller").unwrap();
+    let call_block = caller.mir_body.blocks.iter().find(|b| {
+        matches!(&b.terminator, MirTerminator::Call { .. })
+    });
+    assert!(call_block.is_some(), "Should have a function call");
+
+    // Apply name resolution
+    module.resolve_names();
+
+    // After resolution, function name should be qualified
+    let caller = module.functions.iter().find(|f| f.display_name == "caller").unwrap();
+    for block in &caller.mir_body.blocks {
+        if let MirTerminator::Call { func, .. } = &block.terminator {
+            assert_eq!(func, "foo::helper", "Function call should be resolved to foo::helper");
+        }
+    }
+}
+
+/// Test name resolution via using namespace directive.
+#[test]
+fn test_name_resolution_using_namespace() {
+    use fragile_clang::MirTerminator;
+
+    let parser = ClangParser::new().expect("Failed to create parser");
+
+    let source = r#"
+        namespace bar {
+            int helper() {
+                return 100;
+            }
+        }
+
+        using namespace bar;
+
+        int caller() {
+            return helper();
+        }
+    "#;
+
+    let ast = parser.parse_string(source, "using_ns.cpp").expect("Failed to parse");
+    let converter = MirConverter::new();
+    let mut module = converter.convert(ast).expect("Failed to convert");
+
+    // Apply name resolution
+    module.resolve_names();
+
+    // Function call should be resolved to bar::helper
+    let caller = module.functions.iter().find(|f| f.display_name == "caller").unwrap();
+    for block in &caller.mir_body.blocks {
+        if let MirTerminator::Call { func, .. } = &block.terminator {
+            assert_eq!(func, "bar::helper", "Function call should be resolved to bar::helper via using directive");
+        }
+    }
+}
+
+/// Test name resolution for global functions from within a namespace.
+#[test]
+fn test_name_resolution_global_from_namespace() {
+    use fragile_clang::MirTerminator;
+
+    let parser = ClangParser::new().expect("Failed to create parser");
+
+    let source = r#"
+        int global_helper() {
+            return 500;
+        }
+
+        namespace ns {
+            int caller() {
+                return global_helper();
+            }
+        }
+    "#;
+
+    let ast = parser.parse_string(source, "global.cpp").expect("Failed to parse");
+    let converter = MirConverter::new();
+    let mut module = converter.convert(ast).expect("Failed to convert");
+
+    // Apply name resolution
+    module.resolve_names();
+
+    // Function call should be resolved to global scope
+    let caller = module.functions.iter().find(|f| f.display_name == "caller").unwrap();
+    for block in &caller.mir_body.blocks {
+        if let MirTerminator::Call { func, .. } = &block.terminator {
+            assert_eq!(func, "global_helper", "Function call should be resolved to global_helper");
+        }
+    }
+}

@@ -33,11 +33,11 @@ See [PLAN_CPP20_MAKO.md](PLAN_CPP20_MAKO.md) for detailed plan.
   - [x] Exception/memory/vtable stubs
 
 ### 1.1 Phase A: Core C++ Infrastructure
-- [-] **A.1 Namespaces**
+- [x] **A.1 Namespaces**
   - [x] `namespace foo { }` declarations [26:01:15, 23:35] ([docs/dev/plan_namespace_declarations.md](docs/dev/plan_namespace_declarations.md))
   - [x] Nested namespaces `foo::bar` [26:01:15, 23:35] (included in above)
   - [x] `using namespace` [26:01:15, 23:41] ([docs/dev/plan_using_namespace.md](docs/dev/plan_using_namespace.md))
-  - [ ] Name resolution
+  - [x] Name resolution [26:01:16, 00:53] ([docs/dev/plan_namespace_name_resolution.md](docs/dev/plan_namespace_name_resolution.md))
 - [x] **A.2 Classes Complete**
   - [x] Field declarations
   - [x] Access specifiers (public/private/protected) [26:01:15, 23:46] ([docs/dev/plan_access_specifiers.md](docs/dev/plan_access_specifiers.md))

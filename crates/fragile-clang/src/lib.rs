@@ -15,11 +15,13 @@ mod parse;
 mod convert;
 mod ast;
 mod types;
+mod resolve;
 
 pub use parse::ClangParser;
 pub use convert::MirConverter;
 pub use ast::{AccessSpecifier, ClangAst, ClangNode, ClangNodeKind, ConstructorKind};
 pub use types::CppType;
+pub use resolve::NameResolver;
 
 use miette::Result;
 use std::path::Path;
@@ -27,11 +29,14 @@ use std::path::Path;
 /// Parse a C++ source file and convert to MIR bodies.
 ///
 /// Returns a map of function names to their MIR representations.
+/// Automatically applies name resolution to resolve unqualified function calls.
 pub fn compile_cpp_file(path: &Path) -> Result<CppModule> {
     let parser = ClangParser::new()?;
     let ast = parser.parse_file(path)?;
     let converter = MirConverter::new();
-    converter.convert(ast)
+    let mut module = converter.convert(ast)?;
+    module.resolve_names();
+    Ok(module)
 }
 
 /// A compiled C++ module containing function MIR bodies.
@@ -79,6 +84,147 @@ impl CppModule {
             using_directives: Vec::new(),
             using_declarations: Vec::new(),
         }
+    }
+
+    /// Apply name resolution to all function calls in MIR bodies.
+    ///
+    /// This post-processing step resolves unqualified function names to their
+    /// fully qualified forms using the stored using directives and declarations.
+    pub fn resolve_names(&mut self) {
+        use crate::resolve::NameResolver;
+
+        // First pass: collect all resolutions needed (avoiding borrow conflicts)
+        let mut function_resolutions: Vec<(usize, Vec<(usize, String)>)> = Vec::new();
+        let mut struct_method_resolutions: Vec<(usize, Vec<(usize, usize, String)>)> = Vec::new();
+        let mut struct_ctor_resolutions: Vec<(usize, Vec<(usize, usize, String)>)> = Vec::new();
+        let mut struct_dtor_resolutions: Vec<(usize, Vec<(usize, String)>)> = Vec::new();
+
+        {
+            let resolver = NameResolver::new(self);
+
+            // Collect function resolutions
+            for (func_idx, func) in self.functions.iter().enumerate() {
+                let scope = &func.namespace;
+                let resolutions = Self::collect_mir_resolutions(&func.mir_body, &resolver, scope);
+                if !resolutions.is_empty() {
+                    function_resolutions.push((func_idx, resolutions));
+                }
+            }
+
+            // Collect struct method resolutions
+            for (st_idx, st) in self.structs.iter().enumerate() {
+                let mut scope = st.namespace.clone();
+                scope.push(st.name.clone());
+
+                let mut method_res = Vec::new();
+                for (method_idx, method) in st.methods.iter().enumerate() {
+                    if let Some(ref mir_body) = method.mir_body {
+                        for (block_idx, resolved) in
+                            Self::collect_mir_resolutions(mir_body, &resolver, &scope)
+                        {
+                            method_res.push((method_idx, block_idx, resolved));
+                        }
+                    }
+                }
+                if !method_res.is_empty() {
+                    struct_method_resolutions.push((st_idx, method_res));
+                }
+
+                let mut ctor_res = Vec::new();
+                for (ctor_idx, ctor) in st.constructors.iter().enumerate() {
+                    if let Some(ref mir_body) = ctor.mir_body {
+                        for (block_idx, resolved) in
+                            Self::collect_mir_resolutions(mir_body, &resolver, &scope)
+                        {
+                            ctor_res.push((ctor_idx, block_idx, resolved));
+                        }
+                    }
+                }
+                if !ctor_res.is_empty() {
+                    struct_ctor_resolutions.push((st_idx, ctor_res));
+                }
+
+                let mut dtor_res = Vec::new();
+                if let Some(ref dtor) = st.destructor {
+                    if let Some(ref mir_body) = dtor.mir_body {
+                        dtor_res = Self::collect_mir_resolutions(mir_body, &resolver, &scope);
+                    }
+                }
+                if !dtor_res.is_empty() {
+                    struct_dtor_resolutions.push((st_idx, dtor_res));
+                }
+            }
+        }
+
+        // Second pass: apply resolutions
+        for (func_idx, resolutions) in function_resolutions {
+            for (block_idx, resolved) in resolutions {
+                if let MirTerminator::Call { func, .. } =
+                    &mut self.functions[func_idx].mir_body.blocks[block_idx].terminator
+                {
+                    *func = resolved;
+                }
+            }
+        }
+
+        for (st_idx, resolutions) in struct_method_resolutions {
+            for (method_idx, block_idx, resolved) in resolutions {
+                if let Some(ref mut mir_body) = self.structs[st_idx].methods[method_idx].mir_body {
+                    if let MirTerminator::Call { func, .. } =
+                        &mut mir_body.blocks[block_idx].terminator
+                    {
+                        *func = resolved;
+                    }
+                }
+            }
+        }
+
+        for (st_idx, resolutions) in struct_ctor_resolutions {
+            for (ctor_idx, block_idx, resolved) in resolutions {
+                if let Some(ref mut mir_body) = self.structs[st_idx].constructors[ctor_idx].mir_body
+                {
+                    if let MirTerminator::Call { func, .. } =
+                        &mut mir_body.blocks[block_idx].terminator
+                    {
+                        *func = resolved;
+                    }
+                }
+            }
+        }
+
+        for (st_idx, resolutions) in struct_dtor_resolutions {
+            if let Some(ref mut dtor) = self.structs[st_idx].destructor {
+                if let Some(ref mut mir_body) = dtor.mir_body {
+                    for (block_idx, resolved) in resolutions {
+                        if let MirTerminator::Call { func, .. } =
+                            &mut mir_body.blocks[block_idx].terminator
+                        {
+                            *func = resolved;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Collect name resolutions needed for a MIR body.
+    fn collect_mir_resolutions(
+        mir_body: &MirBody,
+        resolver: &resolve::NameResolver,
+        scope: &[String],
+    ) -> Vec<(usize, String)> {
+        let mut resolutions = Vec::new();
+        for (block_idx, block) in mir_body.blocks.iter().enumerate() {
+            if let MirTerminator::Call { func, .. } = &block.terminator {
+                if let Some(qualified) = resolver.resolve_function(func, scope) {
+                    resolutions.push((
+                        block_idx,
+                        resolve::NameResolver::format_qualified_name(&qualified),
+                    ));
+                }
+            }
+        }
+        resolutions
     }
 }
 

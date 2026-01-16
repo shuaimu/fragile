@@ -508,14 +508,10 @@ impl MirConverter {
             }
 
             ClangNodeKind::CallExpr { ty } => {
-                // First child is the function reference, rest are arguments
+                // First child is the function reference (may be wrapped in ImplicitCastExpr),
+                // rest are arguments
                 if let Some(func_ref) = node.children.first() {
-                    let func_name = if let ClangNodeKind::DeclRefExpr { name, .. } = &func_ref.kind
-                    {
-                        name.clone()
-                    } else {
-                        "unknown".to_string()
-                    };
+                    let func_name = Self::extract_function_name(func_ref);
 
                     let mut args = Vec::new();
                     for arg_node in node.children.iter().skip(1) {
@@ -768,6 +764,27 @@ impl MirConverter {
         }
 
         initializers
+    }
+
+    /// Extract function name from a CallExpr's first child, unwrapping casts.
+    ///
+    /// Clang often wraps function references in ImplicitCastExpr or UnexposedExpr,
+    /// so we need to recursively unwrap to find the actual DeclRefExpr containing the name.
+    fn extract_function_name(node: &ClangNode) -> String {
+        match &node.kind {
+            ClangNodeKind::DeclRefExpr { name, .. } => name.clone(),
+            ClangNodeKind::ImplicitCastExpr { .. }
+            | ClangNodeKind::CastExpr { .. }
+            | ClangNodeKind::Unknown(_) => {
+                // Unwrap cast/unknown node and recurse
+                if let Some(inner) = node.children.first() {
+                    Self::extract_function_name(inner)
+                } else {
+                    "unknown".to_string()
+                }
+            }
+            _ => "unknown".to_string(),
+        }
     }
 }
 
