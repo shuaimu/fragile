@@ -451,7 +451,7 @@ Migration: After C++20 support is complete, deprecate these.
 ## 5. Testing & Milestones
 
 ### 5.1 Unit Tests
-- [x] fragile-clang: 406 tests passing (27 unit + 379 integration) - includes 10 coroutine + 7 exception + 6 RTTI + 8 promise type + 8 awaitable + 8 generator + 3 noexcept + 1 member access + 1 stack unwinding + 185 mako file tests [26:01:16]
+- [x] fragile-clang: 413 tests passing (27 unit + 386 integration) - includes 10 coroutine + 7 exception + 6 RTTI + 8 promise type + 8 awaitable + 8 generator + 3 noexcept + 1 member access + 1 stack unwinding + 192 mako file tests [26:01:16]
 - [x] fragile-rustc-driver: 7 tests passing (6 original + 1 rustc_integration when feature enabled)
 - [x] fragile-runtime: Compiles
 
@@ -471,10 +471,10 @@ Migration: After C++20 support is complete, deprecate these.
 
 Current status:
 - **rrr module**: 20/20 files parsing (100%) - all base, misc, reactor, rpc files parsing
-- **mako module**: 152/338 files parsing (~45%) - includes all 12 memdb files, deptran (consensus executors, rcc, occ, classic, troad, carousel, tapir, janus, mencius), masstree, masstree-beta (all 28 files), all lib files
-- **Total tests**: 406 passing (fragile-clang integration tests)
+- **mako module**: 159/338 files parsing (~47%) - includes all 12 memdb files, deptran (consensus executors, rcc, occ, classic, troad, carousel, tapir, janus, mencius), masstree, masstree-beta (all 28 files), all lib files
+- **Total tests**: 413 passing (fragile-clang integration tests)
 - **Milestones**: M1 ✅, M2-M4 (parsing complete, compilation pending)
 
 Next steps:
-1. **rustc Integration (2.3)** - Requires user setup: `rustup component add rustc-dev --toolchain nightly`
+1. **rustc Integration (2.3)** - ✅ Completed [26:01:16, 17:00] - Query override infrastructure in place
 2. **Expand mako parsing** - Many remaining files need external library stubs (eRPC, boost, YAML, bsoncxx). Added stubs for: gflags, libevent, protobuf, gperftools, rocksdb, boost, yaml-cpp
