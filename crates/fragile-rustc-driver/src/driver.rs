@@ -468,4 +468,92 @@ mod tests {
         assert!(driver.mir_registry.function_count() >= 100,
             "Driver should have registered at least 100 functions");
     }
+
+    /// End-to-end test: Parse all mako/vec/*.cpp files, generate stubs, register modules.
+    /// Tests: coroutine.cpp, occ.cpp (coroutine-based concurrency)
+    #[test]
+    fn test_end_to_end_mako_vec() {
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let project_root = Path::new(manifest_dir).parent().unwrap().parent().unwrap();
+        let vec_dir = project_root.join("vendor/mako/src/mako/vec");
+
+        // Check if directory exists
+        if !vec_dir.exists() {
+            eprintln!("Skipping test: mako/vec not found at {:?}", vec_dir);
+            return;
+        }
+
+        // Check if submodules are initialized
+        let rusty_cpp_path = project_root.join("vendor/mako/third-party/rusty-cpp/include");
+        if !rusty_cpp_path.exists() {
+            eprintln!("Skipping test: rusty-cpp submodule not initialized");
+            return;
+        }
+
+        // Set up include paths
+        let stubs_path = Path::new(manifest_dir)
+            .parent().unwrap()
+            .join("fragile-clang/stubs");
+
+        let include_paths = vec![
+            project_root.join("vendor/mako/src").to_string_lossy().to_string(),
+            project_root.join("vendor/mako/src/rrr").to_string_lossy().to_string(),
+            project_root.join("vendor/mako/src/mako").to_string_lossy().to_string(),
+            rusty_cpp_path.to_string_lossy().to_string(),
+        ];
+
+        let system_include_paths = vec![
+            stubs_path.to_string_lossy().to_string(),
+        ];
+
+        // Files to test
+        let files = ["coroutine.cpp", "occ.cpp"];
+        let mut all_modules = Vec::new();
+        let driver = FragileDriver::new();
+
+        for file in &files {
+            let cpp_file = vec_dir.join(file);
+            if !cpp_file.exists() {
+                eprintln!("  Skipping {}: not found", file);
+                continue;
+            }
+
+            // Parse the C++ file
+            let parser = fragile_clang::ClangParser::with_paths(
+                include_paths.clone(),
+                system_include_paths.clone(),
+            ).expect("Failed to create parser");
+
+            let ast = parser.parse_file(&cpp_file)
+                .expect(&format!("Failed to parse {}", file));
+
+            let converter = fragile_clang::MirConverter::new();
+            let module = converter.convert(ast)
+                .expect(&format!("Failed to convert {} to MIR", file));
+
+            println!("{}: {} functions", file, module.functions.len());
+
+            // Register with driver
+            driver.register_cpp_module(&module);
+            all_modules.push(module);
+        }
+
+        // Verify we parsed all files
+        assert_eq!(all_modules.len(), 2, "Should have parsed all 2 files");
+
+        // Generate combined stubs
+        let stubs = generate_rust_stubs(&all_modules);
+        assert!(stubs.contains("extern"), "Stubs should contain extern block");
+
+        // Verify total function count
+        let total_functions: usize = all_modules.iter().map(|m| m.functions.len()).sum();
+        println!("Total functions from mako/vec: {}", total_functions);
+        println!("Total registered in driver: {}", driver.mir_registry.function_count());
+        println!("Generated {} bytes of Rust stubs", stubs.len());
+
+        // Should have functions from both coroutine files
+        assert!(total_functions >= 20, "Expected at least 20 functions from mako/vec");
+        assert!(driver.mir_registry.function_count() >= 20,
+            "Driver should have registered at least 20 functions");
+    }
 }
