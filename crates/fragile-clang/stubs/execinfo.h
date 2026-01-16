@@ -1,5 +1,7 @@
 // Minimal execinfo.h stub for fragile parsing
-#ifndef _FRAGILE_EXECINFO_H_
+// Use system include guard so we're mutually exclusive with system execinfo.h
+#ifndef _EXECINFO_H
+#define _EXECINFO_H
 #define _FRAGILE_EXECINFO_H_
 
 #include "cstdint"
@@ -17,4 +19,4 @@ void backtrace_symbols_fd(void* const* buffer, int size, int fd);
 
 }
 
-#endif // _FRAGILE_EXECINFO_H_
+#endif // _EXECINFO_H

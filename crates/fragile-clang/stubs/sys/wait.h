@@ -5,10 +5,29 @@
 #define _SYS_WAIT_H
 
 #include <sys/types.h>
+#include <csignal>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+// Forward declare signal info structure
+#ifndef __siginfo_t_defined
+#define __siginfo_t_defined
+typedef struct siginfo_t {
+    int si_signo;
+    int si_errno;
+    int si_code;
+    pid_t si_pid;
+    uid_t si_uid;
+    void* si_addr;
+    int si_status;
+    long si_band;
+} siginfo_t;
+#endif
+
+// Forward declare rusage
+struct rusage;
 
 // Wait status macros
 #define WIFEXITED(status)   (((status) & 0x7f) == 0)

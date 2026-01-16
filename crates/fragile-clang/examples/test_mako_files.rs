@@ -86,11 +86,11 @@ fn main() {
         if sto_path.exists() {
             include_paths.push(sto_path.to_string_lossy().to_string());
         }
-
         // Defines needed for mako/masstree
         let defines = vec![
             r#"CONFIG_H="mako/masstree/config.h""#.to_string(),
             "WORDS_BIGENDIAN_SET=1".to_string(),  // Enable little-endian path in string_slice.hh
+            "HAVE_EXECINFO_H=1".to_string(),      // Enable execinfo.h before config.h is parsed
         ];
 
         let parser = match ClangParser::with_paths_and_defines(include_paths, system_include_paths, defines) {

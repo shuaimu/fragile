@@ -212,7 +212,7 @@ See [PLAN_CPP20_MAKO.md](PLAN_CPP20_MAKO.md) for detailed plan.
     - [x] `vendor/mako/src/rrr/reactor/fiber_impl.cc` - **PARSED**: 4640 functions
     - [x] `vendor/mako/src/rrr/reactor/reactor.cc` - **PARSED**: 4640 functions
     - [-] `vendor/mako/src/rrr/reactor/quorum_event.cc` - Cross-namespace inheritance: `janus::QuorumEvent` inherits from `rrr::Event` via `using rrr::Event;`. Clang semantic error on `test()` call [26:01:16, 12:00]. See docs/dev/plan_fix_stub_headers_quorum_event.md
-  - [-] All mako module - **51/155 files parsing (32.9%)** [26:01:16, 22:00]
+  - [-] All mako module - **59/155 files parsing (38.1%)** [26:01:16, 10:00]
     - [x] `vendor/mako/src/mako/vec/coroutine.cpp` - **PARSED**: 40 functions
     - [x] `vendor/mako/src/mako/vec/occ.cpp` - **PARSED**: 41 functions
     - [x] `vendor/mako/src/mako/lib/memory.cc` - **PARSED**: 17 functions
@@ -278,6 +278,19 @@ See [PLAN_CPP20_MAKO.md](PLAN_CPP20_MAKO.md) for detailed plan.
     - [x] F.3.17 Added: unordered_map iterator type aliases, numeric stub, is_object_v/is_signed_v/is_unsigned_v [26:01:16, 22:00]
     - [x] F.3.18 Fixed: vector::assign SFINAE to exclude integers from iterator overload [26:01:16, 22:00]
     - [x] `vendor/mako/src/mako/masstree/testrunner.cc` - **PARSED**: 107 functions [26:01:16, 22:00]
+    - [x] `vendor/mako/src/mako/masstree/mttest.cc` - **PARSED**: 172 functions (masstree test harness) [26:01:16, 10:00]
+    - [x] `vendor/mako/src/mako/masstree/checkpoint.cc` - **PARSED**: 183 functions [26:01:16, 10:00]
+    - [x] `vendor/mako/src/mako/masstree/query_masstree.cc` - **PARSED**: 154 functions [26:01:16, 10:00]
+    - [x] `vendor/mako/src/mako/masstree/scantest.cc` - **PARSED**: 155 functions [26:01:16, 10:00]
+    - [x] `vendor/mako/src/mako/masstree/value_array.cc` - **PARSED**: 154 functions [26:01:16, 10:00]
+    - [x] `vendor/mako/src/mako/masstree/value_string.cc` - **PARSED**: 154 functions [26:01:16, 10:00]
+    - [x] `vendor/mako/src/mako/masstree/value_versioned_array.cc` - **PARSED**: 154 functions [26:01:16, 10:00]
+    - [x] `vendor/mako/src/mako/lib/message.cc` - **PARSED**: 22 functions [26:01:16, 10:00]
+    - [x] F.3.19 Added stubs: log.hh (masstree), sys/utsname.h, asm-generic/mman.h, pwd.h [26:01:16, 10:00]
+    - [x] F.3.20 Added siginfo_t to sys/wait.h for waitid() [26:01:16, 10:00]
+    - [x] F.3.21 Added SIGBUS and other signals to csignal [26:01:16, 10:00]
+    - [x] F.3.22 Added fdopen/fileno to cstdio [26:01:16, 10:00]
+    - [x] F.3.23 Added HAVE_EXECINFO_H define to mako test examples [26:01:16, 10:00]
     - [-] `vendor/mako/src/mako/thread.cc` - Needs eRPC rpc.h header (external dependency)
     - [-] `vendor/mako/src/mako/persist_test.cc` - Has LZ4 stubs but needs one_way_post template from mako internals
     - [ ] Remaining files need: eRPC library stubs, more STL stubs
@@ -366,8 +379,8 @@ Migration: After C++20 support is complete, deprecate these.
 
 Current status:
 - **rrr module**: 15/16 files parsing (94%) - blocked by quorum_event.cc cross-namespace inheritance
-- **mako module**: 44/155 files parsing (28.4%)
-- **Total tests**: 270 passing (27 unit + 243 integration)
+- **mako module**: 59/155 files parsing (38.1%)
+- **Total tests**: 243 passing (fragile-clang integration tests)
 
 Next steps:
 1. **rustc Integration (2.3)** - Requires user setup: `rustup component add rustc-dev --toolchain nightly`
