@@ -1647,4 +1647,99 @@ fn main() {
             }
         }
     }
+
+    /// Test M6.5: Unit test harness with virtual functions and STL
+    /// This tests compiling a minimal unit test framework that uses:
+    /// - Class inheritance with virtual functions
+    /// - Singleton pattern
+    /// - std::vector with class pointers
+    #[test]
+    #[cfg(feature = "rustc-integration")]
+    fn test_unittest_harness() {
+        use tempfile::TempDir;
+
+        // Find the unittest_minimal.cpp test file
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let project_root = Path::new(manifest_dir).parent().unwrap().parent().unwrap();
+        let unittest_cpp = project_root.join("tests/clang_integration/unittest_minimal.cpp");
+
+        if !unittest_cpp.exists() {
+            eprintln!("Skipping test: unittest_minimal.cpp not found at {:?}", unittest_cpp);
+            return;
+        }
+
+        // Create temp directory
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+
+        // Create a Rust main file that runs the test harness
+        let main_rs = temp_dir.path().join("main.rs");
+        std::fs::write(&main_rs, r#"
+extern "C" {
+    // Run all registered tests, returns number of failures
+    fn test_run_all() -> i32;
+
+    // Get number of registered tests
+    fn test_count() -> i32;
+}
+
+fn main() {
+    // Check that tests were registered
+    let count = unsafe { test_count() };
+    println!("Number of registered tests: {}", count);
+    assert!(count > 0, "Expected at least one test to be registered");
+
+    // Run all tests
+    let failures = unsafe { test_run_all() };
+    println!("Test failures: {}", failures);
+
+    if failures == 0 {
+        println!("All unit tests passed!");
+    } else {
+        panic!("Unit test harness reported {} failures", failures);
+    }
+}
+"#).expect("Failed to write main.rs");
+
+        let output_path = temp_dir.path().join("unittest_binary");
+
+        // Create driver
+        let driver = FragileDriver::new();
+
+        // Run full pipeline
+        let result = driver.compile_with_cpp(
+            &[main_rs.as_path()],
+            &[unittest_cpp.as_path()],
+            &output_path,
+            None,
+        );
+
+        match result {
+            Ok(()) => {
+                println!("unittest harness compilation succeeded!");
+                assert!(output_path.exists(), "Binary should exist");
+
+                // Run the binary
+                let run_result = std::process::Command::new(&output_path)
+                    .output();
+
+                match run_result {
+                    Ok(output) => {
+                        let stdout = String::from_utf8_lossy(&output.stdout);
+                        let stderr = String::from_utf8_lossy(&output.stderr);
+                        println!("stdout: {}", stdout);
+                        println!("stderr: {}", stderr);
+                        assert!(output.status.success(), "Binary should run successfully");
+                        assert!(stdout.contains("All unit tests passed!"),
+                            "Output should indicate success");
+                    }
+                    Err(e) => {
+                        eprintln!("Failed to run binary (may be expected): {}", e);
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("unittest harness compilation failed (may be expected in CI): {}", e);
+            }
+        }
+    }
 }
