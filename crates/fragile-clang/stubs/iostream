@@ -19,6 +19,16 @@ template<typename CharT, typename Traits = char_traits<CharT>> class basic_ostre
 template<typename CharT, typename Traits = char_traits<CharT>> class basic_istream;
 template<typename CharT, typename Traits = char_traits<CharT>> class basic_iostream;
 
+// I/O manipulator helper structs
+struct _Setprecision { int n; };
+inline _Setprecision setprecision(int n) { return {n}; }
+
+struct _Setw { int n; };
+inline _Setw setw(int n) { return {n}; }
+
+struct _Setfill { char c; };
+inline _Setfill setfill(char c) { return {c}; }
+
 // ios_base
 class ios_base {
 public:
@@ -158,6 +168,11 @@ public:
     basic_ostream& operator<<(basic_ostream& (*pf)(basic_ostream&)) {
         return pf(*this);
     }
+
+    // I/O manipulator support
+    basic_ostream& operator<<(_Setprecision sp) { this->precision(sp.n); return *this; }
+    basic_ostream& operator<<(_Setw sw) { this->width(sw.n); return *this; }
+    basic_ostream& operator<<(_Setfill sf) { (void)sf; return *this; }
 
     basic_ostream& put(char_type c) { (void)c; return *this; }
     basic_ostream& write(const char_type* s, size_t n) { (void)s; (void)n; return *this; }

@@ -7472,8 +7472,18 @@ fn test_mako_thread_cc() {
         r#"CONFIG_H="mako/masstree/config.h""#.to_string(),
     ];
 
-    let parser = ClangParser::with_paths_and_defines(include_paths, system_include_paths, defines)
-        .expect("Failed to create parser");
+    // Ignore known mako code issues (const correctness problems in common.h)
+    let ignored_errors = vec![
+        "cannot initialize a parameter of type".to_string(),
+        "casts away qualifiers".to_string(),
+    ];
+
+    let parser = ClangParser::with_paths_defines_and_ignored_errors(
+        include_paths,
+        system_include_paths,
+        defines,
+        ignored_errors,
+    ).expect("Failed to create parser");
 
     let result = parser.parse_file(&thread_path);
 
@@ -7491,8 +7501,7 @@ fn test_mako_thread_cc() {
             assert!(module.functions.len() > 0, "Expected to find ndb_thread functions");
         }
         Err(e) => {
-            println!("Note: thread.cc parsing failed: {:?}", e);
-            println!("This may require additional stub headers");
+            panic!("thread.cc should parse successfully: {:?}", e);
         }
     }
 }

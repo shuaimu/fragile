@@ -32,7 +32,7 @@ public:
         friend class thread;
     };
 
-    using native_handle_type = void*;
+    using native_handle_type = pthread_t;
 
     thread() noexcept : joinable_(false) {}
 
@@ -70,7 +70,7 @@ public:
 
     id get_id() const noexcept { return id_; }
 
-    native_handle_type native_handle() { return nullptr; }
+    native_handle_type native_handle() { return 0; }
 
     static unsigned int hardware_concurrency() noexcept { return 1; }
 

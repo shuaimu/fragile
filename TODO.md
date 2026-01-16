@@ -311,7 +311,7 @@ See [PLAN_CPP20_MAKO.md](PLAN_CPP20_MAKO.md) for detailed plan.
     - [x] `vendor/mako/src/mako/lib/multi_transport_manager.cc` - **PARSED**: multi transport manager [26:01:16, 17:30]
     - [x] `vendor/mako/src/rrr/reactor/quorum_event.cc` - **PARSED**: 4631 functions (with error filtering for cross-namespace inheritance) [26:01:16, 19:00]
     - [x] F.3.29 Added `ignored_error_patterns` to ClangParser for filtering known Clang semantic issues [26:01:16, 19:00]
-    - [-] `vendor/mako/src/mako/thread.cc` - Needs eRPC rpc.h header (external dependency)
+    - [x] `vendor/mako/src/mako/thread.cc` - **PARSED**: ndb_thread functions (eRPC stub added) [26:01:16]
     - [-] `vendor/mako/src/mako/persist_test.cc` - References undefined `one_way_post` template (bug in mako - template never defined)
     - [-] `vendor/mako/src/mako/masstree/mtd.cc` - Needs WORDS_BIGENDIAN config (fixed), but has sys/epoll.h conflicts with system headers
     - [x] `vendor/mako/src/memdb/utils.cc` - **PARSED**: 5233 functions
@@ -414,7 +414,10 @@ See [PLAN_CPP20_MAKO.md](PLAN_CPP20_MAKO.md) for detailed plan.
     - [x] `vendor/mako/src/mako/benchmarks/encstress.cc` - **PARSED**: encryption stress test [26:01:16, 20:00]
     - [-] `vendor/mako/src/deptran/mongodb/server.cc` - Needs bsoncxx (external dep)
     - [x] `vendor/mako/src/bench/micro/procedure.cc` - **PARSED**: 4759 functions (micro benchmark procedure) [26:01:16, 22:50]
-    - [ ] Remaining files need: eRPC library stubs, bsoncxx
+    - [x] F.3.49 Added eRPC rpc.h stub header with ReqHandle, MsgBuffer, Rpc, Nexus types [26:01:16]
+    - [x] F.3.50 Fixed std::thread::native_handle_type to use pthread_t [26:01:16]
+    - [x] F.3.51 Added iomanip support (_Setw, _Setprecision, _Setfill) to iostream [26:01:16]
+    - [ ] Remaining files need: bsoncxx (mongodb)
   - [ ] Link and run tests
 
 ---
@@ -519,11 +522,12 @@ Current status:
 - **mako module**: 338/338 files tested (100%) - includes all memdb files, deptran files, consensus executors, masstree, benchmarks
 - **Total tests**: 596 fragile-clang (27 unit + 569 integration), 11 fragile-rustc-driver with feature
 - **Milestones**: M1 ✅, M2-M4 (parsing complete, compilation pending)
-- **Blocked files**: mongodb/server.cc (bsoncxx), thread.cc (eRPC), persist_test.cc (undefined template), mtd.cc (epoll conflicts)
+- **Blocked files**: mongodb/server.cc (bsoncxx), persist_test.cc (undefined template), mtd.cc (epoll conflicts)
 
 Next steps:
 1. **rustc Integration (2.3)** - ✅ Completed [26:01:16, 17:00] - Query override infrastructure in place
 2. **MIR Conversion (2.4)** - ✅ Completed [26:01:17] - ~290 LOC of conversion code, TLS wiring complete
 3. **Full MIR Injection** - ✅ Completed [26:01:17] - mir_built query override with arena allocation
-4. **Expand mako parsing** - Some files need external library stubs (eRPC, bsoncxx)
-5. **End-to-end testing** - Test with nightly rustc + rustc-dev component
+4. **eRPC stub** - ✅ Completed [26:01:16] - thread.cc now parses with eRPC rpc.h stub
+5. **Expand mako parsing** - mongodb/server.cc needs bsoncxx stub
+6. **End-to-end testing** - Test with nightly rustc + rustc-dev component
