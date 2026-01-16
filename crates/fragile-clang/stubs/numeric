@@ -1,0 +1,135 @@
+// Minimal numeric stub for fragile parsing
+#ifndef _FRAGILE_NUMERIC_
+#define _FRAGILE_NUMERIC_
+
+#include "cstdint"
+#include "iterator"
+
+namespace std {
+
+// iota - fill range with sequentially increasing values
+template<typename ForwardIt, typename T>
+void iota(ForwardIt first, ForwardIt last, T value) {
+    for (; first != last; ++first, ++value) {
+        *first = value;
+    }
+}
+
+// accumulate
+template<typename InputIt, typename T>
+T accumulate(InputIt first, InputIt last, T init) {
+    for (; first != last; ++first) {
+        init = init + *first;
+    }
+    return init;
+}
+
+template<typename InputIt, typename T, typename BinaryOp>
+T accumulate(InputIt first, InputIt last, T init, BinaryOp op) {
+    for (; first != last; ++first) {
+        init = op(init, *first);
+    }
+    return init;
+}
+
+// inner_product
+template<typename InputIt1, typename InputIt2, typename T>
+T inner_product(InputIt1 first1, InputIt1 last1, InputIt2 first2, T init) {
+    for (; first1 != last1; ++first1, ++first2) {
+        init = init + (*first1 * *first2);
+    }
+    return init;
+}
+
+// adjacent_difference
+template<typename InputIt, typename OutputIt>
+OutputIt adjacent_difference(InputIt first, InputIt last, OutputIt d_first) {
+    if (first == last) return d_first;
+    auto prev = *first;
+    *d_first++ = prev;
+    for (++first; first != last; ++first) {
+        auto current = *first;
+        *d_first++ = current - prev;
+        prev = current;
+    }
+    return d_first;
+}
+
+// partial_sum
+template<typename InputIt, typename OutputIt>
+OutputIt partial_sum(InputIt first, InputIt last, OutputIt d_first) {
+    if (first == last) return d_first;
+    auto sum = *first;
+    *d_first++ = sum;
+    for (++first; first != last; ++first) {
+        sum = sum + *first;
+        *d_first++ = sum;
+    }
+    return d_first;
+}
+
+// reduce (C++17)
+template<typename InputIt, typename T>
+T reduce(InputIt first, InputIt last, T init) {
+    return accumulate(first, last, init);
+}
+
+template<typename InputIt, typename T, typename BinaryOp>
+T reduce(InputIt first, InputIt last, T init, BinaryOp op) {
+    return accumulate(first, last, init, op);
+}
+
+// exclusive_scan (C++17)
+template<typename InputIt, typename OutputIt, typename T>
+OutputIt exclusive_scan(InputIt first, InputIt last, OutputIt d_first, T init) {
+    for (; first != last; ++first) {
+        *d_first++ = init;
+        init = init + *first;
+    }
+    return d_first;
+}
+
+// inclusive_scan (C++17)
+template<typename InputIt, typename OutputIt>
+OutputIt inclusive_scan(InputIt first, InputIt last, OutputIt d_first) {
+    if (first == last) return d_first;
+    auto sum = *first++;
+    *d_first++ = sum;
+    for (; first != last; ++first) {
+        sum = sum + *first;
+        *d_first++ = sum;
+    }
+    return d_first;
+}
+
+// transform_reduce (C++17)
+template<typename InputIt1, typename InputIt2, typename T>
+T transform_reduce(InputIt1 first1, InputIt1 last1, InputIt2 first2, T init) {
+    return inner_product(first1, last1, first2, init);
+}
+
+// gcd and lcm (C++17)
+template<typename M, typename N>
+constexpr auto gcd(M m, N n) {
+    while (n != 0) {
+        auto t = n;
+        n = m % n;
+        m = t;
+    }
+    return m;
+}
+
+template<typename M, typename N>
+constexpr auto lcm(M m, N n) {
+    return (m != 0 && n != 0) ? (m / gcd(m, n)) * n : 0;
+}
+
+// midpoint (C++20)
+template<typename T>
+constexpr T midpoint(T a, T b) noexcept {
+    return a + (b - a) / 2;
+}
+
+} // namespace std
+
+#endif // _FRAGILE_NUMERIC_

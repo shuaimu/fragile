@@ -469,24 +469,10 @@ void sort_heap(RandomIt first, RandomIt last) {}
 template<typename RandomIt>
 bool is_heap(RandomIt first, RandomIt last) { return true; }
 
-// Accumulate (technically in <numeric> but commonly expected)
-template<typename InputIt, typename T>
-T accumulate(InputIt first, InputIt last, T init) {
-    for (; first != last; ++first) {
-        init = init + *first;
-    }
-    return init;
-}
-
-template<typename InputIt, typename T, typename BinaryOp>
-T accumulate(InputIt first, InputIt last, T init, BinaryOp op) {
-    for (; first != last; ++first) {
-        init = op(init, *first);
-    }
-    return init;
-}
-
 } // namespace std
+
+// Include numeric for accumulate (some code expects it from algorithm)
+#include "numeric"
 
 // Export min/max to global namespace for C-style code compatibility
 // (many real-world codebases expect this after including <algorithm>)
