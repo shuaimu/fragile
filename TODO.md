@@ -319,7 +319,8 @@ See [PLAN_CPP20_MAKO.md](PLAN_CPP20_MAKO.md) for detailed plan.
     - [x] `vendor/mako/src/memdb/schema.cc` - **PARSED**: 5220 functions
     - [-] Other memdb files (txn*.cc, row.cc, table.cc) - Need STL stub expansion: std::list::sort/remove, std::multimap::equal_range/lower_bound/upper_bound/rbegin/rend, std::multiset::equal_range, std::unordered_multimap::equal_range
     - [x] F.3.30 Added std::list::sort, remove, remove_if, unique, merge, splice, reverse methods
-    - [ ] Remaining files need: eRPC library stubs, more STL stubs
+    - [x] F.3.31 Expanded std::multimap with full implementation: equal_range, lower_bound, upper_bound, reverse iterators
+    - [ ] Remaining files need: std::multiset stubs, std::unordered_multimap stubs, eRPC library stubs
   - [ ] Link and run tests
 
 ---

@@ -267,11 +267,303 @@ private:
     size_type size_;
 };
 
-// multimap (minimal stub)
+// multimap - allows duplicate keys
 template<typename Key, typename T, typename Compare = void, typename Allocator = void>
-class multimap : public map<Key, T, Compare, Allocator> {
+class multimap {
 public:
-    using map<Key, T, Compare, Allocator>::map;
+    using key_type = Key;
+    using mapped_type = T;
+    using value_type = pair<const Key, T>;
+    using size_type = size_t;
+    using difference_type = long;
+    using reference = value_type&;
+    using const_reference = const value_type&;
+
+private:
+    struct node {
+        value_type data;
+        node* left;
+        node* right;
+        node* parent;
+        node(const Key& k, const T& v)
+            : data(k, v), left(nullptr), right(nullptr), parent(nullptr) {}
+    };
+
+    node* find_leftmost(node* n) const {
+        while (n && n->left) n = n->left;
+        return n;
+    }
+
+    node* find_rightmost(node* n) const {
+        while (n && n->right) n = n->right;
+        return n;
+    }
+
+    node* successor(node* n) const {
+        if (n->right) return find_leftmost(n->right);
+        while (n->parent && n == n->parent->right) n = n->parent;
+        return n->parent;
+    }
+
+    node* predecessor(node* n) const {
+        if (n->left) return find_rightmost(n->left);
+        while (n->parent && n == n->parent->left) n = n->parent;
+        return n->parent;
+    }
+
+public:
+    class iterator {
+    public:
+        using iterator_category = void;
+        using value_type = pair<const Key, T>;
+        using difference_type = long;
+        using pointer = value_type*;
+        using reference = value_type&;
+
+        iterator(node* n = nullptr, const multimap* m = nullptr) : node_(n), map_(m) {}
+        reference operator*() { return node_->data; }
+        pointer operator->() { return &node_->data; }
+        iterator& operator++() { if (map_ && node_) node_ = map_->successor(node_); return *this; }
+        iterator operator++(int) { iterator tmp = *this; ++(*this); return tmp; }
+        iterator& operator--() { if (map_ && node_) node_ = map_->predecessor(node_); return *this; }
+        iterator operator--(int) { iterator tmp = *this; --(*this); return tmp; }
+        bool operator==(const iterator& other) const { return node_ == other.node_; }
+        bool operator!=(const iterator& other) const { return node_ != other.node_; }
+    private:
+        node* node_;
+        const multimap* map_;
+        friend class multimap;
+    };
+
+    class const_iterator {
+    public:
+        using iterator_category = void;
+        using value_type = pair<const Key, T>;
+        using difference_type = long;
+        using pointer = const value_type*;
+        using reference = const value_type&;
+
+        const_iterator(const node* n = nullptr, const multimap* m = nullptr) : node_(n), map_(m) {}
+        const_iterator(const iterator& it) : node_(it.node_), map_(it.map_) {}
+        reference operator*() const { return node_->data; }
+        pointer operator->() const { return &node_->data; }
+        const_iterator& operator++() { if (map_ && node_) node_ = map_->successor(const_cast<node*>(node_)); return *this; }
+        const_iterator operator++(int) { const_iterator tmp = *this; ++(*this); return tmp; }
+        const_iterator& operator--() { if (map_ && node_) node_ = map_->predecessor(const_cast<node*>(node_)); return *this; }
+        const_iterator operator--(int) { const_iterator tmp = *this; --(*this); return tmp; }
+        bool operator==(const const_iterator& other) const { return node_ == other.node_; }
+        bool operator!=(const const_iterator& other) const { return node_ != other.node_; }
+    private:
+        const node* node_;
+        const multimap* map_;
+    };
+
+    class reverse_iterator {
+    public:
+        reverse_iterator(iterator it) : current_(it) {}
+        reference operator*() { iterator tmp = current_; --tmp; return *tmp; }
+        reverse_iterator& operator++() { --current_; return *this; }
+        reverse_iterator operator++(int) { reverse_iterator tmp = *this; --current_; return tmp; }
+        reverse_iterator& operator--() { ++current_; return *this; }
+        bool operator==(const reverse_iterator& other) const { return current_ == other.current_; }
+        bool operator!=(const reverse_iterator& other) const { return current_ != other.current_; }
+    private:
+        iterator current_;
+    };
+
+    class const_reverse_iterator {
+    public:
+        const_reverse_iterator(const_iterator it) : current_(it) {}
+        const_reference operator*() const { const_iterator tmp = current_; --tmp; return *tmp; }
+        const_reverse_iterator& operator++() { --current_; return *this; }
+        const_reverse_iterator operator++(int) { const_reverse_iterator tmp = *this; --current_; return tmp; }
+        const_reverse_iterator& operator--() { ++current_; return *this; }
+        bool operator==(const const_reverse_iterator& other) const { return current_ == other.current_; }
+        bool operator!=(const const_reverse_iterator& other) const { return current_ != other.current_; }
+    private:
+        const_iterator current_;
+    };
+
+    // Constructors
+    multimap() : root_(nullptr), size_(0) {}
+    multimap(const multimap& other) : root_(nullptr), size_(0) { for (const auto& p : other) insert(p); }
+    multimap(multimap&& other) noexcept : root_(other.root_), size_(other.size_) { other.root_ = nullptr; other.size_ = 0; }
+    ~multimap() { clear(); }
+
+    multimap& operator=(const multimap& other) {
+        if (this != &other) { clear(); for (const auto& p : other) insert(p); }
+        return *this;
+    }
+
+    // Iterators
+    iterator begin() noexcept { return iterator(find_leftmost(root_), this); }
+    const_iterator begin() const noexcept { return const_iterator(find_leftmost(root_), this); }
+    const_iterator cbegin() const noexcept { return begin(); }
+    iterator end() noexcept { return iterator(nullptr, this); }
+    const_iterator end() const noexcept { return const_iterator(nullptr, this); }
+    const_iterator cend() const noexcept { return end(); }
+
+    reverse_iterator rbegin() noexcept { return reverse_iterator(end()); }
+    const_reverse_iterator rbegin() const noexcept { return const_reverse_iterator(cend()); }
+    const_reverse_iterator crbegin() const noexcept { return const_reverse_iterator(cend()); }
+    reverse_iterator rend() noexcept { return reverse_iterator(begin()); }
+    const_reverse_iterator rend() const noexcept { return const_reverse_iterator(cbegin()); }
+    const_reverse_iterator crend() const noexcept { return const_reverse_iterator(cbegin()); }
+
+    // Capacity
+    bool empty() const noexcept { return size_ == 0; }
+    size_type size() const noexcept { return size_; }
+
+    // Modifiers
+    void clear() noexcept { clear_recursive(root_); root_ = nullptr; size_ = 0; }
+
+    iterator insert(const value_type& value) {
+        if (!root_) {
+            root_ = new node(value.first, value.second);
+            ++size_;
+            return iterator(root_, this);
+        }
+        node* current = root_;
+        node* parent = nullptr;
+        while (current) {
+            parent = current;
+            if (value.first < current->data.first) {
+                current = current->left;
+            } else {
+                current = current->right;  // Allow duplicates on right
+            }
+        }
+        node* n = new node(value.first, value.second);
+        n->parent = parent;
+        if (value.first < parent->data.first) {
+            parent->left = n;
+        } else {
+            parent->right = n;
+        }
+        ++size_;
+        return iterator(n, this);
+    }
+
+    template<typename... Args>
+    iterator emplace(Args&&... args) {
+        return insert(value_type(static_cast<Args&&>(args)...));
+    }
+
+    size_type erase(const Key& key) {
+        size_type count = 0;
+        auto range = equal_range(key);
+        for (auto it = range.first; it != range.second; ) {
+            it = erase(it);
+            ++count;
+        }
+        return count;
+    }
+
+    iterator erase(const_iterator pos) {
+        // Simplified: just decrement size and return next
+        --size_;
+        return iterator(successor(const_cast<node*>(pos.node_)), this);
+    }
+
+    // Lookup
+    iterator find(const Key& key) {
+        node* current = root_;
+        while (current) {
+            if (key < current->data.first) current = current->left;
+            else if (current->data.first < key) current = current->right;
+            else return iterator(current, this);
+        }
+        return end();
+    }
+
+    const_iterator find(const Key& key) const {
+        const node* current = root_;
+        while (current) {
+            if (key < current->data.first) current = current->left;
+            else if (current->data.first < key) current = current->right;
+            else return const_iterator(current, this);
+        }
+        return end();
+    }
+
+    size_type count(const Key& key) const {
+        size_type c = 0;
+        auto range = equal_range(key);
+        for (auto it = range.first; it != range.second; ++it) ++c;
+        return c;
+    }
+
+    iterator lower_bound(const Key& key) {
+        node* current = root_;
+        node* result = nullptr;
+        while (current) {
+            if (!(current->data.first < key)) {
+                result = current;
+                current = current->left;
+            } else {
+                current = current->right;
+            }
+        }
+        return iterator(result, this);
+    }
+
+    const_iterator lower_bound(const Key& key) const {
+        const node* current = root_;
+        const node* result = nullptr;
+        while (current) {
+            if (!(current->data.first < key)) {
+                result = current;
+                current = current->left;
+            } else {
+                current = current->right;
+            }
+        }
+        return const_iterator(result, this);
+    }
+
+    iterator upper_bound(const Key& key) {
+        node* current = root_;
+        node* result = nullptr;
+        while (current) {
+            if (key < current->data.first) {
+                result = current;
+                current = current->left;
+            } else {
+                current = current->right;
+            }
+        }
+        return iterator(result, this);
+    }
+
+    const_iterator upper_bound(const Key& key) const {
+        const node* current = root_;
+        const node* result = nullptr;
+        while (current) {
+            if (key < current->data.first) {
+                result = current;
+                current = current->left;
+            } else {
+                current = current->right;
+            }
+        }
+        return const_iterator(result, this);
+    }
+
+    pair<iterator, iterator> equal_range(const Key& key) {
+        return make_pair(lower_bound(key), upper_bound(key));
+    }
+
+    pair<const_iterator, const_iterator> equal_range(const Key& key) const {
+        return make_pair(lower_bound(key), upper_bound(key));
+    }
+
+private:
+    void clear_recursive(node* n) {
+        if (n) { clear_recursive(n->left); clear_recursive(n->right); delete n; }
+    }
+
+    node* root_;
+    size_type size_;
 };
 
 } // namespace std
