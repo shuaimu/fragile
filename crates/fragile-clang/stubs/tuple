@@ -1,0 +1,281 @@
+// Minimal tuple stub for fragile parsing
+#ifndef _FRAGILE_TUPLE_
+#define _FRAGILE_TUPLE_
+
+#include "cstdint"
+#include "type_traits"
+
+// Forward declare pair since we can't include utility (would be circular)
+namespace std {
+template<typename T1, typename T2> struct pair;
+}
+
+namespace std {
+
+// Forward declaration
+template<typename... Types>
+class tuple;
+
+// Empty tuple
+template<>
+class tuple<> {
+public:
+    constexpr tuple() = default;
+    constexpr tuple(const tuple&) = default;
+    constexpr tuple(tuple&&) = default;
+    tuple& operator=(const tuple&) = default;
+    tuple& operator=(tuple&&) = default;
+    constexpr void swap(tuple&) noexcept {}
+};
+
+// Single element tuple
+template<typename T>
+class tuple<T> {
+public:
+    using value_type = T;
+
+    constexpr tuple() : value_() {}
+    constexpr explicit tuple(const T& t) : value_(t) {}
+    constexpr explicit tuple(T&& t) : value_(static_cast<T&&>(t)) {}
+
+    template<typename U>
+    constexpr tuple(const tuple<U>& other) : value_(get<0>(other)) {}
+
+    template<typename U>
+    constexpr tuple(tuple<U>&& other) : value_(static_cast<U&&>(get<0>(other))) {}
+
+    constexpr tuple(const tuple&) = default;
+    constexpr tuple(tuple&&) = default;
+    tuple& operator=(const tuple&) = default;
+    tuple& operator=(tuple&&) = default;
+
+    template<size_t I>
+    constexpr auto& get_impl() { static_assert(I == 0); return value_; }
+    template<size_t I>
+    constexpr const auto& get_impl() const { static_assert(I == 0); return value_; }
+
+private:
+    T value_;
+    template<size_t I, typename... Args> friend constexpr auto& get(tuple<Args...>&);
+    template<size_t I, typename... Args> friend constexpr const auto& get(const tuple<Args...>&);
+};
+
+// Two element tuple (pair-like)
+template<typename T1, typename T2>
+class tuple<T1, T2> {
+public:
+    constexpr tuple() : first_(), second_() {}
+    constexpr tuple(const T1& t1, const T2& t2) : first_(t1), second_(t2) {}
+    constexpr tuple(T1&& t1, T2&& t2) : first_(static_cast<T1&&>(t1)), second_(static_cast<T2&&>(t2)) {}
+
+    template<typename U1, typename U2>
+    constexpr tuple(const tuple<U1, U2>& other) : first_(get<0>(other)), second_(get<1>(other)) {}
+
+    template<typename U1, typename U2>
+    constexpr tuple(tuple<U1, U2>&& other)
+        : first_(static_cast<U1&&>(get<0>(other))), second_(static_cast<U2&&>(get<1>(other))) {}
+
+    template<typename U1, typename U2>
+    constexpr tuple(const pair<U1, U2>& p) : first_(p.first), second_(p.second) {}
+
+    constexpr tuple(const tuple&) = default;
+    constexpr tuple(tuple&&) = default;
+    tuple& operator=(const tuple&) = default;
+    tuple& operator=(tuple&&) = default;
+
+    T1 first_;
+    T2 second_;
+};
+
+// Three element tuple
+template<typename T1, typename T2, typename T3>
+class tuple<T1, T2, T3> {
+public:
+    constexpr tuple() : first_(), second_(), third_() {}
+    constexpr tuple(const T1& t1, const T2& t2, const T3& t3)
+        : first_(t1), second_(t2), third_(t3) {}
+    constexpr tuple(T1&& t1, T2&& t2, T3&& t3)
+        : first_(static_cast<T1&&>(t1)), second_(static_cast<T2&&>(t2)), third_(static_cast<T3&&>(t3)) {}
+
+    constexpr tuple(const tuple&) = default;
+    constexpr tuple(tuple&&) = default;
+    tuple& operator=(const tuple&) = default;
+    tuple& operator=(tuple&&) = default;
+
+    T1 first_;
+    T2 second_;
+    T3 third_;
+};
+
+// Four element tuple
+template<typename T1, typename T2, typename T3, typename T4>
+class tuple<T1, T2, T3, T4> {
+public:
+    constexpr tuple() = default;
+    constexpr tuple(const T1& t1, const T2& t2, const T3& t3, const T4& t4)
+        : first_(t1), second_(t2), third_(t3), fourth_(t4) {}
+
+    constexpr tuple(const tuple&) = default;
+    constexpr tuple(tuple&&) = default;
+    tuple& operator=(const tuple&) = default;
+    tuple& operator=(tuple&&) = default;
+
+    T1 first_;
+    T2 second_;
+    T3 third_;
+    T4 fourth_;
+};
+
+// tuple_size
+template<typename T>
+struct tuple_size;
+
+template<typename... Types>
+struct tuple_size<tuple<Types...>> : integral_constant<size_t, sizeof...(Types)> {};
+
+template<typename T>
+inline constexpr size_t tuple_size_v = tuple_size<T>::value;
+
+// tuple_element
+template<size_t I, typename T>
+struct tuple_element;
+
+template<typename T>
+struct tuple_element<0, tuple<T>> {
+    using type = T;
+};
+
+template<typename T1, typename T2>
+struct tuple_element<0, tuple<T1, T2>> {
+    using type = T1;
+};
+
+template<typename T1, typename T2>
+struct tuple_element<1, tuple<T1, T2>> {
+    using type = T2;
+};
+
+template<typename T1, typename T2, typename T3>
+struct tuple_element<0, tuple<T1, T2, T3>> {
+    using type = T1;
+};
+
+template<typename T1, typename T2, typename T3>
+struct tuple_element<1, tuple<T1, T2, T3>> {
+    using type = T2;
+};
+
+template<typename T1, typename T2, typename T3>
+struct tuple_element<2, tuple<T1, T2, T3>> {
+    using type = T3;
+};
+
+template<typename T1, typename T2, typename T3, typename T4>
+struct tuple_element<0, tuple<T1, T2, T3, T4>> {
+    using type = T1;
+};
+
+template<typename T1, typename T2, typename T3, typename T4>
+struct tuple_element<1, tuple<T1, T2, T3, T4>> {
+    using type = T2;
+};
+
+template<typename T1, typename T2, typename T3, typename T4>
+struct tuple_element<2, tuple<T1, T2, T3, T4>> {
+    using type = T3;
+};
+
+template<typename T1, typename T2, typename T3, typename T4>
+struct tuple_element<3, tuple<T1, T2, T3, T4>> {
+    using type = T4;
+};
+
+template<size_t I, typename T>
+using tuple_element_t = typename tuple_element<I, T>::type;
+
+// get for tuple<T1, T2>
+template<size_t I, typename T1, typename T2>
+constexpr auto& get(tuple<T1, T2>& t) {
+    if constexpr (I == 0) return t.first_;
+    else return t.second_;
+}
+
+template<size_t I, typename T1, typename T2>
+constexpr const auto& get(const tuple<T1, T2>& t) {
+    if constexpr (I == 0) return t.first_;
+    else return t.second_;
+}
+
+template<size_t I, typename T1, typename T2>
+constexpr auto&& get(tuple<T1, T2>&& t) {
+    if constexpr (I == 0) return static_cast<T1&&>(t.first_);
+    else return static_cast<T2&&>(t.second_);
+}
+
+// get for tuple<T1, T2, T3>
+template<size_t I, typename T1, typename T2, typename T3>
+constexpr auto& get(tuple<T1, T2, T3>& t) {
+    if constexpr (I == 0) return t.first_;
+    else if constexpr (I == 1) return t.second_;
+    else return t.third_;
+}
+
+template<size_t I, typename T1, typename T2, typename T3>
+constexpr const auto& get(const tuple<T1, T2, T3>& t) {
+    if constexpr (I == 0) return t.first_;
+    else if constexpr (I == 1) return t.second_;
+    else return t.third_;
+}
+
+template<size_t I, typename T1, typename T2, typename T3>
+constexpr auto&& get(tuple<T1, T2, T3>&& t) {
+    if constexpr (I == 0) return static_cast<T1&&>(t.first_);
+    else if constexpr (I == 1) return static_cast<T2&&>(t.second_);
+    else return static_cast<T3&&>(t.third_);
+}
+
+// get for tuple<T1, T2, T3, T4>
+template<size_t I, typename T1, typename T2, typename T3, typename T4>
+constexpr auto& get(tuple<T1, T2, T3, T4>& t) {
+    if constexpr (I == 0) return t.first_;
+    else if constexpr (I == 1) return t.second_;
+    else if constexpr (I == 2) return t.third_;
+    else return t.fourth_;
+}
+
+template<size_t I, typename T1, typename T2, typename T3, typename T4>
+constexpr const auto& get(const tuple<T1, T2, T3, T4>& t) {
+    if constexpr (I == 0) return t.first_;
+    else if constexpr (I == 1) return t.second_;
+    else if constexpr (I == 2) return t.third_;
+    else return t.fourth_;
+}
+
+// make_tuple
+template<typename... Types>
+constexpr tuple<Types...> make_tuple(Types&&... args) {
+    return tuple<Types...>(static_cast<Types&&>(args)...);
+}
+
+// tie
+template<typename... Types>
+constexpr tuple<Types&...> tie(Types&... args) noexcept {
+    return tuple<Types&...>(args...);
+}
+
+// ignore
+struct ignore_t {
+    template<typename T>
+    const ignore_t& operator=(T&&) const { return *this; }
+};
+inline constexpr ignore_t ignore{};
+
+// forward_as_tuple
+template<typename... Types>
+constexpr tuple<Types&&...> forward_as_tuple(Types&&... args) noexcept {
+    return tuple<Types&&...>(static_cast<Types&&>(args)...);
+}
+
+} // namespace std
+
+#endif // _FRAGILE_TUPLE_

@@ -3,6 +3,7 @@
 #define _FRAGILE_CSTDLIB_
 
 #include "cstdint"
+#include "cstdio"
 
 // Macro constants
 #define EXIT_SUCCESS 0

@@ -182,9 +182,11 @@ See [PLAN_CPP20_MAKO.md](PLAN_CPP20_MAKO.md) for detailed plan.
   - [x] `vendor/mako/src/rrr/misc/marshal.cpp` - **PARSED**: 52 functions extracted (read/write operators) [26:01:16, 12:30]
   - [x] F.1.5 Extended stub headers for server.cpp (fstream, array, future, concepts, etc.) [26:01:16, 04:40]
   - [x] `vendor/mako/src/rrr/rpc/server.cpp` - **PARSED**: 4667 functions extracted (RPC server) [26:01:16, 04:40]
-- [ ] **F.2 Coroutine Files**
-  - [ ] `vendor/mako/src/mako/vec/coroutine.cpp`
-  - [ ] `vendor/mako/src/mako/vec/occ.cpp`
+- [x] **F.2 Coroutine Files** [26:01:16, 05:30]
+  - [x] F.2.0 Add `<coroutine>` stub header [26:01:16, 05:00]
+  - [x] `vendor/mako/src/mako/vec/coroutine.cpp` - **PARSED**: 26 functions (Task, Scheduler, main) [26:01:16, 05:00]
+  - [x] F.2.1 Add stubs: tuple, csignal, pthread.h, sched.h; extend string with assign(), vector with memory include [26:01:16, 05:30]
+  - [x] `vendor/mako/src/mako/vec/occ.cpp` - **PARSED**: 27 functions (OCC, workerThread, main) [26:01:16, 05:30]
 - [ ] **F.3 Full Build**
   - [ ] All rrr module
   - [ ] All mako module
@@ -253,7 +255,7 @@ Migration: After C++20 support is complete, deprecate these.
 ## 5. Testing & Milestones
 
 ### 5.1 Unit Tests
-- [x] fragile-clang: 224 tests passing (27 unit + 197 integration) - includes 10 coroutine + 7 exception + 6 RTTI + 8 promise type + 8 awaitable + 8 generator + 4 mako pattern + server.cpp tests
+- [x] fragile-clang: 225 tests passing (27 unit + 198 integration) - includes 10 coroutine + 7 exception + 6 RTTI + 8 promise type + 8 awaitable + 8 generator + 5 mako file tests
 - [x] fragile-rustc-driver: 6 tests passing
 - [x] fragile-runtime: Compiles
 

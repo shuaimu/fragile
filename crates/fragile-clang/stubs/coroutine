@@ -1,0 +1,129 @@
+// Minimal coroutine stub for fragile parsing (C++20)
+#ifndef _FRAGILE_COROUTINE_
+#define _FRAGILE_COROUTINE_
+
+#include "cstddef"
+#include "type_traits"
+
+namespace std {
+
+// coroutine_traits - defines the promise_type for a coroutine
+template<typename R, typename... Args>
+struct coroutine_traits {
+    using promise_type = typename R::promise_type;
+};
+
+// coroutine_handle - type-erased handle to a coroutine
+template<typename Promise = void>
+struct coroutine_handle;
+
+// Specialization for void (type-erased)
+template<>
+struct coroutine_handle<void> {
+    constexpr coroutine_handle() noexcept : ptr_(nullptr) {}
+    constexpr coroutine_handle(nullptr_t) noexcept : ptr_(nullptr) {}
+
+    coroutine_handle& operator=(nullptr_t) noexcept {
+        ptr_ = nullptr;
+        return *this;
+    }
+
+    constexpr void* address() const noexcept { return ptr_; }
+
+    static constexpr coroutine_handle from_address(void* addr) noexcept {
+        coroutine_handle h;
+        h.ptr_ = addr;
+        return h;
+    }
+
+    constexpr explicit operator bool() const noexcept { return ptr_ != nullptr; }
+
+    bool done() const noexcept { return false; }
+    void operator()() const { resume(); }
+    void resume() const {}
+    void destroy() const {}
+
+protected:
+    void* ptr_;
+};
+
+// Specialization for specific promise type
+template<typename Promise>
+struct coroutine_handle : coroutine_handle<void> {
+    using coroutine_handle<void>::coroutine_handle;
+
+    static coroutine_handle from_promise(Promise& promise) noexcept {
+        coroutine_handle h;
+        h.ptr_ = &promise;
+        return h;
+    }
+
+    static constexpr coroutine_handle from_address(void* addr) noexcept {
+        coroutine_handle h;
+        h.ptr_ = addr;
+        return h;
+    }
+
+    Promise& promise() const noexcept {
+        return *static_cast<Promise*>(ptr_);
+    }
+};
+
+// Comparison operators for coroutine_handle
+template<typename T>
+constexpr bool operator==(coroutine_handle<T> lhs, coroutine_handle<T> rhs) noexcept {
+    return lhs.address() == rhs.address();
+}
+
+template<typename T>
+constexpr bool operator!=(coroutine_handle<T> lhs, coroutine_handle<T> rhs) noexcept {
+    return !(lhs == rhs);
+}
+
+// suspend_never - awaitable that never suspends
+struct suspend_never {
+    constexpr bool await_ready() const noexcept { return true; }
+    constexpr void await_suspend(coroutine_handle<>) const noexcept {}
+    constexpr void await_resume() const noexcept {}
+};
+
+// suspend_always - awaitable that always suspends
+struct suspend_always {
+    constexpr bool await_ready() const noexcept { return false; }
+    constexpr void await_suspend(coroutine_handle<>) const noexcept {}
+    constexpr void await_resume() const noexcept {}
+};
+
+// noop_coroutine_promise - promise type for noop coroutine
+struct noop_coroutine_promise {};
+
+// noop_coroutine_handle - handle type for noop coroutine
+template<>
+struct coroutine_handle<noop_coroutine_promise> : coroutine_handle<void> {
+    using promise_type = noop_coroutine_promise;
+
+    constexpr explicit operator bool() const noexcept { return true; }
+    constexpr bool done() const noexcept { return false; }
+
+    constexpr void operator()() const noexcept {}
+    constexpr void resume() const noexcept {}
+    constexpr void destroy() const noexcept {}
+
+    noop_coroutine_promise& promise() const noexcept {
+        static noop_coroutine_promise p;
+        return p;
+    }
+
+    constexpr void* address() const noexcept { return ptr_; }
+};
+
+using noop_coroutine_handle = coroutine_handle<noop_coroutine_promise>;
+
+// noop_coroutine - returns a handle to a no-op coroutine
+inline noop_coroutine_handle noop_coroutine() noexcept {
+    return noop_coroutine_handle{};
+}
+
+} // namespace std
+
+#endif // _FRAGILE_COROUTINE_

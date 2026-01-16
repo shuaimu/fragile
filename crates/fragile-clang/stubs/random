@@ -8,6 +8,26 @@
 
 namespace std {
 
+// Linear congruential engine (stub)
+template<typename UIntType, UIntType a, UIntType c, UIntType m>
+class linear_congruential_engine {
+public:
+    using result_type = UIntType;
+    static constexpr result_type min() { return c == 0 ? 1 : 0; }
+    static constexpr result_type max() { return m - 1; }
+
+    linear_congruential_engine() = default;
+    explicit linear_congruential_engine(result_type seed) { (void)seed; }
+
+    void seed(result_type s = 1) { (void)s; }
+    result_type operator()() { return 0; }
+    void discard(unsigned long long n) { (void)n; }
+};
+
+// minstd_rand0 and minstd_rand
+using minstd_rand0 = linear_congruential_engine<uint_fast32_t, 16807, 0, 2147483647>;
+using minstd_rand = linear_congruential_engine<uint_fast32_t, 48271, 0, 2147483647>;
+
 // Mersenne Twister engine
 class mt19937 {
 public:
@@ -83,6 +103,9 @@ public:
     static constexpr result_type min() { return 0; }
     static constexpr result_type max() { return 0xFFFFFFFF; }
 };
+
+// default_random_engine - implementation-defined, typically minstd_rand or mt19937
+using default_random_engine = mt19937;
 
 } // namespace std
 

@@ -6993,3 +6993,135 @@ fn test_mako_server_cpp_actual() {
     });
     assert!(has_shutdown, "Expected to find shutdown-related functions");
 }
+
+/// Test parsing the actual coroutine.cpp from Mako
+/// This tests C++20 coroutine patterns
+#[test]
+fn test_mako_coroutine_cpp_actual() {
+    use std::path::Path;
+
+    // Get the project root directory
+    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+    let project_root = Path::new(manifest_dir).parent().unwrap().parent().unwrap();
+    let coroutine_cpp_path = project_root.join("vendor/mako/src/mako/vec/coroutine.cpp");
+
+    if !coroutine_cpp_path.exists() {
+        println!("Skipping test: vendor/mako not present");
+        return;
+    }
+
+    // System include paths (searched for <...> includes with -isystem)
+    let mut system_include_paths = vec![];
+
+    // Add fragile stub headers as SYSTEM includes
+    let stubs_path = Path::new(manifest_dir).join("stubs");
+    if stubs_path.exists() {
+        system_include_paths.push(stubs_path.to_string_lossy().to_string());
+    }
+
+    // Add clang's headers for built-in types
+    let clang_paths = vec![
+        "/usr/lib/llvm-19/lib/clang/19/include",
+        "/usr/lib/llvm-18/lib/clang/18/include",
+    ];
+
+    for path in &clang_paths {
+        if Path::new(path).exists() {
+            system_include_paths.push(path.to_string());
+            break;
+        }
+    }
+
+    let parser = ClangParser::with_paths(vec![], system_include_paths)
+        .expect("Failed to create parser");
+
+    let result = parser.parse_file(&coroutine_cpp_path);
+
+    // coroutine.cpp should parse successfully
+    let ast = result.expect("coroutine.cpp should parse successfully");
+
+    // Convert to MIR
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).unwrap();
+
+    println!("Successfully parsed coroutine.cpp with {} functions", module.functions.len());
+
+    // Verify we found a reasonable number of functions
+    assert!(module.functions.len() > 5, "Expected to find functions from coroutine.cpp");
+
+    // Verify the main function is present
+    let has_main = module.functions.iter().any(|f| f.display_name == "main");
+    assert!(has_main, "Expected to find main function");
+
+    // Verify coroutine-related functions
+    let has_coroutine = module.functions.iter().any(|f| {
+        f.display_name.contains("coroutine") || f.display_name.contains("workerThread")
+    });
+    assert!(has_coroutine, "Expected to find coroutine-related functions");
+}
+
+/// Test parsing the actual occ.cpp from Mako
+/// This tests OCC (Optimistic Concurrency Control) implementation
+#[test]
+fn test_mako_occ_cpp_actual() {
+    use std::path::Path;
+
+    // Get the project root directory
+    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+    let project_root = Path::new(manifest_dir).parent().unwrap().parent().unwrap();
+    let occ_cpp_path = project_root.join("vendor/mako/src/mako/vec/occ.cpp");
+
+    if !occ_cpp_path.exists() {
+        println!("Skipping test: vendor/mako not present");
+        return;
+    }
+
+    // System include paths (searched for <...> includes with -isystem)
+    let mut system_include_paths = vec![];
+
+    // Add fragile stub headers as SYSTEM includes
+    let stubs_path = Path::new(manifest_dir).join("stubs");
+    if stubs_path.exists() {
+        system_include_paths.push(stubs_path.to_string_lossy().to_string());
+    }
+
+    // Add clang's headers for built-in types
+    let clang_paths = vec![
+        "/usr/lib/llvm-19/lib/clang/19/include",
+        "/usr/lib/llvm-18/lib/clang/18/include",
+    ];
+
+    for path in &clang_paths {
+        if Path::new(path).exists() {
+            system_include_paths.push(path.to_string());
+            break;
+        }
+    }
+
+    let parser = ClangParser::with_paths(vec![], system_include_paths)
+        .expect("Failed to create parser");
+
+    let result = parser.parse_file(&occ_cpp_path);
+
+    // occ.cpp should parse successfully
+    let ast = result.expect("occ.cpp should parse successfully");
+
+    // Convert to MIR
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).unwrap();
+
+    println!("Successfully parsed occ.cpp with {} functions", module.functions.len());
+
+    // Verify we found a reasonable number of functions
+    assert!(module.functions.len() > 5, "Expected to find functions from occ.cpp");
+
+    // Verify the main function is present
+    let has_main = module.functions.iter().any(|f| f.display_name == "main");
+    assert!(has_main, "Expected to find main function");
+
+    // Verify OCC-related functions
+    let has_occ = module.functions.iter().any(|f| {
+        f.display_name.contains("workerThread") || f.display_name.contains("handleSignal")
+    });
+    assert!(has_occ, "Expected to find OCC-related functions");
+}

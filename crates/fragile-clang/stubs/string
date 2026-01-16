@@ -222,6 +222,50 @@ public:
 
     void pop_back() { if (size_ > 0) { --size_; data_[size_] = CharT(); } }
 
+    // assign methods
+    basic_string& assign(const basic_string& str) {
+        return *this = str;
+    }
+
+    basic_string& assign(const basic_string& str, size_type pos, size_type count = npos) {
+        if (count == npos || pos + count > str.size_) count = str.size_ - pos;
+        return assign(str.data_ + pos, count);
+    }
+
+    basic_string& assign(const CharT* s, size_type count) {
+        delete[] data_;
+        size_ = count;
+        capacity_ = count + 1;
+        data_ = new CharT[capacity_];
+        Traits::copy(data_, s, count);
+        data_[size_] = CharT();
+        return *this;
+    }
+
+    basic_string& assign(const CharT* s) {
+        return assign(s, Traits::length(s));
+    }
+
+    basic_string& assign(size_type count, CharT ch) {
+        delete[] data_;
+        size_ = count;
+        capacity_ = count + 1;
+        data_ = new CharT[capacity_];
+        Traits::assign(data_, count, ch);
+        data_[size_] = CharT();
+        return *this;
+    }
+
+    template<typename InputIt>
+    basic_string& assign(InputIt first, InputIt last) {
+        // Simplified: just handle as a range
+        clear();
+        for (; first != last; ++first) {
+            push_back(*first);
+        }
+        return *this;
+    }
+
     // String operations
     int compare(const basic_string& str) const {
         size_type len = size_ < str.size_ ? size_ : str.size_;
