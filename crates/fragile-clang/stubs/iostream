@@ -68,6 +68,19 @@ public:
     static constexpr seekdir cur = 1;
     static constexpr seekdir end = 2;
 
+    // ios_base::failure exception class
+    class failure {
+    public:
+        explicit failure(const char* msg) : msg_(msg ? msg : "") {}
+        explicit failure(const string& msg) : msg_(msg) {}
+        failure(const failure&) = default;
+        failure& operator=(const failure&) = default;
+        virtual ~failure() = default;
+        virtual const char* what() const noexcept { return msg_.c_str(); }
+    private:
+        string msg_;
+    };
+
     // Format flag operations
     fmtflags flags() const { return fmtflags_; }
     fmtflags flags(fmtflags fmtfl) { fmtflags old = fmtflags_; fmtflags_ = fmtfl; return old; }
@@ -90,7 +103,7 @@ protected:
     streamsize width_ = 0;
 };
 
-// basic_ios
+// basic_ios - virtual base class to avoid diamond problem
 template<typename CharT, typename Traits>
 class basic_ios : public ios_base {
 public:
@@ -116,7 +129,7 @@ protected:
 
 // basic_ostream
 template<typename CharT, typename Traits>
-class basic_ostream : public basic_ios<CharT, Traits> {
+class basic_ostream : virtual public basic_ios<CharT, Traits> {
 public:
     using char_type = CharT;
     using traits_type = Traits;
@@ -149,11 +162,16 @@ public:
     basic_ostream& put(char_type c) { (void)c; return *this; }
     basic_ostream& write(const char_type* s, size_t n) { (void)s; (void)n; return *this; }
     basic_ostream& flush() { return *this; }
+
+    // Positioning
+    basic_ostream& seekp(streampos pos) { (void)pos; return *this; }
+    basic_ostream& seekp(streamoff off, ios_base::seekdir dir) { (void)off; (void)dir; return *this; }
+    streampos tellp() { return 0; }
 };
 
 // basic_istream
 template<typename CharT, typename Traits>
-class basic_istream : public basic_ios<CharT, Traits> {
+class basic_istream : virtual public basic_ios<CharT, Traits> {
 public:
     using char_type = CharT;
     using traits_type = Traits;
@@ -192,6 +210,11 @@ public:
     size_t gcount() const { return 0; }
     int_type peek() { return -1; }
     basic_istream& ignore(size_t n = 1, int_type delim = -1) { (void)n; (void)delim; return *this; }
+
+    // Positioning
+    basic_istream& seekg(streampos pos) { (void)pos; return *this; }
+    basic_istream& seekg(streamoff off, ios_base::seekdir dir) { (void)off; (void)dir; return *this; }
+    streampos tellg() { return 0; }
 };
 
 // basic_iostream

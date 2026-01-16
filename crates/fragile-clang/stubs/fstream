@@ -94,6 +94,7 @@ template<typename CharT>
 class basic_fstream : public basic_iostream<CharT> {
 public:
     using openmode = typename ios_base::openmode;
+    using seekdir = typename ios_base::seekdir;
 
     basic_fstream() = default;
     explicit basic_fstream(const char* filename, openmode mode = ios_base::in | ios_base::out) { (void)filename; (void)mode; }
@@ -106,6 +107,24 @@ public:
     void close() {}
 
     basic_filebuf<CharT>* rdbuf() const { return nullptr; }
+
+    // Input positioning (from basic_istream)
+    basic_fstream& seekg(streampos pos) { (void)pos; return *this; }
+    basic_fstream& seekg(streamoff off, seekdir dir) { (void)off; (void)dir; return *this; }
+    streampos tellg() { return 0; }
+
+    // Output positioning (from basic_ostream)
+    basic_fstream& seekp(streampos pos) { (void)pos; return *this; }
+    basic_fstream& seekp(streamoff off, seekdir dir) { (void)off; (void)dir; return *this; }
+    streampos tellp() { return 0; }
+
+    // Read operations (from basic_istream)
+    basic_fstream& read(CharT* s, streamsize n) { (void)s; (void)n; return *this; }
+    streamsize gcount() const { return 0; }
+
+    // Write operations (from basic_ostream)
+    basic_fstream& write(const CharT* s, streamsize n) { (void)s; (void)n; return *this; }
+    basic_fstream& flush() { return *this; }
 };
 
 using fstream = basic_fstream<char>;

@@ -1,0 +1,229 @@
+// Minimal optional stub for fragile parsing
+#ifndef _FRAGILE_OPTIONAL_
+#define _FRAGILE_OPTIONAL_
+
+#include "cstdint"
+#include "utility"
+#include "exception"
+
+namespace std {
+
+// nullopt_t tag type
+struct nullopt_t {
+    explicit constexpr nullopt_t(int) {}
+};
+inline constexpr nullopt_t nullopt{0};
+
+// bad_optional_access exception
+class bad_optional_access : public exception {
+public:
+    bad_optional_access() noexcept = default;
+    const char* what() const noexcept override { return "bad optional access"; }
+};
+
+// optional class template
+template<typename T>
+class optional {
+public:
+    using value_type = T;
+
+    // Constructors
+    constexpr optional() noexcept : has_value_(false), dummy_{} {}
+    constexpr optional(nullopt_t) noexcept : has_value_(false), dummy_{} {}
+
+    constexpr optional(const T& value) : has_value_(true), value_(value) {}
+    constexpr optional(T&& value) : has_value_(true), value_(static_cast<T&&>(value)) {}
+
+    template<typename U = T>
+    constexpr explicit optional(U&& value) : has_value_(true), value_(static_cast<U&&>(value)) {}
+
+    optional(const optional& other) : has_value_(other.has_value_) {
+        if (has_value_) {
+            new (&value_) T(other.value_);
+        }
+    }
+
+    optional(optional&& other) noexcept : has_value_(other.has_value_) {
+        if (has_value_) {
+            new (&value_) T(static_cast<T&&>(other.value_));
+        }
+    }
+
+    ~optional() {
+        if (has_value_) {
+            value_.~T();
+        }
+    }
+
+    // Assignment
+    optional& operator=(nullopt_t) noexcept {
+        reset();
+        return *this;
+    }
+
+    optional& operator=(const optional& other) {
+        if (other.has_value_) {
+            if (has_value_) {
+                value_ = other.value_;
+            } else {
+                new (&value_) T(other.value_);
+                has_value_ = true;
+            }
+        } else {
+            reset();
+        }
+        return *this;
+    }
+
+    optional& operator=(optional&& other) noexcept {
+        if (other.has_value_) {
+            if (has_value_) {
+                value_ = static_cast<T&&>(other.value_);
+            } else {
+                new (&value_) T(static_cast<T&&>(other.value_));
+                has_value_ = true;
+            }
+        } else {
+            reset();
+        }
+        return *this;
+    }
+
+    template<typename U = T>
+    optional& operator=(U&& value) {
+        if (has_value_) {
+            value_ = static_cast<U&&>(value);
+        } else {
+            new (&value_) T(static_cast<U&&>(value));
+            has_value_ = true;
+        }
+        return *this;
+    }
+
+    // Observers
+    constexpr const T* operator->() const { return &value_; }
+    constexpr T* operator->() { return &value_; }
+
+    constexpr const T& operator*() const& { return value_; }
+    constexpr T& operator*() & { return value_; }
+    constexpr const T&& operator*() const&& { return static_cast<const T&&>(value_); }
+    constexpr T&& operator*() && { return static_cast<T&&>(value_); }
+
+    constexpr explicit operator bool() const noexcept { return has_value_; }
+    constexpr bool has_value() const noexcept { return has_value_; }
+
+    constexpr T& value() & {
+        if (!has_value_) throw bad_optional_access();
+        return value_;
+    }
+    constexpr const T& value() const& {
+        if (!has_value_) throw bad_optional_access();
+        return value_;
+    }
+    constexpr T&& value() && {
+        if (!has_value_) throw bad_optional_access();
+        return static_cast<T&&>(value_);
+    }
+    constexpr const T&& value() const&& {
+        if (!has_value_) throw bad_optional_access();
+        return static_cast<const T&&>(value_);
+    }
+
+    template<typename U>
+    constexpr T value_or(U&& default_value) const& {
+        return has_value_ ? value_ : static_cast<T>(static_cast<U&&>(default_value));
+    }
+    template<typename U>
+    constexpr T value_or(U&& default_value) && {
+        return has_value_ ? static_cast<T&&>(value_) : static_cast<T>(static_cast<U&&>(default_value));
+    }
+
+    // Modifiers
+    void reset() noexcept {
+        if (has_value_) {
+            value_.~T();
+            has_value_ = false;
+        }
+    }
+
+    template<typename... Args>
+    T& emplace(Args&&... args) {
+        reset();
+        new (&value_) T(static_cast<Args&&>(args)...);
+        has_value_ = true;
+        return value_;
+    }
+
+    void swap(optional& other) noexcept {
+        if (has_value_ && other.has_value_) {
+            T tmp = static_cast<T&&>(value_);
+            value_ = static_cast<T&&>(other.value_);
+            other.value_ = static_cast<T&&>(tmp);
+        } else if (has_value_) {
+            new (&other.value_) T(static_cast<T&&>(value_));
+            other.has_value_ = true;
+            value_.~T();
+            has_value_ = false;
+        } else if (other.has_value_) {
+            new (&value_) T(static_cast<T&&>(other.value_));
+            has_value_ = true;
+            other.value_.~T();
+            other.has_value_ = false;
+        }
+    }
+
+private:
+    bool has_value_;
+    union {
+        char dummy_;
+        T value_;
+    };
+};
+
+// Comparison operators
+template<typename T>
+constexpr bool operator==(const optional<T>& lhs, const optional<T>& rhs) {
+    if (lhs.has_value() != rhs.has_value()) return false;
+    if (!lhs.has_value()) return true;
+    return *lhs == *rhs;
+}
+
+template<typename T>
+constexpr bool operator!=(const optional<T>& lhs, const optional<T>& rhs) {
+    return !(lhs == rhs);
+}
+
+template<typename T>
+constexpr bool operator==(const optional<T>& opt, nullopt_t) noexcept {
+    return !opt.has_value();
+}
+
+template<typename T>
+constexpr bool operator==(nullopt_t, const optional<T>& opt) noexcept {
+    return !opt.has_value();
+}
+
+template<typename T>
+constexpr bool operator!=(const optional<T>& opt, nullopt_t) noexcept {
+    return opt.has_value();
+}
+
+template<typename T>
+constexpr bool operator!=(nullopt_t, const optional<T>& opt) noexcept {
+    return opt.has_value();
+}
+
+// make_optional
+template<typename T>
+constexpr optional<typename std::remove_reference<T>::type> make_optional(T&& value) {
+    return optional<typename std::remove_reference<T>::type>(static_cast<T&&>(value));
+}
+
+template<typename T, typename... Args>
+constexpr optional<T> make_optional(Args&&... args) {
+    return optional<T>(T(static_cast<Args&&>(args)...));
+}
+
+} // namespace std
+
+#endif // _FRAGILE_OPTIONAL_

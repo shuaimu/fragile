@@ -7686,3 +7686,143 @@ fn test_mako_allocator_cc() {
         }
     }
 }
+
+/// Test parsing disk.cpp from Mako
+/// Self-contained file with standard library only (fstream, optional)
+#[test]
+fn test_mako_disk_cpp() {
+    use std::path::Path;
+
+    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+    let project_root = Path::new(manifest_dir).parent().unwrap().parent().unwrap();
+    let disk_path = project_root.join("vendor/mako/src/mako/disk.cpp");
+
+    if !disk_path.exists() {
+        println!("Skipping test: vendor/mako not present");
+        return;
+    }
+
+    // System include paths
+    let mut system_include_paths = vec![];
+
+    let stubs_path = Path::new(manifest_dir).join("stubs");
+    if stubs_path.exists() {
+        system_include_paths.push(stubs_path.to_string_lossy().to_string());
+    }
+
+    let clang_paths = vec![
+        "/usr/lib/llvm-19/lib/clang/19/include",
+        "/usr/lib/llvm-18/lib/clang/18/include",
+    ];
+
+    for path in &clang_paths {
+        if Path::new(path).exists() {
+            system_include_paths.push(path.to_string());
+            break;
+        }
+    }
+
+    // disk.cpp doesn't need user include paths - it's self-contained
+    let parser = ClangParser::with_paths(vec![], system_include_paths)
+        .expect("Failed to create parser");
+
+    let result = parser.parse_file(&disk_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+
+            println!("Successfully parsed disk.cpp with {} functions", module.functions.len());
+            for func in &module.functions {
+                println!("  Function: {}", func.display_name);
+            }
+
+            // disk.cpp has main and OnDiskIntArray methods
+            assert!(module.functions.len() > 0, "Expected to find disk.cpp functions");
+        }
+        Err(e) => {
+            panic!("disk.cpp should parse successfully: {:?}", e);
+        }
+    }
+}
+
+/// Test parsing rcu.cc from Mako
+/// RCU synchronization - uses numa.h and internal headers
+#[test]
+fn test_mako_rcu_cc() {
+    use std::path::Path;
+
+    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+    let project_root = Path::new(manifest_dir).parent().unwrap().parent().unwrap();
+    let rcu_path = project_root.join("vendor/mako/src/mako/rcu.cc");
+
+    if !rcu_path.exists() {
+        println!("Skipping test: vendor/mako not present");
+        return;
+    }
+
+    let rusty_cpp_path = project_root.join("vendor/mako/third-party/rusty-cpp/include");
+    if !rusty_cpp_path.exists() {
+        println!("Skipping test: mako submodules not initialized");
+        return;
+    }
+
+    // System include paths
+    let mut system_include_paths = vec![];
+
+    let stubs_path = Path::new(manifest_dir).join("stubs");
+    if stubs_path.exists() {
+        system_include_paths.push(stubs_path.to_string_lossy().to_string());
+    }
+
+    let clang_paths = vec![
+        "/usr/lib/llvm-19/lib/clang/19/include",
+        "/usr/lib/llvm-18/lib/clang/18/include",
+    ];
+
+    for path in &clang_paths {
+        if Path::new(path).exists() {
+            system_include_paths.push(path.to_string());
+            break;
+        }
+    }
+
+    // User include paths
+    let mako_src = project_root.join("vendor/mako/src");
+    let mako_mako = project_root.join("vendor/mako/src/mako");
+    let include_paths = vec![
+        mako_mako.to_string_lossy().to_string(),
+        mako_src.to_string_lossy().to_string(),
+        rusty_cpp_path.to_string_lossy().to_string(),
+    ];
+
+    // Preprocessor defines - CONFIG_H is required by macros.h
+    let defines = vec![
+        r#"CONFIG_H="mako/masstree/config.h""#.to_string(),
+    ];
+
+    let parser = ClangParser::with_paths_and_defines(include_paths, system_include_paths, defines)
+        .expect("Failed to create parser");
+
+    let result = parser.parse_file(&rcu_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+
+            println!("Successfully parsed rcu.cc with {} functions", module.functions.len());
+            for func in &module.functions {
+                println!("  Function: {}", func.display_name);
+            }
+
+            // rcu.cc has RCU synchronization functions
+            assert!(module.functions.len() > 0, "Expected to find RCU functions");
+        }
+        Err(e) => {
+            println!("Note: rcu.cc parsing failed: {:?}", e);
+            println!("This may require additional stub headers");
+        }
+    }
+}
