@@ -156,10 +156,10 @@ See [PLAN_CPP20_MAKO.md](PLAN_CPP20_MAKO.md) for detailed plan.
   - [ ] D.7.2 Generator pattern test
 
 ### 1.5 Phase E: Advanced Features
-- [ ] **E.1 Exceptions**
-  - [ ] try/catch/throw
-  - [ ] noexcept
-  - [ ] Stack unwinding
+- [x] **E.1 Exceptions** [26:01:16, 03:55] ([docs/dev/plan_exception_support.md](docs/dev/plan_exception_support.md))
+  - [x] try/catch/throw (TryStmt, CatchStmt, ThrowExpr AST nodes + parsing + MIR conversion)
+  - [ ] noexcept (future work)
+  - [ ] Stack unwinding (requires runtime support)
 - [ ] **E.2 RTTI**
   - [ ] typeid
   - [ ] dynamic_cast
@@ -247,7 +247,7 @@ Migration: After C++20 support is complete, deprecate these.
 ## 5. Testing & Milestones
 
 ### 5.1 Unit Tests
-- [x] fragile-clang: 181 tests passing (27 unit + 154 integration) - includes 10 coroutine tests
+- [x] fragile-clang: 188 tests passing (27 unit + 161 integration) - includes 10 coroutine tests + 7 exception tests
 - [x] fragile-rustc-driver: 6 tests passing
 - [x] fragile-runtime: Compiles
 

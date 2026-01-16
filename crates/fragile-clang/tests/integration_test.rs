@@ -5214,3 +5214,180 @@ fn test_coroutine_handle_operations() {
     let test_fn = module.functions.iter().find(|f| f.display_name == "test_handle_ops");
     assert!(test_fn.is_some(), "Expected to find test_handle_ops function");
 }
+
+// ========== C++ Exception Handling Tests (E.1) ==========
+
+/// Test parsing basic try/catch block.
+#[test]
+fn test_exception_try_catch() {
+    let parser = ClangParser::new().unwrap();
+    let code = r#"
+        void test_exceptions() {
+            try {
+                int x = 42;
+            } catch (int e) {
+                int y = e;
+            }
+        }
+    "#;
+
+    let result = parser.parse_string(code, "test.cpp");
+    assert!(result.is_ok(), "Failed to parse try/catch: {:?}", result.err());
+
+    let ast = result.unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).unwrap();
+
+    let test_fn = module.functions.iter().find(|f| f.display_name == "test_exceptions");
+    assert!(test_fn.is_some(), "Expected to find test_exceptions function");
+}
+
+/// Test parsing throw expression.
+#[test]
+fn test_exception_throw() {
+    let parser = ClangParser::new().unwrap();
+    let code = r#"
+        void test_throw() {
+            throw 42;
+        }
+    "#;
+
+    let result = parser.parse_string(code, "test.cpp");
+    assert!(result.is_ok(), "Failed to parse throw: {:?}", result.err());
+
+    let ast = result.unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).unwrap();
+
+    let test_fn = module.functions.iter().find(|f| f.display_name == "test_throw");
+    assert!(test_fn.is_some(), "Expected to find test_throw function");
+}
+
+/// Test parsing catch-all handler.
+#[test]
+fn test_exception_catch_all() {
+    let parser = ClangParser::new().unwrap();
+    let code = r#"
+        void test_catch_all() {
+            try {
+                throw "error";
+            } catch (...) {
+                // Handle all exceptions
+            }
+        }
+    "#;
+
+    let result = parser.parse_string(code, "test.cpp");
+    assert!(result.is_ok(), "Failed to parse catch-all: {:?}", result.err());
+
+    let ast = result.unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).unwrap();
+
+    let test_fn = module.functions.iter().find(|f| f.display_name == "test_catch_all");
+    assert!(test_fn.is_some(), "Expected to find test_catch_all function");
+}
+
+/// Test parsing multiple catch handlers.
+#[test]
+fn test_exception_multiple_catch() {
+    let parser = ClangParser::new().unwrap();
+    let code = r#"
+        void test_multiple_catch() {
+            try {
+                throw 1.0;
+            } catch (int e) {
+                // Handle int
+            } catch (double d) {
+                // Handle double
+            } catch (...) {
+                // Handle all others
+            }
+        }
+    "#;
+
+    let result = parser.parse_string(code, "test.cpp");
+    assert!(result.is_ok(), "Failed to parse multiple catch: {:?}", result.err());
+
+    let ast = result.unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).unwrap();
+
+    let test_fn = module.functions.iter().find(|f| f.display_name == "test_multiple_catch");
+    assert!(test_fn.is_some(), "Expected to find test_multiple_catch function");
+}
+
+/// Test parsing rethrow (throw;).
+#[test]
+fn test_exception_rethrow() {
+    let parser = ClangParser::new().unwrap();
+    let code = r#"
+        void test_rethrow() {
+            try {
+                throw 42;
+            } catch (...) {
+                throw;  // Rethrow
+            }
+        }
+    "#;
+
+    let result = parser.parse_string(code, "test.cpp");
+    assert!(result.is_ok(), "Failed to parse rethrow: {:?}", result.err());
+
+    let ast = result.unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).unwrap();
+
+    let test_fn = module.functions.iter().find(|f| f.display_name == "test_rethrow");
+    assert!(test_fn.is_some(), "Expected to find test_rethrow function");
+}
+
+/// Test that TryStmt AST node is properly created.
+#[test]
+fn test_exception_ast_try_node() {
+    let parser = ClangParser::new().unwrap();
+    let code = r#"
+        void test_try() {
+            try {
+                int x = 1;
+            } catch (int e) {
+                int y = e;
+            }
+        }
+    "#;
+
+    let result = parser.parse_string(code, "test.cpp");
+    assert!(result.is_ok(), "Failed to parse: {:?}", result.err());
+
+    let ast = result.unwrap();
+
+    // Search the AST for TryStmt node
+    let has_try = find_node_kind(&ast.translation_unit, |kind| {
+        matches!(kind, ClangNodeKind::TryStmt)
+    });
+
+    assert!(has_try.is_some(), "Expected to find TryStmt node in AST");
+}
+
+/// Test that ThrowExpr AST node is properly created.
+#[test]
+fn test_exception_ast_throw_node() {
+    let parser = ClangParser::new().unwrap();
+    let code = r#"
+        void test_throw_node() {
+            throw 42;
+        }
+    "#;
+
+    let result = parser.parse_string(code, "test.cpp");
+    assert!(result.is_ok(), "Failed to parse: {:?}", result.err());
+
+    let ast = result.unwrap();
+
+    // Search the AST for ThrowExpr node
+    let has_throw = find_node_kind(&ast.translation_unit, |kind| {
+        matches!(kind, ClangNodeKind::ThrowExpr { .. })
+    });
+
+    assert!(has_throw.is_some(), "Expected to find ThrowExpr node in AST");
+}

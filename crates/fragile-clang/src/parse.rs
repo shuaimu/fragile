@@ -607,6 +607,21 @@ impl ClangParser {
                 }
                 clang_sys::CXCursor_DefaultStmt => ClangNodeKind::DefaultStmt,
 
+                // C++ Exception Handling
+                clang_sys::CXCursor_CXXTryStmt => ClangNodeKind::TryStmt,
+
+                clang_sys::CXCursor_CXXCatchStmt => {
+                    // Get the exception type from the first child if it's a VarDecl
+                    let exception_ty = self.get_catch_exception_type(cursor);
+                    ClangNodeKind::CatchStmt { exception_ty }
+                }
+
+                clang_sys::CXCursor_CXXThrowExpr => {
+                    // Get the type being thrown from the child expression
+                    let exception_ty = self.get_throw_exception_type(cursor);
+                    ClangNodeKind::ThrowExpr { exception_ty }
+                }
+
                 // Expressions
                 clang_sys::CXCursor_IntegerLiteral => {
                     // Try to evaluate the literal
@@ -1123,6 +1138,90 @@ impl ClangParser {
                 cursor,
                 find_operand_type,
                 &mut data as *mut OperandTypeData as clang_sys::CXClientData,
+            );
+
+            data.ty
+        }
+    }
+
+    /// Get the exception type for a catch statement.
+    /// Returns None for `catch(...)` (catch all).
+    fn get_catch_exception_type(&self, cursor: clang_sys::CXCursor) -> Option<CppType> {
+        unsafe {
+            // The first child of a catch statement is the exception declaration (VarDecl)
+            // or nothing for catch(...)
+            struct CatchTypeData {
+                ty: Option<CppType>,
+                parser: *const ClangParser,
+            }
+
+            extern "C" fn find_catch_type(
+                child: clang_sys::CXCursor,
+                _parent: clang_sys::CXCursor,
+                data: clang_sys::CXClientData,
+            ) -> clang_sys::CXChildVisitResult {
+                unsafe {
+                    let data = &mut *(data as *mut CatchTypeData);
+                    let child_kind = clang_sys::clang_getCursorKind(child);
+
+                    // Look for VarDecl which contains the exception type
+                    if child_kind == clang_sys::CXCursor_VarDecl {
+                        let child_type = clang_sys::clang_getCursorType(child);
+                        data.ty = Some((*data.parser).convert_type(child_type));
+                        return clang_sys::CXChildVisit_Break;
+                    }
+                    clang_sys::CXChildVisit_Continue
+                }
+            }
+
+            let mut data = CatchTypeData {
+                ty: None,
+                parser: self as *const ClangParser,
+            };
+
+            clang_sys::clang_visitChildren(
+                cursor,
+                find_catch_type,
+                &mut data as *mut CatchTypeData as clang_sys::CXClientData,
+            );
+
+            data.ty
+        }
+    }
+
+    /// Get the exception type for a throw expression.
+    /// Returns None for `throw;` (rethrow).
+    fn get_throw_exception_type(&self, cursor: clang_sys::CXCursor) -> Option<CppType> {
+        unsafe {
+            // The child of a throw expression is the expression being thrown
+            // No child means it's a rethrow (throw;)
+            struct ThrowTypeData {
+                ty: Option<CppType>,
+                parser: *const ClangParser,
+            }
+
+            extern "C" fn find_throw_type(
+                child: clang_sys::CXCursor,
+                _parent: clang_sys::CXCursor,
+                data: clang_sys::CXClientData,
+            ) -> clang_sys::CXChildVisitResult {
+                unsafe {
+                    let data = &mut *(data as *mut ThrowTypeData);
+                    let child_type = clang_sys::clang_getCursorType(child);
+                    data.ty = Some((*data.parser).convert_type(child_type));
+                    clang_sys::CXChildVisit_Break
+                }
+            }
+
+            let mut data = ThrowTypeData {
+                ty: None,
+                parser: self as *const ClangParser,
+            };
+
+            clang_sys::clang_visitChildren(
+                cursor,
+                find_throw_type,
+                &mut data as *mut ThrowTypeData as clang_sys::CXClientData,
             );
 
             data.ty

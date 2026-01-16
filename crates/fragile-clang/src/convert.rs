@@ -751,6 +751,24 @@ impl MirConverter {
                 }
             }
 
+            // C++ Exception Handling
+            ClangNodeKind::TryStmt => {
+                // Try statement: first child is compound stmt (try block),
+                // remaining children are catch handlers
+                // For now, just convert the try block; catch handlers are placeholders
+                for child in &node.children {
+                    self.convert_stmt(child, builder)?;
+                }
+            }
+
+            ClangNodeKind::CatchStmt { exception_ty: _ } => {
+                // Catch handler: first child is exception decl, second is body
+                // For now, just convert children
+                for child in &node.children {
+                    self.convert_stmt(child, builder)?;
+                }
+            }
+
             // Expression statement
             _ => {
                 if is_expression_kind(&node.kind) {
@@ -966,6 +984,19 @@ impl MirConverter {
                 });
 
                 // The yield expression returns a value (typically void for generators)
+                Ok(MirOperand::Constant(MirConstant::Unit))
+            }
+
+            // C++ Exception Handling
+            ClangNodeKind::ThrowExpr { exception_ty: _ } => {
+                // throw expression - evaluate the thrown value (if any)
+                // For now, just evaluate children for side effects
+                // Proper exception handling would need runtime support
+                if let Some(expr) = node.children.first() {
+                    let _ = self.convert_expr(expr, builder)?;
+                }
+                // throw is like an unreachable after the expression is evaluated
+                builder.finish_block(MirTerminator::Unreachable);
                 Ok(MirOperand::Constant(MirConstant::Unit))
             }
 
@@ -1565,6 +1596,8 @@ fn is_expression_kind(kind: &ClangNodeKind) -> bool {
             // C++20 Coroutine expressions
             | ClangNodeKind::CoawaitExpr { .. }
             | ClangNodeKind::CoyieldExpr { .. }
+            // C++ Exception expressions
+            | ClangNodeKind::ThrowExpr { .. }
     )
 }
 

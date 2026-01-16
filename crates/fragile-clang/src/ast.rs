@@ -380,6 +380,23 @@ pub enum ClangNodeKind {
         value_ty: Option<CppType>,
     },
 
+    // C++ Exception Handling
+
+    /// try statement with catch handlers
+    TryStmt,
+
+    /// catch handler in a try statement
+    CatchStmt {
+        /// Type being caught (None for `catch(...)`)
+        exception_ty: Option<CppType>,
+    },
+
+    /// throw expression
+    ThrowExpr {
+        /// Type being thrown (None for `throw;` rethrow)
+        exception_ty: Option<CppType>,
+    },
+
     /// Unknown or unhandled node kind
     Unknown(String),
 }
