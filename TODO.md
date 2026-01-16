@@ -212,7 +212,7 @@ See [PLAN_CPP20_MAKO.md](PLAN_CPP20_MAKO.md) for detailed plan.
     - [x] `vendor/mako/src/rrr/reactor/fiber_impl.cc` - **PARSED**: 4640 functions
     - [x] `vendor/mako/src/rrr/reactor/reactor.cc` - **PARSED**: 4640 functions
     - [-] `vendor/mako/src/rrr/reactor/quorum_event.cc` - Cross-namespace inheritance: `janus::QuorumEvent` inherits from `rrr::Event` via `using rrr::Event;`. Clang semantic error on `test()` call [26:01:16, 12:00]. See docs/dev/plan_fix_stub_headers_quorum_event.md
-  - [-] All mako module - **39/155 files parsing (25.2%)** [26:01:16, 17:00]
+  - [-] All mako module - **44/155 files parsing (28.4%)** [26:01:16, 17:00]
     - [x] `vendor/mako/src/mako/vec/coroutine.cpp` - **PARSED**: 40 functions
     - [x] `vendor/mako/src/mako/vec/occ.cpp` - **PARSED**: 41 functions
     - [x] `vendor/mako/src/mako/lib/memory.cc` - **PARSED**: 17 functions
@@ -252,6 +252,10 @@ See [PLAN_CPP20_MAKO.md](PLAN_CPP20_MAKO.md) for detailed plan.
     - [x] `vendor/mako/src/mako/masstree/straccum.cc` - **PARSED**: 121 functions [26:01:16, 19:30]
     - [x] `vendor/mako/src/mako/masstree/string.cc` - **PARSED**: 130 functions [26:01:16, 19:30]
     - [x] `vendor/mako/src/mako/masstree/test_string.cc` - **PARSED**: 117 functions [26:01:16, 19:30]
+    - [x] `vendor/mako/src/mako/masstree/json.cc` - **PARSED**: 151 functions [26:01:16, 20:00]
+    - [x] `vendor/mako/src/mako/masstree/misc.cc` - **PARSED**: 114 functions [26:01:16, 20:00]
+    - [x] `vendor/mako/src/mako/masstree/kvrandom.cc` - **PARSED**: with random() [26:01:16, 20:00]
+    - [x] `vendor/mako/src/mako/masstree/kvthread.cc` - **PARSED**: with posix_memalign [26:01:16, 20:00]
     - [x] F.3.4 Added stubs: cxxabi.h, typeinfo, endian.h, deque, stack, numa.h [26:01:16, 10:00]
     - [x] F.3.5 Fixed: cstdint types for x86_64, iostream/sstream traits, stdexcept includes, string getline
     - [x] F.3.6 Added parser support for preprocessor defines (CONFIG_H for masstree)
@@ -350,7 +354,7 @@ Migration: After C++20 support is complete, deprecate these.
 
 Current status:
 - **rrr module**: 15/16 files parsing (94%) - blocked by quorum_event.cc cross-namespace inheritance
-- **mako module**: 39/155 files parsing (25.2%)
+- **mako module**: 44/155 files parsing (28.4%)
 - **Total tests**: 270 passing (27 unit + 243 integration)
 
 Next steps:
