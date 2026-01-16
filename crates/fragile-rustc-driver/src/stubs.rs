@@ -162,6 +162,7 @@ mod tests {
             constructors: vec![],
             destructor: None,
             methods: vec![],
+            friends: vec![],
         };
 
         let stub = generate_struct_stub(&struct_def);
@@ -189,6 +190,7 @@ mod tests {
             constructors: vec![],
             destructor: None,
             methods: vec![],
+            friends: vec![],
         };
 
         let stub = generate_struct_stub(&struct_def);

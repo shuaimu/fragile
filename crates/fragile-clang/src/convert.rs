@@ -3,10 +3,10 @@
 use crate::ast::{BinaryOp, ClangAst, ClangNode, ClangNodeKind, UnaryOp};
 use crate::types::CppType;
 use crate::{
-    CppConstructor, CppDestructor, CppExtern, CppField, CppFunction, CppMethod, CppModule,
-    CppStruct, MemberInitializer, MirBasicBlock, MirBinOp, MirBody, MirConstant, MirLocal,
-    MirOperand, MirPlace, MirRvalue, MirStatement, MirTerminator, MirUnaryOp, UsingDeclaration,
-    UsingDirective,
+    CppConstructor, CppDestructor, CppExtern, CppField, CppFriend, CppFunction, CppMethod,
+    CppModule, CppStruct, MemberInitializer, MirBasicBlock, MirBinOp, MirBody, MirConstant,
+    MirLocal, MirOperand, MirPlace, MirRvalue, MirStatement, MirTerminator, MirUnaryOp,
+    UsingDeclaration, UsingDirective,
 };
 use miette::Result;
 
@@ -558,6 +558,7 @@ impl MirConverter {
         let mut constructors = Vec::new();
         let mut destructor = None;
         let mut methods = Vec::new();
+        let mut friends = Vec::new();
 
         for child in &node.children {
             match &child.kind {
@@ -633,6 +634,13 @@ impl MirConverter {
                         mir_body,
                     });
                 }
+                ClangNodeKind::FriendDecl { friend_class, friend_function } => {
+                    if let Some(class_name) = friend_class {
+                        friends.push(CppFriend::Class { name: class_name.clone() });
+                    } else if let Some(func_name) = friend_function {
+                        friends.push(CppFriend::Function { name: func_name.clone() });
+                    }
+                }
                 _ => {}
             }
         }
@@ -646,6 +654,7 @@ impl MirConverter {
             constructors,
             destructor,
             methods,
+            friends,
         })
     }
 

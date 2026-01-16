@@ -356,6 +356,12 @@ impl ClangParser {
                     ClangNodeKind::MemberRef { name }
                 }
 
+                clang_sys::CXCursor_FriendDecl => {
+                    // Friend declaration - examine children to determine type
+                    let (friend_class, friend_function) = self.get_friend_info(cursor);
+                    ClangNodeKind::FriendDecl { friend_class, friend_function }
+                }
+
                 // Statements
                 clang_sys::CXCursor_CompoundStmt => ClangNodeKind::CompoundStmt,
                 clang_sys::CXCursor_ReturnStmt => ClangNodeKind::ReturnStmt,
@@ -725,6 +731,75 @@ impl ClangParser {
             // Reverse to get outermost first (outer::inner -> ["outer", "inner"])
             path.reverse();
             path
+        }
+    }
+
+    /// Get friend information from a FriendDecl cursor.
+    /// Returns (friend_class, friend_function) where one will be Some and the other None.
+    fn get_friend_info(&self, cursor: clang_sys::CXCursor) -> (Option<String>, Option<String>) {
+        unsafe {
+            // Structure to pass both options through the visitor
+            struct FriendInfo {
+                friend_class: Option<String>,
+                friend_function: Option<String>,
+            }
+            let mut info = FriendInfo {
+                friend_class: None,
+                friend_function: None,
+            };
+            let info_ptr: *mut FriendInfo = &mut info;
+
+            extern "C" fn friend_visitor(
+                child: clang_sys::CXCursor,
+                _parent: clang_sys::CXCursor,
+                data: clang_sys::CXClientData,
+            ) -> clang_sys::CXChildVisitResult {
+                unsafe {
+                    let info = &mut *(data as *mut FriendInfo);
+                    let kind = clang_sys::clang_getCursorKind(child);
+
+                    match kind {
+                        // Friend class declaration
+                        // CXCursor_ClassDecl = 4, CXCursor_StructDecl = 2
+                        // Also check for ClassTemplate (31) which can appear for forward-declared friends
+                        clang_sys::CXCursor_ClassDecl
+                        | clang_sys::CXCursor_StructDecl
+                        | clang_sys::CXCursor_ClassTemplate => {
+                            let name = cursor_spelling(child);
+                            if !name.is_empty() {
+                                info.friend_class = Some(name);
+                            }
+                        }
+                        // Friend function declaration
+                        clang_sys::CXCursor_FunctionDecl => {
+                            let name = cursor_spelling(child);
+                            if !name.is_empty() {
+                                info.friend_function = Some(name);
+                            }
+                        }
+                        // For types, sometimes the type reference appears instead
+                        clang_sys::CXCursor_TypeRef => {
+                            let name = cursor_spelling(child);
+                            if !name.is_empty() && info.friend_class.is_none() {
+                                // Strip "class " or "struct " prefix if present
+                                let name = name
+                                    .strip_prefix("class ")
+                                    .or_else(|| name.strip_prefix("struct "))
+                                    .unwrap_or(&name)
+                                    .to_string();
+                                info.friend_class = Some(name);
+                            }
+                        }
+                        _ => {}
+                    }
+
+                    clang_sys::CXChildVisit_Continue
+                }
+            }
+
+            clang_sys::clang_visitChildren(cursor, friend_visitor, info_ptr as clang_sys::CXClientData);
+
+            (info.friend_class, info.friend_function)
         }
     }
 }

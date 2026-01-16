@@ -121,6 +121,8 @@ pub struct CppStruct {
     pub destructor: Option<CppDestructor>,
     /// Methods (member functions)
     pub methods: Vec<CppMethod>,
+    /// Friend declarations
+    pub friends: Vec<CppFriend>,
 }
 
 /// A C++ class field (data member).
@@ -182,6 +184,15 @@ pub struct CppDestructor {
     pub access: AccessSpecifier,
     /// MIR body (if this is a definition)
     pub mir_body: Option<MirBody>,
+}
+
+/// A C++ friend declaration.
+#[derive(Debug, Clone)]
+pub enum CppFriend {
+    /// Friend class (e.g., `friend class Bar;`)
+    Class { name: String },
+    /// Friend function (e.g., `friend void helper(Foo&);`)
+    Function { name: String },
 }
 
 /// An extern declaration (function without body).

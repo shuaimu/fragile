@@ -38,14 +38,14 @@ See [PLAN_CPP20_MAKO.md](PLAN_CPP20_MAKO.md) for detailed plan.
   - [x] Nested namespaces `foo::bar` [26:01:15, 23:35] (included in above)
   - [x] `using namespace` [26:01:15, 23:41] ([docs/dev/plan_using_namespace.md](docs/dev/plan_using_namespace.md))
   - [ ] Name resolution
-- [-] **A.2 Classes Complete**
+- [x] **A.2 Classes Complete**
   - [x] Field declarations
   - [x] Access specifiers (public/private/protected) [26:01:15, 23:46] ([docs/dev/plan_access_specifiers.md](docs/dev/plan_access_specifiers.md))
   - [x] Constructors (default, copy, move) [26:01:15] ([docs/dev/plan_constructors.md](docs/dev/plan_constructors.md))
   - [x] Destructors [26:01:15] (included in above)
   - [x] Member initializer lists [26:01:16] ([docs/dev/plan_member_initializer_lists.md](docs/dev/plan_member_initializer_lists.md))
   - [x] Static members [26:01:16] ([docs/dev/plan_static_members.md](docs/dev/plan_static_members.md))
-  - [ ] Friend declarations
+  - [x] Friend declarations [26:01:16] ([docs/dev/plan_friend_declarations.md](docs/dev/plan_friend_declarations.md))
 - [ ] **A.3 Inheritance**
   - [ ] Single inheritance
   - [ ] Multiple inheritance
@@ -214,7 +214,7 @@ Migration: After C++20 support is complete, deprecate these.
 ## 5. Testing & Milestones
 
 ### 5.1 Unit Tests
-- [x] fragile-clang: 33 tests passing (7 unit + 26 integration)
+- [x] fragile-clang: 36 tests passing (7 unit + 29 integration)
 - [x] fragile-rustc-driver: 6 tests passing
 - [x] fragile-runtime: Compiles
 

@@ -122,6 +122,13 @@ pub enum ClangNodeKind {
     MemberRef {
         name: String,
     },
+    /// Friend declaration
+    FriendDecl {
+        /// Friend class name (if friend class)
+        friend_class: Option<String>,
+        /// Friend function name (if friend function)
+        friend_function: Option<String>,
+    },
     /// Namespace declaration
     NamespaceDecl {
         /// Namespace name (None for anonymous namespaces)

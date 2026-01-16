@@ -783,3 +783,97 @@ fn test_mixed_static_members() {
     assert_eq!(static_method_count, 1);
     assert_eq!(instance_method_count, 1);
 }
+
+/// Test friend class declaration.
+#[test]
+fn test_friend_class() {
+    use fragile_clang::CppFriend;
+
+    let parser = ClangParser::new().expect("Failed to create parser");
+
+    let source = r#"
+        class Foo {
+            friend class Bar;
+        private:
+            int value;
+        };
+    "#;
+
+    let ast = parser.parse_string(source, "friend_class.cpp").expect("Failed to parse");
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    assert_eq!(module.structs.len(), 1);
+
+    let s = &module.structs[0];
+    assert_eq!(s.friends.len(), 1);
+
+    match &s.friends[0] {
+        CppFriend::Class { name } => assert_eq!(name, "Bar"),
+        _ => panic!("Expected friend class, got function"),
+    }
+}
+
+/// Test friend function declaration.
+#[test]
+fn test_friend_function() {
+    use fragile_clang::CppFriend;
+
+    let parser = ClangParser::new().expect("Failed to create parser");
+
+    let source = r#"
+        class Foo {
+            friend void helper(Foo& f);
+        private:
+            int value;
+        };
+    "#;
+
+    let ast = parser.parse_string(source, "friend_func.cpp").expect("Failed to parse");
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    assert_eq!(module.structs.len(), 1);
+
+    let s = &module.structs[0];
+    assert_eq!(s.friends.len(), 1);
+
+    match &s.friends[0] {
+        CppFriend::Function { name } => assert_eq!(name, "helper"),
+        _ => panic!("Expected friend function, got class"),
+    }
+}
+
+/// Test multiple friend declarations.
+#[test]
+fn test_multiple_friends() {
+    use fragile_clang::CppFriend;
+
+    let parser = ClangParser::new().expect("Failed to create parser");
+
+    let source = r#"
+        class Foo {
+            friend class Bar;
+            friend class Baz;
+            friend void helper(Foo& f);
+        private:
+            int value;
+        };
+    "#;
+
+    let ast = parser.parse_string(source, "multi_friend.cpp").expect("Failed to parse");
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    assert_eq!(module.structs.len(), 1);
+
+    let s = &module.structs[0];
+    assert_eq!(s.friends.len(), 3);
+
+    // Count friend classes and functions
+    let class_count = s.friends.iter().filter(|f| matches!(f, CppFriend::Class { .. })).count();
+    let func_count = s.friends.iter().filter(|f| matches!(f, CppFriend::Function { .. })).count();
+
+    assert_eq!(class_count, 2);
+    assert_eq!(func_count, 1);
+}
