@@ -5839,3 +5839,302 @@ fn test_promise_type_complete() {
     let coro_fn = module.functions.iter().find(|f| f.display_name == "complete_coro");
     assert!(coro_fn.is_some(), "Expected to find complete_coro function");
 }
+
+// ========== C++20 Coroutine Awaitables Tests (D.6) ==========
+
+/// Test parsing custom awaitable with await_ready method.
+#[test]
+fn test_awaitable_await_ready() {
+    let parser = ClangParser::with_system_includes().unwrap();
+    let code = r#"
+        #include <coroutine>
+
+        struct CustomAwaitable {
+            bool await_ready() { return false; }
+            void await_suspend(std::coroutine_handle<>) {}
+            void await_resume() {}
+        };
+    "#;
+
+    let result = parser.parse_string(code, "test.cpp");
+    assert!(result.is_ok(), "Failed to parse await_ready: {:?}", result.err());
+
+    let ast = result.unwrap();
+
+    // Find await_ready method returning bool
+    let has_method = find_node_kind(&ast.translation_unit, |kind| {
+        matches!(kind, ClangNodeKind::CXXMethodDecl { name, return_type, .. }
+            if name == "await_ready" && matches!(return_type, CppType::Bool))
+    });
+
+    assert!(has_method.is_some(), "Expected to find await_ready method in CustomAwaitable");
+}
+
+/// Test parsing custom awaitable with await_suspend method.
+#[test]
+fn test_awaitable_await_suspend() {
+    let parser = ClangParser::with_system_includes().unwrap();
+    let code = r#"
+        #include <coroutine>
+
+        struct CustomAwaitable {
+            bool await_ready() { return false; }
+            void await_suspend(std::coroutine_handle<> h) { h.resume(); }
+            void await_resume() {}
+        };
+    "#;
+
+    let result = parser.parse_string(code, "test.cpp");
+    assert!(result.is_ok(), "Failed to parse await_suspend: {:?}", result.err());
+
+    let ast = result.unwrap();
+
+    // Find await_suspend method with coroutine_handle parameter
+    let has_method = find_node_kind(&ast.translation_unit, |kind| {
+        matches!(kind, ClangNodeKind::CXXMethodDecl { name, params, .. }
+            if name == "await_suspend" && params.len() == 1)
+    });
+
+    assert!(has_method.is_some(), "Expected to find await_suspend method in CustomAwaitable");
+}
+
+/// Test parsing custom awaitable with await_resume method.
+#[test]
+fn test_awaitable_await_resume() {
+    let parser = ClangParser::with_system_includes().unwrap();
+    let code = r#"
+        #include <coroutine>
+
+        struct ValueAwaitable {
+            bool await_ready() { return true; }
+            void await_suspend(std::coroutine_handle<>) {}
+            int await_resume() { return 42; }
+        };
+    "#;
+
+    let result = parser.parse_string(code, "test.cpp");
+    assert!(result.is_ok(), "Failed to parse await_resume: {:?}", result.err());
+
+    let ast = result.unwrap();
+
+    // Find await_resume method returning int
+    let has_method = find_node_kind(&ast.translation_unit, |kind| {
+        matches!(kind, ClangNodeKind::CXXMethodDecl { name, return_type, .. }
+            if name == "await_resume" && matches!(return_type, CppType::Int { signed: true }))
+    });
+
+    assert!(has_method.is_some(), "Expected to find await_resume method in ValueAwaitable");
+}
+
+/// Test parsing awaitable with conditional suspend (returns bool from await_suspend).
+#[test]
+fn test_awaitable_conditional_suspend() {
+    let parser = ClangParser::with_system_includes().unwrap();
+    let code = r#"
+        #include <coroutine>
+
+        struct ConditionalAwaitable {
+            bool await_ready() { return false; }
+            bool await_suspend(std::coroutine_handle<> h) {
+                return true; // true = suspend, false = resume immediately
+            }
+            int await_resume() { return 0; }
+        };
+    "#;
+
+    let result = parser.parse_string(code, "test.cpp");
+    assert!(result.is_ok(), "Failed to parse conditional suspend: {:?}", result.err());
+
+    let ast = result.unwrap();
+
+    // Find await_suspend returning bool (conditional suspension)
+    let has_method = find_node_kind(&ast.translation_unit, |kind| {
+        matches!(kind, ClangNodeKind::CXXMethodDecl { name, return_type, .. }
+            if name == "await_suspend" && matches!(return_type, CppType::Bool))
+    });
+
+    assert!(has_method.is_some(), "Expected to find await_suspend returning bool");
+}
+
+/// Test parsing awaitable with symmetric transfer (returns coroutine_handle from await_suspend).
+#[test]
+fn test_awaitable_symmetric_transfer() {
+    let parser = ClangParser::with_system_includes().unwrap();
+    let code = r#"
+        #include <coroutine>
+
+        struct SymmetricAwaitable {
+            std::coroutine_handle<> next_coro;
+
+            bool await_ready() { return false; }
+            std::coroutine_handle<> await_suspend(std::coroutine_handle<>) {
+                return next_coro; // Transfer to another coroutine
+            }
+            void await_resume() {}
+        };
+    "#;
+
+    let result = parser.parse_string(code, "test.cpp");
+    assert!(result.is_ok(), "Failed to parse symmetric transfer: {:?}", result.err());
+
+    let ast = result.unwrap();
+
+    // Find await_suspend method
+    let has_method = find_node_kind(&ast.translation_unit, |kind| {
+        matches!(kind, ClangNodeKind::CXXMethodDecl { name, .. } if name == "await_suspend")
+    });
+
+    assert!(has_method.is_some(), "Expected to find await_suspend for symmetric transfer");
+}
+
+/// Test using custom awaitable with co_await in a coroutine.
+#[test]
+fn test_awaitable_with_co_await() {
+    let parser = ClangParser::with_system_includes().unwrap();
+    let code = r#"
+        #include <coroutine>
+
+        struct ValueAwaitable {
+            int value;
+            bool await_ready() { return true; }
+            void await_suspend(std::coroutine_handle<>) {}
+            int await_resume() { return value; }
+        };
+
+        struct Task {
+            struct promise_type {
+                Task get_return_object() { return {}; }
+                std::suspend_never initial_suspend() { return {}; }
+                std::suspend_never final_suspend() noexcept { return {}; }
+                void return_void() {}
+                void unhandled_exception() {}
+            };
+        };
+
+        Task use_custom_awaitable() {
+            ValueAwaitable awaitable{42};
+            int result = co_await awaitable;
+        }
+    "#;
+
+    let result = parser.parse_string(code, "test.cpp");
+    assert!(result.is_ok(), "Failed to parse co_await with custom awaitable: {:?}", result.err());
+
+    let ast = result.unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).unwrap();
+
+    // Verify the coroutine function is parsed
+    let coro_fn = module.functions.iter().find(|f| f.display_name == "use_custom_awaitable");
+    assert!(coro_fn.is_some(), "Expected to find use_custom_awaitable function");
+}
+
+/// Test promise_type with await_transform method.
+#[test]
+fn test_awaitable_await_transform() {
+    let parser = ClangParser::with_system_includes().unwrap();
+    let code = r#"
+        #include <coroutine>
+
+        struct TransformTask {
+            struct promise_type {
+                TransformTask get_return_object() { return {}; }
+                std::suspend_never initial_suspend() { return {}; }
+                std::suspend_never final_suspend() noexcept { return {}; }
+                void return_void() {}
+                void unhandled_exception() {}
+
+                // Transform any awaited type
+                std::suspend_always await_transform(int value) {
+                    return {};
+                }
+            };
+        };
+
+        TransformTask with_transform() {
+            co_await 42;  // Will be transformed by await_transform
+        }
+    "#;
+
+    let result = parser.parse_string(code, "test.cpp");
+    assert!(result.is_ok(), "Failed to parse await_transform: {:?}", result.err());
+
+    let ast = result.unwrap();
+
+    // Find await_transform method
+    let has_method = find_node_kind(&ast.translation_unit, |kind| {
+        matches!(kind, ClangNodeKind::CXXMethodDecl { name, params, .. }
+            if name == "await_transform" && params.len() == 1)
+    });
+
+    assert!(has_method.is_some(), "Expected to find await_transform method in promise_type");
+}
+
+/// Test complete awaitable pattern integration.
+#[test]
+fn test_awaitable_complete_pattern() {
+    let parser = ClangParser::with_system_includes().unwrap();
+    let code = r#"
+        #include <coroutine>
+
+        // A simple async operation awaitable
+        struct AsyncOperation {
+            int result_value;
+            bool is_ready;
+
+            bool await_ready() const noexcept { return is_ready; }
+
+            void await_suspend(std::coroutine_handle<> h) noexcept {
+                // In real code: schedule resumption when operation completes
+                h.resume();
+            }
+
+            int await_resume() noexcept { return result_value; }
+        };
+
+        struct AsyncTask {
+            struct promise_type {
+                AsyncTask get_return_object() { return {}; }
+                std::suspend_never initial_suspend() { return {}; }
+                std::suspend_always final_suspend() noexcept { return {}; }
+                void return_void() {}
+                void unhandled_exception() {}
+            };
+        };
+
+        AsyncTask async_example() {
+            AsyncOperation op1{10, false};
+            int r1 = co_await op1;
+
+            AsyncOperation op2{20, true};
+            int r2 = co_await op2;
+
+            co_return;
+        }
+    "#;
+
+    let result = parser.parse_string(code, "test.cpp");
+    assert!(result.is_ok(), "Failed to parse complete awaitable pattern: {:?}", result.err());
+
+    let ast = result.unwrap();
+
+    // Verify all three awaitable methods are found
+    let has_ready = find_node_kind(&ast.translation_unit, |kind| {
+        matches!(kind, ClangNodeKind::CXXMethodDecl { name, .. } if name == "await_ready")
+    });
+    let has_suspend = find_node_kind(&ast.translation_unit, |kind| {
+        matches!(kind, ClangNodeKind::CXXMethodDecl { name, .. } if name == "await_suspend")
+    });
+    let has_resume = find_node_kind(&ast.translation_unit, |kind| {
+        matches!(kind, ClangNodeKind::CXXMethodDecl { name, .. } if name == "await_resume")
+    });
+
+    assert!(has_ready.is_some() && has_suspend.is_some() && has_resume.is_some(),
+        "Expected all three awaitable protocol methods");
+
+    // Verify the coroutine function is parsed via MIR conversion
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).unwrap();
+    let coro_fn = module.functions.iter().find(|f| f.display_name == "async_example");
+    assert!(coro_fn.is_some(), "Expected to find async_example function");
+}

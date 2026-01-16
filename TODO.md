@@ -148,9 +148,9 @@ See [PLAN_CPP20_MAKO.md](PLAN_CPP20_MAKO.md) for detailed plan.
   - [x] D.5.1 get_return_object() (8 tests added)
   - [x] D.5.2 initial_suspend / final_suspend
   - [x] D.5.3 return_void / return_value / yield_value / unhandled_exception
-- [ ] **D.6 Awaitables** (~100 lines)
-  - [ ] D.6.1 await_ready/suspend/resume protocol
-  - [ ] D.6.2 co_await expression evaluation
+- [x] **D.6 Awaitables** (~100 lines) [26:01:16, 04:40] ([docs/dev/plan_awaitables.md](docs/dev/plan_awaitables.md))
+  - [x] D.6.1 await_ready/suspend/resume protocol (8 tests added)
+  - [x] D.6.2 co_await expression evaluation with custom awaitables
 - [ ] **D.7 Generators** (~100 lines)
   - [ ] D.7.1 co_yield expression
   - [ ] D.7.2 Generator pattern test
@@ -247,7 +247,7 @@ Migration: After C++20 support is complete, deprecate these.
 ## 5. Testing & Milestones
 
 ### 5.1 Unit Tests
-- [x] fragile-clang: 202 tests passing (27 unit + 175 integration) - includes 10 coroutine + 7 exception + 6 RTTI + 8 promise type tests
+- [x] fragile-clang: 210 tests passing (27 unit + 183 integration) - includes 10 coroutine + 7 exception + 6 RTTI + 8 promise type + 8 awaitable tests
 - [x] fragile-rustc-driver: 6 tests passing
 - [x] fragile-runtime: Compiles
 
