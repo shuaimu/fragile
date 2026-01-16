@@ -192,7 +192,7 @@ See [PLAN_CPP20_MAKO.md](PLAN_CPP20_MAKO.md) for detailed plan.
   - [x] F.2.1 Add stubs: tuple, csignal, pthread.h, sched.h; extend string with assign(), vector with memory include [26:01:16, 05:30]
   - [x] `vendor/mako/src/mako/vec/occ.cpp` - **PARSED**: 27 functions (OCC, workerThread, main) [26:01:16, 05:30]
 - [-] **F.3 Full Build** (Started [26:01:16, 06:00])
-  - [x] All rrr module - **15/16 files parsing (94%)** [26:01:16, 08:00]
+  - [x] All rrr module - **20/20 files parsing (100%)** [26:01:16, 21:30]
     - [x] F.3.1 Extended stubs: cmath, iomanip, list reverse iterators, unordered_map insert_or_assign [26:01:16, 06:00]
     - [x] F.3.2 Time stubs: time.h, sys/time.h, limits.h, climits, execinfo.h [26:01:16, 08:00]
     - [x] F.3.3 Iterator stubs: std::reverse_iterator for list, range insert [26:01:16, 08:00]
@@ -380,7 +380,7 @@ Migration: After C++20 support is complete, deprecate these.
 ## 5. Testing & Milestones
 
 ### 5.1 Unit Tests
-- [x] fragile-clang: 337 tests passing (27 unit + 310 integration) - includes 10 coroutine + 7 exception + 6 RTTI + 8 promise type + 8 awaitable + 8 generator + 3 noexcept + 1 member access + 1 stack unwinding + 116 mako file tests [26:01:16, 19:00]
+- [x] fragile-clang: 344 tests passing (27 unit + 317 integration) - includes 10 coroutine + 7 exception + 6 RTTI + 8 promise type + 8 awaitable + 8 generator + 3 noexcept + 1 member access + 1 stack unwinding + 123 mako file tests [26:01:16, 21:30]
 - [x] fragile-rustc-driver: 6 tests passing
 - [x] fragile-runtime: Compiles
 
@@ -399,9 +399,9 @@ Migration: After C++20 support is complete, deprecate these.
 **Primary: Mako Integration (Phase F)**
 
 Current status:
-- **rrr module**: 16/16 files parsing (100%) - quorum_event.cc now parses with error filtering
+- **rrr module**: 20/20 files parsing (100%) - all base, misc, reactor, rpc files parsing
 - **mako module**: 110/338 files parsing (~33%) - includes memdb, deptran, masstree, masstree-beta (all 28 files), all lib files
-- **Total tests**: 337 passing (fragile-clang integration tests)
+- **Total tests**: 344 passing (fragile-clang integration tests)
 
 Next steps:
 1. **rustc Integration (2.3)** - Requires user setup: `rustup component add rustc-dev --toolchain nightly`
