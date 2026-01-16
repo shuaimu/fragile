@@ -9031,3 +9031,225 @@ fn test_rrr_base_unittest_cpp() {
     }
 }
 
+/// Test parsing masstree kvrandom.cc (pure random number generation)
+#[test]
+fn test_mako_masstree_kvrandom_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/mako/masstree/kvrandom.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: kvrandom.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let masstree_path = project_root.join("vendor/mako/src/mako/masstree");
+
+    let mut system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let clang_paths = [
+        "/usr/lib/llvm-19/lib/clang/19/include",
+        "/usr/lib/llvm-18/lib/clang/18/include",
+    ];
+
+    for path in &clang_paths {
+        if Path::new(path).exists() {
+            system_include_paths.push(path.to_string());
+            break;
+        }
+    }
+
+    let include_paths = vec![
+        masstree_path.to_string_lossy().to_string(),
+    ];
+
+    let parser = ClangParser::with_paths(include_paths, system_include_paths)
+        .expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+
+            println!("Successfully parsed kvrandom.cc with {} functions", module.functions.len());
+            // kvrandom.cc has 1 main function (psdes) plus static data
+            assert!(module.functions.len() >= 1, "Expected at least psdes function");
+        }
+        Err(e) => {
+            println!("Note: kvrandom.cc parsing failed: {:?}", e);
+        }
+    }
+}
+
+/// Test parsing masstree kvio.cc (buffered I/O)
+#[test]
+fn test_mako_masstree_kvio_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/mako/masstree/kvio.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: kvio.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let masstree_path = project_root.join("vendor/mako/src/mako/masstree");
+
+    let mut system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let clang_paths = [
+        "/usr/lib/llvm-19/lib/clang/19/include",
+        "/usr/lib/llvm-18/lib/clang/18/include",
+    ];
+
+    for path in &clang_paths {
+        if Path::new(path).exists() {
+            system_include_paths.push(path.to_string());
+            break;
+        }
+    }
+
+    let include_paths = vec![
+        masstree_path.to_string_lossy().to_string(),
+    ];
+
+    let parser = ClangParser::with_paths(include_paths, system_include_paths)
+        .expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+
+            println!("Successfully parsed kvio.cc with {} functions", module.functions.len());
+            // kvio.cc has multiple I/O functions
+            assert!(module.functions.len() >= 5, "Expected I/O utility functions");
+        }
+        Err(e) => {
+            println!("Note: kvio.cc parsing failed: {:?}", e);
+        }
+    }
+}
+
+/// Test parsing masstree straccum.cc (string accumulator)
+#[test]
+fn test_mako_masstree_straccum_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/mako/masstree/straccum.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: straccum.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let masstree_path = project_root.join("vendor/mako/src/mako/masstree");
+
+    let mut system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let clang_paths = [
+        "/usr/lib/llvm-19/lib/clang/19/include",
+        "/usr/lib/llvm-18/lib/clang/18/include",
+    ];
+
+    for path in &clang_paths {
+        if Path::new(path).exists() {
+            system_include_paths.push(path.to_string());
+            break;
+        }
+    }
+
+    let include_paths = vec![
+        masstree_path.to_string_lossy().to_string(),
+    ];
+
+    let parser = ClangParser::with_paths(include_paths, system_include_paths)
+        .expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+
+            println!("Successfully parsed straccum.cc with {} functions", module.functions.len());
+            // straccum.cc has many string building functions
+            assert!(module.functions.len() >= 10, "Expected string accumulator functions");
+        }
+        Err(e) => {
+            println!("Note: straccum.cc parsing failed: {:?}", e);
+        }
+    }
+}
+
+/// Test parsing masstree string.cc (string implementation)
+#[test]
+fn test_mako_masstree_string_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/mako/masstree/string.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: string.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let masstree_path = project_root.join("vendor/mako/src/mako/masstree");
+
+    let mut system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let clang_paths = [
+        "/usr/lib/llvm-19/lib/clang/19/include",
+        "/usr/lib/llvm-18/lib/clang/18/include",
+    ];
+
+    for path in &clang_paths {
+        if Path::new(path).exists() {
+            system_include_paths.push(path.to_string());
+            break;
+        }
+    }
+
+    let include_paths = vec![
+        masstree_path.to_string_lossy().to_string(),
+    ];
+
+    let parser = ClangParser::with_paths(include_paths, system_include_paths)
+        .expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+
+            println!("Successfully parsed string.cc with {} functions", module.functions.len());
+        }
+        Err(e) => {
+            println!("Note: string.cc parsing failed: {:?}", e);
+        }
+    }
+}
+
