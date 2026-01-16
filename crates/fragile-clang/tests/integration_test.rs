@@ -20027,3 +20027,562 @@ fn test_mako_deptran_raft_server_cc() {
         }
     }
 }
+
+/// Test parsing deptran/benchmark_control_rpc.cc - Benchmark control RPC handlers
+#[test]
+fn test_mako_deptran_benchmark_control_rpc_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/deptran/benchmark_control_rpc.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: deptran/benchmark_control_rpc.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let rusty_cpp_path = project_root.join("vendor/mako/third-party/rusty-cpp/include");
+
+    if !rusty_cpp_path.exists() {
+        println!("Skipping test: rusty-cpp submodule not initialized");
+        return;
+    }
+
+    let include_paths = vec![
+        project_root.join("vendor/mako/src").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/deptran").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/memdb").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/rrr").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/bench").to_string_lossy().to_string(),
+        rusty_cpp_path.to_string_lossy().to_string(),
+    ];
+
+    let system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let ignored_errors = vec![
+        "cannot initialize object parameter of type".to_string(),
+        "rcc_rpc.h' file not found".to_string(),
+        "member access into incomplete type".to_string(),
+        "only virtual member functions can be marked 'override'".to_string(),
+        "expected class name".to_string(),
+        "unknown type name 'DepId'".to_string(),
+        "unknown type name 'Profiling'".to_string(),
+        "unknown type name 'ServerResponse'".to_string(),
+        "unknown type name 'ClientResponse'".to_string(),
+        "unknown type name 'TxDispatchRequest'".to_string(),
+        "use of undeclared identifier".to_string(),
+        "no member named".to_string(),
+        "variable has incomplete type".to_string(),
+    ];
+
+    let parser = ClangParser::with_paths_defines_and_ignored_errors(
+        include_paths,
+        system_include_paths,
+        vec![],
+        ignored_errors,
+    ).expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+            println!("deptran/benchmark_control_rpc.cc parsed successfully with {} functions", module.functions.len());
+        }
+        Err(e) => {
+            panic!("deptran/benchmark_control_rpc.cc should parse successfully: {:?}", e);
+        }
+    }
+}
+
+/// Test parsing deptran/client_status.cc - Client status tracking
+#[test]
+fn test_mako_deptran_client_status_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/deptran/client_status.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: deptran/client_status.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let rusty_cpp_path = project_root.join("vendor/mako/third-party/rusty-cpp/include");
+
+    if !rusty_cpp_path.exists() {
+        println!("Skipping test: rusty-cpp submodule not initialized");
+        return;
+    }
+
+    let include_paths = vec![
+        project_root.join("vendor/mako/src").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/deptran").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/memdb").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/rrr").to_string_lossy().to_string(),
+        rusty_cpp_path.to_string_lossy().to_string(),
+    ];
+
+    let system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let ignored_errors = vec![
+        "cannot initialize object parameter of type".to_string(),
+        "rcc_rpc.h' file not found".to_string(),
+        "member access into incomplete type".to_string(),
+        "only virtual member functions can be marked 'override'".to_string(),
+        "expected class name".to_string(),
+        "unknown type name 'DepId'".to_string(),
+        "unknown type name 'Profiling'".to_string(),
+    ];
+
+    let parser = ClangParser::with_paths_defines_and_ignored_errors(
+        include_paths,
+        system_include_paths,
+        vec![],
+        ignored_errors,
+    ).expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+            println!("deptran/client_status.cc parsed successfully with {} functions", module.functions.len());
+        }
+        Err(e) => {
+            panic!("deptran/client_status.cc should parse successfully: {:?}", e);
+        }
+    }
+}
+
+/// Test parsing deptran/stats_registry.cc - Statistics collection
+#[test]
+fn test_mako_deptran_stats_registry_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/deptran/stats_registry.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: deptran/stats_registry.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let rusty_cpp_path = project_root.join("vendor/mako/third-party/rusty-cpp/include");
+
+    if !rusty_cpp_path.exists() {
+        println!("Skipping test: rusty-cpp submodule not initialized");
+        return;
+    }
+
+    let include_paths = vec![
+        project_root.join("vendor/mako/src").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/deptran").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/memdb").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/rrr").to_string_lossy().to_string(),
+        rusty_cpp_path.to_string_lossy().to_string(),
+    ];
+
+    let system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let ignored_errors = vec![
+        "cannot initialize object parameter of type".to_string(),
+        "rcc_rpc.h' file not found".to_string(),
+        "member access into incomplete type".to_string(),
+        "only virtual member functions can be marked 'override'".to_string(),
+        "expected class name".to_string(),
+        "unknown type name 'DepId'".to_string(),
+        "unknown type name 'Profiling'".to_string(),
+    ];
+
+    let parser = ClangParser::with_paths_defines_and_ignored_errors(
+        include_paths,
+        system_include_paths,
+        vec![],
+        ignored_errors,
+    ).expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+            println!("deptran/stats_registry.cc parsed successfully with {} functions", module.functions.len());
+        }
+        Err(e) => {
+            panic!("deptran/stats_registry.cc should parse successfully: {:?}", e);
+        }
+    }
+}
+
+/// Test parsing deptran/tpcc_sharding.cc - TPC-C sharding logic
+#[test]
+fn test_mako_deptran_tpcc_sharding_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/deptran/tpcc_sharding.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: deptran/tpcc_sharding.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let rusty_cpp_path = project_root.join("vendor/mako/third-party/rusty-cpp/include");
+
+    if !rusty_cpp_path.exists() {
+        println!("Skipping test: rusty-cpp submodule not initialized");
+        return;
+    }
+
+    let include_paths = vec![
+        project_root.join("vendor/mako/src").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/deptran").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/memdb").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/rrr").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/bench").to_string_lossy().to_string(),
+        rusty_cpp_path.to_string_lossy().to_string(),
+    ];
+
+    let system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let ignored_errors = vec![
+        "cannot initialize object parameter of type".to_string(),
+        "rcc_rpc.h' file not found".to_string(),
+        "member access into incomplete type".to_string(),
+        "only virtual member functions can be marked 'override'".to_string(),
+        "expected class name".to_string(),
+        "unknown type name 'DepId'".to_string(),
+        "unknown type name 'Profiling'".to_string(),
+        "use of undeclared identifier".to_string(),
+        "expected expression".to_string(),
+    ];
+
+    let parser = ClangParser::with_paths_defines_and_ignored_errors(
+        include_paths,
+        system_include_paths,
+        vec![],
+        ignored_errors,
+    ).expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+            println!("deptran/tpcc_sharding.cc parsed successfully with {} functions", module.functions.len());
+        }
+        Err(e) => {
+            panic!("deptran/tpcc_sharding.cc should parse successfully: {:?}", e);
+        }
+    }
+}
+
+/// Test parsing deptran/sharding_policy_cache.cc - Sharding policy cache
+#[test]
+fn test_mako_deptran_sharding_policy_cache_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/deptran/sharding_policy_cache.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: deptran/sharding_policy_cache.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let rusty_cpp_path = project_root.join("vendor/mako/third-party/rusty-cpp/include");
+
+    if !rusty_cpp_path.exists() {
+        println!("Skipping test: rusty-cpp submodule not initialized");
+        return;
+    }
+
+    let include_paths = vec![
+        project_root.join("vendor/mako/src").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/deptran").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/memdb").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/rrr").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/bench").to_string_lossy().to_string(),
+        rusty_cpp_path.to_string_lossy().to_string(),
+    ];
+
+    let system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let ignored_errors = vec![
+        "cannot initialize object parameter of type".to_string(),
+        "rcc_rpc.h' file not found".to_string(),
+        "member access into incomplete type".to_string(),
+        "only virtual member functions can be marked 'override'".to_string(),
+        "expected class name".to_string(),
+        "unknown type name 'DepId'".to_string(),
+        "unknown type name 'Profiling'".to_string(),
+        "use of undeclared identifier".to_string(),
+        "expected expression".to_string(),
+    ];
+
+    let parser = ClangParser::with_paths_defines_and_ignored_errors(
+        include_paths,
+        system_include_paths,
+        vec![],
+        ignored_errors,
+    ).expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+            println!("deptran/sharding_policy_cache.cc parsed successfully with {} functions", module.functions.len());
+        }
+        Err(e) => {
+            panic!("deptran/sharding_policy_cache.cc should parse successfully: {:?}", e);
+        }
+    }
+}
+
+/// Test parsing deptran/paxos_worker.cc - Paxos worker threads
+#[test]
+fn test_mako_deptran_paxos_worker_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/deptran/paxos_worker.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: deptran/paxos_worker.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let rusty_cpp_path = project_root.join("vendor/mako/third-party/rusty-cpp/include");
+
+    if !rusty_cpp_path.exists() {
+        println!("Skipping test: rusty-cpp submodule not initialized");
+        return;
+    }
+
+    let include_paths = vec![
+        project_root.join("vendor/mako/src").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/deptran").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/memdb").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/rrr").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/bench").to_string_lossy().to_string(),
+        rusty_cpp_path.to_string_lossy().to_string(),
+    ];
+
+    let system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let ignored_errors = vec![
+        "cannot initialize object parameter of type".to_string(),
+        "rcc_rpc.h' file not found".to_string(),
+        "member access into incomplete type".to_string(),
+        "only virtual member functions can be marked 'override'".to_string(),
+        "expected class name".to_string(),
+        "unknown type name 'DepId'".to_string(),
+        "unknown type name 'Profiling'".to_string(),
+        "unknown type name 'ServerResponse'".to_string(),
+        "unknown type name 'ClientResponse'".to_string(),
+        "unknown type name 'TxDispatchRequest'".to_string(),
+        "use of undeclared identifier".to_string(),
+        "no member named".to_string(),
+        "does not refer to a value".to_string(),
+        "expected expression".to_string(),
+        "expected '(' for function-style cast".to_string(),
+        "no matching member function for call to 'wait'".to_string(),
+        "implicit instantiation of undefined template".to_string(),
+        "no viable conversion".to_string(),
+        "use of overloaded operator".to_string(),
+        "default initialization of an object of const type".to_string(),
+    ];
+
+    let parser = ClangParser::with_paths_defines_and_ignored_errors(
+        include_paths,
+        system_include_paths,
+        vec![],
+        ignored_errors,
+    ).expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+            println!("deptran/paxos_worker.cc parsed successfully with {} functions", module.functions.len());
+        }
+        Err(e) => {
+            panic!("deptran/paxos_worker.cc should parse successfully: {:?}", e);
+        }
+    }
+}
+
+/// Test parsing deptran/paxos_main_helper.cc - Paxos main function helpers
+#[test]
+fn test_mako_deptran_paxos_main_helper_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/deptran/paxos_main_helper.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: deptran/paxos_main_helper.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let rusty_cpp_path = project_root.join("vendor/mako/third-party/rusty-cpp/include");
+
+    if !rusty_cpp_path.exists() {
+        println!("Skipping test: rusty-cpp submodule not initialized");
+        return;
+    }
+
+    let include_paths = vec![
+        project_root.join("vendor/mako/src").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/deptran").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/memdb").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/rrr").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/bench").to_string_lossy().to_string(),
+        rusty_cpp_path.to_string_lossy().to_string(),
+    ];
+
+    let system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let ignored_errors = vec![
+        "cannot initialize object parameter of type".to_string(),
+        "rcc_rpc.h' file not found".to_string(),
+        "member access into incomplete type".to_string(),
+        "only virtual member functions can be marked 'override'".to_string(),
+        "expected class name".to_string(),
+        "unknown type name".to_string(),
+        "use of undeclared identifier".to_string(),
+        "no member named".to_string(),
+        "does not refer to a value".to_string(),
+        "expected expression".to_string(),
+        "expected '(' for function-style cast".to_string(),
+        "no matching member function for call to 'wait'".to_string(),
+        "no viable conversion".to_string(),
+        "no matching literal operator".to_string(),
+        "default initialization of an object of const type".to_string(),
+    ];
+
+    let parser = ClangParser::with_paths_defines_and_ignored_errors(
+        include_paths,
+        system_include_paths,
+        vec![],
+        ignored_errors,
+    ).expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+            println!("deptran/paxos_main_helper.cc parsed successfully with {} functions", module.functions.len());
+        }
+        Err(e) => {
+            panic!("deptran/paxos_main_helper.cc should parse successfully: {:?}", e);
+        }
+    }
+}
+
+/// Test parsing deptran/raft_main_helper.cc - Raft main function helpers
+#[test]
+fn test_mako_deptran_raft_main_helper_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/deptran/raft_main_helper.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: deptran/raft_main_helper.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let rusty_cpp_path = project_root.join("vendor/mako/third-party/rusty-cpp/include");
+
+    if !rusty_cpp_path.exists() {
+        println!("Skipping test: rusty-cpp submodule not initialized");
+        return;
+    }
+
+    let include_paths = vec![
+        project_root.join("vendor/mako/src").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/deptran").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/memdb").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/rrr").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/bench").to_string_lossy().to_string(),
+        rusty_cpp_path.to_string_lossy().to_string(),
+    ];
+
+    let system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let ignored_errors = vec![
+        "cannot initialize object parameter of type".to_string(),
+        "rcc_rpc.h' file not found".to_string(),
+        "member access into incomplete type".to_string(),
+        "only virtual member functions can be marked 'override'".to_string(),
+        "expected class name".to_string(),
+        "unknown type name 'DepId'".to_string(),
+        "unknown type name 'Profiling'".to_string(),
+        "unknown type name 'ServerResponse'".to_string(),
+        "unknown type name 'ClientResponse'".to_string(),
+        "unknown type name 'TxDispatchRequest'".to_string(),
+        "use of undeclared identifier".to_string(),
+        "no member named".to_string(),
+        "does not refer to a value".to_string(),
+        "expected expression".to_string(),
+        "expected '(' for function-style cast".to_string(),
+        "no matching member function for call to 'wait'".to_string(),
+        "no viable conversion".to_string(),
+    ];
+
+    let parser = ClangParser::with_paths_defines_and_ignored_errors(
+        include_paths,
+        system_include_paths,
+        vec![],
+        ignored_errors,
+    ).expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+            println!("deptran/raft_main_helper.cc parsed successfully with {} functions", module.functions.len());
+        }
+        Err(e) => {
+            panic!("deptran/raft_main_helper.cc should parse successfully: {:?}", e);
+        }
+    }
+}
