@@ -1,0 +1,269 @@
+// Fragile stub header for <locale>
+// Localization library
+
+#ifndef _FRAGILE_LOCALE_
+#define _FRAGILE_LOCALE_
+
+#include "string"
+#include "cstddef"
+
+namespace std {
+
+// locale class
+class locale {
+public:
+    // Category types
+    enum category {
+        none     = 0,
+        collate  = 1,
+        ctype    = 2,
+        monetary = 4,
+        numeric  = 8,
+        time     = 16,
+        messages = 32,
+        all = collate | ctype | monetary | numeric | time | messages
+    };
+
+    // Nested facet base class
+    class facet {
+    protected:
+        explicit facet(size_t refs = 0) {}
+        virtual ~facet() = default;
+        facet(const facet&) = delete;
+        facet& operator=(const facet&) = delete;
+    };
+
+    // Nested id class
+    class id {
+    public:
+        id() = default;
+        id(const id&) = delete;
+        id& operator=(const id&) = delete;
+    };
+
+    // Constructors
+    locale() noexcept = default;
+    locale(const locale& other) noexcept = default;
+    explicit locale(const char* name) {}
+    explicit locale(const string& name) {}
+    locale(const locale& other, const char* name, category cat) {}
+    locale(const locale& other, const locale& one, category cat) {}
+    template<class Facet>
+    locale(const locale& other, Facet* f) {}
+
+    ~locale() = default;
+
+    locale& operator=(const locale& other) noexcept = default;
+
+    // locale operations
+    string name() const { return "C"; }
+
+    bool operator==(const locale& other) const { return true; }
+    bool operator!=(const locale& other) const { return false; }
+
+    template<class CharT, class Traits, class Alloc>
+    bool operator()(const basic_string<CharT, Traits, Alloc>& s1,
+                   const basic_string<CharT, Traits, Alloc>& s2) const {
+        return s1 < s2;
+    }
+
+    // Static members
+    static locale global(const locale& loc) { return locale(); }
+    static const locale& classic() {
+        static locale c;
+        return c;
+    }
+};
+
+// has_facet
+template<class Facet>
+bool has_facet(const locale& loc) noexcept {
+    return false;
+}
+
+// use_facet
+template<class Facet>
+const Facet& use_facet(const locale& loc) {
+    static Facet f;
+    return f;
+}
+
+// ctype_base
+class ctype_base {
+public:
+    using mask = unsigned short;
+    static constexpr mask space  = 1;
+    static constexpr mask print  = 2;
+    static constexpr mask cntrl  = 4;
+    static constexpr mask upper  = 8;
+    static constexpr mask lower  = 16;
+    static constexpr mask alpha  = 32;
+    static constexpr mask digit  = 64;
+    static constexpr mask punct  = 128;
+    static constexpr mask xdigit = 256;
+    static constexpr mask blank  = 512;
+    static constexpr mask alnum  = alpha | digit;
+    static constexpr mask graph  = alnum | punct;
+};
+
+// ctype
+template<class CharT>
+class ctype : public locale::facet, public ctype_base {
+public:
+    using char_type = CharT;
+    static locale::id id;
+
+    explicit ctype(size_t refs = 0) : locale::facet(refs) {}
+
+    bool is(mask m, CharT c) const { return false; }
+    const CharT* is(const CharT* lo, const CharT* hi, mask* vec) const { return hi; }
+    const CharT* scan_is(mask m, const CharT* lo, const CharT* hi) const { return hi; }
+    const CharT* scan_not(mask m, const CharT* lo, const CharT* hi) const { return hi; }
+
+    CharT toupper(CharT c) const { return c; }
+    const CharT* toupper(CharT* lo, const CharT* hi) const { return hi; }
+    CharT tolower(CharT c) const { return c; }
+    const CharT* tolower(CharT* lo, const CharT* hi) const { return hi; }
+
+    CharT widen(char c) const { return static_cast<CharT>(c); }
+    const char* widen(const char* lo, const char* hi, CharT* dest) const { return hi; }
+    char narrow(CharT c, char dflt) const { return static_cast<char>(c); }
+    const CharT* narrow(const CharT* lo, const CharT* hi, char dflt, char* dest) const { return hi; }
+
+protected:
+    ~ctype() override = default;
+};
+
+template<class CharT>
+locale::id ctype<CharT>::id;
+
+// Specialization for char
+template<>
+class ctype<char> : public locale::facet, public ctype_base {
+public:
+    using char_type = char;
+    static locale::id id;
+    static const size_t table_size = 256;
+
+    explicit ctype(const mask* tbl = nullptr, bool del = false, size_t refs = 0)
+        : locale::facet(refs) {}
+
+    bool is(mask m, char c) const { return false; }
+    const char* is(const char* lo, const char* hi, mask* vec) const { return hi; }
+    const char* scan_is(mask m, const char* lo, const char* hi) const { return hi; }
+    const char* scan_not(mask m, const char* lo, const char* hi) const { return hi; }
+
+    char toupper(char c) const { return c; }
+    const char* toupper(char* lo, const char* hi) const { return hi; }
+    char tolower(char c) const { return c; }
+    const char* tolower(char* lo, const char* hi) const { return hi; }
+
+    char widen(char c) const { return c; }
+    const char* widen(const char* lo, const char* hi, char* dest) const { return hi; }
+    char narrow(char c, char dflt) const { return c; }
+    const char* narrow(const char* lo, const char* hi, char dflt, char* dest) const { return hi; }
+
+    const mask* table() const noexcept { return nullptr; }
+    static const mask* classic_table() noexcept { return nullptr; }
+
+protected:
+    ~ctype() override = default;
+};
+
+// collate
+template<class CharT>
+class collate : public locale::facet {
+public:
+    using char_type = CharT;
+    using string_type = basic_string<CharT>;
+    static locale::id id;
+
+    explicit collate(size_t refs = 0) : locale::facet(refs) {}
+
+    int compare(const CharT* lo1, const CharT* hi1,
+                const CharT* lo2, const CharT* hi2) const {
+        return 0;
+    }
+
+    string_type transform(const CharT* lo, const CharT* hi) const {
+        return string_type(lo, hi);
+    }
+
+    long hash(const CharT* lo, const CharT* hi) const { return 0; }
+
+protected:
+    ~collate() override = default;
+};
+
+template<class CharT>
+locale::id collate<CharT>::id;
+
+// numpunct
+template<class CharT>
+class numpunct : public locale::facet {
+public:
+    using char_type = CharT;
+    using string_type = basic_string<CharT>;
+    static locale::id id;
+
+    explicit numpunct(size_t refs = 0) : locale::facet(refs) {}
+
+    CharT decimal_point() const { return CharT('.'); }
+    CharT thousands_sep() const { return CharT(','); }
+    string grouping() const { return ""; }
+    string_type truename() const { return string_type(); }
+    string_type falsename() const { return string_type(); }
+
+protected:
+    ~numpunct() override = default;
+};
+
+template<class CharT>
+locale::id numpunct<CharT>::id;
+
+// isspace, etc. overloads with locale
+template<class CharT>
+bool isspace(CharT c, const locale& loc) { return false; }
+
+template<class CharT>
+bool isprint(CharT c, const locale& loc) { return false; }
+
+template<class CharT>
+bool iscntrl(CharT c, const locale& loc) { return false; }
+
+template<class CharT>
+bool isupper(CharT c, const locale& loc) { return false; }
+
+template<class CharT>
+bool islower(CharT c, const locale& loc) { return false; }
+
+template<class CharT>
+bool isalpha(CharT c, const locale& loc) { return false; }
+
+template<class CharT>
+bool isdigit(CharT c, const locale& loc) { return false; }
+
+template<class CharT>
+bool ispunct(CharT c, const locale& loc) { return false; }
+
+template<class CharT>
+bool isxdigit(CharT c, const locale& loc) { return false; }
+
+template<class CharT>
+bool isalnum(CharT c, const locale& loc) { return false; }
+
+template<class CharT>
+bool isgraph(CharT c, const locale& loc) { return false; }
+
+template<class CharT>
+bool isblank(CharT c, const locale& loc) { return false; }
+
+template<class CharT>
+CharT toupper(CharT c, const locale& loc) { return c; }
+
+template<class CharT>
+CharT tolower(CharT c, const locale& loc) { return c; }
+
+} // namespace std
+
+#endif // _FRAGILE_LOCALE_

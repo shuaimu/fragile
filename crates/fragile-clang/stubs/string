@@ -222,6 +222,120 @@ public:
 
     void pop_back() { if (size_ > 0) { --size_; data_[size_] = CharT(); } }
 
+    // replace methods
+    basic_string& replace(size_type pos, size_type count, const basic_string& str) {
+        return replace(pos, count, str.data_, str.size_);
+    }
+
+    basic_string& replace(size_type pos, size_type count, const basic_string& str,
+                         size_type pos2, size_type count2 = npos) {
+        if (count2 == npos || pos2 + count2 > str.size_) count2 = str.size_ - pos2;
+        return replace(pos, count, str.data_ + pos2, count2);
+    }
+
+    basic_string& replace(size_type pos, size_type count, const CharT* cstr, size_type count2) {
+        if (pos > size_) pos = size_;
+        if (pos + count > size_) count = size_ - pos;
+
+        size_type new_size = size_ - count + count2;
+        if (new_size >= capacity_) {
+            CharT* new_data = new CharT[new_size + 1];
+            Traits::copy(new_data, data_, pos);
+            Traits::copy(new_data + pos, cstr, count2);
+            Traits::copy(new_data + pos + count2, data_ + pos + count, size_ - pos - count);
+            delete[] data_;
+            data_ = new_data;
+            capacity_ = new_size + 1;
+        } else {
+            // Move tail if needed
+            if (count != count2) {
+                for (size_type i = size_ - 1; i >= pos + count && i < size_; --i) {
+                    data_[i - count + count2] = data_[i];
+                }
+            }
+            Traits::copy(data_ + pos, cstr, count2);
+        }
+        size_ = new_size;
+        data_[size_] = CharT();
+        return *this;
+    }
+
+    basic_string& replace(size_type pos, size_type count, const CharT* cstr) {
+        return replace(pos, count, cstr, Traits::length(cstr));
+    }
+
+    basic_string& replace(size_type pos, size_type count, size_type count2, CharT ch) {
+        basic_string temp(count2, ch);
+        return replace(pos, count, temp);
+    }
+
+    basic_string& replace(const_iterator first, const_iterator last, const basic_string& str) {
+        size_type pos = first - data_;
+        size_type count = last - first;
+        return replace(pos, count, str);
+    }
+
+    basic_string& replace(const_iterator first, const_iterator last, const CharT* cstr, size_type count2) {
+        size_type pos = first - data_;
+        size_type count = last - first;
+        return replace(pos, count, cstr, count2);
+    }
+
+    basic_string& replace(const_iterator first, const_iterator last, const CharT* cstr) {
+        size_type pos = first - data_;
+        size_type count = last - first;
+        return replace(pos, count, cstr);
+    }
+
+    basic_string& replace(const_iterator first, const_iterator last, size_type count2, CharT ch) {
+        size_type pos = first - data_;
+        size_type count = last - first;
+        return replace(pos, count, count2, ch);
+    }
+
+    // insert methods
+    basic_string& insert(size_type pos, const basic_string& str) {
+        return insert(pos, str.data_, str.size_);
+    }
+
+    basic_string& insert(size_type pos, const CharT* s) {
+        return insert(pos, s, Traits::length(s));
+    }
+
+    basic_string& insert(size_type pos, const CharT* s, size_type count) {
+        return replace(pos, 0, s, count);
+    }
+
+    basic_string& insert(size_type pos, size_type count, CharT ch) {
+        return replace(pos, 0, count, ch);
+    }
+
+    // erase methods
+    basic_string& erase(size_type pos = 0, size_type count = npos) {
+        if (pos > size_) pos = size_;
+        if (count == npos || pos + count > size_) count = size_ - pos;
+        size_type tail_len = size_ - pos - count;
+        for (size_type i = 0; i < tail_len; ++i) {
+            data_[pos + i] = data_[pos + count + i];
+        }
+        size_ -= count;
+        data_[size_] = CharT();
+        return *this;
+    }
+
+    iterator erase(const_iterator position) {
+        size_type pos = position - data_;
+        erase(pos, 1);
+        return data_ + pos;
+    }
+
+    iterator erase(const_iterator first, const_iterator last) {
+        size_type pos = first - data_;
+        size_type count = last - first;
+        erase(pos, count);
+        return data_ + pos;
+    }
+
     // assign methods
     basic_string& assign(const basic_string& str) {
         return *this = str;
