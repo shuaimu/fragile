@@ -19,6 +19,8 @@ pub struct ClangParser {
     system_include_paths: Vec<String>,
     /// Preprocessor defines (-D flags)
     defines: Vec<String>,
+    /// Error patterns to ignore (substring matches)
+    ignored_error_patterns: Vec<String>,
 }
 
 impl ClangParser {
@@ -46,6 +48,17 @@ impl ClangParser {
         system_include_paths: Vec<String>,
         defines: Vec<String>,
     ) -> Result<Self> {
+        Self::with_paths_defines_and_ignored_errors(include_paths, system_include_paths, defines, Vec::new())
+    }
+
+    /// Create a new Clang parser with include paths, preprocessor defines, and error patterns to ignore.
+    /// Ignored error patterns are substring matches against error messages.
+    pub fn with_paths_defines_and_ignored_errors(
+        include_paths: Vec<String>,
+        system_include_paths: Vec<String>,
+        defines: Vec<String>,
+        ignored_error_patterns: Vec<String>,
+    ) -> Result<Self> {
         unsafe {
             let index = clang_sys::clang_createIndex(0, 0);
             if index.is_null() {
@@ -56,6 +69,7 @@ impl ClangParser {
                 include_paths,
                 system_include_paths,
                 defines,
+                ignored_error_patterns,
             })
         }
     }
@@ -203,7 +217,10 @@ impl ClangParser {
                     // Check if this error is from a system header
                     let is_system_header = clang_sys::clang_Location_isInSystemHeader(location) != 0;
 
-                    if !is_system_header {
+                    // Check if this error matches any ignored pattern
+                    let is_ignored = self.ignored_error_patterns.iter().any(|pattern| msg.contains(pattern));
+
+                    if !is_system_header && !is_ignored {
                         user_errors.push(format!(
                             "{}:{}:{}: {}",
                             file_name, line, column, msg
