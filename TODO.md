@@ -123,9 +123,9 @@ See [PLAN_CPP20_MAKO.md](PLAN_CPP20_MAKO.md) for detailed plan.
 - [ ] std::atomic
 
 #### C.4 Utilities
-- [ ] std::function
+- [x] std::function [26:01:16]
 - [ ] std::chrono
-- [ ] std::move / std::forward (✅ basic support done in Phase A)
+- [x] std::move / std::forward (✅ basic support done in Phase A)
 
 ### 1.4 Phase D: C++20 Coroutines
 - [ ] **D.1 Infrastructure**

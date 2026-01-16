@@ -4436,3 +4436,56 @@ fn test_lambda_generic() {
     let test_fn = module.functions.iter().find(|f| f.display_name == "test_generic");
     assert!(test_fn.is_some(), "Expected to find test_generic function");
 }
+
+// ========== std::function Tests (C.4) ==========
+
+/// Test parsing code that uses std::function.
+#[test]
+fn test_std_function_basic() {
+    let parser = ClangParser::with_system_includes().unwrap();
+    let code = r#"
+        #include <functional>
+
+        int apply_fn(std::function<int(int)> f, int x) {
+            return f(x);
+        }
+
+        int test_function() {
+            auto double_it = [](int x) { return x * 2; };
+            std::function<int(int)> fn = double_it;
+            return apply_fn(fn, 5);
+        }
+    "#;
+
+    let ast = parser.parse_string(code, "test.cpp").unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).unwrap();
+
+    let test_fn = module.functions.iter().find(|f| f.display_name == "test_function");
+    assert!(test_fn.is_some(), "Expected to find test_function function");
+
+    let apply_fn = module.functions.iter().find(|f| f.display_name == "apply_fn");
+    assert!(apply_fn.is_some(), "Expected to find apply_fn function");
+}
+
+/// Test std::function with void return type.
+#[test]
+fn test_std_function_void() {
+    let parser = ClangParser::with_system_includes().unwrap();
+    let code = r#"
+        #include <functional>
+
+        void test_void_fn() {
+            int counter = 0;
+            std::function<void()> incr = [&counter]() { counter++; };
+            incr();
+        }
+    "#;
+
+    let ast = parser.parse_string(code, "test.cpp").unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).unwrap();
+
+    let test_fn = module.functions.iter().find(|f| f.display_name == "test_void_fn");
+    assert!(test_fn.is_some(), "Expected to find test_void_fn function");
+}
