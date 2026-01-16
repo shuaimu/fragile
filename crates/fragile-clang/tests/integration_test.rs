@@ -14952,3 +14952,53 @@ fn test_mako_deptran_multi_value_cc() {
     }
 }
 
+/// Test parsing mako/benchmarks/ut/static_int.cc - static int unit test
+#[test]
+fn test_mako_benchmark_static_int_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/mako/benchmarks/ut/static_int.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: static_int.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let rusty_cpp_path = project_root.join("vendor/mako/third-party/rusty-cpp/include");
+
+    if !rusty_cpp_path.exists() {
+        println!("Skipping test: rusty-cpp submodule not initialized");
+        return;
+    }
+
+    let include_paths = vec![
+        project_root.join("vendor/mako/src").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/mako").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/mako/benchmarks").to_string_lossy().to_string(),
+        rusty_cpp_path.to_string_lossy().to_string(),
+    ];
+
+    let system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let parser = ClangParser::with_paths(include_paths, system_include_paths)
+        .expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+            println!("mako/benchmarks/ut/static_int.cc parsed successfully with {} functions", module.functions.len());
+            assert!(module.functions.len() >= 1, "Expected static int test functions");
+        }
+        Err(e) => {
+            panic!("mako/benchmarks/ut/static_int.cc should parse successfully: {:?}", e);
+        }
+    }
+}
+

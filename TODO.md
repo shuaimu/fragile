@@ -333,6 +333,7 @@ See [PLAN_CPP20_MAKO.md](PLAN_CPP20_MAKO.md) for detailed plan.
     - [x] F.3.36 Added std::hash<float>, std::hash<double> to functional stub
     - [x] F.3.37 Added enable_shared_from_this, dynamic_pointer_cast, static_pointer_cast, const_pointer_cast
     - [x] `vendor/mako/src/deptran/multi_value.cc` - **PARSED**: 5031 functions [26:01:16]
+    - [x] `vendor/mako/src/mako/benchmarks/ut/static_int.cc` - **PARSED**: 25 functions [26:01:16]
     - [ ] Remaining files need: eRPC library stubs
   - [ ] Link and run tests
 
@@ -399,7 +400,7 @@ Migration: After C++20 support is complete, deprecate these.
 ## 5. Testing & Milestones
 
 ### 5.1 Unit Tests
-- [x] fragile-clang: 355 tests passing (27 unit + 328 integration) - includes 10 coroutine + 7 exception + 6 RTTI + 8 promise type + 8 awaitable + 8 generator + 3 noexcept + 1 member access + 1 stack unwinding + 134 mako file tests [26:01:16]
+- [x] fragile-clang: 356 tests passing (27 unit + 329 integration) - includes 10 coroutine + 7 exception + 6 RTTI + 8 promise type + 8 awaitable + 8 generator + 3 noexcept + 1 member access + 1 stack unwinding + 135 mako file tests [26:01:16]
 - [x] fragile-rustc-driver: 6 tests passing
 - [x] fragile-runtime: Compiles
 
@@ -420,7 +421,7 @@ Migration: After C++20 support is complete, deprecate these.
 Current status:
 - **rrr module**: 20/20 files parsing (100%) - all base, misc, reactor, rpc files parsing
 - **mako module**: 117/338 files parsing (~35%) - includes all 12 memdb files, deptran, masstree, masstree-beta (all 28 files), all lib files
-- **Total tests**: 355 passing (fragile-clang integration tests)
+- **Total tests**: 356 passing (fragile-clang integration tests)
 
 Next steps:
 1. **rustc Integration (2.3)** - Requires user setup: `rustup component add rustc-dev --toolchain nightly`
