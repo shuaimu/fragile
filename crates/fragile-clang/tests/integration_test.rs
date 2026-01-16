@@ -20586,3 +20586,1181 @@ fn test_mako_deptran_raft_main_helper_cc() {
         }
     }
 }
+
+/// Test parsing deptran/snow/ro6.cc - Snow protocol read-only replica
+#[test]
+fn test_mako_deptran_snow_ro6_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/deptran/snow/ro6.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: deptran/snow/ro6.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let rusty_cpp_path = project_root.join("vendor/mako/third-party/rusty-cpp/include");
+
+    if !rusty_cpp_path.exists() {
+        println!("Skipping test: rusty-cpp submodule not initialized");
+        return;
+    }
+
+    let include_paths = vec![
+        project_root.join("vendor/mako/src").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/deptran").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/deptran/snow").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/memdb").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/rrr").to_string_lossy().to_string(),
+        rusty_cpp_path.to_string_lossy().to_string(),
+    ];
+
+    let system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let ignored_errors = vec![
+        "cannot initialize object parameter of type".to_string(),
+        "rcc_rpc.h' file not found".to_string(),
+        "member access into incomplete type".to_string(),
+        "only virtual member functions can be marked 'override'".to_string(),
+        "expected class name".to_string(),
+        "unknown type name".to_string(),
+    ];
+
+    let parser = ClangParser::with_paths_defines_and_ignored_errors(
+        include_paths,
+        system_include_paths,
+        vec![],
+        ignored_errors,
+    ).expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+            println!("deptran/snow/ro6.cc parsed successfully with {} functions", module.functions.len());
+        }
+        Err(e) => {
+            panic!("deptran/snow/ro6.cc should parse successfully: {:?}", e);
+        }
+    }
+}
+
+/// Test parsing deptran/snow/ro6_coord.cc - Snow protocol coordinator
+#[test]
+fn test_mako_deptran_snow_ro6_coord_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/deptran/snow/ro6_coord.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: deptran/snow/ro6_coord.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let rusty_cpp_path = project_root.join("vendor/mako/third-party/rusty-cpp/include");
+
+    if !rusty_cpp_path.exists() {
+        println!("Skipping test: rusty-cpp submodule not initialized");
+        return;
+    }
+
+    let include_paths = vec![
+        project_root.join("vendor/mako/src").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/deptran").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/deptran/snow").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/memdb").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/rrr").to_string_lossy().to_string(),
+        rusty_cpp_path.to_string_lossy().to_string(),
+    ];
+
+    let system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let ignored_errors = vec![
+        "cannot initialize object parameter of type".to_string(),
+        "rcc_rpc.h' file not found".to_string(),
+        "member access into incomplete type".to_string(),
+        "only virtual member functions can be marked 'override'".to_string(),
+        "expected class name".to_string(),
+        "unknown type name".to_string(),
+    ];
+
+    let parser = ClangParser::with_paths_defines_and_ignored_errors(
+        include_paths,
+        system_include_paths,
+        vec![],
+        ignored_errors,
+    ).expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+            println!("deptran/snow/ro6_coord.cc parsed successfully with {} functions", module.functions.len());
+        }
+        Err(e) => {
+            panic!("deptran/snow/ro6_coord.cc should parse successfully: {:?}", e);
+        }
+    }
+}
+
+/// Test parsing deptran/snow/ro6_row.cc - Snow protocol row management
+#[test]
+fn test_mako_deptran_snow_ro6_row_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/deptran/snow/ro6_row.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: deptran/snow/ro6_row.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let rusty_cpp_path = project_root.join("vendor/mako/third-party/rusty-cpp/include");
+
+    if !rusty_cpp_path.exists() {
+        println!("Skipping test: rusty-cpp submodule not initialized");
+        return;
+    }
+
+    let include_paths = vec![
+        project_root.join("vendor/mako/src").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/deptran").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/deptran/snow").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/memdb").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/rrr").to_string_lossy().to_string(),
+        rusty_cpp_path.to_string_lossy().to_string(),
+    ];
+
+    let system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let ignored_errors = vec![
+        "cannot initialize object parameter of type".to_string(),
+        "rcc_rpc.h' file not found".to_string(),
+        "member access into incomplete type".to_string(),
+        "only virtual member functions can be marked 'override'".to_string(),
+        "expected class name".to_string(),
+        "unknown type name".to_string(),
+        "cannot decrement value of type".to_string(),
+        "no matching member function for call to 'erase'".to_string(),
+    ];
+
+    let parser = ClangParser::with_paths_defines_and_ignored_errors(
+        include_paths,
+        system_include_paths,
+        vec![],
+        ignored_errors,
+    ).expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+            println!("deptran/snow/ro6_row.cc parsed successfully with {} functions", module.functions.len());
+        }
+        Err(e) => {
+            panic!("deptran/snow/ro6_row.cc should parse successfully: {:?}", e);
+        }
+    }
+}
+
+/// Test parsing deptran/2pl/scheduler.cc - Two-Phase Locking scheduler
+#[test]
+fn test_mako_deptran_2pl_scheduler_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/deptran/2pl/scheduler.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: deptran/2pl/scheduler.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let rusty_cpp_path = project_root.join("vendor/mako/third-party/rusty-cpp/include");
+
+    if !rusty_cpp_path.exists() {
+        println!("Skipping test: rusty-cpp submodule not initialized");
+        return;
+    }
+
+    let include_paths = vec![
+        project_root.join("vendor/mako/src").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/deptran").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/deptran/2pl").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/memdb").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/rrr").to_string_lossy().to_string(),
+        rusty_cpp_path.to_string_lossy().to_string(),
+    ];
+
+    let system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let ignored_errors = vec![
+        "cannot initialize object parameter of type".to_string(),
+        "rcc_rpc.h' file not found".to_string(),
+        "member access into incomplete type".to_string(),
+        "only virtual member functions can be marked 'override'".to_string(),
+        "expected class name".to_string(),
+        "unknown type name".to_string(),
+    ];
+
+    let parser = ClangParser::with_paths_defines_and_ignored_errors(
+        include_paths,
+        system_include_paths,
+        vec![],
+        ignored_errors,
+    ).expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+            println!("deptran/2pl/scheduler.cc parsed successfully with {} functions", module.functions.len());
+        }
+        Err(e) => {
+            panic!("deptran/2pl/scheduler.cc should parse successfully: {:?}", e);
+        }
+    }
+}
+
+/// Test parsing deptran/2pl/tx.cc - Two-Phase Locking transaction
+#[test]
+fn test_mako_deptran_2pl_tx_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/deptran/2pl/tx.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: deptran/2pl/tx.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let rusty_cpp_path = project_root.join("vendor/mako/third-party/rusty-cpp/include");
+
+    if !rusty_cpp_path.exists() {
+        println!("Skipping test: rusty-cpp submodule not initialized");
+        return;
+    }
+
+    let include_paths = vec![
+        project_root.join("vendor/mako/src").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/deptran").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/deptran/2pl").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/memdb").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/rrr").to_string_lossy().to_string(),
+        rusty_cpp_path.to_string_lossy().to_string(),
+    ];
+
+    let system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let ignored_errors = vec![
+        "cannot initialize object parameter of type".to_string(),
+        "rcc_rpc.h' file not found".to_string(),
+        "member access into incomplete type".to_string(),
+        "only virtual member functions can be marked 'override'".to_string(),
+        "expected class name".to_string(),
+        "unknown type name".to_string(),
+    ];
+
+    let parser = ClangParser::with_paths_defines_and_ignored_errors(
+        include_paths,
+        system_include_paths,
+        vec![],
+        ignored_errors,
+    ).expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+            println!("deptran/2pl/tx.cc parsed successfully with {} functions", module.functions.len());
+        }
+        Err(e) => {
+            panic!("deptran/2pl/tx.cc should parse successfully: {:?}", e);
+        }
+    }
+}
+
+/// Test parsing deptran/copilot/commo.cc - Copilot protocol communication
+#[test]
+fn test_mako_deptran_copilot_commo_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/deptran/copilot/commo.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: deptran/copilot/commo.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let rusty_cpp_path = project_root.join("vendor/mako/third-party/rusty-cpp/include");
+
+    if !rusty_cpp_path.exists() {
+        println!("Skipping test: rusty-cpp submodule not initialized");
+        return;
+    }
+
+    let include_paths = vec![
+        project_root.join("vendor/mako/src").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/deptran").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/deptran/copilot").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/memdb").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/rrr").to_string_lossy().to_string(),
+        rusty_cpp_path.to_string_lossy().to_string(),
+    ];
+
+    let system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let ignored_errors = vec![
+        "cannot initialize object parameter of type".to_string(),
+        "rcc_rpc.h' file not found".to_string(),
+        "member access into incomplete type".to_string(),
+        "only virtual member functions can be marked 'override'".to_string(),
+        "expected class name".to_string(),
+        "unknown type name".to_string(),
+        "use of undeclared identifier".to_string(),
+        "variable has incomplete type".to_string(),
+        "expected expression".to_string(),
+    ];
+
+    let parser = ClangParser::with_paths_defines_and_ignored_errors(
+        include_paths,
+        system_include_paths,
+        vec![],
+        ignored_errors,
+    ).expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+            println!("deptran/copilot/commo.cc parsed successfully with {} functions", module.functions.len());
+        }
+        Err(e) => {
+            panic!("deptran/copilot/commo.cc should parse successfully: {:?}", e);
+        }
+    }
+}
+
+/// Test parsing deptran/copilot/coordinator.cc - Copilot protocol coordinator
+#[test]
+fn test_mako_deptran_copilot_coordinator_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/deptran/copilot/coordinator.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: deptran/copilot/coordinator.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let rusty_cpp_path = project_root.join("vendor/mako/third-party/rusty-cpp/include");
+
+    if !rusty_cpp_path.exists() {
+        println!("Skipping test: rusty-cpp submodule not initialized");
+        return;
+    }
+
+    let include_paths = vec![
+        project_root.join("vendor/mako/src").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/deptran").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/deptran/copilot").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/memdb").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/rrr").to_string_lossy().to_string(),
+        rusty_cpp_path.to_string_lossy().to_string(),
+    ];
+
+    let system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let ignored_errors = vec![
+        "cannot initialize object parameter of type".to_string(),
+        "rcc_rpc.h' file not found".to_string(),
+        "member access into incomplete type".to_string(),
+        "only virtual member functions can be marked 'override'".to_string(),
+        "expected class name".to_string(),
+        "unknown type name".to_string(),
+        "use of undeclared identifier".to_string(),
+        "no matching member function for call to 'wait'".to_string(),
+    ];
+
+    let parser = ClangParser::with_paths_defines_and_ignored_errors(
+        include_paths,
+        system_include_paths,
+        vec![],
+        ignored_errors,
+    ).expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+            println!("deptran/copilot/coordinator.cc parsed successfully with {} functions", module.functions.len());
+        }
+        Err(e) => {
+            panic!("deptran/copilot/coordinator.cc should parse successfully: {:?}", e);
+        }
+    }
+}
+
+/// Test parsing deptran/copilot/frame.cc - Copilot protocol frame
+#[test]
+fn test_mako_deptran_copilot_frame_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/deptran/copilot/frame.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: deptran/copilot/frame.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let rusty_cpp_path = project_root.join("vendor/mako/third-party/rusty-cpp/include");
+
+    if !rusty_cpp_path.exists() {
+        println!("Skipping test: rusty-cpp submodule not initialized");
+        return;
+    }
+
+    let include_paths = vec![
+        project_root.join("vendor/mako/src").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/deptran").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/deptran/copilot").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/memdb").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/rrr").to_string_lossy().to_string(),
+        rusty_cpp_path.to_string_lossy().to_string(),
+    ];
+
+    let system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let ignored_errors = vec![
+        "cannot initialize object parameter of type".to_string(),
+        "rcc_rpc.h' file not found".to_string(),
+        "member access into incomplete type".to_string(),
+        "only virtual member functions can be marked 'override'".to_string(),
+        "expected class name".to_string(),
+        "unknown type name".to_string(),
+        "use of undeclared identifier".to_string(),
+        "no matching member function for call to 'push_back'".to_string(),
+    ];
+
+    let parser = ClangParser::with_paths_defines_and_ignored_errors(
+        include_paths,
+        system_include_paths,
+        vec![],
+        ignored_errors,
+    ).expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+            println!("deptran/copilot/frame.cc parsed successfully with {} functions", module.functions.len());
+        }
+        Err(e) => {
+            panic!("deptran/copilot/frame.cc should parse successfully: {:?}", e);
+        }
+    }
+}
+
+/// Test parsing deptran/copilot/server.cc - Copilot protocol server
+#[test]
+fn test_mako_deptran_copilot_server_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/deptran/copilot/server.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: deptran/copilot/server.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let rusty_cpp_path = project_root.join("vendor/mako/third-party/rusty-cpp/include");
+
+    if !rusty_cpp_path.exists() {
+        println!("Skipping test: rusty-cpp submodule not initialized");
+        return;
+    }
+
+    let include_paths = vec![
+        project_root.join("vendor/mako/src").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/deptran").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/deptran/copilot").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/memdb").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/rrr").to_string_lossy().to_string(),
+        rusty_cpp_path.to_string_lossy().to_string(),
+    ];
+
+    let system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let ignored_errors = vec![
+        "cannot initialize object parameter of type".to_string(),
+        "rcc_rpc.h' file not found".to_string(),
+        "member access into incomplete type".to_string(),
+        "only virtual member functions can be marked 'override'".to_string(),
+        "expected class name".to_string(),
+        "unknown type name".to_string(),
+        "use of undeclared identifier".to_string(),
+        "no member named".to_string(),
+    ];
+
+    let parser = ClangParser::with_paths_defines_and_ignored_errors(
+        include_paths,
+        system_include_paths,
+        vec![],
+        ignored_errors,
+    ).expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+            println!("deptran/copilot/server.cc parsed successfully with {} functions", module.functions.len());
+        }
+        Err(e) => {
+            panic!("deptran/copilot/server.cc should parse successfully: {:?}", e);
+        }
+    }
+}
+
+/// Test parsing deptran/copilot/service.cc - Copilot protocol service
+#[test]
+fn test_mako_deptran_copilot_service_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/deptran/copilot/service.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: deptran/copilot/service.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let rusty_cpp_path = project_root.join("vendor/mako/third-party/rusty-cpp/include");
+
+    if !rusty_cpp_path.exists() {
+        println!("Skipping test: rusty-cpp submodule not initialized");
+        return;
+    }
+
+    let include_paths = vec![
+        project_root.join("vendor/mako/src").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/deptran").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/deptran/copilot").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/memdb").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/rrr").to_string_lossy().to_string(),
+        rusty_cpp_path.to_string_lossy().to_string(),
+    ];
+
+    let system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let ignored_errors = vec![
+        "cannot initialize object parameter of type".to_string(),
+        "rcc_rpc.h' file not found".to_string(),
+        "member access into incomplete type".to_string(),
+        "only virtual member functions can be marked 'override'".to_string(),
+        "expected class name".to_string(),
+        "unknown type name".to_string(),
+        "use of undeclared identifier".to_string(),
+    ];
+
+    let parser = ClangParser::with_paths_defines_and_ignored_errors(
+        include_paths,
+        system_include_paths,
+        vec![],
+        ignored_errors,
+    ).expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+            println!("deptran/copilot/service.cc parsed successfully with {} functions", module.functions.len());
+        }
+        Err(e) => {
+            panic!("deptran/copilot/service.cc should parse successfully: {:?}", e);
+        }
+    }
+}
+
+/// Test parsing deptran/februus/commo.cc - Februus protocol communication
+#[test]
+fn test_mako_deptran_februus_commo_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/deptran/februus/commo.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: deptran/februus/commo.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let rusty_cpp_path = project_root.join("vendor/mako/third-party/rusty-cpp/include");
+
+    if !rusty_cpp_path.exists() {
+        println!("Skipping test: rusty-cpp submodule not initialized");
+        return;
+    }
+
+    let include_paths = vec![
+        project_root.join("vendor/mako/src").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/deptran").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/deptran/februus").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/memdb").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/rrr").to_string_lossy().to_string(),
+        rusty_cpp_path.to_string_lossy().to_string(),
+    ];
+
+    let system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let ignored_errors = vec![
+        "cannot initialize object parameter of type".to_string(),
+        "rcc_rpc.h' file not found".to_string(),
+        "member access into incomplete type".to_string(),
+        "only virtual member functions can be marked 'override'".to_string(),
+        "expected class name".to_string(),
+        "unknown type name".to_string(),
+        "use of undeclared identifier".to_string(),
+    ];
+
+    let parser = ClangParser::with_paths_defines_and_ignored_errors(
+        include_paths,
+        system_include_paths,
+        vec![],
+        ignored_errors,
+    ).expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+            println!("deptran/februus/commo.cc parsed successfully with {} functions", module.functions.len());
+        }
+        Err(e) => {
+            panic!("deptran/februus/commo.cc should parse successfully: {:?}", e);
+        }
+    }
+}
+
+/// Test parsing deptran/februus/coordinator.cc - Februus protocol coordinator
+#[test]
+fn test_mako_deptran_februus_coordinator_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/deptran/februus/coordinator.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: deptran/februus/coordinator.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let rusty_cpp_path = project_root.join("vendor/mako/third-party/rusty-cpp/include");
+
+    if !rusty_cpp_path.exists() {
+        println!("Skipping test: rusty-cpp submodule not initialized");
+        return;
+    }
+
+    let include_paths = vec![
+        project_root.join("vendor/mako/src").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/deptran").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/deptran/februus").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/memdb").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/rrr").to_string_lossy().to_string(),
+        rusty_cpp_path.to_string_lossy().to_string(),
+    ];
+
+    let system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let ignored_errors = vec![
+        "cannot initialize object parameter of type".to_string(),
+        "rcc_rpc.h' file not found".to_string(),
+        "member access into incomplete type".to_string(),
+        "only virtual member functions can be marked 'override'".to_string(),
+        "expected class name".to_string(),
+        "unknown type name".to_string(),
+        "use of undeclared identifier".to_string(),
+        "no matching member function for call to 'wait'".to_string(),
+        "no member named".to_string(),
+    ];
+
+    let parser = ClangParser::with_paths_defines_and_ignored_errors(
+        include_paths,
+        system_include_paths,
+        vec![],
+        ignored_errors,
+    ).expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+            println!("deptran/februus/coordinator.cc parsed successfully with {} functions", module.functions.len());
+        }
+        Err(e) => {
+            panic!("deptran/februus/coordinator.cc should parse successfully: {:?}", e);
+        }
+    }
+}
+
+/// Test parsing deptran/februus/frame.cc - Februus protocol frame
+#[test]
+fn test_mako_deptran_februus_frame_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/deptran/februus/frame.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: deptran/februus/frame.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let rusty_cpp_path = project_root.join("vendor/mako/third-party/rusty-cpp/include");
+
+    if !rusty_cpp_path.exists() {
+        println!("Skipping test: rusty-cpp submodule not initialized");
+        return;
+    }
+
+    let include_paths = vec![
+        project_root.join("vendor/mako/src").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/deptran").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/deptran/februus").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/memdb").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/rrr").to_string_lossy().to_string(),
+        rusty_cpp_path.to_string_lossy().to_string(),
+    ];
+
+    let system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let ignored_errors = vec![
+        "cannot initialize object parameter of type".to_string(),
+        "rcc_rpc.h' file not found".to_string(),
+        "member access into incomplete type".to_string(),
+        "only virtual member functions can be marked 'override'".to_string(),
+        "expected class name".to_string(),
+        "unknown type name".to_string(),
+        "use of undeclared identifier".to_string(),
+    ];
+
+    let parser = ClangParser::with_paths_defines_and_ignored_errors(
+        include_paths,
+        system_include_paths,
+        vec![],
+        ignored_errors,
+    ).expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+            println!("deptran/februus/frame.cc parsed successfully with {} functions", module.functions.len());
+        }
+        Err(e) => {
+            panic!("deptran/februus/frame.cc should parse successfully: {:?}", e);
+        }
+    }
+}
+
+/// Test parsing deptran/februus/scheduler.cc - Februus protocol scheduler
+#[test]
+fn test_mako_deptran_februus_scheduler_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/deptran/februus/scheduler.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: deptran/februus/scheduler.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let rusty_cpp_path = project_root.join("vendor/mako/third-party/rusty-cpp/include");
+
+    if !rusty_cpp_path.exists() {
+        println!("Skipping test: rusty-cpp submodule not initialized");
+        return;
+    }
+
+    let include_paths = vec![
+        project_root.join("vendor/mako/src").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/deptran").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/deptran/februus").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/memdb").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/rrr").to_string_lossy().to_string(),
+        rusty_cpp_path.to_string_lossy().to_string(),
+    ];
+
+    let system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let ignored_errors = vec![
+        "cannot initialize object parameter of type".to_string(),
+        "rcc_rpc.h' file not found".to_string(),
+        "member access into incomplete type".to_string(),
+        "only virtual member functions can be marked 'override'".to_string(),
+        "expected class name".to_string(),
+        "unknown type name".to_string(),
+        "use of undeclared identifier".to_string(),
+    ];
+
+    let parser = ClangParser::with_paths_defines_and_ignored_errors(
+        include_paths,
+        system_include_paths,
+        vec![],
+        ignored_errors,
+    ).expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+            println!("deptran/februus/scheduler.cc parsed successfully with {} functions", module.functions.len());
+        }
+        Err(e) => {
+            panic!("deptran/februus/scheduler.cc should parse successfully: {:?}", e);
+        }
+    }
+}
+
+/// Test parsing deptran/none/coordinator.cc - None protocol coordinator
+#[test]
+fn test_mako_deptran_none_coordinator_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/deptran/none/coordinator.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: deptran/none/coordinator.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let rusty_cpp_path = project_root.join("vendor/mako/third-party/rusty-cpp/include");
+
+    if !rusty_cpp_path.exists() {
+        println!("Skipping test: rusty-cpp submodule not initialized");
+        return;
+    }
+
+    let include_paths = vec![
+        project_root.join("vendor/mako/src").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/deptran").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/deptran/none").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/memdb").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/rrr").to_string_lossy().to_string(),
+        rusty_cpp_path.to_string_lossy().to_string(),
+    ];
+
+    let system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let ignored_errors = vec![
+        "cannot initialize object parameter of type".to_string(),
+        "rcc_rpc.h' file not found".to_string(),
+        "member access into incomplete type".to_string(),
+        "only virtual member functions can be marked 'override'".to_string(),
+        "expected class name".to_string(),
+        "unknown type name".to_string(),
+        "use of undeclared identifier".to_string(),
+    ];
+
+    let parser = ClangParser::with_paths_defines_and_ignored_errors(
+        include_paths,
+        system_include_paths,
+        vec![],
+        ignored_errors,
+    ).expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+            println!("deptran/none/coordinator.cc parsed successfully with {} functions", module.functions.len());
+        }
+        Err(e) => {
+            panic!("deptran/none/coordinator.cc should parse successfully: {:?}", e);
+        }
+    }
+}
+
+/// Test parsing deptran/none/scheduler.cc - None protocol scheduler
+#[test]
+fn test_mako_deptran_none_scheduler_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/deptran/none/scheduler.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: deptran/none/scheduler.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let rusty_cpp_path = project_root.join("vendor/mako/third-party/rusty-cpp/include");
+
+    if !rusty_cpp_path.exists() {
+        println!("Skipping test: rusty-cpp submodule not initialized");
+        return;
+    }
+
+    let include_paths = vec![
+        project_root.join("vendor/mako/src").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/deptran").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/deptran/none").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/memdb").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/rrr").to_string_lossy().to_string(),
+        rusty_cpp_path.to_string_lossy().to_string(),
+    ];
+
+    let system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let ignored_errors = vec![
+        "cannot initialize object parameter of type".to_string(),
+        "rcc_rpc.h' file not found".to_string(),
+        "member access into incomplete type".to_string(),
+        "only virtual member functions can be marked 'override'".to_string(),
+        "expected class name".to_string(),
+        "unknown type name".to_string(),
+        "use of undeclared identifier".to_string(),
+        "variable has incomplete type".to_string(),
+    ];
+
+    let parser = ClangParser::with_paths_defines_and_ignored_errors(
+        include_paths,
+        system_include_paths,
+        vec![],
+        ignored_errors,
+    ).expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+            println!("deptran/none/scheduler.cc parsed successfully with {} functions", module.functions.len());
+        }
+        Err(e) => {
+            panic!("deptran/none/scheduler.cc should parse successfully: {:?}", e);
+        }
+    }
+}
+
+/// Test parsing deptran/none_copilot/commo.cc - None Copilot communication
+#[test]
+fn test_mako_deptran_none_copilot_commo_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/deptran/none_copilot/commo.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: deptran/none_copilot/commo.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let rusty_cpp_path = project_root.join("vendor/mako/third-party/rusty-cpp/include");
+
+    if !rusty_cpp_path.exists() {
+        println!("Skipping test: rusty-cpp submodule not initialized");
+        return;
+    }
+
+    let include_paths = vec![
+        project_root.join("vendor/mako/src").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/deptran").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/deptran/none_copilot").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/memdb").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/rrr").to_string_lossy().to_string(),
+        rusty_cpp_path.to_string_lossy().to_string(),
+    ];
+
+    let system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let ignored_errors = vec![
+        "cannot initialize object parameter of type".to_string(),
+        "rcc_rpc.h' file not found".to_string(),
+        "member access into incomplete type".to_string(),
+        "only virtual member functions can be marked 'override'".to_string(),
+        "expected class name".to_string(),
+        "unknown type name".to_string(),
+        "use of undeclared identifier".to_string(),
+        "variable has incomplete type".to_string(),
+    ];
+
+    let parser = ClangParser::with_paths_defines_and_ignored_errors(
+        include_paths,
+        system_include_paths,
+        vec![],
+        ignored_errors,
+    ).expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+            println!("deptran/none_copilot/commo.cc parsed successfully with {} functions", module.functions.len());
+        }
+        Err(e) => {
+            panic!("deptran/none_copilot/commo.cc should parse successfully: {:?}", e);
+        }
+    }
+}
+
+/// Test parsing deptran/none_copilot/scheduler.cc - None Copilot scheduler
+#[test]
+fn test_mako_deptran_none_copilot_scheduler_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/deptran/none_copilot/scheduler.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: deptran/none_copilot/scheduler.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let rusty_cpp_path = project_root.join("vendor/mako/third-party/rusty-cpp/include");
+
+    if !rusty_cpp_path.exists() {
+        println!("Skipping test: rusty-cpp submodule not initialized");
+        return;
+    }
+
+    let include_paths = vec![
+        project_root.join("vendor/mako/src").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/deptran").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/deptran/none_copilot").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/memdb").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/rrr").to_string_lossy().to_string(),
+        rusty_cpp_path.to_string_lossy().to_string(),
+    ];
+
+    let system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let ignored_errors = vec![
+        "cannot initialize object parameter of type".to_string(),
+        "rcc_rpc.h' file not found".to_string(),
+        "member access into incomplete type".to_string(),
+        "only virtual member functions can be marked 'override'".to_string(),
+        "expected class name".to_string(),
+        "unknown type name".to_string(),
+        "use of undeclared identifier".to_string(),
+        "variable has incomplete type".to_string(),
+        "is ambiguous".to_string(),
+    ];
+
+    let parser = ClangParser::with_paths_defines_and_ignored_errors(
+        include_paths,
+        system_include_paths,
+        vec![],
+        ignored_errors,
+    ).expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+            println!("deptran/none_copilot/scheduler.cc parsed successfully with {} functions", module.functions.len());
+        }
+        Err(e) => {
+            panic!("deptran/none_copilot/scheduler.cc should parse successfully: {:?}", e);
+        }
+    }
+}
