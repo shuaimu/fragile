@@ -326,11 +326,14 @@ Migration: After C++20 support is complete, deprecate these.
 
 ## Current Focus
 
-**Primary: C++20/23 for Mako**
+**Primary: Mako Integration (Phase F)**
+
+Current status:
+- **rrr module**: 15/16 files parsing (94%) - blocked by quorum_event.cc cross-namespace inheritance
+- **mako module**: 26/155 files parsing (16.8%)
+- **Total tests**: 263 passing (27 unit + 236 integration)
 
 Next steps:
-1. **A.1 Namespaces** - Mako uses `namespace rrr`, `namespace mako`
-2. **A.2 Classes** - Complete class support with constructors/destructors
-3. **A.3 Inheritance** - Virtual functions for polymorphism
-
-Start with: Try to compile `vendor/mako/src/rrr/misc/rand.cpp` as first target.
+1. **rustc Integration (2.3)** - Requires user setup: `rustup component add rustc-dev --toolchain nightly`
+2. **Expand mako parsing** - Many remaining files need external library stubs (eRPC, YAML)
+3. **Fix quorum_event.cc** - Cross-namespace inheritance issue with `janus::QuorumEvent : public rrr::Event`
