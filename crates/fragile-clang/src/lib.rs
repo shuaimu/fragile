@@ -18,7 +18,7 @@ mod types;
 
 pub use parse::ClangParser;
 pub use convert::MirConverter;
-pub use ast::{ClangAst, ClangNode, ClangNodeKind};
+pub use ast::{AccessSpecifier, ClangAst, ClangNode, ClangNodeKind};
 pub use types::CppType;
 
 use miette::Result;
@@ -107,10 +107,12 @@ pub struct CppFunction {
 pub struct CppStruct {
     /// Type name
     pub name: String,
+    /// Whether this is a class (vs struct)
+    pub is_class: bool,
     /// Namespace path (e.g., ["rrr", "nested"])
     pub namespace: Vec<String>,
-    /// Fields with their types
-    pub fields: Vec<(String, CppType)>,
+    /// Fields with their types and access specifiers
+    pub fields: Vec<(String, CppType, AccessSpecifier)>,
     /// Methods (converted to associated functions)
     pub methods: Vec<CppFunction>,
 }

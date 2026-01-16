@@ -1,6 +1,6 @@
 //! Clang AST to MIR conversion.
 
-use crate::ast::{BinaryOp, ClangAst, ClangNode, ClangNodeKind, UnaryOp};
+use crate::ast::{AccessSpecifier, BinaryOp, ClangAst, ClangNode, ClangNodeKind, UnaryOp};
 use crate::types::CppType;
 use crate::{
     CppExtern, CppFunction, CppModule, CppStruct, MirBasicBlock, MirBinOp, MirBody, MirConstant,
@@ -156,10 +156,10 @@ impl MirConverter {
             }
             ClangNodeKind::RecordDecl {
                 name,
-                is_class: _,
+                is_class,
                 fields: _,
             } => {
-                let struct_def = self.convert_struct(node, name, namespace_context)?;
+                let struct_def = self.convert_struct(node, name, *is_class, namespace_context)?;
                 module.structs.push(struct_def);
             }
             ClangNodeKind::UsingDirective { namespace } => {
@@ -516,18 +516,20 @@ impl MirConverter {
         &self,
         node: &ClangNode,
         name: &str,
+        is_class: bool,
         namespace_context: &[String],
     ) -> Result<CppStruct> {
         let mut fields = Vec::new();
 
         for child in &node.children {
-            if let ClangNodeKind::FieldDecl { name: field_name, ty } = &child.kind {
-                fields.push((field_name.clone(), ty.clone()));
+            if let ClangNodeKind::FieldDecl { name: field_name, ty, access } = &child.kind {
+                fields.push((field_name.clone(), ty.clone(), *access));
             }
         }
 
         Ok(CppStruct {
             name: name.to_string(),
+            is_class,
             namespace: namespace_context.to_vec(),
             fields,
             methods: Vec::new(), // TODO: extract methods

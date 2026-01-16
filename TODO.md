@@ -38,9 +38,9 @@ See [PLAN_CPP20_MAKO.md](PLAN_CPP20_MAKO.md) for detailed plan.
   - [x] Nested namespaces `foo::bar` [26:01:15, 23:35] (included in above)
   - [x] `using namespace` [26:01:15, 23:41] ([docs/dev/plan_using_namespace.md](docs/dev/plan_using_namespace.md))
   - [ ] Name resolution
-- [ ] **A.2 Classes Complete**
+- [-] **A.2 Classes Complete**
   - [x] Field declarations
-  - [ ] Access specifiers (public/private/protected)
+  - [x] Access specifiers (public/private/protected) [26:01:15, 23:46] ([docs/dev/plan_access_specifiers.md](docs/dev/plan_access_specifiers.md))
   - [ ] Constructors (default, copy, move)
   - [ ] Destructors
   - [ ] Member initializer lists
@@ -214,8 +214,8 @@ Migration: After C++20 support is complete, deprecate these.
 ## 5. Testing & Milestones
 
 ### 5.1 Unit Tests
-- [x] fragile-clang: 17 tests passing (6 unit + 11 integration)
-- [x] fragile-rustc-driver: 5 tests passing
+- [x] fragile-clang: 19 tests passing (6 unit + 13 integration)
+- [x] fragile-rustc-driver: 6 tests passing
 - [x] fragile-runtime: Compiles
 
 ### 5.2 Mako Milestones

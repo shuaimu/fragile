@@ -42,14 +42,21 @@ pub fn generate_rust_stubs(modules: &[CppModule]) -> String {
 
 /// Generate a Rust struct definition for a C++ struct.
 fn generate_struct_stub(struct_def: &CppStruct) -> String {
+    use fragile_clang::AccessSpecifier;
+
     let mut output = String::new();
 
-    output.push_str(&format!("#[repr(C)]\n"));
+    output.push_str("#[repr(C)]\n");
     output.push_str(&format!("pub struct {} {{\n", struct_def.name));
 
-    for (field_name, field_type) in &struct_def.fields {
+    for (field_name, field_type, access) in &struct_def.fields {
         let rust_type = field_type.to_rust_type_str();
-        output.push_str(&format!("    pub {}: {},\n", field_name, rust_type));
+        // Only public fields get pub visibility in Rust
+        let visibility = match access {
+            AccessSpecifier::Public => "pub ",
+            AccessSpecifier::Private | AccessSpecifier::Protected => "",
+        };
+        output.push_str(&format!("    {}{}: {},\n", visibility, field_name, rust_type));
     }
 
     output.push_str("}\n");
@@ -137,12 +144,15 @@ mod tests {
 
     #[test]
     fn test_generate_struct_stub() {
+        use fragile_clang::AccessSpecifier;
+
         let struct_def = CppStruct {
             name: "Point".to_string(),
+            is_class: false,
             namespace: Vec::new(),
             fields: vec![
-                ("x".to_string(), CppType::int()),
-                ("y".to_string(), CppType::int()),
+                ("x".to_string(), CppType::int(), AccessSpecifier::Public),
+                ("y".to_string(), CppType::int(), AccessSpecifier::Public),
             ],
             methods: vec![],
         };
@@ -153,6 +163,31 @@ mod tests {
         assert!(stub.contains("pub struct Point"));
         assert!(stub.contains("pub x: i32"));
         assert!(stub.contains("pub y: i32"));
+    }
+
+    #[test]
+    fn test_generate_struct_stub_with_private_fields() {
+        use fragile_clang::AccessSpecifier;
+
+        let struct_def = CppStruct {
+            name: "MyClass".to_string(),
+            is_class: true,
+            namespace: Vec::new(),
+            fields: vec![
+                ("public_field".to_string(), CppType::int(), AccessSpecifier::Public),
+                ("private_field".to_string(), CppType::int(), AccessSpecifier::Private),
+                ("protected_field".to_string(), CppType::int(), AccessSpecifier::Protected),
+            ],
+            methods: vec![],
+        };
+
+        let stub = generate_struct_stub(&struct_def);
+
+        assert!(stub.contains("pub public_field: i32"));
+        assert!(stub.contains("private_field: i32"));
+        assert!(!stub.contains("pub private_field"));
+        assert!(stub.contains("protected_field: i32"));
+        assert!(!stub.contains("pub protected_field"));
     }
 
     #[test]

@@ -31,6 +31,18 @@ pub struct SourceLocation {
     pub column: u32,
 }
 
+/// C++ access specifier for class members.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AccessSpecifier {
+    /// Public access - accessible from anywhere
+    Public,
+    /// Private access - accessible only from within the class
+    #[default]
+    Private,
+    /// Protected access - accessible from class and derived classes
+    Protected,
+}
+
 /// Kinds of Clang AST nodes we care about.
 #[derive(Debug)]
 pub enum ClangNodeKind {
@@ -66,6 +78,7 @@ pub enum ClangNodeKind {
     FieldDecl {
         name: String,
         ty: CppType,
+        access: AccessSpecifier,
     },
     /// Namespace declaration
     NamespaceDecl {

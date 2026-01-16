@@ -205,6 +205,79 @@ fn test_namespace_struct() {
     assert_eq!(s.fields.len(), 2);
 }
 
+/// Test class with access specifiers.
+#[test]
+fn test_class_access_specifiers() {
+    use fragile_clang::AccessSpecifier;
+
+    let parser = ClangParser::new().expect("Failed to create parser");
+
+    let source = r#"
+        class MyClass {
+        public:
+            int public_field;
+        private:
+            int private_field;
+        protected:
+            int protected_field;
+        };
+    "#;
+
+    let ast = parser.parse_string(source, "access.cpp").expect("Failed to parse");
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    assert_eq!(module.structs.len(), 1);
+
+    let s = &module.structs[0];
+    assert_eq!(s.name, "MyClass");
+    assert!(s.is_class);
+    assert_eq!(s.fields.len(), 3);
+
+    // Check access specifiers
+    let (name0, _, access0) = &s.fields[0];
+    assert_eq!(name0, "public_field");
+    assert_eq!(*access0, AccessSpecifier::Public);
+
+    let (name1, _, access1) = &s.fields[1];
+    assert_eq!(name1, "private_field");
+    assert_eq!(*access1, AccessSpecifier::Private);
+
+    let (name2, _, access2) = &s.fields[2];
+    assert_eq!(name2, "protected_field");
+    assert_eq!(*access2, AccessSpecifier::Protected);
+}
+
+/// Test struct default access (public).
+#[test]
+fn test_struct_default_access() {
+    use fragile_clang::AccessSpecifier;
+
+    let parser = ClangParser::new().expect("Failed to create parser");
+
+    let source = r#"
+        struct MyStruct {
+            int field1;
+            int field2;
+        };
+    "#;
+
+    let ast = parser.parse_string(source, "struct_access.cpp").expect("Failed to parse");
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    assert_eq!(module.structs.len(), 1);
+
+    let s = &module.structs[0];
+    assert_eq!(s.name, "MyStruct");
+    assert!(!s.is_class);
+
+    // Struct members should be public by default
+    for (_, _, access) in &s.fields {
+        assert_eq!(*access, AccessSpecifier::Public);
+    }
+}
+
 /// Test anonymous namespace.
 #[test]
 fn test_anonymous_namespace() {

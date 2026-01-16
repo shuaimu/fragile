@@ -1,7 +1,7 @@
 //! Clang AST parsing using libclang.
 
 use crate::ast::{
-    BinaryOp, CastKind, ClangAst, ClangNode, ClangNodeKind, SourceLocation, UnaryOp,
+    AccessSpecifier, BinaryOp, CastKind, ClangAst, ClangNode, ClangNodeKind, SourceLocation, UnaryOp,
 };
 use crate::types::CppType;
 use miette::{miette, Result};
@@ -267,7 +267,8 @@ impl ClangParser {
                 clang_sys::CXCursor_FieldDecl => {
                     let name = cursor_spelling(cursor);
                     let ty = self.convert_type(clang_sys::clang_getCursorType(cursor));
-                    ClangNodeKind::FieldDecl { name, ty }
+                    let access = self.get_access_specifier(cursor);
+                    ClangNodeKind::FieldDecl { name, ty, access }
                 }
 
                 clang_sys::CXCursor_Namespace => {
@@ -498,6 +499,19 @@ impl ClangParser {
         // TODO: Extract actual operator from tokens
         // For now, default to Minus - will be fixed in Phase 2
         UnaryOp::Minus
+    }
+
+    /// Get the access specifier for a cursor (field, method, etc.).
+    fn get_access_specifier(&self, cursor: clang_sys::CXCursor) -> AccessSpecifier {
+        unsafe {
+            let access = clang_sys::clang_getCXXAccessSpecifier(cursor);
+            match access {
+                clang_sys::CX_CXXPublic => AccessSpecifier::Public,
+                clang_sys::CX_CXXProtected => AccessSpecifier::Protected,
+                clang_sys::CX_CXXPrivate => AccessSpecifier::Private,
+                _ => AccessSpecifier::Private, // Default to private for invalid/unknown
+            }
+        }
     }
 
     /// Get the namespace path from a UsingDirective cursor by examining its children.
