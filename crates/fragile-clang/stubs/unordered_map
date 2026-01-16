@@ -6,6 +6,7 @@
 #include "utility"
 #include "functional"
 #include "initializer_list"
+#include "iterator"
 
 namespace std {
 
@@ -44,6 +45,12 @@ private:
 public:
     class iterator {
     public:
+        using iterator_category = forward_iterator_tag;
+        using value_type = pair<const Key, T>;
+        using difference_type = long;
+        using pointer = value_type*;
+        using reference = value_type&;
+
         iterator() : map_(nullptr), bucket_(0), node_(nullptr) {}
         iterator(unordered_map* m, size_type b, node* n) : map_(m), bucket_(b), node_(n) {}
 
@@ -76,6 +83,12 @@ public:
 
     class const_iterator {
     public:
+        using iterator_category = forward_iterator_tag;
+        using value_type = pair<const Key, T>;
+        using difference_type = long;
+        using pointer = const value_type*;
+        using reference = const value_type&;
+
         const_iterator() : map_(nullptr), bucket_(0), node_(nullptr) {}
         const_iterator(const unordered_map* m, size_type b, const node* n) : map_(m), bucket_(b), node_(n) {}
         const_iterator(const iterator& it) : map_(it.map_), bucket_(it.bucket_), node_(it.node_) {}
