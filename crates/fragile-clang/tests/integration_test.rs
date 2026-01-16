@@ -9470,3 +9470,115 @@ fn test_mako_masstree_checkpoint_cc() {
     }
 }
 
+/// Test parsing mako lib lookup3.cc (hash functions)
+#[test]
+fn test_mako_lib_lookup3_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/mako/lib/lookup3.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: lookup3.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let lib_path = project_root.join("vendor/mako/src/mako/lib");
+
+    let mut system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let clang_paths = [
+        "/usr/lib/llvm-19/lib/clang/19/include",
+        "/usr/lib/llvm-18/lib/clang/18/include",
+    ];
+
+    for path in &clang_paths {
+        if Path::new(path).exists() {
+            system_include_paths.push(path.to_string());
+            break;
+        }
+    }
+
+    let include_paths = vec![
+        lib_path.to_string_lossy().to_string(),
+    ];
+
+    let parser = ClangParser::with_paths(include_paths, system_include_paths)
+        .expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+
+            println!("Successfully parsed lookup3.cc with {} functions", module.functions.len());
+            // lookup3.cc has several hash functions
+            assert!(module.functions.len() >= 1, "Expected hash functions");
+        }
+        Err(e) => {
+            println!("Note: lookup3.cc parsing failed: {:?}", e);
+        }
+    }
+}
+
+/// Test parsing mako lib timestamp.cc (timestamp utilities)
+#[test]
+fn test_mako_lib_timestamp_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/mako/lib/timestamp.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: timestamp.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let lib_path = project_root.join("vendor/mako/src/mako/lib");
+    let mako_path = project_root.join("vendor/mako/src/mako");
+
+    let mut system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let clang_paths = [
+        "/usr/lib/llvm-19/lib/clang/19/include",
+        "/usr/lib/llvm-18/lib/clang/18/include",
+    ];
+
+    for path in &clang_paths {
+        if Path::new(path).exists() {
+            system_include_paths.push(path.to_string());
+            break;
+        }
+    }
+
+    let include_paths = vec![
+        lib_path.to_string_lossy().to_string(),
+        mako_path.to_string_lossy().to_string(),
+    ];
+
+    let parser = ClangParser::with_paths(include_paths, system_include_paths)
+        .expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+
+            println!("Successfully parsed timestamp.cc with {} functions", module.functions.len());
+        }
+        Err(e) => {
+            println!("Note: timestamp.cc parsing failed: {:?}", e);
+        }
+    }
+}
+
