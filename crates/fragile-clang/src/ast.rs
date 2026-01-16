@@ -102,6 +102,8 @@ pub enum ClangNodeKind {
         params: Vec<(String, CppType)>,
         is_definition: bool,
         is_static: bool,
+        is_virtual: bool,
+        is_pure_virtual: bool,
         access: AccessSpecifier,
     },
     /// Constructor declaration

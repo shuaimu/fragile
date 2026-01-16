@@ -295,6 +295,8 @@ impl ClangParser {
                     let params = self.extract_params(cursor);
                     let is_definition = clang_sys::clang_isCursorDefinition(cursor) != 0;
                     let is_static = clang_sys::clang_CXXMethod_isStatic(cursor) != 0;
+                    let is_virtual = clang_sys::clang_CXXMethod_isVirtual(cursor) != 0;
+                    let is_pure_virtual = clang_sys::clang_CXXMethod_isPureVirtual(cursor) != 0;
                     let access = self.get_access_specifier(cursor);
                     ClangNodeKind::CXXMethodDecl {
                         name,
@@ -302,6 +304,8 @@ impl ClangParser {
                         params,
                         is_definition,
                         is_static,
+                        is_virtual,
+                        is_pure_virtual,
                         access,
                     }
                 }

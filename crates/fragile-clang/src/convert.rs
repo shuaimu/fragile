@@ -581,6 +581,8 @@ impl MirConverter {
                     params,
                     is_definition,
                     is_static,
+                    is_virtual,
+                    is_pure_virtual,
                     access,
                 } => {
                     let mir_body = if *is_definition {
@@ -593,6 +595,8 @@ impl MirConverter {
                         return_type: return_type.clone(),
                         params: params.clone(),
                         is_static: *is_static,
+                        is_virtual: *is_virtual,
+                        is_pure_virtual: *is_pure_virtual,
                         access: *access,
                         mir_body,
                     });

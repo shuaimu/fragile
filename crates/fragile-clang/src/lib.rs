@@ -160,6 +160,10 @@ pub struct CppMethod {
     pub params: Vec<(String, CppType)>,
     /// Whether this is a static method
     pub is_static: bool,
+    /// Whether this is a virtual method
+    pub is_virtual: bool,
+    /// Whether this is a pure virtual method (= 0)
+    pub is_pure_virtual: bool,
     /// Access specifier
     pub access: AccessSpecifier,
     /// MIR body (if this is a definition)

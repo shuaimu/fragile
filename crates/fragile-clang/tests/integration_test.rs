@@ -1037,3 +1037,64 @@ fn test_multiple_inheritance() {
     // Second base is protected Base2
     assert_eq!(derived.bases[1].access, AccessSpecifier::Protected);
 }
+
+/// Test virtual function.
+#[test]
+fn test_virtual_function() {
+    let parser = ClangParser::new().expect("Failed to create parser");
+
+    let source = r#"
+        class Base {
+        public:
+            virtual void foo() { }
+            void normal() { }
+        };
+    "#;
+
+    let ast = parser.parse_string(source, "virtual_func.cpp").expect("Failed to parse");
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    assert_eq!(module.structs.len(), 1);
+
+    let s = &module.structs[0];
+    assert_eq!(s.methods.len(), 2);
+
+    // Find virtual method
+    let virtual_method = s.methods.iter().find(|m| m.name == "foo");
+    assert!(virtual_method.is_some());
+    assert!(virtual_method.unwrap().is_virtual);
+    assert!(!virtual_method.unwrap().is_pure_virtual);
+
+    // Find normal method
+    let normal_method = s.methods.iter().find(|m| m.name == "normal");
+    assert!(normal_method.is_some());
+    assert!(!normal_method.unwrap().is_virtual);
+}
+
+/// Test pure virtual function.
+#[test]
+fn test_pure_virtual_function() {
+    let parser = ClangParser::new().expect("Failed to create parser");
+
+    let source = r#"
+        class Abstract {
+        public:
+            virtual void pure() = 0;
+        };
+    "#;
+
+    let ast = parser.parse_string(source, "pure_virtual.cpp").expect("Failed to parse");
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    assert_eq!(module.structs.len(), 1);
+
+    let s = &module.structs[0];
+    assert_eq!(s.methods.len(), 1);
+
+    let method = &s.methods[0];
+    assert_eq!(method.name, "pure");
+    assert!(method.is_virtual);
+    assert!(method.is_pure_virtual);
+}
