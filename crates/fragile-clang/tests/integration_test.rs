@@ -1,6 +1,6 @@
 //! Integration tests for Clang AST parsing and MIR conversion.
 
-use fragile_clang::{ClangParser, MirConverter, CppType};
+use fragile_clang::{ClangParser, MirConverter, CppType, MirTerminator};
 
 /// Test parsing a simple add function.
 #[test]
@@ -3256,4 +3256,255 @@ fn test_for_loop_nested() {
     // Nested loops should have more blocks than a simple function
     // (at least entry block + some loop structure)
     assert!(module.functions[0].mir_body.blocks.len() >= 2);
+}
+
+// ============================================================================
+// Switch Statement Tests
+// ============================================================================
+
+/// Test basic switch statement parsing.
+#[test]
+fn test_switch_basic() {
+    let parser = ClangParser::new().unwrap();
+    let code = r#"
+        int classify(int x) {
+            switch (x) {
+                case 0:
+                    return 0;
+                case 1:
+                    return 1;
+                default:
+                    return -1;
+            }
+        }
+    "#;
+
+    let ast = parser.parse_string(code, "test.cpp").unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    assert_eq!(module.functions.len(), 1);
+    let func = &module.functions[0];
+    assert_eq!(func.display_name, "classify");
+
+    // Should have multiple blocks for switch branches
+    assert!(func.mir_body.blocks.len() >= 3);
+}
+
+/// Test switch with multiple cases.
+#[test]
+fn test_switch_multiple_cases() {
+    let parser = ClangParser::new().unwrap();
+    let code = r#"
+        int day_type(int day) {
+            switch (day) {
+                case 1:
+                case 2:
+                case 3:
+                case 4:
+                case 5:
+                    return 1;
+                case 6:
+                case 7:
+                    return 0;
+                default:
+                    return -1;
+            }
+        }
+    "#;
+
+    let ast = parser.parse_string(code, "test.cpp").unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    assert_eq!(module.functions.len(), 1);
+    assert_eq!(module.functions[0].display_name, "day_type");
+}
+
+/// Test switch without default.
+#[test]
+fn test_switch_no_default() {
+    let parser = ClangParser::new().unwrap();
+    let code = r#"
+        int simple_switch(int x) {
+            switch (x) {
+                case 0:
+                    return 0;
+                case 1:
+                    return 1;
+            }
+            return -1;
+        }
+    "#;
+
+    let ast = parser.parse_string(code, "test.cpp").unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    assert_eq!(module.functions.len(), 1);
+    assert_eq!(module.functions[0].display_name, "simple_switch");
+}
+
+// ============================================================================
+// Break and Continue Statement Tests
+// ============================================================================
+
+#[test]
+fn test_break_in_while_loop() {
+    let parser = ClangParser::new().unwrap();
+    let code = r#"
+        int find_first_even(int n) {
+            int i = 0;
+            while (i < n) {
+                if (i % 2 == 0) {
+                    break;
+                }
+                i = i + 1;
+            }
+            return i;
+        }
+    "#;
+
+    let ast = parser.parse_string(code, "test.cpp").unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    assert_eq!(module.functions.len(), 1);
+    let func = &module.functions[0];
+    assert_eq!(func.display_name, "find_first_even");
+
+    // Check that there's a Goto terminator (not Unreachable) for break
+    let has_goto = func.mir_body.blocks.iter().any(|block| {
+        matches!(block.terminator, MirTerminator::Goto { .. })
+    });
+    assert!(has_goto, "Break should generate a Goto terminator");
+}
+
+#[test]
+fn test_continue_in_while_loop() {
+    let parser = ClangParser::new().unwrap();
+    let code = r#"
+        int sum_odd(int n) {
+            int i = 0;
+            int sum = 0;
+            while (i < n) {
+                i = i + 1;
+                if (i % 2 == 0) {
+                    continue;
+                }
+                sum = sum + i;
+            }
+            return sum;
+        }
+    "#;
+
+    let ast = parser.parse_string(code, "test.cpp").unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    assert_eq!(module.functions.len(), 1);
+    let func = &module.functions[0];
+    assert_eq!(func.display_name, "sum_odd");
+
+    // Check that we have blocks for the loop structure
+    assert!(func.mir_body.blocks.len() >= 3, "Should have blocks for loop header, body, and exit");
+}
+
+#[test]
+fn test_break_in_for_loop() {
+    let parser = ClangParser::new().unwrap();
+    let code = r#"
+        int find_divisor(int n, int d) {
+            for (int i = 2; i < n; i = i + 1) {
+                if (n % i == 0) {
+                    return i;
+                }
+                if (i > d) {
+                    break;
+                }
+            }
+            return -1;
+        }
+    "#;
+
+    let ast = parser.parse_string(code, "test.cpp").unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    assert_eq!(module.functions.len(), 1);
+    let func = &module.functions[0];
+    assert_eq!(func.display_name, "find_divisor");
+
+    // Check that break generates a Goto terminator, not Unreachable
+    let has_unreachable = func.mir_body.blocks.iter().any(|block| {
+        matches!(block.terminator, MirTerminator::Unreachable)
+    });
+    assert!(!has_unreachable, "Break should not generate Unreachable terminator");
+}
+
+#[test]
+fn test_continue_in_for_loop() {
+    let parser = ClangParser::new().unwrap();
+    let code = r#"
+        int count_non_divisible(int n, int d) {
+            int count = 0;
+            for (int i = 1; i <= n; i = i + 1) {
+                if (i % d == 0) {
+                    continue;
+                }
+                count = count + 1;
+            }
+            return count;
+        }
+    "#;
+
+    let ast = parser.parse_string(code, "test.cpp").unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    assert_eq!(module.functions.len(), 1);
+    let func = &module.functions[0];
+    assert_eq!(func.display_name, "count_non_divisible");
+
+    // Check that continue generates Goto (not Unreachable)
+    let has_unreachable = func.mir_body.blocks.iter().any(|block| {
+        matches!(block.terminator, MirTerminator::Unreachable)
+    });
+    assert!(!has_unreachable, "Continue should not generate Unreachable terminator");
+}
+
+#[test]
+fn test_nested_loops_break() {
+    let parser = ClangParser::new().unwrap();
+    let code = r#"
+        int nested_break(int n) {
+            int result = 0;
+            for (int i = 0; i < n; i = i + 1) {
+                for (int j = 0; j < n; j = j + 1) {
+                    if (j > i) {
+                        break;
+                    }
+                    result = result + 1;
+                }
+            }
+            return result;
+        }
+    "#;
+
+    let ast = parser.parse_string(code, "test.cpp").unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    assert_eq!(module.functions.len(), 1);
+    let func = &module.functions[0];
+    assert_eq!(func.display_name, "nested_break");
+
+    // Check that break in inner loop generates Goto (not Unreachable)
+    let has_unreachable = func.mir_body.blocks.iter().any(|block| {
+        matches!(block.terminator, MirTerminator::Unreachable)
+    });
+    assert!(!has_unreachable, "Break in nested loop should not generate Unreachable terminator");
+
+    // Check that we have at least some blocks generated
+    assert!(func.mir_body.blocks.len() >= 1, "Function should have at least one block");
 }

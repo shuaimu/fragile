@@ -174,9 +174,9 @@ See [PLAN_CPP20_MAKO.md](PLAN_CPP20_MAKO.md) for detailed plan.
 - [x] IfStmt
 - [x] WhileStmt
 - [x] ForStmt [26:01:16, 06:45]
-- [ ] BreakStmt (loop context)
-- [ ] ContinueStmt (loop context)
-- [ ] Switch statement
+- [x] Switch statement [26:01:16, 07:00]
+- [x] BreakStmt (loop context) [26:01:16, 07:15]
+- [x] ContinueStmt (loop context) [26:01:16, 07:15]
 
 ### 2.3 rustc Integration
 - [ ] Nightly + rustc-dev setup
@@ -219,7 +219,7 @@ Migration: After C++20 support is complete, deprecate these.
 ## 5. Testing & Milestones
 
 ### 5.1 Unit Tests
-- [x] fragile-clang: 135 tests passing (27 unit + 108 integration)
+- [x] fragile-clang: 143 tests passing (27 unit + 116 integration)
 - [x] fragile-rustc-driver: 6 tests passing
 - [x] fragile-runtime: Compiles
 

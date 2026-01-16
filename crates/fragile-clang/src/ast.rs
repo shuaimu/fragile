@@ -222,6 +222,15 @@ pub enum ClangNodeKind {
     BreakStmt,
     /// Continue statement
     ContinueStmt,
+    /// Switch statement
+    SwitchStmt,
+    /// Case statement (case label with optional nested case or body)
+    CaseStmt {
+        /// The case value (constant expression)
+        value: i128,
+    },
+    /// Default statement in switch
+    DefaultStmt,
 
     // Expressions
     /// Integer literal

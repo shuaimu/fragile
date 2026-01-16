@@ -17,6 +17,14 @@ pub struct MirConverter {
     current_function: Option<FunctionBuilder>,
 }
 
+/// Loop context for tracking break/continue targets.
+struct LoopContext {
+    /// Block to jump to on `continue` (loop header)
+    continue_target: usize,
+    /// Block to jump to on `break` (loop exit)
+    break_target: usize,
+}
+
 /// Builder for constructing MIR bodies.
 struct FunctionBuilder {
     /// Local variables
@@ -29,6 +37,8 @@ struct FunctionBuilder {
     current_statements: Vec<MirStatement>,
     /// Map from variable names to local indices
     var_map: rustc_hash::FxHashMap<String, usize>,
+    /// Stack of loop contexts for nested loops
+    loop_stack: Vec<LoopContext>,
 }
 
 impl FunctionBuilder {
@@ -39,7 +49,26 @@ impl FunctionBuilder {
             current_block: 0,
             current_statements: Vec::new(),
             var_map: rustc_hash::FxHashMap::default(),
+            loop_stack: Vec::new(),
         }
+    }
+
+    /// Push a loop context onto the stack.
+    fn push_loop(&mut self, continue_target: usize, break_target: usize) {
+        self.loop_stack.push(LoopContext {
+            continue_target,
+            break_target,
+        });
+    }
+
+    /// Pop the current loop context from the stack.
+    fn pop_loop(&mut self) {
+        self.loop_stack.pop();
+    }
+
+    /// Get the current loop context (if inside a loop).
+    fn current_loop(&self) -> Option<&LoopContext> {
+        self.loop_stack.last()
     }
 
     /// Add a local variable and return its index.
@@ -430,11 +459,17 @@ impl MirConverter {
                         otherwise: loop_exit,
                     });
 
+                    // Push loop context for break/continue
+                    builder.push_loop(loop_header, loop_exit);
+
                     // Loop body
                     self.convert_stmt(body, builder)?;
                     builder.finish_block(MirTerminator::Goto {
                         target: loop_header,
                     });
+
+                    // Pop loop context
+                    builder.pop_loop();
                 }
             }
 
@@ -506,6 +541,9 @@ impl MirConverter {
                     });
                 }
 
+                // Push loop context for break/continue
+                builder.push_loop(loop_header, loop_exit);
+
                 // Loop body
                 if let Some(body_node) = body {
                     self.convert_stmt(body_node, builder)?;
@@ -522,16 +560,131 @@ impl MirConverter {
                 builder.finish_block(MirTerminator::Goto {
                     target: loop_header,
                 });
+
+                // Pop loop context
+                builder.pop_loop();
             }
 
             ClangNodeKind::BreakStmt => {
-                // TODO: Need to track loop context to know where to jump
-                builder.finish_block(MirTerminator::Unreachable);
+                // Break jumps to loop exit
+                if let Some(loop_ctx) = builder.current_loop() {
+                    let break_target = loop_ctx.break_target;
+                    builder.finish_block(MirTerminator::Goto {
+                        target: break_target,
+                    });
+                } else {
+                    // Break outside of loop - should be an error, but emit unreachable for now
+                    builder.finish_block(MirTerminator::Unreachable);
+                }
             }
 
             ClangNodeKind::ContinueStmt => {
-                // TODO: Need to track loop context to know where to jump
-                builder.finish_block(MirTerminator::Unreachable);
+                // Continue jumps to loop header
+                if let Some(loop_ctx) = builder.current_loop() {
+                    let continue_target = loop_ctx.continue_target;
+                    builder.finish_block(MirTerminator::Goto {
+                        target: continue_target,
+                    });
+                } else {
+                    // Continue outside of loop - should be an error, but emit unreachable for now
+                    builder.finish_block(MirTerminator::Unreachable);
+                }
+            }
+
+            ClangNodeKind::SwitchStmt => {
+                // SwitchStmt children:
+                // [0] Condition expression (what we switch on)
+                // [1] Switch body (CompoundStmt containing CaseStmt and DefaultStmt)
+                //
+                // MIR structure:
+                // - Evaluate condition
+                // - SwitchInt terminator with targets for each case value
+                // - Each case label jumps to its block
+                // - Default case is the "otherwise" target
+                //
+                // Note: This is a simplified implementation that doesn't handle fallthrough.
+                // Proper fallthrough would require tracking whether each case ends with break.
+
+                if node.children.len() >= 2 {
+                    let cond_node = &node.children[0];
+                    let body_node = &node.children[1];
+
+                    // Evaluate the switch condition
+                    let cond_operand = self.convert_expr(cond_node, builder)?;
+
+                    // Collect case values and their indices
+                    let mut case_values: Vec<(i128, usize)> = Vec::new();
+                    let mut default_idx: Option<usize> = None;
+
+                    for (idx, child) in body_node.children.iter().enumerate() {
+                        match &child.kind {
+                            ClangNodeKind::CaseStmt { value } => {
+                                case_values.push((*value, idx));
+                            }
+                            ClangNodeKind::DefaultStmt => {
+                                default_idx = Some(idx);
+                            }
+                            _ => {}
+                        }
+                    }
+
+                    // Create blocks: one for each case/default + exit block
+                    let num_cases = body_node.children.len();
+                    let first_case_block = builder.new_block() as usize;
+                    let case_blocks: Vec<usize> = (0..num_cases)
+                        .map(|i| first_case_block + i)
+                        .collect();
+                    let exit_block = first_case_block + num_cases;
+
+                    // Build SwitchInt targets
+                    let targets: Vec<(i128, usize)> = case_values
+                        .iter()
+                        .map(|(val, idx)| (*val, case_blocks[*idx]))
+                        .collect();
+
+                    // Default target: either the default case block or exit
+                    let otherwise = default_idx
+                        .map(|idx| case_blocks[idx])
+                        .unwrap_or(exit_block);
+
+                    // Emit the switch terminator
+                    builder.finish_block(MirTerminator::SwitchInt {
+                        operand: cond_operand,
+                        targets,
+                        otherwise,
+                    });
+
+                    // Convert each case body
+                    for (_idx, child) in body_node.children.iter().enumerate() {
+                        match &child.kind {
+                            ClangNodeKind::CaseStmt { .. } | ClangNodeKind::DefaultStmt => {
+                                // Case/default body is in children
+                                for case_child in &child.children {
+                                    // Skip the constant expr, convert the actual body
+                                    if !matches!(case_child.kind, ClangNodeKind::IntegerLiteral(_)) {
+                                        self.convert_stmt(case_child, builder)?;
+                                    }
+                                }
+                                // Jump to exit (break - simplified, no fallthrough)
+                                builder.finish_block(MirTerminator::Goto {
+                                    target: exit_block,
+                                });
+                            }
+                            _ => {
+                                // Other statements in switch body (shouldn't normally happen)
+                                self.convert_stmt(child, builder)?;
+                            }
+                        }
+                    }
+                }
+            }
+
+            ClangNodeKind::CaseStmt { .. } | ClangNodeKind::DefaultStmt => {
+                // These are handled as part of SwitchStmt processing
+                // If encountered standalone, convert children
+                for child in &node.children {
+                    self.convert_stmt(child, builder)?;
+                }
             }
 
             // Expression statement

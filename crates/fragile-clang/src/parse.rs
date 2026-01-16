@@ -473,6 +473,42 @@ impl ClangParser {
                 clang_sys::CXCursor_DeclStmt => ClangNodeKind::DeclStmt,
                 clang_sys::CXCursor_BreakStmt => ClangNodeKind::BreakStmt,
                 clang_sys::CXCursor_ContinueStmt => ClangNodeKind::ContinueStmt,
+                clang_sys::CXCursor_SwitchStmt => ClangNodeKind::SwitchStmt,
+                clang_sys::CXCursor_CaseStmt => {
+                    // Evaluate the case constant
+                    // The first child of CaseStmt is the constant expression
+                    // Visit children to find the constant expression
+                    extern "C" fn find_case_value(
+                        child: clang_sys::CXCursor,
+                        _parent: clang_sys::CXCursor,
+                        data: clang_sys::CXClientData,
+                    ) -> clang_sys::CXChildVisitResult {
+                        unsafe {
+                            let child_kind = clang_sys::clang_getCursorKind(child);
+                            // First child should be the case constant (or ConstantExpr wrapper)
+                            if child_kind == clang_sys::CXCursor_IntegerLiteral {
+                                let eval = clang_sys::clang_Cursor_Evaluate(child);
+                                if !eval.is_null() {
+                                    let value_ptr = data as *mut i128;
+                                    *value_ptr = clang_sys::clang_EvalResult_getAsInt(eval) as i128;
+                                    clang_sys::clang_EvalResult_dispose(eval);
+                                    return clang_sys::CXChildVisit_Break;
+                                }
+                            }
+                            clang_sys::CXChildVisit_Recurse
+                        }
+                    }
+
+                    let mut case_value: i128 = 0;
+                    clang_sys::clang_visitChildren(
+                        cursor,
+                        find_case_value,
+                        &mut case_value as *mut i128 as clang_sys::CXClientData,
+                    );
+
+                    ClangNodeKind::CaseStmt { value: case_value }
+                }
+                clang_sys::CXCursor_DefaultStmt => ClangNodeKind::DefaultStmt,
 
                 // Expressions
                 clang_sys::CXCursor_IntegerLiteral => {
