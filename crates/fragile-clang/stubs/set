@@ -55,6 +55,32 @@ public:
 
     using const_iterator = iterator;
 
+    class reverse_iterator {
+    public:
+        reverse_iterator(node* n = nullptr) : node_(n) {}
+        const_reference operator*() const { return node_->data; }
+        const value_type* operator->() const { return &node_->data; }
+        reverse_iterator& operator++() {
+            if (node_->left) {
+                node_ = node_->left;
+                while (node_->right) node_ = node_->right;
+            } else {
+                while (node_->parent && node_ == node_->parent->left)
+                    node_ = node_->parent;
+                node_ = node_->parent;
+            }
+            return *this;
+        }
+        reverse_iterator operator++(int) { reverse_iterator tmp = *this; ++(*this); return tmp; }
+        bool operator==(const reverse_iterator& other) const { return node_ == other.node_; }
+        bool operator!=(const reverse_iterator& other) const { return node_ != other.node_; }
+    private:
+        node* node_;
+        friend class set;
+    };
+
+    using const_reverse_iterator = reverse_iterator;
+
     // Constructors
     set() : root_(nullptr), size_(0) {}
 
@@ -113,6 +139,21 @@ public:
     iterator end() noexcept { return iterator(nullptr); }
     const_iterator end() const noexcept { return const_iterator(nullptr); }
     const_iterator cend() const noexcept { return const_iterator(nullptr); }
+
+    reverse_iterator rbegin() noexcept {
+        node* n = root_;
+        while (n && n->right) n = n->right;
+        return reverse_iterator(n);
+    }
+    const_reverse_iterator rbegin() const noexcept {
+        node* n = root_;
+        while (n && n->right) n = n->right;
+        return const_reverse_iterator(n);
+    }
+    const_reverse_iterator crbegin() const noexcept { return rbegin(); }
+    reverse_iterator rend() noexcept { return reverse_iterator(nullptr); }
+    const_reverse_iterator rend() const noexcept { return const_reverse_iterator(nullptr); }
+    const_reverse_iterator crend() const noexcept { return const_reverse_iterator(nullptr); }
 
     // Capacity
     bool empty() const noexcept { return size_ == 0; }
