@@ -188,16 +188,33 @@ See [PLAN_CPP20_MAKO.md](PLAN_CPP20_MAKO.md) for detailed plan.
   - [x] F.2.1 Add stubs: tuple, csignal, pthread.h, sched.h; extend string with assign(), vector with memory include [26:01:16, 05:30]
   - [x] `vendor/mako/src/mako/vec/occ.cpp` - **PARSED**: 27 functions (OCC, workerThread, main) [26:01:16, 05:30]
 - [-] **F.3 Full Build** (Started [26:01:16, 06:00])
-  - [-] All rrr module
+  - [x] All rrr module - **15/16 files parsing (94%)** [26:01:16, 08:00]
     - [x] F.3.1 Extended stubs: cmath, iomanip, list reverse iterators, unordered_map insert_or_assign [26:01:16, 06:00]
-    - [x] `vendor/mako/src/rrr/base/basetypes.cpp` - **PARSED**: 15 functions [26:01:16, 06:00]
-    - [x] `vendor/mako/src/rrr/base/misc.cpp` - **PARSED**: 20 functions [26:01:16, 06:00]
-    - [x] `vendor/mako/src/rrr/rpc/client.cpp` - **PARSED**: 4671 functions [26:01:16, 06:00]
-    - [x] `vendor/mako/src/rrr/reactor/event.cc` - **PARSED**: 4640 functions [26:01:16, 06:00]
-    - [x] `vendor/mako/src/rrr/reactor/fiber_impl.cc` - **PARSED**: 4640 functions [26:01:16, 06:00]
-    - [x] `vendor/mako/src/rrr/reactor/reactor.cc` - **PARSED**: 4640 functions [26:01:16, 06:00]
-    - [ ] Remaining rrr files (need global namespace `max`, `errno` exports)
-  - [ ] All mako module
+    - [x] F.3.2 Time stubs: time.h, sys/time.h, limits.h, climits, execinfo.h [26:01:16, 08:00]
+    - [x] F.3.3 Iterator stubs: std::reverse_iterator for list, range insert [26:01:16, 08:00]
+    - [x] `vendor/mako/src/rrr/base/basetypes.cpp` - **PARSED**: 22 functions
+    - [x] `vendor/mako/src/rrr/base/debugging.cpp` - **PARSED**: 23 functions
+    - [x] `vendor/mako/src/rrr/base/logging.cpp` - **PARSED**: 27 functions
+    - [x] `vendor/mako/src/rrr/base/misc.cpp` - **PARSED**: 27 functions
+    - [x] `vendor/mako/src/rrr/base/strop.cpp` - **PARSED**: 33 functions
+    - [x] `vendor/mako/src/rrr/base/threading.cpp` - **PARSED**: 26 functions
+    - [x] `vendor/mako/src/rrr/base/unittest.cpp` - **PARSED**: 26 functions
+    - [x] `vendor/mako/src/rrr/misc/alock.cpp` - **PARSED**: 4640 functions
+    - [x] `vendor/mako/src/rrr/misc/recorder.cpp` - **PARSED**: 53 functions
+    - [x] `vendor/mako/src/rrr/rpc/client.cpp` - **PARSED**: 4671 functions
+    - [x] `vendor/mako/src/rrr/rpc/utils.cpp` - **PARSED**: 29 functions
+    - [x] `vendor/mako/src/rrr/reactor/epoll_wrapper.cc` - **PARSED**: 26 functions
+    - [x] `vendor/mako/src/rrr/reactor/event.cc` - **PARSED**: 4640 functions
+    - [x] `vendor/mako/src/rrr/reactor/fiber_impl.cc` - **PARSED**: 4640 functions
+    - [x] `vendor/mako/src/rrr/reactor/reactor.cc` - **PARSED**: 4640 functions
+    - [ ] `vendor/mako/src/rrr/reactor/quorum_event.cc` - Cross-namespace inheritance issue
+  - [-] All mako module - **12/155 files parsing (7.7%)** [26:01:16, 08:30]
+    - [x] `vendor/mako/src/mako/vec/coroutine.cpp` - **PARSED**: 26 functions
+    - [x] `vendor/mako/src/mako/vec/occ.cpp` - **PARSED**: 27 functions
+    - [x] `vendor/mako/src/mako/lib/memory.cc` - **PARSED**: 3 functions
+    - [x] `vendor/mako/src/mako/lib/lookup3.cc` - **PARSED**: 9 functions
+    - [x] `vendor/mako/src/mako/db.cc` - **PARSED**: 0 functions (declarations only)
+    - [ ] Remaining files need: sys/mman.h, numa.h, cassert, deque, and other system headers
   - [ ] Link and run tests
 
 ---
@@ -263,7 +280,7 @@ Migration: After C++20 support is complete, deprecate these.
 ## 5. Testing & Milestones
 
 ### 5.1 Unit Tests
-- [x] fragile-clang: 226 tests passing (27 unit + 199 integration) - includes 10 coroutine + 7 exception + 6 RTTI + 8 promise type + 8 awaitable + 8 generator + 7 mako file tests
+- [x] fragile-clang: 226 tests passing (27 unit + 199 integration) - includes 10 coroutine + 7 exception + 6 RTTI + 8 promise type + 8 awaitable + 8 generator + 7 mako file tests [26:01:16]
 - [x] fragile-rustc-driver: 6 tests passing
 - [x] fragile-runtime: Compiles
 
