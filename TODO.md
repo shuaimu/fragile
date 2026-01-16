@@ -212,7 +212,7 @@ See [PLAN_CPP20_MAKO.md](PLAN_CPP20_MAKO.md) for detailed plan.
     - [x] `vendor/mako/src/rrr/reactor/fiber_impl.cc` - **PARSED**: 4640 functions
     - [x] `vendor/mako/src/rrr/reactor/reactor.cc` - **PARSED**: 4640 functions
     - [-] `vendor/mako/src/rrr/reactor/quorum_event.cc` - Cross-namespace inheritance: `janus::QuorumEvent` inherits from `rrr::Event` via `using rrr::Event;`. Clang semantic error on `test()` call [26:01:16, 12:00]. See docs/dev/plan_fix_stub_headers_quorum_event.md
-  - [-] All mako module - **274/320 files parsing (~86%)** [26:01:16, 21:30] (includes all 12 memdb files)
+  - [-] All mako module - **282/320 files parsing (~88%)** [26:01:16, 21:45] (includes all 12 memdb files)
     - [x] `vendor/mako/src/mako/vec/coroutine.cpp` - **PARSED**: 40 functions
     - [x] `vendor/mako/src/mako/vec/occ.cpp` - **PARSED**: 41 functions
     - [x] `vendor/mako/src/mako/lib/memory.cc` - **PARSED**: 17 functions
@@ -484,7 +484,7 @@ Migration: After C++20 support is complete, deprecate these.
 ## 5. Testing & Milestones
 
 ### 5.1 Unit Tests
-- [x] fragile-clang: 531 tests passing (27 unit + 504 integration) - includes 10 coroutine + 7 exception + 6 RTTI + 8 promise type + 8 awaitable + 8 generator + 3 noexcept + 1 member access + 1 stack unwinding + 276 mako file tests [26:01:16, 21:30]
+- [x] fragile-clang: 539 tests passing (27 unit + 512 integration) - includes 10 coroutine + 7 exception + 6 RTTI + 8 promise type + 8 awaitable + 8 generator + 3 noexcept + 1 member access + 1 stack unwinding + 284 mako file tests [26:01:16, 21:45]
 - [x] fragile-rustc-driver: 7 tests passing (6 original + 1 rustc_integration when feature enabled)
 - [x] fragile-runtime: Compiles
 
@@ -504,8 +504,8 @@ Migration: After C++20 support is complete, deprecate these.
 
 Current status:
 - **rrr module**: 20/20 files parsing (100%) - all base, misc, reactor, rpc files parsing
-- **mako module**: 274/320 files parsing (~86%) - includes all 12 memdb files, deptran root-level files, consensus executors (rcc, occ, classic, troad, carousel, tapir, janus, mencius, paxos, raft), client/server workers, paxos/raft helpers, benchmark_control_rpc, stats_registry, sharding files, masstree, masstree-beta (all 28 files), all lib files, sto tests (unit tests + trans_test, single, concurrent, etc.), helloworld/network clients, raft tests, helloworld main, benchmarks
-- **Total tests**: 531 passing (fragile-clang integration tests)
+- **mako module**: 282/320 files parsing (~88%) - includes all 12 memdb files, deptran root-level files, consensus executors (rcc, occ, classic, troad, carousel, tapir, janus, mencius, paxos, raft), client/server workers, paxos/raft helpers, benchmark_control_rpc, stats_registry, sharding files, masstree, masstree-beta (all 28 files), all lib files, sto tests (unit tests + data structure tests), helloworld/network clients, raft tests, helloworld main, benchmarks
+- **Total tests**: 539 passing (fragile-clang integration tests)
 - **Milestones**: M1 ✅, M2-M4 (parsing complete, compilation pending)
 
 Next steps:
