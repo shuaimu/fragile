@@ -200,6 +200,19 @@ public:
         return insert(value_type(static_cast<Args&&>(args)...));
     }
 
+    template<typename InputIt>
+    void insert(InputIt first, InputIt last) {
+        for (; first != last; ++first) {
+            insert(*first);
+        }
+    }
+
+    void insert(std::initializer_list<value_type> ilist) {
+        for (const auto& v : ilist) {
+            insert(v);
+        }
+    }
+
     iterator erase(const_iterator pos) {
         --size_;
         return end();

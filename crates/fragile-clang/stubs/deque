@@ -210,6 +210,38 @@ public:
         other.capacity_ = tmp_cap;
     }
 
+    // Insert methods
+    iterator insert(const_iterator pos, const T& value) {
+        size_type idx = pos - data_;
+        if (size_ >= capacity_) grow(capacity_ == 0 ? 1 : capacity_ * 2);
+        for (size_type i = size_; i > idx; --i) {
+            data_[i] = static_cast<T&&>(data_[i - 1]);
+        }
+        data_[idx] = value;
+        ++size_;
+        return data_ + idx;
+    }
+
+    template<typename InputIt>
+    iterator insert(const_iterator pos, InputIt first, InputIt last) {
+        size_type idx = pos - data_;
+        size_type count = 0;
+        // First count the elements to insert
+        for (InputIt it = first; it != last; ++it) ++count;
+        if (size_ + count > capacity_) grow(size_ + count);
+        // Shift existing elements
+        for (size_type i = size_ + count - 1; i >= idx + count && i < size_ + count; --i) {
+            data_[i] = static_cast<T&&>(data_[i - count]);
+        }
+        // Insert new elements
+        size_type i = idx;
+        for (; first != last; ++first) {
+            data_[i++] = *first;
+        }
+        size_ += count;
+        return data_ + idx;
+    }
+
 private:
     void grow(size_type new_cap) {
         T* new_data = new T[new_cap];

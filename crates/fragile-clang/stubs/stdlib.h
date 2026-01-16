@@ -29,6 +29,7 @@ long random(void);
 void srandom(unsigned int seed);
 char* initstate(unsigned int seed, char* state, size_t n);
 char* setstate(char* state);
+int rand_r(unsigned int* seedp);  // POSIX thread-safe rand
 }
 
 using std::qsort;

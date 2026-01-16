@@ -222,6 +222,23 @@ public:
         return data_ + idx;
     }
 
+    template<typename InputIt>
+    iterator insert(const_iterator pos, InputIt first, InputIt last) {
+        size_type idx = pos - data_;
+        size_type count = 0;
+        for (InputIt it = first; it != last; ++it) ++count;
+        if (size_ + count > capacity_) reserve(size_ + count);
+        for (size_type i = size_ + count - 1; i >= idx + count && i < size_ + count; --i) {
+            data_[i] = static_cast<T&&>(data_[i - count]);
+        }
+        size_type i = idx;
+        for (; first != last; ++first) {
+            data_[i++] = *first;
+        }
+        size_ += count;
+        return data_ + idx;
+    }
+
     void swap(vector& other) noexcept {
         T* tmp_data = data_;
         size_type tmp_size = size_;
