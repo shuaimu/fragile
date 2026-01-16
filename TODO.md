@@ -66,8 +66,8 @@ See [PLAN_CPP20_MAKO.md](PLAN_CPP20_MAKO.md) for detailed plan.
   - [x] std::move [26:01:16, 00:58] ([docs/dev/plan_std_move.md](docs/dev/plan_std_move.md))
   - [x] std::forward [26:01:16, 00:58] (included in above)
 
-### 1.2 Phase B: Templates
-- [-] **B.1 Function Templates**
+### 1.2 Phase B: Templates ✅
+- [x] **B.1 Function Templates**
   - [x] Basic templates [26:01:16] ([docs/dev/plan_function_templates.md](docs/dev/plan_function_templates.md))
   - [x] Argument deduction
     - [x] Dependent type representation (CppType extensions) [26:01:16, 01:18] ([docs/dev/plan_dependent_types.md](docs/dev/plan_dependent_types.md))
@@ -85,13 +85,13 @@ See [PLAN_CPP20_MAKO.md](PLAN_CPP20_MAKO.md) for detailed plan.
   - [x] TypeTraitExpr AST node [26:01:16, 06:15]
   - [x] TypeTraitEvaluator (is_integral, is_same, etc.) [26:01:16, 06:15]
   - Note: std::enable_if, std::is_base_of (class hierarchy), std::conditional deferred to Phase C
-- [-] **B.4 C++20 Concepts** ([docs/dev/plan_cpp20_concepts.md](docs/dev/plan_cpp20_concepts.md))
+- [x] **B.4 C++20 Concepts** ([docs/dev/plan_cpp20_concepts.md](docs/dev/plan_cpp20_concepts.md))
   - [x] B.4.1 AST representation (ConceptDecl, RequiresExpr, RequiresClause nodes) [26:01:16, 02:40]
   - [x] B.4.2 Parser support (handle concept cursors, requires clauses) [26:01:16, 02:40]
   - [x] B.4.3 Concept definitions (`concept Integral = ...`) [26:01:16, 02:40]
   - [x] B.4.4 Requires clauses on functions/templates (`requires Integral<T>`) [26:01:16, 02:40]
   - [x] B.4.5 Requires expressions (`requires { expr; }`) [26:01:16, 02:50]
-  - [ ] B.4.6 Standard concepts (std::integral, std::same_as, etc.)
+  - Note: B.4.6 Standard concepts (std::integral, std::same_as) deferred to Phase C (Standard Library)
 
 ### 1.3 Phase C: Standard Library
 - [ ] **C.1 Containers**
