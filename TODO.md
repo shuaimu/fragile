@@ -246,7 +246,9 @@ See [PLAN_CPP20_MAKO.md](PLAN_CPP20_MAKO.md) for detailed plan.
     - [x] F.3.10 Fixed cctype stub for isdigit ambiguity [26:01:16, 12:00]
     - [x] F.3.11 Added optional stub, fixed fstream (seekg/seekp/tellg), ios_base::failure, virtual inheritance in iostream [26:01:16, 14:45]
     - [x] F.3.12 Added system_error stub header, updated sys/socket.h to include cstring [26:01:16, 17:00]
+    - [x] F.3.13 Added lz4.h, sys/uio.h, fcntl.h, getopt.h stubs for persist_test.cc (file not fully parsing due to mako internal deps) [26:01:16, 18:00]
     - [-] `vendor/mako/src/mako/thread.cc` - Needs eRPC rpc.h header (external dependency)
+    - [-] `vendor/mako/src/mako/persist_test.cc` - Has LZ4 stubs but needs one_way_post template from mako internals
     - [ ] Remaining files need: eRPC library stubs, more STL stubs
   - [ ] Link and run tests
 
