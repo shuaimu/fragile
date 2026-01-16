@@ -1,0 +1,299 @@
+// Minimal future stub for fragile parsing
+#ifndef _FRAGILE_FUTURE_
+#define _FRAGILE_FUTURE_
+
+#include "chrono"
+#include "stdexcept"
+
+namespace std {
+
+// Future status enum
+enum class future_status {
+    ready,
+    timeout,
+    deferred
+};
+
+// future_error exception
+class future_error : public logic_error {
+public:
+    explicit future_error(int ec) : logic_error("future_error") {}
+};
+
+// Forward declarations
+template<typename R> class promise;
+template<typename R> class future;
+template<typename R> class shared_future;
+template<typename F> class packaged_task;
+
+// future<R> - provides access to the result of an async operation
+template<typename R>
+class future {
+public:
+    future() noexcept : valid_(false) {}
+    future(future&& other) noexcept : valid_(other.valid_) { other.valid_ = false; }
+    future(const future&) = delete;
+    ~future() = default;
+
+    future& operator=(future&& other) noexcept {
+        valid_ = other.valid_;
+        other.valid_ = false;
+        return *this;
+    }
+    future& operator=(const future&) = delete;
+
+    // Retrieving the result
+    R get() { valid_ = false; return R{}; }
+
+    // State
+    bool valid() const noexcept { return valid_; }
+
+    // Waiting
+    void wait() const {}
+
+    template<typename Rep, typename Period>
+    future_status wait_for(const chrono::duration<Rep, Period>& timeout) const {
+        return future_status::ready;
+    }
+
+    template<typename Clock, typename Duration>
+    future_status wait_until(const chrono::time_point<Clock, Duration>& timeout_time) const {
+        return future_status::ready;
+    }
+
+    // Share
+    shared_future<R> share() noexcept;
+
+private:
+    bool valid_;
+    template<typename> friend class promise;
+    template<typename> friend class packaged_task;
+};
+
+// future<void> specialization
+template<>
+class future<void> {
+public:
+    future() noexcept : valid_(false) {}
+    future(future&& other) noexcept : valid_(other.valid_) { other.valid_ = false; }
+    future(const future&) = delete;
+    ~future() = default;
+
+    future& operator=(future&& other) noexcept {
+        valid_ = other.valid_;
+        other.valid_ = false;
+        return *this;
+    }
+    future& operator=(const future&) = delete;
+
+    void get() { valid_ = false; }
+    bool valid() const noexcept { return valid_; }
+    void wait() const {}
+
+    template<typename Rep, typename Period>
+    future_status wait_for(const chrono::duration<Rep, Period>& timeout) const {
+        return future_status::ready;
+    }
+
+    template<typename Clock, typename Duration>
+    future_status wait_until(const chrono::time_point<Clock, Duration>& timeout_time) const {
+        return future_status::ready;
+    }
+
+    shared_future<void> share() noexcept;
+
+private:
+    bool valid_;
+    template<typename> friend class promise;
+    template<typename> friend class packaged_task;
+};
+
+// shared_future<R> - provides access to the result from multiple threads
+template<typename R>
+class shared_future {
+public:
+    shared_future() noexcept : valid_(false) {}
+    shared_future(const shared_future& other) : valid_(other.valid_) {}
+    shared_future(shared_future&& other) noexcept : valid_(other.valid_) { other.valid_ = false; }
+    shared_future(future<R>&& f) noexcept : valid_(f.valid()) { f.valid_ = false; }
+    ~shared_future() = default;
+
+    shared_future& operator=(const shared_future& other) {
+        valid_ = other.valid_;
+        return *this;
+    }
+    shared_future& operator=(shared_future&& other) noexcept {
+        valid_ = other.valid_;
+        other.valid_ = false;
+        return *this;
+    }
+
+    // Retrieving the result
+    const R& get() const { return dummy_; }
+
+    // State
+    bool valid() const noexcept { return valid_; }
+
+    // Waiting
+    void wait() const {}
+
+    template<typename Rep, typename Period>
+    future_status wait_for(const chrono::duration<Rep, Period>& timeout) const {
+        return future_status::ready;
+    }
+
+    template<typename Clock, typename Duration>
+    future_status wait_until(const chrono::time_point<Clock, Duration>& timeout_time) const {
+        return future_status::ready;
+    }
+
+private:
+    bool valid_;
+    R dummy_{};
+};
+
+// shared_future<void> specialization
+template<>
+class shared_future<void> {
+public:
+    shared_future() noexcept : valid_(false) {}
+    shared_future(const shared_future& other) : valid_(other.valid_) {}
+    shared_future(shared_future&& other) noexcept : valid_(other.valid_) { other.valid_ = false; }
+    shared_future(future<void>&& f) noexcept : valid_(f.valid()) { f.valid_ = false; }
+    ~shared_future() = default;
+
+    shared_future& operator=(const shared_future& other) {
+        valid_ = other.valid_;
+        return *this;
+    }
+    shared_future& operator=(shared_future&& other) noexcept {
+        valid_ = other.valid_;
+        other.valid_ = false;
+        return *this;
+    }
+
+    void get() const {}
+    bool valid() const noexcept { return valid_; }
+    void wait() const {}
+
+    template<typename Rep, typename Period>
+    future_status wait_for(const chrono::duration<Rep, Period>& timeout) const {
+        return future_status::ready;
+    }
+
+    template<typename Clock, typename Duration>
+    future_status wait_until(const chrono::time_point<Clock, Duration>& timeout_time) const {
+        return future_status::ready;
+    }
+
+private:
+    bool valid_;
+};
+
+// Implementation of share()
+template<typename R>
+inline shared_future<R> future<R>::share() noexcept {
+    return shared_future<R>(static_cast<future<R>&&>(*this));
+}
+
+inline shared_future<void> future<void>::share() noexcept {
+    return shared_future<void>(static_cast<future<void>&&>(*this));
+}
+
+// promise<R> - stores a value to be acquired asynchronously
+template<typename R>
+class promise {
+public:
+    promise() = default;
+    promise(promise&& other) noexcept = default;
+    promise(const promise&) = delete;
+    ~promise() = default;
+
+    promise& operator=(promise&& other) noexcept = default;
+    promise& operator=(const promise&) = delete;
+
+    void swap(promise& other) noexcept {}
+
+    future<R> get_future() { return future<R>(); }
+
+    void set_value(const R& value) {}
+    void set_value(R&& value) {}
+    void set_exception(exception_ptr p) {}
+    void set_value_at_thread_exit(const R& value) {}
+    void set_value_at_thread_exit(R&& value) {}
+    void set_exception_at_thread_exit(exception_ptr p) {}
+};
+
+// promise<void> specialization
+template<>
+class promise<void> {
+public:
+    promise() = default;
+    promise(promise&& other) noexcept = default;
+    promise(const promise&) = delete;
+    ~promise() = default;
+
+    promise& operator=(promise&& other) noexcept = default;
+    promise& operator=(const promise&) = delete;
+
+    void swap(promise& other) noexcept {}
+
+    future<void> get_future() { return future<void>(); }
+
+    void set_value() {}
+    void set_exception(exception_ptr p) {}
+    void set_value_at_thread_exit() {}
+    void set_exception_at_thread_exit(exception_ptr p) {}
+};
+
+// packaged_task<R(Args...)> - wraps a callable element
+template<typename R, typename... Args>
+class packaged_task<R(Args...)> {
+public:
+    packaged_task() noexcept = default;
+    template<typename F>
+    explicit packaged_task(F&& f) {}
+    packaged_task(packaged_task&& other) noexcept = default;
+    packaged_task(const packaged_task&) = delete;
+    ~packaged_task() = default;
+
+    packaged_task& operator=(packaged_task&& other) noexcept = default;
+    packaged_task& operator=(const packaged_task&) = delete;
+
+    bool valid() const noexcept { return true; }
+    void swap(packaged_task& other) noexcept {}
+
+    future<R> get_future() { return future<R>(); }
+
+    void operator()(Args... args) {}
+    void make_ready_at_thread_exit(Args... args) {}
+    void reset() {}
+};
+
+// async - runs a function asynchronously
+enum class launch {
+    async = 1,
+    deferred = 2
+};
+
+inline constexpr launch operator|(launch lhs, launch rhs) {
+    return static_cast<launch>(static_cast<int>(lhs) | static_cast<int>(rhs));
+}
+
+inline constexpr launch operator&(launch lhs, launch rhs) {
+    return static_cast<launch>(static_cast<int>(lhs) & static_cast<int>(rhs));
+}
+
+template<typename F, typename... Args>
+auto async(F&& f, Args&&... args) -> future<decltype(f(args...))> {
+    return future<decltype(f(args...))>();
+}
+
+template<typename F, typename... Args>
+auto async(launch policy, F&& f, Args&&... args) -> future<decltype(f(args...))> {
+    return future<decltype(f(args...))>();
+}
+
+} // namespace std
+
+#endif // _FRAGILE_FUTURE_

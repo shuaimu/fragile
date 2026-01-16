@@ -3,6 +3,7 @@
 #define _FRAGILE_CSTDIO_
 
 #include "cstdint"
+#include "cstdarg"
 
 // FILE type (opaque)
 struct FILE;

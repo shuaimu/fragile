@@ -6969,28 +6969,27 @@ fn test_mako_server_cpp_actual() {
 
     let result = parser.parse_file(&server_cpp_path);
 
-    match result {
-        Ok(ast) => {
-            // Verify the namespace was found
-            let has_namespace = find_node_kind(&ast.translation_unit, |kind| {
-                matches!(kind, ClangNodeKind::NamespaceDecl { name } if name.as_deref() == Some("rrr"))
-            });
-            assert!(has_namespace.is_some(), "Expected to find rrr namespace");
+    // server.cpp should now parse successfully
+    let ast = result.expect("server.cpp should parse successfully");
 
-            // Convert to MIR
-            let converter = MirConverter::new();
-            let module = converter.convert(ast).unwrap();
+    // Verify the namespace was found
+    let has_namespace = find_node_kind(&ast.translation_unit, |kind| {
+        matches!(kind, ClangNodeKind::NamespaceDecl { name } if name.as_deref() == Some("rrr"))
+    });
+    assert!(has_namespace.is_some(), "Expected to find rrr namespace");
 
-            println!("Successfully parsed server.cpp with {} functions", module.functions.len());
-            for func in &module.functions {
-                println!("  Function: {}", func.display_name);
-            }
-        }
-        Err(e) => {
-            // Document what failed for incremental improvement
-            println!("Note: server.cpp parsing failed: {:?}", e);
-            println!("Consider extending stub headers if more coverage is needed.");
-            // Don't fail - this documents the issue
-        }
-    }
+    // Convert to MIR
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).unwrap();
+
+    println!("Successfully parsed server.cpp with {} functions", module.functions.len());
+
+    // Verify we found a reasonable number of functions
+    assert!(module.functions.len() > 100, "Expected to find many functions from server.cpp");
+
+    // Verify some key functions are present
+    let has_shutdown = module.functions.iter().any(|f| {
+        f.display_name.contains("shutdown") || f.display_name.contains("Shutdown")
+    });
+    assert!(has_shutdown, "Expected to find shutdown-related functions");
 }

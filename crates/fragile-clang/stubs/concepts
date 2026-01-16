@@ -1,0 +1,171 @@
+// Minimal concepts stub for fragile parsing (C++20)
+#ifndef _FRAGILE_CONCEPTS_
+#define _FRAGILE_CONCEPTS_
+
+#include "type_traits"
+
+namespace std {
+
+// Core language concepts
+
+// same_as
+template<typename T, typename U>
+concept same_as = is_same_v<T, U> && is_same_v<U, T>;
+
+// derived_from
+template<typename Derived, typename Base>
+concept derived_from =
+    is_base_of_v<Base, Derived> &&
+    is_convertible_v<const volatile Derived*, const volatile Base*>;
+
+// convertible_to
+template<typename From, typename To>
+concept convertible_to =
+    is_convertible_v<From, To> &&
+    requires { static_cast<To>(declval<From>()); };
+
+// common_reference_with - simplified
+template<typename T, typename U>
+concept common_reference_with = same_as<T, U>;
+
+// common_with - simplified
+template<typename T, typename U>
+concept common_with = same_as<T, U>;
+
+// Arithmetic concepts
+
+// integral
+template<typename T>
+concept integral = is_integral_v<T>;
+
+// signed_integral
+template<typename T>
+concept signed_integral = integral<T> && is_signed_v<T>;
+
+// unsigned_integral
+template<typename T>
+concept unsigned_integral = integral<T> && is_unsigned_v<T>;
+
+// floating_point
+template<typename T>
+concept floating_point = is_floating_point_v<T>;
+
+// Comparison concepts
+
+// equality_comparable - simplified
+template<typename T>
+concept equality_comparable = requires(T a, T b) {
+    { a == b } -> convertible_to<bool>;
+    { a != b } -> convertible_to<bool>;
+};
+
+// totally_ordered - simplified
+template<typename T>
+concept totally_ordered = equality_comparable<T> && requires(T a, T b) {
+    { a <  b } -> convertible_to<bool>;
+    { a >  b } -> convertible_to<bool>;
+    { a <= b } -> convertible_to<bool>;
+    { a >= b } -> convertible_to<bool>;
+};
+
+// Object concepts
+
+// movable
+template<typename T>
+concept movable =
+    is_object_v<T> &&
+    is_move_constructible_v<T> &&
+    is_move_assignable_v<T>;
+
+// copyable
+template<typename T>
+concept copyable =
+    movable<T> &&
+    is_copy_constructible_v<T> &&
+    is_copy_assignable_v<T>;
+
+// semiregular
+template<typename T>
+concept semiregular = copyable<T> && is_default_constructible_v<T>;
+
+// regular
+template<typename T>
+concept regular = semiregular<T> && equality_comparable<T>;
+
+// Callable concepts
+
+// invocable
+template<typename F, typename... Args>
+concept invocable = is_invocable_v<F, Args...>;
+
+// regular_invocable (semantically same as invocable)
+template<typename F, typename... Args>
+concept regular_invocable = invocable<F, Args...>;
+
+// predicate
+template<typename F, typename... Args>
+concept predicate = regular_invocable<F, Args...> &&
+    convertible_to<invoke_result_t<F, Args...>, bool>;
+
+// relation
+template<typename R, typename T, typename U>
+concept relation =
+    predicate<R, T, T> &&
+    predicate<R, U, U> &&
+    predicate<R, T, U> &&
+    predicate<R, U, T>;
+
+// equivalence_relation
+template<typename R, typename T, typename U>
+concept equivalence_relation = relation<R, T, U>;
+
+// strict_weak_order
+template<typename R, typename T, typename U>
+concept strict_weak_order = relation<R, T, U>;
+
+// Additional type traits needed for concepts
+
+// default_initializable
+template<typename T>
+concept default_initializable =
+    is_default_constructible_v<T> &&
+    requires { T{}; } &&
+    requires { ::new T; };
+
+// destructible
+template<typename T>
+concept destructible = is_nothrow_destructible_v<T>;
+
+// constructible_from
+template<typename T, typename... Args>
+concept constructible_from = destructible<T> && is_constructible_v<T, Args...>;
+
+// move_constructible
+template<typename T>
+concept move_constructible = constructible_from<T, T>;
+
+// copy_constructible
+template<typename T>
+concept copy_constructible =
+    move_constructible<T> &&
+    constructible_from<T, T&> &&
+    constructible_from<T, const T&> &&
+    constructible_from<T, const T>;
+
+// assignable_from
+template<typename LHS, typename RHS>
+concept assignable_from =
+    is_lvalue_reference_v<LHS> &&
+    requires(LHS lhs, RHS&& rhs) {
+        { lhs = static_cast<RHS&&>(rhs) } -> same_as<LHS>;
+    };
+
+// swappable - simplified
+template<typename T>
+concept swappable = requires(T& a, T& b) {
+    swap(a, b);
+};
+
+} // namespace std
+
+#endif // _FRAGILE_CONCEPTS_

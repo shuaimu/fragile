@@ -55,6 +55,9 @@
 #define SHUT_WR 1
 #define SHUT_RDWR 2
 
+// Maximum listen queue length
+#define SOMAXCONN 4096
+
 // Message flags
 #define MSG_OOB 0x01
 #define MSG_PEEK 0x02

@@ -187,6 +187,54 @@ struct hash<T*> {
     size_t operator()(T* v) const noexcept { return reinterpret_cast<size_t>(v); }
 };
 
+// invoke (C++17) - call a callable with arguments
+template<typename F, typename... Args>
+auto invoke(F&& f, Args&&... args)
+    -> decltype(static_cast<F&&>(f)(static_cast<Args&&>(args)...)) {
+    return static_cast<F&&>(f)(static_cast<Args&&>(args)...);
+}
+
+// mem_fn - wrap a member function pointer
+template<typename M, typename C>
+auto mem_fn(M C::* pm) {
+    return [pm](C& obj, auto&&... args) {
+        return (obj.*pm)(static_cast<decltype(args)&&>(args)...);
+    };
+}
+
+// bind (simplified)
+template<typename F, typename... BoundArgs>
+auto bind(F&& f, BoundArgs&&... args) {
+    return [f = static_cast<F&&>(f), ...bound = static_cast<BoundArgs&&>(args)]
+           (auto&&... call_args) mutable {
+        return f(bound..., static_cast<decltype(call_args)&&>(call_args)...);
+    };
+}
+
+// Placeholder namespace
+namespace placeholders {
+    // Placeholders _1, _2, etc.
+    struct _placeholder_1 {} constexpr _1{};
+    struct _placeholder_2 {} constexpr _2{};
+    struct _placeholder_3 {} constexpr _3{};
+}
+
+// not_fn (C++17)
+template<typename F>
+auto not_fn(F&& f) {
+    return [f = static_cast<F&&>(f)](auto&&... args) mutable {
+        return !f(static_cast<decltype(args)&&>(args)...);
+    };
+}
+
+// identity (C++20)
+struct identity {
+    template<typename T>
+    constexpr T&& operator()(T&& t) const noexcept {
+        return static_cast<T&&>(t);
+    }
+};
+
 } // namespace std
 
 #endif // _FRAGILE_FUNCTIONAL_

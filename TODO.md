@@ -180,7 +180,8 @@ See [PLAN_CPP20_MAKO.md](PLAN_CPP20_MAKO.md) for detailed plan.
   - [x] `vendor/mako/src/rrr/misc/rand.cpp` - **PARSED**: 225 functions extracted including rdtsc [26:01:16, 04:15]
   - [x] F.1.4 Comprehensive stub headers (algorithm, atomic, chrono, mutex, etc.) and -isystem support [26:01:16, 12:30]
   - [x] `vendor/mako/src/rrr/misc/marshal.cpp` - **PARSED**: 52 functions extracted (read/write operators) [26:01:16, 12:30]
-  - [ ] `vendor/mako/src/rrr/rpc/server.cpp`
+  - [x] F.1.5 Extended stub headers for server.cpp (fstream, array, future, concepts, etc.) [26:01:16, 04:40]
+  - [x] `vendor/mako/src/rrr/rpc/server.cpp` - **PARSED**: 4667 functions extracted (RPC server) [26:01:16, 04:40]
 - [ ] **F.2 Coroutine Files**
   - [ ] `vendor/mako/src/mako/vec/coroutine.cpp`
   - [ ] `vendor/mako/src/mako/vec/occ.cpp`
@@ -252,7 +253,7 @@ Migration: After C++20 support is complete, deprecate these.
 ## 5. Testing & Milestones
 
 ### 5.1 Unit Tests
-- [x] fragile-clang: 222 tests passing (27 unit + 195 integration) - includes 10 coroutine + 7 exception + 6 RTTI + 8 promise type + 8 awaitable + 8 generator + 4 mako pattern tests
+- [x] fragile-clang: 224 tests passing (27 unit + 197 integration) - includes 10 coroutine + 7 exception + 6 RTTI + 8 promise type + 8 awaitable + 8 generator + 4 mako pattern + server.cpp tests
 - [x] fragile-rustc-driver: 6 tests passing
 - [x] fragile-runtime: Compiles
 

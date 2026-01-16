@@ -66,6 +66,9 @@ public:
 
     unique_lock() noexcept : mtx_(nullptr), owns_(false) {}
     explicit unique_lock(mutex_type& m) : mtx_(&m), owns_(true) { mtx_->lock(); }
+    unique_lock(mutex_type& m, defer_lock_t) noexcept : mtx_(&m), owns_(false) {}
+    unique_lock(mutex_type& m, try_to_lock_t) : mtx_(&m), owns_(mtx_->try_lock()) {}
+    unique_lock(mutex_type& m, adopt_lock_t) : mtx_(&m), owns_(true) {}
     ~unique_lock() { if (owns_) mtx_->unlock(); }
 
     unique_lock(const unique_lock&) = delete;
@@ -94,9 +97,65 @@ public:
     bool owns_lock() const noexcept { return owns_; }
     explicit operator bool() const noexcept { return owns_; }
 
+    mutex_type* release() noexcept {
+        mutex_type* ret = mtx_;
+        mtx_ = nullptr;
+        owns_ = false;
+        return ret;
+    }
+
 private:
     mutex_type* mtx_;
     bool owns_;
+};
+
+// Once flag for one-time initialization
+struct once_flag {
+    constexpr once_flag() noexcept : state_(0) {}
+    once_flag(const once_flag&) = delete;
+    once_flag& operator=(const once_flag&) = delete;
+private:
+    int state_;
+    template<typename Callable, typename... Args>
+    friend void call_once(once_flag& flag, Callable&& f, Args&&... args);
+};
+
+// Call once - invoke callable exactly once
+template<typename Callable, typename... Args>
+void call_once(once_flag& flag, Callable&& f, Args&&... args) {
+    if (flag.state_ == 0) {
+        f(args...);
+        flag.state_ = 1;
+    }
+}
+
+// Scoped lock (C++17)
+template<typename... Mutexes>
+class scoped_lock {
+public:
+    explicit scoped_lock(Mutexes&... m) : mutexes_(m...) {}
+    ~scoped_lock() {}
+    scoped_lock(const scoped_lock&) = delete;
+    scoped_lock& operator=(const scoped_lock&) = delete;
+private:
+    // We just store a tuple, actual implementation would lock all
+    // For parsing purposes, this is sufficient
+    int dummy_;
+    // Using a simple approach since we don't need real functionality
+    [[maybe_unused]] int placeholder_;
+};
+
+// Single mutex specialization
+template<typename Mutex>
+class scoped_lock<Mutex> {
+public:
+    using mutex_type = Mutex;
+    explicit scoped_lock(Mutex& m) : guard_(m) {}
+    ~scoped_lock() = default;
+    scoped_lock(const scoped_lock&) = delete;
+    scoped_lock& operator=(const scoped_lock&) = delete;
+private:
+    lock_guard<Mutex> guard_;
 };
 
 } // namespace std

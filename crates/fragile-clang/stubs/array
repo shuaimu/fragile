@@ -1,0 +1,173 @@
+// Minimal array stub for fragile parsing
+#ifndef _FRAGILE_ARRAY_
+#define _FRAGILE_ARRAY_
+
+#include "cstdint"
+#include "iterator"
+
+namespace std {
+
+// std::array - fixed-size container
+template<typename T, size_t N>
+struct array {
+    using value_type = T;
+    using size_type = size_t;
+    using difference_type = ptrdiff_t;
+    using reference = value_type&;
+    using const_reference = const value_type&;
+    using pointer = value_type*;
+    using const_pointer = const value_type*;
+    using iterator = pointer;
+    using const_iterator = const_pointer;
+    using reverse_iterator = std::reverse_iterator<iterator>;
+    using const_reverse_iterator = std::reverse_iterator<const_iterator>;
+
+    // Element access
+    reference at(size_type pos) { return data_[pos]; }
+    const_reference at(size_type pos) const { return data_[pos]; }
+    reference operator[](size_type pos) { return data_[pos]; }
+    const_reference operator[](size_type pos) const { return data_[pos]; }
+    reference front() { return data_[0]; }
+    const_reference front() const { return data_[0]; }
+    reference back() { return data_[N > 0 ? N - 1 : 0]; }
+    const_reference back() const { return data_[N > 0 ? N - 1 : 0]; }
+    pointer data() noexcept { return data_; }
+    const_pointer data() const noexcept { return data_; }
+
+    // Iterators
+    iterator begin() noexcept { return data_; }
+    const_iterator begin() const noexcept { return data_; }
+    const_iterator cbegin() const noexcept { return data_; }
+    iterator end() noexcept { return data_ + N; }
+    const_iterator end() const noexcept { return data_ + N; }
+    const_iterator cend() const noexcept { return data_ + N; }
+    reverse_iterator rbegin() noexcept { return reverse_iterator(end()); }
+    const_reverse_iterator rbegin() const noexcept { return const_reverse_iterator(end()); }
+    const_reverse_iterator crbegin() const noexcept { return const_reverse_iterator(end()); }
+    reverse_iterator rend() noexcept { return reverse_iterator(begin()); }
+    const_reverse_iterator rend() const noexcept { return const_reverse_iterator(begin()); }
+    const_reverse_iterator crend() const noexcept { return const_reverse_iterator(begin()); }
+
+    // Capacity
+    constexpr bool empty() const noexcept { return N == 0; }
+    constexpr size_type size() const noexcept { return N; }
+    constexpr size_type max_size() const noexcept { return N; }
+
+    // Operations
+    void fill(const T& value) {
+        for (size_type i = 0; i < N; ++i) {
+            data_[i] = value;
+        }
+    }
+    void swap(array& other) noexcept {
+        for (size_type i = 0; i < N; ++i) {
+            T tmp = data_[i];
+            data_[i] = other.data_[i];
+            other.data_[i] = tmp;
+        }
+    }
+
+    // Data member (public for aggregate initialization)
+    T data_[N > 0 ? N : 1];
+};
+
+// Zero-size array specialization
+template<typename T>
+struct array<T, 0> {
+    using value_type = T;
+    using size_type = size_t;
+    using difference_type = ptrdiff_t;
+    using reference = value_type&;
+    using const_reference = const value_type&;
+    using pointer = value_type*;
+    using const_pointer = const value_type*;
+    using iterator = pointer;
+    using const_iterator = const_pointer;
+
+    constexpr bool empty() const noexcept { return true; }
+    constexpr size_type size() const noexcept { return 0; }
+    constexpr size_type max_size() const noexcept { return 0; }
+    pointer data() noexcept { return nullptr; }
+    const_pointer data() const noexcept { return nullptr; }
+    iterator begin() noexcept { return nullptr; }
+    iterator end() noexcept { return nullptr; }
+    const_iterator begin() const noexcept { return nullptr; }
+    const_iterator end() const noexcept { return nullptr; }
+};
+
+// Comparison operators
+template<typename T, size_t N>
+bool operator==(const array<T, N>& lhs, const array<T, N>& rhs) {
+    for (size_t i = 0; i < N; ++i) {
+        if (!(lhs[i] == rhs[i])) return false;
+    }
+    return true;
+}
+
+template<typename T, size_t N>
+bool operator!=(const array<T, N>& lhs, const array<T, N>& rhs) {
+    return !(lhs == rhs);
+}
+
+template<typename T, size_t N>
+bool operator<(const array<T, N>& lhs, const array<T, N>& rhs) {
+    for (size_t i = 0; i < N; ++i) {
+        if (lhs[i] < rhs[i]) return true;
+        if (rhs[i] < lhs[i]) return false;
+    }
+    return false;
+}
+
+template<typename T, size_t N>
+bool operator<=(const array<T, N>& lhs, const array<T, N>& rhs) {
+    return !(rhs < lhs);
+}
+
+template<typename T, size_t N>
+bool operator>(const array<T, N>& lhs, const array<T, N>& rhs) {
+    return rhs < lhs;
+}
+
+template<typename T, size_t N>
+bool operator>=(const array<T, N>& lhs, const array<T, N>& rhs) {
+    return !(lhs < rhs);
+}
+
+// std::get for array
+template<size_t I, typename T, size_t N>
+constexpr T& get(array<T, N>& arr) noexcept {
+    static_assert(I < N, "array index out of bounds");
+    return arr[I];
+}
+
+template<size_t I, typename T, size_t N>
+constexpr const T& get(const array<T, N>& arr) noexcept {
+    static_assert(I < N, "array index out of bounds");
+    return arr[I];
+}
+
+template<size_t I, typename T, size_t N>
+constexpr T&& get(array<T, N>&& arr) noexcept {
+    static_assert(I < N, "array index out of bounds");
+    return static_cast<T&&>(arr[I]);
+}
+
+// swap
+template<typename T, size_t N>
+void swap(array<T, N>& lhs, array<T, N>& rhs) noexcept {
+    lhs.swap(rhs);
+}
+
+// to_array (C++20)
+template<typename T, size_t N>
+constexpr array<T, N> to_array(T (&a)[N]) {
+    array<T, N> result{};
+    for (size_t i = 0; i < N; ++i) {
+        result[i] = a[i];
+    }
+    return result;
+}
+
+} // namespace std
+
+#endif // _FRAGILE_ARRAY_

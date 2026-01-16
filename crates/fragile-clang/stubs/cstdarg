@@ -1,0 +1,20 @@
+// Minimal cstdarg stub for fragile parsing
+#ifndef _FRAGILE_CSTDARG_
+#define _FRAGILE_CSTDARG_
+
+// va_list is a compiler builtin type
+// Clang provides __builtin_va_list
+
+namespace std {
+    using va_list = __builtin_va_list;
+}
+
+using std::va_list;
+
+// Variadic argument macros (use compiler builtins)
+#define va_start(ap, param) __builtin_va_start(ap, param)
+#define va_end(ap) __builtin_va_end(ap)
+#define va_arg(ap, type) __builtin_va_arg(ap, type)
+#define va_copy(dest, src) __builtin_va_copy(dest, src)
+
+#endif // _FRAGILE_CSTDARG_
