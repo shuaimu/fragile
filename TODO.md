@@ -314,6 +314,11 @@ See [PLAN_CPP20_MAKO.md](PLAN_CPP20_MAKO.md) for detailed plan.
     - [-] `vendor/mako/src/mako/thread.cc` - Needs eRPC rpc.h header (external dependency)
     - [-] `vendor/mako/src/mako/persist_test.cc` - References undefined `one_way_post` template (bug in mako - template never defined)
     - [-] `vendor/mako/src/mako/masstree/mtd.cc` - Needs WORDS_BIGENDIAN config (fixed), but has sys/epoll.h conflicts with system headers
+    - [x] `vendor/mako/src/memdb/utils.cc` - **PARSED**: 5233 functions
+    - [x] `vendor/mako/src/memdb/value.cc` - **PARSED**: 5222 functions
+    - [x] `vendor/mako/src/memdb/schema.cc` - **PARSED**: 5220 functions
+    - [-] Other memdb files (txn*.cc, row.cc, table.cc) - Need STL stub expansion: std::list::sort/remove, std::multimap::equal_range/lower_bound/upper_bound/rbegin/rend, std::multiset::equal_range, std::unordered_multimap::equal_range
+    - [x] F.3.30 Added std::list::sort, remove, remove_if, unique, merge, splice, reverse methods
     - [ ] Remaining files need: eRPC library stubs, more STL stubs
   - [ ] Link and run tests
 
@@ -380,7 +385,7 @@ Migration: After C++20 support is complete, deprecate these.
 ## 5. Testing & Milestones
 
 ### 5.1 Unit Tests
-- [x] fragile-clang: 344 tests passing (27 unit + 317 integration) - includes 10 coroutine + 7 exception + 6 RTTI + 8 promise type + 8 awaitable + 8 generator + 3 noexcept + 1 member access + 1 stack unwinding + 123 mako file tests [26:01:16, 21:30]
+- [x] fragile-clang: 347 tests passing (27 unit + 320 integration) - includes 10 coroutine + 7 exception + 6 RTTI + 8 promise type + 8 awaitable + 8 generator + 3 noexcept + 1 member access + 1 stack unwinding + 126 mako file tests [26:01:16, 22:30]
 - [x] fragile-rustc-driver: 6 tests passing
 - [x] fragile-runtime: Compiles
 
@@ -401,7 +406,7 @@ Migration: After C++20 support is complete, deprecate these.
 Current status:
 - **rrr module**: 20/20 files parsing (100%) - all base, misc, reactor, rpc files parsing
 - **mako module**: 110/338 files parsing (~33%) - includes memdb, deptran, masstree, masstree-beta (all 28 files), all lib files
-- **Total tests**: 344 passing (fragile-clang integration tests)
+- **Total tests**: 347 passing (fragile-clang integration tests)
 
 Next steps:
 1. **rustc Integration (2.3)** - Requires user setup: `rustup component add rustc-dev --toolchain nightly`

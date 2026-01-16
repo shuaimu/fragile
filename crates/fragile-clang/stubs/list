@@ -276,6 +276,121 @@ public:
         return result;
     }
 
+    // List-specific operations
+    void sort() {
+        // Simple bubble sort for stub
+        if (size_ < 2) return;
+        bool swapped;
+        do {
+            swapped = false;
+            for (node* n = head_; n && n->next; n = n->next) {
+                if (n->next->data < n->data) {
+                    T tmp = static_cast<T&&>(n->data);
+                    n->data = static_cast<T&&>(n->next->data);
+                    n->next->data = static_cast<T&&>(tmp);
+                    swapped = true;
+                }
+            }
+        } while (swapped);
+    }
+
+    template<typename Compare>
+    void sort(Compare comp) {
+        // Simple bubble sort for stub
+        if (size_ < 2) return;
+        bool swapped;
+        do {
+            swapped = false;
+            for (node* n = head_; n && n->next; n = n->next) {
+                if (comp(n->next->data, n->data)) {
+                    T tmp = static_cast<T&&>(n->data);
+                    n->data = static_cast<T&&>(n->next->data);
+                    n->next->data = static_cast<T&&>(tmp);
+                    swapped = true;
+                }
+            }
+        } while (swapped);
+    }
+
+    void remove(const T& value) {
+        node* n = head_;
+        while (n) {
+            node* next = n->next;
+            if (n->data == value) {
+                if (n->prev) n->prev->next = n->next;
+                else head_ = n->next;
+                if (n->next) n->next->prev = n->prev;
+                else tail_ = n->prev;
+                delete n;
+                --size_;
+            }
+            n = next;
+        }
+    }
+
+    template<typename Predicate>
+    void remove_if(Predicate pred) {
+        node* n = head_;
+        while (n) {
+            node* next = n->next;
+            if (pred(n->data)) {
+                if (n->prev) n->prev->next = n->next;
+                else head_ = n->next;
+                if (n->next) n->next->prev = n->prev;
+                else tail_ = n->prev;
+                delete n;
+                --size_;
+            }
+            n = next;
+        }
+    }
+
+    void unique() {
+        if (size_ < 2) return;
+        for (node* n = head_; n && n->next; ) {
+            if (n->data == n->next->data) {
+                node* to_delete = n->next;
+                n->next = to_delete->next;
+                if (to_delete->next) to_delete->next->prev = n;
+                else tail_ = n;
+                delete to_delete;
+                --size_;
+            } else {
+                n = n->next;
+            }
+        }
+    }
+
+    void merge(list& other) {
+        // Simple merge for sorted lists
+        while (!other.empty()) {
+            push_back(static_cast<T&&>(other.front()));
+            other.pop_front();
+        }
+        sort();
+    }
+
+    void splice(const_iterator pos, list& other) {
+        while (!other.empty()) {
+            insert(pos, static_cast<T&&>(other.front()));
+            other.pop_front();
+        }
+    }
+
+    void reverse() {
+        if (size_ < 2) return;
+        node* current = head_;
+        while (current) {
+            node* tmp = current->prev;
+            current->prev = current->next;
+            current->next = tmp;
+            current = current->prev;
+        }
+        node* tmp = head_;
+        head_ = tail_;
+        tail_ = tmp;
+    }
+
 private:
     node* head_;
     node* tail_;
