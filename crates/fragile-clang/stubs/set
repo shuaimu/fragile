@@ -46,6 +46,18 @@ public:
             return *this;
         }
         iterator operator++(int) { iterator tmp = *this; ++(*this); return tmp; }
+        iterator& operator--() {
+            if (node_->left) {
+                node_ = node_->left;
+                while (node_->right) node_ = node_->right;
+            } else {
+                while (node_->parent && node_ == node_->parent->left)
+                    node_ = node_->parent;
+                node_ = node_->parent;
+            }
+            return *this;
+        }
+        iterator operator--(int) { iterator tmp = *this; --(*this); return tmp; }
         bool operator==(const iterator& other) const { return node_ == other.node_; }
         bool operator!=(const iterator& other) const { return node_ != other.node_; }
     private:
@@ -57,25 +69,31 @@ public:
 
     class reverse_iterator {
     public:
-        reverse_iterator(node* n = nullptr) : node_(n) {}
-        const_reference operator*() const { return node_->data; }
-        const value_type* operator->() const { return &node_->data; }
-        reverse_iterator& operator++() {
-            if (node_->left) {
-                node_ = node_->left;
-                while (node_->right) node_ = node_->right;
-            } else {
-                while (node_->parent && node_ == node_->parent->left)
-                    node_ = node_->parent;
-                node_ = node_->parent;
-            }
-            return *this;
+        using iterator_type = iterator;
+
+        reverse_iterator() : current_() {}
+        explicit reverse_iterator(iterator it) : current_(it) {}
+        reverse_iterator(node* n) : current_(n) {}  // Legacy constructor
+
+        const_reference operator*() const {
+            iterator tmp = current_;
+            --tmp;
+            return *tmp;
         }
-        reverse_iterator operator++(int) { reverse_iterator tmp = *this; ++(*this); return tmp; }
-        bool operator==(const reverse_iterator& other) const { return node_ == other.node_; }
-        bool operator!=(const reverse_iterator& other) const { return node_ != other.node_; }
+        const value_type* operator->() const {
+            iterator tmp = current_;
+            --tmp;
+            return &(*tmp);
+        }
+        reverse_iterator& operator++() { --current_; return *this; }
+        reverse_iterator operator++(int) { reverse_iterator tmp = *this; --current_; return tmp; }
+        reverse_iterator& operator--() { ++current_; return *this; }
+        reverse_iterator operator--(int) { reverse_iterator tmp = *this; ++current_; return tmp; }
+        bool operator==(const reverse_iterator& other) const { return current_ == other.current_; }
+        bool operator!=(const reverse_iterator& other) const { return current_ != other.current_; }
+        iterator base() const { return current_; }
     private:
-        node* node_;
+        iterator current_;
         friend class set;
     };
 
@@ -258,6 +276,71 @@ public:
 
     size_type count(const Key& key) const {
         return find(key) != end() ? 1 : 0;
+    }
+
+    // Bound methods
+    iterator lower_bound(const Key& key) {
+        node* current = root_;
+        node* result = nullptr;
+        while (current) {
+            if (!(current->data < key)) {  // current >= key
+                result = current;
+                current = current->left;
+            } else {
+                current = current->right;
+            }
+        }
+        return iterator(result);
+    }
+
+    const_iterator lower_bound(const Key& key) const {
+        const node* current = root_;
+        const node* result = nullptr;
+        while (current) {
+            if (!(current->data < key)) {
+                result = current;
+                current = current->left;
+            } else {
+                current = current->right;
+            }
+        }
+        return const_iterator(result);
+    }
+
+    iterator upper_bound(const Key& key) {
+        node* current = root_;
+        node* result = nullptr;
+        while (current) {
+            if (key < current->data) {  // current > key
+                result = current;
+                current = current->left;
+            } else {
+                current = current->right;
+            }
+        }
+        return iterator(result);
+    }
+
+    const_iterator upper_bound(const Key& key) const {
+        const node* current = root_;
+        const node* result = nullptr;
+        while (current) {
+            if (key < current->data) {
+                result = current;
+                current = current->left;
+            } else {
+                current = current->right;
+            }
+        }
+        return const_iterator(result);
+    }
+
+    pair<iterator, iterator> equal_range(const Key& key) {
+        return make_pair(lower_bound(key), upper_bound(key));
+    }
+
+    pair<const_iterator, const_iterator> equal_range(const Key& key) const {
+        return make_pair(lower_bound(key), upper_bound(key));
     }
 
 private:

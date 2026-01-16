@@ -316,12 +316,310 @@ public:
     size_type bucket_count() const noexcept { return BUCKET_COUNT; }
 };
 
-// unordered_multimap (minimal stub)
+// unordered_multimap - allows duplicate keys
 template<typename Key, typename T, typename Hash = hash<Key>,
          typename KeyEqual = equal_to<Key>, typename Allocator = void>
-class unordered_multimap : public unordered_map<Key, T, Hash, KeyEqual, Allocator> {
+class unordered_multimap {
 public:
-    using unordered_map<Key, T, Hash, KeyEqual, Allocator>::unordered_map;
+    using key_type = Key;
+    using mapped_type = T;
+    using value_type = pair<const Key, T>;
+    using size_type = size_t;
+    using difference_type = long;
+    using hasher = Hash;
+    using key_equal = KeyEqual;
+    using reference = value_type&;
+    using const_reference = const value_type&;
+
+private:
+    static constexpr size_type BUCKET_COUNT = 16;
+
+    struct node {
+        value_type data;
+        node* next;
+        node(const Key& k, const T& v) : data(k, v), next(nullptr) {}
+    };
+
+    node* buckets_[BUCKET_COUNT] = {};
+    size_type size_ = 0;
+    hasher hash_;
+    key_equal equal_;
+
+    size_type bucket_index(const Key& key) const {
+        return hash_(key) % BUCKET_COUNT;
+    }
+
+public:
+    class iterator {
+    public:
+        using iterator_category = forward_iterator_tag;
+        using value_type = pair<const Key, T>;
+        using difference_type = long;
+        using pointer = value_type*;
+        using reference = value_type&;
+
+        iterator() : map_(nullptr), bucket_(0), node_(nullptr) {}
+        iterator(unordered_multimap* m, size_type b, node* n) : map_(m), bucket_(b), node_(n) {}
+
+        reference operator*() { return node_->data; }
+        value_type* operator->() { return &node_->data; }
+
+        iterator& operator++() {
+            if (node_->next) {
+                node_ = node_->next;
+            } else {
+                ++bucket_;
+                while (bucket_ < BUCKET_COUNT && !map_->buckets_[bucket_]) {
+                    ++bucket_;
+                }
+                node_ = bucket_ < BUCKET_COUNT ? map_->buckets_[bucket_] : nullptr;
+            }
+            return *this;
+        }
+
+        iterator operator++(int) { iterator tmp = *this; ++(*this); return tmp; }
+        bool operator==(const iterator& other) const { return node_ == other.node_; }
+        bool operator!=(const iterator& other) const { return node_ != other.node_; }
+
+    private:
+        unordered_multimap* map_;
+        size_type bucket_;
+        node* node_;
+        friend class unordered_multimap;
+    };
+
+    class const_iterator {
+    public:
+        using iterator_category = forward_iterator_tag;
+        using value_type = pair<const Key, T>;
+        using difference_type = long;
+        using pointer = const value_type*;
+        using reference = const value_type&;
+
+        const_iterator() : map_(nullptr), bucket_(0), node_(nullptr) {}
+        const_iterator(const unordered_multimap* m, size_type b, const node* n) : map_(m), bucket_(b), node_(n) {}
+        const_iterator(const iterator& it) : map_(it.map_), bucket_(it.bucket_), node_(it.node_) {}
+
+        const_reference operator*() const { return node_->data; }
+        const value_type* operator->() const { return &node_->data; }
+
+        const_iterator& operator++() {
+            if (node_->next) {
+                node_ = node_->next;
+            } else {
+                ++bucket_;
+                while (bucket_ < BUCKET_COUNT && !map_->buckets_[bucket_]) {
+                    ++bucket_;
+                }
+                node_ = bucket_ < BUCKET_COUNT ? map_->buckets_[bucket_] : nullptr;
+            }
+            return *this;
+        }
+
+        const_iterator operator++(int) { const_iterator tmp = *this; ++(*this); return tmp; }
+        bool operator==(const const_iterator& other) const { return node_ == other.node_; }
+        bool operator!=(const const_iterator& other) const { return node_ != other.node_; }
+
+    private:
+        const unordered_multimap* map_;
+        size_type bucket_;
+        const node* node_;
+    };
+
+    // Constructors
+    unordered_multimap() = default;
+
+    unordered_multimap(const unordered_multimap& other) {
+        for (const auto& p : other) insert(p);
+    }
+
+    unordered_multimap(unordered_multimap&& other) noexcept : size_(other.size_) {
+        for (size_type i = 0; i < BUCKET_COUNT; ++i) {
+            buckets_[i] = other.buckets_[i];
+            other.buckets_[i] = nullptr;
+        }
+        other.size_ = 0;
+    }
+
+    ~unordered_multimap() { clear(); }
+
+    // Assignment
+    unordered_multimap& operator=(const unordered_multimap& other) {
+        if (this != &other) {
+            clear();
+            for (const auto& p : other) insert(p);
+        }
+        return *this;
+    }
+
+    // Iterators
+    iterator begin() noexcept {
+        for (size_type i = 0; i < BUCKET_COUNT; ++i) {
+            if (buckets_[i]) return iterator(this, i, buckets_[i]);
+        }
+        return end();
+    }
+
+    const_iterator begin() const noexcept {
+        for (size_type i = 0; i < BUCKET_COUNT; ++i) {
+            if (buckets_[i]) return const_iterator(this, i, buckets_[i]);
+        }
+        return end();
+    }
+
+    const_iterator cbegin() const noexcept { return begin(); }
+    iterator end() noexcept { return iterator(this, BUCKET_COUNT, nullptr); }
+    const_iterator end() const noexcept { return const_iterator(this, BUCKET_COUNT, nullptr); }
+    const_iterator cend() const noexcept { return end(); }
+
+    // Capacity
+    bool empty() const noexcept { return size_ == 0; }
+    size_type size() const noexcept { return size_; }
+
+    // Modifiers
+    void clear() noexcept {
+        for (size_type i = 0; i < BUCKET_COUNT; ++i) {
+            node* n = buckets_[i];
+            while (n) {
+                node* next = n->next;
+                delete n;
+                n = next;
+            }
+            buckets_[i] = nullptr;
+        }
+        size_ = 0;
+    }
+
+    // insert allows duplicates (unlike unordered_map)
+    iterator insert(const value_type& value) {
+        size_type idx = bucket_index(value.first);
+        node* new_node = new node(value.first, value.second);
+        new_node->next = buckets_[idx];
+        buckets_[idx] = new_node;
+        ++size_;
+        return iterator(this, idx, new_node);
+    }
+
+    template<typename... Args>
+    iterator emplace(Args&&... args) {
+        return insert(value_type(static_cast<Args&&>(args)...));
+    }
+
+    iterator erase(const_iterator pos) {
+        size_type idx = bucket_index(pos->first);
+        node* prev = nullptr;
+        node* n = buckets_[idx];
+        while (n && n != pos.node_) {
+            prev = n;
+            n = n->next;
+        }
+        if (n) {
+            if (prev) prev->next = n->next;
+            else buckets_[idx] = n->next;
+            delete n;
+            --size_;
+        }
+        return end();
+    }
+
+    size_type erase(const Key& key) {
+        size_type count = 0;
+        auto range = equal_range(key);
+        for (auto it = range.first; it != range.second; ) {
+            it = erase(it);
+            ++count;
+        }
+        return count;
+    }
+
+    // Lookup
+    iterator find(const Key& key) {
+        size_type idx = bucket_index(key);
+        node* n = buckets_[idx];
+        while (n) {
+            if (equal_(n->data.first, key)) {
+                return iterator(this, idx, n);
+            }
+            n = n->next;
+        }
+        return end();
+    }
+
+    const_iterator find(const Key& key) const {
+        size_type idx = bucket_index(key);
+        const node* n = buckets_[idx];
+        while (n) {
+            if (equal_(n->data.first, key)) {
+                return const_iterator(this, idx, n);
+            }
+            n = n->next;
+        }
+        return end();
+    }
+
+    size_type count(const Key& key) const {
+        size_type c = 0;
+        size_type idx = bucket_index(key);
+        const node* n = buckets_[idx];
+        while (n) {
+            if (equal_(n->data.first, key)) ++c;
+            n = n->next;
+        }
+        return c;
+    }
+
+    // equal_range - returns all elements with the given key
+    pair<iterator, iterator> equal_range(const Key& key) {
+        size_type idx = bucket_index(key);
+        node* first_match = nullptr;
+        node* last_match = nullptr;
+        node* n = buckets_[idx];
+
+        // Find all matching nodes (they're in the same bucket due to hash)
+        while (n) {
+            if (equal_(n->data.first, key)) {
+                if (!first_match) first_match = n;
+                last_match = n;
+            }
+            n = n->next;
+        }
+
+        if (!first_match) {
+            return make_pair(end(), end());
+        }
+
+        // Find the node after the last match
+        iterator last_it(this, idx, last_match);
+        ++last_it;
+        return make_pair(iterator(this, idx, first_match), last_it);
+    }
+
+    pair<const_iterator, const_iterator> equal_range(const Key& key) const {
+        size_type idx = bucket_index(key);
+        const node* first_match = nullptr;
+        const node* last_match = nullptr;
+        const node* n = buckets_[idx];
+
+        while (n) {
+            if (equal_(n->data.first, key)) {
+                if (!first_match) first_match = n;
+                last_match = n;
+            }
+            n = n->next;
+        }
+
+        if (!first_match) {
+            return make_pair(cend(), cend());
+        }
+
+        const_iterator last_it(this, idx, last_match);
+        ++last_it;
+        return make_pair(const_iterator(this, idx, first_match), last_it);
+    }
+
+    // Hash policy
+    float load_factor() const { return static_cast<float>(size_) / BUCKET_COUNT; }
+    size_type bucket_count() const noexcept { return BUCKET_COUNT; }
 };
 
 } // namespace std

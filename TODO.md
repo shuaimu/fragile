@@ -212,7 +212,7 @@ See [PLAN_CPP20_MAKO.md](PLAN_CPP20_MAKO.md) for detailed plan.
     - [x] `vendor/mako/src/rrr/reactor/fiber_impl.cc` - **PARSED**: 4640 functions
     - [x] `vendor/mako/src/rrr/reactor/reactor.cc` - **PARSED**: 4640 functions
     - [-] `vendor/mako/src/rrr/reactor/quorum_event.cc` - Cross-namespace inheritance: `janus::QuorumEvent` inherits from `rrr::Event` via `using rrr::Event;`. Clang semantic error on `test()` call [26:01:16, 12:00]. See docs/dev/plan_fix_stub_headers_quorum_event.md
-  - [-] All mako module - **101/338 files parsing (~30%)** [26:01:16, 13:30]
+  - [-] All mako module - **117/338 files parsing (~35%)** [26:01:16] (includes all 12 memdb files)
     - [x] `vendor/mako/src/mako/vec/coroutine.cpp` - **PARSED**: 40 functions
     - [x] `vendor/mako/src/mako/vec/occ.cpp` - **PARSED**: 41 functions
     - [x] `vendor/mako/src/mako/lib/memory.cc` - **PARSED**: 17 functions
@@ -317,10 +317,20 @@ See [PLAN_CPP20_MAKO.md](PLAN_CPP20_MAKO.md) for detailed plan.
     - [x] `vendor/mako/src/memdb/utils.cc` - **PARSED**: 5233 functions
     - [x] `vendor/mako/src/memdb/value.cc` - **PARSED**: 5222 functions
     - [x] `vendor/mako/src/memdb/schema.cc` - **PARSED**: 5220 functions
-    - [-] Other memdb files (txn*.cc, row.cc, table.cc) - Need STL stub expansion: std::list::sort/remove, std::multimap::equal_range/lower_bound/upper_bound/rbegin/rend, std::multiset::equal_range, std::unordered_multimap::equal_range
+    - [x] `vendor/mako/src/memdb/txn.cc` - **PARSED**: 4678 functions [26:01:16]
+    - [x] `vendor/mako/src/memdb/txn_2pl.cc` - **PARSED**: 4678 functions [26:01:16]
+    - [x] `vendor/mako/src/memdb/txn_nested.cc` - **PARSED**: 4678 functions [26:01:16]
+    - [x] `vendor/mako/src/memdb/txn_occ.cc` - **PARSED**: 4678 functions [26:01:16]
+    - [x] `vendor/mako/src/memdb/txn_unsafe.cc` - **PARSED**: 4678 functions [26:01:16]
+    - [x] `vendor/mako/src/memdb/row.cc` - **PARSED**: 4677 functions [26:01:16]
+    - [x] `vendor/mako/src/memdb/table.cc` - **PARSED**: 4677 functions [26:01:16]
     - [x] F.3.30 Added std::list::sort, remove, remove_if, unique, merge, splice, reverse methods
     - [x] F.3.31 Expanded std::multimap with full implementation: equal_range, lower_bound, upper_bound, reverse iterators
-    - [ ] Remaining files need: std::multiset stubs, std::unordered_multimap stubs, eRPC library stubs
+    - [x] F.3.32 Added std::unordered_multimap::equal_range, full implementation with iterator support
+    - [x] F.3.33 Added multimap/set reverse_iterator::base(), default constructor, operator->
+    - [x] F.3.34 Added std::set/multiset lower_bound, upper_bound, equal_range, bidirectional iterator
+    - [x] F.3.35 Added multimap range-based erase(first, last) method
+    - [ ] Remaining files need: eRPC library stubs
   - [ ] Link and run tests
 
 ---
@@ -386,7 +396,7 @@ Migration: After C++20 support is complete, deprecate these.
 ## 5. Testing & Milestones
 
 ### 5.1 Unit Tests
-- [x] fragile-clang: 347 tests passing (27 unit + 320 integration) - includes 10 coroutine + 7 exception + 6 RTTI + 8 promise type + 8 awaitable + 8 generator + 3 noexcept + 1 member access + 1 stack unwinding + 126 mako file tests [26:01:16, 22:30]
+- [x] fragile-clang: 354 tests passing (27 unit + 327 integration) - includes 10 coroutine + 7 exception + 6 RTTI + 8 promise type + 8 awaitable + 8 generator + 3 noexcept + 1 member access + 1 stack unwinding + 133 mako file tests [26:01:16]
 - [x] fragile-rustc-driver: 6 tests passing
 - [x] fragile-runtime: Compiles
 
@@ -406,8 +416,8 @@ Migration: After C++20 support is complete, deprecate these.
 
 Current status:
 - **rrr module**: 20/20 files parsing (100%) - all base, misc, reactor, rpc files parsing
-- **mako module**: 110/338 files parsing (~33%) - includes memdb, deptran, masstree, masstree-beta (all 28 files), all lib files
-- **Total tests**: 347 passing (fragile-clang integration tests)
+- **mako module**: 117/338 files parsing (~35%) - includes all 12 memdb files, deptran, masstree, masstree-beta (all 28 files), all lib files
+- **Total tests**: 354 passing (fragile-clang integration tests)
 
 Next steps:
 1. **rustc Integration (2.3)** - Requires user setup: `rustup component add rustc-dev --toolchain nightly`

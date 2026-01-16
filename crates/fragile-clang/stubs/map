@@ -360,26 +360,43 @@ public:
 
     class reverse_iterator {
     public:
-        reverse_iterator(iterator it) : current_(it) {}
+        using iterator_type = iterator;
+        using value_type = pair<const Key, T>;
+        using pointer = value_type*;
+        using reference = value_type&;
+
+        reverse_iterator() : current_() {}
+        explicit reverse_iterator(iterator it) : current_(it) {}
         reference operator*() { iterator tmp = current_; --tmp; return *tmp; }
+        pointer operator->() { iterator tmp = current_; --tmp; return &(*tmp); }
         reverse_iterator& operator++() { --current_; return *this; }
         reverse_iterator operator++(int) { reverse_iterator tmp = *this; --current_; return tmp; }
         reverse_iterator& operator--() { ++current_; return *this; }
         bool operator==(const reverse_iterator& other) const { return current_ == other.current_; }
         bool operator!=(const reverse_iterator& other) const { return current_ != other.current_; }
+        iterator base() const { return current_; }
     private:
         iterator current_;
     };
 
     class const_reverse_iterator {
     public:
-        const_reverse_iterator(const_iterator it) : current_(it) {}
+        using iterator_type = const_iterator;
+        using value_type = pair<const Key, T>;
+        using pointer = const value_type*;
+        using reference = const value_type&;
+
+        const_reverse_iterator() : current_() {}
+        explicit const_reverse_iterator(const_iterator it) : current_(it) {}
+        const_reverse_iterator(const reverse_iterator& rit) : current_(rit.base()) {}
         const_reference operator*() const { const_iterator tmp = current_; --tmp; return *tmp; }
+        pointer operator->() const { const_iterator tmp = current_; --tmp; return &(*tmp); }
         const_reverse_iterator& operator++() { --current_; return *this; }
         const_reverse_iterator operator++(int) { const_reverse_iterator tmp = *this; --current_; return tmp; }
         const_reverse_iterator& operator--() { ++current_; return *this; }
         bool operator==(const const_reverse_iterator& other) const { return current_ == other.current_; }
         bool operator!=(const const_reverse_iterator& other) const { return current_ != other.current_; }
+        const_iterator base() const { return current_; }
     private:
         const_iterator current_;
     };
@@ -463,6 +480,14 @@ public:
         // Simplified: just decrement size and return next
         --size_;
         return iterator(successor(const_cast<node*>(pos.node_)), this);
+    }
+
+    // Range-based erase
+    iterator erase(const_iterator first, const_iterator last) {
+        while (first != last) {
+            first = erase(first);
+        }
+        return iterator(const_cast<node*>(last.node_), this);
     }
 
     // Lookup
