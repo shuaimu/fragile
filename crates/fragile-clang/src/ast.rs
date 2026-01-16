@@ -71,6 +71,25 @@ pub enum ClangNodeKind {
         params: Vec<(String, CppType)>,
         is_definition: bool,
     },
+    /// Function template declaration
+    FunctionTemplateDecl {
+        name: String,
+        /// Template type parameters (e.g., ["T", "U"] for template<typename T, typename U>)
+        template_params: Vec<String>,
+        /// Return type (may be dependent on template params)
+        return_type: CppType,
+        /// Parameters (may be dependent on template params)
+        params: Vec<(String, CppType)>,
+        is_definition: bool,
+    },
+    /// Template type parameter (e.g., typename T)
+    TemplateTypeParmDecl {
+        name: String,
+        /// Depth in nested template declarations
+        depth: u32,
+        /// Index within the template parameter list
+        index: u32,
+    },
     /// Parameter declaration
     ParmVarDecl {
         name: String,

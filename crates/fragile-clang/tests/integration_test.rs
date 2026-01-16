@@ -1520,3 +1520,76 @@ fn test_rvalue_reference() {
         panic!("Expected Reference type for int&&");
     }
 }
+
+/// Test basic function template parsing.
+#[test]
+fn test_function_template_basic() {
+    let parser = ClangParser::new().expect("Failed to create parser");
+
+    let source = r#"
+        template<typename T>
+        T identity(T x) {
+            return x;
+        }
+    "#;
+
+    let ast = parser.parse_string(source, "template_basic.cpp").expect("Failed to parse");
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    assert_eq!(module.function_templates.len(), 1);
+
+    let tmpl = &module.function_templates[0];
+    assert_eq!(tmpl.name, "identity");
+    assert_eq!(tmpl.template_params.len(), 1);
+    assert_eq!(tmpl.template_params[0], "T");
+    assert!(tmpl.is_definition);
+}
+
+/// Test function template with multiple type parameters.
+#[test]
+fn test_function_template_multiple_params() {
+    let parser = ClangParser::new().expect("Failed to create parser");
+
+    let source = r#"
+        template<typename T, typename U>
+        T convert(U value) {
+            return static_cast<T>(value);
+        }
+    "#;
+
+    let ast = parser.parse_string(source, "template_multi.cpp").expect("Failed to parse");
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    assert_eq!(module.function_templates.len(), 1);
+
+    let tmpl = &module.function_templates[0];
+    assert_eq!(tmpl.name, "convert");
+    assert_eq!(tmpl.template_params.len(), 2);
+    assert_eq!(tmpl.template_params[0], "T");
+    assert_eq!(tmpl.template_params[1], "U");
+}
+
+/// Test function template declaration (without definition).
+#[test]
+fn test_function_template_declaration() {
+    let parser = ClangParser::new().expect("Failed to create parser");
+
+    let source = r#"
+        template<typename T>
+        T compute(T a, T b);
+    "#;
+
+    let ast = parser.parse_string(source, "template_decl.cpp").expect("Failed to parse");
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    assert_eq!(module.function_templates.len(), 1);
+
+    let tmpl = &module.function_templates[0];
+    assert_eq!(tmpl.name, "compute");
+    assert_eq!(tmpl.template_params.len(), 1);
+    assert_eq!(tmpl.template_params[0], "T");
+    assert!(!tmpl.is_definition);
+}

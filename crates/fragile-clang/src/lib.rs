@@ -43,6 +43,8 @@ pub struct CppModule {
     pub structs: Vec<CppStruct>,
     /// Extern declarations (no body)
     pub externs: Vec<CppExtern>,
+    /// Function template declarations
+    pub function_templates: Vec<CppFunctionTemplate>,
     /// Using namespace directives (for name resolution)
     pub using_directives: Vec<UsingDirective>,
     /// Using declarations (specific name imports)
@@ -73,6 +75,7 @@ impl CppModule {
             functions: Vec::new(),
             structs: Vec::new(),
             externs: Vec::new(),
+            function_templates: Vec::new(),
             using_directives: Vec::new(),
             using_declarations: Vec::new(),
         }
@@ -100,6 +103,23 @@ pub struct CppFunction {
     pub return_type: CppType,
     /// MIR body (serialized for transfer to rustc driver)
     pub mir_body: MirBody,
+}
+
+/// A C++ function template declaration.
+#[derive(Debug)]
+pub struct CppFunctionTemplate {
+    /// Template name (e.g., "identity")
+    pub name: String,
+    /// Namespace path
+    pub namespace: Vec<String>,
+    /// Template type parameters (e.g., ["T", "U"])
+    pub template_params: Vec<String>,
+    /// Return type (may reference template params)
+    pub return_type: CppType,
+    /// Parameters (may reference template params)
+    pub params: Vec<(String, CppType)>,
+    /// Whether this template has a definition
+    pub is_definition: bool,
 }
 
 /// A C++ struct/class definition.

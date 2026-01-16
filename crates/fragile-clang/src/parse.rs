@@ -240,6 +240,46 @@ impl ClangParser {
                     }
                 }
 
+                // CXCursor_FunctionTemplate = 30
+                30 => {
+                    let name = cursor_spelling(cursor);
+                    let template_params = self.get_template_type_params(cursor);
+
+                    // Get the templated function's type info from children
+                    let cursor_type = clang_sys::clang_getCursorType(cursor);
+                    let return_type = self.convert_type(clang_sys::clang_getResultType(cursor_type));
+
+                    let num_args = clang_sys::clang_Cursor_getNumArguments(cursor);
+                    let mut params = Vec::new();
+                    for i in 0..num_args {
+                        let arg = clang_sys::clang_Cursor_getArgument(cursor, i as u32);
+                        let arg_name = cursor_spelling(arg);
+                        let arg_type = clang_sys::clang_getCursorType(arg);
+                        params.push((arg_name, self.convert_type(arg_type)));
+                    }
+
+                    let is_definition = clang_sys::clang_isCursorDefinition(cursor) != 0;
+
+                    ClangNodeKind::FunctionTemplateDecl {
+                        name,
+                        template_params,
+                        return_type,
+                        params,
+                        is_definition,
+                    }
+                }
+
+                // CXCursor_TemplateTypeParameter = 27
+                27 => {
+                    let name = cursor_spelling(cursor);
+                    // TODO: Extract proper depth and index from cursor
+                    ClangNodeKind::TemplateTypeParmDecl {
+                        name,
+                        depth: 0,
+                        index: 0,
+                    }
+                }
+
                 clang_sys::CXCursor_ParmDecl => {
                     let name = cursor_spelling(cursor);
                     let ty = self.convert_type(clang_sys::clang_getCursorType(cursor));
@@ -789,6 +829,40 @@ impl ClangParser {
             clang_sys::clang_visitChildren(cursor, attr_visitor, info_ptr as clang_sys::CXClientData);
 
             (info.is_override, info.is_final)
+        }
+    }
+
+    /// Get template type parameters from a function/class template cursor.
+    /// Returns the names of the template type parameters (e.g., ["T", "U"]).
+    fn get_template_type_params(&self, cursor: clang_sys::CXCursor) -> Vec<String> {
+        unsafe {
+            let mut params: Vec<String> = Vec::new();
+            let params_ptr: *mut Vec<String> = &mut params;
+
+            extern "C" fn param_visitor(
+                child: clang_sys::CXCursor,
+                _parent: clang_sys::CXCursor,
+                data: clang_sys::CXClientData,
+            ) -> clang_sys::CXChildVisitResult {
+                unsafe {
+                    let params = &mut *(data as *mut Vec<String>);
+                    let kind = clang_sys::clang_getCursorKind(child);
+
+                    // CXCursor_TemplateTypeParameter = 27
+                    if kind == 27 {
+                        let name = cursor_spelling(child);
+                        if !name.is_empty() {
+                            params.push(name);
+                        }
+                    }
+
+                    clang_sys::CXChildVisit_Continue
+                }
+            }
+
+            clang_sys::clang_visitChildren(cursor, param_visitor, params_ptr as clang_sys::CXClientData);
+
+            params
         }
     }
 

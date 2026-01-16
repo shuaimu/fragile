@@ -4,9 +4,9 @@ use crate::ast::{BinaryOp, ClangAst, ClangNode, ClangNodeKind, UnaryOp};
 use crate::types::CppType;
 use crate::{
     CppBaseClass, CppConstructor, CppDestructor, CppExtern, CppField, CppFriend, CppFunction,
-    CppMethod, CppModule, CppStruct, MemberInitializer, MirBasicBlock, MirBinOp, MirBody,
-    MirConstant, MirLocal, MirOperand, MirPlace, MirRvalue, MirStatement, MirTerminator,
-    MirUnaryOp, UsingDeclaration, UsingDirective,
+    CppFunctionTemplate, CppMethod, CppModule, CppStruct, MemberInitializer, MirBasicBlock,
+    MirBinOp, MirBody, MirConstant, MirLocal, MirOperand, MirPlace, MirRvalue, MirStatement,
+    MirTerminator, MirUnaryOp, UsingDeclaration, UsingDirective,
 };
 use miette::Result;
 
@@ -154,6 +154,26 @@ impl MirConverter {
                         return_type: return_type.clone(),
                     });
                 }
+            }
+            ClangNodeKind::FunctionTemplateDecl {
+                name,
+                template_params,
+                return_type,
+                params,
+                is_definition,
+            } => {
+                module.function_templates.push(CppFunctionTemplate {
+                    name: name.clone(),
+                    namespace: namespace_context.to_vec(),
+                    template_params: template_params.clone(),
+                    return_type: return_type.clone(),
+                    params: params.clone(),
+                    is_definition: *is_definition,
+                });
+            }
+            ClangNodeKind::TemplateTypeParmDecl { .. } => {
+                // Template type parameters are handled as part of FunctionTemplateDecl
+                // No separate processing needed
             }
             ClangNodeKind::RecordDecl {
                 name,

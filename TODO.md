@@ -67,8 +67,8 @@ See [PLAN_CPP20_MAKO.md](PLAN_CPP20_MAKO.md) for detailed plan.
   - [ ] std::forward
 
 ### 1.2 Phase B: Templates
-- [ ] **B.1 Function Templates**
-  - [ ] Basic templates
+- [-] **B.1 Function Templates**
+  - [x] Basic templates [26:01:16] ([docs/dev/plan_function_templates.md](docs/dev/plan_function_templates.md))
   - [ ] Argument deduction
   - [ ] Specialization
   - [ ] Variadic templates
@@ -214,7 +214,7 @@ Migration: After C++20 support is complete, deprecate these.
 ## 5. Testing & Milestones
 
 ### 5.1 Unit Tests
-- [x] fragile-clang: 53 tests passing (7 unit + 46 integration)
+- [x] fragile-clang: 56 tests passing (7 unit + 49 integration)
 - [x] fragile-rustc-driver: 6 tests passing
 - [x] fragile-runtime: Compiles
 
