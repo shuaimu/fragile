@@ -524,7 +524,7 @@ Migration: After C++20 support is complete, deprecate these.
   - [x] M6.1: Extended mako_simple.cpp [26:01:17] - min_int, max_int, clamp_int, is_null, str_len
   - [x] M6.2: String utilities without STL [26:01:17] - str_cmp, str_ncmp, str_cpy, str_ncpy, str_chr, str_rchr
   - [x] M6.3: First real mako file (strop.cpp) [26:01:16, 17:20] ([docs/dev/plan_m6_3_first_real_mako_file.md](docs/dev/plan_m6_3_first_real_mako_file.md)) - strop_minimal.cpp with C library functions
-  - [ ] M6.4: Simple mako test executable
+  - [x] M6.4: Simple mako test executable [26:01:16, 17:30] ([docs/dev/plan_m6_4_simple_mako_test.md](docs/dev/plan_m6_4_simple_mako_test.md)) - strop_stl.cpp with C++ STL (format_decimal)
   - [ ] M6.5: Unit test harness
   - [ ] M6.6+: Full test suite
 
@@ -538,7 +538,7 @@ Current status:
 - **rrr module**: 20/20 files parsing (100%) - all base, misc, reactor, rpc files parsing
 - **mako module**: 338/338 files tested (100%) - includes all memdb files, deptran files, consensus executors, masstree, benchmarks
 - **Total tests**: 596 fragile-clang (27 unit + 569 integration), 20 fragile-rustc-driver
-- **Milestones**: M1-M5 ✅ complete, M6.1-M6.3 ✅ complete, M6 (full tests) in progress
+- **Milestones**: M1-M5 ✅ complete, M6.1-M6.4 ✅ complete, M6 (full tests) in progress
 - **Blocked files**: mongodb/server.cc (bsoncxx), persist_test.cc (undefined template), mtd.cc (epoll conflicts)
 
 Next steps:
@@ -551,4 +551,5 @@ Next steps:
 7. **M6.1 Extended mako_simple** - ✅ Completed [26:01:17] - min/max/clamp/is_null/str_len
 8. **M6.2 String utilities** - ✅ Completed [26:01:17] - str_cmp/ncmp/cpy/ncpy/chr/rchr
 9. **M6.3 First real mako file** - ✅ Completed [26:01:16, 17:20] - strop_minimal with C library functions
-10. **M6.4 Simple mako test executable** - Next: Create executable that links with real mako code
+10. **M6.4 Simple mako test** - ✅ Completed [26:01:16, 17:30] - strop_stl with STL (format_decimal)
+11. **M6.5 Unit test harness** - Next: Port mako's unittest framework
