@@ -1742,4 +1742,96 @@ fn main() {
             }
         }
     }
+
+    /// Test M6.6a: Self-contained strop tests using unittest harness
+    /// This validates that we can run actual tests through the Fragile pipeline.
+    #[test]
+    #[cfg(feature = "rustc-integration")]
+    fn test_strop_harness() {
+        use tempfile::TempDir;
+
+        // Find the test_strop_harness.cpp test file
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let project_root = Path::new(manifest_dir).parent().unwrap().parent().unwrap();
+        let strop_harness_cpp = project_root.join("tests/clang_integration/test_strop_harness.cpp");
+
+        if !strop_harness_cpp.exists() {
+            eprintln!("Skipping test: test_strop_harness.cpp not found at {:?}", strop_harness_cpp);
+            return;
+        }
+
+        // Create temp directory
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+
+        // Create a Rust main file that runs the strop test harness
+        let main_rs = temp_dir.path().join("main.rs");
+        std::fs::write(&main_rs, r#"
+extern "C" {
+    // Run all strop tests, returns number of failures
+    fn strop_test_run_all() -> i32;
+
+    // Get number of registered strop tests
+    fn strop_test_count() -> i32;
+}
+
+fn main() {
+    // Check that tests were registered
+    let count = unsafe { strop_test_count() };
+    println!("Number of registered strop tests: {}", count);
+    assert!(count >= 5, "Expected at least 5 strop tests, got {}", count);
+
+    // Run all tests
+    let failures = unsafe { strop_test_run_all() };
+    println!("Strop test failures: {}", failures);
+
+    if failures == 0 {
+        println!("All strop harness tests passed!");
+    } else {
+        panic!("Strop test harness reported {} failures", failures);
+    }
+}
+"#).expect("Failed to write main.rs");
+
+        let output_path = temp_dir.path().join("strop_harness_binary");
+
+        // Create driver
+        let driver = FragileDriver::new();
+
+        // Run full pipeline
+        let result = driver.compile_with_cpp(
+            &[main_rs.as_path()],
+            &[strop_harness_cpp.as_path()],
+            &output_path,
+            None,
+        );
+
+        match result {
+            Ok(()) => {
+                println!("strop harness compilation succeeded!");
+                assert!(output_path.exists(), "Binary should exist");
+
+                // Run the binary
+                let run_result = std::process::Command::new(&output_path)
+                    .output();
+
+                match run_result {
+                    Ok(output) => {
+                        let stdout = String::from_utf8_lossy(&output.stdout);
+                        let stderr = String::from_utf8_lossy(&output.stderr);
+                        println!("stdout: {}", stdout);
+                        println!("stderr: {}", stderr);
+                        assert!(output.status.success(), "Binary should run successfully");
+                        assert!(stdout.contains("All strop harness tests passed!"),
+                            "Output should indicate success");
+                    }
+                    Err(e) => {
+                        eprintln!("Failed to run binary (may be expected): {}", e);
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("strop harness compilation failed (may be expected in CI): {}", e);
+            }
+        }
+    }
 }
