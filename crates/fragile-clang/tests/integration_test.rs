@@ -4644,3 +4644,111 @@ fn test_std_condition_variable() {
     let signal_fn = module.functions.iter().find(|f| f.display_name == "signal");
     assert!(signal_fn.is_some(), "Expected to find signal function");
 }
+
+// ========== Other Containers Tests (C.1.3) ==========
+
+/// Test parsing code that uses std::optional.
+#[test]
+fn test_std_optional_basic() {
+    let parser = ClangParser::with_system_includes().unwrap();
+    let code = r#"
+        #include <optional>
+
+        std::optional<int> find_value(bool found) {
+            if (found) {
+                return 42;
+            }
+            return std::nullopt;
+        }
+
+        int use_optional() {
+            auto opt = find_value(true);
+            if (opt.has_value()) {
+                return opt.value();
+            }
+            return 0;
+        }
+    "#;
+
+    let ast = parser.parse_string(code, "test.cpp").unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).unwrap();
+
+    let find_fn = module.functions.iter().find(|f| f.display_name == "find_value");
+    assert!(find_fn.is_some(), "Expected to find find_value function");
+
+    let use_fn = module.functions.iter().find(|f| f.display_name == "use_optional");
+    assert!(use_fn.is_some(), "Expected to find use_optional function");
+}
+
+/// Test std::variant.
+#[test]
+fn test_std_variant_basic() {
+    let parser = ClangParser::with_system_includes().unwrap();
+    let code = r#"
+        #include <variant>
+        #include <string>
+
+        int use_variant() {
+            std::variant<int, double, std::string> v = 42;
+            if (std::holds_alternative<int>(v)) {
+                return std::get<int>(v);
+            }
+            return 0;
+        }
+    "#;
+
+    let ast = parser.parse_string(code, "test.cpp").unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).unwrap();
+
+    let use_fn = module.functions.iter().find(|f| f.display_name == "use_variant");
+    assert!(use_fn.is_some(), "Expected to find use_variant function");
+}
+
+/// Test std::map.
+#[test]
+fn test_std_map_basic() {
+    let parser = ClangParser::with_system_includes().unwrap();
+    let code = r#"
+        #include <map>
+        #include <string>
+
+        void use_map() {
+            std::map<std::string, int> m;
+            m["one"] = 1;
+            m["two"] = 2;
+            int val = m["one"];
+        }
+    "#;
+
+    let ast = parser.parse_string(code, "test.cpp").unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).unwrap();
+
+    let use_fn = module.functions.iter().find(|f| f.display_name == "use_map");
+    assert!(use_fn.is_some(), "Expected to find use_map function");
+}
+
+/// Test std::unordered_map.
+#[test]
+fn test_std_unordered_map_basic() {
+    let parser = ClangParser::with_system_includes().unwrap();
+    let code = r#"
+        #include <unordered_map>
+        #include <string>
+
+        int use_unordered_map() {
+            std::unordered_map<std::string, int> m;
+            m["key"] = 42;
+            return m["key"];
+        }
+    "#;
+
+    let ast = parser.parse_string(code, "test.cpp").unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).unwrap();
+
+    let use_fn = module.functions.iter().find(|f| f.display_name == "use_unordered_map");
+    assert!(use_fn.is_some(), "Expected to find use_unordered_map function");
+}
