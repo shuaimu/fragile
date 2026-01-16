@@ -583,6 +583,8 @@ impl MirConverter {
                     is_static,
                     is_virtual,
                     is_pure_virtual,
+                    is_override,
+                    is_final,
                     access,
                 } => {
                     let mir_body = if *is_definition {
@@ -597,6 +599,8 @@ impl MirConverter {
                         is_static: *is_static,
                         is_virtual: *is_virtual,
                         is_pure_virtual: *is_pure_virtual,
+                        is_override: *is_override,
+                        is_final: *is_final,
                         access: *access,
                         mir_body,
                     });

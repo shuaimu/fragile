@@ -1098,3 +1098,107 @@ fn test_pure_virtual_function() {
     assert!(method.is_virtual);
     assert!(method.is_pure_virtual);
 }
+
+/// Test override specifier on methods.
+#[test]
+fn test_override_specifier() {
+    let parser = ClangParser::new().expect("Failed to create parser");
+
+    let source = r#"
+        class Base {
+        public:
+            virtual void foo() { }
+        };
+
+        class Derived : public Base {
+        public:
+            void foo() override { }
+        };
+    "#;
+
+    let ast = parser.parse_string(source, "override.cpp").expect("Failed to parse");
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    // Find the derived class
+    let derived = module.structs.iter().find(|s| s.name == "Derived");
+    assert!(derived.is_some());
+
+    let derived = derived.unwrap();
+    assert_eq!(derived.methods.len(), 1);
+
+    let method = &derived.methods[0];
+    assert_eq!(method.name, "foo");
+    assert!(method.is_virtual); // override implies virtual
+    assert!(method.is_override);
+    assert!(!method.is_final);
+}
+
+/// Test final specifier on methods.
+#[test]
+fn test_final_specifier() {
+    let parser = ClangParser::new().expect("Failed to create parser");
+
+    let source = r#"
+        class Base {
+        public:
+            virtual void foo() { }
+        };
+
+        class Derived : public Base {
+        public:
+            void foo() final { }
+        };
+    "#;
+
+    let ast = parser.parse_string(source, "final.cpp").expect("Failed to parse");
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    // Find the derived class
+    let derived = module.structs.iter().find(|s| s.name == "Derived");
+    assert!(derived.is_some());
+
+    let derived = derived.unwrap();
+    assert_eq!(derived.methods.len(), 1);
+
+    let method = &derived.methods[0];
+    assert_eq!(method.name, "foo");
+    assert!(method.is_virtual); // final implies virtual
+    assert!(method.is_final);
+}
+
+/// Test override and final together.
+#[test]
+fn test_override_and_final() {
+    let parser = ClangParser::new().expect("Failed to create parser");
+
+    let source = r#"
+        class Base {
+        public:
+            virtual void foo() { }
+        };
+
+        class Derived : public Base {
+        public:
+            void foo() override final { }
+        };
+    "#;
+
+    let ast = parser.parse_string(source, "override_final.cpp").expect("Failed to parse");
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    // Find the derived class
+    let derived = module.structs.iter().find(|s| s.name == "Derived");
+    assert!(derived.is_some());
+
+    let derived = derived.unwrap();
+    assert_eq!(derived.methods.len(), 1);
+
+    let method = &derived.methods[0];
+    assert_eq!(method.name, "foo");
+    assert!(method.is_virtual);
+    assert!(method.is_override);
+    assert!(method.is_final);
+}

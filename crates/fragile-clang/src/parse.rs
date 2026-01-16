@@ -297,6 +297,7 @@ impl ClangParser {
                     let is_static = clang_sys::clang_CXXMethod_isStatic(cursor) != 0;
                     let is_virtual = clang_sys::clang_CXXMethod_isVirtual(cursor) != 0;
                     let is_pure_virtual = clang_sys::clang_CXXMethod_isPureVirtual(cursor) != 0;
+                    let (is_override, is_final) = self.get_override_final_attrs(cursor);
                     let access = self.get_access_specifier(cursor);
                     ClangNodeKind::CXXMethodDecl {
                         name,
@@ -306,6 +307,8 @@ impl ClangParser {
                         is_static,
                         is_virtual,
                         is_pure_virtual,
+                        is_override,
+                        is_final,
                         access,
                     }
                 }
@@ -743,6 +746,47 @@ impl ClangParser {
             // Reverse to get outermost first (outer::inner -> ["outer", "inner"])
             path.reverse();
             path
+        }
+    }
+
+    /// Get override and final attributes from a method cursor.
+    /// Returns (is_override, is_final).
+    fn get_override_final_attrs(&self, cursor: clang_sys::CXCursor) -> (bool, bool) {
+        unsafe {
+            struct AttrInfo {
+                is_override: bool,
+                is_final: bool,
+            }
+            let mut info = AttrInfo {
+                is_override: false,
+                is_final: false,
+            };
+            let info_ptr: *mut AttrInfo = &mut info;
+
+            extern "C" fn attr_visitor(
+                child: clang_sys::CXCursor,
+                _parent: clang_sys::CXCursor,
+                data: clang_sys::CXClientData,
+            ) -> clang_sys::CXChildVisitResult {
+                unsafe {
+                    let info = &mut *(data as *mut AttrInfo);
+                    let kind = clang_sys::clang_getCursorKind(child);
+
+                    // CXCursor_CXXOverrideAttr = 405
+                    // CXCursor_CXXFinalAttr = 404
+                    match kind {
+                        404 => info.is_final = true,
+                        405 => info.is_override = true,
+                        _ => {}
+                    }
+
+                    clang_sys::CXChildVisit_Continue
+                }
+            }
+
+            clang_sys::clang_visitChildren(cursor, attr_visitor, info_ptr as clang_sys::CXClientData);
+
+            (info.is_override, info.is_final)
         }
     }
 

@@ -164,6 +164,10 @@ pub struct CppMethod {
     pub is_virtual: bool,
     /// Whether this is a pure virtual method (= 0)
     pub is_pure_virtual: bool,
+    /// Whether this method has the override specifier
+    pub is_override: bool,
+    /// Whether this method has the final specifier
+    pub is_final: bool,
     /// Access specifier
     pub access: AccessSpecifier,
     /// MIR body (if this is a definition)

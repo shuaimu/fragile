@@ -104,6 +104,8 @@ pub enum ClangNodeKind {
         is_static: bool,
         is_virtual: bool,
         is_pure_virtual: bool,
+        is_override: bool,
+        is_final: bool,
         access: AccessSpecifier,
     },
     /// Constructor declaration
