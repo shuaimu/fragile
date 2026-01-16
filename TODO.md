@@ -367,6 +367,12 @@ See [PLAN_CPP20_MAKO.md](PLAN_CPP20_MAKO.md) for detailed plan.
     - [x] `vendor/mako/src/deptran/janus/scheduler.cc` - **PARSED**: 4756 functions (with error filtering) [26:01:16, 14:00]
     - [x] `vendor/mako/src/deptran/tapir/tx.cc` - **PARSED**: 4756 functions (with error filtering) [26:01:16, 14:00]
     - [x] `vendor/mako/src/deptran/carousel/tx.cc` - **PARSED**: 4756 functions (with error filtering) [26:01:16, 14:00]
+    - [x] `vendor/mako/src/deptran/carousel/frame.cc` - **PARSED**: 4756 functions (with error filtering) [26:01:16, 14:15]
+    - [x] `vendor/mako/src/deptran/janus/commo.cc` - **PARSED**: 4756 functions (with error filtering) [26:01:16, 14:15]
+    - [x] `vendor/mako/src/deptran/janus/coordinator.cc` - **PARSED**: 4756 functions (with error filtering) [26:01:16, 14:15]
+    - [x] `vendor/mako/src/deptran/janus/frame.cc` - **PARSED**: 4756 functions (with error filtering) [26:01:16, 14:15]
+    - [x] `vendor/mako/src/deptran/tapir/frame.cc` - **PARSED**: 4756 functions (with error filtering) [26:01:16, 14:15]
+    - [x] `vendor/mako/src/deptran/tapir/scheduler.cc` - **PARSED**: 4756 functions (with error filtering) [26:01:16, 14:15]
     - [x] F.3.41 Added ignored_error_patterns for: QuorumEvent cross-namespace inheritance, rcc_rpc.h missing, incomplete types, override issues [26:01:16, 14:00]
     - [-] `vendor/mako/src/deptran/mongodb/server.cc` - Needs bsoncxx (external dep)
     - [-] `vendor/mako/src/bench/micro/procedure.cc` - Needs more complex error filtering
@@ -436,7 +442,7 @@ Migration: After C++20 support is complete, deprecate these.
 ## 5. Testing & Milestones
 
 ### 5.1 Unit Tests
-- [x] fragile-clang: 395 tests passing (27 unit + 368 integration) - includes 10 coroutine + 7 exception + 6 RTTI + 8 promise type + 8 awaitable + 8 generator + 3 noexcept + 1 member access + 1 stack unwinding + 174 mako file tests [26:01:16]
+- [x] fragile-clang: 401 tests passing (27 unit + 374 integration) - includes 10 coroutine + 7 exception + 6 RTTI + 8 promise type + 8 awaitable + 8 generator + 3 noexcept + 1 member access + 1 stack unwinding + 180 mako file tests [26:01:16]
 - [x] fragile-rustc-driver: 6 tests passing
 - [x] fragile-runtime: Compiles
 
@@ -456,8 +462,8 @@ Migration: After C++20 support is complete, deprecate these.
 
 Current status:
 - **rrr module**: 20/20 files parsing (100%) - all base, misc, reactor, rpc files parsing
-- **mako module**: 141/338 files parsing (~42%) - includes all 12 memdb files, deptran (consensus executors, rcc, occ, classic, troad, carousel, tapir, janus, mencius), masstree, masstree-beta (all 28 files), all lib files
-- **Total tests**: 395 passing (fragile-clang integration tests)
+- **mako module**: 147/338 files parsing (~44%) - includes all 12 memdb files, deptran (consensus executors, rcc, occ, classic, troad, carousel, tapir, janus, mencius), masstree, masstree-beta (all 28 files), all lib files
+- **Total tests**: 401 passing (fragile-clang integration tests)
 - **Milestones**: M1 ✅, M2-M4 (parsing complete, compilation pending)
 
 Next steps:
