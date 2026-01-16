@@ -16,13 +16,16 @@ using ptrdiff_t = long;
 // nullptr_t is already in cstdint
 using ::nullptr_t;
 
-// max_align_t - use clang's include guard to avoid conflicts
-#ifndef __CLANG_MAX_ALIGN_T_DEFINED
+// max_align_t - if clang's header defined ::max_align_t, bring it to std::
+// Otherwise define it ourselves
+#ifdef __CLANG_MAX_ALIGN_T_DEFINED
+using max_align_t = ::max_align_t;
+#else
 #define __CLANG_MAX_ALIGN_T_DEFINED
-typedef struct {
+struct max_align_t {
     long long __clang_max_align_nonce1;
     long double __clang_max_align_nonce2;
-} max_align_t;
+};
 #endif
 
 // byte (C++17)
