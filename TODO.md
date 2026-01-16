@@ -449,6 +449,16 @@ See [PLAN_CPP20_MAKO.md](PLAN_CPP20_MAKO.md) for detailed plan.
   - [x] 2.3.3.4 Query override wiring (~50 LOC) [26:01:16, 16:30] - Infrastructure ready, full wiring needs TLS for registry
 - [x] **2.3.4 mir_borrowck bypass** (~50 LOC) [26:01:16, 17:00] - Infrastructure in place, full implementation needs TLS for registry state
 
+### 2.4 MIR Conversion Expansion ([docs/dev/plan_mir_conversion_expansion.md](docs/dev/plan_mir_conversion_expansion.md))
+- [x] **2.4.1 BinOp/UnaryOp conversion** (~30 LOC) [26:01:16, 23:00] - convert_binop, convert_unop
+- [x] **2.4.2 Constant conversion** (~40 LOC) [26:01:16, 23:00] - convert_constant for Int/Float/Bool/Unit
+- [x] **2.4.3 Place conversion** (~40 LOC) [26:01:16, 23:00] - convert_place with Deref/Field/Index projections
+- [x] **2.4.4 Operand conversion** (~20 LOC) [26:01:16, 23:00] - convert_operand for Copy/Move/Constant
+- [ ] **2.4.5 Statement conversion** (~60 LOC) - Assign, Nop statements
+- [ ] **2.4.6 Terminator conversion** (~100 LOC) - Return, Goto, SwitchInt, Call, etc.
+- [ ] **2.4.7 Basic block assembly** (~30 LOC) - Full block conversion
+- [ ] **2.4.8 Integration testing** (~50 LOC) - End-to-end tests
+
 ---
 
 ## 3. Go Support (Deferred)

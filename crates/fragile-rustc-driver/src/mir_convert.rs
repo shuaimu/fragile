@@ -8,12 +8,13 @@
 
 #![cfg(feature = "rustc-integration")]
 
+extern crate rustc_abi;
 extern crate rustc_index;
 extern crate rustc_middle;
 extern crate rustc_span;
 
-use fragile_clang::{CppType, MirBody};
-use rustc_middle::mir;
+use fragile_clang::{CppType, MirBinOp, MirBody, MirConstant, MirOperand, MirPlace, MirUnaryOp};
+use rustc_middle::mir::{self, BinOp, UnOp};
 use rustc_middle::ty::{Ty, TyCtxt};
 use rustc_span::DUMMY_SP;
 
@@ -191,6 +192,139 @@ impl<'tcx> MirConvertCtx<'tcx> {
                 // Use unit as placeholder for complex types
                 // These need full type resolution
                 self.tcx.types.unit
+            }
+        }
+    }
+
+    /// Convert a Fragile MirBinOp to rustc's BinOp.
+    pub fn convert_binop(&self, op: &MirBinOp) -> BinOp {
+        match op {
+            MirBinOp::Add => BinOp::Add,
+            MirBinOp::Sub => BinOp::Sub,
+            MirBinOp::Mul => BinOp::Mul,
+            MirBinOp::Div => BinOp::Div,
+            MirBinOp::Rem => BinOp::Rem,
+            MirBinOp::BitAnd => BinOp::BitAnd,
+            MirBinOp::BitOr => BinOp::BitOr,
+            MirBinOp::BitXor => BinOp::BitXor,
+            MirBinOp::Shl => BinOp::Shl,
+            MirBinOp::Shr => BinOp::Shr,
+            MirBinOp::Eq => BinOp::Eq,
+            MirBinOp::Ne => BinOp::Ne,
+            MirBinOp::Lt => BinOp::Lt,
+            MirBinOp::Le => BinOp::Le,
+            MirBinOp::Gt => BinOp::Gt,
+            MirBinOp::Ge => BinOp::Ge,
+        }
+    }
+
+    /// Convert a Fragile MirUnaryOp to rustc's UnOp.
+    pub fn convert_unop(&self, op: &MirUnaryOp) -> UnOp {
+        match op {
+            MirUnaryOp::Neg => UnOp::Neg,
+            MirUnaryOp::Not => UnOp::Not,
+        }
+    }
+
+    /// Convert a Fragile MirConstant to a rustc constant operand.
+    ///
+    /// Returns (ty, const_value) where ty is the inferred type and const_value
+    /// is the constant that can be used to construct a Const.
+    pub fn convert_constant(&self, constant: &MirConstant) -> (Ty<'tcx>, mir::ConstValue) {
+        use rustc_middle::mir::ConstValue;
+        use rustc_middle::ty::ScalarInt;
+
+        match constant {
+            MirConstant::Int { value, bits } => {
+                // Determine type based on bit width and sign
+                let (ty, scalar) = match bits {
+                    8 => (self.tcx.types.i8, ScalarInt::try_from_int(*value as i8, rustc_abi::Size::from_bytes(1)).unwrap()),
+                    16 => (self.tcx.types.i16, ScalarInt::try_from_int(*value as i16, rustc_abi::Size::from_bytes(2)).unwrap()),
+                    32 => (self.tcx.types.i32, ScalarInt::try_from_int(*value as i32, rustc_abi::Size::from_bytes(4)).unwrap()),
+                    64 => (self.tcx.types.i64, ScalarInt::try_from_int(*value as i64, rustc_abi::Size::from_bytes(8)).unwrap()),
+                    128 => (self.tcx.types.i128, ScalarInt::try_from_int(*value, rustc_abi::Size::from_bytes(16)).unwrap()),
+                    _ => {
+                        // Default to i32 for unrecognized sizes
+                        (self.tcx.types.i32, ScalarInt::try_from_int(*value as i32, rustc_abi::Size::from_bytes(4)).unwrap())
+                    }
+                };
+                (ty, ConstValue::Scalar(scalar.into()))
+            }
+            MirConstant::Float { value, bits } => {
+                let (ty, scalar) = if *bits <= 32 {
+                    let f = *value as f32;
+                    (self.tcx.types.f32, ScalarInt::try_from_uint(f.to_bits() as u128, rustc_abi::Size::from_bytes(4)).unwrap())
+                } else {
+                    let f = *value;
+                    (self.tcx.types.f64, ScalarInt::try_from_uint(f.to_bits() as u128, rustc_abi::Size::from_bytes(8)).unwrap())
+                };
+                (ty, ConstValue::Scalar(scalar.into()))
+            }
+            MirConstant::Bool(b) => {
+                let scalar = if *b { ScalarInt::TRUE } else { ScalarInt::FALSE };
+                (self.tcx.types.bool, ConstValue::Scalar(scalar.into()))
+            }
+            MirConstant::Unit => {
+                (self.tcx.types.unit, ConstValue::ZeroSized)
+            }
+        }
+    }
+
+    /// Convert a Fragile MirPlace to rustc's Place.
+    ///
+    /// Note: This is a simplified conversion. Full conversion requires:
+    /// - Proper type tracking for field projections
+    /// - Local variable mapping
+    pub fn convert_place(&self, place: &MirPlace) -> mir::Place<'tcx> {
+        use rustc_abi::FieldIdx;
+        use rustc_middle::mir::{Local, Place, ProjectionElem};
+
+        let local = Local::from_usize(place.local);
+
+        if place.projection.is_empty() {
+            Place::from(local)
+        } else {
+            // For now, handle simple projections
+            // Full implementation needs type tracking for Field projections
+            let projections: Vec<_> = place.projection.iter().map(|proj| {
+                match proj {
+                    fragile_clang::MirProjection::Deref => ProjectionElem::Deref,
+                    fragile_clang::MirProjection::Field(idx) => {
+                        // Note: This needs the actual field type, using unit as placeholder
+                        ProjectionElem::Field(
+                            FieldIdx::from_usize(*idx),
+                            self.tcx.types.unit,
+                        )
+                    }
+                    fragile_clang::MirProjection::Index(idx) => {
+                        ProjectionElem::Index(Local::from_usize(*idx))
+                    }
+                }
+            }).collect();
+
+            Place {
+                local,
+                projection: self.tcx.mk_place_elems(&projections),
+            }
+        }
+    }
+
+    /// Convert a Fragile MirOperand to rustc's Operand.
+    pub fn convert_operand(&self, operand: &MirOperand) -> mir::Operand<'tcx> {
+        use rustc_middle::mir::{Operand, Const};
+
+        match operand {
+            MirOperand::Copy(place) => Operand::Copy(self.convert_place(place)),
+            MirOperand::Move(place) => Operand::Move(self.convert_place(place)),
+            MirOperand::Constant(constant) => {
+                let (ty, const_value) = self.convert_constant(constant);
+                // Use mir::Const::Val which directly stores the ConstValue and Ty
+                let const_ = Const::Val(const_value, ty);
+                Operand::Constant(Box::new(mir::ConstOperand {
+                    span: DUMMY_SP,
+                    user_ty: None,
+                    const_,
+                }))
             }
         }
     }
