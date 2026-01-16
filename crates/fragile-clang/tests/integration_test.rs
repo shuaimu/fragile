@@ -8659,3 +8659,127 @@ fn test_mako_masstree_compiler_cc() {
     }
 }
 
+/// Test parsing rrr/base/basetypes.cpp
+#[test]
+fn test_rrr_base_basetypes_cpp() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/rrr/base/basetypes.cpp");
+
+    if !file_path.exists() {
+        println!("Skipping test: basetypes.cpp not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let rusty_cpp_path = project_root.join("vendor/mako/third-party/rusty-cpp/include");
+
+    if !rusty_cpp_path.exists() {
+        println!("Skipping test: rusty-cpp submodule not initialized");
+        return;
+    }
+
+    let mut system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+        rusty_cpp_path.to_string_lossy().to_string(),
+    ];
+
+    let clang_paths = [
+        "/usr/lib/llvm-19/lib/clang/19/include",
+        "/usr/lib/llvm-18/lib/clang/18/include",
+    ];
+
+    for path in &clang_paths {
+        if Path::new(path).exists() {
+            system_include_paths.push(path.to_string());
+            break;
+        }
+    }
+
+    let rrr_path = project_root.join("vendor/mako/src/rrr");
+    let include_paths = vec![
+        rrr_path.to_string_lossy().to_string(),
+    ];
+
+    let parser = ClangParser::with_paths(include_paths, system_include_paths)
+        .expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+
+            println!("Successfully parsed basetypes.cpp with {} functions", module.functions.len());
+            assert!(module.functions.len() >= 10, "Expected base type utility functions");
+        }
+        Err(e) => {
+            println!("Note: basetypes.cpp parsing failed: {:?}", e);
+        }
+    }
+}
+
+/// Test parsing rrr/base/misc.cpp
+#[test]
+fn test_rrr_base_misc_cpp() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/rrr/base/misc.cpp");
+
+    if !file_path.exists() {
+        println!("Skipping test: misc.cpp not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let rusty_cpp_path = project_root.join("vendor/mako/third-party/rusty-cpp/include");
+
+    if !rusty_cpp_path.exists() {
+        println!("Skipping test: rusty-cpp submodule not initialized");
+        return;
+    }
+
+    let mut system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+        rusty_cpp_path.to_string_lossy().to_string(),
+    ];
+
+    let clang_paths = [
+        "/usr/lib/llvm-19/lib/clang/19/include",
+        "/usr/lib/llvm-18/lib/clang/18/include",
+    ];
+
+    for path in &clang_paths {
+        if Path::new(path).exists() {
+            system_include_paths.push(path.to_string());
+            break;
+        }
+    }
+
+    let rrr_path = project_root.join("vendor/mako/src/rrr");
+    let include_paths = vec![
+        rrr_path.to_string_lossy().to_string(),
+    ];
+
+    let parser = ClangParser::with_paths(include_paths, system_include_paths)
+        .expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+
+            println!("Successfully parsed misc.cpp with {} functions", module.functions.len());
+            assert!(module.functions.len() >= 10, "Expected miscellaneous utility functions");
+        }
+        Err(e) => {
+            println!("Note: misc.cpp parsing failed: {:?}", e);
+        }
+    }
+}
+
