@@ -49,6 +49,7 @@ unsigned long long strtoull(const char* str, char** str_end, int base);
 // Random number generation
 int rand();
 void srand(unsigned int seed);
+int rand_r(unsigned int* seedp);  // POSIX thread-safe random
 
 // Integer arithmetic
 int abs(int n);
@@ -104,6 +105,7 @@ using std::strtoul;
 using std::strtoull;
 using std::rand;
 using std::srand;
+using std::rand_r;
 using std::abs;
 using std::labs;
 using std::llabs;
