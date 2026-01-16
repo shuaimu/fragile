@@ -208,7 +208,7 @@ See [PLAN_CPP20_MAKO.md](PLAN_CPP20_MAKO.md) for detailed plan.
     - [x] `vendor/mako/src/rrr/reactor/fiber_impl.cc` - **PARSED**: 4640 functions
     - [x] `vendor/mako/src/rrr/reactor/reactor.cc` - **PARSED**: 4640 functions
     - [-] `vendor/mako/src/rrr/reactor/quorum_event.cc` - Cross-namespace inheritance: `janus::QuorumEvent` inherits from `rrr::Event` via `using rrr::Event;`. Clang semantic error on `test()` call [26:01:16, 12:00]. See docs/dev/plan_fix_stub_headers_quorum_event.md
-  - [-] All mako module - **27/155 files parsing (17.4%)** [26:01:16, 14:45]
+  - [-] All mako module - **28/155 files parsing (18.1%)** [26:01:16, 17:00]
     - [x] `vendor/mako/src/mako/vec/coroutine.cpp` - **PARSED**: 40 functions
     - [x] `vendor/mako/src/mako/vec/occ.cpp` - **PARSED**: 41 functions
     - [x] `vendor/mako/src/mako/lib/memory.cc` - **PARSED**: 17 functions
@@ -236,6 +236,7 @@ See [PLAN_CPP20_MAKO.md](PLAN_CPP20_MAKO.md) for detailed plan.
     - [x] `vendor/mako/src/mako/benchmarks/sto/TRcu.cc` - **PARSED**: 75 functions
     - [x] `vendor/mako/src/mako/benchmarks/sto/masstree-beta/memdebug.cc` - **PARSED**: 14 functions
     - [x] `vendor/mako/src/mako/stats_server.cc` - **PARSED**: 141 functions (stats server with system_error) [26:01:16, 17:00]
+    - [x] `vendor/mako/src/mako/stats_client.cc` - **PARSED**: 142 functions (stats client with main) [26:01:16, 17:00]
     - [x] F.3.4 Added stubs: cxxabi.h, typeinfo, endian.h, deque, stack, numa.h [26:01:16, 10:00]
     - [x] F.3.5 Fixed: cstdint types for x86_64, iostream/sstream traits, stdexcept includes, string getline
     - [x] F.3.6 Added parser support for preprocessor defines (CONFIG_H for masstree)
@@ -312,7 +313,7 @@ Migration: After C++20 support is complete, deprecate these.
 ## 5. Testing & Milestones
 
 ### 5.1 Unit Tests
-- [x] fragile-clang: 264 tests passing (27 unit + 237 integration) - includes 10 coroutine + 7 exception + 6 RTTI + 8 promise type + 8 awaitable + 8 generator + 19 mako file tests [26:01:16, 17:00]
+- [x] fragile-clang: 265 tests passing (27 unit + 238 integration) - includes 10 coroutine + 7 exception + 6 RTTI + 8 promise type + 8 awaitable + 8 generator + 20 mako file tests [26:01:16, 17:00]
 - [x] fragile-rustc-driver: 6 tests passing
 - [x] fragile-runtime: Compiles
 
@@ -332,8 +333,8 @@ Migration: After C++20 support is complete, deprecate these.
 
 Current status:
 - **rrr module**: 15/16 files parsing (94%) - blocked by quorum_event.cc cross-namespace inheritance
-- **mako module**: 27/155 files parsing (17.4%)
-- **Total tests**: 264 passing (27 unit + 237 integration)
+- **mako module**: 28/155 files parsing (18.1%)
+- **Total tests**: 265 passing (27 unit + 238 integration)
 
 Next steps:
 1. **rustc Integration (2.3)** - Requires user setup: `rustup component add rustc-dev --toolchain nightly`
