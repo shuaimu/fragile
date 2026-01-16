@@ -2,74 +2,40 @@
 #ifndef _FRAGILE_SSTREAM_
 #define _FRAGILE_SSTREAM_
 
-#include "cstdint"
+#include "iostream"  // For ios_base, streamsize, etc.
 #include "string"
 
 namespace std {
 
 // Basic streambuf stub
-template<typename CharT, typename Traits = void>
+template<typename CharT, typename Traits = char_traits<CharT>>
 class basic_streambuf {
 public:
     virtual ~basic_streambuf() = default;
 };
 
-// Stream formatting flags (used by iomanip)
-typedef int streamsize;
+// Note: streamsize and ios_base are defined in iostream
 
-// ios_base for formatting
-class ios_base {
-public:
-    // Format flags
-    typedef unsigned int fmtflags;
-    static constexpr fmtflags boolalpha = 1 << 0;
-    static constexpr fmtflags dec = 1 << 1;
-    static constexpr fmtflags fixed = 1 << 2;
-    static constexpr fmtflags hex = 1 << 3;
-    static constexpr fmtflags internal = 1 << 4;
-    static constexpr fmtflags left = 1 << 5;
-    static constexpr fmtflags oct = 1 << 6;
-    static constexpr fmtflags right = 1 << 7;
-    static constexpr fmtflags scientific = 1 << 8;
-    static constexpr fmtflags showbase = 1 << 9;
-    static constexpr fmtflags showpoint = 1 << 10;
-    static constexpr fmtflags showpos = 1 << 11;
-    static constexpr fmtflags skipws = 1 << 12;
-    static constexpr fmtflags unitbuf = 1 << 13;
-    static constexpr fmtflags uppercase = 1 << 14;
-    static constexpr fmtflags adjustfield = left | right | internal;
-    static constexpr fmtflags basefield = dec | oct | hex;
-    static constexpr fmtflags floatfield = scientific | fixed;
-
-    fmtflags flags() const { return fmtflags_; }
-    fmtflags flags(fmtflags fmtfl) { fmtflags old = fmtflags_; fmtflags_ = fmtfl; return old; }
-    fmtflags setf(fmtflags fmtfl) { fmtflags old = fmtflags_; fmtflags_ |= fmtfl; return old; }
-    fmtflags setf(fmtflags fmtfl, fmtflags mask) { fmtflags old = fmtflags_; fmtflags_ = (fmtflags_ & ~mask) | (fmtfl & mask); return old; }
-    void unsetf(fmtflags mask) { fmtflags_ &= ~mask; }
-
-    streamsize precision() const { return precision_; }
-    streamsize precision(streamsize prec) { streamsize old = precision_; precision_ = prec; return old; }
-
-    streamsize width() const { return width_; }
-    streamsize width(streamsize wide) { streamsize old = width_; width_ = wide; return old; }
-
-protected:
-    fmtflags fmtflags_ = dec | skipws;
-    streamsize precision_ = 6;
-    streamsize width_ = 0;
-};
-
-// Manipulators
+// Manipulators (may already be in iomanip, but we provide here for convenience)
+#ifndef _SETPRECISION_DEFINED
+#define _SETPRECISION_DEFINED
 struct _Setprecision { int n; };
 inline _Setprecision setprecision(int n) { return {n}; }
+#endif
 
+#ifndef _SETW_DEFINED
+#define _SETW_DEFINED
 struct _Setw { int n; };
 inline _Setw setw(int n) { return {n}; }
+#endif
 
+#ifndef _SETFILL_DEFINED
+#define _SETFILL_DEFINED
 struct _Setfill { char c; };
 inline _Setfill setfill(char c) { return {c}; }
+#endif
 
-// Stream manipulator types
+// Stream manipulator functions (use ios_base from iostream)
 inline ios_base& fixed(ios_base& str) { str.setf(ios_base::fixed, ios_base::floatfield); return str; }
 inline ios_base& scientific(ios_base& str) { str.setf(ios_base::scientific, ios_base::floatfield); return str; }
 inline ios_base& hex(ios_base& str) { str.setf(ios_base::hex, ios_base::basefield); return str; }
@@ -84,9 +50,9 @@ inline ios_base& noshowbase(ios_base& str) { str.unsetf(ios_base::showbase); ret
 inline ios_base& showpoint(ios_base& str) { str.setf(ios_base::showpoint); return str; }
 inline ios_base& noshowpoint(ios_base& str) { str.unsetf(ios_base::showpoint); return str; }
 
-// Basic stringstream
-template<typename CharT, typename Traits = void, typename Allocator = void>
-class basic_stringstream : public ios_base {
+// Basic stringstream - inherits from basic_iostream
+template<typename CharT, typename Traits = char_traits<CharT>, typename Allocator = void>
+class basic_stringstream : public basic_iostream<CharT, Traits> {
 public:
     using string_type = basic_string<CharT>;
 
@@ -112,8 +78,8 @@ public:
 
     // Manipulator support
     basic_stringstream& operator<<(ios_base& (*pf)(ios_base&)) { pf(*this); return *this; }
-    basic_stringstream& operator<<(_Setprecision sp) { precision(sp.n); return *this; }
-    basic_stringstream& operator<<(_Setw sw) { width(sw.n); return *this; }
+    basic_stringstream& operator<<(_Setprecision sp) { this->precision(sp.n); return *this; }
+    basic_stringstream& operator<<(_Setw sw) { this->width(sw.n); return *this; }
     basic_stringstream& operator<<(_Setfill sf) { (void)sf; return *this; }
 
     // Input operators
@@ -123,49 +89,53 @@ public:
     basic_stringstream& operator>>(string_type& s) { (void)s; return *this; }
 };
 
-template<typename CharT, typename Traits = void, typename Allocator = void>
-class basic_ostringstream : public basic_stringstream<CharT, Traits, Allocator> {
-    using base = basic_stringstream<CharT, Traits, Allocator>;
+template<typename CharT, typename Traits = char_traits<CharT>, typename Allocator = void>
+class basic_ostringstream : public basic_ostream<CharT, Traits> {
 public:
-    using typename base::string_type;
+    using string_type = basic_string<CharT>;
 
     basic_ostringstream() = default;
-    explicit basic_ostringstream(const string_type& s) : base(s) {}
+    explicit basic_ostringstream(const string_type& s) { (void)s; }
 
-    // Explicit str() methods to avoid dependent base class lookup issues
-    string_type str() const { return base::str(); }
-    void str(const string_type& s) { base::str(s); }
-
-    using base::precision;
-    using base::width;
-    using base::setf;
-    using base::unsetf;
-    using base::flags;
+    string_type str() const { return string_type(); }
+    void str(const string_type& s) { (void)s; }
 
     // Override operators to return correct type
-    basic_ostringstream& operator<<(const char* s) { base::operator<<(s); return *this; }
-    basic_ostringstream& operator<<(const string_type& s) { base::operator<<(s); return *this; }
-    basic_ostringstream& operator<<(int n) { base::operator<<(n); return *this; }
-    basic_ostringstream& operator<<(long n) { base::operator<<(n); return *this; }
-    basic_ostringstream& operator<<(long long n) { base::operator<<(n); return *this; }
-    basic_ostringstream& operator<<(unsigned int n) { base::operator<<(n); return *this; }
-    basic_ostringstream& operator<<(unsigned long n) { base::operator<<(n); return *this; }
-    basic_ostringstream& operator<<(unsigned long long n) { base::operator<<(n); return *this; }
-    basic_ostringstream& operator<<(double n) { base::operator<<(n); return *this; }
-    basic_ostringstream& operator<<(float n) { base::operator<<(n); return *this; }
-    basic_ostringstream& operator<<(bool b) { base::operator<<(b); return *this; }
-    basic_ostringstream& operator<<(void* p) { base::operator<<(p); return *this; }
-    basic_ostringstream& operator<<(char c) { base::operator<<(c); return *this; }
-    basic_ostringstream& operator<<(ios_base& (*pf)(ios_base&)) { base::operator<<(pf); return *this; }
-    basic_ostringstream& operator<<(_Setprecision sp) { base::operator<<(sp); return *this; }
-    basic_ostringstream& operator<<(_Setw sw) { base::operator<<(sw); return *this; }
-    basic_ostringstream& operator<<(_Setfill sf) { base::operator<<(sf); return *this; }
+    basic_ostringstream& operator<<(const char* s) { (void)s; return *this; }
+    basic_ostringstream& operator<<(const string_type& s) { (void)s; return *this; }
+    basic_ostringstream& operator<<(int n) { (void)n; return *this; }
+    basic_ostringstream& operator<<(long n) { (void)n; return *this; }
+    basic_ostringstream& operator<<(long long n) { (void)n; return *this; }
+    basic_ostringstream& operator<<(unsigned int n) { (void)n; return *this; }
+    basic_ostringstream& operator<<(unsigned long n) { (void)n; return *this; }
+    basic_ostringstream& operator<<(unsigned long long n) { (void)n; return *this; }
+    basic_ostringstream& operator<<(double n) { (void)n; return *this; }
+    basic_ostringstream& operator<<(float n) { (void)n; return *this; }
+    basic_ostringstream& operator<<(bool b) { (void)b; return *this; }
+    basic_ostringstream& operator<<(void* p) { (void)p; return *this; }
+    basic_ostringstream& operator<<(char c) { (void)c; return *this; }
+    basic_ostringstream& operator<<(ios_base& (*pf)(ios_base&)) { pf(*this); return *this; }
+    basic_ostringstream& operator<<(_Setprecision sp) { this->precision(sp.n); return *this; }
+    basic_ostringstream& operator<<(_Setw sw) { this->width(sw.n); return *this; }
+    basic_ostringstream& operator<<(_Setfill sf) { (void)sf; return *this; }
 };
 
-template<typename CharT, typename Traits = void, typename Allocator = void>
-class basic_istringstream : public basic_stringstream<CharT, Traits, Allocator> {
+template<typename CharT, typename Traits = char_traits<CharT>, typename Allocator = void>
+class basic_istringstream : public basic_istream<CharT, Traits> {
 public:
-    using basic_stringstream<CharT, Traits, Allocator>::basic_stringstream;
+    using string_type = basic_string<CharT>;
+
+    basic_istringstream() = default;
+    explicit basic_istringstream(const string_type& s) { (void)s; }
+
+    string_type str() const { return string_type(); }
+    void str(const string_type& s) { (void)s; }
+
+    // Input operators
+    basic_istringstream& operator>>(int& n) { (void)n; return *this; }
+    basic_istringstream& operator>>(long& n) { (void)n; return *this; }
+    basic_istringstream& operator>>(double& n) { (void)n; return *this; }
+    basic_istringstream& operator>>(string_type& s) { (void)s; return *this; }
 };
 
 using stringstream = basic_stringstream<char>;

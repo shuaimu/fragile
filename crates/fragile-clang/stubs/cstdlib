@@ -30,6 +30,7 @@ int at_quick_exit(void (*func)());
 
 // Environment
 char* getenv(const char* name);
+int system(const char* command);
 
 // Numeric conversions
 double atof(const char* str);
@@ -87,6 +88,7 @@ using std::abort;
 using std::exit;
 using std::atexit;
 using std::getenv;
+using std::system;
 using std::atof;
 using std::atoi;
 using std::atol;

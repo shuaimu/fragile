@@ -76,8 +76,18 @@ fn main() {
         if rusty_cpp_path.exists() {
             include_paths.push(rusty_cpp_path.to_string_lossy().to_string());
         }
+        // Add sto benchmarks path for masstree headers
+        let sto_path = project_root.join("vendor/mako/src/mako/benchmarks/sto");
+        if sto_path.exists() {
+            include_paths.push(sto_path.to_string_lossy().to_string());
+        }
 
-        let parser = match ClangParser::with_paths(include_paths, system_include_paths) {
+        // Defines needed for mako/masstree
+        let defines = vec![
+            r#"CONFIG_H="mako/masstree/config.h""#.to_string(),
+        ];
+
+        let parser = match ClangParser::with_paths_and_defines(include_paths, system_include_paths, defines) {
             Ok(p) => p,
             Err(e) => {
                 failures.push((file.clone(), format!("Parser creation failed: {}", e)));

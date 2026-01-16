@@ -17,6 +17,8 @@ pub struct ClangParser {
     include_paths: Vec<String>,
     /// System include paths (searched with -isystem for angle-bracket includes)
     system_include_paths: Vec<String>,
+    /// Preprocessor defines (-D flags)
+    defines: Vec<String>,
 }
 
 impl ClangParser {
@@ -34,6 +36,16 @@ impl ClangParser {
     /// System paths use -isystem and are searched for angle-bracket includes (<...>).
     /// Regular paths use -I and are searched for quoted includes ("...").
     pub fn with_paths(include_paths: Vec<String>, system_include_paths: Vec<String>) -> Result<Self> {
+        Self::with_paths_and_defines(include_paths, system_include_paths, Vec::new())
+    }
+
+    /// Create a new Clang parser with include paths and preprocessor defines.
+    /// Defines should be in the form "NAME" or "NAME=VALUE".
+    pub fn with_paths_and_defines(
+        include_paths: Vec<String>,
+        system_include_paths: Vec<String>,
+        defines: Vec<String>,
+    ) -> Result<Self> {
         unsafe {
             let index = clang_sys::clang_createIndex(0, 0);
             if index.is_null() {
@@ -43,6 +55,7 @@ impl ClangParser {
                 index,
                 include_paths,
                 system_include_paths,
+                defines,
             })
         }
     }
@@ -114,6 +127,11 @@ impl ClangParser {
         // Add user include paths (-I for quoted includes)
         for path in &self.include_paths {
             args.push(CString::new(format!("-I{}", path)).unwrap());
+        }
+
+        // Add preprocessor defines (-D flags)
+        for define in &self.defines {
+            args.push(CString::new(format!("-D{}", define)).unwrap());
         }
 
         args

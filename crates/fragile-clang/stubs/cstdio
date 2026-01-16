@@ -1,12 +1,15 @@
 // Minimal cstdio stub for fragile parsing
-#ifndef _FRAGILE_CSTDIO_
+// Use system include guard so we're mutually exclusive with system stdio.h
+#ifndef _STDIO_H
+#define _STDIO_H
 #define _FRAGILE_CSTDIO_
 
 #include "cstdint"
 #include "cstdarg"
 
-// FILE type (opaque)
-struct FILE;
+// FILE type - use struct _IO_FILE to match glibc
+struct _IO_FILE;
+typedef struct _IO_FILE FILE;
 
 // Standard streams
 extern FILE* stdin;
@@ -149,4 +152,4 @@ using std::vfprintf;
 using std::vsprintf;
 using std::vsnprintf;
 
-#endif // _FRAGILE_CSTDIO_
+#endif // _STDIO_H

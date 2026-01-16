@@ -1,0 +1,203 @@
+warning: field `current_function` is never read
+  --> crates/fragile-clang/src/convert.rs:17:5
+   |
+15 | pub struct MirConverter {
+   |            ------------ field in this struct
+16 |     /// Current function being converted
+17 |     current_function: Option<FunctionBuilder>,
+   |     ^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` on by default
+
+warning: method `build_coroutine` is never used
+   --> crates/fragile-clang/src/convert.rs:121:8
+    |
+44  | impl FunctionBuilder {
+    | -------------------- method in this implementation
+...
+121 |     fn build_coroutine(self) -> MirBody {
+    |        ^^^^^^^^^^^^^^^
+
+warning: `fragile-clang` (lib) generated 2 warnings
+warning: unused import: `CppFunction`
+ --> crates/fragile-rustc-driver/src/queries.rs:3:21
+  |
+3 | use fragile_clang::{CppFunction, CppModule, MirBody};
+  |                     ^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` on by default
+
+warning: unused import: `fragile_clang::CppModule`
+  --> crates/fragile-rustc-driver/src/lib.rs:74:5
+   |
+74 | use fragile_clang::CppModule;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: `fragile-rustc-driver` (lib) generated 2 warnings (run `cargo fix --lib -p fragile-rustc-driver` to apply 2 suggestions)
+   Compiling fragile-clang v0.1.0 (/home/shuai/workspace/fragile/crates/fragile-clang)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.73s
+     Running `target/debug/examples/test_mako_files`
+Found 155 mako module files
+
+=== Successful files (12) ===
+  vendor/mako/src/mako/benchmarks/erpc_runner/common.cc - 26 functions
+  vendor/mako/src/mako/benchmarks/erpc_runner/configuration.cc - 87 functions
+  vendor/mako/src/mako/benchmarks/sto/Packer.cc - 61 functions
+  vendor/mako/src/mako/benchmarks/sto/TRcu.cc - 61 functions
+  vendor/mako/src/mako/benchmarks/sto/masstree-beta/memdebug.cc - 0 functions
+  vendor/mako/src/mako/db.cc - 0 functions
+  vendor/mako/src/mako/lib/lookup3.cc - 9 functions
+  vendor/mako/src/mako/lib/memory.cc - 3 functions
+  vendor/mako/src/mako/lib/rust_wrapper.cc - 0 functions
+  vendor/mako/src/mako/masstree/memdebug.cc - 0 functions
+  vendor/mako/src/mako/vec/coroutine.cpp - 26 functions
+  vendor/mako/src/mako/vec/occ.cpp - 27 functions
+
+=== Failed files (143) ===
+  vendor/mako/src/mako/allocator.cc - Clang errors in user code:
+  vendor/mako/src/mako/benchmarks/abstract_db.cc - Clang errors in user code:
+  vendor/mako/src/mako/benchmarks/bench.cc - Clang errors in user code:
+  vendor/mako/src/mako/benchmarks/bid.cc - Clang errors in user code:
+  vendor/mako/src/mako/benchmarks/config_node_init.cc - Clang errors in user code:
+  vendor/mako/src/mako/benchmarks/dbtest.cc - Clang errors in user code:
+  vendor/mako/src/mako/benchmarks/encstress.cc - Clang errors in user code:
+  vendor/mako/src/mako/benchmarks/erpc_runner/erpc_demo.cc - Clang errors in user code:
+  vendor/mako/src/mako/benchmarks/erpc_runner/erpc_runner.cc - Clang errors in user code:
+  vendor/mako/src/mako/benchmarks/erpc_runner/erpc_runner_queue.cc - Clang errors in user code:
+  vendor/mako/src/mako/benchmarks/erpc_runner/erpc_runner_test.cc - Clang errors in user code:
+  vendor/mako/src/mako/benchmarks/paxos_async_commit_test.cc - Clang errors in user code:
+  vendor/mako/src/mako/benchmarks/queue.cc - Clang errors in user code:
+  vendor/mako/src/mako/benchmarks/rocksdb_replay_app.cc - Clang errors in user code:
+  vendor/mako/src/mako/benchmarks/rpc_setup.cc - Clang errors in user code:
+  vendor/mako/src/mako/benchmarks/sto/Boosting.cc - Clang errors in user code:
+  vendor/mako/src/mako/benchmarks/sto/Boosting_standalone.cc - Clang errors in user code:
+  vendor/mako/src/mako/benchmarks/sto/MassTrans.cc - Clang errors in user code:
+  vendor/mako/src/mako/benchmarks/sto/ReplayDB.cc - Clang errors in user code:
+  vendor/mako/src/mako/benchmarks/sto/ThreadPool.cc - Clang errors in user code:
+  vendor/mako/src/mako/benchmarks/sto/Transaction.cc - Clang errors in user code:
+  vendor/mako/src/mako/benchmarks/sto/common.cc - Clang errors in user code:
+  vendor/mako/src/mako/benchmarks/sto/concurrent.cc - Clang errors in user code:
+  vendor/mako/src/mako/benchmarks/sto/concurrentqueue.cc - Clang errors in user code:
+  vendor/mako/src/mako/benchmarks/sto/ex-counter.cc - Clang errors in user code:
+  vendor/mako/src/mako/benchmarks/sto/hashtable_nostm.cc - Clang errors in user code:
+  vendor/mako/src/mako/benchmarks/sto/ht_mt.cc - Clang errors in user code:
+  vendor/mako/src/mako/benchmarks/sto/iterators.cc - Clang errors in user code:
+  vendor/mako/src/mako/benchmarks/sto/list1.cc - Clang errors in user code:
+  vendor/mako/src/mako/benchmarks/sto/masstree-beta/checkpoint.cc - Clang errors in user code:
+  vendor/mako/src/mako/benchmarks/sto/masstree-beta/compiler.cc - Clang errors in user code:
+  vendor/mako/src/mako/benchmarks/sto/masstree-beta/file.cc - Clang errors in user code:
+  vendor/mako/src/mako/benchmarks/sto/masstree-beta/json.cc - Clang errors in user code:
+  vendor/mako/src/mako/benchmarks/sto/masstree-beta/jsontest.cc - Clang errors in user code:
+  vendor/mako/src/mako/benchmarks/sto/masstree-beta/kvio.cc - Clang errors in user code:
+  vendor/mako/src/mako/benchmarks/sto/masstree-beta/kvrandom.cc - Clang errors in user code:
+  vendor/mako/src/mako/benchmarks/sto/masstree-beta/kvthread.cc - Clang errors in user code:
+  vendor/mako/src/mako/benchmarks/sto/masstree-beta/misc.cc - Clang errors in user code:
+  vendor/mako/src/mako/benchmarks/sto/masstree-beta/msgpack.cc - Clang errors in user code:
+  vendor/mako/src/mako/benchmarks/sto/masstree-beta/msgpacktest.cc - Clang errors in user code:
+  vendor/mako/src/mako/benchmarks/sto/masstree-beta/mtclient.cc - Clang errors in user code:
+  vendor/mako/src/mako/benchmarks/sto/masstree-beta/mtd.cc - Clang errors in user code:
+  vendor/mako/src/mako/benchmarks/sto/masstree-beta/mttest.cc - Clang errors in user code:
+  vendor/mako/src/mako/benchmarks/sto/masstree-beta/perfstat.cc - Clang errors in user code:
+  vendor/mako/src/mako/benchmarks/sto/masstree-beta/query_masstree.cc - Clang errors in user code:
+  vendor/mako/src/mako/benchmarks/sto/masstree-beta/scantest.cc - Clang errors in user code:
+  vendor/mako/src/mako/benchmarks/sto/masstree-beta/str.cc - Clang errors in user code:
+  vendor/mako/src/mako/benchmarks/sto/masstree-beta/straccum.cc - Clang errors in user code:
+  vendor/mako/src/mako/benchmarks/sto/masstree-beta/string.cc - Clang errors in user code:
+  vendor/mako/src/mako/benchmarks/sto/masstree-beta/string_slice.cc - Clang errors in user code:
+  vendor/mako/src/mako/benchmarks/sto/masstree-beta/test_atomics.cc - Clang errors in user code:
+  vendor/mako/src/mako/benchmarks/sto/masstree-beta/test_string.cc - Clang errors in user code:
+  vendor/mako/src/mako/benchmarks/sto/masstree-beta/testrunner.cc - Clang errors in user code:
+  vendor/mako/src/mako/benchmarks/sto/masstree-beta/value_array.cc - Clang errors in user code:
+  vendor/mako/src/mako/benchmarks/sto/masstree-beta/value_string.cc - Clang errors in user code:
+  vendor/mako/src/mako/benchmarks/sto/masstree-beta/value_versioned_array.cc - Clang errors in user code:
+  vendor/mako/src/mako/benchmarks/sto/pqVsIt.cc - Clang errors in user code:
+  vendor/mako/src/mako/benchmarks/sto/pqueue.cc - Clang errors in user code:
+  vendor/mako/src/mako/benchmarks/sto/predicates.cc - Clang errors in user code:
+  vendor/mako/src/mako/benchmarks/sto/rbtree.cc - Clang errors in user code:
+  vendor/mako/src/mako/benchmarks/sto/single.cc - Clang errors in user code:
+  vendor/mako/src/mako/benchmarks/sto/singleelems.cc - Clang errors in user code:
+  vendor/mako/src/mako/benchmarks/sto/trans_test.cc - Clang errors in user code:
+  vendor/mako/src/mako/benchmarks/sto/unit-rcu.cc - Clang errors in user code:
+  vendor/mako/src/mako/benchmarks/sto/unit-tarray.cc - Clang errors in user code:
+  vendor/mako/src/mako/benchmarks/sto/unit-tbox.cc - Clang errors in user code:
+  vendor/mako/src/mako/benchmarks/sto/unit-tcounter.cc - Clang errors in user code:
+  vendor/mako/src/mako/benchmarks/sto/unit-tgeneric.cc - Clang errors in user code:
+  vendor/mako/src/mako/benchmarks/sto/unit-tintpredicate.cc - Clang errors in user code:
+  vendor/mako/src/mako/benchmarks/sto/unit-tvector-nopred.cc - Clang errors in user code:
+  vendor/mako/src/mako/benchmarks/sto/unit-tvector.cc - Clang errors in user code:
+  vendor/mako/src/mako/benchmarks/sto/vector.cc - Clang errors in user code:
+  vendor/mako/src/mako/benchmarks/sync_util_init.cc - Clang errors in user code:
+  vendor/mako/src/mako/benchmarks/tpcc.cc - Clang errors in user code:
+  vendor/mako/src/mako/benchmarks/tpcc_simple.cc - Clang errors in user code:
+  vendor/mako/src/mako/benchmarks/ut/basic.cc - Clang errors in user code:
+  vendor/mako/src/mako/benchmarks/ut/erpc_client.cc - Clang errors in user code:
+  vendor/mako/src/mako/benchmarks/ut/erpc_server.cc - Clang errors in user code:
+  vendor/mako/src/mako/benchmarks/ut/simpleShards.cc - Clang errors in user code:
+  vendor/mako/src/mako/benchmarks/ut/simpleTransaction.cc - Clang errors in user code:
+  vendor/mako/src/mako/benchmarks/ut/static_int.cc - Clang errors in user code:
+  vendor/mako/src/mako/benchmarks/ycsb.cc - Clang errors in user code:
+  vendor/mako/src/mako/btree.cc - Clang errors in user code:
+  vendor/mako/src/mako/core.cc - Clang errors in user code:
+  vendor/mako/src/mako/counter.cc - Clang errors in user code:
+  vendor/mako/src/mako/disk.cpp - Clang errors in user code:
+  vendor/mako/src/mako/lib/client.cc - Clang errors in user code:
+  vendor/mako/src/mako/lib/configuration.cc - Clang errors in user code:
+  vendor/mako/src/mako/lib/erpc_backend.cc - Clang errors in user code:
+  vendor/mako/src/mako/lib/fasttransport.cc - Clang errors in user code:
+  vendor/mako/src/mako/lib/helper_queue.cc - Clang errors in user code:
+  vendor/mako/src/mako/lib/kv_store.cc - Clang errors in user code:
+  vendor/mako/src/mako/lib/message.cc - Clang errors in user code:
+  vendor/mako/src/mako/lib/multi_transport_manager.cc - Clang errors in user code:
+  vendor/mako/src/mako/lib/promise.cc - Clang errors in user code:
+  vendor/mako/src/mako/lib/rrr_rpc_backend.cc - Clang errors in user code:
+  vendor/mako/src/mako/lib/server.cc - Clang errors in user code:
+  vendor/mako/src/mako/lib/shardClient.cc - Clang errors in user code:
+  vendor/mako/src/mako/lib/timestamp.cc - Clang errors in user code:
+  vendor/mako/src/mako/lib/transport.cc - Clang errors in user code:
+  vendor/mako/src/mako/masstree/checkpoint.cc - Clang errors in user code:
+  vendor/mako/src/mako/masstree/compiler.cc - Clang errors in user code:
+  vendor/mako/src/mako/masstree/file.cc - Clang errors in user code:
+  vendor/mako/src/mako/masstree/json.cc - Clang errors in user code:
+  vendor/mako/src/mako/masstree/jsontest.cc - Clang errors in user code:
+  vendor/mako/src/mako/masstree/kvio.cc - Clang errors in user code:
+  vendor/mako/src/mako/masstree/kvrandom.cc - Clang errors in user code:
+  vendor/mako/src/mako/masstree/kvthread.cc - Clang errors in user code:
+  vendor/mako/src/mako/masstree/masstree_context.cc - Clang errors in user code:
+  vendor/mako/src/mako/masstree/misc.cc - Clang errors in user code:
+  vendor/mako/src/mako/masstree/msgpack.cc - Clang errors in user code:
+  vendor/mako/src/mako/masstree/msgpacktest.cc - Clang errors in user code:
+  vendor/mako/src/mako/masstree/mtclient.cc - Clang errors in user code:
+  vendor/mako/src/mako/masstree/mtd.cc - Clang errors in user code:
+  vendor/mako/src/mako/masstree/mttest.cc - Clang errors in user code:
+  vendor/mako/src/mako/masstree/perfstat.cc - Clang errors in user code:
+  vendor/mako/src/mako/masstree/query_masstree.cc - Clang errors in user code:
+  vendor/mako/src/mako/masstree/scantest.cc - Clang errors in user code:
+  vendor/mako/src/mako/masstree/str.cc - Clang errors in user code:
+  vendor/mako/src/mako/masstree/straccum.cc - Clang errors in user code:
+  vendor/mako/src/mako/masstree/string.cc - Clang errors in user code:
+  vendor/mako/src/mako/masstree/string_slice.cc - Clang errors in user code:
+  vendor/mako/src/mako/masstree/test_atomics.cc - Clang errors in user code:
+  vendor/mako/src/mako/masstree/test_string.cc - Clang errors in user code:
+  vendor/mako/src/mako/masstree/testrunner.cc - Clang errors in user code:
+  vendor/mako/src/mako/masstree/value_array.cc - Clang errors in user code:
+  vendor/mako/src/mako/masstree/value_string.cc - Clang errors in user code:
+  vendor/mako/src/mako/masstree/value_versioned_array.cc - Clang errors in user code:
+  vendor/mako/src/mako/memory.cc - Clang errors in user code:
+  vendor/mako/src/mako/persist_test.cc - Clang errors in user code:
+  vendor/mako/src/mako/rcu.cc - Clang errors in user code:
+  vendor/mako/src/mako/rocksdb_persistence.cc - Clang errors in user code:
+  vendor/mako/src/mako/silo_runtime.cc - Clang errors in user code:
+  vendor/mako/src/mako/stats_client.cc - Clang errors in user code:
+  vendor/mako/src/mako/stats_server.cc - Clang errors in user code:
+  vendor/mako/src/mako/test.cc - Clang errors in user code:
+  vendor/mako/src/mako/thread.cc - Clang errors in user code:
+  vendor/mako/src/mako/ticker.cc - Clang errors in user code:
+  vendor/mako/src/mako/tuple.cc - Clang errors in user code:
+  vendor/mako/src/mako/txn.cc - Clang errors in user code:
+  vendor/mako/src/mako/txn_btree.cc - Clang errors in user code:
+  vendor/mako/src/mako/txn_proto2_impl.cc - Clang errors in user code:
+  vendor/mako/src/mako/varint.cc - Clang errors in user code:
+
+=== Summary ===
+Success: 12/155 (7.7%)
+Failed: 143

@@ -539,6 +539,28 @@ struct hash<string> {
     }
 };
 
+// Forward declarations for I/O (full definitions in iostream/sstream)
+template<typename CharT, typename Traits> class basic_istream;
+
+// getline - reads from input stream into string
+template<typename CharT, typename Traits, typename Alloc>
+basic_istream<CharT, Traits>& getline(
+    basic_istream<CharT, Traits>& input,
+    basic_string<CharT, Traits, Alloc>& str,
+    CharT delim) {
+    str.clear();
+    // Stub implementation - just return the stream
+    (void)delim;
+    return input;
+}
+
+template<typename CharT, typename Traits, typename Alloc>
+basic_istream<CharT, Traits>& getline(
+    basic_istream<CharT, Traits>& input,
+    basic_string<CharT, Traits, Alloc>& str) {
+    return getline(input, str, CharT('\n'));
+}
+
 } // namespace std
 
 #endif // _FRAGILE_STRING_

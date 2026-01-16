@@ -3,17 +3,11 @@
 #define _FRAGILE_STDEXCEPT_
 
 #include "string"
+#include "exception"  // For std::exception base class
 
 namespace std {
 
-class exception {
-public:
-    exception() noexcept = default;
-    exception(const exception&) noexcept = default;
-    exception& operator=(const exception&) noexcept = default;
-    virtual ~exception() noexcept = default;
-    virtual const char* what() const noexcept { return "exception"; }
-};
+// Note: exception and bad_exception are defined in <exception>
 
 class logic_error : public exception {
 public:
@@ -81,11 +75,7 @@ public:
     explicit underflow_error(const char* what_arg) : runtime_error(what_arg) {}
 };
 
-class bad_exception : public exception {
-public:
-    bad_exception() noexcept = default;
-    virtual const char* what() const noexcept override { return "bad exception"; }
-};
+// Note: bad_exception is defined in <exception>
 
 } // namespace std
 

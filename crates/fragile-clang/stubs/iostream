@@ -14,10 +14,10 @@ using streamoff = long;
 
 // Forward declarations
 class ios_base;
-template<typename CharT, typename Traits = void> class basic_ios;
-template<typename CharT, typename Traits = void> class basic_ostream;
-template<typename CharT, typename Traits = void> class basic_istream;
-template<typename CharT, typename Traits = void> class basic_iostream;
+template<typename CharT, typename Traits = char_traits<CharT>> class basic_ios;
+template<typename CharT, typename Traits = char_traits<CharT>> class basic_ostream;
+template<typename CharT, typename Traits = char_traits<CharT>> class basic_istream;
+template<typename CharT, typename Traits = char_traits<CharT>> class basic_iostream;
 
 // ios_base
 class ios_base {
@@ -27,6 +27,7 @@ public:
     using openmode = unsigned int;
     using seekdir = int;
 
+    // Format flags
     static constexpr fmtflags boolalpha = 1 << 0;
     static constexpr fmtflags dec = 1 << 1;
     static constexpr fmtflags fixed = 1 << 2;
@@ -40,12 +41,21 @@ public:
     static constexpr fmtflags left = 1 << 10;
     static constexpr fmtflags right = 1 << 11;
     static constexpr fmtflags internal = 1 << 12;
+    static constexpr fmtflags unitbuf = 1 << 13;
+    static constexpr fmtflags uppercase = 1 << 14;
 
+    // Combined format flag masks
+    static constexpr fmtflags adjustfield = left | right | internal;
+    static constexpr fmtflags basefield = dec | oct | hex;
+    static constexpr fmtflags floatfield = scientific | fixed;
+
+    // IO state flags
     static constexpr iostate goodbit = 0;
     static constexpr iostate badbit = 1 << 0;
     static constexpr iostate eofbit = 1 << 1;
     static constexpr iostate failbit = 1 << 2;
 
+    // Open mode flags
     static constexpr openmode app = 1 << 0;
     static constexpr openmode ate = 1 << 1;
     static constexpr openmode binary = 1 << 2;
@@ -53,13 +63,31 @@ public:
     static constexpr openmode out = 1 << 4;
     static constexpr openmode trunc = 1 << 5;
 
+    // Seek direction
     static constexpr seekdir beg = 0;
     static constexpr seekdir cur = 1;
     static constexpr seekdir end = 2;
 
+    // Format flag operations
+    fmtflags flags() const { return fmtflags_; }
+    fmtflags flags(fmtflags fmtfl) { fmtflags old = fmtflags_; fmtflags_ = fmtfl; return old; }
+    fmtflags setf(fmtflags fmtfl) { fmtflags old = fmtflags_; fmtflags_ |= fmtfl; return old; }
+    fmtflags setf(fmtflags fmtfl, fmtflags mask) { fmtflags old = fmtflags_; fmtflags_ = (fmtflags_ & ~mask) | (fmtfl & mask); return old; }
+    void unsetf(fmtflags mask) { fmtflags_ &= ~mask; }
+
+    // Precision and width
+    streamsize precision() const { return precision_; }
+    streamsize precision(streamsize prec) { streamsize old = precision_; precision_ = prec; return old; }
+    streamsize width() const { return width_; }
+    streamsize width(streamsize wide) { streamsize old = width_; width_ = wide; return old; }
+
 protected:
     ios_base() = default;
     ~ios_base() = default;
+
+    fmtflags fmtflags_ = dec | skipws;
+    streamsize precision_ = 6;
+    streamsize width_ = 0;
 };
 
 // basic_ios

@@ -4,6 +4,10 @@
 #ifndef _FRAGILE_CSTDINT_
 #define _FRAGILE_CSTDINT_
 
+// Include commonly needed headers
+#include "endian.h"  // Byte order macros (be16toh, htobe16, etc.)
+#include "cctype"    // Character functions (tolower, toupper, etc.)
+
 // nullptr_t needs to be defined before other types
 namespace std {
     using nullptr_t = decltype(nullptr);
@@ -14,12 +18,14 @@ namespace std {
     using int8_t = signed char;
     using int16_t = short;
     using int32_t = int;
-    using int64_t = long long;
+    // On x86_64 Linux, int64_t is 'long', not 'long long' (both are 64-bit but different types)
+    using int64_t = long;
 
     using uint8_t = unsigned char;
     using uint16_t = unsigned short;
     using uint32_t = unsigned int;
-    using uint64_t = unsigned long long;
+    // On x86_64 Linux, uint64_t is 'unsigned long', not 'unsigned long long'
+    using uint64_t = unsigned long;
 
     using size_t = unsigned long;
     using ssize_t = long;  // POSIX signed size type

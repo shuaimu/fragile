@@ -1,0 +1,74 @@
+// Minimal typeinfo stub for fragile parsing
+#ifndef _TYPEINFO
+#define _TYPEINFO
+
+#include "cstddef"
+#include "exception"  // For std::exception base class
+
+namespace std {
+
+// type_info class - provides runtime type information
+class type_info {
+public:
+    virtual ~type_info();
+
+    // Deleted copy constructor and assignment
+    type_info(const type_info&) = delete;
+    type_info& operator=(const type_info&) = delete;
+
+    // Comparison operators
+    bool operator==(const type_info& rhs) const noexcept {
+        return __name == rhs.__name;
+    }
+
+    bool operator!=(const type_info& rhs) const noexcept {
+        return !(*this == rhs);
+    }
+
+    // Returns implementation-defined name
+    const char* name() const noexcept {
+        return __name;
+    }
+
+    // C++11: hash_code
+    size_t hash_code() const noexcept {
+        // Simple hash based on name pointer
+        return reinterpret_cast<size_t>(__name);
+    }
+
+    // C++11: before (for ordering)
+    bool before(const type_info& rhs) const noexcept {
+        return __name < rhs.__name;
+    }
+
+protected:
+    // Protected constructor - only compiler can create type_info
+    explicit type_info(const char* name) : __name(name) {}
+
+private:
+    const char* __name;
+};
+
+// bad_cast exception
+class bad_cast : public exception {
+public:
+    bad_cast() noexcept {}
+    virtual ~bad_cast() noexcept;
+    virtual const char* what() const noexcept {
+        return "std::bad_cast";
+    }
+};
+
+// bad_typeid exception
+class bad_typeid : public exception {
+public:
+    bad_typeid() noexcept {}
+    virtual ~bad_typeid() noexcept;
+    virtual const char* what() const noexcept {
+        return "std::bad_typeid";
+    }
+};
+
+} // namespace std
+
+#endif // _TYPEINFO
