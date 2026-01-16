@@ -2155,7 +2155,7 @@ impl ClangParser {
             let mut info = AliasInfo {
                 underlying_type: None,
                 parser: self,
-                template_params: template_params,
+                template_params,
             };
             let info_ptr: *mut AliasInfo = &mut info;
 
