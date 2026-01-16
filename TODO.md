@@ -484,7 +484,7 @@ Migration: After C++20 support is complete, deprecate these.
 ## 5. Testing & Milestones
 
 ### 5.1 Unit Tests
-- [x] fragile-clang: 539 tests passing (27 unit + 512 integration) - includes 10 coroutine + 7 exception + 6 RTTI + 8 promise type + 8 awaitable + 8 generator + 3 noexcept + 1 member access + 1 stack unwinding + 284 mako file tests [26:01:16, 21:45]
+- [x] fragile-clang: 596 tests passing (27 unit + 569 integration) - includes 10 coroutine + 7 exception + 6 RTTI + 8 promise type + 8 awaitable + 8 generator + 3 noexcept + 1 member access + 1 stack unwinding + 338 mako file tests (100% coverage) [26:01:16, 22:40]
 - [x] fragile-rustc-driver: 7 tests passing (6 original + 1 rustc_integration when feature enabled)
 - [x] fragile-runtime: Compiles
 
