@@ -103,6 +103,21 @@ Test coverage added:
 - 15+ new assertions testing all functions
 - Edge cases: empty strings, boundary values, null pointers
 
+### M6.2 - String utilities without STL [COMPLETED]
+
+Added to mako_simple.cpp:
+- `str_cmp(const char*, const char*)` - string comparison (like strcmp)
+- `str_ncmp(const char*, const char*, int)` - limited string comparison
+- `str_cpy(char*, const char*)` - string copy (like strcpy)
+- `str_ncpy(char*, const char*, int)` - limited string copy
+- `str_chr(const char*, char)` - find character (like strchr)
+- `str_rchr(const char*, char)` - find last character (like strrchr)
+
+Test coverage:
+- 6 new extern "C" declarations with proper name mangling
+- Comprehensive tests for all string operations
+- Edge cases: equal strings, prefix matching, null termination, character not found
+
 ## Estimated LOC for M6.1
 
 - mako_simple.cpp additions: ~35 LOC

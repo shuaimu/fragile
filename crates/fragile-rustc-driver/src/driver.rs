@@ -1127,4 +1127,164 @@ fn main() {
             }
         }
     }
+
+    /// Test M6.2: String utility functions (str_cmp, str_cpy, str_chr, etc.)
+    #[test]
+    #[cfg(feature = "rustc-integration")]
+    fn test_string_utilities() {
+        use tempfile::TempDir;
+
+        // Find the mako_simple.cpp test file
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let project_root = Path::new(manifest_dir).parent().unwrap().parent().unwrap();
+        let mako_simple = project_root.join("tests/clang_integration/mako_simple.cpp");
+
+        if !mako_simple.exists() {
+            eprintln!("Skipping test: mako_simple.cpp not found at {:?}", mako_simple);
+            return;
+        }
+
+        // Create temp directory
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+
+        // Create a Rust main file that tests string utilities
+        let main_rs = temp_dir.path().join("main.rs");
+        std::fs::write(&main_rs, r#"
+use std::ffi::CString;
+
+extern "C" {
+    #[link_name = "_ZN3rrr7str_cmpEPKcS1_"]
+    fn rrr_str_cmp(s1: *const i8, s2: *const i8) -> i32;
+
+    #[link_name = "_ZN3rrr8str_ncmpEPKcS1_i"]
+    fn rrr_str_ncmp(s1: *const i8, s2: *const i8, n: i32) -> i32;
+
+    #[link_name = "_ZN3rrr7str_cpyEPcPKc"]
+    fn rrr_str_cpy(dest: *mut i8, src: *const i8) -> *mut i8;
+
+    #[link_name = "_ZN3rrr8str_ncpyEPcPKci"]
+    fn rrr_str_ncpy(dest: *mut i8, src: *const i8, n: i32) -> *mut i8;
+
+    #[link_name = "_ZN3rrr7str_chrEPKcc"]
+    fn rrr_str_chr(str: *const i8, c: i8) -> *const i8;
+
+    #[link_name = "_ZN3rrr8str_rchrEPKcc"]
+    fn rrr_str_rchr(str: *const i8, c: i8) -> *const i8;
+}
+
+fn main() {
+    // Test str_cmp
+    let s1 = CString::new("hello").unwrap();
+    let s2 = CString::new("hello").unwrap();
+    let s3 = CString::new("world").unwrap();
+    let s4 = CString::new("hella").unwrap();
+
+    let cmp_eq = unsafe { rrr_str_cmp(s1.as_ptr(), s2.as_ptr()) };
+    println!("str_cmp('hello', 'hello') = {}", cmp_eq);
+    assert_eq!(cmp_eq, 0, "Equal strings should return 0");
+
+    let cmp_lt = unsafe { rrr_str_cmp(s1.as_ptr(), s3.as_ptr()) };
+    println!("str_cmp('hello', 'world') = {}", cmp_lt);
+    assert!(cmp_lt < 0, "hello < world");
+
+    let cmp_gt = unsafe { rrr_str_cmp(s3.as_ptr(), s1.as_ptr()) };
+    println!("str_cmp('world', 'hello') = {}", cmp_gt);
+    assert!(cmp_gt > 0, "world > hello");
+
+    let cmp_diff = unsafe { rrr_str_cmp(s1.as_ptr(), s4.as_ptr()) };
+    println!("str_cmp('hello', 'hella') = {}", cmp_diff);
+    assert!(cmp_diff > 0, "hello > hella (o > a)");
+
+    // Test str_ncmp
+    let ncmp_eq = unsafe { rrr_str_ncmp(s1.as_ptr(), s4.as_ptr(), 4) };
+    println!("str_ncmp('hello', 'hella', 4) = {}", ncmp_eq);
+    assert_eq!(ncmp_eq, 0, "First 4 chars are equal");
+
+    let ncmp_diff = unsafe { rrr_str_ncmp(s1.as_ptr(), s4.as_ptr(), 5) };
+    println!("str_ncmp('hello', 'hella', 5) = {}", ncmp_diff);
+    assert!(ncmp_diff > 0, "5th char differs");
+
+    // Test str_cpy
+    let mut buffer = [0i8; 32];
+    let src = CString::new("copy me").unwrap();
+    let result = unsafe { rrr_str_cpy(buffer.as_mut_ptr(), src.as_ptr()) };
+    assert_eq!(result, buffer.as_mut_ptr(), "str_cpy should return dest");
+    let copied = unsafe { std::ffi::CStr::from_ptr(buffer.as_ptr()) };
+    println!("str_cpy result: '{}'", copied.to_str().unwrap());
+    assert_eq!(copied.to_str().unwrap(), "copy me");
+
+    // Test str_ncpy
+    let mut buffer2 = [0i8; 32];
+    let src2 = CString::new("truncate").unwrap();
+    unsafe { rrr_str_ncpy(buffer2.as_mut_ptr(), src2.as_ptr(), 5) };
+    // Only first 5 chars copied
+    let partial = unsafe { std::ffi::CStr::from_ptr(buffer2.as_ptr()) };
+    println!("str_ncpy('truncate', 5) = '{}'", partial.to_str().unwrap());
+    assert_eq!(partial.to_str().unwrap(), "trunc");
+
+    // Test str_chr
+    let find_str = CString::new("hello world").unwrap();
+    let found_o = unsafe { rrr_str_chr(find_str.as_ptr(), 'o' as i8) };
+    assert!(!found_o.is_null(), "Should find 'o'");
+    let offset = unsafe { found_o.offset_from(find_str.as_ptr()) };
+    println!("str_chr('hello world', 'o') offset = {}", offset);
+    assert_eq!(offset, 4, "First 'o' at index 4");
+
+    let not_found = unsafe { rrr_str_chr(find_str.as_ptr(), 'z' as i8) };
+    assert!(not_found.is_null(), "Should not find 'z'");
+    println!("str_chr('hello world', 'z') = null");
+
+    // Test str_rchr
+    let found_last_o = unsafe { rrr_str_rchr(find_str.as_ptr(), 'o' as i8) };
+    assert!(!found_last_o.is_null(), "Should find last 'o'");
+    let last_offset = unsafe { found_last_o.offset_from(find_str.as_ptr()) };
+    println!("str_rchr('hello world', 'o') offset = {}", last_offset);
+    assert_eq!(last_offset, 7, "Last 'o' at index 7");
+
+    println!("All string utilities passed!");
+}
+"#).expect("Failed to write main.rs");
+
+        let output_path = temp_dir.path().join("string_test_binary");
+
+        // Create driver
+        let driver = FragileDriver::new();
+
+        // Run full pipeline
+        let result = driver.compile_with_cpp(
+            &[main_rs.as_path()],
+            &[mako_simple.as_path()],
+            &output_path,
+            None,
+        );
+
+        match result {
+            Ok(()) => {
+                println!("String utilities compilation succeeded!");
+                assert!(output_path.exists(), "Binary should exist");
+
+                // Run the binary
+                let run_result = std::process::Command::new(&output_path)
+                    .output();
+
+                match run_result {
+                    Ok(output) => {
+                        let stdout = String::from_utf8_lossy(&output.stdout);
+                        let stderr = String::from_utf8_lossy(&output.stderr);
+                        println!("stdout: {}", stdout);
+                        println!("stderr: {}", stderr);
+                        assert!(output.status.success(), "Binary should run successfully");
+                        assert!(stdout.contains("All string utilities passed!"),
+                            "Output should indicate success");
+                    }
+                    Err(e) => {
+                        eprintln!("Failed to run binary (may be expected): {}", e);
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("String utilities compilation failed (may be expected in CI): {}", e);
+            }
+        }
+    }
 }

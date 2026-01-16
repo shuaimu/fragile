@@ -92,4 +92,94 @@ int str_len(const char* str) {
     return len;
 }
 
+// M6.2: String utilities without STL
+
+// String compare (like strcmp)
+// Returns: negative if s1 < s2, 0 if equal, positive if s1 > s2
+// Uses C++ name mangling: _ZN3rrr7str_cmpEPKcS1_
+int str_cmp(const char* s1, const char* s2) {
+    while (*s1 && (*s1 == *s2)) {
+        s1++;
+        s2++;
+    }
+    return static_cast<unsigned char>(*s1) - static_cast<unsigned char>(*s2);
+}
+
+// String compare with length limit (like strncmp)
+// Uses C++ name mangling: _ZN3rrr8str_ncmpEPKcS1_i
+int str_ncmp(const char* s1, const char* s2, int n) {
+    for (int i = 0; i < n; i++) {
+        if (s1[i] != s2[i]) {
+            return static_cast<unsigned char>(s1[i]) - static_cast<unsigned char>(s2[i]);
+        }
+        if (s1[i] == '\0') {
+            return 0;
+        }
+    }
+    return 0;
+}
+
+// Copy string (like strcpy)
+// Returns pointer to destination
+// Uses C++ name mangling: _ZN3rrr7str_cpyEPcPKc
+char* str_cpy(char* dest, const char* src) {
+    char* ret = dest;
+    while ((*dest++ = *src++)) {
+        // Copy until null terminator
+    }
+    return ret;
+}
+
+// Copy string with length limit (like strncpy)
+// Uses C++ name mangling: _ZN3rrr8str_ncpyEPcPKci
+char* str_ncpy(char* dest, const char* src, int n) {
+    char* ret = dest;
+    int i = 0;
+    while (i < n && src[i] != '\0') {
+        dest[i] = src[i];
+        i++;
+    }
+    // Pad with zeros if source is shorter
+    while (i < n) {
+        dest[i] = '\0';
+        i++;
+    }
+    return ret;
+}
+
+// Find character in string (like strchr)
+// Returns pointer to first occurrence or null
+// Uses C++ name mangling: _ZN3rrr7str_chrEPKcc
+const char* str_chr(const char* str, char c) {
+    while (*str) {
+        if (*str == c) {
+            return str;
+        }
+        str++;
+    }
+    // Check for null terminator match
+    if (c == '\0') {
+        return str;
+    }
+    return nullptr;
+}
+
+// Find last character in string (like strrchr)
+// Returns pointer to last occurrence or null
+// Uses C++ name mangling: _ZN3rrr8str_rchrEPKcc
+const char* str_rchr(const char* str, char c) {
+    const char* last = nullptr;
+    while (*str) {
+        if (*str == c) {
+            last = str;
+        }
+        str++;
+    }
+    // Check for null terminator match
+    if (c == '\0') {
+        return str;
+    }
+    return last;
+}
+
 } // namespace rrr
