@@ -77,9 +77,7 @@ void swap(T& a, T& b) noexcept {
     b = static_cast<T&&>(tmp);
 }
 
-// declval
-template<typename T>
-T&& declval() noexcept;
+// declval is in type_traits
 
 // integer_sequence
 template<typename T, T... Ints>

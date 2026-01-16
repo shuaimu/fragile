@@ -1,0 +1,230 @@
+// Minimal variant stub for fragile parsing (C++17)
+#ifndef _FRAGILE_VARIANT_
+#define _FRAGILE_VARIANT_
+
+#include "cstdint"
+#include "type_traits"
+#include "utility"
+
+namespace std {
+
+// variant_size
+template<typename T>
+struct variant_size;
+
+template<typename... Types>
+struct variant_size<variant<Types...>> : integral_constant<size_t, sizeof...(Types)> {};
+
+template<typename T>
+inline constexpr size_t variant_size_v = variant_size<T>::value;
+
+// variant_alternative
+template<size_t I, typename T>
+struct variant_alternative;
+
+// Forward declaration of variant
+template<typename... Types>
+class variant;
+
+// variant_npos
+inline constexpr size_t variant_npos = static_cast<size_t>(-1);
+
+// monostate (empty alternative)
+struct monostate {};
+constexpr bool operator<(monostate, monostate) noexcept { return false; }
+constexpr bool operator>(monostate, monostate) noexcept { return false; }
+constexpr bool operator<=(monostate, monostate) noexcept { return true; }
+constexpr bool operator>=(monostate, monostate) noexcept { return true; }
+constexpr bool operator==(monostate, monostate) noexcept { return true; }
+constexpr bool operator!=(monostate, monostate) noexcept { return false; }
+
+// bad_variant_access exception
+class bad_variant_access {
+public:
+    bad_variant_access() noexcept = default;
+    virtual ~bad_variant_access() noexcept = default;
+    virtual const char* what() const noexcept { return "bad variant access"; }
+};
+
+// variant class template
+template<typename... Types>
+class variant {
+public:
+    // Constructors
+    constexpr variant() noexcept = default;
+
+    constexpr variant(const variant& other) = default;
+    constexpr variant(variant&& other) noexcept = default;
+
+    template<typename T>
+    constexpr variant(T&& t) noexcept {
+        index_ = 0;  // Simplified: always set to first type
+    }
+
+    template<typename T, typename... Args>
+    constexpr explicit variant(in_place_type_t<T>, Args&&... args) {
+        index_ = 0;  // Simplified
+    }
+
+    template<size_t I, typename... Args>
+    constexpr explicit variant(in_place_index_t<I>, Args&&... args) {
+        index_ = I;
+    }
+
+    ~variant() = default;
+
+    // Assignment
+    constexpr variant& operator=(const variant& other) = default;
+    constexpr variant& operator=(variant&& other) noexcept = default;
+
+    template<typename T>
+    constexpr variant& operator=(T&& t) noexcept {
+        return *this;
+    }
+
+    // Observers
+    constexpr size_t index() const noexcept { return index_; }
+    constexpr bool valueless_by_exception() const noexcept { return index_ == variant_npos; }
+
+    // Modifiers
+    template<typename T, typename... Args>
+    T& emplace(Args&&... args) {
+        index_ = 0;  // Simplified
+        return *reinterpret_cast<T*>(&storage_);
+    }
+
+    template<size_t I, typename... Args>
+    auto& emplace(Args&&... args) {
+        index_ = I;
+        return *reinterpret_cast<char*>(&storage_);
+    }
+
+    constexpr void swap(variant& other) noexcept {
+        std::swap(index_, other.index_);
+        std::swap(storage_, other.storage_);
+    }
+
+private:
+    size_t index_ = 0;
+    aligned_storage_t<64, 8> storage_;
+};
+
+// in_place helpers
+template<typename T>
+struct in_place_type_t { explicit in_place_type_t() = default; };
+
+template<typename T>
+inline constexpr in_place_type_t<T> in_place_type{};
+
+template<size_t I>
+struct in_place_index_t { explicit in_place_index_t() = default; };
+
+template<size_t I>
+inline constexpr in_place_index_t<I> in_place_index{};
+
+// get functions
+template<size_t I, typename... Types>
+constexpr auto& get(variant<Types...>& v) {
+    return *reinterpret_cast<char*>(&v);
+}
+
+template<size_t I, typename... Types>
+constexpr auto&& get(variant<Types...>&& v) {
+    return std::move(*reinterpret_cast<char*>(&v));
+}
+
+template<size_t I, typename... Types>
+constexpr const auto& get(const variant<Types...>& v) {
+    return *reinterpret_cast<const char*>(&v);
+}
+
+template<typename T, typename... Types>
+constexpr T& get(variant<Types...>& v) {
+    return *reinterpret_cast<T*>(&v);
+}
+
+template<typename T, typename... Types>
+constexpr T&& get(variant<Types...>&& v) {
+    return std::move(*reinterpret_cast<T*>(&v));
+}
+
+template<typename T, typename... Types>
+constexpr const T& get(const variant<Types...>& v) {
+    return *reinterpret_cast<const T*>(&v);
+}
+
+// get_if functions
+template<size_t I, typename... Types>
+constexpr auto* get_if(variant<Types...>* pv) noexcept {
+    if (!pv || pv->index() != I) return static_cast<char*>(nullptr);
+    return reinterpret_cast<char*>(pv);
+}
+
+template<size_t I, typename... Types>
+constexpr const auto* get_if(const variant<Types...>* pv) noexcept {
+    if (!pv || pv->index() != I) return static_cast<const char*>(nullptr);
+    return reinterpret_cast<const char*>(pv);
+}
+
+template<typename T, typename... Types>
+constexpr T* get_if(variant<Types...>* pv) noexcept {
+    return reinterpret_cast<T*>(pv);
+}
+
+template<typename T, typename... Types>
+constexpr const T* get_if(const variant<Types...>* pv) noexcept {
+    return reinterpret_cast<const T*>(pv);
+}
+
+// holds_alternative
+template<typename T, typename... Types>
+constexpr bool holds_alternative(const variant<Types...>& v) noexcept {
+    return true;  // Simplified
+}
+
+// visit
+template<typename Visitor, typename... Variants>
+constexpr decltype(auto) visit(Visitor&& vis, Variants&&... vars) {
+    return vis();  // Simplified: doesn't actually dispatch
+}
+
+// Comparison operators
+template<typename... Types>
+constexpr bool operator==(const variant<Types...>& v, const variant<Types...>& w) {
+    return v.index() == w.index();
+}
+
+template<typename... Types>
+constexpr bool operator!=(const variant<Types...>& v, const variant<Types...>& w) {
+    return !(v == w);
+}
+
+template<typename... Types>
+constexpr bool operator<(const variant<Types...>& v, const variant<Types...>& w) {
+    return v.index() < w.index();
+}
+
+template<typename... Types>
+constexpr bool operator>(const variant<Types...>& v, const variant<Types...>& w) {
+    return w < v;
+}
+
+template<typename... Types>
+constexpr bool operator<=(const variant<Types...>& v, const variant<Types...>& w) {
+    return !(v > w);
+}
+
+template<typename... Types>
+constexpr bool operator>=(const variant<Types...>& v, const variant<Types...>& w) {
+    return !(v < w);
+}
+
+// swap
+template<typename... Types>
+constexpr void swap(variant<Types...>& lhs, variant<Types...>& rhs) noexcept {
+    lhs.swap(rhs);
+}
+
+} // namespace std
+
+#endif // _FRAGILE_VARIANT_

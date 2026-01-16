@@ -178,7 +178,8 @@ See [PLAN_CPP20_MAKO.md](PLAN_CPP20_MAKO.md) for detailed plan.
   - [x] F.1.2 Parser improvements: better error messages with file/line, KeepGoing mode, system header filtering [26:01:16, 04:05]
   - [x] F.1.3 Stub headers for STL types (cstdint, random) [26:01:16, 04:15]
   - [x] `vendor/mako/src/rrr/misc/rand.cpp` - **PARSED**: 225 functions extracted including rdtsc [26:01:16, 04:15]
-  - [ ] `vendor/mako/src/rrr/misc/marshal.cpp`
+  - [x] F.1.4 Comprehensive stub headers (algorithm, atomic, chrono, mutex, etc.) and -isystem support [26:01:16, 12:30]
+  - [x] `vendor/mako/src/rrr/misc/marshal.cpp` - **PARSED**: 52 functions extracted (read/write operators) [26:01:16, 12:30]
   - [ ] `vendor/mako/src/rrr/rpc/server.cpp`
 - [ ] **F.2 Coroutine Files**
   - [ ] `vendor/mako/src/mako/vec/coroutine.cpp`

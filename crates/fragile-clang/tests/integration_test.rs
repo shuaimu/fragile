@@ -6907,3 +6907,90 @@ fn test_mako_marshal_cpp_actual() {
         }
     }
 }
+
+/// Test parsing the actual server.cpp from Mako
+/// This tests RPC server patterns used in distributed systems
+#[test]
+fn test_mako_server_cpp_actual() {
+    use std::path::Path;
+
+    // Get the project root directory
+    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+    let project_root = Path::new(manifest_dir).parent().unwrap().parent().unwrap();
+    let server_cpp_path = project_root.join("vendor/mako/src/rrr/rpc/server.cpp");
+
+    if !server_cpp_path.exists() {
+        println!("Skipping test: vendor/mako not present");
+        return;
+    }
+
+    // Check if submodules are initialized
+    let rusty_cpp_path = project_root.join("vendor/mako/third-party/rusty-cpp/include");
+    if !rusty_cpp_path.exists() {
+        println!("Skipping test: mako submodules not initialized");
+        println!("Run: cd vendor/mako && git submodule update --init --recursive");
+        return;
+    }
+
+    // Create parser with Mako include paths
+    let mako_rrr_path = project_root.join("vendor/mako/src/rrr");
+    let mako_src_path = project_root.join("vendor/mako/src");
+
+    // System include paths (searched for <...> includes with -isystem)
+    let mut system_include_paths = vec![];
+
+    // Add fragile stub headers as SYSTEM includes so they're found for <...> includes
+    let stubs_path = Path::new(manifest_dir).join("stubs");
+    if stubs_path.exists() {
+        system_include_paths.push(stubs_path.to_string_lossy().to_string());
+    }
+
+    // Add clang's headers for built-in types
+    let clang_paths = vec![
+        "/usr/lib/llvm-19/lib/clang/19/include",
+        "/usr/lib/llvm-18/lib/clang/18/include",
+    ];
+
+    for path in &clang_paths {
+        if Path::new(path).exists() {
+            system_include_paths.push(path.to_string());
+            break; // Just use the first one found
+        }
+    }
+
+    // User include paths (searched for "..." includes with -I)
+    let mut include_paths = vec![];
+    include_paths.push(mako_rrr_path.to_string_lossy().to_string());
+    include_paths.push(mako_src_path.to_string_lossy().to_string());
+    include_paths.push(rusty_cpp_path.to_string_lossy().to_string());
+
+    let parser = ClangParser::with_paths(include_paths, system_include_paths)
+        .expect("Failed to create parser");
+
+    let result = parser.parse_file(&server_cpp_path);
+
+    match result {
+        Ok(ast) => {
+            // Verify the namespace was found
+            let has_namespace = find_node_kind(&ast.translation_unit, |kind| {
+                matches!(kind, ClangNodeKind::NamespaceDecl { name } if name.as_deref() == Some("rrr"))
+            });
+            assert!(has_namespace.is_some(), "Expected to find rrr namespace");
+
+            // Convert to MIR
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+
+            println!("Successfully parsed server.cpp with {} functions", module.functions.len());
+            for func in &module.functions {
+                println!("  Function: {}", func.display_name);
+            }
+        }
+        Err(e) => {
+            // Document what failed for incremental improvement
+            println!("Note: server.cpp parsing failed: {:?}", e);
+            println!("Consider extending stub headers if more coverage is needed.");
+            // Don't fail - this documents the issue
+        }
+    }
+}

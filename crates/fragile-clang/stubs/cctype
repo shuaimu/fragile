@@ -1,0 +1,43 @@
+// Minimal cctype stub for fragile parsing
+#ifndef _FRAGILE_CCTYPE_
+#define _FRAGILE_CCTYPE_
+
+namespace std {
+
+// Character classification functions
+int isalnum(int ch);
+int isalpha(int ch);
+int islower(int ch);
+int isupper(int ch);
+int isdigit(int ch);
+int isxdigit(int ch);
+int iscntrl(int ch);
+int isgraph(int ch);
+int isspace(int ch);
+int isblank(int ch);
+int isprint(int ch);
+int ispunct(int ch);
+
+// Character conversion functions
+int tolower(int ch);
+int toupper(int ch);
+
+}
+
+// C-style global functions
+using std::isalnum;
+using std::isalpha;
+using std::islower;
+using std::isupper;
+using std::isdigit;
+using std::isxdigit;
+using std::iscntrl;
+using std::isgraph;
+using std::isspace;
+using std::isblank;
+using std::isprint;
+using std::ispunct;
+using std::tolower;
+using std::toupper;
+
+#endif // _FRAGILE_CCTYPE_

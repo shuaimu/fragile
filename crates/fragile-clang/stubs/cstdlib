@@ -1,0 +1,111 @@
+// Minimal cstdlib stub for fragile parsing
+#ifndef _FRAGILE_CSTDLIB_
+#define _FRAGILE_CSTDLIB_
+
+#include "cstdint"
+
+// Macro constants
+#define EXIT_SUCCESS 0
+#define EXIT_FAILURE 1
+#define RAND_MAX 2147483647
+#define MB_CUR_MAX 16
+
+namespace std {
+
+// Memory management
+void* malloc(size_t size);
+void* calloc(size_t num, size_t size);
+void* realloc(void* ptr, size_t new_size);
+void free(void* ptr);
+void* aligned_alloc(size_t alignment, size_t size);
+
+// Program termination
+[[noreturn]] void abort() noexcept;
+[[noreturn]] void exit(int status);
+[[noreturn]] void quick_exit(int status);
+[[noreturn]] void _Exit(int status) noexcept;
+int atexit(void (*func)());
+int at_quick_exit(void (*func)());
+
+// Environment
+char* getenv(const char* name);
+
+// Numeric conversions
+double atof(const char* str);
+int atoi(const char* str);
+long atol(const char* str);
+long long atoll(const char* str);
+double strtod(const char* str, char** str_end);
+float strtof(const char* str, char** str_end);
+long double strtold(const char* str, char** str_end);
+long strtol(const char* str, char** str_end, int base);
+long long strtoll(const char* str, char** str_end, int base);
+unsigned long strtoul(const char* str, char** str_end, int base);
+unsigned long long strtoull(const char* str, char** str_end, int base);
+
+// Random number generation
+int rand();
+void srand(unsigned int seed);
+
+// Integer arithmetic
+int abs(int n);
+long abs(long n);
+long long abs(long long n);
+long labs(long n);
+long long llabs(long long n);
+
+struct div_t { int quot; int rem; };
+struct ldiv_t { long quot; long rem; };
+struct lldiv_t { long long quot; long long rem; };
+
+div_t div(int x, int y);
+ldiv_t div(long x, long y);
+lldiv_t div(long long x, long long y);
+ldiv_t ldiv(long x, long y);
+lldiv_t lldiv(long long x, long long y);
+
+// Searching and sorting
+void* bsearch(const void* key, const void* ptr, size_t count, size_t size, int (*comp)(const void*, const void*));
+void qsort(void* ptr, size_t count, size_t size, int (*comp)(const void*, const void*));
+
+// Multibyte/wide character conversion
+int mblen(const char* s, size_t n);
+int mbtowc(wchar_t* pwc, const char* s, size_t n);
+int wctomb(char* s, wchar_t wc);
+size_t mbstowcs(wchar_t* dst, const char* src, size_t len);
+size_t wcstombs(char* dst, const wchar_t* src, size_t len);
+
+}
+
+// C-style global functions
+using std::malloc;
+using std::calloc;
+using std::realloc;
+using std::free;
+using std::abort;
+using std::exit;
+using std::atexit;
+using std::getenv;
+using std::atof;
+using std::atoi;
+using std::atol;
+using std::atoll;
+using std::strtod;
+using std::strtof;
+using std::strtold;
+using std::strtol;
+using std::strtoll;
+using std::strtoul;
+using std::strtoull;
+using std::rand;
+using std::srand;
+using std::abs;
+using std::labs;
+using std::llabs;
+using std::div;
+using std::ldiv;
+using std::lldiv;
+using std::bsearch;
+using std::qsort;
+
+#endif // _FRAGILE_CSTDLIB_

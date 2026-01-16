@@ -3,6 +3,7 @@
 #define _FRAGILE_FUNCTIONAL_
 
 #include "cstdint"
+#include "cstdlib"
 
 namespace std {
 

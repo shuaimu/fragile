@@ -1,0 +1,114 @@
+// Minimal thread stub for fragile parsing
+#ifndef _FRAGILE_THREAD_
+#define _FRAGILE_THREAD_
+
+#include "cstdint"
+#include "chrono"
+#include "functional"
+#include "utility"
+
+namespace std {
+
+// thread class
+class thread {
+public:
+    class id {
+    public:
+        id() noexcept : id_(0) {}
+        explicit id(unsigned long id) noexcept : id_(id) {}
+
+        bool operator==(const id& other) const noexcept { return id_ == other.id_; }
+        bool operator!=(const id& other) const noexcept { return id_ != other.id_; }
+        bool operator<(const id& other) const noexcept { return id_ < other.id_; }
+        bool operator<=(const id& other) const noexcept { return id_ <= other.id_; }
+        bool operator>(const id& other) const noexcept { return id_ > other.id_; }
+        bool operator>=(const id& other) const noexcept { return id_ >= other.id_; }
+
+    private:
+        unsigned long id_;
+        friend class thread;
+    };
+
+    using native_handle_type = void*;
+
+    thread() noexcept : joinable_(false) {}
+
+    template<typename F, typename... Args>
+    explicit thread(F&& f, Args&&... args) : joinable_(true) {
+        // Stub: actual thread creation not implemented
+    }
+
+    ~thread() {
+        if (joinable()) {
+            // In real implementation, would call std::terminate()
+        }
+    }
+
+    thread(thread&& other) noexcept : id_(other.id_), joinable_(other.joinable_) {
+        other.id_ = id();
+        other.joinable_ = false;
+    }
+
+    thread& operator=(thread&& other) noexcept {
+        if (joinable()) {
+            // In real implementation, would call std::terminate()
+        }
+        id_ = other.id_;
+        joinable_ = other.joinable_;
+        other.id_ = id();
+        other.joinable_ = false;
+        return *this;
+    }
+
+    thread(const thread&) = delete;
+    thread& operator=(const thread&) = delete;
+
+    bool joinable() const noexcept { return joinable_; }
+
+    id get_id() const noexcept { return id_; }
+
+    native_handle_type native_handle() { return nullptr; }
+
+    static unsigned int hardware_concurrency() noexcept { return 1; }
+
+    void join() {
+        joinable_ = false;
+    }
+
+    void detach() {
+        joinable_ = false;
+    }
+
+    void swap(thread& other) noexcept {
+        std::swap(id_, other.id_);
+        std::swap(joinable_, other.joinable_);
+    }
+
+private:
+    id id_;
+    bool joinable_;
+};
+
+inline void swap(thread& x, thread& y) noexcept {
+    x.swap(y);
+}
+
+namespace this_thread {
+    thread::id get_id() noexcept;
+
+    void yield() noexcept;
+
+    template<typename Rep, typename Period>
+    void sleep_for(const chrono::duration<Rep, Period>& rel_time) {
+        // Stub: actual sleep not implemented
+    }
+
+    template<typename Clock, typename Duration>
+    void sleep_until(const chrono::time_point<Clock, Duration>& abs_time) {
+        // Stub: actual sleep not implemented
+    }
+}
+
+} // namespace std
+
+#endif // _FRAGILE_THREAD_

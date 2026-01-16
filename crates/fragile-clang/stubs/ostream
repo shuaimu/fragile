@@ -1,0 +1,9 @@
+// Minimal ostream stub for fragile parsing
+#ifndef _FRAGILE_OSTREAM_
+#define _FRAGILE_OSTREAM_
+
+#include "iostream"
+
+// iostream already includes basic_ostream support
+
+#endif // _FRAGILE_OSTREAM_
