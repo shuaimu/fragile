@@ -20,8 +20,8 @@ mod deduce;
 
 pub use parse::ClangParser;
 pub use convert::MirConverter;
-pub use ast::{AccessSpecifier, ClangAst, ClangNode, ClangNodeKind, ConstructorKind};
-pub use types::CppType;
+pub use ast::{AccessSpecifier, ClangAst, ClangNode, ClangNodeKind, ConstructorKind, TypeTraitKind};
+pub use types::{CppType, TypeProperties, TypeTraitResult, TypeTraitEvaluator};
 pub use resolve::NameResolver;
 pub use deduce::{DeductionError, TypeDeducer};
 

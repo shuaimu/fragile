@@ -464,3 +464,155 @@ pub struct TypeProperties {
     /// True if the destructor is trivial
     pub is_trivially_destructible: bool,
 }
+
+/// Type trait evaluation results.
+/// Used for evaluating Clang's built-in type traits like __is_integral(T).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TypeTraitResult {
+    /// The trait evaluates to a known boolean value
+    Value(bool),
+    /// The trait cannot be evaluated (e.g., depends on template parameters)
+    Dependent,
+}
+
+impl TypeTraitResult {
+    /// Returns true if this result is a definite true value.
+    pub fn is_true(&self) -> bool {
+        matches!(self, TypeTraitResult::Value(true))
+    }
+
+    /// Returns true if this result is a definite false value.
+    pub fn is_false(&self) -> bool {
+        matches!(self, TypeTraitResult::Value(false))
+    }
+
+    /// Returns true if the result depends on template parameters.
+    pub fn is_dependent(&self) -> bool {
+        matches!(self, TypeTraitResult::Dependent)
+    }
+
+    /// Get the boolean value if known, None if dependent.
+    pub fn to_bool(&self) -> Option<bool> {
+        match self {
+            TypeTraitResult::Value(v) => Some(*v),
+            TypeTraitResult::Dependent => None,
+        }
+    }
+}
+
+/// Evaluates type traits against concrete or dependent types.
+pub struct TypeTraitEvaluator;
+
+impl TypeTraitEvaluator {
+    /// Evaluate __is_integral(T)
+    pub fn is_integral(ty: &CppType) -> TypeTraitResult {
+        match ty.is_integral() {
+            Some(v) => TypeTraitResult::Value(v),
+            None => TypeTraitResult::Dependent,
+        }
+    }
+
+    /// Evaluate __is_signed(T)
+    pub fn is_signed(ty: &CppType) -> TypeTraitResult {
+        match ty.is_signed() {
+            Some(v) => TypeTraitResult::Value(v),
+            None => TypeTraitResult::Dependent,
+        }
+    }
+
+    /// Evaluate __is_unsigned(T)
+    pub fn is_unsigned(ty: &CppType) -> TypeTraitResult {
+        match ty.is_signed() {
+            Some(signed) => TypeTraitResult::Value(!signed),
+            None => TypeTraitResult::Dependent,
+        }
+    }
+
+    /// Evaluate __is_floating_point(T)
+    pub fn is_floating_point(ty: &CppType) -> TypeTraitResult {
+        match ty.is_floating_point() {
+            Some(v) => TypeTraitResult::Value(v),
+            None => TypeTraitResult::Dependent,
+        }
+    }
+
+    /// Evaluate __is_arithmetic(T)
+    pub fn is_arithmetic(ty: &CppType) -> TypeTraitResult {
+        match ty.is_arithmetic() {
+            Some(v) => TypeTraitResult::Value(v),
+            None => TypeTraitResult::Dependent,
+        }
+    }
+
+    /// Evaluate __is_scalar(T)
+    pub fn is_scalar(ty: &CppType) -> TypeTraitResult {
+        match ty.is_scalar() {
+            Some(v) => TypeTraitResult::Value(v),
+            None => TypeTraitResult::Dependent,
+        }
+    }
+
+    /// Evaluate __is_pointer(T)
+    pub fn is_pointer(ty: &CppType) -> TypeTraitResult {
+        match ty.properties() {
+            Some(p) => TypeTraitResult::Value(p.is_pointer),
+            None => TypeTraitResult::Dependent,
+        }
+    }
+
+    /// Evaluate __is_reference(T)
+    pub fn is_reference(ty: &CppType) -> TypeTraitResult {
+        match ty.properties() {
+            Some(p) => TypeTraitResult::Value(p.is_reference),
+            None => TypeTraitResult::Dependent,
+        }
+    }
+
+    /// Evaluate __is_same(T, U)
+    pub fn is_same(ty1: &CppType, ty2: &CppType) -> TypeTraitResult {
+        // If either type is dependent, result is dependent
+        if ty1.is_dependent() || ty2.is_dependent() {
+            return TypeTraitResult::Dependent;
+        }
+        TypeTraitResult::Value(ty1 == ty2)
+    }
+
+    /// Evaluate __is_trivially_copyable(T)
+    pub fn is_trivially_copyable(ty: &CppType) -> TypeTraitResult {
+        match ty.properties() {
+            Some(p) => TypeTraitResult::Value(p.is_trivially_copyable),
+            None => TypeTraitResult::Dependent,
+        }
+    }
+
+    /// Evaluate __is_trivially_destructible(T)
+    pub fn is_trivially_destructible(ty: &CppType) -> TypeTraitResult {
+        match ty.properties() {
+            Some(p) => TypeTraitResult::Value(p.is_trivially_destructible),
+            None => TypeTraitResult::Dependent,
+        }
+    }
+
+    /// Evaluate __is_base_of(Base, Derived)
+    /// Note: This requires class hierarchy information which we don't have yet.
+    /// For now, returns Dependent for named types.
+    pub fn is_base_of(base: &CppType, derived: &CppType) -> TypeTraitResult {
+        // If either type is dependent, result is dependent
+        if base.is_dependent() || derived.is_dependent() {
+            return TypeTraitResult::Dependent;
+        }
+
+        // If types are the same, a class is considered a base of itself
+        if base == derived {
+            return TypeTraitResult::Value(true);
+        }
+
+        // For Named types, we would need class hierarchy information
+        // For now, return Dependent to indicate we can't evaluate this
+        match (base, derived) {
+            (CppType::Named(_), CppType::Named(_)) => TypeTraitResult::Dependent,
+            // Non-class types: false (not a class hierarchy relationship)
+            _ => TypeTraitResult::Value(false),
+        }
+    }
+}

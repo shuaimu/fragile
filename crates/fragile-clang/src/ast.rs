@@ -280,8 +280,48 @@ pub enum ClangNodeKind {
         ty: CppType,
     },
 
+    /// Type trait expression (e.g., __is_integral(T), __is_same(T, U))
+    /// These are Clang's built-in type trait intrinsics.
+    TypeTraitExpr {
+        /// The kind of type trait being evaluated
+        trait_kind: TypeTraitKind,
+        /// The type arguments to the trait
+        type_args: Vec<CppType>,
+    },
+
     /// Unknown or unhandled node kind
     Unknown(String),
+}
+
+/// Kinds of built-in type traits (Clang intrinsics).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TypeTraitKind {
+    /// __is_integral(T) - checks if T is an integral type
+    IsIntegral,
+    /// __is_signed(T) - checks if T is a signed type
+    IsSigned,
+    /// __is_unsigned(T) - checks if T is an unsigned type
+    IsUnsigned,
+    /// __is_floating_point(T) - checks if T is a floating point type
+    IsFloatingPoint,
+    /// __is_arithmetic(T) - checks if T is arithmetic (integral or floating)
+    IsArithmetic,
+    /// __is_scalar(T) - checks if T is scalar (arithmetic, pointer, enum)
+    IsScalar,
+    /// __is_pointer(T) - checks if T is a pointer type
+    IsPointer,
+    /// __is_reference(T) - checks if T is a reference type
+    IsReference,
+    /// __is_same(T, U) - checks if T and U are the same type
+    IsSame,
+    /// __is_base_of(Base, Derived) - checks if Base is a base class of Derived
+    IsBaseOf,
+    /// __is_trivially_copyable(T) - checks if T is trivially copyable
+    IsTriviallyCopyable,
+    /// __is_trivially_destructible(T) - checks if T is trivially destructible
+    IsTriviallyDestructible,
+    /// Unknown/other type trait
+    Unknown,
 }
 
 /// Binary operators.

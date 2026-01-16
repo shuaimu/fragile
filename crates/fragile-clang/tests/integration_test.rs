@@ -3030,3 +3030,132 @@ fn test_is_arithmetic_helper() {
     assert_eq!(CppType::Double.is_arithmetic(), Some(true));
     assert_eq!(CppType::int().ptr().is_arithmetic(), Some(false));
 }
+
+// ============================================================================
+// Type Trait Evaluator Tests
+// ============================================================================
+
+use fragile_clang::{TypeTraitEvaluator, TypeTraitResult};
+
+/// Test TypeTraitEvaluator::is_integral with various types.
+#[test]
+fn test_type_trait_is_integral() {
+    // Integral types
+    assert_eq!(TypeTraitEvaluator::is_integral(&CppType::int()), TypeTraitResult::Value(true));
+    assert_eq!(TypeTraitEvaluator::is_integral(&CppType::Bool), TypeTraitResult::Value(true));
+    assert_eq!(TypeTraitEvaluator::is_integral(&CppType::Char { signed: true }), TypeTraitResult::Value(true));
+    assert_eq!(TypeTraitEvaluator::is_integral(&CppType::Short { signed: false }), TypeTraitResult::Value(true));
+    assert_eq!(TypeTraitEvaluator::is_integral(&CppType::Long { signed: true }), TypeTraitResult::Value(true));
+    assert_eq!(TypeTraitEvaluator::is_integral(&CppType::LongLong { signed: false }), TypeTraitResult::Value(true));
+
+    // Non-integral types
+    assert_eq!(TypeTraitEvaluator::is_integral(&CppType::Double), TypeTraitResult::Value(false));
+    assert_eq!(TypeTraitEvaluator::is_integral(&CppType::Float), TypeTraitResult::Value(false));
+    assert_eq!(TypeTraitEvaluator::is_integral(&CppType::int().ptr()), TypeTraitResult::Value(false));
+
+    // Dependent types
+    assert_eq!(TypeTraitEvaluator::is_integral(&CppType::template_param("T", 0, 0)), TypeTraitResult::Dependent);
+}
+
+/// Test TypeTraitEvaluator::is_signed and is_unsigned.
+#[test]
+fn test_type_trait_is_signed() {
+    // Signed types
+    assert_eq!(TypeTraitEvaluator::is_signed(&CppType::Int { signed: true }), TypeTraitResult::Value(true));
+    assert_eq!(TypeTraitEvaluator::is_signed(&CppType::Char { signed: true }), TypeTraitResult::Value(true));
+    assert_eq!(TypeTraitEvaluator::is_signed(&CppType::Double), TypeTraitResult::Value(true)); // floating point is signed
+
+    // Unsigned types
+    assert_eq!(TypeTraitEvaluator::is_signed(&CppType::Int { signed: false }), TypeTraitResult::Value(false));
+    assert_eq!(TypeTraitEvaluator::is_signed(&CppType::Bool), TypeTraitResult::Value(false)); // bool is unsigned
+
+    // is_unsigned should be opposite
+    assert_eq!(TypeTraitEvaluator::is_unsigned(&CppType::Int { signed: true }), TypeTraitResult::Value(false));
+    assert_eq!(TypeTraitEvaluator::is_unsigned(&CppType::Int { signed: false }), TypeTraitResult::Value(true));
+
+    // Dependent
+    assert_eq!(TypeTraitEvaluator::is_signed(&CppType::template_param("T", 0, 0)), TypeTraitResult::Dependent);
+}
+
+/// Test TypeTraitEvaluator::is_floating_point.
+#[test]
+fn test_type_trait_is_floating_point() {
+    assert_eq!(TypeTraitEvaluator::is_floating_point(&CppType::Float), TypeTraitResult::Value(true));
+    assert_eq!(TypeTraitEvaluator::is_floating_point(&CppType::Double), TypeTraitResult::Value(true));
+    assert_eq!(TypeTraitEvaluator::is_floating_point(&CppType::int()), TypeTraitResult::Value(false));
+    assert_eq!(TypeTraitEvaluator::is_floating_point(&CppType::Bool), TypeTraitResult::Value(false));
+}
+
+/// Test TypeTraitEvaluator::is_same.
+#[test]
+fn test_type_trait_is_same() {
+    // Same types
+    assert_eq!(TypeTraitEvaluator::is_same(&CppType::int(), &CppType::int()), TypeTraitResult::Value(true));
+    assert_eq!(TypeTraitEvaluator::is_same(&CppType::Double, &CppType::Double), TypeTraitResult::Value(true));
+
+    // Different types
+    assert_eq!(TypeTraitEvaluator::is_same(&CppType::int(), &CppType::Double), TypeTraitResult::Value(false));
+    assert_eq!(TypeTraitEvaluator::is_same(&CppType::int(), &CppType::uint()), TypeTraitResult::Value(false));
+    assert_eq!(TypeTraitEvaluator::is_same(&CppType::int(), &CppType::int().ptr()), TypeTraitResult::Value(false));
+
+    // Dependent types
+    let t_param = CppType::template_param("T", 0, 0);
+    assert_eq!(TypeTraitEvaluator::is_same(&t_param, &CppType::int()), TypeTraitResult::Dependent);
+    assert_eq!(TypeTraitEvaluator::is_same(&CppType::int(), &t_param), TypeTraitResult::Dependent);
+    assert_eq!(TypeTraitEvaluator::is_same(&t_param, &t_param), TypeTraitResult::Dependent);
+}
+
+/// Test TypeTraitEvaluator::is_pointer and is_reference.
+#[test]
+fn test_type_trait_is_pointer_reference() {
+    // Pointer types
+    assert_eq!(TypeTraitEvaluator::is_pointer(&CppType::int().ptr()), TypeTraitResult::Value(true));
+    assert_eq!(TypeTraitEvaluator::is_pointer(&CppType::Void.ptr()), TypeTraitResult::Value(true));
+    assert_eq!(TypeTraitEvaluator::is_pointer(&CppType::int()), TypeTraitResult::Value(false));
+
+    // Reference types
+    assert_eq!(TypeTraitEvaluator::is_reference(&CppType::int().ref_()), TypeTraitResult::Value(true));
+    assert_eq!(TypeTraitEvaluator::is_reference(&CppType::int().const_ref()), TypeTraitResult::Value(true));
+    assert_eq!(TypeTraitEvaluator::is_reference(&CppType::int().rvalue_ref()), TypeTraitResult::Value(true));
+    assert_eq!(TypeTraitEvaluator::is_reference(&CppType::int()), TypeTraitResult::Value(false));
+    assert_eq!(TypeTraitEvaluator::is_reference(&CppType::int().ptr()), TypeTraitResult::Value(false));
+}
+
+/// Test TypeTraitResult helper methods.
+#[test]
+fn test_type_trait_result_helpers() {
+    let true_result = TypeTraitResult::Value(true);
+    let false_result = TypeTraitResult::Value(false);
+    let dependent = TypeTraitResult::Dependent;
+
+    assert!(true_result.is_true());
+    assert!(!true_result.is_false());
+    assert!(!true_result.is_dependent());
+    assert_eq!(true_result.to_bool(), Some(true));
+
+    assert!(!false_result.is_true());
+    assert!(false_result.is_false());
+    assert!(!false_result.is_dependent());
+    assert_eq!(false_result.to_bool(), Some(false));
+
+    assert!(!dependent.is_true());
+    assert!(!dependent.is_false());
+    assert!(dependent.is_dependent());
+    assert_eq!(dependent.to_bool(), None);
+}
+
+/// Test TypeTraitEvaluator::is_base_of with concrete types.
+#[test]
+fn test_type_trait_is_base_of() {
+    // Same type is a base of itself
+    let my_class = CppType::Named("MyClass".to_string());
+    assert_eq!(TypeTraitEvaluator::is_base_of(&my_class, &my_class), TypeTraitResult::Value(true));
+
+    // Different named types - we don't have hierarchy info, so result is Dependent
+    let base = CppType::Named("Base".to_string());
+    let derived = CppType::Named("Derived".to_string());
+    assert_eq!(TypeTraitEvaluator::is_base_of(&base, &derived), TypeTraitResult::Dependent);
+
+    // Non-class types: false
+    assert_eq!(TypeTraitEvaluator::is_base_of(&CppType::int(), &CppType::Double), TypeTraitResult::Value(false));
+}
