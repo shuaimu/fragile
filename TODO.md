@@ -393,6 +393,20 @@ See [PLAN_CPP20_MAKO.md](PLAN_CPP20_MAKO.md) for detailed plan.
     - [x] F.3.43 Added boost::algorithm::ends_with string/const char* overloads [26:01:16, 18:45]
     - [x] F.3.44 Added std::map reverse_iterator, rbegin(), rend() [26:01:16, 18:45]
     - [x] F.3.45 Added std::basic_string reverse_iterator, rbegin(), rend() [26:01:16, 18:45]
+    - [x] F.3.46 Added tests for bench/tpcc_real_dist (delivery, new_order, payment, sharding) [26:01:16, 19:00]
+    - [x] F.3.47 Added tests for sto benchmarks (Transaction, ThreadPool, common) [26:01:16, 19:00]
+    - [x] F.3.48 Added tests for deptran client files (helloworld_impl, network_impl, raft/test, raft/testconf) [26:01:16, 19:00]
+    - [x] `vendor/mako/src/bench/tpcc_real_dist/delivery.cc` - **PARSED**: benchmark delivery [26:01:16, 19:00]
+    - [x] `vendor/mako/src/bench/tpcc_real_dist/new_order.cc` - **PARSED**: benchmark new_order [26:01:16, 19:00]
+    - [x] `vendor/mako/src/bench/tpcc_real_dist/payment.cc` - **PARSED**: benchmark payment [26:01:16, 19:00]
+    - [x] `vendor/mako/src/bench/tpcc_real_dist/sharding.cc` - **PARSED**: benchmark sharding [26:01:16, 19:00]
+    - [x] `vendor/mako/src/mako/benchmarks/sto/Transaction.cc` - **PARSED**: STO Transaction [26:01:16, 19:00]
+    - [x] `vendor/mako/src/mako/benchmarks/sto/ThreadPool.cc` - **PARSED**: STO ThreadPool [26:01:16, 19:00]
+    - [x] `vendor/mako/src/mako/benchmarks/sto/common.cc` - **PARSED**: STO common [26:01:16, 19:00]
+    - [x] `vendor/mako/src/deptran/helloworld_client/helloworld_impl.cc` - **PARSED**: helloworld client [26:01:16, 19:00]
+    - [x] `vendor/mako/src/deptran/network_client/network_impl.cc` - **PARSED**: network client [26:01:16, 19:00]
+    - [x] `vendor/mako/src/deptran/raft/test.cc` - **PARSED**: raft lab tests [26:01:16, 19:00]
+    - [x] `vendor/mako/src/deptran/raft/testconf.cc` - **PARSED**: raft test configuration [26:01:16, 19:00]
     - [-] `vendor/mako/src/deptran/mongodb/server.cc` - Needs bsoncxx (external dep)
     - [-] `vendor/mako/src/bench/micro/procedure.cc` - Needs more complex error filtering
     - [ ] Remaining files need: eRPC library stubs, bsoncxx
@@ -465,7 +479,7 @@ Migration: After C++20 support is complete, deprecate these.
 ## 5. Testing & Milestones
 
 ### 5.1 Unit Tests
-- [x] fragile-clang: 446 tests passing (27 unit + 419 integration) - includes 10 coroutine + 7 exception + 6 RTTI + 8 promise type + 8 awaitable + 8 generator + 3 noexcept + 1 member access + 1 stack unwinding + 189 mako file tests [26:01:16]
+- [x] fragile-clang: 506 tests passing (27 unit + 479 integration) - includes 10 coroutine + 7 exception + 6 RTTI + 8 promise type + 8 awaitable + 8 generator + 3 noexcept + 1 member access + 1 stack unwinding + 200 mako file tests [26:01:16, 19:00]
 - [x] fragile-rustc-driver: 7 tests passing (6 original + 1 rustc_integration when feature enabled)
 - [x] fragile-runtime: Compiles
 
@@ -485,8 +499,8 @@ Migration: After C++20 support is complete, deprecate these.
 
 Current status:
 - **rrr module**: 20/20 files parsing (100%) - all base, misc, reactor, rpc files parsing
-- **mako module**: 189/320 files parsing (~59%) - includes all 12 memdb files, deptran root-level files, consensus executors (rcc, occ, classic, troad, carousel, tapir, janus, mencius, paxos, raft), client/server workers, paxos/raft helpers, benchmark_control_rpc, stats_registry, sharding files, masstree, masstree-beta (all 28 files), all lib files
-- **Total tests**: 446 passing (fragile-clang integration tests)
+- **mako module**: 200/320 files parsing (~63%) - includes all 12 memdb files, deptran root-level files, consensus executors (rcc, occ, classic, troad, carousel, tapir, janus, mencius, paxos, raft), client/server workers, paxos/raft helpers, benchmark_control_rpc, stats_registry, sharding files, masstree, masstree-beta (all 28 files), all lib files, sto benchmarks (Transaction, ThreadPool, common), helloworld/network clients, raft tests
+- **Total tests**: 506 passing (fragile-clang integration tests)
 - **Milestones**: M1 ✅, M2-M4 (parsing complete, compilation pending)
 
 Next steps:
