@@ -400,15 +400,15 @@ Migration: After C++20 support is complete, deprecate these.
 ## 5. Testing & Milestones
 
 ### 5.1 Unit Tests
-- [x] fragile-clang: 356 tests passing (27 unit + 329 integration) - includes 10 coroutine + 7 exception + 6 RTTI + 8 promise type + 8 awaitable + 8 generator + 3 noexcept + 1 member access + 1 stack unwinding + 135 mako file tests [26:01:16]
+- [x] fragile-clang: 357 tests passing (27 unit + 330 integration) - includes 10 coroutine + 7 exception + 6 RTTI + 8 promise type + 8 awaitable + 8 generator + 3 noexcept + 1 member access + 1 stack unwinding + 136 mako file tests [26:01:16]
 - [x] fragile-rustc-driver: 6 tests passing
 - [x] fragile-runtime: Compiles
 
 ### 5.2 Mako Milestones
-- [ ] **M1**: Compile `rand.cpp` (minimal deps)
-- [ ] **M2**: Compile `rrr/misc/*.cpp` (templates, STL)
-- [ ] **M3**: Compile `rrr/rpc/*.cpp` (OOP, threads)
-- [ ] **M4**: Compile `mako/vec/*.cpp` (coroutines)
+- [x] **M1**: Parse `rand.cpp` (minimal deps) [26:01:16] - 26 functions, rand_r stub added
+- [-] **M2**: Parse `rrr/misc/*.cpp` (templates, STL) - 5/5 files parsing (100%)
+- [-] **M3**: Parse `rrr/rpc/*.cpp` (OOP, threads) - 4/4 files parsing (100%)
+- [-] **M4**: Parse `mako/vec/*.cpp` (coroutines) - 2/2 files parsing (100%)
 - [ ] **M5**: Full Mako build
 - [ ] **M6**: Mako tests pass
 
@@ -421,7 +421,8 @@ Migration: After C++20 support is complete, deprecate these.
 Current status:
 - **rrr module**: 20/20 files parsing (100%) - all base, misc, reactor, rpc files parsing
 - **mako module**: 117/338 files parsing (~35%) - includes all 12 memdb files, deptran, masstree, masstree-beta (all 28 files), all lib files
-- **Total tests**: 356 passing (fragile-clang integration tests)
+- **Total tests**: 357 passing (fragile-clang integration tests)
+- **Milestones**: M1 ✅, M2-M4 (parsing complete, compilation pending)
 
 Next steps:
 1. **rustc Integration (2.3)** - Requires user setup: `rustup component add rustc-dev --toolchain nightly`
