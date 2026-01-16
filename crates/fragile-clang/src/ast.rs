@@ -93,6 +93,16 @@ pub enum ClangNodeKind {
         name: String,
         ty: CppType,
         access: AccessSpecifier,
+        is_static: bool,
+    },
+    /// C++ method declaration
+    CXXMethodDecl {
+        name: String,
+        return_type: CppType,
+        params: Vec<(String, CppType)>,
+        is_definition: bool,
+        is_static: bool,
+        access: AccessSpecifier,
     },
     /// Constructor declaration
     ConstructorDecl {

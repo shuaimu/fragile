@@ -49,17 +49,21 @@ fn generate_struct_stub(struct_def: &CppStruct) -> String {
     output.push_str("#[repr(C)]\n");
     output.push_str(&format!("pub struct {} {{\n", struct_def.name));
 
-    for (field_name, field_type, access) in &struct_def.fields {
-        let rust_type = field_type.to_rust_type_str();
+    // Generate non-static fields
+    for field in &struct_def.fields {
+        let rust_type = field.ty.to_rust_type_str();
         // Only public fields get pub visibility in Rust
-        let visibility = match access {
+        let visibility = match field.access {
             AccessSpecifier::Public => "pub ",
             AccessSpecifier::Private | AccessSpecifier::Protected => "",
         };
-        output.push_str(&format!("    {}{}: {},\n", visibility, field_name, rust_type));
+        output.push_str(&format!("    {}{}: {},\n", visibility, field.name, rust_type));
     }
 
     output.push_str("}\n");
+
+    // Generate static fields as associated constants (if any)
+    // Note: Static members need separate handling in C++
 
     output
 }
@@ -144,16 +148,17 @@ mod tests {
 
     #[test]
     fn test_generate_struct_stub() {
-        use fragile_clang::AccessSpecifier;
+        use fragile_clang::{AccessSpecifier, CppField};
 
         let struct_def = CppStruct {
             name: "Point".to_string(),
             is_class: false,
             namespace: Vec::new(),
             fields: vec![
-                ("x".to_string(), CppType::int(), AccessSpecifier::Public),
-                ("y".to_string(), CppType::int(), AccessSpecifier::Public),
+                CppField { name: "x".to_string(), ty: CppType::int(), access: AccessSpecifier::Public },
+                CppField { name: "y".to_string(), ty: CppType::int(), access: AccessSpecifier::Public },
             ],
+            static_fields: vec![],
             constructors: vec![],
             destructor: None,
             methods: vec![],
@@ -169,17 +174,18 @@ mod tests {
 
     #[test]
     fn test_generate_struct_stub_with_private_fields() {
-        use fragile_clang::AccessSpecifier;
+        use fragile_clang::{AccessSpecifier, CppField};
 
         let struct_def = CppStruct {
             name: "MyClass".to_string(),
             is_class: true,
             namespace: Vec::new(),
             fields: vec![
-                ("public_field".to_string(), CppType::int(), AccessSpecifier::Public),
-                ("private_field".to_string(), CppType::int(), AccessSpecifier::Private),
-                ("protected_field".to_string(), CppType::int(), AccessSpecifier::Protected),
+                CppField { name: "public_field".to_string(), ty: CppType::int(), access: AccessSpecifier::Public },
+                CppField { name: "private_field".to_string(), ty: CppType::int(), access: AccessSpecifier::Private },
+                CppField { name: "protected_field".to_string(), ty: CppType::int(), access: AccessSpecifier::Protected },
             ],
+            static_fields: vec![],
             constructors: vec![],
             destructor: None,
             methods: vec![],

@@ -44,7 +44,7 @@ See [PLAN_CPP20_MAKO.md](PLAN_CPP20_MAKO.md) for detailed plan.
   - [x] Constructors (default, copy, move) [26:01:15] ([docs/dev/plan_constructors.md](docs/dev/plan_constructors.md))
   - [x] Destructors [26:01:15] (included in above)
   - [x] Member initializer lists [26:01:16] ([docs/dev/plan_member_initializer_lists.md](docs/dev/plan_member_initializer_lists.md))
-  - [ ] Static members
+  - [x] Static members [26:01:16] ([docs/dev/plan_static_members.md](docs/dev/plan_static_members.md))
   - [ ] Friend declarations
 - [ ] **A.3 Inheritance**
   - [ ] Single inheritance
@@ -214,7 +214,7 @@ Migration: After C++20 support is complete, deprecate these.
 ## 5. Testing & Milestones
 
 ### 5.1 Unit Tests
-- [x] fragile-clang: 30 tests passing (7 unit + 23 integration)
+- [x] fragile-clang: 33 tests passing (7 unit + 26 integration)
 - [x] fragile-rustc-driver: 6 tests passing
 - [x] fragile-runtime: Compiles
 

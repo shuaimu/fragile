@@ -3,9 +3,10 @@
 use crate::ast::{BinaryOp, ClangAst, ClangNode, ClangNodeKind, UnaryOp};
 use crate::types::CppType;
 use crate::{
-    CppConstructor, CppDestructor, CppExtern, CppFunction, CppModule, CppStruct, MemberInitializer,
-    MirBasicBlock, MirBinOp, MirBody, MirConstant, MirLocal, MirOperand, MirPlace, MirRvalue,
-    MirStatement, MirTerminator, MirUnaryOp, UsingDeclaration, UsingDirective,
+    CppConstructor, CppDestructor, CppExtern, CppField, CppFunction, CppMethod, CppModule,
+    CppStruct, MemberInitializer, MirBasicBlock, MirBinOp, MirBody, MirConstant, MirLocal,
+    MirOperand, MirPlace, MirRvalue, MirStatement, MirTerminator, MirUnaryOp, UsingDeclaration,
+    UsingDirective,
 };
 use miette::Result;
 
@@ -223,6 +224,39 @@ impl MirConverter {
             return_type: return_type.clone(),
             mir_body,
         })
+    }
+
+    /// Convert just a function/method body to MIR (without creating CppFunction).
+    fn convert_method_body(
+        &self,
+        node: &ClangNode,
+        return_type: &CppType,
+        params: &[(String, CppType)],
+    ) -> Result<MirBody> {
+        let mut builder = FunctionBuilder::new();
+
+        // Local 0 is always the return place
+        builder.add_local(None, return_type.clone(), false);
+
+        // Add parameters as locals
+        for (param_name, param_ty) in params {
+            builder.add_local(Some(param_name.clone()), param_ty.clone(), true);
+        }
+
+        // Find the compound statement (function body)
+        for child in &node.children {
+            if matches!(child.kind, ClangNodeKind::CompoundStmt) {
+                self.convert_compound_stmt(child, &mut builder)?;
+                break;
+            }
+        }
+
+        // If no explicit return, add one
+        if builder.current_statements.is_empty() && builder.blocks.is_empty() {
+            builder.finish_block(MirTerminator::Return);
+        }
+
+        Ok(builder.build())
     }
 
     /// Convert a compound statement (block).
@@ -520,13 +554,46 @@ impl MirConverter {
         namespace_context: &[String],
     ) -> Result<CppStruct> {
         let mut fields = Vec::new();
+        let mut static_fields = Vec::new();
         let mut constructors = Vec::new();
         let mut destructor = None;
+        let mut methods = Vec::new();
 
         for child in &node.children {
             match &child.kind {
-                ClangNodeKind::FieldDecl { name: field_name, ty, access } => {
-                    fields.push((field_name.clone(), ty.clone(), *access));
+                ClangNodeKind::FieldDecl { name: field_name, ty, access, is_static } => {
+                    let field = CppField {
+                        name: field_name.clone(),
+                        ty: ty.clone(),
+                        access: *access,
+                    };
+                    if *is_static {
+                        static_fields.push(field);
+                    } else {
+                        fields.push(field);
+                    }
+                }
+                ClangNodeKind::CXXMethodDecl {
+                    name: method_name,
+                    return_type,
+                    params,
+                    is_definition,
+                    is_static,
+                    access,
+                } => {
+                    let mir_body = if *is_definition {
+                        Some(self.convert_method_body(child, return_type, params)?)
+                    } else {
+                        None
+                    };
+                    methods.push(CppMethod {
+                        name: method_name.clone(),
+                        return_type: return_type.clone(),
+                        params: params.clone(),
+                        is_static: *is_static,
+                        access: *access,
+                        mir_body,
+                    });
                 }
                 ClangNodeKind::ConstructorDecl {
                     class_name: _,
@@ -575,9 +642,10 @@ impl MirConverter {
             is_class,
             namespace: namespace_context.to_vec(),
             fields,
+            static_fields,
             constructors,
             destructor,
-            methods: Vec::new(), // TODO: extract methods
+            methods,
         })
     }
 

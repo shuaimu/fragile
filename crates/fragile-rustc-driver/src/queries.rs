@@ -69,7 +69,7 @@ impl CppMirRegistry {
             let fields: Vec<(String, String)> = struct_def
                 .fields
                 .iter()
-                .map(|(name, ty, _access)| (name.clone(), ty.to_rust_type_str()))
+                .map(|field| (field.name.clone(), field.ty.to_rust_type_str()))
                 .collect();
 
             structs.insert(

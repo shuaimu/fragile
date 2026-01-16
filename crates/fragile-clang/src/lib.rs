@@ -111,14 +111,44 @@ pub struct CppStruct {
     pub is_class: bool,
     /// Namespace path (e.g., ["rrr", "nested"])
     pub namespace: Vec<String>,
-    /// Fields with their types and access specifiers
-    pub fields: Vec<(String, CppType, AccessSpecifier)>,
+    /// Non-static fields with their types and access specifiers
+    pub fields: Vec<CppField>,
+    /// Static data members
+    pub static_fields: Vec<CppField>,
     /// Constructors
     pub constructors: Vec<CppConstructor>,
     /// Destructor (at most one)
     pub destructor: Option<CppDestructor>,
-    /// Methods (converted to associated functions)
-    pub methods: Vec<CppFunction>,
+    /// Methods (member functions)
+    pub methods: Vec<CppMethod>,
+}
+
+/// A C++ class field (data member).
+#[derive(Debug, Clone)]
+pub struct CppField {
+    /// Field name
+    pub name: String,
+    /// Field type
+    pub ty: CppType,
+    /// Access specifier
+    pub access: AccessSpecifier,
+}
+
+/// A C++ class method (member function).
+#[derive(Debug, Clone)]
+pub struct CppMethod {
+    /// Method name
+    pub name: String,
+    /// Return type
+    pub return_type: CppType,
+    /// Parameters
+    pub params: Vec<(String, CppType)>,
+    /// Whether this is a static method
+    pub is_static: bool,
+    /// Access specifier
+    pub access: AccessSpecifier,
+    /// MIR body (if this is a definition)
+    pub mir_body: Option<MirBody>,
 }
 
 /// A C++ constructor.

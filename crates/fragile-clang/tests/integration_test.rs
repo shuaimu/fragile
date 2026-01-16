@@ -235,17 +235,17 @@ fn test_class_access_specifiers() {
     assert_eq!(s.fields.len(), 3);
 
     // Check access specifiers
-    let (name0, _, access0) = &s.fields[0];
-    assert_eq!(name0, "public_field");
-    assert_eq!(*access0, AccessSpecifier::Public);
+    let field0 = &s.fields[0];
+    assert_eq!(field0.name, "public_field");
+    assert_eq!(field0.access, AccessSpecifier::Public);
 
-    let (name1, _, access1) = &s.fields[1];
-    assert_eq!(name1, "private_field");
-    assert_eq!(*access1, AccessSpecifier::Private);
+    let field1 = &s.fields[1];
+    assert_eq!(field1.name, "private_field");
+    assert_eq!(field1.access, AccessSpecifier::Private);
 
-    let (name2, _, access2) = &s.fields[2];
-    assert_eq!(name2, "protected_field");
-    assert_eq!(*access2, AccessSpecifier::Protected);
+    let field2 = &s.fields[2];
+    assert_eq!(field2.name, "protected_field");
+    assert_eq!(field2.access, AccessSpecifier::Protected);
 }
 
 /// Test struct default access (public).
@@ -273,8 +273,8 @@ fn test_struct_default_access() {
     assert!(!s.is_class);
 
     // Struct members should be public by default
-    for (_, _, access) in &s.fields {
-        assert_eq!(*access, AccessSpecifier::Public);
+    for field in &s.fields {
+        assert_eq!(field.access, AccessSpecifier::Public);
     }
 }
 
@@ -676,4 +676,110 @@ fn test_no_member_initializer() {
     let ctor = &s.constructors[0];
     // No member initializers - assignment happens in body
     assert_eq!(ctor.member_initializers.len(), 0);
+}
+
+/// Test class with static member variable.
+#[test]
+fn test_static_member_variable() {
+    let parser = ClangParser::new().expect("Failed to create parser");
+
+    let source = r#"
+        class Counter {
+        public:
+            static int count;
+            int value;
+        };
+    "#;
+
+    let ast = parser.parse_string(source, "static_var.cpp").expect("Failed to parse");
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    assert_eq!(module.structs.len(), 1);
+
+    let s = &module.structs[0];
+    // Non-static fields
+    assert_eq!(s.fields.len(), 1);
+    assert_eq!(s.fields[0].name, "value");
+
+    // Static fields
+    assert_eq!(s.static_fields.len(), 1);
+    assert_eq!(s.static_fields[0].name, "count");
+}
+
+/// Test class with static method.
+#[test]
+fn test_static_method() {
+    let parser = ClangParser::new().expect("Failed to create parser");
+
+    let source = r#"
+        class Counter {
+        public:
+            int value;
+            static int getZero() { return 0; }
+            int getValue() { return value; }
+        };
+    "#;
+
+    let ast = parser.parse_string(source, "static_method.cpp").expect("Failed to parse");
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    assert_eq!(module.structs.len(), 1);
+
+    let s = &module.structs[0];
+    assert_eq!(s.methods.len(), 2);
+
+    // Find static method
+    let static_method = s.methods.iter().find(|m| m.name == "getZero");
+    assert!(static_method.is_some());
+    assert!(static_method.unwrap().is_static);
+
+    // Find non-static method
+    let instance_method = s.methods.iter().find(|m| m.name == "getValue");
+    assert!(instance_method.is_some());
+    assert!(!instance_method.unwrap().is_static);
+}
+
+/// Test class with mix of static and non-static members.
+#[test]
+fn test_mixed_static_members() {
+    let parser = ClangParser::new().expect("Failed to create parser");
+
+    let source = r#"
+        class MixedClass {
+        public:
+            static int static_count;
+            int instance_value;
+            static void staticMethod() { }
+            void instanceMethod() { }
+        private:
+            static int private_static;
+        };
+    "#;
+
+    let ast = parser.parse_string(source, "mixed.cpp").expect("Failed to parse");
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    assert_eq!(module.structs.len(), 1);
+
+    let s = &module.structs[0];
+
+    // Check instance fields
+    assert_eq!(s.fields.len(), 1);
+    assert_eq!(s.fields[0].name, "instance_value");
+
+    // Check static fields (public and private)
+    assert_eq!(s.static_fields.len(), 2);
+    let static_names: Vec<_> = s.static_fields.iter().map(|f| &f.name).collect();
+    assert!(static_names.contains(&&"static_count".to_string()));
+    assert!(static_names.contains(&&"private_static".to_string()));
+
+    // Check methods
+    assert_eq!(s.methods.len(), 2);
+    let static_method_count = s.methods.iter().filter(|m| m.is_static).count();
+    let instance_method_count = s.methods.iter().filter(|m| !m.is_static).count();
+    assert_eq!(static_method_count, 1);
+    assert_eq!(instance_method_count, 1);
 }

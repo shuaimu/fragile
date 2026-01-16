@@ -249,9 +249,24 @@ impl ClangParser {
                 clang_sys::CXCursor_VarDecl => {
                     let name = cursor_spelling(cursor);
                     let ty = self.convert_type(clang_sys::clang_getCursorType(cursor));
-                    // Check if it has an initializer by looking at children
-                    let has_init = false; // Will be determined by children
-                    ClangNodeKind::VarDecl { name, ty, has_init }
+                    let storage_class = clang_sys::clang_Cursor_getStorageClass(cursor);
+                    let is_static = storage_class == clang_sys::CX_SC_Static;
+
+                    // Check if this is a static member inside a class
+                    let parent = clang_sys::clang_getCursorSemanticParent(cursor);
+                    let parent_kind = clang_sys::clang_getCursorKind(parent);
+                    let is_class_member = parent_kind == clang_sys::CXCursor_ClassDecl
+                        || parent_kind == clang_sys::CXCursor_StructDecl;
+
+                    if is_class_member && is_static {
+                        // Static data member - treat as a static field
+                        let access = self.get_access_specifier(cursor);
+                        ClangNodeKind::FieldDecl { name, ty, access, is_static: true }
+                    } else {
+                        // Regular variable declaration
+                        let has_init = false; // Will be determined by children
+                        ClangNodeKind::VarDecl { name, ty, has_init }
+                    }
                 }
 
                 clang_sys::CXCursor_StructDecl | clang_sys::CXCursor_ClassDecl => {
@@ -269,7 +284,26 @@ impl ClangParser {
                     let name = cursor_spelling(cursor);
                     let ty = self.convert_type(clang_sys::clang_getCursorType(cursor));
                     let access = self.get_access_specifier(cursor);
-                    ClangNodeKind::FieldDecl { name, ty, access }
+                    // Regular field declarations are never static
+                    ClangNodeKind::FieldDecl { name, ty, access, is_static: false }
+                }
+
+                clang_sys::CXCursor_CXXMethod => {
+                    let name = cursor_spelling(cursor);
+                    let cursor_type = clang_sys::clang_getCursorType(cursor);
+                    let return_type = self.convert_type(clang_sys::clang_getResultType(cursor_type));
+                    let params = self.extract_params(cursor);
+                    let is_definition = clang_sys::clang_isCursorDefinition(cursor) != 0;
+                    let is_static = clang_sys::clang_CXXMethod_isStatic(cursor) != 0;
+                    let access = self.get_access_specifier(cursor);
+                    ClangNodeKind::CXXMethodDecl {
+                        name,
+                        return_type,
+                        params,
+                        is_definition,
+                        is_static,
+                        access,
+                    }
                 }
 
                 clang_sys::CXCursor_Constructor => {
