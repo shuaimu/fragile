@@ -3,10 +3,11 @@
 use crate::ast::{BinaryOp, ClangAst, ClangNode, ClangNodeKind, UnaryOp};
 use crate::types::CppType;
 use crate::{
-    CppBaseClass, CppClassTemplate, CppConstructor, CppDestructor, CppExtern, CppField, CppFriend,
-    CppFunction, CppFunctionTemplate, CppMethod, CppModule, CppStruct, MemberInitializer,
-    MirBasicBlock, MirBinOp, MirBody, MirConstant, MirLocal, MirOperand, MirPlace, MirRvalue,
-    MirStatement, MirTerminator, MirUnaryOp, UsingDeclaration, UsingDirective,
+    CppBaseClass, CppClassTemplate, CppClassTemplatePartialSpec, CppConstructor, CppDestructor,
+    CppExtern, CppField, CppFriend, CppFunction, CppFunctionTemplate, CppMethod, CppModule,
+    CppStruct, MemberInitializer, MirBasicBlock, MirBinOp, MirBody, MirConstant, MirLocal,
+    MirOperand, MirPlace, MirRvalue, MirStatement, MirTerminator, MirUnaryOp, UsingDeclaration,
+    UsingDirective,
 };
 use miette::Result;
 
@@ -193,6 +194,24 @@ impl MirConverter {
                     namespace_context,
                 )?;
                 module.class_templates.push(class_template);
+            }
+            ClangNodeKind::ClassTemplatePartialSpecDecl {
+                name,
+                template_params,
+                specialization_args,
+                is_class,
+                parameter_pack_indices,
+            } => {
+                let partial_spec = self.convert_class_template_partial_spec(
+                    node,
+                    name,
+                    template_params,
+                    specialization_args,
+                    *is_class,
+                    parameter_pack_indices,
+                    namespace_context,
+                )?;
+                module.class_partial_specializations.push(partial_spec);
             }
             ClangNodeKind::RecordDecl {
                 name,
@@ -723,6 +742,122 @@ impl MirConverter {
             is_class,
             namespace: namespace_context.to_vec(),
             template_params: template_params.to_vec(),
+            fields,
+            static_fields,
+            constructors,
+            destructor,
+            methods,
+            parameter_pack_indices: parameter_pack_indices.to_vec(),
+        })
+    }
+
+    /// Convert a class template partial specialization definition.
+    fn convert_class_template_partial_spec(
+        &self,
+        node: &ClangNode,
+        name: &str,
+        template_params: &[String],
+        specialization_args: &[CppType],
+        is_class: bool,
+        parameter_pack_indices: &[usize],
+        namespace_context: &[String],
+    ) -> Result<CppClassTemplatePartialSpec> {
+        let mut fields = Vec::new();
+        let mut static_fields = Vec::new();
+        let mut constructors = Vec::new();
+        let mut destructor = None;
+        let mut methods = Vec::new();
+
+        for child in &node.children {
+            match &child.kind {
+                ClangNodeKind::FieldDecl { name: field_name, ty, access, is_static } => {
+                    let field = CppField {
+                        name: field_name.clone(),
+                        ty: ty.clone(),
+                        access: *access,
+                    };
+                    if *is_static {
+                        static_fields.push(field);
+                    } else {
+                        fields.push(field);
+                    }
+                }
+                ClangNodeKind::CXXMethodDecl {
+                    name: method_name,
+                    return_type,
+                    params,
+                    is_definition,
+                    is_static,
+                    is_virtual,
+                    is_pure_virtual,
+                    is_override,
+                    is_final,
+                    access,
+                } => {
+                    let mir_body = if *is_definition {
+                        Some(self.convert_method_body(child, return_type, params)?)
+                    } else {
+                        None
+                    };
+                    methods.push(CppMethod {
+                        name: method_name.clone(),
+                        return_type: return_type.clone(),
+                        params: params.clone(),
+                        is_static: *is_static,
+                        is_virtual: *is_virtual,
+                        is_pure_virtual: *is_pure_virtual,
+                        is_override: *is_override,
+                        is_final: *is_final,
+                        access: *access,
+                        mir_body,
+                    });
+                }
+                ClangNodeKind::ConstructorDecl {
+                    class_name: _,
+                    params,
+                    is_definition,
+                    ctor_kind,
+                    access,
+                } => {
+                    let member_initializers = self.extract_member_initializers(child);
+                    let mir_body = if *is_definition {
+                        Some(self.convert_constructor_body(child, params)?)
+                    } else {
+                        None
+                    };
+                    constructors.push(CppConstructor {
+                        params: params.clone(),
+                        kind: *ctor_kind,
+                        access: *access,
+                        member_initializers,
+                        mir_body,
+                    });
+                }
+                ClangNodeKind::DestructorDecl {
+                    class_name: _,
+                    is_definition,
+                    access,
+                } => {
+                    let mir_body = if *is_definition {
+                        Some(self.convert_destructor_body(child)?)
+                    } else {
+                        None
+                    };
+                    destructor = Some(CppDestructor {
+                        access: *access,
+                        mir_body,
+                    });
+                }
+                _ => {}
+            }
+        }
+
+        Ok(CppClassTemplatePartialSpec {
+            template_name: name.to_string(),
+            is_class,
+            namespace: namespace_context.to_vec(),
+            template_params: template_params.to_vec(),
+            specialization_args: specialization_args.to_vec(),
             fields,
             static_fields,
             constructors,

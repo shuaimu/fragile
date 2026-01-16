@@ -94,6 +94,18 @@ pub enum ClangNodeKind {
         /// Indices of parameter packs
         parameter_pack_indices: Vec<usize>,
     },
+    /// Class template partial specialization (e.g., template<typename T> class Pair<T, T> { ... })
+    ClassTemplatePartialSpecDecl {
+        name: String,
+        /// Template type parameters for this specialization
+        template_params: Vec<String>,
+        /// The specialization argument pattern as types
+        specialization_args: Vec<CppType>,
+        /// Whether this is a class (vs struct)
+        is_class: bool,
+        /// Indices of parameter packs
+        parameter_pack_indices: Vec<usize>,
+    },
     /// Template type parameter (e.g., typename T or typename... Args)
     TemplateTypeParmDecl {
         name: String,

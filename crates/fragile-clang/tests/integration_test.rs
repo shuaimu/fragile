@@ -2639,3 +2639,178 @@ fn test_struct_template() {
     // The key is that fields with template types work
     assert_eq!(tmpl.fields.len(), 1);
 }
+
+// ============================================================================
+// Class Template Partial Specialization Tests
+// ============================================================================
+
+/// Test basic partial specialization - same type for both parameters.
+#[test]
+fn test_partial_spec_same_type() {
+    let parser = ClangParser::new().unwrap();
+    let code = r#"
+        // Primary template
+        template<typename T, typename U>
+        class Pair {
+            T first;
+            U second;
+        };
+
+        // Partial specialization: both types are the same
+        template<typename T>
+        class Pair<T, T> {
+            T first;
+            T second;
+        };
+    "#;
+
+    let ast = parser.parse_string(code, "test.cpp").unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    // Should have the primary template
+    assert_eq!(module.class_templates.len(), 1);
+    assert_eq!(module.class_templates[0].name, "Pair");
+    assert_eq!(module.class_templates[0].template_params.len(), 2);
+
+    // Should have one partial specialization
+    assert_eq!(module.class_partial_specializations.len(), 1);
+    let partial = &module.class_partial_specializations[0];
+    assert_eq!(partial.template_name, "Pair");
+    assert_eq!(partial.template_params.len(), 1); // Only one parameter: T
+    assert_eq!(partial.specialization_args.len(), 2); // Two args: T, T
+
+    // Both specialization args should reference the same template parameter
+    match &partial.specialization_args[0] {
+        CppType::TemplateParam { name, .. } => assert_eq!(name, "T"),
+        other => panic!("Expected TemplateParam, got {:?}", other),
+    }
+    match &partial.specialization_args[1] {
+        CppType::TemplateParam { name, .. } => assert_eq!(name, "T"),
+        other => panic!("Expected TemplateParam, got {:?}", other),
+    }
+}
+
+/// Test partial specialization with pointer.
+#[test]
+fn test_partial_spec_pointer() {
+    let parser = ClangParser::new().unwrap();
+    let code = r#"
+        // Primary template
+        template<typename T, typename U>
+        class Pair {
+            T first;
+            U second;
+        };
+
+        // Partial specialization: second type is pointer
+        template<typename T, typename U>
+        class Pair<T, U*> {
+            T first;
+            U* second;
+        };
+    "#;
+
+    let ast = parser.parse_string(code, "test.cpp").unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    // Should have the primary template
+    assert_eq!(module.class_templates.len(), 1);
+
+    // Should have one partial specialization
+    assert_eq!(module.class_partial_specializations.len(), 1);
+    let partial = &module.class_partial_specializations[0];
+    assert_eq!(partial.template_name, "Pair");
+    assert_eq!(partial.template_params.len(), 2); // Two parameters: T, U
+    assert_eq!(partial.specialization_args.len(), 2); // Two args: T, U*
+
+    // First arg is just T
+    match &partial.specialization_args[0] {
+        CppType::TemplateParam { name, .. } => assert_eq!(name, "T"),
+        other => panic!("Expected TemplateParam for first arg, got {:?}", other),
+    }
+
+    // Second arg is U*
+    match &partial.specialization_args[1] {
+        CppType::Pointer { pointee, .. } => {
+            match pointee.as_ref() {
+                CppType::TemplateParam { name, .. } => assert_eq!(name, "U"),
+                other => panic!("Expected TemplateParam in pointer, got {:?}", other),
+            }
+        }
+        other => panic!("Expected Pointer for second arg, got {:?}", other),
+    }
+}
+
+/// Test partial specialization with methods.
+#[test]
+fn test_partial_spec_with_methods() {
+    let parser = ClangParser::new().unwrap();
+    let code = r#"
+        // Primary template
+        template<typename T, typename U>
+        class Pair {
+            T first;
+            U second;
+        public:
+            T getFirst() { return first; }
+        };
+
+        // Partial specialization with its own methods
+        template<typename T>
+        class Pair<T, T> {
+            T first;
+            T second;
+        public:
+            T getFirst() { return first; }
+            T getSecond() { return second; }
+        };
+    "#;
+
+    let ast = parser.parse_string(code, "test.cpp").unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    // Partial specialization should have methods
+    assert_eq!(module.class_partial_specializations.len(), 1);
+    let partial = &module.class_partial_specializations[0];
+    assert_eq!(partial.methods.len(), 2);
+
+    let method_names: Vec<_> = partial.methods.iter().map(|m| &m.name).collect();
+    assert!(method_names.contains(&&"getFirst".to_string()));
+    assert!(method_names.contains(&&"getSecond".to_string()));
+}
+
+/// Test partial specialization in namespace.
+#[test]
+fn test_partial_spec_in_namespace() {
+    let parser = ClangParser::new().unwrap();
+    let code = r#"
+        namespace ns {
+            // Primary template
+            template<typename T, typename U>
+            class Pair {
+                T first;
+                U second;
+            };
+
+            // Partial specialization
+            template<typename T>
+            class Pair<T, T> {
+                T value;
+            };
+        }
+    "#;
+
+    let ast = parser.parse_string(code, "test.cpp").unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    // Both should be in the namespace
+    assert_eq!(module.class_templates.len(), 1);
+    assert_eq!(module.class_templates[0].namespace, vec!["ns"]);
+
+    assert_eq!(module.class_partial_specializations.len(), 1);
+    assert_eq!(module.class_partial_specializations[0].namespace, vec!["ns"]);
+}

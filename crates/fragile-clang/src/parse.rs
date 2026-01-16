@@ -289,6 +289,29 @@ impl ClangParser {
                     }
                 }
 
+                // CXCursor_ClassTemplatePartialSpecialization = 32
+                32 => {
+                    let name = cursor_spelling(cursor);
+                    let (template_params, parameter_pack_indices) = self.get_template_type_params_with_packs(cursor);
+
+                    // Get the specialization arguments
+                    let specialization_args = self.get_template_specialization_args(cursor);
+
+                    // Determine if this is a class or struct
+                    let cursor_type = clang_sys::clang_getCursorType(cursor);
+                    let type_spelling = clang_sys::clang_getTypeSpelling(cursor_type);
+                    let type_name = cx_string_to_string(type_spelling);
+                    let is_class = type_name.starts_with("class ") || !type_name.starts_with("struct ");
+
+                    ClangNodeKind::ClassTemplatePartialSpecDecl {
+                        name,
+                        template_params,
+                        specialization_args,
+                        is_class,
+                        parameter_pack_indices,
+                    }
+                }
+
                 // CXCursor_TemplateTypeParameter = 27
                 27 => {
                     let name = cursor_spelling(cursor);
@@ -919,13 +942,34 @@ impl ClangParser {
             // The const qualifier is already captured in the parent type
             let base_name = type_name.trim_start_matches("const ").to_string();
 
-            // Check if this is a template parameter
+            // Check if this is a template parameter by name
             if let Some(index) = template_params.iter().position(|p| p == &base_name) {
                 return CppType::TemplateParam {
                     name: base_name,
                     depth: 0,
                     index: index as u32,
                 };
+            }
+
+            // Check for internal template parameter format: "type-parameter-{depth}-{index}"
+            // libclang uses this format for template parameters in partial specializations
+            if base_name.starts_with("type-parameter-") {
+                let parts: Vec<_> = base_name["type-parameter-".len()..].split('-').collect();
+                if parts.len() == 2 {
+                    if let (Ok(depth), Ok(index)) = (parts[0].parse::<u32>(), parts[1].parse::<u32>()) {
+                        // Map the index to the template parameter name
+                        let name = if (index as usize) < template_params.len() {
+                            template_params[index as usize].clone()
+                        } else {
+                            base_name.clone()
+                        };
+                        return CppType::TemplateParam {
+                            name,
+                            depth,
+                            index,
+                        };
+                    }
+                }
             }
 
             // Check for dependent types (types that contain template params)
@@ -1077,6 +1121,35 @@ impl ClangParser {
             clang_sys::clang_visitChildren(cursor, param_visitor, info_ptr as clang_sys::CXClientData);
 
             (info.names, info.pack_indices)
+        }
+    }
+
+    /// Get the template specialization arguments from a partial specialization cursor.
+    /// Returns the types used in the specialization pattern (e.g., [T, T] for Pair<T, T>).
+    fn get_template_specialization_args(&self, cursor: clang_sys::CXCursor) -> Vec<CppType> {
+        unsafe {
+            // Get the specialized type (e.g., Pair<T, T>)
+            let cursor_type = clang_sys::clang_getCursorType(cursor);
+
+            // Get the number of template arguments
+            let num_args = clang_sys::clang_Type_getNumTemplateArguments(cursor_type);
+            if num_args < 0 {
+                return Vec::new();
+            }
+
+            // Get the template parameters for this partial specialization
+            let template_params = self.get_template_type_params(cursor);
+
+            // Extract each template argument
+            let mut args = Vec::new();
+            for i in 0..num_args {
+                let arg_type = clang_sys::clang_Type_getTemplateArgumentAsType(cursor_type, i as u32);
+                // Use template-aware conversion to detect template parameter references
+                let cpp_type = self.convert_type_with_template_ctx(arg_type, &template_params);
+                args.push(cpp_type);
+            }
+
+            args
         }
     }
 

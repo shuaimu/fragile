@@ -54,6 +54,8 @@ pub struct CppModule {
     pub function_templates: Vec<CppFunctionTemplate>,
     /// Class template declarations
     pub class_templates: Vec<CppClassTemplate>,
+    /// Class template partial specializations
+    pub class_partial_specializations: Vec<CppClassTemplatePartialSpec>,
     /// Using namespace directives (for name resolution)
     pub using_directives: Vec<UsingDirective>,
     /// Using declarations (specific name imports)
@@ -86,6 +88,7 @@ impl CppModule {
             externs: Vec::new(),
             function_templates: Vec::new(),
             class_templates: Vec::new(),
+            class_partial_specializations: Vec::new(),
             using_directives: Vec::new(),
             using_declarations: Vec::new(),
         }
@@ -463,6 +466,34 @@ pub struct CppClassTemplate {
     /// Methods (may reference template params)
     pub methods: Vec<CppMethod>,
     /// Indices of template parameters that are parameter packs (variadic)
+    pub parameter_pack_indices: Vec<usize>,
+}
+
+/// A partial specialization of a class template.
+/// Represents `template<typename T> class Pair<T, T> { ... }`
+#[derive(Debug)]
+pub struct CppClassTemplatePartialSpec {
+    /// Name of the primary template being specialized
+    pub template_name: String,
+    /// Whether this is a class (vs struct)
+    pub is_class: bool,
+    /// Namespace path
+    pub namespace: Vec<String>,
+    /// Template type parameters for this specialization (e.g., ["T"])
+    pub template_params: Vec<String>,
+    /// Specialization argument pattern (e.g., [TemplateParam("T"), TemplateParam("T")] for Pair<T,T>)
+    pub specialization_args: Vec<CppType>,
+    /// Non-static fields
+    pub fields: Vec<CppField>,
+    /// Static data members
+    pub static_fields: Vec<CppField>,
+    /// Constructors
+    pub constructors: Vec<CppConstructor>,
+    /// Destructor
+    pub destructor: Option<CppDestructor>,
+    /// Methods
+    pub methods: Vec<CppMethod>,
+    /// Indices of parameter packs
     pub parameter_pack_indices: Vec<usize>,
 }
 
