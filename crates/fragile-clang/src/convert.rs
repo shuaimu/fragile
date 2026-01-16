@@ -184,6 +184,13 @@ impl MirConverter {
                     self.convert_decl(child, module, &new_context)?;
                 }
             }
+            ClangNodeKind::LinkageSpecDecl => {
+                // Linkage specification (extern "C" { ... })
+                // Recursively convert contents without changing namespace context
+                for child in &node.children {
+                    self.convert_decl(child, module, namespace_context)?;
+                }
+            }
             ClangNodeKind::FunctionDecl {
                 name,
                 return_type,

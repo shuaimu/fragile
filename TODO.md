@@ -515,10 +515,10 @@ Migration: After C++20 support is complete, deprecate these.
   - [x] M5.4: Compile rrr/misc/*.cpp (4 files: 4781 functions, 639KB stubs) [26:01:17]
   - [x] M5.5: Compile rrr/rpc/*.cpp (3 files: 9356 functions, 1.2MB stubs) [26:01:17]
   - [x] M5.6: Compile mako/vec/*.cpp (2 files: 67 functions, 27KB stubs) [26:01:17]
-  - [-] M5.7: Link all components into executable
+  - [x] M5.7: Link all components into executable [26:01:17]
     - [x] M5.7.1: Add compilation test with rustc driver [26:01:17]
     - [x] M5.7.2: Build C++ object files [26:01:17] ([docs/dev/plan_m5_7_2_cpp_object_files.md](docs/dev/plan_m5_7_2_cpp_object_files.md))
-    - [ ] M5.7.3: Link Rust + C++ objects
+    - [x] M5.7.3: Link Rust + C++ objects [26:01:17] ([docs/dev/plan_m5_7_3_link_rust_cpp.md](docs/dev/plan_m5_7_3_link_rust_cpp.md))
   - [ ] M5.8: Run basic mako operations
 - [ ] **M6**: Mako tests pass
 
@@ -531,8 +531,8 @@ Migration: After C++20 support is complete, deprecate these.
 Current status:
 - **rrr module**: 20/20 files parsing (100%) - all base, misc, reactor, rpc files parsing
 - **mako module**: 338/338 files tested (100%) - includes all memdb files, deptran files, consensus executors, masstree, benchmarks
-- **Total tests**: 596 fragile-clang (27 unit + 569 integration), 19 fragile-rustc-driver (up from 17)
-- **Milestones**: M1 ✅, M2-M4 (parsing complete), M5.1-M5.7.2 ✅
+- **Total tests**: 596 fragile-clang (27 unit + 569 integration), 19 fragile-rustc-driver
+- **Milestones**: M1 ✅, M2-M4 (parsing complete), M5.1-M5.7 ✅
 - **Blocked files**: mongodb/server.cc (bsoncxx), persist_test.cc (undefined template), mtd.cc (epoll conflicts)
 
 Next steps:
@@ -540,5 +540,5 @@ Next steps:
 2. **MIR Conversion (2.4)** - ✅ Completed [26:01:17] - ~290 LOC of conversion code, TLS wiring complete
 3. **Full MIR Injection** - ✅ Completed [26:01:17] - mir_built query override with arena allocation
 4. **C++ Object Compilation (M5.7.2)** - ✅ Completed [26:01:17] - CppCompiler module with clang integration
-5. **M5.7.3 Linking** - Next: Link Rust binary with C++ object files
-6. **End-to-end testing** - Test with nightly rustc + rustc-dev component
+5. **M5.7.3 Linking** - ✅ Completed [26:01:17] - run_rustc_with_objects with C++ runtime linking
+6. **M5.8 Run basic mako ops** - Next: Test actual mako functions

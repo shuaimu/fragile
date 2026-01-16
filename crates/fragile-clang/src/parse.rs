@@ -666,6 +666,13 @@ impl ClangParser {
                     ClangNodeKind::NamespaceDecl { name: name_opt }
                 }
 
+                // CXCursor_LinkageSpec = 23 (extern "C" { ... })
+                // This is a language linkage specification that wraps declarations.
+                // We treat it as a container and recurse into it to find the actual declarations.
+                clang_sys::CXCursor_LinkageSpec => {
+                    ClangNodeKind::LinkageSpecDecl
+                }
+
                 clang_sys::CXCursor_UsingDirective => {
                     // For UsingDirective, the child nodes contain a NamespaceRef
                     // that points to the nominated namespace

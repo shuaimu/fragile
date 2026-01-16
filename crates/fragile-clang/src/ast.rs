@@ -200,6 +200,10 @@ pub enum ClangNodeKind {
         /// Namespace name (None for anonymous namespaces)
         name: Option<String>,
     },
+    /// Language linkage specification (e.g., `extern "C" { ... }`)
+    /// This is a container for declarations with different linkage.
+    /// Children are the actual declarations.
+    LinkageSpecDecl,
     /// Using namespace directive (e.g., `using namespace std;`)
     UsingDirective {
         /// The namespace path being imported (e.g., ["std"] or ["rrr", "base"])

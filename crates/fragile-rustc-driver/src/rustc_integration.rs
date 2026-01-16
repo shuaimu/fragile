@@ -414,11 +414,33 @@ impl rustc_driver::Callbacks for FragileCallbacks {
 /// 1. Creates a temporary file with the C++ stubs
 /// 2. Sets up the rustc arguments
 /// 3. Runs rustc with our custom callbacks
+///
+/// # Arguments
+/// * `rust_files` - Rust source files to compile
+/// * `cpp_stubs` - Generated Rust stubs for C++ declarations
+/// * `output` - Output binary path
+/// * `mir_registry` - Registry of C++ MIR bodies
+/// * `cpp_objects` - Optional C++ object files to link
+/// * `link_cpp_runtime` - Whether to link C++ standard library
 pub fn run_rustc(
     rust_files: &[&Path],
     cpp_stubs: &str,
     output: &Path,
     mir_registry: Arc<CppMirRegistry>,
+) -> Result<()> {
+    run_rustc_with_objects(rust_files, cpp_stubs, output, mir_registry, &[], true)
+}
+
+/// Run rustc with the Fragile callbacks and C++ object files.
+///
+/// This is the full version that supports linking with C++ object files.
+pub fn run_rustc_with_objects(
+    rust_files: &[&Path],
+    cpp_stubs: &str,
+    output: &Path,
+    mir_registry: Arc<CppMirRegistry>,
+    cpp_objects: &[PathBuf],
+    link_cpp_runtime: bool,
 ) -> Result<()> {
     // Create a temporary file for the stubs
     let temp_dir = tempfile::tempdir().map_err(|e| miette!("Failed to create temp dir: {}", e))?;
@@ -449,11 +471,28 @@ pub fn run_rustc(
     args.push("--extern".to_string());
     args.push(format!("cpp_stubs={}", stubs_path.display()));
 
+    // Add C++ object files as linker arguments
+    for obj in cpp_objects {
+        args.push("-C".to_string());
+        args.push(format!("link-arg={}", obj.display()));
+    }
+
+    // Link C++ runtime library if requested
+    if link_cpp_runtime && !cpp_objects.is_empty() {
+        // Try to detect whether to use libstdc++ or libc++
+        // Default to libstdc++ as it's more common on Linux
+        args.push("-C".to_string());
+        args.push("link-arg=-lstdc++".to_string());
+    }
+
     // Create our callbacks
     let mut callbacks = FragileCallbacks::new(mir_registry).with_stubs_path(stubs_path.clone());
 
     eprintln!("[fragile] Running rustc with args: {:?}", args);
     eprintln!("[fragile] C++ functions registered: {}", callbacks.cpp_function_names.len());
+    if !cpp_objects.is_empty() {
+        eprintln!("[fragile] C++ objects to link: {:?}", cpp_objects);
+    }
 
     // Run rustc with our callbacks
     let result = rustc_driver::catch_fatal_errors(|| {
