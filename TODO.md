@@ -312,8 +312,8 @@ See [PLAN_CPP20_MAKO.md](PLAN_CPP20_MAKO.md) for detailed plan.
     - [x] `vendor/mako/src/rrr/reactor/quorum_event.cc` - **PARSED**: 4631 functions (with error filtering for cross-namespace inheritance) [26:01:16, 19:00]
     - [x] F.3.29 Added `ignored_error_patterns` to ClangParser for filtering known Clang semantic issues [26:01:16, 19:00]
     - [-] `vendor/mako/src/mako/thread.cc` - Needs eRPC rpc.h header (external dependency)
-    - [-] `vendor/mako/src/mako/persist_test.cc` - Has LZ4 stubs but needs one_way_post template from mako internals
-    - [-] `vendor/mako/src/mako/masstree/mtd.cc` - Needs log.hh (complex logging dependencies)
+    - [-] `vendor/mako/src/mako/persist_test.cc` - References undefined `one_way_post` template (bug in mako - template never defined)
+    - [-] `vendor/mako/src/mako/masstree/mtd.cc` - Needs WORDS_BIGENDIAN config (fixed), but has sys/epoll.h conflicts with system headers
     - [ ] Remaining files need: eRPC library stubs, more STL stubs
   - [ ] Link and run tests
 
