@@ -100,10 +100,10 @@ See [PLAN_CPP20_MAKO.md](PLAN_CPP20_MAKO.md) for detailed plan.
 - [x] **C.0.2 Type alias support** - Parse and track `using` type aliases (e.g., `std::vector<T>::iterator`) [26:01:16]
 
 #### C.1 Containers
-- [ ] **C.1.1 std::vector (basic)**
-  - [ ] Parse vector template from `<vector>` header
-  - [ ] Support push_back, pop_back, size, operator[]
-  - [ ] Support begin(), end() iterators
+- [x] **C.1.1 std::vector (basic)** [26:01:16]
+  - [x] Parse vector template from `<vector>` header
+  - [x] Support push_back, pop_back, size, operator[]
+  - [x] Support begin(), end() iterators
 - [ ] **C.1.2 std::string**
   - [ ] Parse string from `<string>` header
   - [ ] Basic operations (c_str(), size(), operator[])

@@ -4097,3 +4097,88 @@ fn test_type_alias_struct() {
     assert_eq!(point_typedef.name, "PointTypedef");
     assert!(matches!(&point_typedef.underlying_type, CppType::Named(name) if name == "Point"));
 }
+
+// ========== std::vector Tests (C.1.1) ==========
+
+/// Test parsing code that uses std::vector with system includes.
+#[test]
+fn test_std_vector_basic_usage() {
+    let parser = ClangParser::with_system_includes().unwrap();
+    let code = r#"
+        #include <vector>
+
+        int test_vector() {
+            std::vector<int> v;
+            v.push_back(42);
+            v.push_back(100);
+            int x = v[0];
+            int s = v.size();
+            return s + x;
+        }
+    "#;
+
+    let ast = parser.parse_string(code, "test.cpp").unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).unwrap();
+
+    // Should have the test_vector function (among many STL functions)
+    let test_fn = module.functions.iter().find(|f| f.display_name == "test_vector");
+    assert!(test_fn.is_some(), "Expected to find test_vector function");
+
+    let test_fn = test_fn.unwrap();
+    assert!(matches!(test_fn.return_type, CppType::Int { signed: true }));
+
+    // Verify the MIR has basic blocks with function calls
+    assert!(!test_fn.mir_body.blocks.is_empty(), "Expected MIR body to have blocks");
+}
+
+/// Test parsing code that uses std::vector with pop_back.
+#[test]
+fn test_std_vector_pop_back() {
+    let parser = ClangParser::with_system_includes().unwrap();
+    let code = r#"
+        #include <vector>
+
+        void test_pop() {
+            std::vector<int> v;
+            v.push_back(1);
+            v.pop_back();
+        }
+    "#;
+
+    let ast = parser.parse_string(code, "test.cpp").unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).unwrap();
+
+    let test_fn = module.functions.iter().find(|f| f.display_name == "test_pop");
+    assert!(test_fn.is_some(), "Expected to find test_pop function");
+}
+
+/// Test parsing code that uses std::vector with iterators.
+#[test]
+fn test_std_vector_iterators() {
+    let parser = ClangParser::with_system_includes().unwrap();
+    let code = r#"
+        #include <vector>
+
+        int sum_vector() {
+            std::vector<int> v;
+            v.push_back(1);
+            v.push_back(2);
+            v.push_back(3);
+
+            int sum = 0;
+            for (auto it = v.begin(); it != v.end(); ++it) {
+                sum += *it;
+            }
+            return sum;
+        }
+    "#;
+
+    let ast = parser.parse_string(code, "test.cpp").unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).unwrap();
+
+    let sum_fn = module.functions.iter().find(|f| f.display_name == "sum_vector");
+    assert!(sum_fn.is_some(), "Expected to find sum_vector function");
+}
