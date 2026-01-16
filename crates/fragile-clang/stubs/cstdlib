@@ -19,6 +19,7 @@ void* calloc(size_t num, size_t size);
 void* realloc(void* ptr, size_t new_size);
 void free(void* ptr);
 void* aligned_alloc(size_t alignment, size_t size);
+int posix_memalign(void** memptr, size_t alignment, size_t size);
 
 // Program termination
 [[noreturn]] void abort() noexcept;
@@ -84,6 +85,7 @@ using std::malloc;
 using std::calloc;
 using std::realloc;
 using std::free;
+using std::posix_memalign;
 using std::abort;
 using std::exit;
 using std::atexit;
