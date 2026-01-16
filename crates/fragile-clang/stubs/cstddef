@@ -4,6 +4,7 @@
 
 #include "cstdint"
 #include "cstdlib"
+#include "new"  // For placement new
 
 namespace std {
 

@@ -30,13 +30,13 @@ typedef long time_t;
 #define __time_t_defined
 #endif
 
-// timespec structure - use conditional to avoid conflict with system headers
-#ifndef __timespec_defined
+// timespec structure - use same guard as Linux kernel/glibc
+#ifndef _STRUCT_TIMESPEC
+#define _STRUCT_TIMESPEC 1
 struct timespec {
     time_t tv_sec;   // Seconds
     long   tv_nsec;  // Nanoseconds
 };
-#define __timespec_defined
 #endif
 
 // tm structure for broken-down time

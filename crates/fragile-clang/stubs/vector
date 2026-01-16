@@ -156,7 +156,7 @@ public:
         size_ = count;
     }
 
-    template<typename InputIt>
+    template<typename InputIt, typename = typename std::enable_if<!std::is_integral<InputIt>::value>::type>
     void assign(InputIt first, InputIt last) {
         clear();
         for (; first != last; ++first) push_back(*first);
