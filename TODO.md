@@ -136,10 +136,10 @@ See [PLAN_CPP20_MAKO.md](PLAN_CPP20_MAKO.md) for detailed plan.
   - [x] D.2.1 Add MirTerminator::Yield, Await, CoroutineReturn to lib.rs
   - [x] D.2.2 No MirRvalue changes needed (terminators handle control flow)
   - [x] D.2.3 Add is_coroutine field to MirBody
-- [ ] **D.3 AST to MIR Conversion** (~150 lines)
-  - [ ] D.3.1 Convert CoawaitExpr to MIR in convert.rs
-  - [ ] D.3.2 Convert CoyieldExpr to MIR in convert.rs
-  - [ ] D.3.3 Convert CoreturnStmt to MIR in convert.rs
+- [x] **D.3 AST to MIR Conversion** (~70 lines) [26:01:16, 03:35] ([docs/dev/plan_coroutine_mir_conversion.md](docs/dev/plan_coroutine_mir_conversion.md))
+  - [x] D.3.1 Convert CoawaitExpr to MIR in convert.rs
+  - [x] D.3.2 Convert CoyieldExpr to MIR in convert.rs
+  - [x] D.3.3 Convert CoreturnStmt to MIR in convert.rs
 - [ ] **D.4 Coroutine Header Parsing** (~100 lines)
   - [ ] D.4.1 Parse `<coroutine>` header types
   - [ ] D.4.2 Parse std::coroutine_handle

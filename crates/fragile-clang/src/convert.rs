@@ -644,6 +644,17 @@ impl MirConverter {
                 }
             }
 
+            // C++20 Coroutine statements
+            ClangNodeKind::CoreturnStmt { value_ty: _ } => {
+                // co_return statement - terminates the coroutine
+                let value = if let Some(expr) = node.children.first() {
+                    Some(self.convert_expr(expr, builder)?)
+                } else {
+                    None
+                };
+                builder.finish_block(MirTerminator::CoroutineReturn { value });
+            }
+
             ClangNodeKind::SwitchStmt => {
                 // SwitchStmt children:
                 // [0] Condition expression (what we switch on)
@@ -910,6 +921,52 @@ impl MirConverter {
                 } else {
                     Ok(MirOperand::Constant(MirConstant::Unit))
                 }
+            }
+
+            // C++20 Coroutine expressions
+            ClangNodeKind::CoawaitExpr { operand_ty: _, result_ty } => {
+                // co_await expression - suspends until the awaitable is ready
+                let awaitable = if let Some(expr) = node.children.first() {
+                    self.convert_expr(expr, builder)?
+                } else {
+                    MirOperand::Constant(MirConstant::Unit)
+                };
+
+                // Create a temporary for the result
+                let result_local = builder.add_local(None, result_ty.clone(), false);
+                let destination = MirPlace::local(result_local);
+
+                // Create await terminator
+                let resume_block = builder.new_block();
+                builder.finish_block(MirTerminator::Await {
+                    awaitable,
+                    destination: destination.clone(),
+                    resume: resume_block,
+                    drop: None,
+                });
+
+                // Return the result place as an operand
+                Ok(MirOperand::Copy(destination))
+            }
+
+            ClangNodeKind::CoyieldExpr { value_ty: _, result_ty: _ } => {
+                // co_yield expression - yields a value and suspends
+                let value = if let Some(expr) = node.children.first() {
+                    self.convert_expr(expr, builder)?
+                } else {
+                    MirOperand::Constant(MirConstant::Unit)
+                };
+
+                // Create yield terminator
+                let resume_block = builder.new_block();
+                builder.finish_block(MirTerminator::Yield {
+                    value,
+                    resume: resume_block,
+                    drop: None,
+                });
+
+                // The yield expression returns a value (typically void for generators)
+                Ok(MirOperand::Constant(MirConstant::Unit))
             }
 
             ClangNodeKind::Unknown(_) => {
@@ -1505,6 +1562,9 @@ fn is_expression_kind(kind: &ClangNodeKind) -> bool {
             | ClangNodeKind::ConditionalOperator { .. }
             | ClangNodeKind::ParenExpr { .. }
             | ClangNodeKind::ImplicitCastExpr { .. }
+            // C++20 Coroutine expressions
+            | ClangNodeKind::CoawaitExpr { .. }
+            | ClangNodeKind::CoyieldExpr { .. }
     )
 }
 
