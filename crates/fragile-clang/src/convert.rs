@@ -1000,6 +1000,28 @@ impl MirConverter {
                 Ok(MirOperand::Constant(MirConstant::Unit))
             }
 
+            // C++ RTTI
+            ClangNodeKind::TypeidExpr { result_ty: _ } => {
+                // typeid expression - evaluate child and return type_info reference
+                // For now, just evaluate children for side effects
+                // Full RTTI requires runtime support
+                if let Some(expr) = node.children.first() {
+                    let _ = self.convert_expr(expr, builder)?;
+                }
+                Ok(MirOperand::Constant(MirConstant::Unit))
+            }
+
+            ClangNodeKind::DynamicCastExpr { target_ty: _ } => {
+                // dynamic_cast - evaluate child and cast
+                // For now, just convert the child expression
+                // Full RTTI requires runtime support
+                if let Some(expr) = node.children.first() {
+                    self.convert_expr(expr, builder)
+                } else {
+                    Ok(MirOperand::Constant(MirConstant::Unit))
+                }
+            }
+
             ClangNodeKind::Unknown(_) => {
                 // Unknown/UnexposedExpr nodes often wrap other expressions
                 // Unwrap and recurse into the child
@@ -1598,6 +1620,9 @@ fn is_expression_kind(kind: &ClangNodeKind) -> bool {
             | ClangNodeKind::CoyieldExpr { .. }
             // C++ Exception expressions
             | ClangNodeKind::ThrowExpr { .. }
+            // C++ RTTI expressions
+            | ClangNodeKind::TypeidExpr { .. }
+            | ClangNodeKind::DynamicCastExpr { .. }
     )
 }
 

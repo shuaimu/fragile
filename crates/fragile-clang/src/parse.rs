@@ -622,6 +622,18 @@ impl ClangParser {
                     ClangNodeKind::ThrowExpr { exception_ty }
                 }
 
+                // C++ RTTI
+                clang_sys::CXCursor_CXXTypeidExpr => {
+                    let result_ty = self.convert_type(clang_sys::clang_getCursorType(cursor));
+                    ClangNodeKind::TypeidExpr { result_ty }
+                }
+
+                clang_sys::CXCursor_CXXDynamicCastExpr => {
+                    // The result type is the target type of the cast
+                    let target_ty = self.convert_type(clang_sys::clang_getCursorType(cursor));
+                    ClangNodeKind::DynamicCastExpr { target_ty }
+                }
+
                 // Expressions
                 clang_sys::CXCursor_IntegerLiteral => {
                     // Try to evaluate the literal

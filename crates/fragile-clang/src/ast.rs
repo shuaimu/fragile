@@ -397,6 +397,20 @@ pub enum ClangNodeKind {
         exception_ty: Option<CppType>,
     },
 
+    // C++ RTTI (Run-Time Type Information)
+
+    /// typeid expression (returns std::type_info const&)
+    TypeidExpr {
+        /// Type of the result (std::type_info const&)
+        result_ty: CppType,
+    },
+
+    /// dynamic_cast expression
+    DynamicCastExpr {
+        /// Target type of the cast
+        target_ty: CppType,
+    },
+
     /// Unknown or unhandled node kind
     Unknown(String),
 }
