@@ -113,6 +113,16 @@ impl FunctionBuilder {
         MirBody {
             blocks: self.blocks,
             locals: self.locals,
+            is_coroutine: false,
+        }
+    }
+
+    /// Build the final MIR body, marking it as a coroutine.
+    fn build_coroutine(self) -> MirBody {
+        MirBody {
+            blocks: self.blocks,
+            locals: self.locals,
+            is_coroutine: true,
         }
     }
 }

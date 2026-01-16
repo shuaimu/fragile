@@ -679,6 +679,8 @@ pub struct MirBody {
     pub blocks: Vec<MirBasicBlock>,
     /// Local variable declarations
     pub locals: Vec<MirLocal>,
+    /// Whether this is a coroutine body (contains co_await, co_yield, or co_return)
+    pub is_coroutine: bool,
 }
 
 impl MirBody {
@@ -686,6 +688,7 @@ impl MirBody {
         Self {
             blocks: Vec::new(),
             locals: Vec::new(),
+            is_coroutine: false,
         }
     }
 }
@@ -739,6 +742,38 @@ pub enum MirTerminator {
     },
     /// Unreachable
     Unreachable,
+
+    // C++20 Coroutine terminators
+
+    /// Yield from a coroutine (co_yield in C++).
+    /// Suspends the coroutine and yields a value.
+    Yield {
+        /// Value being yielded
+        value: MirOperand,
+        /// Block to resume at after yield
+        resume: usize,
+        /// Block for when the coroutine is dropped while suspended
+        drop: Option<usize>,
+    },
+
+    /// Await an awaitable (co_await in C++).
+    /// Suspends the coroutine until the awaitable is ready.
+    Await {
+        /// The awaitable being awaited
+        awaitable: MirOperand,
+        /// Destination place for the await result
+        destination: MirPlace,
+        /// Block to resume at after await completes
+        resume: usize,
+        /// Block for when the coroutine is dropped while suspended
+        drop: Option<usize>,
+    },
+
+    /// Return from a coroutine (co_return in C++).
+    CoroutineReturn {
+        /// Optional value being returned (None for `co_return;`)
+        value: Option<MirOperand>,
+    },
 }
 
 /// An rvalue (right-hand side of assignment).

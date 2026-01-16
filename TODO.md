@@ -132,10 +132,10 @@ See [PLAN_CPP20_MAKO.md](PLAN_CPP20_MAKO.md) for detailed plan.
   - [x] D.1.1 Add CoawaitExpr, CoyieldExpr, CoreturnStmt to ClangNodeKind in ast.rs
   - [x] D.1.2 Parse coroutine expressions in parse.rs (token-based detection for UnexposedExpr/Stmt)
   - [x] D.1.3 Add basic tests for coroutine AST parsing (6 tests added)
-- [ ] **D.2 MIR Representation for Coroutines** (~100 lines)
-  - [ ] D.2.1 Add MirTerminator::Yield, MirTerminator::CoroutineReturn to lib.rs
-  - [ ] D.2.2 Add coroutine-related MirRvalue variants if needed
-  - [ ] D.2.3 Update MirBody to track coroutine state
+- [x] **D.2 MIR Representation for Coroutines** (~50 lines) [26:01:16, 03:25] ([docs/dev/plan_coroutine_mir.md](docs/dev/plan_coroutine_mir.md))
+  - [x] D.2.1 Add MirTerminator::Yield, Await, CoroutineReturn to lib.rs
+  - [x] D.2.2 No MirRvalue changes needed (terminators handle control flow)
+  - [x] D.2.3 Add is_coroutine field to MirBody
 - [ ] **D.3 AST to MIR Conversion** (~150 lines)
   - [ ] D.3.1 Convert CoawaitExpr to MIR in convert.rs
   - [ ] D.3.2 Convert CoyieldExpr to MIR in convert.rs
