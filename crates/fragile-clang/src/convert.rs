@@ -13,7 +13,8 @@ use miette::Result;
 
 /// Converter from Clang AST to MIR.
 pub struct MirConverter {
-    /// Current function being converted
+    /// Current function being converted (reserved for future use)
+    #[allow(dead_code)]
     current_function: Option<FunctionBuilder>,
 }
 
@@ -118,6 +119,8 @@ impl FunctionBuilder {
     }
 
     /// Build the final MIR body, marking it as a coroutine.
+    /// Reserved for future coroutine MIR generation.
+    #[allow(dead_code)]
     fn build_coroutine(self) -> MirBody {
         MirBody {
             blocks: self.blocks,
