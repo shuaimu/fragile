@@ -52,13 +52,13 @@ See [PLAN_CPP20_MAKO.md](PLAN_CPP20_MAKO.md) for detailed plan.
   - [x] Virtual functions + vtables [26:01:16] ([docs/dev/plan_virtual_functions.md](docs/dev/plan_virtual_functions.md))
   - [x] Pure virtual (= 0) [26:01:16] (included in above)
   - [x] Override/final specifiers [26:01:16] ([docs/dev/plan_override_final.md](docs/dev/plan_override_final.md))
-- [ ] **A.4 Operator Overloading**
-  - [ ] Arithmetic (+, -, *, /)
-  - [ ] Comparison (==, !=, <, >)
-  - [ ] Assignment (=, +=)
-  - [ ] Subscript []
-  - [ ] Call ()
-  - [ ] Pointer (*, ->)
+- [x] **A.4 Operator Overloading**
+  - [x] Arithmetic (+, -, *, /) [26:01:16] ([docs/dev/plan_operator_overloading.md](docs/dev/plan_operator_overloading.md))
+  - [x] Comparison (==, !=, <, >) [26:01:16] (included in above)
+  - [x] Assignment (=, +=) [26:01:16] (included in above)
+  - [x] Subscript [] [26:01:16] (included in above)
+  - [x] Call () [26:01:16] (included in above)
+  - [x] Pointer (*, ->) [26:01:16] (included in above)
 - [ ] **A.5 References & Move Semantics**
   - [x] Lvalue references (T&)
   - [ ] Const references (const T&)
@@ -214,7 +214,7 @@ Migration: After C++20 support is complete, deprecate these.
 ## 5. Testing & Milestones
 
 ### 5.1 Unit Tests
-- [x] fragile-clang: 46 tests passing (7 unit + 39 integration)
+- [x] fragile-clang: 51 tests passing (7 unit + 44 integration)
 - [x] fragile-rustc-driver: 6 tests passing
 - [x] fragile-runtime: Compiles
 

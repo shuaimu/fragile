@@ -1202,3 +1202,214 @@ fn test_override_and_final() {
     assert!(method.is_override);
     assert!(method.is_final);
 }
+
+/// Test operator overloading (arithmetic operators).
+#[test]
+fn test_operator_overloading_arithmetic() {
+    let parser = ClangParser::new().expect("Failed to create parser");
+
+    let source = r#"
+        class Vector {
+        public:
+            int x, y;
+
+            Vector operator+(const Vector& other) const {
+                return Vector();
+            }
+
+            Vector operator-(const Vector& other) const {
+                return Vector();
+            }
+
+            Vector operator*(int scalar) const {
+                return Vector();
+            }
+
+            Vector operator/(int scalar) const {
+                return Vector();
+            }
+        };
+    "#;
+
+    let ast = parser.parse_string(source, "operators.cpp").expect("Failed to parse");
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    assert_eq!(module.structs.len(), 1);
+
+    let s = &module.structs[0];
+    assert_eq!(s.name, "Vector");
+
+    // Should have 4 operator methods
+    let operator_methods: Vec<_> = s.methods.iter().filter(|m| m.name.starts_with("operator")).collect();
+    assert_eq!(operator_methods.len(), 4);
+
+    // Check for specific operators
+    let op_plus = s.methods.iter().find(|m| m.name == "operator+");
+    assert!(op_plus.is_some(), "operator+ not found");
+
+    let op_minus = s.methods.iter().find(|m| m.name == "operator-");
+    assert!(op_minus.is_some(), "operator- not found");
+
+    let op_mul = s.methods.iter().find(|m| m.name == "operator*");
+    assert!(op_mul.is_some(), "operator* not found");
+
+    let op_div = s.methods.iter().find(|m| m.name == "operator/");
+    assert!(op_div.is_some(), "operator/ not found");
+}
+
+/// Test operator overloading (comparison operators).
+#[test]
+fn test_operator_overloading_comparison() {
+    let parser = ClangParser::new().expect("Failed to create parser");
+
+    let source = r#"
+        class Value {
+        public:
+            int val;
+
+            bool operator==(const Value& other) const {
+                return val == other.val;
+            }
+
+            bool operator!=(const Value& other) const {
+                return val != other.val;
+            }
+
+            bool operator<(const Value& other) const {
+                return val < other.val;
+            }
+
+            bool operator>(const Value& other) const {
+                return val > other.val;
+            }
+        };
+    "#;
+
+    let ast = parser.parse_string(source, "comparison.cpp").expect("Failed to parse");
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    assert_eq!(module.structs.len(), 1);
+
+    let s = &module.structs[0];
+
+    // Check for specific operators
+    assert!(s.methods.iter().any(|m| m.name == "operator=="), "operator== not found");
+    assert!(s.methods.iter().any(|m| m.name == "operator!="), "operator!= not found");
+    assert!(s.methods.iter().any(|m| m.name == "operator<"), "operator< not found");
+    assert!(s.methods.iter().any(|m| m.name == "operator>"), "operator> not found");
+}
+
+/// Test operator overloading (compound assignment).
+#[test]
+fn test_operator_overloading_assignment() {
+    let parser = ClangParser::new().expect("Failed to create parser");
+
+    let source = r#"
+        class Counter {
+        public:
+            int count;
+
+            Counter& operator=(const Counter& other) {
+                count = other.count;
+                return *this;
+            }
+
+            Counter& operator+=(int delta) {
+                count += delta;
+                return *this;
+            }
+
+            Counter& operator-=(int delta) {
+                count -= delta;
+                return *this;
+            }
+        };
+    "#;
+
+    let ast = parser.parse_string(source, "assignment.cpp").expect("Failed to parse");
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    assert_eq!(module.structs.len(), 1);
+
+    let s = &module.structs[0];
+
+    // Check for specific operators
+    assert!(s.methods.iter().any(|m| m.name == "operator="), "operator= not found");
+    assert!(s.methods.iter().any(|m| m.name == "operator+="), "operator+= not found");
+    assert!(s.methods.iter().any(|m| m.name == "operator-="), "operator-= not found");
+}
+
+/// Test operator overloading (subscript and call operators).
+#[test]
+fn test_operator_overloading_subscript_call() {
+    let parser = ClangParser::new().expect("Failed to create parser");
+
+    let source = r#"
+        class Array {
+        public:
+            int data[10];
+
+            int& operator[](int index) {
+                return data[index];
+            }
+
+            int operator()(int a, int b) {
+                return a + b;
+            }
+        };
+    "#;
+
+    let ast = parser.parse_string(source, "subscript_call.cpp").expect("Failed to parse");
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    assert_eq!(module.structs.len(), 1);
+
+    let s = &module.structs[0];
+
+    // Check for specific operators
+    assert!(s.methods.iter().any(|m| m.name == "operator[]"), "operator[] not found");
+    assert!(s.methods.iter().any(|m| m.name == "operator()"), "operator() not found");
+}
+
+/// Test operator overloading (pointer operators).
+#[test]
+fn test_operator_overloading_pointer() {
+    let parser = ClangParser::new().expect("Failed to create parser");
+
+    let source = r#"
+        struct Inner {
+            int value;
+        };
+
+        class SmartPtr {
+        public:
+            Inner* ptr;
+
+            Inner& operator*() {
+                return *ptr;
+            }
+
+            Inner* operator->() {
+                return ptr;
+            }
+        };
+    "#;
+
+    let ast = parser.parse_string(source, "pointer.cpp").expect("Failed to parse");
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    // Find SmartPtr class
+    let smart_ptr = module.structs.iter().find(|s| s.name == "SmartPtr");
+    assert!(smart_ptr.is_some(), "SmartPtr class not found");
+
+    let s = smart_ptr.unwrap();
+
+    // Check for specific operators
+    assert!(s.methods.iter().any(|m| m.name == "operator*"), "operator* not found");
+    assert!(s.methods.iter().any(|m| m.name == "operator->"), "operator-> not found");
+}
