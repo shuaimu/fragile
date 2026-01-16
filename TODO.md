@@ -412,12 +412,12 @@ See [PLAN_CPP20_MAKO.md](PLAN_CPP20_MAKO.md) for detailed plan.
     - [x] `vendor/mako/src/mako/benchmarks/bid.cc` - **PARSED**: bid benchmark [26:01:16, 20:00]
     - [x] `vendor/mako/src/mako/benchmarks/bench.cc` - **PARSED**: main benchmark harness [26:01:16, 20:00]
     - [x] `vendor/mako/src/mako/benchmarks/encstress.cc` - **PARSED**: encryption stress test [26:01:16, 20:00]
-    - [-] `vendor/mako/src/deptran/mongodb/server.cc` - Needs bsoncxx (external dep)
+    - [-] `vendor/mako/src/deptran/mongodb/server.cc` - Needs mongocxx/bsoncxx C++ driver stubs (optional for non-MongoDB builds)
     - [x] `vendor/mako/src/bench/micro/procedure.cc` - **PARSED**: 4759 functions (micro benchmark procedure) [26:01:16, 22:50]
     - [x] F.3.49 Added eRPC rpc.h stub header with ReqHandle, MsgBuffer, Rpc, Nexus types [26:01:16]
     - [x] F.3.50 Fixed std::thread::native_handle_type to use pthread_t [26:01:16]
     - [x] F.3.51 Added iomanip support (_Setw, _Setprecision, _Setfill) to iostream [26:01:16]
-    - [ ] Remaining files need: bsoncxx (mongodb)
+    - [-] mongodb files deferred - require external mongocxx/bsoncxx drivers (not installed)
   - [ ] Link and run tests
 
 ---
@@ -500,7 +500,7 @@ Migration: After C++20 support is complete, deprecate these.
 
 ### 5.1 Unit Tests
 - [x] fragile-clang: 596 tests passing (27 unit + 569 integration) - includes 10 coroutine + 7 exception + 6 RTTI + 8 promise type + 8 awaitable + 8 generator + 3 noexcept + 1 member access + 1 stack unwinding + 338 mako file tests (100% coverage) [26:01:16, 22:40]
-- [x] fragile-rustc-driver: 7 tests passing (6 original + 1 rustc_integration when feature enabled)
+- [x] fragile-rustc-driver: 9 tests passing (8 unit + 1 end-to-end + rustc_integration tests when feature enabled)
 - [x] fragile-runtime: Compiles
 
 ### 5.2 Mako Milestones
@@ -508,7 +508,15 @@ Migration: After C++20 support is complete, deprecate these.
 - [x] **M2**: Parse `rrr/misc/*.cpp` (templates, STL) - 5/5 files parsing (100%) [26:01:16]
 - [x] **M3**: Parse `rrr/rpc/*.cpp` (OOP, threads) - 4/4 files parsing (100%) [26:01:16]
 - [x] **M4**: Parse `mako/vec/*.cpp` (coroutines) - 2/2 files parsing (100%) [26:01:16]
-- [ ] **M5**: Full Mako build
+- [-] **M5**: Full Mako build ([docs/dev/plan_m5_full_mako_build.md](docs/dev/plan_m5_full_mako_build.md))
+  - [x] M5.1: Simple add.cpp end-to-end test (C++ → MIR → stubs) [26:01:17]
+  - [ ] M5.2: Enable CI with nightly rust + rustc-dev
+  - [ ] M5.3: Compile rand.cpp through full pipeline
+  - [ ] M5.4: Compile rrr/misc/*.cpp
+  - [ ] M5.5: Compile rrr/rpc/*.cpp
+  - [ ] M5.6: Compile mako/vec/*.cpp
+  - [ ] M5.7: Link all components into executable
+  - [ ] M5.8: Run basic mako operations
 - [ ] **M6**: Mako tests pass
 
 ---

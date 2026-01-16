@@ -107,11 +107,58 @@ mod tests {
     use super::*;
     use crate::stubs::generate_rust_stubs;
     use fragile_clang::{CppFunction, CppType, MirBody};
+    use std::path::Path;
 
     #[test]
     fn test_driver_creation() {
         let driver = FragileDriver::new();
         assert_eq!(driver.mir_registry.function_count(), 0);
+    }
+
+    /// End-to-end test: Parse add.cpp, generate stubs, register module
+    #[test]
+    fn test_end_to_end_add_cpp() {
+        // Path to the test file
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let project_root = Path::new(manifest_dir).parent().unwrap().parent().unwrap();
+        let add_cpp = project_root.join("tests/clang_integration/add.cpp");
+
+        // Check if test file exists
+        if !add_cpp.exists() {
+            eprintln!("Skipping test: add.cpp not found at {:?}", add_cpp);
+            return;
+        }
+
+        // Parse the C++ file
+        let module = fragile_clang::compile_cpp_file(&add_cpp)
+            .expect("Failed to parse add.cpp");
+
+        // Verify the module contains the add function
+        assert!(module.functions.iter().any(|f| f.display_name == "add"),
+            "Expected to find 'add' function in module");
+
+        // Find the add function and verify its signature
+        let add_func = module.functions.iter()
+            .find(|f| f.display_name == "add")
+            .expect("add function not found");
+
+        assert_eq!(add_func.params.len(), 2, "add should have 2 parameters");
+        assert!(add_func.return_type.is_integral() == Some(true), "add should return integral type");
+
+        // Register the module with the driver
+        let driver = FragileDriver::new();
+        driver.register_cpp_module(&module);
+
+        // Verify registration
+        assert!(driver.mir_registry.function_count() > 0,
+            "Module should have registered at least one function");
+
+        // Generate Rust stubs
+        let stubs = generate_rust_stubs(&[module]);
+        assert!(stubs.contains("extern"), "Stubs should contain extern block");
+        assert!(stubs.contains("add"), "Stubs should reference add function");
+
+        println!("Generated stubs:\n{}", stubs);
     }
 
     #[test]
