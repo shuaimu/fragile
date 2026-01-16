@@ -155,9 +155,9 @@ See [PLAN_CPP20_MAKO.md](PLAN_CPP20_MAKO.md) for detailed plan.
   - [x] Basic lambdas
   - [x] Captures (value/reference)
   - [x] Generic lambdas
-- [ ] **E.4 Attributes**
-  - [ ] [[nodiscard]]
-  - [ ] [[maybe_unused]]
+- [x] **E.4 Attributes** [26:01:16]
+  - [x] [[nodiscard]]
+  - [x] [[maybe_unused]]
 
 ### 1.6 Phase F: Mako Integration
 - [ ] **F.1 Build Individual Files**

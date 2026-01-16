@@ -4752,3 +4752,78 @@ fn test_std_unordered_map_basic() {
     let use_fn = module.functions.iter().find(|f| f.display_name == "use_unordered_map");
     assert!(use_fn.is_some(), "Expected to find use_unordered_map function");
 }
+
+// ========== Attribute Tests (E.4) ==========
+
+/// Test parsing code with [[nodiscard]] attribute.
+#[test]
+fn test_attribute_nodiscard() {
+    let parser = ClangParser::new().unwrap();
+    let code = r#"
+        [[nodiscard]] int get_value() {
+            return 42;
+        }
+
+        int use_nodiscard() {
+            return get_value();
+        }
+    "#;
+
+    let ast = parser.parse_string(code, "test.cpp").unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).unwrap();
+
+    let get_fn = module.functions.iter().find(|f| f.display_name == "get_value");
+    assert!(get_fn.is_some(), "Expected to find get_value function");
+
+    let use_fn = module.functions.iter().find(|f| f.display_name == "use_nodiscard");
+    assert!(use_fn.is_some(), "Expected to find use_nodiscard function");
+}
+
+/// Test parsing code with [[maybe_unused]] attribute.
+#[test]
+fn test_attribute_maybe_unused() {
+    let parser = ClangParser::new().unwrap();
+    let code = r#"
+        void use_maybe_unused([[maybe_unused]] int x) {
+            // x might be unused
+        }
+
+        int test_unused() {
+            [[maybe_unused]] int unused_var = 42;
+            return 0;
+        }
+    "#;
+
+    let ast = parser.parse_string(code, "test.cpp").unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).unwrap();
+
+    let use_fn = module.functions.iter().find(|f| f.display_name == "use_maybe_unused");
+    assert!(use_fn.is_some(), "Expected to find use_maybe_unused function");
+
+    let test_fn = module.functions.iter().find(|f| f.display_name == "test_unused");
+    assert!(test_fn.is_some(), "Expected to find test_unused function");
+}
+
+/// Test parsing code with [[deprecated]] attribute.
+#[test]
+fn test_attribute_deprecated() {
+    let parser = ClangParser::new().unwrap();
+    let code = r#"
+        [[deprecated("Use new_api instead")]]
+        void old_api() {}
+
+        void new_api() {}
+    "#;
+
+    let ast = parser.parse_string(code, "test.cpp").unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).unwrap();
+
+    let old_fn = module.functions.iter().find(|f| f.display_name == "old_api");
+    assert!(old_fn.is_some(), "Expected to find old_api function");
+
+    let new_fn = module.functions.iter().find(|f| f.display_name == "new_api");
+    assert!(new_fn.is_some(), "Expected to find new_api function");
+}
