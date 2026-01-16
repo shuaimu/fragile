@@ -84,7 +84,12 @@ public:
 
     // Input operators
     basic_stringstream& operator>>(int& n) { (void)n; return *this; }
+    basic_stringstream& operator>>(unsigned int& n) { (void)n; return *this; }
     basic_stringstream& operator>>(long& n) { (void)n; return *this; }
+    basic_stringstream& operator>>(unsigned long& n) { (void)n; return *this; }
+    basic_stringstream& operator>>(long long& n) { (void)n; return *this; }
+    basic_stringstream& operator>>(unsigned long long& n) { (void)n; return *this; }
+    basic_stringstream& operator>>(float& n) { (void)n; return *this; }
     basic_stringstream& operator>>(double& n) { (void)n; return *this; }
     basic_stringstream& operator>>(string_type& s) { (void)s; return *this; }
 };
@@ -133,7 +138,12 @@ public:
 
     // Input operators
     basic_istringstream& operator>>(int& n) { (void)n; return *this; }
+    basic_istringstream& operator>>(unsigned int& n) { (void)n; return *this; }
     basic_istringstream& operator>>(long& n) { (void)n; return *this; }
+    basic_istringstream& operator>>(unsigned long& n) { (void)n; return *this; }
+    basic_istringstream& operator>>(long long& n) { (void)n; return *this; }
+    basic_istringstream& operator>>(unsigned long long& n) { (void)n; return *this; }
+    basic_istringstream& operator>>(float& n) { (void)n; return *this; }
     basic_istringstream& operator>>(double& n) { (void)n; return *this; }
     basic_istringstream& operator>>(string_type& s) { (void)s; return *this; }
 };

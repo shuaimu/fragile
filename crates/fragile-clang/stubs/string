@@ -95,6 +95,14 @@ public:
         other.capacity_ = 0;
     }
 
+    // Iterator range constructor
+    template<typename InputIt>
+    basic_string(InputIt first, InputIt last) : data_(nullptr), size_(0), capacity_(0) {
+        for (InputIt it = first; it != last; ++it) {
+            push_back(*it);
+        }
+    }
+
     ~basic_string() { delete[] data_; }
 
     // Assignment

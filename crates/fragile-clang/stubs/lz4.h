@@ -39,6 +39,9 @@ LZ4LIB_API int LZ4_compress_fast_extState(void* state, const char* src, char* ds
 /// Simple state-based compression (4 args: ctx, src, dst, srcSize)
 LZ4LIB_API int LZ4_compress_heap(void* state, const char* src, char* dst, int srcSize);
 
+/// State-based compression with output size limit
+LZ4LIB_API int LZ4_compress_heap_limitedOutput(void* state, const char* src, char* dst, int srcSize, int maxDstSize);
+
 /// Simple decompression function
 LZ4LIB_API int LZ4_decompress_safe(const char* src, char* dst, int compressedSize, int dstCapacity);
 
@@ -54,6 +57,9 @@ LZ4LIB_API int LZ4_sizeofState(void);
 LZ4LIB_API void* LZ4_create(void);
 /// Alternative name
 #define LZ4_createStream LZ4_create
+
+/// Get the size needed for the create buffer
+LZ4LIB_API int LZ4_create_size(void);
 
 /// Free a compression context
 LZ4LIB_API void LZ4_free(void* ctx);

@@ -31,7 +31,7 @@ private:
 public:
     class iterator {
     public:
-        iterator(node* n = nullptr) : node_(n) {}
+        iterator(const node* n = nullptr) : node_(const_cast<node*>(n)) {}
         const_reference operator*() const { return node_->data; }
         const value_type* operator->() const { return &node_->data; }
         iterator& operator++() {

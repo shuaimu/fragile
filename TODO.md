@@ -212,7 +212,7 @@ See [PLAN_CPP20_MAKO.md](PLAN_CPP20_MAKO.md) for detailed plan.
     - [x] `vendor/mako/src/rrr/reactor/fiber_impl.cc` - **PARSED**: 4640 functions
     - [x] `vendor/mako/src/rrr/reactor/reactor.cc` - **PARSED**: 4640 functions
     - [-] `vendor/mako/src/rrr/reactor/quorum_event.cc` - Cross-namespace inheritance: `janus::QuorumEvent` inherits from `rrr::Event` via `using rrr::Event;`. Clang semantic error on `test()` call [26:01:16, 12:00]. See docs/dev/plan_fix_stub_headers_quorum_event.md
-  - [-] All mako module - **44/155 files parsing (28.4%)** [26:01:16, 17:00]
+  - [-] All mako module - **50/155 files parsing (32.3%)** [26:01:16, 21:00]
     - [x] `vendor/mako/src/mako/vec/coroutine.cpp` - **PARSED**: 40 functions
     - [x] `vendor/mako/src/mako/vec/occ.cpp` - **PARSED**: 41 functions
     - [x] `vendor/mako/src/mako/lib/memory.cc` - **PARSED**: 17 functions
@@ -256,6 +256,12 @@ See [PLAN_CPP20_MAKO.md](PLAN_CPP20_MAKO.md) for detailed plan.
     - [x] `vendor/mako/src/mako/masstree/misc.cc` - **PARSED**: 114 functions [26:01:16, 20:00]
     - [x] `vendor/mako/src/mako/masstree/kvrandom.cc` - **PARSED**: with random() [26:01:16, 20:00]
     - [x] `vendor/mako/src/mako/masstree/kvthread.cc` - **PARSED**: with posix_memalign [26:01:16, 20:00]
+    - [x] `vendor/mako/src/mako/btree.cc` - **PARSED**: 193 functions (B-tree) [26:01:16, 21:00]
+    - [x] `vendor/mako/src/mako/tuple.cc` - **PARSED**: 161 functions [26:01:16, 21:00]
+    - [x] `vendor/mako/src/mako/rcu.cc` - **PARSED**: 4724 functions [26:01:16, 21:00]
+    - [x] `vendor/mako/src/mako/masstree/perfstat.cc` - **PARSED**: 111 functions [26:01:16, 21:00]
+    - [x] `vendor/mako/src/mako/masstree/string_slice.cc` - **PARSED**: 98 functions [26:01:16, 21:00]
+    - [x] `vendor/mako/src/mako/masstree/test_atomics.cc` - **PARSED**: 162 functions [26:01:16, 21:00]
     - [x] F.3.4 Added stubs: cxxabi.h, typeinfo, endian.h, deque, stack, numa.h [26:01:16, 10:00]
     - [x] F.3.5 Fixed: cstdint types for x86_64, iostream/sstream traits, stdexcept includes, string getline
     - [x] F.3.6 Added parser support for preprocessor defines (CONFIG_H for masstree)
@@ -266,6 +272,8 @@ See [PLAN_CPP20_MAKO.md](PLAN_CPP20_MAKO.md) for detailed plan.
     - [x] F.3.11 Added optional stub, fixed fstream (seekg/seekp/tellg), ios_base::failure, virtual inheritance in iostream [26:01:16, 14:45]
     - [x] F.3.12 Added system_error stub header, updated sys/socket.h to include cstring [26:01:16, 17:00]
     - [x] F.3.13 Added lz4.h, sys/uio.h, fcntl.h, getopt.h stubs for persist_test.cc (file not fully parsing due to mako internal deps) [26:01:16, 18:00]
+    - [x] F.3.14 Fixed: string iterator constructor, set const_iterator, LZ4_create_size, tuple converting constructor [26:01:16, 21:00]
+    - [x] F.3.15 Added: deque to vector transitive include, istringstream unsigned type operators [26:01:16, 21:00]
     - [-] `vendor/mako/src/mako/thread.cc` - Needs eRPC rpc.h header (external dependency)
     - [-] `vendor/mako/src/mako/persist_test.cc` - Has LZ4 stubs but needs one_way_post template from mako internals
     - [ ] Remaining files need: eRPC library stubs, more STL stubs

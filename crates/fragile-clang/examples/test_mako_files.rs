@@ -90,6 +90,7 @@ fn main() {
         // Defines needed for mako/masstree
         let defines = vec![
             r#"CONFIG_H="mako/masstree/config.h""#.to_string(),
+            "WORDS_BIGENDIAN_SET=1".to_string(),  // Enable little-endian path in string_slice.hh
         ];
 
         let parser = match ClangParser::with_paths_and_defines(include_paths, system_include_paths, defines) {

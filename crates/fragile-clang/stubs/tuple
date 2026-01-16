@@ -97,6 +97,17 @@ public:
     constexpr tuple(T1&& t1, T2&& t2, T3&& t3)
         : first_(static_cast<T1&&>(t1)), second_(static_cast<T2&&>(t2)), third_(static_cast<T3&&>(t3)) {}
 
+    // Converting constructor from compatible tuple
+    template<typename U1, typename U2, typename U3>
+    constexpr tuple(const tuple<U1, U2, U3>& other)
+        : first_(other.first_), second_(other.second_), third_(other.third_) {}
+
+    template<typename U1, typename U2, typename U3>
+    constexpr tuple(tuple<U1, U2, U3>&& other)
+        : first_(static_cast<U1&&>(other.first_)),
+          second_(static_cast<U2&&>(other.second_)),
+          third_(static_cast<U3&&>(other.third_)) {}
+
     constexpr tuple(const tuple&) = default;
     constexpr tuple(tuple&&) = default;
     tuple& operator=(const tuple&) = default;
