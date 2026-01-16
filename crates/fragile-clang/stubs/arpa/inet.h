@@ -5,6 +5,7 @@
 #define _ARPA_INET_H
 
 #include <stdint.h>
+#include <netinet/in.h>  // For in_addr
 
 #ifdef __cplusplus
 extern "C" {
@@ -41,10 +42,7 @@ inline uint32_t ntohl(uint32_t netlong) {
     return htonl(netlong);
 }
 
-// IP address structure
-struct in_addr {
-    uint32_t s_addr;
-};
+// in_addr is now defined in netinet/in.h
 
 // Convert IP address from text to binary form
 int inet_pton(int af, const char* src, void* dst);
