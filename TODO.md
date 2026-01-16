@@ -172,8 +172,9 @@ See [PLAN_CPP20_MAKO.md](PLAN_CPP20_MAKO.md) for detailed plan.
   - [x] [[maybe_unused]]
 
 ### 1.6 Phase F: Mako Integration
-- [ ] **F.1 Build Individual Files**
-  - [ ] `vendor/mako/src/rrr/misc/rand.cpp`
+- [ ] **F.1 Build Individual Files** (Started [26:01:16, 05:00], [docs/dev/plan_mako_integration.md](docs/dev/plan_mako_integration.md))
+  - [x] F.1.0 rand.cpp patterns test (thread_local, inline asm, STL) - 3 tests added
+  - [ ] `vendor/mako/src/rrr/misc/rand.cpp` - needs base/all.hpp, pthread
   - [ ] `vendor/mako/src/rrr/misc/marshal.cpp`
   - [ ] `vendor/mako/src/rrr/rpc/server.cpp`
 - [ ] **F.2 Coroutine Files**
@@ -247,7 +248,7 @@ Migration: After C++20 support is complete, deprecate these.
 ## 5. Testing & Milestones
 
 ### 5.1 Unit Tests
-- [x] fragile-clang: 218 tests passing (27 unit + 191 integration) - includes 10 coroutine + 7 exception + 6 RTTI + 8 promise type + 8 awaitable + 8 generator tests
+- [x] fragile-clang: 221 tests passing (27 unit + 194 integration) - includes 10 coroutine + 7 exception + 6 RTTI + 8 promise type + 8 awaitable + 8 generator + 3 mako pattern tests
 - [x] fragile-rustc-driver: 6 tests passing
 - [x] fragile-runtime: Compiles
 

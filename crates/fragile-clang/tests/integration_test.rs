@@ -6480,3 +6480,173 @@ fn test_generator_complete_pattern() {
     let gen_fn = module.functions.iter().find(|f| f.display_name == "make_range");
     assert!(gen_fn.is_some(), "Expected to find make_range function");
 }
+
+// ========== Phase F: Mako Integration Tests ==========
+
+/// Test parsing simplified rand.cpp patterns.
+/// This tests the patterns used in Mako's rand.cpp without external dependencies.
+#[test]
+fn test_mako_rand_patterns() {
+    let parser = ClangParser::with_system_includes().unwrap();
+    // Simplified version of rand.cpp patterns
+    let code = r#"
+        #include <string>
+        #include <vector>
+
+        namespace rrr {
+
+        class RandomGenerator {
+        private:
+            static thread_local unsigned int seed_;
+            static int nu_constant;
+
+        public:
+            static int rand(int min = 0, int max = 100);
+            static double rand_double(double min = 0.0, double max = 1.0);
+            static std::string rand_str(int length = 0);
+            static std::string int2str_n(int i, int length);
+            static bool percentage_true(double p);
+            static bool percentage_true(int p);
+            static unsigned int weighted_select(const std::vector<double> &weight_vector);
+        };
+
+        thread_local unsigned int RandomGenerator::seed_ = 12345;
+        int RandomGenerator::nu_constant = 0;
+
+        int RandomGenerator::rand(int min, int max) {
+            seed_ = seed_ * 1103515245 + 12345;
+            return (seed_ % (max - min + 1)) + min;
+        }
+
+        double RandomGenerator::rand_double(double min, double max) {
+            if (max == min) return min;
+            int r = rand(0, 1000000);
+            return ((double)r) / 1000000.0 * (max - min) + min;
+        }
+
+        std::string RandomGenerator::rand_str(int length) {
+            int r = rand(0, 1000000);
+            std::string s = std::to_string(r);
+            if (length <= 0) return s;
+            return s.substr(0, length);
+        }
+
+        std::string RandomGenerator::int2str_n(int i, int length) {
+            std::string ret = std::to_string(i);
+            while (ret.length() < (unsigned)length) {
+                ret = std::string("0") + ret;
+            }
+            if (ret.length() > (unsigned)length) {
+                ret = ret.substr(ret.length() - length, length);
+            }
+            return ret;
+        }
+
+        bool RandomGenerator::percentage_true(double p) {
+            return rand_double(0.0, 100.0) <= p;
+        }
+
+        bool RandomGenerator::percentage_true(int p) {
+            return rand(0, 99) < p;
+        }
+
+        unsigned int RandomGenerator::weighted_select(const std::vector<double> &weight_vector) {
+            double sum = 0;
+            for (unsigned i = 0; i < weight_vector.size(); i++)
+                sum += weight_vector[i];
+            double r = rand_double(0, sum);
+            double stage_sum = 0;
+            for (unsigned i = 0; i < weight_vector.size(); i++) {
+                stage_sum += weight_vector[i];
+                if (r <= stage_sum) return i;
+            }
+            return weight_vector.size() - 1;
+        }
+
+        }
+    "#;
+
+    let result = parser.parse_string(code, "test_rand.cpp");
+    assert!(result.is_ok(), "Failed to parse rand patterns: {:?}", result.err());
+
+    let ast = result.unwrap();
+
+    // Verify namespace
+    let has_namespace = find_node_kind(&ast.translation_unit, |kind| {
+        matches!(kind, ClangNodeKind::NamespaceDecl { name } if name.as_deref() == Some("rrr"))
+    });
+    assert!(has_namespace.is_some(), "Expected to find rrr namespace");
+
+    // Verify class
+    let has_class = find_node_kind(&ast.translation_unit, |kind| {
+        matches!(kind, ClangNodeKind::RecordDecl { name, .. } if name == "RandomGenerator")
+    });
+    assert!(has_class.is_some(), "Expected to find RandomGenerator class");
+
+    // Verify static methods
+    let has_rand = find_node_kind(&ast.translation_unit, |kind| {
+        matches!(kind, ClangNodeKind::CXXMethodDecl { name, is_static: true, .. } if name == "rand")
+    });
+    assert!(has_rand.is_some(), "Expected to find static rand method");
+
+    // Verify can convert to MIR
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).unwrap();
+
+    // The module should have functions from the class
+    // Note: Static member functions are parsed but display names may vary
+    assert!(!module.functions.is_empty(), "Expected to find functions in module");
+}
+
+/// Test thread_local storage class.
+#[test]
+fn test_mako_thread_local_storage() {
+    let parser = ClangParser::with_system_includes().unwrap();
+    let code = r#"
+        class TestClass {
+        private:
+            static thread_local int counter_;
+        public:
+            static int get() { return counter_++; }
+        };
+
+        thread_local int TestClass::counter_ = 0;
+
+        int use_counter() {
+            return TestClass::get();
+        }
+    "#;
+
+    let result = parser.parse_string(code, "test.cpp");
+    assert!(result.is_ok(), "Failed to parse thread_local: {:?}", result.err());
+
+    let ast = result.unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).unwrap();
+
+    let fn_found = module.functions.iter().any(|f| f.display_name == "use_counter");
+    assert!(fn_found, "Expected to find use_counter function");
+}
+
+/// Test inline assembly parsing (should be handled gracefully).
+#[test]
+fn test_mako_inline_asm() {
+    let parser = ClangParser::with_system_includes().unwrap();
+    let code = r#"
+        unsigned long long rdtsc() {
+            unsigned int lo, hi;
+            __asm__ __volatile__("rdtsc" : "=a" (lo), "=d" (hi));
+            return ((unsigned long long)hi << 32) | lo;
+        }
+    "#;
+
+    let result = parser.parse_string(code, "test.cpp");
+    assert!(result.is_ok(), "Failed to parse inline asm: {:?}", result.err());
+
+    // We expect the function to be parseable even if inline asm is not fully supported
+    let ast = result.unwrap();
+    let has_fn = find_node_kind(&ast.translation_unit, |kind| {
+        matches!(kind, ClangNodeKind::FunctionDecl { name, .. } if name == "rdtsc")
+    });
+    assert!(has_fn.is_some(), "Expected to find rdtsc function");
+}
