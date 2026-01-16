@@ -84,6 +84,16 @@ pub enum ClangNodeKind {
         /// Indices of template parameters that are parameter packs (variadic)
         parameter_pack_indices: Vec<usize>,
     },
+    /// Class template declaration (e.g., template<typename T> class Box { ... })
+    ClassTemplateDecl {
+        name: String,
+        /// Template type parameters (e.g., ["T", "U"])
+        template_params: Vec<String>,
+        /// Whether this is a class (vs struct)
+        is_class: bool,
+        /// Indices of parameter packs
+        parameter_pack_indices: Vec<usize>,
+    },
     /// Template type parameter (e.g., typename T or typename... Args)
     TemplateTypeParmDecl {
         name: String,

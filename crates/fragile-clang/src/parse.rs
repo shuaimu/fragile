@@ -269,6 +269,26 @@ impl ClangParser {
                     }
                 }
 
+                // CXCursor_ClassTemplate = 31
+                31 => {
+                    let name = cursor_spelling(cursor);
+                    let (template_params, parameter_pack_indices) = self.get_template_type_params_with_packs(cursor);
+
+                    // Determine if this is a class or struct by checking the templated decl
+                    // The spelling includes "class" or "struct" prefix
+                    let cursor_type = clang_sys::clang_getCursorType(cursor);
+                    let type_spelling = clang_sys::clang_getTypeSpelling(cursor_type);
+                    let type_name = cx_string_to_string(type_spelling);
+                    let is_class = type_name.starts_with("class ") || !type_name.starts_with("struct ");
+
+                    ClangNodeKind::ClassTemplateDecl {
+                        name,
+                        template_params,
+                        is_class,
+                        parameter_pack_indices,
+                    }
+                }
+
                 // CXCursor_TemplateTypeParameter = 27
                 27 => {
                     let name = cursor_spelling(cursor);

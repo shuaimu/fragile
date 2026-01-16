@@ -52,6 +52,8 @@ pub struct CppModule {
     pub externs: Vec<CppExtern>,
     /// Function template declarations
     pub function_templates: Vec<CppFunctionTemplate>,
+    /// Class template declarations
+    pub class_templates: Vec<CppClassTemplate>,
     /// Using namespace directives (for name resolution)
     pub using_directives: Vec<UsingDirective>,
     /// Using declarations (specific name imports)
@@ -83,6 +85,7 @@ impl CppModule {
             structs: Vec::new(),
             externs: Vec::new(),
             function_templates: Vec::new(),
+            class_templates: Vec::new(),
             using_directives: Vec::new(),
             using_declarations: Vec::new(),
         }
@@ -435,6 +438,32 @@ pub struct CppStruct {
     pub methods: Vec<CppMethod>,
     /// Friend declarations
     pub friends: Vec<CppFriend>,
+}
+
+/// A C++ class template declaration.
+/// Represents `template<typename T> class Box { ... }`
+#[derive(Debug)]
+pub struct CppClassTemplate {
+    /// Template name (e.g., "Box")
+    pub name: String,
+    /// Whether this is a class (vs struct)
+    pub is_class: bool,
+    /// Namespace path (e.g., ["rrr", "nested"])
+    pub namespace: Vec<String>,
+    /// Template type parameters (e.g., ["T", "U"])
+    pub template_params: Vec<String>,
+    /// Non-static fields with their types (may reference template params)
+    pub fields: Vec<CppField>,
+    /// Static data members
+    pub static_fields: Vec<CppField>,
+    /// Constructors (may reference template params)
+    pub constructors: Vec<CppConstructor>,
+    /// Destructor (at most one)
+    pub destructor: Option<CppDestructor>,
+    /// Methods (may reference template params)
+    pub methods: Vec<CppMethod>,
+    /// Indices of template parameters that are parameter packs (variadic)
+    pub parameter_pack_indices: Vec<usize>,
 }
 
 /// A C++ base class (for inheritance).

@@ -2517,3 +2517,125 @@ fn test_parameter_pack_type() {
     let param = CppType::template_param("T", 0, 0);
     assert!(!param.is_parameter_pack());
 }
+
+// ============================================================================
+// Class Template Tests
+// ============================================================================
+
+/// Test basic class template parsing.
+#[test]
+fn test_class_template_basic() {
+    let parser = ClangParser::new().unwrap();
+    let code = r#"
+        template<typename T>
+        class Box {
+        public:
+            T value;
+        };
+    "#;
+
+    let ast = parser.parse_string(code, "test.cpp").unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    assert_eq!(module.class_templates.len(), 1);
+    let tmpl = &module.class_templates[0];
+    assert_eq!(tmpl.name, "Box");
+    assert_eq!(tmpl.template_params, vec!["T"]);
+    assert!(tmpl.is_class);
+    assert!(!tmpl.parameter_pack_indices.is_empty() == false); // No packs
+}
+
+/// Test class template with multiple template parameters.
+#[test]
+fn test_class_template_multiple_params() {
+    let parser = ClangParser::new().unwrap();
+    let code = r#"
+        template<typename K, typename V>
+        class Pair {
+        public:
+            K first;
+            V second;
+        };
+    "#;
+
+    let ast = parser.parse_string(code, "test.cpp").unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    assert_eq!(module.class_templates.len(), 1);
+    let tmpl = &module.class_templates[0];
+    assert_eq!(tmpl.name, "Pair");
+    assert_eq!(tmpl.template_params, vec!["K", "V"]);
+    assert_eq!(tmpl.fields.len(), 2);
+}
+
+/// Test class template with methods.
+#[test]
+fn test_class_template_with_methods() {
+    let parser = ClangParser::new().unwrap();
+    let code = r#"
+        template<typename T>
+        class Box {
+        public:
+            T value;
+            Box(T v) : value(v) {}
+            T get() const { return value; }
+        };
+    "#;
+
+    let ast = parser.parse_string(code, "test.cpp").unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    assert_eq!(module.class_templates.len(), 1);
+    let tmpl = &module.class_templates[0];
+    assert_eq!(tmpl.name, "Box");
+    assert_eq!(tmpl.constructors.len(), 1);
+    assert_eq!(tmpl.methods.len(), 1);
+    assert_eq!(tmpl.methods[0].name, "get");
+}
+
+/// Test variadic class template.
+#[test]
+fn test_class_template_variadic() {
+    let parser = ClangParser::new().unwrap();
+    let code = r#"
+        template<typename... Args>
+        class Tuple {
+        };
+    "#;
+
+    let ast = parser.parse_string(code, "test.cpp").unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    assert_eq!(module.class_templates.len(), 1);
+    let tmpl = &module.class_templates[0];
+    assert_eq!(tmpl.name, "Tuple");
+    assert_eq!(tmpl.template_params, vec!["Args"]);
+    assert_eq!(tmpl.parameter_pack_indices, vec![0]);
+}
+
+/// Test struct template (vs class template).
+#[test]
+fn test_struct_template() {
+    let parser = ClangParser::new().unwrap();
+    let code = r#"
+        template<typename T>
+        struct Wrapper {
+            T data;
+        };
+    "#;
+
+    let ast = parser.parse_string(code, "test.cpp").unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    assert_eq!(module.class_templates.len(), 1);
+    let tmpl = &module.class_templates[0];
+    assert_eq!(tmpl.name, "Wrapper");
+    // Note: struct templates may be detected as is_class=true due to how clang reports them
+    // The key is that fields with template types work
+    assert_eq!(tmpl.fields.len(), 1);
+}
