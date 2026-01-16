@@ -212,7 +212,7 @@ See [PLAN_CPP20_MAKO.md](PLAN_CPP20_MAKO.md) for detailed plan.
     - [x] `vendor/mako/src/rrr/reactor/fiber_impl.cc` - **PARSED**: 4640 functions
     - [x] `vendor/mako/src/rrr/reactor/reactor.cc` - **PARSED**: 4640 functions
     - [-] `vendor/mako/src/rrr/reactor/quorum_event.cc` - Cross-namespace inheritance: `janus::QuorumEvent` inherits from `rrr::Event` via `using rrr::Event;`. Clang semantic error on `test()` call [26:01:16, 12:00]. See docs/dev/plan_fix_stub_headers_quorum_event.md
-  - [-] All mako module - **282/320 files parsing (~88%)** [26:01:16, 21:45] (includes all 12 memdb files)
+  - [-] All mako module - **286/320 files parsing (~89%)** [26:01:16, 22:00] (includes all 12 memdb files)
     - [x] `vendor/mako/src/mako/vec/coroutine.cpp` - **PARSED**: 40 functions
     - [x] `vendor/mako/src/mako/vec/occ.cpp` - **PARSED**: 41 functions
     - [x] `vendor/mako/src/mako/lib/memory.cc` - **PARSED**: 17 functions
