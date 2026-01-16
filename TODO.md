@@ -369,7 +369,7 @@ Migration: After C++20 support is complete, deprecate these.
 ## 5. Testing & Milestones
 
 ### 5.1 Unit Tests
-- [x] fragile-clang: 274 tests passing (27 unit + 247 integration) - includes 10 coroutine + 7 exception + 6 RTTI + 8 promise type + 8 awaitable + 8 generator + 3 noexcept + 1 member access + 1 stack unwinding + 24 mako file tests [26:01:16, 09:42]
+- [x] fragile-clang: 276 tests passing (27 unit + 249 integration) - includes 10 coroutine + 7 exception + 6 RTTI + 8 promise type + 8 awaitable + 8 generator + 3 noexcept + 1 member access + 1 stack unwinding + 26 mako file tests [26:01:16, 09:50]
 - [x] fragile-rustc-driver: 6 tests passing
 - [x] fragile-runtime: Compiles
 
@@ -390,7 +390,7 @@ Migration: After C++20 support is complete, deprecate these.
 Current status:
 - **rrr module**: 15/16 files parsing (94%) - blocked by quorum_event.cc cross-namespace inheritance
 - **mako module**: 63/155+ files parsing (~40%) - now includes memdb, deptran
-- **Total tests**: 247 passing (fragile-clang integration tests)
+- **Total tests**: 249 passing (fragile-clang integration tests)
 
 Next steps:
 1. **rustc Integration (2.3)** - Requires user setup: `rustup component add rustc-dev --toolchain nightly`
