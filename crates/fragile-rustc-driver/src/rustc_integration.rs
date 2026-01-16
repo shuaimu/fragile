@@ -125,37 +125,39 @@ impl rustc_driver::Callbacks for FragileCallbacks {
     /// Called before creating the compiler instance.
     ///
     /// This is where we set up query overrides for MIR injection and borrow check bypass.
+    ///
+    /// # Query Override Architecture
+    ///
+    /// The `override_queries` callback receives a function pointer (not closure), so we cannot
+    /// capture state from `self`. The architecture for full MIR injection would require:
+    ///
+    /// 1. Store C++ function registry in a thread-local or global static
+    /// 2. Override `mir_built` query to check if DefId matches a C++ function
+    /// 3. If match: return pre-computed MIR from `MirConvertCtx`
+    /// 4. If no match: delegate to original `mir_built` query
+    ///
+    /// Current status: Infrastructure ready, full wiring deferred until MIR conversion is complete.
     fn config(&mut self, config: &mut Config) {
-        // Clone data needed for the closure (closures need 'static lifetime)
-        let _cpp_function_names = self.cpp_function_names.clone();
-        let _mir_registry = Arc::clone(&self.mir_registry);
+        // Log registered C++ functions
+        let function_count = self.cpp_function_names.len();
+        eprintln!(
+            "[fragile] Configuring rustc with {} registered C++ functions",
+            function_count
+        );
 
         // Set up query overrides
-        // Note: The actual MIR injection is complex and requires converting our MIR format
-        // to rustc's internal MIR representation. For now, we set up the infrastructure.
+        // Note: override_queries takes a fn pointer, not a closure, so we cannot capture state.
+        // For now, we just install logging infrastructure.
         config.override_queries = Some(|_session, providers| {
-            // The providers struct has a `queries` field that contains the actual query providers
-            // We would override `providers.queries.mir_built` here
+            // Query override infrastructure is installed
+            // Full MIR injection requires:
+            // 1. Thread-local storage for registry access
+            // 2. mir_built override to inject C++ MIR
+            // 3. mir_borrowck override to skip borrow checking for C++ code
             //
-            // Example (full implementation would require MIR format conversion):
-            // let orig_mir_built = providers.queries.mir_built;
-            // providers.queries.mir_built = |tcx, key| {
-            //     // Check if this DefId corresponds to a C++ function
-            //     let def_id = key.to_def_id();
-            //     if is_cpp_function(tcx, def_id, &cpp_function_names) {
-            //         // Return pre-computed MIR from registry
-            //         convert_cpp_mir_to_rustc(tcx, mir_registry.get_mir(&name))
-            //     } else {
-            //         // Fall back to normal rustc pipeline
-            //         orig_mir_built(tcx, key)
-            //     }
-            // };
-
-            // For now, we just log that we're being called
-            // The actual MIR format conversion is the hard part and will be
-            // implemented incrementally
-            eprintln!("[fragile] Query override infrastructure installed");
-            let _ = providers; // silence unused warning
+            // These are tracked in TODO tasks 2.3.3.4 and 2.3.4
+            eprintln!("[fragile] Query override callback invoked");
+            let _ = providers;
         });
     }
 
@@ -180,15 +182,37 @@ impl rustc_driver::Callbacks for FragileCallbacks {
     }
 
     /// Called after type analysis.
+    ///
+    /// This callback demonstrates the connection between our C++ function detection
+    /// infrastructure and the rustc compilation pipeline.
     fn after_analysis<'tcx>(
         &mut self,
         _compiler: &Compiler,
         tcx: TyCtxt<'tcx>,
     ) -> Compilation {
         eprintln!("[fragile] Type analysis complete");
-        // Here we could inspect the MIR that was generated
-        // and verify our injected MIR is present
-        let _ = tcx;
+
+        // Convert function names to HashSet for lookup
+        let cpp_names: HashSet<String> = self.cpp_function_names.iter().cloned().collect();
+
+        // Scan for C++ functions in the compiled crate
+        let cpp_def_ids = collect_cpp_def_ids(tcx, &cpp_names);
+
+        if !cpp_def_ids.is_empty() {
+            eprintln!(
+                "[fragile] Found {} C++ function(s) in compiled crate:",
+                cpp_def_ids.len()
+            );
+            for (def_id, link_name) in &cpp_def_ids {
+                eprintln!("  - {} (DefId: {:?})", link_name, def_id);
+            }
+        } else if !cpp_names.is_empty() {
+            eprintln!(
+                "[fragile] No matching C++ functions found (registered: {})",
+                cpp_names.len()
+            );
+        }
+
         Compilation::Continue
     }
 }
