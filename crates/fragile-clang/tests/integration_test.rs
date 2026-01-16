@@ -5089,3 +5089,128 @@ fn test_coroutine_ast_coreturn_node() {
         assert!(fn_found, "Expected test_return function to be parsed");
     }
 }
+
+// ========== C++20 Coroutine Header Types Tests (D.4) ==========
+
+/// Test parsing std::coroutine_handle type.
+#[test]
+fn test_coroutine_handle_type() {
+    let parser = ClangParser::with_system_includes().unwrap();
+    let code = r#"
+        #include <coroutine>
+
+        struct MyPromise;
+
+        void test_handle() {
+            std::coroutine_handle<MyPromise> handle;
+            std::coroutine_handle<void> void_handle;
+        }
+    "#;
+
+    let result = parser.parse_string(code, "test.cpp");
+    assert!(result.is_ok(), "Failed to parse coroutine_handle: {:?}", result.err());
+
+    let ast = result.unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).unwrap();
+
+    let test_fn = module.functions.iter().find(|f| f.display_name == "test_handle");
+    assert!(test_fn.is_some(), "Expected to find test_handle function");
+}
+
+/// Test parsing std::suspend_always and std::suspend_never types.
+#[test]
+fn test_suspend_types() {
+    let parser = ClangParser::with_system_includes().unwrap();
+    let code = r#"
+        #include <coroutine>
+
+        void test_suspend_types() {
+            std::suspend_always always_suspender;
+            std::suspend_never never_suspender;
+
+            // Test await_ready, await_suspend, await_resume
+            bool ready1 = always_suspender.await_ready();
+            bool ready2 = never_suspender.await_ready();
+        }
+    "#;
+
+    let result = parser.parse_string(code, "test.cpp");
+    assert!(result.is_ok(), "Failed to parse suspend types: {:?}", result.err());
+
+    let ast = result.unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).unwrap();
+
+    let test_fn = module.functions.iter().find(|f| f.display_name == "test_suspend_types");
+    assert!(test_fn.is_some(), "Expected to find test_suspend_types function");
+}
+
+/// Test coroutine_traits usage in promise type detection.
+#[test]
+fn test_coroutine_traits() {
+    let parser = ClangParser::with_system_includes().unwrap();
+    // Test that we can parse code that relies on coroutine_traits
+    let code = r#"
+        #include <coroutine>
+
+        template<typename T>
+        struct Task {
+            struct promise_type {
+                Task get_return_object() { return {}; }
+                std::suspend_never initial_suspend() { return {}; }
+                std::suspend_never final_suspend() noexcept { return {}; }
+                void return_value(T value) {}
+                void unhandled_exception() {}
+            };
+        };
+
+        Task<int> async_compute() {
+            co_return 42;
+        }
+    "#;
+
+    let result = parser.parse_string(code, "test.cpp");
+    assert!(result.is_ok(), "Failed to parse coroutine_traits code: {:?}", result.err());
+
+    let ast = result.unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).unwrap();
+
+    // The async_compute function should be parsed
+    let coro_fn = module.functions.iter().find(|f| f.display_name == "async_compute");
+    assert!(coro_fn.is_some(), "Expected to find async_compute function");
+}
+
+/// Test coroutine handle operations (resume, destroy, done).
+#[test]
+fn test_coroutine_handle_operations() {
+    let parser = ClangParser::with_system_includes().unwrap();
+    let code = r#"
+        #include <coroutine>
+
+        struct MyPromise {
+            std::suspend_always initial_suspend() { return {}; }
+            std::suspend_always final_suspend() noexcept { return {}; }
+            void return_void() {}
+            void unhandled_exception() {}
+            void get_return_object() {}
+        };
+
+        void test_handle_ops(std::coroutine_handle<MyPromise> h) {
+            h.resume();
+            bool is_done = h.done();
+            h.destroy();
+        }
+    "#;
+
+    let result = parser.parse_string(code, "test.cpp");
+    assert!(result.is_ok(), "Failed to parse handle operations: {:?}", result.err());
+
+    let ast = result.unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).unwrap();
+
+    let test_fn = module.functions.iter().find(|f| f.display_name == "test_handle_ops");
+    assert!(test_fn.is_some(), "Expected to find test_handle_ops function");
+}

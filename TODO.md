@@ -140,10 +140,10 @@ See [PLAN_CPP20_MAKO.md](PLAN_CPP20_MAKO.md) for detailed plan.
   - [x] D.3.1 Convert CoawaitExpr to MIR in convert.rs
   - [x] D.3.2 Convert CoyieldExpr to MIR in convert.rs
   - [x] D.3.3 Convert CoreturnStmt to MIR in convert.rs
-- [ ] **D.4 Coroutine Header Parsing** (~100 lines)
-  - [ ] D.4.1 Parse `<coroutine>` header types
-  - [ ] D.4.2 Parse std::coroutine_handle
-  - [ ] D.4.3 Parse std::suspend_always/never
+- [x] **D.4 Coroutine Header Parsing** (~100 lines) [26:01:16, 03:45] ([docs/dev/plan_coroutine_header_parsing.md](docs/dev/plan_coroutine_header_parsing.md))
+  - [x] D.4.1 Parse `<coroutine>` header types (already working via existing infrastructure)
+  - [x] D.4.2 Parse std::coroutine_handle (4 tests added)
+  - [x] D.4.3 Parse std::suspend_always/never (4 tests added)
 - [ ] **D.5 Promise Types** (~100 lines)
   - [ ] D.5.1 get_return_object()
   - [ ] D.5.2 initial_suspend / final_suspend
@@ -247,7 +247,7 @@ Migration: After C++20 support is complete, deprecate these.
 ## 5. Testing & Milestones
 
 ### 5.1 Unit Tests
-- [x] fragile-clang: 177 tests passing (27 unit + 150 integration) - includes 6 coroutine tests
+- [x] fragile-clang: 181 tests passing (27 unit + 154 integration) - includes 10 coroutine tests
 - [x] fragile-rustc-driver: 6 tests passing
 - [x] fragile-runtime: Compiles
 
