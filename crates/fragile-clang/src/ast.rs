@@ -70,6 +70,8 @@ pub enum ClangNodeKind {
         return_type: CppType,
         params: Vec<(String, CppType)>,
         is_definition: bool,
+        /// Whether the function is declared noexcept
+        is_noexcept: bool,
     },
     /// Function template declaration
     FunctionTemplateDecl {
@@ -85,6 +87,8 @@ pub enum ClangNodeKind {
         parameter_pack_indices: Vec<usize>,
         /// Optional requires clause constraint (C++20)
         requires_clause: Option<String>,
+        /// Whether the function is declared noexcept
+        is_noexcept: bool,
     },
     /// Class template declaration (e.g., template<typename T> class Box { ... })
     ClassTemplateDecl {

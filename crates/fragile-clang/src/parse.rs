@@ -351,6 +351,36 @@ impl ClangParser {
         }
     }
 
+    /// Check if a function declaration has the noexcept specifier.
+    /// Uses token-based detection to find 'noexcept' in the function signature.
+    fn is_function_noexcept(&self, cursor: clang_sys::CXCursor) -> bool {
+        unsafe {
+            let tu = clang_sys::clang_Cursor_getTranslationUnit(cursor);
+            let extent = clang_sys::clang_getCursorExtent(cursor);
+            let mut tokens: *mut clang_sys::CXToken = ptr::null_mut();
+            let mut num_tokens: u32 = 0;
+
+            clang_sys::clang_tokenize(tu, extent, &mut tokens, &mut num_tokens);
+
+            let mut has_noexcept = false;
+            for i in 0..num_tokens {
+                let token = *tokens.add(i as usize);
+                let spelling = clang_sys::clang_getTokenSpelling(tu, token);
+                let token_str = cx_string_to_string(spelling);
+                if token_str == "noexcept" {
+                    has_noexcept = true;
+                    break;
+                }
+            }
+
+            if !tokens.is_null() {
+                clang_sys::clang_disposeTokens(tu, tokens, num_tokens);
+            }
+
+            has_noexcept
+        }
+    }
+
     /// Convert a Clang cursor kind to our AST node kind.
     fn convert_cursor_kind(
         &self,
@@ -377,12 +407,14 @@ impl ClangParser {
                     }
 
                     let is_definition = clang_sys::clang_isCursorDefinition(cursor) != 0;
+                    let is_noexcept = self.is_function_noexcept(cursor);
 
                     ClangNodeKind::FunctionDecl {
                         name,
                         return_type,
                         params,
                         is_definition,
+                        is_noexcept,
                     }
                 }
 
@@ -404,6 +436,7 @@ impl ClangParser {
                     let params = self.get_function_template_params(cursor, &template_params);
 
                     let is_definition = clang_sys::clang_isCursorDefinition(cursor) != 0;
+                    let is_noexcept = self.is_function_noexcept(cursor);
 
                     // Extract requires clause if present (C++20)
                     let requires_clause = self.get_requires_clause(cursor);
@@ -416,6 +449,7 @@ impl ClangParser {
                         is_definition,
                         parameter_pack_indices,
                         requires_clause,
+                        is_noexcept,
                     }
                 }
 

@@ -8054,3 +8054,89 @@ fn test_mako_stats_client_cc() {
     }
 }
 
+/// Test noexcept specifier on regular functions.
+#[test]
+fn test_noexcept_function() {
+    let parser = ClangParser::new().expect("Failed to create parser");
+
+    let source = r#"
+        // Function with noexcept
+        void safe_func() noexcept {
+        }
+
+        // Function without noexcept
+        void unsafe_func() {
+        }
+    "#;
+
+    let ast = parser.parse_string(source, "noexcept.cpp").expect("Failed to parse");
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    assert_eq!(module.functions.len(), 2);
+
+    // Find safe_func (noexcept)
+    let safe_func = module.functions.iter().find(|f| f.display_name == "safe_func").unwrap();
+    assert!(safe_func.is_noexcept, "safe_func should have is_noexcept=true");
+
+    // Find unsafe_func (not noexcept)
+    let unsafe_func = module.functions.iter().find(|f| f.display_name == "unsafe_func").unwrap();
+    assert!(!unsafe_func.is_noexcept, "unsafe_func should have is_noexcept=false");
+}
+
+/// Test noexcept specifier on function templates.
+#[test]
+fn test_noexcept_function_template() {
+    let parser = ClangParser::new().expect("Failed to create parser");
+
+    let source = r#"
+        // Template with noexcept
+        template<typename T>
+        T safe_template(T val) noexcept {
+            return val;
+        }
+
+        // Template without noexcept
+        template<typename T>
+        T unsafe_template(T val) {
+            return val;
+        }
+    "#;
+
+    let ast = parser.parse_string(source, "noexcept_template.cpp").expect("Failed to parse");
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    assert_eq!(module.function_templates.len(), 2);
+
+    // Find safe_template (noexcept)
+    let safe_tmpl = module.function_templates.iter().find(|f| f.name == "safe_template").unwrap();
+    assert!(safe_tmpl.is_noexcept, "safe_template should have is_noexcept=true");
+
+    // Find unsafe_template (not noexcept)
+    let unsafe_tmpl = module.function_templates.iter().find(|f| f.name == "unsafe_template").unwrap();
+    assert!(!unsafe_tmpl.is_noexcept, "unsafe_template should have is_noexcept=false");
+}
+
+/// Test noexcept with expression (conditional noexcept).
+#[test]
+fn test_noexcept_conditional() {
+    let parser = ClangParser::new().expect("Failed to create parser");
+
+    let source = r#"
+        template<typename T>
+        void maybe_throws(T val) noexcept(noexcept(val.foo())) {
+        }
+    "#;
+
+    let ast = parser.parse_string(source, "noexcept_cond.cpp").expect("Failed to parse");
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    assert_eq!(module.function_templates.len(), 1);
+    let tmpl = &module.function_templates[0];
+    assert_eq!(tmpl.name, "maybe_throws");
+    // noexcept(...) should still be detected as having noexcept specifier
+    assert!(tmpl.is_noexcept, "noexcept(expr) should have is_noexcept=true");
+}
+

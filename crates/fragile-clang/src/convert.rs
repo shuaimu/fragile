@@ -180,9 +180,10 @@ impl MirConverter {
                 return_type,
                 params,
                 is_definition,
+                is_noexcept,
             } => {
                 if *is_definition {
-                    let func = self.convert_function(node, name, return_type, params, namespace_context)?;
+                    let func = self.convert_function(node, name, return_type, params, *is_noexcept, namespace_context)?;
                     module.functions.push(func);
                 } else {
                     // Just a declaration, add as extern
@@ -203,6 +204,7 @@ impl MirConverter {
                 is_definition,
                 parameter_pack_indices,
                 requires_clause,
+                is_noexcept,
             } => {
                 module.function_templates.push(CppFunctionTemplate {
                     name: name.clone(),
@@ -211,7 +213,7 @@ impl MirConverter {
                     return_type: return_type.clone(),
                     params: params.clone(),
                     is_definition: *is_definition,
-                    is_noexcept: false, // TODO: extract from function declaration
+                    is_noexcept: *is_noexcept,
                     specializations: Vec::new(),
                     parameter_pack_indices: parameter_pack_indices.clone(),
                     requires_clause: requires_clause.clone(),
@@ -330,6 +332,7 @@ impl MirConverter {
         name: &str,
         return_type: &CppType,
         params: &[(String, CppType)],
+        is_noexcept: bool,
         namespace_context: &[String],
     ) -> Result<CppFunction> {
         let mut builder = FunctionBuilder::new();
@@ -363,7 +366,7 @@ impl MirConverter {
             namespace: namespace_context.to_vec(),
             params: params.to_vec(),
             return_type: return_type.clone(),
-            is_noexcept: false, // TODO: extract from function declaration
+            is_noexcept,
             mir_body,
         })
     }
@@ -1111,6 +1114,7 @@ impl MirConverter {
                     is_definition,
                     parameter_pack_indices: method_pack_indices,
                     requires_clause: _,  // Member templates don't track requires clause yet
+                    is_noexcept: _,
                 } => {
                     // Member template inside a class template
                     member_templates.push(CppMemberTemplate {
@@ -1250,6 +1254,7 @@ impl MirConverter {
                     is_definition,
                     parameter_pack_indices: method_pack_indices,
                     requires_clause: _,  // Member templates don't track requires clause yet
+                    is_noexcept: _,
                 } => {
                     member_templates.push(CppMemberTemplate {
                         name: method_name.clone(),
@@ -1387,6 +1392,7 @@ impl MirConverter {
                     is_definition,
                     parameter_pack_indices,
                     requires_clause: _,  // Member templates don't track requires clause yet
+                    is_noexcept: _,
                 } => {
                     // Member template inside a class
                     member_templates.push(CppMemberTemplate {
