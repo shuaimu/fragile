@@ -15631,3 +15631,162 @@ fn test_bench_tpca_sharding_cc() {
         }
     }
 }
+
+/// Test parsing bench/paxos_lib/network_bench.cc - Paxos network benchmark
+#[test]
+fn test_bench_paxos_lib_network_bench_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/bench/paxos_lib/network_bench.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: bench/paxos_lib/network_bench.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let rusty_cpp_path = project_root.join("vendor/mako/third-party/rusty-cpp/include");
+
+    if !rusty_cpp_path.exists() {
+        println!("Skipping test: rusty-cpp submodule not initialized");
+        return;
+    }
+
+    let include_paths = vec![
+        project_root.join("vendor/mako/src").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/mako").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/memdb").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/rrr").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/deptran").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/bench").to_string_lossy().to_string(),
+        rusty_cpp_path.to_string_lossy().to_string(),
+    ];
+
+    let system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let parser = ClangParser::with_paths(include_paths, system_include_paths)
+        .expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+            println!("bench/paxos_lib/network_bench.cc parsed successfully with {} functions", module.functions.len());
+            assert!(module.functions.len() >= 1, "Expected network benchmark functions");
+        }
+        Err(e) => {
+            panic!("bench/paxos_lib/network_bench.cc should parse successfully: {:?}", e);
+        }
+    }
+}
+
+/// Test parsing bench/tpcc/sharding.cc - TPC-C sharding
+#[test]
+fn test_bench_tpcc_sharding_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/bench/tpcc/sharding.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: bench/tpcc/sharding.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let rusty_cpp_path = project_root.join("vendor/mako/third-party/rusty-cpp/include");
+
+    if !rusty_cpp_path.exists() {
+        println!("Skipping test: rusty-cpp submodule not initialized");
+        return;
+    }
+
+    let include_paths = vec![
+        project_root.join("vendor/mako/src").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/mako").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/memdb").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/rrr").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/deptran").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/bench").to_string_lossy().to_string(),
+        rusty_cpp_path.to_string_lossy().to_string(),
+    ];
+
+    let system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let parser = ClangParser::with_paths(include_paths, system_include_paths)
+        .expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+            println!("bench/tpcc/sharding.cc parsed successfully with {} functions", module.functions.len());
+            assert!(module.functions.len() >= 100, "Expected TPC-C sharding functions");
+        }
+        Err(e) => {
+            panic!("bench/tpcc/sharding.cc should parse successfully: {:?}", e);
+        }
+    }
+}
+
+/// Test parsing bench/rw/procedure.cc - RW benchmark procedure
+#[test]
+fn test_bench_rw_procedure_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/bench/rw/procedure.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: bench/rw/procedure.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let rusty_cpp_path = project_root.join("vendor/mako/third-party/rusty-cpp/include");
+
+    if !rusty_cpp_path.exists() {
+        println!("Skipping test: rusty-cpp submodule not initialized");
+        return;
+    }
+
+    let include_paths = vec![
+        project_root.join("vendor/mako/src").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/mako").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/memdb").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/rrr").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/deptran").to_string_lossy().to_string(),
+        project_root.join("vendor/mako/src/bench").to_string_lossy().to_string(),
+        rusty_cpp_path.to_string_lossy().to_string(),
+    ];
+
+    let system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let parser = ClangParser::with_paths(include_paths, system_include_paths)
+        .expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+            println!("bench/rw/procedure.cc parsed successfully with {} functions", module.functions.len());
+            assert!(module.functions.len() >= 100, "Expected RW procedure functions");
+        }
+        Err(e) => {
+            panic!("bench/rw/procedure.cc should parse successfully: {:?}", e);
+        }
+    }
+}
