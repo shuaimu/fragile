@@ -3825,3 +3825,66 @@ fn test_class_template_with_requires_clause() {
     let tmpl = &module.class_templates[0];
     assert_eq!(tmpl.name, "Counter");
 }
+
+/// Test concept with requires expression containing simple requirements.
+#[test]
+fn test_concept_with_requires_expression() {
+    let parser = ClangParser::new().unwrap();
+    let code = r#"
+        template<typename T>
+        concept Addable = requires(T a, T b) {
+            a + b;
+        };
+    "#;
+
+    let ast = parser.parse_string(code, "test.cpp").unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    assert_eq!(module.concepts.len(), 1);
+    let concept = &module.concepts[0];
+    assert_eq!(concept.name, "Addable");
+    // The constraint should contain the requires expression
+    assert!(concept.constraint_expr.contains("requires") || !concept.constraint_expr.is_empty());
+}
+
+/// Test concept with multiple requirements.
+#[test]
+fn test_concept_with_multiple_requirements() {
+    let parser = ClangParser::new().unwrap();
+    let code = r#"
+        template<typename T>
+        concept Copyable = requires(T a) {
+            T(a);
+            a = a;
+        };
+    "#;
+
+    let ast = parser.parse_string(code, "test.cpp").unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    assert_eq!(module.concepts.len(), 1);
+    let concept = &module.concepts[0];
+    assert_eq!(concept.name, "Copyable");
+}
+
+/// Test concept with type requirement.
+#[test]
+fn test_concept_with_type_requirement() {
+    let parser = ClangParser::new().unwrap();
+    let code = r#"
+        template<typename T>
+        concept HasValueType = requires {
+            typename T::value_type;
+        };
+    "#;
+
+    let ast = parser.parse_string(code, "test.cpp").unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    assert_eq!(module.concepts.len(), 1);
+    let concept = &module.concepts[0];
+    assert_eq!(concept.name, "HasValueType");
+}

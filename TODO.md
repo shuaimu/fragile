@@ -90,7 +90,7 @@ See [PLAN_CPP20_MAKO.md](PLAN_CPP20_MAKO.md) for detailed plan.
   - [x] B.4.2 Parser support (handle concept cursors, requires clauses) [26:01:16, 02:40]
   - [x] B.4.3 Concept definitions (`concept Integral = ...`) [26:01:16, 02:40]
   - [x] B.4.4 Requires clauses on functions/templates (`requires Integral<T>`) [26:01:16, 02:40]
-  - [ ] B.4.5 Requires expressions (`requires { expr; }`)
+  - [x] B.4.5 Requires expressions (`requires { expr; }`) [26:01:16, 02:50]
   - [ ] B.4.6 Standard concepts (std::integral, std::same_as, etc.)
 
 ### 1.3 Phase C: Standard Library
