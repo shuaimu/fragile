@@ -305,6 +305,133 @@ public:
         return npos;
     }
 
+    size_type rfind(const basic_string& str, size_type pos = npos) const {
+        return rfind(str.data_, pos, str.size_);
+    }
+
+    size_type rfind(const CharT* s, size_type pos, size_type count) const {
+        if (count == 0) return (pos < size_) ? pos : size_;
+        if (count > size_) return npos;
+        size_type start = (pos < size_ - count) ? pos : size_ - count;
+        for (size_type i = start + 1; i > 0; --i) {
+            if (Traits::compare(data_ + i - 1, s, count) == 0) return i - 1;
+        }
+        return npos;
+    }
+
+    size_type rfind(const CharT* s, size_type pos = npos) const {
+        return rfind(s, pos, Traits::length(s));
+    }
+
+    size_type rfind(CharT c, size_type pos = npos) const {
+        if (size_ == 0) return npos;
+        size_type start = (pos < size_) ? pos : size_ - 1;
+        for (size_type i = start + 1; i > 0; --i) {
+            if (data_[i - 1] == c) return i - 1;
+        }
+        return npos;
+    }
+
+    size_type find_first_of(const basic_string& str, size_type pos = 0) const {
+        return find_first_of(str.data_, pos, str.size_);
+    }
+
+    size_type find_first_of(const CharT* s, size_type pos, size_type count) const {
+        for (size_type i = pos; i < size_; ++i) {
+            for (size_type j = 0; j < count; ++j) {
+                if (data_[i] == s[j]) return i;
+            }
+        }
+        return npos;
+    }
+
+    size_type find_first_of(const CharT* s, size_type pos = 0) const {
+        return find_first_of(s, pos, Traits::length(s));
+    }
+
+    size_type find_first_of(CharT c, size_type pos = 0) const {
+        return find(c, pos);
+    }
+
+    size_type find_last_of(const basic_string& str, size_type pos = npos) const {
+        return find_last_of(str.data_, pos, str.size_);
+    }
+
+    size_type find_last_of(const CharT* s, size_type pos, size_type count) const {
+        if (size_ == 0 || count == 0) return npos;
+        size_type start = (pos < size_) ? pos : size_ - 1;
+        for (size_type i = start + 1; i > 0; --i) {
+            for (size_type j = 0; j < count; ++j) {
+                if (data_[i - 1] == s[j]) return i - 1;
+            }
+        }
+        return npos;
+    }
+
+    size_type find_last_of(const CharT* s, size_type pos = npos) const {
+        return find_last_of(s, pos, Traits::length(s));
+    }
+
+    size_type find_last_of(CharT c, size_type pos = npos) const {
+        return rfind(c, pos);
+    }
+
+    size_type find_first_not_of(const basic_string& str, size_type pos = 0) const {
+        return find_first_not_of(str.data_, pos, str.size_);
+    }
+
+    size_type find_first_not_of(const CharT* s, size_type pos, size_type count) const {
+        for (size_type i = pos; i < size_; ++i) {
+            bool found = false;
+            for (size_type j = 0; j < count; ++j) {
+                if (data_[i] == s[j]) { found = true; break; }
+            }
+            if (!found) return i;
+        }
+        return npos;
+    }
+
+    size_type find_first_not_of(const CharT* s, size_type pos = 0) const {
+        return find_first_not_of(s, pos, Traits::length(s));
+    }
+
+    size_type find_first_not_of(CharT c, size_type pos = 0) const {
+        for (size_type i = pos; i < size_; ++i) {
+            if (data_[i] != c) return i;
+        }
+        return npos;
+    }
+
+    size_type find_last_not_of(const basic_string& str, size_type pos = npos) const {
+        return find_last_not_of(str.data_, pos, str.size_);
+    }
+
+    size_type find_last_not_of(const CharT* s, size_type pos, size_type count) const {
+        if (size_ == 0) return npos;
+        size_type start = (pos < size_) ? pos : size_ - 1;
+        for (size_type i = start + 1; i > 0; --i) {
+            bool found = false;
+            for (size_type j = 0; j < count; ++j) {
+                if (data_[i - 1] == s[j]) { found = true; break; }
+            }
+            if (!found) return i - 1;
+        }
+        return npos;
+    }
+
+    size_type find_last_not_of(const CharT* s, size_type pos = npos) const {
+        return find_last_not_of(s, pos, Traits::length(s));
+    }
+
+    size_type find_last_not_of(CharT c, size_type pos = npos) const {
+        if (size_ == 0) return npos;
+        size_type start = (pos < size_) ? pos : size_ - 1;
+        for (size_type i = start + 1; i > 0; --i) {
+            if (data_[i - 1] != c) return i - 1;
+        }
+        return npos;
+    }
+
     // Comparison operators
     bool operator==(const basic_string& other) const { return compare(other) == 0; }
     bool operator!=(const basic_string& other) const { return compare(other) != 0; }

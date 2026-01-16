@@ -1,0 +1,324 @@
+warning: field `current_function` is never read
+  --> crates/fragile-clang/src/convert.rs:17:5
+   |
+15 | pub struct MirConverter {
+   |            ------------ field in this struct
+16 |     /// Current function being converted
+17 |     current_function: Option<FunctionBuilder>,
+   |     ^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` on by default
+
+warning: method `build_coroutine` is never used
+   --> crates/fragile-clang/src/convert.rs:121:8
+    |
+44  | impl FunctionBuilder {
+    | -------------------- method in this implementation
+...
+121 |     fn build_coroutine(self) -> MirBody {
+    |        ^^^^^^^^^^^^^^^
+
+warning: `fragile-clang` (lib) generated 2 warnings
+warning: unused import: `CppFunction`
+ --> crates/fragile-rustc-driver/src/queries.rs:3:21
+  |
+3 | use fragile_clang::{CppFunction, CppModule, MirBody};
+  |                     ^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` on by default
+
+warning: unused import: `fragile_clang::CppModule`
+  --> crates/fragile-rustc-driver/src/lib.rs:74:5
+   |
+74 | use fragile_clang::CppModule;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: `fragile-rustc-driver` (lib) generated 2 warnings (run `cargo fix --lib -p fragile-rustc-driver` to apply 2 suggestions)
+warning: unused import: `ClangNodeKind`
+ --> crates/fragile-clang/examples/debug_specialization.rs:1:45
+  |
+1 | use fragile_clang::{ClangParser, ClangNode, ClangNodeKind};
+  |                                             ^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` on by default
+
+warning: `fragile-clang` (example "debug_specialization") generated 1 warning (run `cargo fix --example "debug_specialization"` to apply 1 suggestion)
+warning: `fragile-clang` (lib test) generated 2 warnings (2 duplicates)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running unittests src/lib.rs (target/debug/deps/fragile_clang-54351fba915332db)
+
+running 27 tests
+test deduce::tests::test_deduce_conflict ... ok
+test deduce::tests::test_deduce_pointer ... ok
+test deduce::tests::test_deduce_simple_double ... ok
+test deduce::tests::test_deduce_simple_int ... ok
+test deduce::tests::test_deduce_multiple_params_same_type ... ok
+test deduce::tests::test_deduce_const_ref ... ok
+test deduce::tests::test_explicit_all_args ... ok
+test deduce::tests::test_deduce_two_different_params ... ok
+test deduce::tests::test_explicit_single_arg ... ok
+test deduce::tests::test_explicit_overrides_deduction ... ok
+test deduce::tests::test_explicit_with_deduction ... ok
+test resolve::tests::test_format_qualified_name ... ok
+test resolve::tests::test_resolve_nested_namespace ... ok
+test resolve::tests::test_resolve_same_namespace ... ok
+test resolve::tests::test_resolve_global_from_namespace ... ok
+test resolve::tests::test_local_shadows_using ... ok
+test resolve::tests::test_resolve_type ... ok
+test resolve::tests::test_resolve_via_using_declaration ... ok
+test resolve::tests::test_resolve_via_using_namespace ... ok
+test resolve::tests::test_using_directive_scope_visibility ... ok
+test convert::tests::test_convert_simple_function ... ok
+test parse::tests::test_parse_namespace ... ok
+test parse::tests::test_parse_anonymous_namespace ... ok
+test parse::tests::test_parse_simple_function ... ok
+test parse::tests::test_parse_using_namespace ... ok
+test parse::tests::test_parse_constructor_with_initializer_list ... ok
+test parse::tests::test_parse_using_nested_namespace ... ok
+
+test result: ok. 27 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/integration_test.rs (target/debug/deps/integration_test-c272c99126814ae2)
+
+running 226 tests
+test test_class_template_basic ... ok
+test test_break_in_for_loop ... ok
+test test_class_template_variadic ... ok
+test test_anonymous_namespace ... ok
+test test_binary_operator_comparison ... ok
+test test_concept_with_type_requirement ... ok
+test test_class_template_multiple_params ... ok
+test test_const_reference ... ok
+test test_continue_in_while_loop ... ok
+test test_binary_operator_arithmetic ... ok
+test test_concept_with_multiple_requirements ... ok
+test test_attribute_deprecated ... ok
+test test_class_access_specifiers ... ok
+test test_convert_add_function ... ok
+test test_break_in_while_loop ... ok
+test test_concept_definition ... ok
+test test_attribute_nodiscard ... ok
+test test_concept_with_requires_expression ... ok
+test test_continue_in_for_loop ... ok
+test test_binary_operator_bitwise ... ok
+test test_attribute_maybe_unused ... ok
+test test_class_template_with_requires_clause ... ok
+test test_deduce_double_type ... ok
+test test_binary_operator_assignment ... ok
+test test_deduce_pointer_type ... ok
+test test_deduce_rvalue_ref_type ... ok
+test test_deduce_and_instantiate ... ok
+test test_exception_throw ... ok
+test test_dependent_types ... ok
+test test_exception_multiple_catch ... ok
+test test_deduce_simple_int_type ... ok
+test test_is_arithmetic_helper ... ok
+test test_deduce_const_ref_type ... ok
+test test_destructor ... ok
+test test_exception_try_catch ... ok
+test test_deduction_conflict ... ok
+test test_exception_catch_all ... ok
+test test_is_integral_helper ... ok
+test test_copy_constructor ... ok
+test test_friend_function ... ok
+test test_class_template_with_methods ... ok
+test test_deduce_instantiate_with_explicit ... ok
+test test_is_dependent_method ... ok
+test test_lambda_capture_ref ... ok
+test test_mako_inline_asm ... ok
+test test_binary_operator_logical ... ok
+test test_function_template_without_requires_clause ... ok
+test test_friend_class ... ok
+test test_exception_ast_throw_node ... ok
+test test_generate_stubs ... ok
+test test_lambda_basic ... ok
+test test_exception_ast_try_node ... ok
+test test_default_constructor ... ok
+test test_name_resolution_global_from_namespace ... ok
+test test_final_specifier ... ok
+test test_explicit_with_mixed_deduction ... ok
+test test_namespace_function ... ok
+test test_mako_thread_local_storage ... ok
+test test_nested_loops_break ... ok
+test test_move_constructor ... ok
+test test_nested_namespace ... ok
+test test_function_template_declaration ... ok
+test test_name_resolution_same_namespace ... ok
+test test_name_resolution_using_namespace ... ok
+test test_instantiate_function_template ... ok
+test test_for_loop_nested ... ok
+test test_explicit_template_arg ... ok
+test test_function_template_basic ... ok
+test test_non_variadic_template ... ok
+test test_operator_overloading_assignment ... ok
+test test_parameter_pack_type ... ok
+test test_parameterized_constructor ... ok
+test test_no_member_initializer ... ok
+test test_parse_add_function ... ok
+test test_operator_overloading_pointer ... ok
+test test_operator_overloading_comparison ... ok
+test test_parser_with_system_includes ... ok
+test test_operator_overloading_subscript_call ... ok
+test test_partial_spec_in_namespace ... ok
+test test_exception_rethrow ... ok
+test test_function_template_with_requires_clause ... ok
+test test_parser_with_custom_include_paths ... ok
+test test_override_and_final ... ok
+test test_partial_spec_pointer ... ok
+test test_for_loop_basic ... ok
+test test_member_template_in_class_template ... ok
+test test_for_loop_expression_init ... ok
+test test_multiple_inheritance ... ok
+test test_private_constructor ... ok
+test test_member_template_basic ... ok
+test test_multiple_friends ... ok
+test test_member_template_multiple_params ... ok
+test test_multiple_concepts ... ok
+test test_multiple_constructors ... ok
+test test_public_inheritance ... ok
+test test_member_initializer_list ... ok
+test test_rtti_ast_dynamic_cast_node ... ok
+test test_lambda_capture_value ... ok
+test test_function_template_multiple_params ... ok
+test test_member_template_variadic ... ok
+test test_mixed_static_members ... ok
+test test_specialization_found ... ok
+test test_lambda_generic ... ok
+test test_rtti_dynamic_cast_reference ... ok
+test test_pure_virtual_function ... ok
+test test_specialization_used_in_instantiation ... ok
+test test_private_inheritance ... ok
+test test_rvalue_reference ... ok
+test test_specialization_with_explicit_args ... ok
+test test_for_loop_empty_body ... ok
+test test_operator_overloading_arithmetic ... ok
+test test_end_to_end ... ok
+test test_override_specifier ... ok
+test test_single_member_initializer ... ok
+test test_rtti_dynamic_cast ... ok
+test test_namespace_struct ... ok
+test test_protected_inheritance ... ok
+test test_parse_with_std_header ... ok
+test test_partial_spec_with_methods ... ok
+test test_rtti_typeid ... ok
+test test_rtti_typeid_type ... ok
+test test_rtti_ast_typeid_node ... ok
+test test_static_member_variable ... ok
+test test_partial_spec_same_type ... ok
+test test_static_method ... ok
+test test_mako_rand_cpp_actual ... ok
+test test_struct_default_access ... ok
+test test_struct_template ... ok
+test test_substitute_template_param ... ok
+test test_generator_yield_then_return ... ok
+test test_coroutine_ast_coawait_node ... ok
+test test_switch_multiple_cases ... ok
+test test_awaitable_with_co_await ... ok
+test test_promise_type_complete ... ok
+test test_template_param_types ... ok
+test test_coroutine_co_return ... ok
+test test_switch_no_default ... ok
+test test_awaitable_await_suspend ... ok
+test test_type_alias_struct ... ok
+test test_type_alias_in_namespace ... ok
+test test_type_alias_using ... ok
+test test_type_alias_reference ... ok
+test test_type_properties_floating ... ok
+test test_type_properties_integral ... ok
+test test_type_properties_pointer ... ok
+test test_type_alias_template ... ok
+test test_type_properties_reference ... ok
+test test_type_properties_template_param ... ok
+test test_type_trait_is_floating_point ... ok
+test test_type_trait_is_base_of ... ok
+test test_type_trait_is_integral ... ok
+test test_type_trait_is_pointer_reference ... ok
+test test_type_trait_is_same ... ok
+test test_coroutine_ast_coreturn_node ... ok
+test test_type_trait_is_signed ... ok
+test test_type_trait_result_helpers ... ok
+test test_unary_operator_increment_decrement ... ok
+test test_unary_operator_arithmetic ... ok
+test test_coroutine_traits ... ok
+test test_coroutine_handle_type ... ok
+test test_unary_operator_logical ... ok
+test test_unary_operator_bitwise ... ok
+test test_switch_basic ... ok
+test test_using_namespace_conversion ... ok
+test test_variadic_template_detected ... ok
+test test_using_namespace_in_scope ... ok
+test test_using_nested_namespace_conversion ... ok
+test test_virtual_inheritance ... ok
+test test_variadic_template_mixed_params ... ok
+test test_virtual_function ... ok
+test test_promise_type_final_suspend ... ok
+test test_typedef ... ok
+test test_awaitable_await_resume ... ok
+test test_generator_ast_coyield_node ... ok
+test test_awaitable_await_ready ... ok
+test test_awaitable_complete_pattern ... ok
+test test_awaitable_await_transform ... ok
+test test_generator_multiple_yields ... ok
+test test_coroutine_co_yield ... ok
+test test_promise_type_yield_value ... ok
+test test_promise_type_return_void ... ok
+test test_promise_type_get_return_object ... ok
+test test_awaitable_conditional_suspend ... ok
+test test_generator_different_types ... ok
+test test_coroutine_co_await ... ok
+test test_generator_yield_in_loop ... ok
+test test_coroutine_handle_operations ... ok
+test test_promise_type_initial_suspend ... ok
+test test_promise_type_return_value ... ok
+test test_promise_type_unhandled_exception ... ok
+test test_awaitable_symmetric_transfer ... ok
+test test_generator_complete_pattern ... ok
+test test_generator_basic_yield ... ok
+test test_generator_with_state ... ok
+test test_coroutine_ast_coyield_node ... ok
+test test_std_move_basic ... ok
+test test_std_forward_basic ... ok
+test test_std_move_in_call ... ok
+test test_suspend_types ... ok
+test test_mako_coroutine_cpp_actual ... ok
+test test_mako_occ_cpp_actual ... ok
+test test_std_optional_basic ... ok
+test test_mako_marshal_cpp_actual ... ok
+test test_std_vector_basic_usage ... ok
+test test_std_vector_pop_back ... ok
+test test_std_vector_iterators ... ok
+test test_std_string_basic_usage ... ok
+test test_std_string_length_empty ... ok
+test test_std_string_cstr_subscript ... ok
+test test_std_function_void ... ok
+test test_mako_rand_patterns ... ok
+test test_std_variant_basic ... ok
+test test_std_map_basic ... ok
+test test_std_atomic ... ok
+test test_std_function_basic ... ok
+test test_std_unordered_map_basic ... ok
+test test_std_mutex_lock_guard ... ok
+test test_std_unique_ptr_custom_type ... ok
+test test_std_unique_ptr_basic ... ok
+test test_std_weak_ptr_basic ... ok
+test test_std_shared_ptr_basic ... ok
+test test_std_chrono_duration ... ok
+test test_std_chrono_time_point ... ok
+test test_std_thread_basic ... ok
+test test_std_condition_variable ... ok
+test test_mako_server_cpp_actual ... ok
+
+test result: ok. 226 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.89s
+
+   Doc-tests fragile_clang
+
+running 6 tests
+test crates/fragile-clang/src/deduce.rs - deduce::TypeDeducer::deduce (line 52) ... ignored
+test crates/fragile-clang/src/deduce.rs - deduce::TypeDeducer::deduce_with_explicit (line 90) ... ignored
+test crates/fragile-clang/src/lib.rs - CppFunctionTemplate::deduce_and_instantiate (line 370) ... ignored
+test crates/fragile-clang/src/lib.rs - CppFunctionTemplate::deduce_and_instantiate_with_explicit (line 402) ... ignored
+test crates/fragile-clang/src/lib.rs - CppFunctionTemplate::instantiate (line 330) ... ignored
+test crates/fragile-clang/src/types.rs - types::CppType::substitute (line 238) ... ignored
+
+test result: ok. 0 passed; 0 failed; 6 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

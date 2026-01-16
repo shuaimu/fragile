@@ -98,6 +98,14 @@ int rename(const char* old_filename, const char* new_filename);
 FILE* tmpfile();
 char* tmpnam(char* filename);
 
+// Process I/O (POSIX extensions)
+FILE* popen(const char* command, const char* type);
+int pclose(FILE* stream);
+
+// Line input (POSIX extensions)
+ssize_t getline(char** lineptr, size_t* n, FILE* stream);
+ssize_t getdelim(char** lineptr, size_t* n, int delim, FILE* stream);
+
 } // namespace std
 
 // C-style global functions
@@ -132,5 +140,9 @@ using std::ferror;
 using std::perror;
 using std::remove;
 using std::rename;
+using std::popen;
+using std::pclose;
+using std::getline;
+using std::getdelim;
 
 #endif // _FRAGILE_CSTDIO_

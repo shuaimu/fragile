@@ -28,6 +28,24 @@ typedef int pthread_once_t;
 #define PTHREAD_MUTEX_ERRORCHECK 2
 #define PTHREAD_MUTEX_DEFAULT PTHREAD_MUTEX_NORMAL
 
+// Static initializers
+#define PTHREAD_MUTEX_INITIALIZER 0
+#define PTHREAD_COND_INITIALIZER 0
+#define PTHREAD_RWLOCK_INITIALIZER 0
+#define PTHREAD_ONCE_INIT 0
+
+// Cancel state constants
+#define PTHREAD_CANCEL_ENABLE 0
+#define PTHREAD_CANCEL_DISABLE 1
+#define PTHREAD_CANCEL_DEFERRED 0
+#define PTHREAD_CANCEL_ASYNCHRONOUS 1
+
+// timespec for timed operations
+struct timespec {
+    long tv_sec;   // seconds
+    long tv_nsec;  // nanoseconds
+};
+
 extern "C" {
 
 // Thread management
@@ -62,6 +80,7 @@ int pthread_mutex_unlock(pthread_mutex_t* mutex);
 int pthread_cond_init(pthread_cond_t* cond, const pthread_condattr_t* attr);
 int pthread_cond_destroy(pthread_cond_t* cond);
 int pthread_cond_wait(pthread_cond_t* cond, pthread_mutex_t* mutex);
+int pthread_cond_timedwait(pthread_cond_t* cond, pthread_mutex_t* mutex, const struct timespec* abstime);
 int pthread_cond_signal(pthread_cond_t* cond);
 int pthread_cond_broadcast(pthread_cond_t* cond);
 

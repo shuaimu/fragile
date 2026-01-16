@@ -214,6 +214,30 @@ public:
         return make_pair(iterator(this, idx, new_node), true);
     }
 
+    // C++17 insert_or_assign
+    template<typename M>
+    pair<iterator, bool> insert_or_assign(const Key& key, M&& obj) {
+        size_type idx = bucket_index(key);
+        node* n = buckets_[idx];
+        while (n) {
+            if (equal_(n->data.first, key)) {
+                n->data.second = static_cast<M&&>(obj);
+                return make_pair(iterator(this, idx, n), false);
+            }
+            n = n->next;
+        }
+        node* new_node = new node(key, static_cast<M&&>(obj));
+        new_node->next = buckets_[idx];
+        buckets_[idx] = new_node;
+        ++size_;
+        return make_pair(iterator(this, idx, new_node), true);
+    }
+
+    template<typename M>
+    pair<iterator, bool> insert_or_assign(Key&& key, M&& obj) {
+        return insert_or_assign(static_cast<const Key&>(key), static_cast<M&&>(obj));
+    }
+
     template<typename... Args>
     pair<iterator, bool> emplace(Args&&... args) {
         return insert(value_type(static_cast<Args&&>(args)...));

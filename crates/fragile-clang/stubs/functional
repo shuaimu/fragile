@@ -82,6 +82,12 @@ public:
     explicit operator bool() const noexcept {
         return callable_ != nullptr;
     }
+
+    // Comparison with nullptr
+    friend bool operator==(const function& f, nullptr_t) noexcept { return !f; }
+    friend bool operator==(nullptr_t, const function& f) noexcept { return !f; }
+    friend bool operator!=(const function& f, nullptr_t) noexcept { return static_cast<bool>(f); }
+    friend bool operator!=(nullptr_t, const function& f) noexcept { return static_cast<bool>(f); }
 };
 
 // Reference wrapper

@@ -1,0 +1,13 @@
+// Minimal iomanip stub for fragile parsing
+#ifndef _FRAGILE_IOMANIP_
+#define _FRAGILE_IOMANIP_
+
+#include "sstream"
+
+// The manipulators are already defined in sstream:
+// - std::setprecision(int)
+// - std::setw(int)
+// - std::setfill(char)
+// - std::fixed, std::scientific, std::hex, std::dec, etc.
+
+#endif // _FRAGILE_IOMANIP_

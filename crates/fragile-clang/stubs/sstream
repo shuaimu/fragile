@@ -14,9 +14,79 @@ public:
     virtual ~basic_streambuf() = default;
 };
 
+// Stream formatting flags (used by iomanip)
+typedef int streamsize;
+
+// ios_base for formatting
+class ios_base {
+public:
+    // Format flags
+    typedef unsigned int fmtflags;
+    static constexpr fmtflags boolalpha = 1 << 0;
+    static constexpr fmtflags dec = 1 << 1;
+    static constexpr fmtflags fixed = 1 << 2;
+    static constexpr fmtflags hex = 1 << 3;
+    static constexpr fmtflags internal = 1 << 4;
+    static constexpr fmtflags left = 1 << 5;
+    static constexpr fmtflags oct = 1 << 6;
+    static constexpr fmtflags right = 1 << 7;
+    static constexpr fmtflags scientific = 1 << 8;
+    static constexpr fmtflags showbase = 1 << 9;
+    static constexpr fmtflags showpoint = 1 << 10;
+    static constexpr fmtflags showpos = 1 << 11;
+    static constexpr fmtflags skipws = 1 << 12;
+    static constexpr fmtflags unitbuf = 1 << 13;
+    static constexpr fmtflags uppercase = 1 << 14;
+    static constexpr fmtflags adjustfield = left | right | internal;
+    static constexpr fmtflags basefield = dec | oct | hex;
+    static constexpr fmtflags floatfield = scientific | fixed;
+
+    fmtflags flags() const { return fmtflags_; }
+    fmtflags flags(fmtflags fmtfl) { fmtflags old = fmtflags_; fmtflags_ = fmtfl; return old; }
+    fmtflags setf(fmtflags fmtfl) { fmtflags old = fmtflags_; fmtflags_ |= fmtfl; return old; }
+    fmtflags setf(fmtflags fmtfl, fmtflags mask) { fmtflags old = fmtflags_; fmtflags_ = (fmtflags_ & ~mask) | (fmtfl & mask); return old; }
+    void unsetf(fmtflags mask) { fmtflags_ &= ~mask; }
+
+    streamsize precision() const { return precision_; }
+    streamsize precision(streamsize prec) { streamsize old = precision_; precision_ = prec; return old; }
+
+    streamsize width() const { return width_; }
+    streamsize width(streamsize wide) { streamsize old = width_; width_ = wide; return old; }
+
+protected:
+    fmtflags fmtflags_ = dec | skipws;
+    streamsize precision_ = 6;
+    streamsize width_ = 0;
+};
+
+// Manipulators
+struct _Setprecision { int n; };
+inline _Setprecision setprecision(int n) { return {n}; }
+
+struct _Setw { int n; };
+inline _Setw setw(int n) { return {n}; }
+
+struct _Setfill { char c; };
+inline _Setfill setfill(char c) { return {c}; }
+
+// Stream manipulator types
+inline ios_base& fixed(ios_base& str) { str.setf(ios_base::fixed, ios_base::floatfield); return str; }
+inline ios_base& scientific(ios_base& str) { str.setf(ios_base::scientific, ios_base::floatfield); return str; }
+inline ios_base& hex(ios_base& str) { str.setf(ios_base::hex, ios_base::basefield); return str; }
+inline ios_base& dec(ios_base& str) { str.setf(ios_base::dec, ios_base::basefield); return str; }
+inline ios_base& oct(ios_base& str) { str.setf(ios_base::oct, ios_base::basefield); return str; }
+inline ios_base& left(ios_base& str) { str.setf(ios_base::left, ios_base::adjustfield); return str; }
+inline ios_base& right(ios_base& str) { str.setf(ios_base::right, ios_base::adjustfield); return str; }
+inline ios_base& boolalpha(ios_base& str) { str.setf(ios_base::boolalpha); return str; }
+inline ios_base& noboolalpha(ios_base& str) { str.unsetf(ios_base::boolalpha); return str; }
+inline ios_base& showbase(ios_base& str) { str.setf(ios_base::showbase); return str; }
+inline ios_base& noshowbase(ios_base& str) { str.unsetf(ios_base::showbase); return str; }
+inline ios_base& showpoint(ios_base& str) { str.setf(ios_base::showpoint); return str; }
+inline ios_base& noshowpoint(ios_base& str) { str.unsetf(ios_base::showpoint); return str; }
+
 // Basic stringstream
 template<typename CharT, typename Traits = void, typename Allocator = void>
-class basic_stringstream {
+class basic_stringstream : public ios_base {
 public:
     using string_type = basic_string<CharT>;
 
@@ -38,6 +108,19 @@ public:
     basic_stringstream& operator<<(float n) { (void)n; return *this; }
     basic_stringstream& operator<<(bool b) { (void)b; return *this; }
     basic_stringstream& operator<<(void* p) { (void)p; return *this; }
+    basic_stringstream& operator<<(char c) { (void)c; return *this; }
+
+    // Manipulator support
+    basic_stringstream& operator<<(ios_base& (*pf)(ios_base&)) { pf(*this); return *this; }
+    basic_stringstream& operator<<(_Setprecision sp) { precision(sp.n); return *this; }
+    basic_stringstream& operator<<(_Setw sw) { width(sw.n); return *this; }
+    basic_stringstream& operator<<(_Setfill sf) { (void)sf; return *this; }
+
+    // Input operators
+    basic_stringstream& operator>>(int& n) { (void)n; return *this; }
+    basic_stringstream& operator>>(long& n) { (void)n; return *this; }
+    basic_stringstream& operator>>(double& n) { (void)n; return *this; }
+    basic_stringstream& operator>>(string_type& s) { (void)s; return *this; }
 };
 
 template<typename CharT, typename Traits = void, typename Allocator = void>

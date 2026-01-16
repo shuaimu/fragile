@@ -240,6 +240,18 @@ public:
     // Hash policy
     float load_factor() const { return static_cast<float>(size_) / BUCKET_COUNT; }
     size_type bucket_count() const noexcept { return BUCKET_COUNT; }
+
+    // Swap
+    void swap(unordered_set& other) noexcept {
+        for (size_type i = 0; i < BUCKET_COUNT; ++i) {
+            node* tmp = buckets_[i];
+            buckets_[i] = other.buckets_[i];
+            other.buckets_[i] = tmp;
+        }
+        size_type tmp_size = size_;
+        size_ = other.size_;
+        other.size_ = tmp_size;
+    }
 };
 
 // unordered_multiset (minimal stub)

@@ -113,6 +113,95 @@ int fdatasync(int fd);
 #define SEEK_CUR 1
 #define SEEK_END 2
 
+// sysconf constants
+#define _SC_ARG_MAX              0
+#define _SC_CHILD_MAX            1
+#define _SC_CLK_TCK              2
+#define _SC_NGROUPS_MAX          3
+#define _SC_OPEN_MAX             4
+#define _SC_STREAM_MAX           5
+#define _SC_TZNAME_MAX           6
+#define _SC_JOB_CONTROL          7
+#define _SC_SAVED_IDS            8
+#define _SC_REALTIME_SIGNALS     9
+#define _SC_PRIORITY_SCHEDULING 10
+#define _SC_TIMERS              11
+#define _SC_ASYNCHRONOUS_IO     12
+#define _SC_PRIORITIZED_IO      13
+#define _SC_SYNCHRONIZED_IO     14
+#define _SC_FSYNC               15
+#define _SC_MAPPED_FILES        16
+#define _SC_MEMLOCK             17
+#define _SC_MEMLOCK_RANGE       18
+#define _SC_MEMORY_PROTECTION   19
+#define _SC_MESSAGE_PASSING     20
+#define _SC_SEMAPHORES          21
+#define _SC_SHARED_MEMORY_OBJECTS 22
+#define _SC_AIO_LISTIO_MAX      23
+#define _SC_AIO_MAX             24
+#define _SC_AIO_PRIO_DELTA_MAX  25
+#define _SC_DELAYTIMER_MAX      26
+#define _SC_MQ_OPEN_MAX         27
+#define _SC_MQ_PRIO_MAX         28
+#define _SC_VERSION             29
+#define _SC_PAGESIZE            30
+#define _SC_PAGE_SIZE           _SC_PAGESIZE
+#define _SC_RTSIG_MAX           31
+#define _SC_SEM_NSEMS_MAX       32
+#define _SC_SEM_VALUE_MAX       33
+#define _SC_SIGQUEUE_MAX        34
+#define _SC_TIMER_MAX           35
+#define _SC_NPROCESSORS_CONF    83
+#define _SC_NPROCESSORS_ONLN    84
+
+// syscall - direct system call interface
+long syscall(long number, ...);
+
+// System call numbers (Linux x86_64)
+#define SYS_read           0
+#define SYS_write          1
+#define SYS_open           2
+#define SYS_close          3
+#define SYS_stat           4
+#define SYS_fstat          5
+#define SYS_lstat          6
+#define SYS_poll           7
+#define SYS_lseek          8
+#define SYS_mmap           9
+#define SYS_mprotect      10
+#define SYS_munmap        11
+#define SYS_brk           12
+#define SYS_ioctl         16
+#define SYS_access        21
+#define SYS_pipe          22
+#define SYS_dup           32
+#define SYS_dup2          33
+#define SYS_pause         34
+#define SYS_getpid        39
+#define SYS_socket        41
+#define SYS_connect       42
+#define SYS_accept        43
+#define SYS_sendto        44
+#define SYS_recvfrom      45
+#define SYS_sendmsg       46
+#define SYS_recvmsg       47
+#define SYS_shutdown      48
+#define SYS_bind          49
+#define SYS_listen        50
+#define SYS_getsockname   51
+#define SYS_getpeername   52
+#define SYS_fork          57
+#define SYS_vfork         58
+#define SYS_execve        59
+#define SYS_exit          60
+#define SYS_wait4         61
+#define SYS_kill          62
+#define SYS_fcntl         72
+#define SYS_gettid       186
+#define SYS_epoll_create 213
+#define SYS_epoll_ctl    233
+#define SYS_epoll_wait   232
+
 // External variables
 extern char* optarg;
 extern int optind, opterr, optopt;
