@@ -220,4 +220,78 @@ mod tests {
         let names = driver.mir_registry.function_names();
         assert!(names.contains(&"_Z3addii".to_string()));
     }
+
+    /// End-to-end test: Parse rand.cpp from mako, generate stubs, register module
+    /// This tests parsing a real-world C++ file through the full pipeline.
+    #[test]
+    fn test_end_to_end_rand_cpp() {
+        // Path to the test file
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let project_root = Path::new(manifest_dir).parent().unwrap().parent().unwrap();
+        let rand_cpp = project_root.join("vendor/mako/src/rrr/misc/rand.cpp");
+
+        // Check if test file exists
+        if !rand_cpp.exists() {
+            eprintln!("Skipping test: rand.cpp not found at {:?}", rand_cpp);
+            return;
+        }
+
+        // Check if submodules are initialized
+        let rusty_cpp_path = project_root.join("vendor/mako/third-party/rusty-cpp/include");
+        if !rusty_cpp_path.exists() {
+            eprintln!("Skipping test: rusty-cpp submodule not initialized");
+            return;
+        }
+
+        // Set up include paths
+        let stubs_path = Path::new(manifest_dir)
+            .parent().unwrap()
+            .join("fragile-clang/stubs");
+
+        let include_paths = vec![
+            project_root.join("vendor/mako/src").to_string_lossy().to_string(),
+            project_root.join("vendor/mako/src/rrr").to_string_lossy().to_string(),
+            rusty_cpp_path.to_string_lossy().to_string(),
+        ];
+
+        let system_include_paths = vec![
+            stubs_path.to_string_lossy().to_string(),
+        ];
+
+        // Parse the C++ file
+        let parser = fragile_clang::ClangParser::with_paths(include_paths, system_include_paths)
+            .expect("Failed to create parser");
+
+        let ast = parser.parse_file(&rand_cpp)
+            .expect("Failed to parse rand.cpp");
+
+        let converter = fragile_clang::MirConverter::new();
+        let module = converter.convert(ast)
+            .expect("Failed to convert rand.cpp to MIR");
+
+        // Verify the module contains RandomGenerator functions
+        println!("rand.cpp parsed with {} functions", module.functions.len());
+        assert!(module.functions.len() >= 5, "Expected at least 5 functions from rand.cpp");
+
+        // Look for specific functions
+        let function_names: Vec<_> = module.functions.iter()
+            .map(|f| f.display_name.as_str())
+            .collect();
+        println!("Functions found: {:?}", function_names);
+
+        // Register the module with the driver
+        let driver = FragileDriver::new();
+        driver.register_cpp_module(&module);
+
+        // Verify registration
+        assert!(driver.mir_registry.function_count() >= 5,
+            "Module should have registered at least 5 functions");
+
+        // Generate Rust stubs
+        let stubs = generate_rust_stubs(&[module]);
+        assert!(stubs.contains("extern"), "Stubs should contain extern block");
+
+        println!("Generated {} bytes of Rust stubs", stubs.len());
+        println!("First 500 chars of stubs:\n{}", &stubs[..stubs.len().min(500)]);
+    }
 }

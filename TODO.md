@@ -500,7 +500,7 @@ Migration: After C++20 support is complete, deprecate these.
 
 ### 5.1 Unit Tests
 - [x] fragile-clang: 596 tests passing (27 unit + 569 integration) - includes 10 coroutine + 7 exception + 6 RTTI + 8 promise type + 8 awaitable + 8 generator + 3 noexcept + 1 member access + 1 stack unwinding + 338 mako file tests (100% coverage) [26:01:16, 22:40]
-- [x] fragile-rustc-driver: 12 tests passing with rustc-integration feature (9 base + 3 rustc_integration tests)
+- [x] fragile-rustc-driver: 13 tests passing with rustc-integration feature (10 base + 3 rustc_integration tests)
 - [x] fragile-runtime: Compiles
 
 ### 5.2 Mako Milestones
@@ -511,7 +511,7 @@ Migration: After C++20 support is complete, deprecate these.
 - [-] **M5**: Full Mako build ([docs/dev/plan_m5_full_mako_build.md](docs/dev/plan_m5_full_mako_build.md))
   - [x] M5.1: Simple add.cpp end-to-end test (C++ → MIR → stubs) [26:01:17]
   - [x] M5.2: Enable CI with nightly rust + rustc-dev [26:01:17]
-  - [ ] M5.3: Compile rand.cpp through full pipeline
+  - [x] M5.3: Compile rand.cpp through full pipeline (29 functions, 17KB stubs) [26:01:17]
   - [ ] M5.4: Compile rrr/misc/*.cpp
   - [ ] M5.5: Compile rrr/rpc/*.cpp
   - [ ] M5.6: Compile mako/vec/*.cpp
