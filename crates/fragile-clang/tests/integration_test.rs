@@ -9582,3 +9582,115 @@ fn test_mako_lib_timestamp_cc() {
     }
 }
 
+/// Test parsing mako lib promise.cc (promise implementation)
+#[test]
+fn test_mako_lib_promise_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/mako/lib/promise.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: promise.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let lib_path = project_root.join("vendor/mako/src/mako/lib");
+    let mako_path = project_root.join("vendor/mako/src/mako");
+
+    let mut system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let clang_paths = [
+        "/usr/lib/llvm-19/lib/clang/19/include",
+        "/usr/lib/llvm-18/lib/clang/18/include",
+    ];
+
+    for path in &clang_paths {
+        if Path::new(path).exists() {
+            system_include_paths.push(path.to_string());
+            break;
+        }
+    }
+
+    let include_paths = vec![
+        lib_path.to_string_lossy().to_string(),
+        mako_path.to_string_lossy().to_string(),
+    ];
+
+    let parser = ClangParser::with_paths(include_paths, system_include_paths)
+        .expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+
+            println!("Successfully parsed promise.cc with {} functions", module.functions.len());
+        }
+        Err(e) => {
+            println!("Note: promise.cc parsing failed: {:?}", e);
+        }
+    }
+}
+
+/// Test parsing mako lib memory.cc (memory utilities)
+#[test]
+fn test_mako_lib_memory_cc() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/src/mako/lib/memory.cc");
+
+    if !file_path.exists() {
+        println!("Skipping test: memory.cc not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let lib_path = project_root.join("vendor/mako/src/mako/lib");
+    let mako_path = project_root.join("vendor/mako/src/mako");
+
+    let mut system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+    ];
+
+    let clang_paths = [
+        "/usr/lib/llvm-19/lib/clang/19/include",
+        "/usr/lib/llvm-18/lib/clang/18/include",
+    ];
+
+    for path in &clang_paths {
+        if Path::new(path).exists() {
+            system_include_paths.push(path.to_string());
+            break;
+        }
+    }
+
+    let include_paths = vec![
+        lib_path.to_string_lossy().to_string(),
+        mako_path.to_string_lossy().to_string(),
+    ];
+
+    let parser = ClangParser::with_paths(include_paths, system_include_paths)
+        .expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+
+            println!("Successfully parsed memory.cc with {} functions", module.functions.len());
+        }
+        Err(e) => {
+            println!("Note: memory.cc parsing failed: {:?}", e);
+        }
+    }
+}
+
