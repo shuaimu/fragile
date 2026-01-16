@@ -877,3 +877,123 @@ fn test_multiple_friends() {
     assert_eq!(class_count, 2);
     assert_eq!(func_count, 1);
 }
+
+/// Test public single inheritance.
+#[test]
+fn test_public_inheritance() {
+    use fragile_clang::AccessSpecifier;
+
+    let parser = ClangParser::new().expect("Failed to create parser");
+
+    let source = r#"
+        class Base {
+        public:
+            int base_value;
+        };
+
+        class Derived : public Base {
+        public:
+            int derived_value;
+        };
+    "#;
+
+    let ast = parser.parse_string(source, "public_inherit.cpp").expect("Failed to parse");
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    assert_eq!(module.structs.len(), 2);
+
+    // Find Derived class
+    let derived = module.structs.iter().find(|s| s.name == "Derived");
+    assert!(derived.is_some(), "Expected Derived class");
+    let derived = derived.unwrap();
+
+    assert_eq!(derived.bases.len(), 1);
+    assert_eq!(derived.bases[0].access, AccessSpecifier::Public);
+    assert!(!derived.bases[0].is_virtual);
+}
+
+/// Test protected inheritance.
+#[test]
+fn test_protected_inheritance() {
+    use fragile_clang::AccessSpecifier;
+
+    let parser = ClangParser::new().expect("Failed to create parser");
+
+    let source = r#"
+        class Base {
+        public:
+            int value;
+        };
+
+        class Derived : protected Base {
+        public:
+            int derived_value;
+        };
+    "#;
+
+    let ast = parser.parse_string(source, "protected_inherit.cpp").expect("Failed to parse");
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    let derived = module.structs.iter().find(|s| s.name == "Derived").unwrap();
+    assert_eq!(derived.bases.len(), 1);
+    assert_eq!(derived.bases[0].access, AccessSpecifier::Protected);
+}
+
+/// Test private inheritance.
+#[test]
+fn test_private_inheritance() {
+    use fragile_clang::AccessSpecifier;
+
+    let parser = ClangParser::new().expect("Failed to create parser");
+
+    let source = r#"
+        class Base {
+        public:
+            int value;
+        };
+
+        class Derived : private Base {
+        public:
+            int derived_value;
+        };
+    "#;
+
+    let ast = parser.parse_string(source, "private_inherit.cpp").expect("Failed to parse");
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    let derived = module.structs.iter().find(|s| s.name == "Derived").unwrap();
+    assert_eq!(derived.bases.len(), 1);
+    assert_eq!(derived.bases[0].access, AccessSpecifier::Private);
+}
+
+/// Test virtual inheritance.
+#[test]
+fn test_virtual_inheritance() {
+    use fragile_clang::AccessSpecifier;
+
+    let parser = ClangParser::new().expect("Failed to create parser");
+
+    let source = r#"
+        class Base {
+        public:
+            int value;
+        };
+
+        class Derived : virtual public Base {
+        public:
+            int derived_value;
+        };
+    "#;
+
+    let ast = parser.parse_string(source, "virtual_inherit.cpp").expect("Failed to parse");
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    let derived = module.structs.iter().find(|s| s.name == "Derived").unwrap();
+    assert_eq!(derived.bases.len(), 1);
+    assert_eq!(derived.bases[0].access, AccessSpecifier::Public);
+    assert!(derived.bases[0].is_virtual);
+}

@@ -111,6 +111,8 @@ pub struct CppStruct {
     pub is_class: bool,
     /// Namespace path (e.g., ["rrr", "nested"])
     pub namespace: Vec<String>,
+    /// Base classes (inheritance)
+    pub bases: Vec<CppBaseClass>,
     /// Non-static fields with their types and access specifiers
     pub fields: Vec<CppField>,
     /// Static data members
@@ -123,6 +125,17 @@ pub struct CppStruct {
     pub methods: Vec<CppMethod>,
     /// Friend declarations
     pub friends: Vec<CppFriend>,
+}
+
+/// A C++ base class (for inheritance).
+#[derive(Debug, Clone)]
+pub struct CppBaseClass {
+    /// Base class type
+    pub base_type: CppType,
+    /// Inheritance access specifier (public/protected/private)
+    pub access: AccessSpecifier,
+    /// Whether this is virtual inheritance
+    pub is_virtual: bool,
 }
 
 /// A C++ class field (data member).

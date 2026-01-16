@@ -362,6 +362,14 @@ impl ClangParser {
                     ClangNodeKind::FriendDecl { friend_class, friend_function }
                 }
 
+                clang_sys::CXCursor_CXXBaseSpecifier => {
+                    // Base class specifier (inheritance)
+                    let base_type = self.convert_type(clang_sys::clang_getCursorType(cursor));
+                    let access = self.get_access_specifier(cursor);
+                    let is_virtual = clang_sys::clang_isVirtualBase(cursor) != 0;
+                    ClangNodeKind::CXXBaseSpecifier { base_type, access, is_virtual }
+                }
+
                 // Statements
                 clang_sys::CXCursor_CompoundStmt => ClangNodeKind::CompoundStmt,
                 clang_sys::CXCursor_ReturnStmt => ClangNodeKind::ReturnStmt,

@@ -3,10 +3,10 @@
 use crate::ast::{BinaryOp, ClangAst, ClangNode, ClangNodeKind, UnaryOp};
 use crate::types::CppType;
 use crate::{
-    CppConstructor, CppDestructor, CppExtern, CppField, CppFriend, CppFunction, CppMethod,
-    CppModule, CppStruct, MemberInitializer, MirBasicBlock, MirBinOp, MirBody, MirConstant,
-    MirLocal, MirOperand, MirPlace, MirRvalue, MirStatement, MirTerminator, MirUnaryOp,
-    UsingDeclaration, UsingDirective,
+    CppBaseClass, CppConstructor, CppDestructor, CppExtern, CppField, CppFriend, CppFunction,
+    CppMethod, CppModule, CppStruct, MemberInitializer, MirBasicBlock, MirBinOp, MirBody,
+    MirConstant, MirLocal, MirOperand, MirPlace, MirRvalue, MirStatement, MirTerminator,
+    MirUnaryOp, UsingDeclaration, UsingDirective,
 };
 use miette::Result;
 
@@ -553,6 +553,7 @@ impl MirConverter {
         is_class: bool,
         namespace_context: &[String],
     ) -> Result<CppStruct> {
+        let mut bases = Vec::new();
         let mut fields = Vec::new();
         let mut static_fields = Vec::new();
         let mut constructors = Vec::new();
@@ -641,6 +642,13 @@ impl MirConverter {
                         friends.push(CppFriend::Function { name: func_name.clone() });
                     }
                 }
+                ClangNodeKind::CXXBaseSpecifier { base_type, access, is_virtual } => {
+                    bases.push(CppBaseClass {
+                        base_type: base_type.clone(),
+                        access: *access,
+                        is_virtual: *is_virtual,
+                    });
+                }
                 _ => {}
             }
         }
@@ -649,6 +657,7 @@ impl MirConverter {
             name: name.to_string(),
             is_class,
             namespace: namespace_context.to_vec(),
+            bases,
             fields,
             static_fields,
             constructors,

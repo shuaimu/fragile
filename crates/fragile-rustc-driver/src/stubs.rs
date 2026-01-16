@@ -154,6 +154,7 @@ mod tests {
             name: "Point".to_string(),
             is_class: false,
             namespace: Vec::new(),
+            bases: vec![],
             fields: vec![
                 CppField { name: "x".to_string(), ty: CppType::int(), access: AccessSpecifier::Public },
                 CppField { name: "y".to_string(), ty: CppType::int(), access: AccessSpecifier::Public },
@@ -181,6 +182,7 @@ mod tests {
             name: "MyClass".to_string(),
             is_class: true,
             namespace: Vec::new(),
+            bases: vec![],
             fields: vec![
                 CppField { name: "public_field".to_string(), ty: CppType::int(), access: AccessSpecifier::Public },
                 CppField { name: "private_field".to_string(), ty: CppType::int(), access: AccessSpecifier::Private },

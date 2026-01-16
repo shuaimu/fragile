@@ -129,6 +129,15 @@ pub enum ClangNodeKind {
         /// Friend function name (if friend function)
         friend_function: Option<String>,
     },
+    /// C++ base class specifier (inheritance)
+    CXXBaseSpecifier {
+        /// Base class type
+        base_type: CppType,
+        /// Inheritance access specifier (public/protected/private)
+        access: AccessSpecifier,
+        /// Whether this is virtual inheritance
+        is_virtual: bool,
+    },
     /// Namespace declaration
     NamespaceDecl {
         /// Namespace name (None for anonymous namespaces)

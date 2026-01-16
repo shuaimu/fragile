@@ -46,8 +46,8 @@ See [PLAN_CPP20_MAKO.md](PLAN_CPP20_MAKO.md) for detailed plan.
   - [x] Member initializer lists [26:01:16] ([docs/dev/plan_member_initializer_lists.md](docs/dev/plan_member_initializer_lists.md))
   - [x] Static members [26:01:16] ([docs/dev/plan_static_members.md](docs/dev/plan_static_members.md))
   - [x] Friend declarations [26:01:16] ([docs/dev/plan_friend_declarations.md](docs/dev/plan_friend_declarations.md))
-- [ ] **A.3 Inheritance**
-  - [ ] Single inheritance
+- [-] **A.3 Inheritance**
+  - [x] Single inheritance [26:01:16] ([docs/dev/plan_single_inheritance.md](docs/dev/plan_single_inheritance.md))
   - [ ] Multiple inheritance
   - [ ] Virtual functions + vtables
   - [ ] Pure virtual (= 0)
@@ -214,7 +214,7 @@ Migration: After C++20 support is complete, deprecate these.
 ## 5. Testing & Milestones
 
 ### 5.1 Unit Tests
-- [x] fragile-clang: 36 tests passing (7 unit + 29 integration)
+- [x] fragile-clang: 40 tests passing (7 unit + 33 integration)
 - [x] fragile-rustc-driver: 6 tests passing
 - [x] fragile-runtime: Compiles
 
