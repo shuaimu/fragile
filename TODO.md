@@ -187,8 +187,16 @@ See [PLAN_CPP20_MAKO.md](PLAN_CPP20_MAKO.md) for detailed plan.
   - [x] `vendor/mako/src/mako/vec/coroutine.cpp` - **PARSED**: 26 functions (Task, Scheduler, main) [26:01:16, 05:00]
   - [x] F.2.1 Add stubs: tuple, csignal, pthread.h, sched.h; extend string with assign(), vector with memory include [26:01:16, 05:30]
   - [x] `vendor/mako/src/mako/vec/occ.cpp` - **PARSED**: 27 functions (OCC, workerThread, main) [26:01:16, 05:30]
-- [ ] **F.3 Full Build**
-  - [ ] All rrr module
+- [-] **F.3 Full Build** (Started [26:01:16, 06:00])
+  - [-] All rrr module
+    - [x] F.3.1 Extended stubs: cmath, iomanip, list reverse iterators, unordered_map insert_or_assign [26:01:16, 06:00]
+    - [x] `vendor/mako/src/rrr/base/basetypes.cpp` - **PARSED**: 15 functions [26:01:16, 06:00]
+    - [x] `vendor/mako/src/rrr/base/misc.cpp` - **PARSED**: 20 functions [26:01:16, 06:00]
+    - [x] `vendor/mako/src/rrr/rpc/client.cpp` - **PARSED**: 4671 functions [26:01:16, 06:00]
+    - [x] `vendor/mako/src/rrr/reactor/event.cc` - **PARSED**: 4640 functions [26:01:16, 06:00]
+    - [x] `vendor/mako/src/rrr/reactor/fiber_impl.cc` - **PARSED**: 4640 functions [26:01:16, 06:00]
+    - [x] `vendor/mako/src/rrr/reactor/reactor.cc` - **PARSED**: 4640 functions [26:01:16, 06:00]
+    - [ ] Remaining rrr files (need global namespace `max`, `errno` exports)
   - [ ] All mako module
   - [ ] Link and run tests
 
@@ -255,7 +263,7 @@ Migration: After C++20 support is complete, deprecate these.
 ## 5. Testing & Milestones
 
 ### 5.1 Unit Tests
-- [x] fragile-clang: 225 tests passing (27 unit + 198 integration) - includes 10 coroutine + 7 exception + 6 RTTI + 8 promise type + 8 awaitable + 8 generator + 5 mako file tests
+- [x] fragile-clang: 226 tests passing (27 unit + 199 integration) - includes 10 coroutine + 7 exception + 6 RTTI + 8 promise type + 8 awaitable + 8 generator + 7 mako file tests
 - [x] fragile-rustc-driver: 6 tests passing
 - [x] fragile-runtime: Compiles
 
