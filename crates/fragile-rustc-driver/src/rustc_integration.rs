@@ -23,7 +23,6 @@ use rustc_data_structures::steal::Steal;
 use rustc_driver::Compilation;
 use rustc_hir as hir;
 use rustc_interface::interface::{Compiler, Config};
-use rustc_middle::mir;
 use rustc_middle::ty::TyCtxt;
 use rustc_span::def_id::LocalDefId;
 use std::cell::RefCell;
@@ -45,7 +44,10 @@ thread_local! {
     static CPP_REGISTRY: RefCell<Option<Arc<CppMirRegistry>>> = const { RefCell::new(None) };
 
     /// Thread-local storage for C++ function names as a HashSet for quick lookup.
-    static CPP_FUNCTION_NAMES: RefCell<HashSet<String>> = const { RefCell::new(HashSet::new()) };
+    static CPP_FUNCTION_NAMES: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
+
+    /// Thread-local storage for the original mir_built provider for fallback.
+    static ORIG_MIR_BUILT: RefCell<Option<for<'tcx> fn(TyCtxt<'tcx>, LocalDefId) -> &'tcx Steal<rustc_middle::mir::Body<'tcx>>>> = const { RefCell::new(None) };
 }
 
 /// Set the C++ registry for the current thread.
@@ -65,6 +67,9 @@ fn clear_cpp_registry() {
     });
     CPP_FUNCTION_NAMES.with(|names| {
         names.borrow_mut().clear();
+    });
+    ORIG_MIR_BUILT.with(|r| {
+        *r.borrow_mut() = None;
     });
 }
 
@@ -127,6 +132,65 @@ pub fn collect_cpp_def_ids<'tcx>(
     }
 
     result
+}
+
+// ============================================================================
+// Custom mir_built Query Provider
+// ============================================================================
+
+/// Custom mir_built query provider that injects C++ MIR.
+///
+/// This function is used as a fn pointer (not closure) for the query override.
+/// All state access goes through thread-local storage.
+fn fragile_mir_built<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    def_id: LocalDefId,
+) -> &'tcx Steal<rustc_middle::mir::Body<'tcx>> {
+    // Check if this is a C++ function by looking at link_name
+    let cpp_function_name = CPP_FUNCTION_NAMES.with(|names| {
+        let names_set = names.borrow();
+        get_cpp_link_name(tcx, def_id).filter(|name| names_set.contains(name))
+    });
+
+    if let Some(link_name) = cpp_function_name {
+        eprintln!("[fragile] mir_built called for C++ function: {}", link_name);
+
+        // Get the MIR body from the registry
+        let mir_body = CPP_REGISTRY.with(|r| {
+            r.borrow().as_ref().and_then(|reg| reg.get_mir(&link_name))
+        });
+
+        if let Some(cpp_mir) = mir_body {
+            eprintln!("[fragile] Found C++ MIR body for {}, converting...", link_name);
+
+            // Convert the fragile MIR to rustc MIR
+            let ctx = MirConvertCtx::new(tcx);
+
+            // Count arguments from the MIR (locals 1..=arg_count are arguments)
+            // For now, use a simple heuristic: count non-return locals as potential args
+            let arg_count = cpp_mir.locals.len().saturating_sub(1);
+            let rustc_body = ctx.convert_mir_body_full(&cpp_mir, arg_count);
+
+            eprintln!(
+                "[fragile] Converted MIR body for {} ({} locals, {} blocks)",
+                link_name,
+                rustc_body.local_decls.len(),
+                rustc_body.basic_blocks.len()
+            );
+
+            // Arena-allocate and wrap in Steal
+            return tcx.arena.alloc(Steal::new(rustc_body));
+        } else {
+            eprintln!("[fragile] No MIR body found for {}, using fallback", link_name);
+        }
+    }
+
+    // Fall back to original rustc mir_built for non-C++ functions
+    ORIG_MIR_BUILT.with(|r| {
+        let orig = r.borrow();
+        let orig_fn = orig.expect("[fragile] ORIG_MIR_BUILT not set - this is a bug");
+        orig_fn(tcx, def_id)
+    })
 }
 
 // ============================================================================
@@ -200,49 +264,15 @@ fn override_queries_callback(
         names_count
     );
 
-    // Store original providers for fallback
-    let orig_mir_built = providers.queries.mir_built;
+    // Store original providers in TLS for fallback from the fn pointer
+    ORIG_MIR_BUILT.with(|r| {
+        *r.borrow_mut() = Some(providers.queries.mir_built);
+    });
 
     // Override mir_built query to inject C++ MIR
-    providers.queries.mir_built = |tcx, def_id| {
-        // Check if this is a C++ function by looking at link_name
-        let cpp_function_name = CPP_FUNCTION_NAMES.with(|names| {
-            let names_set = names.borrow();
-            get_cpp_link_name(tcx, def_id).filter(|name| names_set.contains(name))
-        });
-
-        if let Some(link_name) = cpp_function_name {
-            eprintln!("[fragile] mir_built called for C++ function: {}", link_name);
-
-            // Get the MIR body from the registry
-            let mir_body = CPP_REGISTRY.with(|r| {
-                r.borrow().as_ref().and_then(|reg| reg.get_mir(&link_name))
-            });
-
-            if let Some(cpp_mir) = mir_body {
-                eprintln!("[fragile] Found C++ MIR body for {}, converting...", link_name);
-
-                // Convert the fragile MIR to rustc MIR
-                let ctx = MirConvertCtx::new(tcx);
-
-                // Count arguments from the MIR (locals 1..=arg_count are arguments)
-                // For now, use a simple heuristic: count non-return locals as potential args
-                let arg_count = cpp_mir.locals.len().saturating_sub(1);
-                let rustc_body = ctx.convert_mir_body_full(&cpp_mir, arg_count);
-
-                eprintln!("[fragile] Converted MIR body for {} ({} locals, {} blocks)",
-                    link_name, rustc_body.local_decls.len(), rustc_body.basic_blocks.len());
-
-                // Arena-allocate and wrap in Steal
-                return tcx.arena.alloc(Steal::new(rustc_body));
-            } else {
-                eprintln!("[fragile] No MIR body found for {}, using fallback", link_name);
-            }
-        }
-
-        // Fall back to original rustc mir_built for non-C++ functions
-        orig_mir_built(tcx, def_id)
-    };
+    // This must be a fn pointer (not closure) so it cannot capture state.
+    // All state access goes through TLS.
+    providers.queries.mir_built = fragile_mir_built;
 
     eprintln!("[fragile] Query override installed for {} C++ functions", function_count);
 }
