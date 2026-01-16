@@ -502,9 +502,9 @@ Migration: After C++20 support is complete, deprecate these.
 
 ### 5.2 Mako Milestones
 - [x] **M1**: Parse `rand.cpp` (minimal deps) [26:01:16] - 26 functions, rand_r stub added
-- [-] **M2**: Parse `rrr/misc/*.cpp` (templates, STL) - 5/5 files parsing (100%)
-- [-] **M3**: Parse `rrr/rpc/*.cpp` (OOP, threads) - 4/4 files parsing (100%)
-- [-] **M4**: Parse `mako/vec/*.cpp` (coroutines) - 2/2 files parsing (100%)
+- [x] **M2**: Parse `rrr/misc/*.cpp` (templates, STL) - 5/5 files parsing (100%) [26:01:16]
+- [x] **M3**: Parse `rrr/rpc/*.cpp` (OOP, threads) - 4/4 files parsing (100%) [26:01:16]
+- [x] **M4**: Parse `mako/vec/*.cpp` (coroutines) - 2/2 files parsing (100%) [26:01:16]
 - [ ] **M5**: Full Mako build
 - [ ] **M6**: Mako tests pass
 
