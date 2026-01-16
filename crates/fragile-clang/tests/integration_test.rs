@@ -997,3 +997,43 @@ fn test_virtual_inheritance() {
     assert_eq!(derived.bases[0].access, AccessSpecifier::Public);
     assert!(derived.bases[0].is_virtual);
 }
+
+/// Test multiple inheritance.
+#[test]
+fn test_multiple_inheritance() {
+    use fragile_clang::AccessSpecifier;
+
+    let parser = ClangParser::new().expect("Failed to create parser");
+
+    let source = r#"
+        class Base1 {
+        public:
+            int value1;
+        };
+
+        class Base2 {
+        public:
+            int value2;
+        };
+
+        class Derived : public Base1, protected Base2 {
+        public:
+            int derived_value;
+        };
+    "#;
+
+    let ast = parser.parse_string(source, "multi_inherit.cpp").expect("Failed to parse");
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    assert_eq!(module.structs.len(), 3);
+
+    let derived = module.structs.iter().find(|s| s.name == "Derived").unwrap();
+    assert_eq!(derived.bases.len(), 2);
+
+    // First base is public Base1
+    assert_eq!(derived.bases[0].access, AccessSpecifier::Public);
+
+    // Second base is protected Base2
+    assert_eq!(derived.bases[1].access, AccessSpecifier::Protected);
+}
