@@ -291,6 +291,7 @@ mod tests {
             is_definition: true,
             specializations: vec![],
             parameter_pack_indices: vec![],
+            requires_clause: None,
         }
     }
 

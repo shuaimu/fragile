@@ -20,7 +20,7 @@ mod deduce;
 
 pub use parse::ClangParser;
 pub use convert::MirConverter;
-pub use ast::{AccessSpecifier, ClangAst, ClangNode, ClangNodeKind, ConstructorKind, TypeTraitKind};
+pub use ast::{AccessSpecifier, ClangAst, ClangNode, ClangNodeKind, ConstructorKind, Requirement, TypeTraitKind};
 pub use types::{CppType, TypeProperties, TypeTraitResult, TypeTraitEvaluator};
 pub use resolve::NameResolver;
 pub use deduce::{DeductionError, TypeDeducer};
@@ -60,6 +60,8 @@ pub struct CppModule {
     pub using_directives: Vec<UsingDirective>,
     /// Using declarations (specific name imports)
     pub using_declarations: Vec<UsingDeclaration>,
+    /// Concept definitions (C++20)
+    pub concepts: Vec<CppConceptDecl>,
 }
 
 /// A using namespace directive.
@@ -91,6 +93,7 @@ impl CppModule {
             class_partial_specializations: Vec::new(),
             using_directives: Vec::new(),
             using_declarations: Vec::new(),
+            concepts: Vec::new(),
         }
     }
 
@@ -278,6 +281,8 @@ pub struct CppFunctionTemplate {
     pub specializations: Vec<CppTemplateSpecialization>,
     /// Indices of template parameters that are parameter packs (variadic)
     pub parameter_pack_indices: Vec<usize>,
+    /// Optional requires clause constraint (C++20)
+    pub requires_clause: Option<String>,
 }
 
 /// An explicit specialization of a function template.
@@ -471,6 +476,8 @@ pub struct CppClassTemplate {
     pub member_templates: Vec<CppMemberTemplate>,
     /// Indices of template parameters that are parameter packs (variadic)
     pub parameter_pack_indices: Vec<usize>,
+    /// Optional requires clause constraint (C++20)
+    pub requires_clause: Option<String>,
 }
 
 /// A partial specialization of a class template.
@@ -627,6 +634,20 @@ pub struct CppExtern {
     pub params: Vec<(String, CppType)>,
     /// Return type
     pub return_type: CppType,
+}
+
+/// A C++20 concept definition.
+/// Represents `template<typename T> concept Integral = ...;`
+#[derive(Debug, Clone)]
+pub struct CppConceptDecl {
+    /// Concept name (e.g., "Integral")
+    pub name: String,
+    /// Namespace path (e.g., ["std"] for std::integral)
+    pub namespace: Vec<String>,
+    /// Template type parameters (e.g., ["T"])
+    pub template_params: Vec<String>,
+    /// The constraint expression as text (for display/debugging)
+    pub constraint_expr: String,
 }
 
 /// Serialized MIR body that can be transferred to rustc driver.

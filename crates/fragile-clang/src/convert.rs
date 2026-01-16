@@ -3,11 +3,11 @@
 use crate::ast::{BinaryOp, ClangAst, ClangNode, ClangNodeKind, UnaryOp};
 use crate::types::CppType;
 use crate::{
-    CppBaseClass, CppClassTemplate, CppClassTemplatePartialSpec, CppConstructor, CppDestructor,
-    CppExtern, CppField, CppFriend, CppFunction, CppFunctionTemplate, CppMemberTemplate, CppMethod,
-    CppModule, CppStruct, MemberInitializer, MirBasicBlock, MirBinOp, MirBody, MirConstant,
-    MirLocal, MirOperand, MirPlace, MirRvalue, MirStatement, MirTerminator, MirUnaryOp,
-    UsingDeclaration, UsingDirective,
+    CppBaseClass, CppClassTemplate, CppClassTemplatePartialSpec, CppConceptDecl, CppConstructor,
+    CppDestructor, CppExtern, CppField, CppFriend, CppFunction, CppFunctionTemplate,
+    CppMemberTemplate, CppMethod, CppModule, CppStruct, MemberInitializer, MirBasicBlock,
+    MirBinOp, MirBody, MirConstant, MirLocal, MirOperand, MirPlace, MirRvalue, MirStatement,
+    MirTerminator, MirUnaryOp, UsingDeclaration, UsingDirective,
 };
 use miette::Result;
 
@@ -192,6 +192,7 @@ impl MirConverter {
                 params,
                 is_definition,
                 parameter_pack_indices,
+                requires_clause,
             } => {
                 module.function_templates.push(CppFunctionTemplate {
                     name: name.clone(),
@@ -202,6 +203,7 @@ impl MirConverter {
                     is_definition: *is_definition,
                     specializations: Vec::new(),
                     parameter_pack_indices: parameter_pack_indices.clone(),
+                    requires_clause: requires_clause.clone(),
                 });
             }
             ClangNodeKind::TemplateTypeParmDecl { .. } => {
@@ -213,6 +215,7 @@ impl MirConverter {
                 template_params,
                 is_class,
                 parameter_pack_indices,
+                requires_clause,
             } => {
                 let class_template = self.convert_class_template(
                     node,
@@ -220,9 +223,22 @@ impl MirConverter {
                     template_params,
                     *is_class,
                     parameter_pack_indices,
+                    requires_clause,
                     namespace_context,
                 )?;
                 module.class_templates.push(class_template);
+            }
+            ClangNodeKind::ConceptDecl {
+                name,
+                template_params,
+                constraint_expr,
+            } => {
+                module.concepts.push(CppConceptDecl {
+                    name: name.clone(),
+                    namespace: namespace_context.to_vec(),
+                    template_params: template_params.clone(),
+                    constraint_expr: constraint_expr.clone(),
+                });
             }
             ClangNodeKind::ClassTemplatePartialSpecDecl {
                 name,
@@ -884,6 +900,7 @@ impl MirConverter {
         template_params: &[String],
         is_class: bool,
         parameter_pack_indices: &[usize],
+        requires_clause: &Option<String>,
         namespace_context: &[String],
     ) -> Result<CppClassTemplate> {
         let mut fields = Vec::new();
@@ -944,6 +961,7 @@ impl MirConverter {
                     params,
                     is_definition,
                     parameter_pack_indices: method_pack_indices,
+                    requires_clause: _,  // Member templates don't track requires clause yet
                 } => {
                     // Member template inside a class template
                     member_templates.push(CppMemberTemplate {
@@ -1009,6 +1027,7 @@ impl MirConverter {
             methods,
             member_templates,
             parameter_pack_indices: parameter_pack_indices.to_vec(),
+            requires_clause: requires_clause.clone(),
         })
     }
 
@@ -1081,6 +1100,7 @@ impl MirConverter {
                     params,
                     is_definition,
                     parameter_pack_indices: method_pack_indices,
+                    requires_clause: _,  // Member templates don't track requires clause yet
                 } => {
                     member_templates.push(CppMemberTemplate {
                         name: method_name.clone(),
@@ -1217,6 +1237,7 @@ impl MirConverter {
                     params,
                     is_definition,
                     parameter_pack_indices,
+                    requires_clause: _,  // Member templates don't track requires clause yet
                 } => {
                     // Member template inside a class
                     member_templates.push(CppMemberTemplate {

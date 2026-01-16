@@ -2,7 +2,7 @@
 
 use crate::ast::{
     AccessSpecifier, BinaryOp, CastKind, ClangAst, ClangNode, ClangNodeKind, ConstructorKind,
-    SourceLocation, UnaryOp,
+    Requirement, SourceLocation, UnaryOp,
 };
 use crate::types::CppType;
 use miette::{miette, Result};
@@ -37,7 +37,7 @@ impl ClangParser {
         let args: Vec<CString> = vec![
             CString::new("-x").unwrap(),
             CString::new("c++").unwrap(),
-            CString::new("-std=c++17").unwrap(),
+            CString::new("-std=c++20").unwrap(),
         ];
         let c_args: Vec<*const i8> = args.iter().map(|s| s.as_ptr()).collect();
 
@@ -102,7 +102,7 @@ impl ClangParser {
         let args: Vec<CString> = vec![
             CString::new("-x").unwrap(),
             CString::new("c++").unwrap(),
-            CString::new("-std=c++17").unwrap(),
+            CString::new("-std=c++20").unwrap(),
         ];
         let c_args: Vec<*const i8> = args.iter().map(|s| s.as_ptr()).collect();
 
@@ -259,6 +259,9 @@ impl ClangParser {
 
                     let is_definition = clang_sys::clang_isCursorDefinition(cursor) != 0;
 
+                    // Extract requires clause if present (C++20)
+                    let requires_clause = self.get_requires_clause(cursor);
+
                     ClangNodeKind::FunctionTemplateDecl {
                         name,
                         template_params,
@@ -266,6 +269,7 @@ impl ClangParser {
                         params,
                         is_definition,
                         parameter_pack_indices,
+                        requires_clause,
                     }
                 }
 
@@ -281,11 +285,15 @@ impl ClangParser {
                     let type_name = cx_string_to_string(type_spelling);
                     let is_class = type_name.starts_with("class ") || !type_name.starts_with("struct ");
 
+                    // Extract requires clause if present (C++20)
+                    let requires_clause = self.get_requires_clause(cursor);
+
                     ClangNodeKind::ClassTemplateDecl {
                         name,
                         template_params,
                         is_class,
                         parameter_pack_indices,
+                        requires_clause,
                     }
                 }
 
@@ -592,6 +600,41 @@ impl ClangParser {
                 clang_sys::CXCursor_ConditionalOperator => {
                     let ty = self.convert_type(clang_sys::clang_getCursorType(cursor));
                     ClangNodeKind::ConditionalOperator { ty }
+                }
+
+                // C++20 Concepts
+                // CXCursor_ConceptDecl = 604
+                604 => {
+                    let name = cursor_spelling(cursor);
+                    let template_params = self.get_template_type_params(cursor);
+                    let constraint_expr = self.get_concept_constraint_expr(cursor);
+
+                    ClangNodeKind::ConceptDecl {
+                        name,
+                        template_params,
+                        constraint_expr,
+                    }
+                }
+
+                // CXCursor_RequiresExpr = 279
+                279 => {
+                    let params = self.get_requires_expr_params(cursor);
+                    let requirements = self.get_requirements(cursor);
+
+                    ClangNodeKind::RequiresExpr {
+                        params,
+                        requirements,
+                    }
+                }
+
+                // CXCursor_ConceptSpecializationExpr = 602
+                602 => {
+                    let (concept_name, template_args) = self.get_concept_specialization_info(cursor);
+
+                    ClangNodeKind::ConceptSpecializationExpr {
+                        concept_name,
+                        template_args,
+                    }
                 }
 
                 _ => {
@@ -1389,6 +1432,257 @@ impl ClangParser {
             clang_sys::clang_visitChildren(cursor, friend_visitor, info_ptr as clang_sys::CXClientData);
 
             (info.friend_class, info.friend_function)
+        }
+    }
+
+    // ========== C++20 Concepts Support ==========
+
+    /// Get the requires clause from a template cursor, if present.
+    /// Returns the constraint expression as a string, or None if no requires clause.
+    fn get_requires_clause(&self, cursor: clang_sys::CXCursor) -> Option<String> {
+        unsafe {
+            struct RequiresInfo {
+                constraint: Option<String>,
+                tu: clang_sys::CXTranslationUnit,
+            }
+            let tu = clang_sys::clang_Cursor_getTranslationUnit(cursor);
+            let mut info = RequiresInfo {
+                constraint: None,
+                tu,
+            };
+            let info_ptr: *mut RequiresInfo = &mut info;
+
+            extern "C" fn requires_visitor(
+                child: clang_sys::CXCursor,
+                _parent: clang_sys::CXCursor,
+                data: clang_sys::CXClientData,
+            ) -> clang_sys::CXChildVisitResult {
+                unsafe {
+                    let info = &mut *(data as *mut RequiresInfo);
+                    let kind = clang_sys::clang_getCursorKind(child);
+
+                    // CXCursor_RequiresExpr = 279, CXCursor_ConceptSpecializationExpr = 602
+                    // These are the only cursors that represent requires clauses
+                    if kind == 279 || kind == 602 {
+                        // Found a constraint - extract the text from the source range
+                        let extent = clang_sys::clang_getCursorExtent(child);
+                        let mut tokens: *mut clang_sys::CXToken = ptr::null_mut();
+                        let mut num_tokens: u32 = 0;
+
+                        clang_sys::clang_tokenize(info.tu, extent, &mut tokens, &mut num_tokens);
+
+                        let mut constraint_parts = Vec::new();
+                        for i in 0..num_tokens {
+                            let token = *tokens.add(i as usize);
+                            let spelling = clang_sys::clang_getTokenSpelling(info.tu, token);
+                            constraint_parts.push(cx_string_to_string(spelling));
+                        }
+
+                        if !tokens.is_null() {
+                            clang_sys::clang_disposeTokens(info.tu, tokens, num_tokens);
+                        }
+
+                        if !constraint_parts.is_empty() {
+                            info.constraint = Some(constraint_parts.join(" "));
+                            return clang_sys::CXChildVisit_Break;
+                        }
+                    }
+
+                    clang_sys::CXChildVisit_Continue
+                }
+            }
+
+            clang_sys::clang_visitChildren(cursor, requires_visitor, info_ptr as clang_sys::CXClientData);
+
+            info.constraint
+        }
+    }
+
+    /// Get the constraint expression from a concept declaration.
+    fn get_concept_constraint_expr(&self, cursor: clang_sys::CXCursor) -> String {
+        unsafe {
+            // Tokenize the entire cursor extent to get the constraint expression
+            let tu = clang_sys::clang_Cursor_getTranslationUnit(cursor);
+            let extent = clang_sys::clang_getCursorExtent(cursor);
+            let mut tokens: *mut clang_sys::CXToken = ptr::null_mut();
+            let mut num_tokens: u32 = 0;
+
+            clang_sys::clang_tokenize(tu, extent, &mut tokens, &mut num_tokens);
+
+            let mut all_tokens = Vec::new();
+            for i in 0..num_tokens {
+                let token = *tokens.add(i as usize);
+                let spelling = clang_sys::clang_getTokenSpelling(tu, token);
+                all_tokens.push(cx_string_to_string(spelling));
+            }
+
+            if !tokens.is_null() {
+                clang_sys::clang_disposeTokens(tu, tokens, num_tokens);
+            }
+
+            // The constraint is everything after "=" in the concept definition
+            // e.g., "template < typename T > concept Integral = __is_integral ( T )"
+            // We want: "__is_integral ( T )"
+            if let Some(eq_pos) = all_tokens.iter().position(|t| t == "=") {
+                all_tokens[eq_pos + 1..].join(" ")
+            } else {
+                String::new()
+            }
+        }
+    }
+
+    /// Get parameters from a requires expression.
+    fn get_requires_expr_params(&self, cursor: clang_sys::CXCursor) -> Vec<(String, CppType)> {
+        unsafe {
+            struct ParamData<'a> {
+                params: Vec<(String, CppType)>,
+                parser: &'a ClangParser,
+            }
+            let mut data = ParamData {
+                params: Vec::new(),
+                parser: self,
+            };
+            let data_ptr: *mut ParamData = &mut data;
+
+            extern "C" fn param_visitor(
+                child: clang_sys::CXCursor,
+                _parent: clang_sys::CXCursor,
+                client_data: clang_sys::CXClientData,
+            ) -> clang_sys::CXChildVisitResult {
+                unsafe {
+                    let data = &mut *(client_data as *mut ParamData);
+                    let kind = clang_sys::clang_getCursorKind(child);
+
+                    // CXCursor_ParmDecl = 10
+                    if kind == 10 {
+                        let name = cursor_spelling(child);
+                        let ty = clang_sys::clang_getCursorType(child);
+                        let cpp_type = data.parser.convert_type(ty);
+                        data.params.push((name, cpp_type));
+                    }
+
+                    // Only visit direct children for parameters
+                    clang_sys::CXChildVisit_Continue
+                }
+            }
+
+            clang_sys::clang_visitChildren(cursor, param_visitor, data_ptr as clang_sys::CXClientData);
+
+            data.params
+        }
+    }
+
+    /// Get requirements from a requires expression.
+    fn get_requirements(&self, cursor: clang_sys::CXCursor) -> Vec<Requirement> {
+        unsafe {
+            struct ReqData<'a> {
+                requirements: Vec<Requirement>,
+                tu: clang_sys::CXTranslationUnit,
+                #[allow(dead_code)]
+                parser: &'a ClangParser,
+            }
+            let tu = clang_sys::clang_Cursor_getTranslationUnit(cursor);
+            let mut data = ReqData {
+                requirements: Vec::new(),
+                tu,
+                parser: self,
+            };
+            let data_ptr: *mut ReqData = &mut data;
+
+            extern "C" fn req_visitor(
+                child: clang_sys::CXCursor,
+                _parent: clang_sys::CXCursor,
+                client_data: clang_sys::CXClientData,
+            ) -> clang_sys::CXChildVisitResult {
+                unsafe {
+                    let data = &mut *(client_data as *mut ReqData);
+                    let kind = clang_sys::clang_getCursorKind(child);
+
+                    // Skip parameter declarations
+                    if kind == 10 {
+                        return clang_sys::CXChildVisit_Continue;
+                    }
+
+                    // Extract the text of each requirement from tokens
+                    let extent = clang_sys::clang_getCursorExtent(child);
+                    let mut tokens: *mut clang_sys::CXToken = ptr::null_mut();
+                    let mut num_tokens: u32 = 0;
+
+                    clang_sys::clang_tokenize(data.tu, extent, &mut tokens, &mut num_tokens);
+
+                    let mut token_strs = Vec::new();
+                    for i in 0..num_tokens {
+                        let token = *tokens.add(i as usize);
+                        let spelling = clang_sys::clang_getTokenSpelling(data.tu, token);
+                        token_strs.push(cx_string_to_string(spelling));
+                    }
+
+                    if !tokens.is_null() {
+                        clang_sys::clang_disposeTokens(data.tu, tokens, num_tokens);
+                    }
+
+                    if !token_strs.is_empty() {
+                        let expr = token_strs.join(" ");
+
+                        // Detect requirement type based on tokens
+                        if token_strs.first().map(|s| s.as_str()) == Some("typename") {
+                            // Type requirement
+                            data.requirements.push(Requirement::Type {
+                                type_name: token_strs[1..].join(" "),
+                            });
+                        } else if token_strs.first().map(|s| s.as_str()) == Some("{") {
+                            // Compound requirement
+                            let is_noexcept = token_strs.contains(&"noexcept".to_string());
+                            let return_constraint = if let Some(arrow_pos) = token_strs.iter().position(|t| t == "->") {
+                                Some(token_strs[arrow_pos + 1..].join(" "))
+                            } else {
+                                None
+                            };
+                            data.requirements.push(Requirement::Compound {
+                                expr,
+                                is_noexcept,
+                                return_constraint,
+                            });
+                        } else if token_strs.first().map(|s| s.as_str()) == Some("requires") {
+                            // Nested requirement
+                            data.requirements.push(Requirement::Nested {
+                                constraint: token_strs[1..].join(" "),
+                            });
+                        } else {
+                            // Simple requirement
+                            data.requirements.push(Requirement::Simple { expr });
+                        }
+                    }
+
+                    clang_sys::CXChildVisit_Continue
+                }
+            }
+
+            clang_sys::clang_visitChildren(cursor, req_visitor, data_ptr as clang_sys::CXClientData);
+
+            data.requirements
+        }
+    }
+
+    /// Get concept specialization information (concept name and template arguments).
+    fn get_concept_specialization_info(&self, cursor: clang_sys::CXCursor) -> (String, Vec<CppType>) {
+        unsafe {
+            // Get the concept name from the cursor spelling
+            let concept_name = cursor_spelling(cursor);
+
+            // Get template arguments from the type
+            let cursor_type = clang_sys::clang_getCursorType(cursor);
+            let num_args = clang_sys::clang_Type_getNumTemplateArguments(cursor_type);
+
+            let mut template_args = Vec::new();
+            if num_args > 0 {
+                for i in 0..num_args {
+                    let arg_type = clang_sys::clang_Type_getTemplateArgumentAsType(cursor_type, i as u32);
+                    template_args.push(self.convert_type(arg_type));
+                }
+            }
+
+            (concept_name, template_args)
         }
     }
 }

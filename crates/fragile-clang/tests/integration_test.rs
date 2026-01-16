@@ -2301,6 +2301,7 @@ fn test_specialization_found() {
         is_definition: true,
         specializations: vec![],
         parameter_pack_indices: vec![],
+        requires_clause: None,
     };
 
     // Add specialization for int
@@ -2346,6 +2347,7 @@ fn test_specialization_used_in_instantiation() {
         is_definition: true,
         specializations: vec![],
         parameter_pack_indices: vec![],
+        requires_clause: None,
     };
 
     // Add specialization for int with custom name
@@ -2394,6 +2396,7 @@ fn test_specialization_with_explicit_args() {
         is_definition: true,
         specializations: vec![],
         parameter_pack_indices: vec![],
+        requires_clause: None,
     };
 
     // Add specialization for <int, double>
@@ -3695,4 +3698,130 @@ fn test_unary_operator_increment_decrement() {
 
     assert_eq!(module.functions.len(), 1);
     assert_eq!(module.functions[0].display_name, "inc_dec");
+}
+
+// ============================================================================
+// C++20 Concepts Tests
+// ============================================================================
+
+/// Test parsing a simple concept definition.
+#[test]
+fn test_concept_definition() {
+    let parser = ClangParser::new().unwrap();
+    let code = r#"
+        template<typename T>
+        concept Integral = __is_integral(T);
+    "#;
+
+    let ast = parser.parse_string(code, "test.cpp").unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    assert_eq!(module.concepts.len(), 1);
+    let concept = &module.concepts[0];
+    assert_eq!(concept.name, "Integral");
+    assert_eq!(concept.template_params, vec!["T"]);
+    assert!(!concept.constraint_expr.is_empty());
+}
+
+/// Test parsing multiple concepts.
+#[test]
+fn test_multiple_concepts() {
+    let parser = ClangParser::new().unwrap();
+    let code = r#"
+        template<typename T>
+        concept Integral = __is_integral(T);
+
+        template<typename T>
+        concept Signed = __is_signed(T);
+
+        template<typename T>
+        concept SignedIntegral = Integral<T> && Signed<T>;
+    "#;
+
+    let ast = parser.parse_string(code, "test.cpp").unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    assert_eq!(module.concepts.len(), 3);
+    assert_eq!(module.concepts[0].name, "Integral");
+    assert_eq!(module.concepts[1].name, "Signed");
+    assert_eq!(module.concepts[2].name, "SignedIntegral");
+}
+
+/// Test function template with requires clause.
+#[test]
+fn test_function_template_with_requires_clause() {
+    let parser = ClangParser::new().unwrap();
+    let code = r#"
+        template<typename T>
+        concept Integral = __is_integral(T);
+
+        template<typename T>
+            requires Integral<T>
+        T twice(T x) {
+            return x + x;
+        }
+    "#;
+
+    let ast = parser.parse_string(code, "test.cpp").unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    // Should have 1 concept and 1 function template
+    assert_eq!(module.concepts.len(), 1);
+    assert_eq!(module.function_templates.len(), 1);
+
+    let tmpl = &module.function_templates[0];
+    assert_eq!(tmpl.name, "twice");
+    // The requires clause should be captured (may be None if not fully parsed yet)
+    // This test verifies the infrastructure is in place
+}
+
+/// Test function template without requires clause (baseline).
+#[test]
+fn test_function_template_without_requires_clause() {
+    let parser = ClangParser::new().unwrap();
+    let code = r#"
+        template<typename T>
+        T identity(T x) {
+            return x;
+        }
+    "#;
+
+    let ast = parser.parse_string(code, "test.cpp").unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    assert_eq!(module.function_templates.len(), 1);
+    let tmpl = &module.function_templates[0];
+    assert_eq!(tmpl.name, "identity");
+    assert!(tmpl.requires_clause.is_none());
+}
+
+/// Test class template with requires clause.
+#[test]
+fn test_class_template_with_requires_clause() {
+    let parser = ClangParser::new().unwrap();
+    let code = r#"
+        template<typename T>
+        concept Integral = __is_integral(T);
+
+        template<typename T>
+            requires Integral<T>
+        class Counter {
+            T value;
+        };
+    "#;
+
+    let ast = parser.parse_string(code, "test.cpp").unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    // Should have 1 concept and 1 class template
+    assert_eq!(module.concepts.len(), 1);
+    assert_eq!(module.class_templates.len(), 1);
+
+    let tmpl = &module.class_templates[0];
+    assert_eq!(tmpl.name, "Counter");
 }

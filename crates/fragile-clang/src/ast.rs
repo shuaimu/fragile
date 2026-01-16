@@ -83,6 +83,8 @@ pub enum ClangNodeKind {
         is_definition: bool,
         /// Indices of template parameters that are parameter packs (variadic)
         parameter_pack_indices: Vec<usize>,
+        /// Optional requires clause constraint (C++20)
+        requires_clause: Option<String>,
     },
     /// Class template declaration (e.g., template<typename T> class Box { ... })
     ClassTemplateDecl {
@@ -93,6 +95,8 @@ pub enum ClangNodeKind {
         is_class: bool,
         /// Indices of parameter packs
         parameter_pack_indices: Vec<usize>,
+        /// Optional requires clause constraint (C++20)
+        requires_clause: Option<String>,
     },
     /// Class template partial specialization (e.g., template<typename T> class Pair<T, T> { ... })
     ClassTemplatePartialSpecDecl {
@@ -298,6 +302,34 @@ pub enum ClangNodeKind {
         type_args: Vec<CppType>,
     },
 
+    // C++20 Concepts
+
+    /// Concept definition (e.g., template<typename T> concept Integral = ...)
+    ConceptDecl {
+        /// Name of the concept
+        name: String,
+        /// Template type parameters (e.g., ["T"])
+        template_params: Vec<String>,
+        /// The constraint expression as text (for display/debugging)
+        constraint_expr: String,
+    },
+
+    /// Requires expression (e.g., requires(T a) { a + a; })
+    RequiresExpr {
+        /// Parameters for the requires expression (may be empty)
+        params: Vec<(String, CppType)>,
+        /// Requirements inside the requires expression
+        requirements: Vec<Requirement>,
+    },
+
+    /// Concept specialization expression (e.g., Integral<T> in requires clause)
+    ConceptSpecializationExpr {
+        /// Name of the concept being referenced
+        concept_name: String,
+        /// Template arguments to the concept
+        template_args: Vec<CppType>,
+    },
+
     /// Unknown or unhandled node kind
     Unknown(String),
 }
@@ -331,6 +363,36 @@ pub enum TypeTraitKind {
     IsTriviallyDestructible,
     /// Unknown/other type trait
     Unknown,
+}
+
+/// A single requirement inside a requires expression.
+#[derive(Debug, Clone)]
+pub enum Requirement {
+    /// Simple requirement: expression must be valid (e.g., `a + b;`)
+    Simple {
+        /// The expression text
+        expr: String,
+    },
+    /// Type requirement: type must exist (e.g., `typename T::value_type;`)
+    Type {
+        /// The type name/expression
+        type_name: String,
+    },
+    /// Compound requirement: expr with optional noexcept and return type constraint
+    /// (e.g., `{ a + b } -> std::same_as<T>;` or `{ a + b } noexcept;`)
+    Compound {
+        /// The expression text
+        expr: String,
+        /// Whether noexcept is required
+        is_noexcept: bool,
+        /// Optional return type constraint (e.g., "std::same_as<T>")
+        return_constraint: Option<String>,
+    },
+    /// Nested requirement: requires clause inside requires (e.g., `requires Concept<T>;`)
+    Nested {
+        /// The nested constraint expression
+        constraint: String,
+    },
 }
 
 /// Binary operators.
