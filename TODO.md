@@ -59,10 +59,10 @@ See [PLAN_CPP20_MAKO.md](PLAN_CPP20_MAKO.md) for detailed plan.
   - [x] Subscript [] [26:01:16] (included in above)
   - [x] Call () [26:01:16] (included in above)
   - [x] Pointer (*, ->) [26:01:16] (included in above)
-- [ ] **A.5 References & Move Semantics**
+- [-] **A.5 References & Move Semantics**
   - [x] Lvalue references (T&)
-  - [ ] Const references (const T&)
-  - [ ] Rvalue references (T&&)
+  - [x] Const references (const T&) [26:01:16] ([docs/dev/plan_references.md](docs/dev/plan_references.md))
+  - [x] Rvalue references (T&&) [26:01:16] (included in above)
   - [ ] std::move
   - [ ] std::forward
 
@@ -214,7 +214,7 @@ Migration: After C++20 support is complete, deprecate these.
 ## 5. Testing & Milestones
 
 ### 5.1 Unit Tests
-- [x] fragile-clang: 51 tests passing (7 unit + 44 integration)
+- [x] fragile-clang: 53 tests passing (7 unit + 46 integration)
 - [x] fragile-rustc-driver: 6 tests passing
 - [x] fragile-runtime: Compiles
 

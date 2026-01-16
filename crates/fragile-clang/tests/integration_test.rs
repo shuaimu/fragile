@@ -1413,3 +1413,110 @@ fn test_operator_overloading_pointer() {
     assert!(s.methods.iter().any(|m| m.name == "operator*"), "operator* not found");
     assert!(s.methods.iter().any(|m| m.name == "operator->"), "operator-> not found");
 }
+
+/// Test const reference parameters.
+#[test]
+fn test_const_reference() {
+    use fragile_clang::CppType;
+
+    let parser = ClangParser::new().expect("Failed to create parser");
+
+    let source = r#"
+        void take_const_ref(const int& value);
+        void take_mutable_ref(int& value);
+        const int& return_const_ref();
+        int& return_mutable_ref();
+    "#;
+
+    let ast = parser.parse_string(source, "const_ref.cpp").expect("Failed to parse");
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    // Find the functions
+    let take_const_ref = module.externs.iter().find(|f| f.display_name == "take_const_ref");
+    assert!(take_const_ref.is_some(), "take_const_ref not found");
+    let f = take_const_ref.unwrap();
+    assert_eq!(f.params.len(), 1);
+    // Check that the parameter is a const lvalue reference
+    if let CppType::Reference { is_const, is_rvalue, .. } = &f.params[0].1 {
+        assert!(*is_const, "Parameter should be const reference");
+        assert!(!*is_rvalue, "Parameter should be lvalue reference");
+    } else {
+        panic!("Expected Reference type for const int&");
+    }
+
+    let take_mutable_ref = module.externs.iter().find(|f| f.display_name == "take_mutable_ref");
+    assert!(take_mutable_ref.is_some(), "take_mutable_ref not found");
+    let f = take_mutable_ref.unwrap();
+    assert_eq!(f.params.len(), 1);
+    // Check that the parameter is a mutable lvalue reference
+    if let CppType::Reference { is_const, is_rvalue, .. } = &f.params[0].1 {
+        assert!(!*is_const, "Parameter should be mutable reference");
+        assert!(!*is_rvalue, "Parameter should be lvalue reference");
+    } else {
+        panic!("Expected Reference type for int&");
+    }
+
+    let return_const_ref = module.externs.iter().find(|f| f.display_name == "return_const_ref");
+    assert!(return_const_ref.is_some(), "return_const_ref not found");
+    let f = return_const_ref.unwrap();
+    // Check that return type is a const lvalue reference
+    if let CppType::Reference { is_const, is_rvalue, .. } = &f.return_type {
+        assert!(*is_const, "Return type should be const reference");
+        assert!(!*is_rvalue, "Return type should be lvalue reference");
+    } else {
+        panic!("Expected Reference type for const int&");
+    }
+
+    let return_mutable_ref = module.externs.iter().find(|f| f.display_name == "return_mutable_ref");
+    assert!(return_mutable_ref.is_some(), "return_mutable_ref not found");
+    let f = return_mutable_ref.unwrap();
+    // Check that return type is a mutable lvalue reference
+    if let CppType::Reference { is_const, is_rvalue, .. } = &f.return_type {
+        assert!(!*is_const, "Return type should be mutable reference");
+        assert!(!*is_rvalue, "Return type should be lvalue reference");
+    } else {
+        panic!("Expected Reference type for int&");
+    }
+}
+
+/// Test rvalue references (move semantics).
+#[test]
+fn test_rvalue_reference() {
+    use fragile_clang::CppType;
+
+    let parser = ClangParser::new().expect("Failed to create parser");
+
+    let source = r#"
+        void take_rvalue(int&& value);
+        int&& return_rvalue();
+    "#;
+
+    let ast = parser.parse_string(source, "rvalue_ref.cpp").expect("Failed to parse");
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    // Find the functions
+    let take_rvalue = module.externs.iter().find(|f| f.display_name == "take_rvalue");
+    assert!(take_rvalue.is_some(), "take_rvalue not found");
+    let f = take_rvalue.unwrap();
+    assert_eq!(f.params.len(), 1);
+    // Check that the parameter is an rvalue reference
+    if let CppType::Reference { is_const, is_rvalue, .. } = &f.params[0].1 {
+        assert!(!*is_const, "Parameter should not be const");
+        assert!(*is_rvalue, "Parameter should be rvalue reference");
+    } else {
+        panic!("Expected Reference type for int&&");
+    }
+
+    let return_rvalue = module.externs.iter().find(|f| f.display_name == "return_rvalue");
+    assert!(return_rvalue.is_some(), "return_rvalue not found");
+    let f = return_rvalue.unwrap();
+    // Check that return type is an rvalue reference
+    if let CppType::Reference { is_const, is_rvalue, .. } = &f.return_type {
+        assert!(!*is_const, "Return type should not be const");
+        assert!(*is_rvalue, "Return type should be rvalue reference");
+    } else {
+        panic!("Expected Reference type for int&&");
+    }
+}

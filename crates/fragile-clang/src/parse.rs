@@ -515,9 +515,11 @@ impl ClangParser {
                 clang_sys::CXType_LValueReference | clang_sys::CXType_RValueReference => {
                     let referent = clang_sys::clang_getPointeeType(ty);
                     let is_const = clang_sys::clang_isConstQualifiedType(referent) != 0;
+                    let is_rvalue = kind == clang_sys::CXType_RValueReference;
                     CppType::Reference {
                         referent: Box::new(self.convert_type(referent)),
                         is_const,
+                        is_rvalue,
                     }
                 }
 

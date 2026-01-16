@@ -26,10 +26,12 @@ pub enum CppType {
         pointee: Box<CppType>,
         is_const: bool,
     },
-    /// Reference type: T&
+    /// Reference type: T& (lvalue) or T&& (rvalue)
     Reference {
         referent: Box<CppType>,
         is_const: bool,
+        /// Whether this is an rvalue reference (T&&) vs lvalue reference (T&)
+        is_rvalue: bool,
     },
     /// Array type: T[N]
     Array {
@@ -73,19 +75,30 @@ impl CppType {
         }
     }
 
-    /// Create a reference to this type.
+    /// Create an lvalue reference to this type.
     pub fn ref_(self) -> Self {
         CppType::Reference {
             referent: Box::new(self),
             is_const: false,
+            is_rvalue: false,
         }
     }
 
-    /// Create a const reference to this type.
+    /// Create a const lvalue reference to this type.
     pub fn const_ref(self) -> Self {
         CppType::Reference {
             referent: Box::new(self),
             is_const: true,
+            is_rvalue: false,
+        }
+    }
+
+    /// Create an rvalue reference to this type.
+    pub fn rvalue_ref(self) -> Self {
+        CppType::Reference {
+            referent: Box::new(self),
+            is_const: false,
+            is_rvalue: true,
         }
     }
 
@@ -110,8 +123,9 @@ impl CppType {
                 let ptr_type = if *is_const { "*const" } else { "*mut" };
                 format!("{} {}", ptr_type, pointee.to_rust_type_str())
             }
-            CppType::Reference { referent, is_const } => {
-                // References are lowered to raw pointers for FFI
+            CppType::Reference { referent, is_const, is_rvalue: _ } => {
+                // Both lvalue and rvalue references are lowered to raw pointers for FFI
+                // The is_rvalue distinction is semantic for C++ but not for FFI
                 let ptr_type = if *is_const { "*const" } else { "*mut" };
                 format!("{} {}", ptr_type, referent.to_rust_type_str())
             }
