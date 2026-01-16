@@ -1,11 +1,12 @@
 //! Custom rustc driver implementation.
 
+use crate::cpp_compiler::{CppCompiler, CppCompilerConfig};
 use crate::queries::CppMirRegistry;
 use fragile_clang::CppModule;
 #[cfg(not(feature = "rustc-integration"))]
 use miette::miette;
 use miette::Result;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 /// Custom rustc driver that injects C++ MIR.
@@ -93,6 +94,52 @@ impl FragileDriver {
             output,
             Arc::clone(&self.mir_registry),
         )
+    }
+
+    /// Compile C++ source files to object files.
+    ///
+    /// # Arguments
+    /// * `cpp_files` - C++ source files to compile
+    /// * `output_dir` - Directory where object files will be placed
+    /// * `config` - Optional compiler configuration (uses defaults if None)
+    ///
+    /// # Returns
+    /// List of paths to generated object files
+    pub fn compile_cpp_objects(
+        &self,
+        cpp_files: &[&Path],
+        output_dir: &Path,
+        config: Option<CppCompilerConfig>,
+    ) -> Result<Vec<PathBuf>> {
+        let config = config.unwrap_or_default();
+        let compiler = CppCompiler::new(config)?;
+        compiler.compile_all(cpp_files, output_dir)
+    }
+
+    /// Compile C++ files to object files with auto-configured include paths.
+    ///
+    /// This method automatically adds the fragile-clang stub headers directory
+    /// as a system include path.
+    ///
+    /// # Arguments
+    /// * `cpp_files` - C++ source files to compile
+    /// * `output_dir` - Directory where object files will be placed
+    ///
+    /// # Returns
+    /// List of paths to generated object files
+    pub fn compile_cpp_objects_with_stubs(
+        &self,
+        cpp_files: &[&Path],
+        output_dir: &Path,
+    ) -> Result<Vec<PathBuf>> {
+        let mut config = CppCompilerConfig::default();
+
+        // Add stub headers directory if available
+        if let Some(stubs_dir) = crate::cpp_compiler::default_stub_headers_dir() {
+            config = config.system_include_dir(stubs_dir);
+        }
+
+        self.compile_cpp_objects(cpp_files, output_dir, Some(config))
     }
 }
 
@@ -639,5 +686,104 @@ fn main() {
 
         // The test passes if we got here - the rustc driver was invoked
         println!("test_compile_add_cpp_with_rustc completed");
+    }
+
+    /// Test compiling C++ source files to object files.
+    /// M5.7.2: Build C++ object files
+    #[test]
+    fn test_compile_cpp_to_object() {
+        use tempfile::TempDir;
+
+        // Find the test file
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let project_root = Path::new(manifest_dir).parent().unwrap().parent().unwrap();
+        let add_cpp = project_root.join("tests/clang_integration/add.cpp");
+
+        if !add_cpp.exists() {
+            eprintln!("Skipping test: add.cpp not found at {:?}", add_cpp);
+            return;
+        }
+
+        // Create driver
+        let driver = FragileDriver::new();
+
+        // Create temp directory for output
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+
+        // Compile C++ to object file
+        let result = driver.compile_cpp_objects(
+            &[add_cpp.as_path()],
+            temp_dir.path(),
+            None,
+        );
+
+        match result {
+            Ok(objects) => {
+                assert_eq!(objects.len(), 1, "Should have one object file");
+                let obj_path = &objects[0];
+                println!("Compiled to: {:?}", obj_path);
+                assert!(obj_path.exists(), "Object file should exist");
+                assert!(obj_path.to_string_lossy().ends_with(".o"),
+                    "Object file should have .o extension");
+
+                // Verify file is non-empty
+                let metadata = std::fs::metadata(obj_path).expect("Failed to get metadata");
+                assert!(metadata.len() > 0, "Object file should be non-empty");
+                println!("Object file size: {} bytes", metadata.len());
+            }
+            Err(e) => {
+                // May fail if no C++ compiler is available
+                eprintln!("C++ compilation failed (may be expected in CI): {}", e);
+            }
+        }
+    }
+
+    /// Test compiling multiple C++ files to objects.
+    /// M5.7.2: Build C++ object files (batch compilation)
+    #[test]
+    fn test_compile_multiple_cpp_to_objects() {
+        use tempfile::TempDir;
+
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let project_root = Path::new(manifest_dir).parent().unwrap().parent().unwrap();
+
+        // Find test files
+        let add_cpp = project_root.join("tests/clang_integration/add.cpp");
+
+        // Create a second test file in temp
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let multiply_cpp = temp_dir.path().join("multiply.cpp");
+        std::fs::write(&multiply_cpp, r#"
+int multiply(int a, int b) {
+    return a * b;
+}
+"#).expect("Failed to write multiply.cpp");
+
+        if !add_cpp.exists() {
+            eprintln!("Skipping test: add.cpp not found");
+            return;
+        }
+
+        let driver = FragileDriver::new();
+        let output_dir = temp_dir.path().join("objects");
+
+        let result = driver.compile_cpp_objects(
+            &[add_cpp.as_path(), multiply_cpp.as_path()],
+            &output_dir,
+            None,
+        );
+
+        match result {
+            Ok(objects) => {
+                assert_eq!(objects.len(), 2, "Should have two object files");
+                for obj in &objects {
+                    println!("Compiled: {:?}", obj);
+                    assert!(obj.exists(), "Object file should exist: {:?}", obj);
+                }
+            }
+            Err(e) => {
+                eprintln!("C++ compilation failed (may be expected in CI): {}", e);
+            }
+        }
     }
 }

@@ -66,6 +66,7 @@
 //! driver.run(&["main.rs", "-o", "output"])?;
 //! ```
 
+mod cpp_compiler;
 mod driver;
 #[cfg(feature = "rustc-integration")]
 mod mir_convert;
@@ -74,6 +75,7 @@ mod queries;
 mod rustc_integration;
 mod stubs;
 
+pub use cpp_compiler::{CppCompiler, CppCompilerConfig, find_compiler};
 pub use driver::FragileDriver;
 pub use queries::CppMirRegistry;
 pub use stubs::generate_rust_stubs;
