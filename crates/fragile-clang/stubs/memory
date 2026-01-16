@@ -5,6 +5,7 @@
 #include "cstdint"
 #include "utility"
 #include "tuple"
+#include "new"  // For placement new operator
 
 namespace std {
 

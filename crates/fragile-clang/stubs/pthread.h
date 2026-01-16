@@ -77,6 +77,10 @@ int pthread_attr_getstacksize(const pthread_attr_t* attr, size_t* stacksize);
 int pthread_setaffinity_np(pthread_t thread, size_t cpusetsize, const cpu_set_t* cpuset);
 int pthread_getaffinity_np(pthread_t thread, size_t cpusetsize, cpu_set_t* cpuset);
 
+// Thread naming (Linux-specific, glibc extension)
+int pthread_setname_np(pthread_t thread, const char* name);
+int pthread_getname_np(pthread_t thread, char* name, size_t len);
+
 // Mutex functions
 int pthread_mutex_init(pthread_mutex_t* mutex, const pthread_mutexattr_t* attr);
 int pthread_mutex_destroy(pthread_mutex_t* mutex);

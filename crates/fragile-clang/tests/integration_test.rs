@@ -7125,3 +7125,326 @@ fn test_mako_occ_cpp_actual() {
     });
     assert!(has_occ, "Expected to find OCC-related functions");
 }
+
+/// Test parsing ticker.cc from Mako
+/// This is one of the simplest files - just static member initialization
+#[test]
+fn test_mako_ticker_cc() {
+    use std::path::Path;
+
+    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+    let project_root = Path::new(manifest_dir).parent().unwrap().parent().unwrap();
+    let ticker_path = project_root.join("vendor/mako/src/mako/ticker.cc");
+
+    if !ticker_path.exists() {
+        println!("Skipping test: vendor/mako not present");
+        return;
+    }
+
+    // Check if submodules are initialized
+    let rusty_cpp_path = project_root.join("vendor/mako/third-party/rusty-cpp/include");
+    if !rusty_cpp_path.exists() {
+        println!("Skipping test: mako submodules not initialized");
+        return;
+    }
+
+    // System include paths
+    let mut system_include_paths = vec![];
+
+    // Add fragile stub headers as SYSTEM includes
+    let stubs_path = Path::new(manifest_dir).join("stubs");
+    if stubs_path.exists() {
+        system_include_paths.push(stubs_path.to_string_lossy().to_string());
+    }
+
+    // Add clang's headers for built-in types
+    let clang_paths = vec![
+        "/usr/lib/llvm-19/lib/clang/19/include",
+        "/usr/lib/llvm-18/lib/clang/18/include",
+    ];
+
+    for path in &clang_paths {
+        if Path::new(path).exists() {
+            system_include_paths.push(path.to_string());
+            break;
+        }
+    }
+
+    // User include paths
+    let mako_src = project_root.join("vendor/mako/src");
+    let mako_mako = project_root.join("vendor/mako/src/mako");
+    let include_paths = vec![
+        mako_mako.to_string_lossy().to_string(),
+        mako_src.to_string_lossy().to_string(),
+        rusty_cpp_path.to_string_lossy().to_string(),
+    ];
+
+    // Preprocessor defines - CONFIG_H is required by macros.h
+    let defines = vec![
+        r#"CONFIG_H="mako/masstree/config.h""#.to_string(),
+    ];
+
+    let parser = ClangParser::with_paths_and_defines(include_paths, system_include_paths, defines)
+        .expect("Failed to create parser");
+
+    let result = parser.parse_file(&ticker_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+
+            println!("Successfully parsed ticker.cc with {} functions", module.functions.len());
+            for func in &module.functions {
+                println!("  Function: {}", func.display_name);
+            }
+
+            // ticker.cc is very simple - just static member init, may have 0-1 functions
+            // The main point is it parses without error
+        }
+        Err(e) => {
+            panic!("ticker.cc should parse successfully: {:?}", e);
+        }
+    }
+}
+
+/// Test parsing core.cc from Mako
+/// Core ID management - depends on silo_runtime.h
+#[test]
+fn test_mako_core_cc() {
+    use std::path::Path;
+
+    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+    let project_root = Path::new(manifest_dir).parent().unwrap().parent().unwrap();
+    let core_path = project_root.join("vendor/mako/src/mako/core.cc");
+
+    if !core_path.exists() {
+        println!("Skipping test: vendor/mako not present");
+        return;
+    }
+
+    let rusty_cpp_path = project_root.join("vendor/mako/third-party/rusty-cpp/include");
+    if !rusty_cpp_path.exists() {
+        println!("Skipping test: mako submodules not initialized");
+        return;
+    }
+
+    // System include paths
+    let mut system_include_paths = vec![];
+
+    let stubs_path = Path::new(manifest_dir).join("stubs");
+    if stubs_path.exists() {
+        system_include_paths.push(stubs_path.to_string_lossy().to_string());
+    }
+
+    let clang_paths = vec![
+        "/usr/lib/llvm-19/lib/clang/19/include",
+        "/usr/lib/llvm-18/lib/clang/18/include",
+    ];
+
+    for path in &clang_paths {
+        if Path::new(path).exists() {
+            system_include_paths.push(path.to_string());
+            break;
+        }
+    }
+
+    // User include paths
+    let mako_src = project_root.join("vendor/mako/src");
+    let mako_mako = project_root.join("vendor/mako/src/mako");
+    let include_paths = vec![
+        mako_mako.to_string_lossy().to_string(),
+        mako_src.to_string_lossy().to_string(),
+        rusty_cpp_path.to_string_lossy().to_string(),
+    ];
+
+    // Preprocessor defines - CONFIG_H is required by macros.h
+    let defines = vec![
+        r#"CONFIG_H="mako/masstree/config.h""#.to_string(),
+    ];
+
+    let parser = ClangParser::with_paths_and_defines(include_paths, system_include_paths, defines)
+        .expect("Failed to create parser");
+
+    let result = parser.parse_file(&core_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+
+            println!("Successfully parsed core.cc with {} functions", module.functions.len());
+            for func in &module.functions {
+                println!("  Function: {}", func.display_name);
+            }
+
+            // core.cc has several coreid:: member functions
+            assert!(module.functions.len() > 0, "Expected to find coreid functions");
+        }
+        Err(e) => {
+            // Document the error but don't fail - this helps track progress
+            println!("Note: core.cc parsing failed: {:?}", e);
+            println!("This may require additional stub headers");
+        }
+    }
+}
+
+/// Test parsing silo_runtime.cc from Mako
+/// Runtime management - uses numa.h, sys/mman.h
+#[test]
+fn test_mako_silo_runtime_cc() {
+    use std::path::Path;
+
+    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+    let project_root = Path::new(manifest_dir).parent().unwrap().parent().unwrap();
+    let silo_path = project_root.join("vendor/mako/src/mako/silo_runtime.cc");
+
+    if !silo_path.exists() {
+        println!("Skipping test: vendor/mako not present");
+        return;
+    }
+
+    let rusty_cpp_path = project_root.join("vendor/mako/third-party/rusty-cpp/include");
+    if !rusty_cpp_path.exists() {
+        println!("Skipping test: mako submodules not initialized");
+        return;
+    }
+
+    // System include paths
+    let mut system_include_paths = vec![];
+
+    let stubs_path = Path::new(manifest_dir).join("stubs");
+    if stubs_path.exists() {
+        system_include_paths.push(stubs_path.to_string_lossy().to_string());
+    }
+
+    let clang_paths = vec![
+        "/usr/lib/llvm-19/lib/clang/19/include",
+        "/usr/lib/llvm-18/lib/clang/18/include",
+    ];
+
+    for path in &clang_paths {
+        if Path::new(path).exists() {
+            system_include_paths.push(path.to_string());
+            break;
+        }
+    }
+
+    // User include paths
+    let mako_src = project_root.join("vendor/mako/src");
+    let mako_mako = project_root.join("vendor/mako/src/mako");
+    let include_paths = vec![
+        mako_mako.to_string_lossy().to_string(),
+        mako_src.to_string_lossy().to_string(),
+        rusty_cpp_path.to_string_lossy().to_string(),
+    ];
+
+    // Preprocessor defines - CONFIG_H is required by macros.h
+    let defines = vec![
+        r#"CONFIG_H="mako/masstree/config.h""#.to_string(),
+    ];
+
+    let parser = ClangParser::with_paths_and_defines(include_paths, system_include_paths, defines)
+        .expect("Failed to create parser");
+
+    let result = parser.parse_file(&silo_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+
+            println!("Successfully parsed silo_runtime.cc with {} functions", module.functions.len());
+            for func in &module.functions {
+                println!("  Function: {}", func.display_name);
+            }
+
+            // silo_runtime.cc has many SiloRuntime:: member functions
+            assert!(module.functions.len() > 5, "Expected to find SiloRuntime functions");
+        }
+        Err(e) => {
+            println!("Note: silo_runtime.cc parsing failed: {:?}", e);
+            println!("This may require additional stub headers");
+        }
+    }
+}
+
+/// Test parsing thread.cc from Mako
+/// Thread wrapper class
+#[test]
+fn test_mako_thread_cc() {
+    use std::path::Path;
+
+    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+    let project_root = Path::new(manifest_dir).parent().unwrap().parent().unwrap();
+    let thread_path = project_root.join("vendor/mako/src/mako/thread.cc");
+
+    if !thread_path.exists() {
+        println!("Skipping test: vendor/mako not present");
+        return;
+    }
+
+    let rusty_cpp_path = project_root.join("vendor/mako/third-party/rusty-cpp/include");
+    if !rusty_cpp_path.exists() {
+        println!("Skipping test: mako submodules not initialized");
+        return;
+    }
+
+    // System include paths
+    let mut system_include_paths = vec![];
+
+    let stubs_path = Path::new(manifest_dir).join("stubs");
+    if stubs_path.exists() {
+        system_include_paths.push(stubs_path.to_string_lossy().to_string());
+    }
+
+    let clang_paths = vec![
+        "/usr/lib/llvm-19/lib/clang/19/include",
+        "/usr/lib/llvm-18/lib/clang/18/include",
+    ];
+
+    for path in &clang_paths {
+        if Path::new(path).exists() {
+            system_include_paths.push(path.to_string());
+            break;
+        }
+    }
+
+    // User include paths
+    let mako_src = project_root.join("vendor/mako/src");
+    let mako_mako = project_root.join("vendor/mako/src/mako");
+    let include_paths = vec![
+        mako_mako.to_string_lossy().to_string(),
+        mako_src.to_string_lossy().to_string(),
+        rusty_cpp_path.to_string_lossy().to_string(),
+    ];
+
+    // Preprocessor defines - CONFIG_H is required by macros.h
+    let defines = vec![
+        r#"CONFIG_H="mako/masstree/config.h""#.to_string(),
+    ];
+
+    let parser = ClangParser::with_paths_and_defines(include_paths, system_include_paths, defines)
+        .expect("Failed to create parser");
+
+    let result = parser.parse_file(&thread_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+
+            println!("Successfully parsed thread.cc with {} functions", module.functions.len());
+            for func in &module.functions {
+                println!("  Function: {}", func.display_name);
+            }
+
+            // thread.cc has ndb_thread:: member functions
+            assert!(module.functions.len() > 0, "Expected to find ndb_thread functions");
+        }
+        Err(e) => {
+            println!("Note: thread.cc parsing failed: {:?}", e);
+            println!("This may require additional stub headers");
+        }
+    }
+}

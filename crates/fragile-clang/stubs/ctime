@@ -1,0 +1,34 @@
+// Minimal ctime stub for fragile parsing
+#ifndef _FRAGILE_CTIME_
+#define _FRAGILE_CTIME_
+
+#include "cstdint"
+#include "time.h"
+
+namespace std {
+
+// Time types (forwarded from time.h)
+using ::time_t;
+using ::clock_t;
+using ::tm;
+using ::timespec;
+
+// Time functions
+using ::time;
+using ::difftime;
+using ::mktime;
+
+using ::asctime;
+using ::ctime;
+using ::gmtime;
+using ::localtime;
+using ::strftime;
+
+using ::clock;
+
+// C++17 timespec_get
+using ::timespec_get;
+
+} // namespace std
+
+#endif // _FRAGILE_CTIME_

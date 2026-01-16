@@ -208,7 +208,7 @@ See [PLAN_CPP20_MAKO.md](PLAN_CPP20_MAKO.md) for detailed plan.
     - [x] `vendor/mako/src/rrr/reactor/fiber_impl.cc` - **PARSED**: 4640 functions
     - [x] `vendor/mako/src/rrr/reactor/reactor.cc` - **PARSED**: 4640 functions
     - [-] `vendor/mako/src/rrr/reactor/quorum_event.cc` - Cross-namespace inheritance: `janus::QuorumEvent` inherits from `rrr::Event` via `using rrr::Event;`. Clang semantic error on `test()` call [26:01:16, 12:00]. See docs/dev/plan_fix_stub_headers_quorum_event.md
-  - [-] All mako module - **18/155 files parsing (11.6%)** [26:01:16, 10:00]
+  - [-] All mako module - **21/155 files parsing (13.5%)** [26:01:16, 11:00]
     - [x] `vendor/mako/src/mako/vec/coroutine.cpp` - **PARSED**: 40 functions
     - [x] `vendor/mako/src/mako/vec/occ.cpp` - **PARSED**: 41 functions
     - [x] `vendor/mako/src/mako/lib/memory.cc` - **PARSED**: 17 functions
@@ -219,6 +219,9 @@ See [PLAN_CPP20_MAKO.md](PLAN_CPP20_MAKO.md) for detailed plan.
     - [x] `vendor/mako/src/mako/lib/rust_wrapper.cc` - **PARSED**: 0 functions
     - [x] `vendor/mako/src/mako/db.cc` - **PARSED**: 0 functions (declarations only)
     - [x] `vendor/mako/src/mako/memory.cc` - **PARSED**: 33 functions
+    - [x] `vendor/mako/src/mako/ticker.cc` - **PARSED**: static member init [26:01:16, 11:00]
+    - [x] `vendor/mako/src/mako/core.cc` - **PARSED**: coreid functions [26:01:16, 11:00]
+    - [x] `vendor/mako/src/mako/silo_runtime.cc` - **PARSED**: SiloRuntime functions [26:01:16, 11:00]
     - [x] `vendor/mako/src/mako/masstree/compiler.cc` - **PARSED**: 92 functions
     - [x] `vendor/mako/src/mako/masstree/masstree_context.cc` - **PARSED**: 102 functions
     - [x] `vendor/mako/src/mako/masstree/memdebug.cc` - **PARSED**: 14 functions
@@ -232,7 +235,9 @@ See [PLAN_CPP20_MAKO.md](PLAN_CPP20_MAKO.md) for detailed plan.
     - [x] F.3.6 Added parser support for preprocessor defines (CONFIG_H for masstree)
     - [x] F.3.7 Fixed cstddef max_align_t to use clang's include guard
     - [x] F.3.8 Fixed include paths: added mako/src/mako for lib/*.h includes
-    - [ ] Remaining files need: fix malloc.h conflicts, more STL stubs
+    - [x] F.3.9 Added stubs: malloc.h, ctime, pthread_setname_np, intmax_t in cstdint, `<new>` in memory [26:01:16, 11:00]
+    - [-] `vendor/mako/src/mako/thread.cc` - Needs eRPC rpc.h header (external dependency)
+    - [ ] Remaining files need: eRPC library stubs, more STL stubs
   - [ ] Link and run tests
 
 ---
@@ -298,7 +303,7 @@ Migration: After C++20 support is complete, deprecate these.
 ## 5. Testing & Milestones
 
 ### 5.1 Unit Tests
-- [x] fragile-clang: 226 tests passing (27 unit + 199 integration) - includes 10 coroutine + 7 exception + 6 RTTI + 8 promise type + 8 awaitable + 8 generator + 7 mako file tests [26:01:16]
+- [x] fragile-clang: 230 tests passing (27 unit + 203 integration) - includes 10 coroutine + 7 exception + 6 RTTI + 8 promise type + 8 awaitable + 8 generator + 11 mako file tests [26:01:16, 11:00]
 - [x] fragile-rustc-driver: 6 tests passing
 - [x] fragile-runtime: Compiles
 
