@@ -125,8 +125,41 @@ public:
 
 template<typename CharT, typename Traits = void, typename Allocator = void>
 class basic_ostringstream : public basic_stringstream<CharT, Traits, Allocator> {
+    using base = basic_stringstream<CharT, Traits, Allocator>;
 public:
-    using basic_stringstream<CharT, Traits, Allocator>::basic_stringstream;
+    using typename base::string_type;
+
+    basic_ostringstream() = default;
+    explicit basic_ostringstream(const string_type& s) : base(s) {}
+
+    // Explicit str() methods to avoid dependent base class lookup issues
+    string_type str() const { return base::str(); }
+    void str(const string_type& s) { base::str(s); }
+
+    using base::precision;
+    using base::width;
+    using base::setf;
+    using base::unsetf;
+    using base::flags;
+
+    // Override operators to return correct type
+    basic_ostringstream& operator<<(const char* s) { base::operator<<(s); return *this; }
+    basic_ostringstream& operator<<(const string_type& s) { base::operator<<(s); return *this; }
+    basic_ostringstream& operator<<(int n) { base::operator<<(n); return *this; }
+    basic_ostringstream& operator<<(long n) { base::operator<<(n); return *this; }
+    basic_ostringstream& operator<<(long long n) { base::operator<<(n); return *this; }
+    basic_ostringstream& operator<<(unsigned int n) { base::operator<<(n); return *this; }
+    basic_ostringstream& operator<<(unsigned long n) { base::operator<<(n); return *this; }
+    basic_ostringstream& operator<<(unsigned long long n) { base::operator<<(n); return *this; }
+    basic_ostringstream& operator<<(double n) { base::operator<<(n); return *this; }
+    basic_ostringstream& operator<<(float n) { base::operator<<(n); return *this; }
+    basic_ostringstream& operator<<(bool b) { base::operator<<(b); return *this; }
+    basic_ostringstream& operator<<(void* p) { base::operator<<(p); return *this; }
+    basic_ostringstream& operator<<(char c) { base::operator<<(c); return *this; }
+    basic_ostringstream& operator<<(ios_base& (*pf)(ios_base&)) { base::operator<<(pf); return *this; }
+    basic_ostringstream& operator<<(_Setprecision sp) { base::operator<<(sp); return *this; }
+    basic_ostringstream& operator<<(_Setw sw) { base::operator<<(sw); return *this; }
+    basic_ostringstream& operator<<(_Setfill sf) { base::operator<<(sf); return *this; }
 };
 
 template<typename CharT, typename Traits = void, typename Allocator = void>

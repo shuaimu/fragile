@@ -488,4 +488,11 @@ T accumulate(InputIt first, InputIt last, T init, BinaryOp op) {
 
 } // namespace std
 
+// Export min/max to global namespace for C-style code compatibility
+// (many real-world codebases expect this after including <algorithm>)
+using std::min;
+using std::max;
+using std::minmax;
+using std::clamp;
+
 #endif // _FRAGILE_ALGORITHM_

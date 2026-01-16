@@ -496,6 +496,37 @@ inline int stoi(const string& str, size_t* pos = nullptr, int base = 10) { (void
 inline long stol(const string& str, size_t* pos = nullptr, int base = 10) { (void)str; (void)pos; (void)base; return 0; }
 inline long long stoll(const string& str, size_t* pos = nullptr, int base = 10) { (void)str; (void)pos; (void)base; return 0; }
 
+// Non-member comparison operators (const char* on left side)
+template<typename CharT, typename Traits, typename Alloc>
+bool operator==(const CharT* lhs, const basic_string<CharT, Traits, Alloc>& rhs) {
+    return rhs == lhs;
+}
+
+template<typename CharT, typename Traits, typename Alloc>
+bool operator!=(const CharT* lhs, const basic_string<CharT, Traits, Alloc>& rhs) {
+    return rhs != lhs;
+}
+
+template<typename CharT, typename Traits, typename Alloc>
+bool operator<(const CharT* lhs, const basic_string<CharT, Traits, Alloc>& rhs) {
+    return rhs > lhs;
+}
+
+template<typename CharT, typename Traits, typename Alloc>
+bool operator>(const CharT* lhs, const basic_string<CharT, Traits, Alloc>& rhs) {
+    return rhs < lhs;
+}
+
+template<typename CharT, typename Traits, typename Alloc>
+bool operator<=(const CharT* lhs, const basic_string<CharT, Traits, Alloc>& rhs) {
+    return rhs >= lhs;
+}
+
+template<typename CharT, typename Traits, typename Alloc>
+bool operator>=(const CharT* lhs, const basic_string<CharT, Traits, Alloc>& rhs) {
+    return rhs <= lhs;
+}
+
 // hash specialization for string
 template<>
 struct hash<string> {

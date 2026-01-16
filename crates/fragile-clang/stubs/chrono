@@ -3,6 +3,7 @@
 #define _FRAGILE_CHRONO_
 
 #include "cstdint"
+#include "algorithm"  // For std::max/min used with durations
 
 namespace std {
 namespace chrono {

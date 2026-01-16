@@ -4,6 +4,7 @@
 
 #include "cstdint"
 #include "initializer_list"
+#include "iterator"  // For std::reverse_iterator
 
 namespace std {
 
@@ -69,49 +70,9 @@ public:
         const node* node_;
     };
 
-    class reverse_iterator {
-    public:
-        using iterator_category = void;
-        using value_type = T;
-        using difference_type = long;
-        using pointer = T*;
-        using reference = T&;
-
-        reverse_iterator(node* n = nullptr) : node_(n) {}
-        reference operator*() { return node_->data; }
-        pointer operator->() { return &(node_->data); }
-        reverse_iterator& operator++() { node_ = node_->prev; return *this; }
-        reverse_iterator operator++(int) { reverse_iterator tmp = *this; ++(*this); return tmp; }
-        reverse_iterator& operator--() { node_ = node_->next; return *this; }
-        reverse_iterator operator--(int) { reverse_iterator tmp = *this; --(*this); return tmp; }
-        bool operator==(const reverse_iterator& other) const { return node_ == other.node_; }
-        bool operator!=(const reverse_iterator& other) const { return node_ != other.node_; }
-    private:
-        node* node_;
-        friend class list;
-    };
-
-    class const_reverse_iterator {
-    public:
-        using iterator_category = void;
-        using value_type = T;
-        using difference_type = long;
-        using pointer = const T*;
-        using reference = const T&;
-
-        const_reverse_iterator(const node* n = nullptr) : node_(n) {}
-        const_reverse_iterator(const reverse_iterator& it) : node_(it.node_) {}
-        reference operator*() const { return node_->data; }
-        pointer operator->() const { return &(node_->data); }
-        const_reverse_iterator& operator++() { node_ = node_->prev; return *this; }
-        const_reverse_iterator operator++(int) { const_reverse_iterator tmp = *this; ++(*this); return tmp; }
-        const_reverse_iterator& operator--() { node_ = node_->next; return *this; }
-        const_reverse_iterator operator--(int) { const_reverse_iterator tmp = *this; --(*this); return tmp; }
-        bool operator==(const const_reverse_iterator& other) const { return node_ == other.node_; }
-        bool operator!=(const const_reverse_iterator& other) const { return node_ != other.node_; }
-    private:
-        const node* node_;
-    };
+    // Use std::reverse_iterator for compatibility with helper functions
+    using reverse_iterator = std::reverse_iterator<iterator>;
+    using const_reverse_iterator = std::reverse_iterator<const_iterator>;
 
     // Constructors
     list() : head_(nullptr), tail_(nullptr), size_(0) {}
@@ -163,13 +124,13 @@ public:
     const_iterator end() const noexcept { return const_iterator(nullptr); }
     const_iterator cend() const noexcept { return const_iterator(nullptr); }
 
-    // Reverse iterators
-    reverse_iterator rbegin() noexcept { return reverse_iterator(tail_); }
-    const_reverse_iterator rbegin() const noexcept { return const_reverse_iterator(tail_); }
-    const_reverse_iterator crbegin() const noexcept { return const_reverse_iterator(tail_); }
-    reverse_iterator rend() noexcept { return reverse_iterator(nullptr); }
-    const_reverse_iterator rend() const noexcept { return const_reverse_iterator(nullptr); }
-    const_reverse_iterator crend() const noexcept { return const_reverse_iterator(nullptr); }
+    // Reverse iterators (std::reverse_iterator wraps end() for rbegin(), begin() for rend())
+    reverse_iterator rbegin() noexcept { return reverse_iterator(end()); }
+    const_reverse_iterator rbegin() const noexcept { return const_reverse_iterator(cend()); }
+    const_reverse_iterator crbegin() const noexcept { return const_reverse_iterator(cend()); }
+    reverse_iterator rend() noexcept { return reverse_iterator(begin()); }
+    const_reverse_iterator rend() const noexcept { return const_reverse_iterator(cbegin()); }
+    const_reverse_iterator crend() const noexcept { return const_reverse_iterator(cbegin()); }
 
     // Capacity
     bool empty() const noexcept { return size_ == 0; }
@@ -298,6 +259,21 @@ public:
         current->prev = n;
         ++size_;
         return iterator(n);
+    }
+
+    // Range insert
+    template<typename InputIt>
+    iterator insert(const_iterator pos, InputIt first, InputIt last) {
+        if (first == last) return iterator(const_cast<node*>(pos.node_));
+        iterator result = insert(pos, *first);
+        iterator current_pos = result;
+        ++current_pos;  // Move to next position
+        ++first;
+        while (first != last) {
+            insert(const_iterator(current_pos.node_), *first);
+            ++first;
+        }
+        return result;
     }
 
 private:

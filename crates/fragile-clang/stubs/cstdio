@@ -144,5 +144,9 @@ using std::popen;
 using std::pclose;
 using std::getline;
 using std::getdelim;
+using std::vprintf;
+using std::vfprintf;
+using std::vsprintf;
+using std::vsnprintf;
 
 #endif // _FRAGILE_CSTDIO_
