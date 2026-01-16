@@ -67,6 +67,8 @@
 //! ```
 
 mod driver;
+#[cfg(feature = "rustc-integration")]
+mod mir_convert;
 mod queries;
 #[cfg(feature = "rustc-integration")]
 mod rustc_integration;
