@@ -4182,3 +4182,76 @@ fn test_std_vector_iterators() {
     let sum_fn = module.functions.iter().find(|f| f.display_name == "sum_vector");
     assert!(sum_fn.is_some(), "Expected to find sum_vector function");
 }
+
+// ========== std::string Tests (C.1.2) ==========
+
+/// Test parsing code that uses std::string basic operations.
+#[test]
+fn test_std_string_basic_usage() {
+    let parser = ClangParser::with_system_includes().unwrap();
+    let code = r#"
+        #include <string>
+
+        int test_string() {
+            std::string s = "hello";
+            int len = s.size();
+            return len;
+        }
+    "#;
+
+    let ast = parser.parse_string(code, "test.cpp").unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).unwrap();
+
+    let test_fn = module.functions.iter().find(|f| f.display_name == "test_string");
+    assert!(test_fn.is_some(), "Expected to find test_string function");
+
+    let test_fn = test_fn.unwrap();
+    assert!(matches!(test_fn.return_type, CppType::Int { signed: true }));
+}
+
+/// Test std::string with c_str() and operator[].
+#[test]
+fn test_std_string_cstr_subscript() {
+    let parser = ClangParser::with_system_includes().unwrap();
+    let code = r#"
+        #include <string>
+
+        char test_cstr() {
+            std::string s = "world";
+            const char* ptr = s.c_str();
+            char c = s[0];
+            return c;
+        }
+    "#;
+
+    let ast = parser.parse_string(code, "test.cpp").unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).unwrap();
+
+    let test_fn = module.functions.iter().find(|f| f.display_name == "test_cstr");
+    assert!(test_fn.is_some(), "Expected to find test_cstr function");
+}
+
+/// Test std::string with length() and empty().
+#[test]
+fn test_std_string_length_empty() {
+    let parser = ClangParser::with_system_includes().unwrap();
+    let code = r#"
+        #include <string>
+
+        bool test_empty() {
+            std::string s;
+            bool empty = s.empty();
+            int len = s.length();
+            return empty;
+        }
+    "#;
+
+    let ast = parser.parse_string(code, "test.cpp").unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).unwrap();
+
+    let test_fn = module.functions.iter().find(|f| f.display_name == "test_empty");
+    assert!(test_fn.is_some(), "Expected to find test_empty function");
+}

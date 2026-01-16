@@ -104,9 +104,9 @@ See [PLAN_CPP20_MAKO.md](PLAN_CPP20_MAKO.md) for detailed plan.
   - [x] Parse vector template from `<vector>` header
   - [x] Support push_back, pop_back, size, operator[]
   - [x] Support begin(), end() iterators
-- [ ] **C.1.2 std::string**
-  - [ ] Parse string from `<string>` header
-  - [ ] Basic operations (c_str(), size(), operator[])
+- [x] **C.1.2 std::string** [26:01:16]
+  - [x] Parse string from `<string>` header
+  - [x] Basic operations (c_str(), size(), operator[])
 - [ ] **C.1.3 Other containers** (deferred)
   - [ ] std::map / std::unordered_map
   - [ ] std::optional, std::variant
