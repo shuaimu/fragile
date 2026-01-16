@@ -4355,3 +4355,84 @@ fn test_std_weak_ptr_basic() {
     let test_fn = module.functions.iter().find(|f| f.display_name == "test_weak");
     assert!(test_fn.is_some(), "Expected to find test_weak function");
 }
+
+// ========== Lambda Tests (E.3) ==========
+
+/// Test parsing code with basic lambda expressions.
+#[test]
+fn test_lambda_basic() {
+    let parser = ClangParser::new().unwrap();
+    let code = r#"
+        int test_lambda() {
+            auto add = [](int a, int b) { return a + b; };
+            return add(2, 3);
+        }
+    "#;
+
+    let ast = parser.parse_string(code, "test.cpp").unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).unwrap();
+
+    let test_fn = module.functions.iter().find(|f| f.display_name == "test_lambda");
+    assert!(test_fn.is_some(), "Expected to find test_lambda function");
+}
+
+/// Test lambda with value capture.
+#[test]
+fn test_lambda_capture_value() {
+    let parser = ClangParser::new().unwrap();
+    let code = r#"
+        int test_capture() {
+            int x = 10;
+            auto add_x = [x](int a) { return a + x; };
+            return add_x(5);
+        }
+    "#;
+
+    let ast = parser.parse_string(code, "test.cpp").unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).unwrap();
+
+    let test_fn = module.functions.iter().find(|f| f.display_name == "test_capture");
+    assert!(test_fn.is_some(), "Expected to find test_capture function");
+}
+
+/// Test lambda with reference capture.
+#[test]
+fn test_lambda_capture_ref() {
+    let parser = ClangParser::new().unwrap();
+    let code = r#"
+        int test_capture_ref() {
+            int x = 10;
+            auto increment = [&x]() { x++; };
+            increment();
+            return x;
+        }
+    "#;
+
+    let ast = parser.parse_string(code, "test.cpp").unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).unwrap();
+
+    let test_fn = module.functions.iter().find(|f| f.display_name == "test_capture_ref");
+    assert!(test_fn.is_some(), "Expected to find test_capture_ref function");
+}
+
+/// Test generic lambda (auto parameters).
+#[test]
+fn test_lambda_generic() {
+    let parser = ClangParser::new().unwrap();
+    let code = r#"
+        int test_generic() {
+            auto add = [](auto a, auto b) { return a + b; };
+            return add(2, 3);
+        }
+    "#;
+
+    let ast = parser.parse_string(code, "test.cpp").unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).unwrap();
+
+    let test_fn = module.functions.iter().find(|f| f.display_name == "test_generic");
+    assert!(test_fn.is_some(), "Expected to find test_generic function");
+}
