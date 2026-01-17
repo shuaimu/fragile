@@ -766,7 +766,7 @@ Migration: After C++20 support is complete, deprecate these.
   - [x] `test_future` passes - 12/12 tests [26:01:17]
   - [x] `test_txn_timeout` passes - 9/9 tests [26:01:17]
   - [x] `stress_transport_backend` passes - 13/13 tests [26:01:17]
-  - [ ] All tests pass (49 executables, 802 tests)
+  - [ ] All tests pass (50 executables, 802+ tests)
 - [ ] **G.6.2 Integration Tests (ci.sh)**
   - [ ] `./ci/ci.sh simpleTransaction` passes
   - [ ] `./ci/ci.sh simplePaxos` passes
