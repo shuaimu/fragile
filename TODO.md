@@ -824,7 +824,7 @@ Current status:
 - Core executables (simpleTransaction, simplePaxos) need full eRPC with ASIO
 - Full integration tests need rpc/server.hpp and benchmark_service.h
 - Remaining test executables blocked on:
-  - test_sto_transaction_real: needs always_assert macro (istreambuf_iterator done)
+  - test_sto_transaction_real: needs full mako lib (rocksdb, erpc, txlog, etc.)
   - bench_future, rpcbench: need full RPC server infrastructure
 
 **Completed**:
