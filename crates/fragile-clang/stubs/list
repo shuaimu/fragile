@@ -377,6 +377,54 @@ public:
         }
     }
 
+    // Splice single element from another list
+    void splice(const_iterator pos, list& other, const_iterator it) {
+        if (it.current == nullptr) return;
+        // Extract the node from 'other'
+        node* n = const_cast<node*>(it.current);
+        // Unlink from other list
+        if (n->prev) {
+            n->prev->next = n->next;
+        } else if (&other != this) {
+            // n was head of other
+            other.head_ = n->next;
+        }
+        if (n->next) {
+            n->next->prev = n->prev;
+        } else if (&other != this) {
+            // n was tail of other
+            other.tail_ = n->prev;
+        }
+        if (&other != this) {
+            other.size_--;
+        }
+        // Insert into this list at pos
+        node* target = const_cast<node*>(pos.current);
+        if (target == nullptr) {
+            // Insert at end
+            n->prev = tail_;
+            n->next = nullptr;
+            if (tail_) {
+                tail_->next = n;
+            } else {
+                head_ = n;
+            }
+            tail_ = n;
+        } else {
+            n->next = target;
+            n->prev = target->prev;
+            if (target->prev) {
+                target->prev->next = n;
+            } else {
+                head_ = n;
+            }
+            target->prev = n;
+        }
+        if (&other != this) {
+            size_++;
+        }
+    }
+
     void reverse() {
         if (size_ < 2) return;
         node* current = head_;

@@ -678,6 +678,12 @@ Migration: After C++20 support is complete, deprecate these.
   - [x] `test_sharding_policy` - Built and all tests pass [26:01:17]
     - gtest-based tests for range-based sharding policy
     - 34/34 tests pass (KeyExtractor, RangeMapping, TableShardingPolicy, Builder, TPC-C helpers, etc.)
+  - [x] `test_idempotency` - Built and all tests pass [26:01:17]
+    - gtest-based tests for RPC idempotency primitives
+    - 32/32 tests pass (IdempotencyKey, KeyGenerator, Config, CachedResponse, IdempotencyCache)
+  - [x] `test_completion_tracker` - Built and all tests pass [26:01:17]
+    - gtest-based tests for request completion tracking
+    - 27/27 tests pass (Config, CompletedEntry, CompletionTracker, QueryResult)
   - [ ] `test_masstree` - Masstree index tests
   - [ ] `test_rpc` - RPC framework tests (full integration)
   - [ ] `test_future` - Future/promise tests
@@ -692,6 +698,8 @@ Migration: After C++20 support is complete, deprecate these.
   - [x] `test_config_schema` passes - 7/7 tests [26:01:17]
   - [x] `test_sharding_policy` passes - 34/34 tests [26:01:17]
   - [x] `test_fiber` passes - 37/37 tests [26:01:17]
+  - [x] `test_idempotency` passes - 32/32 tests [26:01:17]
+  - [x] `test_completion_tracker` passes - 27/27 tests [26:01:17]
   - [ ] `test_masstree` passes
   - [ ] `test_rpc` passes
   - [ ] All 25 ctest tests pass
