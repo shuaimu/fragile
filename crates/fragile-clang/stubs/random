@@ -6,6 +6,7 @@
 
 #include "cstdint"
 #include "climits"
+#include "algorithm"  // For std::min/std::max which many STL headers expect
 
 namespace std {
 

@@ -41,12 +41,14 @@ private:
 };
 
 // Common duration types
-using nanoseconds = duration<long long>;
-using microseconds = duration<long long>;
-using milliseconds = duration<long long>;
-using seconds = duration<long long>;
-using minutes = duration<long long>;
-using hours = duration<long long>;
+// Note: Use long instead of long long for compatibility with libc++ on some systems
+// where duration::count() returns long (matching 1L literal type)
+using nanoseconds = duration<long>;
+using microseconds = duration<long>;
+using milliseconds = duration<long>;
+using seconds = duration<long>;
+using minutes = duration<long>;
+using hours = duration<long>;
 
 // duration_cast
 template<typename ToDuration, typename Rep, typename Period>

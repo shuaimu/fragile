@@ -502,13 +502,13 @@ Migration: After C++20 support is complete, deprecate these.
 - [x] fragile-clang: 569 tests passing (all integration tests) [26:01:17]
 - [x] fragile-rustc-driver: 20 tests passing (base tests without rustc-integration feature) [26:01:17]
 - [x] fragile-runtime: Compiles
-- [x] **Mako Tests**: 48 test executables, 789 tests [26:01:17]
+- [x] **Mako Tests**: 49 test executables, 802 tests [26:01:17]
   - Core tests: test_fiber (37), test_marshal (23), test_sharding_policy (34), test_idempotency (32), test_completion_tracker (27)
   - Masstree tests: test_masstree (2), test_masstree_internals (13), test_masstree_multi_instance (5)
   - Silo tests: test_silo_varint (22), test_silo_runtime (8), test_silo_rcu_thread (9), test_silo_multi_site_stress (10), test_silo_allocator_tuple (18)
   - RPC unit tests: rpc_connection_state_test (30), rpc_circuit_breaker_test (21), rpc_reconnect_policy_test (19), rpc_request_queue_test (28), rpc_callbacks_test (24), rpc_heartbeat_test (20), rpc_timeout_retry_test (30), rpc_request_buffering_test (17), rpc_log_storage_test (35)
   - Reactor tests: test_timeout_race (6), test_reactor (15), test_reactor_extended (12)
-  - Transport tests: test_transport_backend (25)
+  - Transport tests: test_transport_backend (25), stress_transport_backend (13)
   - Timeout tests: test_txn_timeout (9)
   - Others: test_alock (14, 2 timing-sensitive fail), test_and_event (5), test_rpc_errors (28), test_config_schema (7), test_arc_mutex_thread (7)
   - Non-gtest: test_fragile_minimal (pass), test_mako_core_minimal (pass)
@@ -723,6 +723,7 @@ Migration: After C++20 support is complete, deprecate these.
   - [x] `test_rpc` - RPC framework tests, 17 tests passing [26:01:17]
   - [x] `test_future` - Future/promise tests, 12 tests passing [26:01:17]
   - [x] `test_txn_timeout` - Transaction timeout/shard failure tests, 9 tests passing [26:01:17]
+  - [x] `stress_transport_backend` - Transport stress tests (mock-based), 13 tests passing [26:01:17]
   - [ ] All others listed in CMakeLists.txt
 - [ ] **G.5.3 Benchmark Executables**
   - [ ] `rpcbench` - RPC benchmark
@@ -761,7 +762,8 @@ Migration: After C++20 support is complete, deprecate these.
   - [x] `test_rpc` passes - 17/17 tests [26:01:17]
   - [x] `test_future` passes - 12/12 tests [26:01:17]
   - [x] `test_txn_timeout` passes - 9/9 tests [26:01:17]
-  - [ ] All tests pass (48 executables, 789 tests)
+  - [x] `stress_transport_backend` passes - 13/13 tests [26:01:17]
+  - [ ] All tests pass (49 executables, 802 tests)
 - [ ] **G.6.2 Integration Tests (ci.sh)**
   - [ ] `./ci/ci.sh simpleTransaction` passes
   - [ ] `./ci/ci.sh simplePaxos` passes
@@ -802,29 +804,34 @@ Current status:
 - **Milestones M1-M6**: ✅ Complete - test harness working
 - **Phase G (Full Build)**: 🔄 In Progress
   - G.1-G.4: ✅ Complete (MIR injection, runtime support, build system, blocked files fixed)
-  - G.5.2: ✅ **48 test executables built, 789 tests passing**
+  - G.5.2: ✅ **49 test executables built, 802 tests passing**
   - **libmako_lib**: ✅ UNBLOCKED [26:01:17, 06:30]
   - G.5.1: Core executables blocked on full eRPC/ASIO stack
   - G.5.3: Benchmark executables blocked on full eRPC/ASIO stack
 
 **Recent Progress** [26:01:17]:
+- Added stress_transport_backend (13 tests) - mock-based transport stress tests
+- Fixed chrono stub to use long instead of long long for duration types (matches libc++)
+- Added random stub include for algorithm (std::max visibility)
 - Added test_txn_timeout (9 tests) - ShardFailureController and TXN_TIMEOUT tests
 - Fixed invoke_result stub to properly deduce return types (was always returning void)
 - Added test_rpc (17 tests), test_future (12 tests) - now unblocked
-- Added test_load_balancer (19 tests), test_rpc_extended (8 tests), rpc_validation_test (15 tests)
-- Total: 48 test executables, 789 tests passing
+- Total: 49 test executables, 802 tests passing
 
 **Blockers**:
 - Core executables (simpleTransaction, simplePaxos) need full eRPC with ASIO
 - Full integration tests need rpc/server.hpp and benchmark_service.h
-- test_rpc: JoinHandle<pair<int,int>> template with vector stub (compiles with real clang++)
+- Remaining test executables blocked on stub limitations:
+  - masstree_perf: needs std::chrono::to_time_t, std::put_time, std::shuffle, std::stod, std::stoull
+  - test_sto_transaction_real: needs std::istreambuf_iterator, always_assert macro
+  - bench_future, rpcbench: need full RPC server infrastructure
 
 **Completed**:
 - G.1: MIR injection pipeline (TLS, type conversion, function sigs, MIR body generation)
 - G.2: Runtime support (fragile-runtime crate)
 - G.3: Build system integration (fragile.toml, compile_commands.json)
 - G.4: Fixed blocked files (mtd.cc, persist_test.cc, mongodb/server.cc)
-- G.5.2: Unit tests (48 executables, 789 tests)
+- G.5.2: Unit tests (49 executables, 802 tests)
 - libmako_lib build unblocked
 
 ---
