@@ -354,16 +354,20 @@ Each feature must work through the MIR pipeline, not clang++.
   - Finds 3,145 functions, 1,905 function templates, 792 structs/classes, 667 class templates
   - Correctly identifies `factorial` function and generated test case functions
   - Created parse_doctest.rs example for testing
-- [-] Compile simple test file (in progress)
+- [x] Compile simple test file [26:01:17]
   - [x] Created factorial.cpp standalone test (without doctest) [26:01:17]
     - tests/cpp/factorial.cpp - minimal test with recursion and control flow
     - tests/clang_integration/factorial.cpp - integration test version
-    - MIR conversion verified: 5 basic blocks, 6 locals, recursive calls work
+    - MIR conversion verified: 4 basic blocks, 6 locals, recursive calls work
     - Added test_end_to_end_factorial_cpp test - passes
     - Stub generation works: factorial function produces correct extern "C" stub
-  - [ ] Test full MIR injection via rustc-integration feature
+  - [x] Test full MIR injection via rustc-integration feature [26:01:17]
+    - Fixed MIR block allocation bug in if/else handling
+    - Added reserve_block() method for forward references
+    - Added needs_terminator() to avoid spurious Goto blocks after return
+    - test_compile_factorial_with_rustc passes: factorial(5) = 120
   - [ ] Test doctest_simple.cpp (blocked on template/STL support)
-- [ ] Run tests successfully
+- [ ] Run tests successfully (blocked on doctest_simple.cpp)
 
 ---
 

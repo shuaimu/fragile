@@ -40,6 +40,8 @@ struct FunctionBuilder {
     var_map: rustc_hash::FxHashMap<String, usize>,
     /// Stack of loop contexts for nested loops
     loop_stack: Vec<LoopContext>,
+    /// Next reserved block index (for forward references in control flow)
+    next_reserved_block: usize,
 }
 
 impl FunctionBuilder {
@@ -51,6 +53,7 @@ impl FunctionBuilder {
             current_statements: Vec::new(),
             var_map: rustc_hash::FxHashMap::default(),
             loop_stack: Vec::new(),
+            next_reserved_block: 1, // Start at 1 (0 is the entry block)
         }
     }
 
@@ -110,7 +113,16 @@ impl FunctionBuilder {
         idx
     }
 
+    /// Reserve a new block index. Each call reserves a unique index.
+    /// Blocks must be finished in the order they were reserved.
+    fn reserve_block(&mut self) -> usize {
+        let idx = self.next_reserved_block;
+        self.next_reserved_block += 1;
+        idx
+    }
+
     /// Create a new block and return its index.
+    /// DEPRECATED: Use reserve_block() for control flow that needs forward references.
     fn new_block(&mut self) -> usize {
         self.blocks.len() + 1 // Next block index
     }
@@ -122,6 +134,16 @@ impl FunctionBuilder {
             locals: self.locals,
             is_coroutine: false,
         }
+    }
+
+    /// Check if the current block needs a terminator.
+    /// Returns false if the block was just started (empty) which means the previous
+    /// statement already provided a terminator (e.g., return, break, continue).
+    fn needs_terminator(&self) -> bool {
+        // If we have statements in the current block, we need a terminator
+        // If the block is empty AND we have previous blocks, then the previous
+        // statement already terminated (e.g., return statement called finish_block)
+        !self.current_statements.is_empty() || self.blocks.is_empty()
     }
 
     /// Build the final MIR body, marking it as a coroutine.
@@ -476,17 +498,19 @@ impl MirConverter {
 
                     let cond_operand = self.convert_expr(condition, builder)?;
 
-                    // We'll create blocks for then, else, and merge
-                    let then_block = builder.new_block();
-                    let merge_block = if else_branch.is_some() {
-                        builder.new_block() + 1
-                    } else {
-                        builder.new_block()
-                    };
+                    // Reserve blocks for then, else (if present), and merge
+                    // Use reserve_block() to get unique indices even before blocks are created
+                    let then_block = builder.reserve_block();
                     let else_block = if else_branch.is_some() {
-                        builder.new_block()
+                        builder.reserve_block()
                     } else {
-                        merge_block
+                        // No else branch - false case goes directly to merge
+                        builder.reserve_block() // This will be the merge block
+                    };
+                    let merge_block = if else_branch.is_some() {
+                        builder.reserve_block()
+                    } else {
+                        else_block // When no else, the "else_block" is actually the merge
                     };
 
                     // Finish current block with switch
@@ -498,16 +522,22 @@ impl MirConverter {
 
                     // Convert then branch
                     self.convert_stmt(then_branch, builder)?;
-                    builder.finish_block(MirTerminator::Goto {
-                        target: merge_block,
-                    });
+                    // Only add Goto if the branch needs a terminator
+                    // (i.e., it didn't already terminate with return/break/continue)
+                    if builder.needs_terminator() {
+                        builder.finish_block(MirTerminator::Goto {
+                            target: merge_block,
+                        });
+                    }
 
                     // Convert else branch if present
                     if let Some(else_stmt) = else_branch {
                         self.convert_stmt(else_stmt, builder)?;
-                        builder.finish_block(MirTerminator::Goto {
-                            target: merge_block,
-                        });
+                        if builder.needs_terminator() {
+                            builder.finish_block(MirTerminator::Goto {
+                                target: merge_block,
+                            });
+                        }
                     }
                 }
             }

@@ -938,6 +938,115 @@ fn main() {
         println!("test_function_call_resolution completed - function calls verified!");
     }
 
+    /// End-to-end test: Compile factorial.cpp with recursion via MIR injection.
+    /// This tests Task 5.2: Factorial with control flow and recursive calls.
+    ///
+    /// Tests that a recursive C++ function compiles and executes correctly.
+    #[test]
+    #[cfg(feature = "rustc-integration")]
+    fn test_compile_factorial_with_rustc() {
+        use tempfile::TempDir;
+
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let project_root = Path::new(manifest_dir).parent().unwrap().parent().unwrap();
+        let factorial_cpp = project_root.join("tests/clang_integration/factorial.cpp");
+
+        // Check if test file exists
+        if !factorial_cpp.exists() {
+            eprintln!("Skipping test: factorial.cpp not found at {:?}", factorial_cpp);
+            return;
+        }
+
+        // Parse the C++ file
+        let module = fragile_clang::compile_cpp_file(&factorial_cpp)
+            .expect("Failed to parse factorial.cpp");
+
+        // Verify we got the factorial function
+        let has_factorial = module.functions.iter().any(|f| f.display_name == "factorial");
+        assert!(has_factorial, "Expected to find 'factorial' function");
+
+        // Print function info for debugging
+        for func in &module.functions {
+            println!("Found function: {} (mangled: {})", func.display_name, func.mangled_name);
+            println!("  MIR blocks: {}, locals: {}", func.mir_body.blocks.len(), func.mir_body.locals.len());
+        }
+
+        // Create driver and register module
+        let driver = FragileDriver::new();
+        driver.register_cpp_module(&module);
+
+        // Generate stubs
+        let stubs = generate_rust_stubs(&[module]);
+        println!("Generated stubs:\n{}", stubs);
+
+        // Create a temporary directory for the output
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+
+        // Create a Rust main file that calls factorial
+        let main_rs_path = temp_dir.path().join("main.rs");
+        let main_content = r#"
+fn main() {
+    // Test factorial: 5! = 120
+    let result = cpp_stubs::factorial(5);
+    println!("factorial(5) = {}", result);
+
+    // Verify result
+    if result == 120 {
+        println!("SUCCESS: factorial test passed!");
+    } else {
+        println!("FAILURE: expected 120, got {}", result);
+        std::process::exit(1);
+    }
+}
+"#;
+        std::fs::write(&main_rs_path, main_content)
+            .expect("Failed to write main.rs");
+
+        let output_path = temp_dir.path().join("test_binary");
+
+        // Compile with MIR injection
+        let result = driver.compile(&[main_rs_path.as_path()], &stubs, &output_path);
+
+        match result {
+            Ok(()) => {
+                println!("Compilation succeeded!");
+                assert!(output_path.exists(), "Output binary should exist");
+
+                // Run the binary and capture output
+                let output = std::process::Command::new(&output_path)
+                    .output()
+                    .expect("Failed to run binary");
+
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                println!("Binary stdout: {}", stdout);
+                println!("Binary stderr: {}", stderr);
+                println!("Exit status: {:?}", output.status);
+
+                // Verify the factorial result
+                assert!(
+                    stdout.contains("120"),
+                    "Expected output to contain result 120 from factorial(5)"
+                );
+                assert!(
+                    stdout.contains("SUCCESS"),
+                    "Expected output to indicate success"
+                );
+                assert!(
+                    output.status.success(),
+                    "Binary should exit with success status"
+                );
+            }
+            Err(e) => {
+                let err_msg = format!("{:?}", e);
+                println!("Compilation failed: {}", err_msg);
+                panic!("Compilation failed: {}", err_msg);
+            }
+        }
+
+        println!("test_compile_factorial_with_rustc completed - recursion verified!");
+    }
+
     /// Test compiling C++ source files to object files.
     /// M5.7.2: Build C++ object files
     #[test]
