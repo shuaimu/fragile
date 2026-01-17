@@ -5,15 +5,16 @@
 #define _STDINT_H
 
 // Exact width integer types
+// Note: On x86_64 Linux, long is 64-bit, so int64_t should be long, not long long
 typedef signed char int8_t;
 typedef short int16_t;
 typedef int int32_t;
-typedef long long int64_t;
+typedef long int64_t;  // long is 64-bit on x86_64
 
 typedef unsigned char uint8_t;
 typedef unsigned short uint16_t;
 typedef unsigned int uint32_t;
-typedef unsigned long long uint64_t;
+typedef unsigned long uint64_t;  // unsigned long is 64-bit on x86_64
 
 // Minimum-width integer types
 typedef int8_t int_least8_t;
@@ -42,8 +43,9 @@ typedef long intptr_t;
 typedef unsigned long uintptr_t;
 
 // Greatest-width integer types
-typedef long long intmax_t;
-typedef unsigned long long uintmax_t;
+// Note: On x86_64 Linux, these should be long to match cstdint
+typedef long intmax_t;
+typedef unsigned long uintmax_t;
 
 // Limits of exact-width integer types
 #define INT8_MIN (-128)

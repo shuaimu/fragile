@@ -14,26 +14,8 @@ public:
     virtual ~basic_streambuf() = default;
 };
 
-// Note: streamsize and ios_base are defined in iostream
-
-// Manipulators (may already be in iomanip, but we provide here for convenience)
-#ifndef _SETPRECISION_DEFINED
-#define _SETPRECISION_DEFINED
-struct _Setprecision { int n; };
-inline _Setprecision setprecision(int n) { return {n}; }
-#endif
-
-#ifndef _SETW_DEFINED
-#define _SETW_DEFINED
-struct _Setw { int n; };
-inline _Setw setw(int n) { return {n}; }
-#endif
-
-#ifndef _SETFILL_DEFINED
-#define _SETFILL_DEFINED
-struct _Setfill { char c; };
-inline _Setfill setfill(char c) { return {c}; }
-#endif
+// Note: streamsize, ios_base, and manipulators (_Setprecision, _Setw, _Setfill)
+// are defined in iostream which we include above.
 
 // Stream manipulator functions (use ios_base from iostream)
 inline ios_base& fixed(ios_base& str) { str.setf(ios_base::fixed, ios_base::floatfield); return str; }

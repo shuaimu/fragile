@@ -207,6 +207,11 @@ impl CppCompiler {
             cmd.arg(format!("-D{}", def));
         }
 
+        // Debug: print the command (env var to enable)
+        if std::env::var("FRAGILE_DEBUG").is_ok() {
+            eprintln!("DEBUG: Running {:?} {:?}", cmd.get_program(), cmd.get_args().collect::<Vec<_>>());
+        }
+
         // Execute
         let output = cmd
             .output()

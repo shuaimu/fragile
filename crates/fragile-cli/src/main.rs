@@ -189,7 +189,24 @@ fn main() -> Result<()> {
             }
 
             // Parse and compile each source file
-            let (include_paths, system_paths, defines) = job.parser_config();
+            let (include_paths, mut system_paths, defines) = job.parser_config();
+
+            // Add fragile-clang stubs directory as system include for proper parsing
+            // This provides minimal STL stubs that allow parsing without full system headers
+            let stubs_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .parent()
+                .unwrap()
+                .join("fragile-clang/stubs");
+
+            if stubs_dir.exists() {
+                if verbose {
+                    println!("Using stubs directory: {}", stubs_dir.display());
+                }
+                system_paths.push(stubs_dir.to_string_lossy().to_string());
+            } else {
+                eprintln!("Warning: stubs directory not found at {}", stubs_dir.display());
+            }
+
 
             let parser = fragile_clang::ClangParser::with_paths_and_defines(
                 include_paths,

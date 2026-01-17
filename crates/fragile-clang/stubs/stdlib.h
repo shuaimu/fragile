@@ -24,6 +24,8 @@ using std::rand;
 using std::srand;
 
 // BSD random number functions
+// Note: rand_r may be defined in cstdlib, so guard the declaration
+#ifndef _FRAGILE_CSTDLIB_
 extern "C" {
 long random(void);
 void srandom(unsigned int seed);
@@ -31,6 +33,7 @@ char* initstate(unsigned int seed, char* state, size_t n);
 char* setstate(char* state);
 int rand_r(unsigned int* seedp);  // POSIX thread-safe rand
 }
+#endif
 
 using std::qsort;
 using std::bsearch;
