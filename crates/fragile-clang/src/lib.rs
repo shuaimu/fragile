@@ -805,6 +805,14 @@ pub enum MirRvalue {
     },
     /// Take address of a place
     Ref { place: MirPlace, mutability: bool },
+    /// Aggregate initialization (struct, array, tuple)
+    /// Fields are stored in order, with optional field names for structs
+    Aggregate {
+        /// The aggregate type (struct, array, etc.)
+        ty: CppType,
+        /// Field values in order, with optional field names
+        fields: Vec<(Option<String>, MirOperand)>,
+    },
 }
 
 /// An operand (something that can be used as input).

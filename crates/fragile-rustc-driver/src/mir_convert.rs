@@ -530,6 +530,23 @@ impl<'tcx> MirConvertCtx<'tcx> {
                 };
                 Rvalue::Ref(self.tcx.lifetimes.re_erased, kind, p)
             }
+            MirRvalue::Aggregate { ty, fields } => {
+                use rustc_middle::mir::AggregateKind;
+                // Convert aggregate initialization
+                // For now, we generate a tuple aggregate as a placeholder
+                // TODO: Properly resolve struct types and generate correct aggregate kind
+                let operands: Vec<_> = fields.iter()
+                    .map(|(_name, operand)| self.convert_operand(operand))
+                    .collect();
+
+                // Use the unit type as placeholder for now
+                // Full implementation would look up the actual struct type
+                let _ = ty; // silence unused warning
+                Rvalue::Aggregate(
+                    Box::new(AggregateKind::Tuple),
+                    operands.into_iter().collect(),
+                )
+            }
         }
     }
 

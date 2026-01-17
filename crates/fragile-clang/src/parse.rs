@@ -946,7 +946,8 @@ impl ClangParser {
                     ClangNodeKind::ParenExpr { ty }
                 }
 
-                clang_sys::CXCursor_CStyleCastExpr => {
+                clang_sys::CXCursor_CStyleCastExpr
+                | clang_sys::CXCursor_CXXFunctionalCastExpr => {
                     let ty = self.convert_type(clang_sys::clang_getCursorType(cursor));
                     ClangNodeKind::CastExpr {
                         cast_kind: CastKind::Other,
@@ -957,6 +958,12 @@ impl ClangParser {
                 clang_sys::CXCursor_ConditionalOperator => {
                     let ty = self.convert_type(clang_sys::clang_getCursorType(cursor));
                     ClangNodeKind::ConditionalOperator { ty }
+                }
+
+                // Initialization list expression: {1, 2, 3}
+                clang_sys::CXCursor_InitListExpr => {
+                    let ty = self.convert_type(clang_sys::clang_getCursorType(cursor));
+                    ClangNodeKind::InitListExpr { ty }
                 }
 
                 // C++20 Concepts

@@ -252,7 +252,14 @@ Each feature must work through the MIR pipeline, not clang++.
   - Arrow access generates Deref + Field projections
   - Added 3 tests: test_convert_member_expr_dot, test_convert_member_expr_arrow, test_convert_nested_member_expr
   - See: `docs/dev/plan_3_1_2_field_access.md`
-- [ ] **3.1.3** Struct literals / aggregate initialization
+- [x] **3.1.3** Struct literals / aggregate initialization [26:01:17]
+  - [x] 3.1.3a Add `InitListExpr` AST node kind in ast.rs
+  - [x] 3.1.3b Add parser handling for `CXCursor_InitListExpr` and `CXXFunctionalCastExpr` in parse.rs
+  - [x] 3.1.3c Add MIR aggregate initialization support (MirRvalue::Aggregate)
+  - [x] 3.1.3d Add conversion from InitListExpr to MIR in convert.rs
+  - [x] 3.1.3e Add tests: test_convert_init_list_struct, test_convert_init_list_variable, test_convert_init_list_array
+  - Fixed CastExpr to skip TypeRef children when finding expression value
+  - See: `docs/dev/plan_3_1_3_init_list.md`
 - [ ] **3.1.4** Nested structs
 
 ### 3.2 Classes

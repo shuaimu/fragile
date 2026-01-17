@@ -1021,7 +1021,11 @@ impl MirConverter {
             ClangNodeKind::ImplicitCastExpr { .. } | ClangNodeKind::CastExpr { .. } => {
                 // For now, just unwrap casts
                 // TODO: Handle actual type conversions
-                if let Some(inner) = node.children.first() {
+                // Skip non-expression children (like TypeRef) and find the actual value
+                if let Some(inner) = node.children.iter().find(|c| is_expression_kind(&c.kind)) {
+                    self.convert_expr(inner, builder)
+                } else if let Some(inner) = node.children.first() {
+                    // Fallback: try first child
                     self.convert_expr(inner, builder)
                 } else {
                     Ok(MirOperand::Constant(MirConstant::Unit))
@@ -1200,6 +1204,34 @@ impl MirConverter {
                         signed: true,
                     }))
                 }
+            }
+
+            ClangNodeKind::InitListExpr { ty } => {
+                // Initialization list expression: {1, 2, 3}
+                // Children are the individual initializer expressions
+                let mut fields = Vec::new();
+
+                for child in &node.children {
+                    let operand = self.convert_expr(child, builder)?;
+                    // For now, we don't have field names from the init list
+                    // Field names can be resolved later if we have struct type info
+                    fields.push((None, operand));
+                }
+
+                // Create a temporary to hold the aggregate value
+                let result_local = builder.add_local(None, ty.clone(), false);
+                let destination = MirPlace::local(result_local);
+
+                // Assign the aggregate to the temporary
+                builder.add_statement(MirStatement::Assign {
+                    target: destination.clone(),
+                    value: MirRvalue::Aggregate {
+                        ty: ty.clone(),
+                        fields,
+                    },
+                });
+
+                Ok(MirOperand::Copy(destination))
             }
 
             ClangNodeKind::Unknown(_) => {
@@ -1755,6 +1787,7 @@ impl MirConverter {
             ClangNodeKind::CastExpr { ty, .. } => ty.clone(),
             ClangNodeKind::ImplicitCastExpr { ty, .. } => ty.clone(),
             ClangNodeKind::ConditionalOperator { ty } => ty.clone(),
+            ClangNodeKind::InitListExpr { ty } => ty.clone(),
             ClangNodeKind::VarDecl { ty, .. } => ty.clone(),
             ClangNodeKind::ParmVarDecl { ty, .. } => ty.clone(),
             _ => CppType::Int { signed: true }, // Default fallback
@@ -1832,6 +1865,7 @@ fn is_expression_kind(kind: &ClangNodeKind) -> bool {
             | ClangNodeKind::ConditionalOperator { .. }
             | ClangNodeKind::ParenExpr { .. }
             | ClangNodeKind::ImplicitCastExpr { .. }
+            | ClangNodeKind::InitListExpr { .. }
             // C++20 Coroutine expressions
             | ClangNodeKind::CoawaitExpr { .. }
             | ClangNodeKind::CoyieldExpr { .. }
@@ -2241,6 +2275,120 @@ mod tests {
 
                 int get_nested_value(Outer o) {
                     return o.inner.value;
+                }
+                "#,
+                "test.cpp",
+            )
+            .unwrap();
+
+        let converter = MirConverter::new();
+        let module = converter.convert(ast).unwrap();
+
+        assert_eq!(module.functions.len(), 1);
+        let func = &module.functions[0];
+
+        // Just verify the function compiles without panicking
+        assert!(
+            !func.mir_body.blocks.is_empty(),
+            "Function should have basic blocks"
+        );
+    }
+
+    #[test]
+    fn test_convert_init_list_struct() {
+        // Test struct aggregate initialization with braced init list
+        let parser = ClangParser::new().unwrap();
+        let ast = parser
+            .parse_string(
+                r#"
+                struct Point {
+                    int x;
+                    int y;
+                };
+
+                Point create_point() {
+                    return Point{1, 2};
+                }
+                "#,
+                "test.cpp",
+            )
+            .unwrap();
+
+        let converter = MirConverter::new();
+        let module = converter.convert(ast).unwrap();
+
+        assert_eq!(module.structs.len(), 1);
+        assert_eq!(module.functions.len(), 1);
+
+        let func = &module.functions[0];
+        let body = &func.mir_body;
+
+        // Verify MirRvalue::Aggregate is used
+        let has_aggregate = body
+            .blocks
+            .iter()
+            .flat_map(|bb| &bb.statements)
+            .any(|stmt| {
+                if let MirStatement::Assign {
+                    value: MirRvalue::Aggregate { .. },
+                    ..
+                } = stmt
+                {
+                    true
+                } else {
+                    false
+                }
+            });
+        assert!(
+            has_aggregate,
+            "Should have MirRvalue::Aggregate for init list"
+        );
+    }
+
+    #[test]
+    fn test_convert_init_list_variable() {
+        // Test struct aggregate initialization assigned to variable
+        let parser = ClangParser::new().unwrap();
+        let ast = parser
+            .parse_string(
+                r#"
+                struct Point {
+                    int x;
+                    int y;
+                };
+
+                int get_x() {
+                    Point p{10, 20};
+                    return p.x;
+                }
+                "#,
+                "test.cpp",
+            )
+            .unwrap();
+
+        let converter = MirConverter::new();
+        let module = converter.convert(ast).unwrap();
+
+        assert_eq!(module.functions.len(), 1);
+        let func = &module.functions[0];
+
+        // Just verify the function compiles without panicking
+        assert!(
+            !func.mir_body.blocks.is_empty(),
+            "Function should have basic blocks"
+        );
+    }
+
+    #[test]
+    fn test_convert_init_list_array() {
+        // Test array initialization with init list
+        let parser = ClangParser::new().unwrap();
+        let ast = parser
+            .parse_string(
+                r#"
+                int get_second() {
+                    int arr[3] = {1, 2, 3};
+                    return arr[1];
                 }
                 "#,
                 "test.cpp",

@@ -337,6 +337,14 @@ pub enum ClangNodeKind {
         ty: CppType,
     },
 
+    /// Initialization list expression (e.g., {1, 2, 3})
+    /// Used for aggregate initialization of structs/arrays.
+    /// Children contain the individual initializer expressions.
+    InitListExpr {
+        /// Result type of the initialization (the struct/array type)
+        ty: CppType,
+    },
+
     /// Type trait expression (e.g., __is_integral(T), __is_same(T, U))
     /// These are Clang's built-in type trait intrinsics.
     TypeTraitExpr {
