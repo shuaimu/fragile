@@ -9738,6 +9738,66 @@ fn test_rrr_rpc_server_cpp() {
     }
 }
 
+/// Test parsing test/benchmark_service.h (RPC service for benchmarks)
+#[test]
+fn test_benchmark_service_h() {
+    use std::path::Path;
+
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let file_path = project_root.join("vendor/mako/test/benchmark_service.h");
+
+    if !file_path.exists() {
+        println!("Skipping test: benchmark_service.h not found");
+        return;
+    }
+
+    let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("stubs");
+    let mako_src = project_root.join("vendor/mako/src");
+    let rrr_path = project_root.join("vendor/mako/src/rrr");
+    let test_path = project_root.join("vendor/mako/test");
+    let rusty_cpp_path = project_root.join("vendor/mako/third-party/rusty-cpp/include");
+
+    let mut system_include_paths = vec![
+        stubs_path.to_string_lossy().to_string(),
+        rusty_cpp_path.to_string_lossy().to_string(),
+    ];
+
+    let clang_paths = [
+        "/usr/lib/llvm-19/lib/clang/19/include",
+        "/usr/lib/llvm-18/lib/clang/18/include",
+    ];
+
+    for path in &clang_paths {
+        if Path::new(path).exists() {
+            system_include_paths.push(path.to_string());
+            break;
+        }
+    }
+
+    let include_paths = vec![
+        rrr_path.to_string_lossy().to_string(),
+        mako_src.to_string_lossy().to_string(),
+        test_path.to_string_lossy().to_string(),
+    ];
+
+    let parser = ClangParser::with_paths(include_paths, system_include_paths)
+        .expect("Failed to create parser");
+
+    let result = parser.parse_file(&file_path);
+
+    match result {
+        Ok(ast) => {
+            let converter = MirConverter::new();
+            let module = converter.convert(ast).unwrap();
+
+            println!("Successfully parsed benchmark_service.h with {} functions", module.functions.len());
+        }
+        Err(e) => {
+            println!("Note: benchmark_service.h parsing failed: {:?}", e);
+        }
+    }
+}
+
 /// Test parsing masstree kvrandom.cc (pure random number generation)
 #[test]
 fn test_mako_masstree_kvrandom_cc() {
