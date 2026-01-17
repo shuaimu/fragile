@@ -606,15 +606,9 @@ Migration: After C++20 support is complete, deprecate these.
   - [ ] External dependencies (pthread, numa, dpdk)
 
 ### G.4 Fix Blocked Files
-- [ ] **G.4.1 mtd.cc** (~20 lines)
-  - [ ] Fix sys/epoll.h conflicts with system headers
-  - [ ] Add WORDS_BIGENDIAN configuration
-- [ ] **G.4.2 persist_test.cc** - Skip or workaround
-  - [ ] Document: has undefined `one_way_post` template (mako bug)
-  - [ ] Exclude from build if not critical
-- [ ] **G.4.3 mongodb/server.cc** - Optional
-  - [ ] Only needed if MongoDB support enabled
-  - [ ] Add bsoncxx/mongocxx stub headers if required
+- [x] **G.4.1 mtd.cc** [26:01:17] - Parsing passes (epoll.h included properly)
+- [x] **G.4.2 persist_test.cc** [26:01:17] - Parsing passes
+- [x] **G.4.3 mongodb/server.cc** [26:01:17] - Parsing passes (5 mongodb tests pass)
 
 ### G.5 Build Mako Executables
 - [ ] **G.5.1 Core Executables**
@@ -692,10 +686,7 @@ Next steps:
 6. G.3.1: Build system integration
 7. G.5.1: Build first executable (simpleTransaction)
 
-**Blocked files** (3 total, non-critical):
-- mongodb/server.cc (needs bsoncxx - optional)
-- persist_test.cc (mako bug - skip)
-- mtd.cc (epoll conflicts - fixable)
+**Previously blocked files**: All now parsing (G.4 complete)
 
 ---
 
