@@ -104,8 +104,12 @@ pub fn is_cpp_function<'tcx>(
 
 /// Collect all DefIds that correspond to C++ functions.
 ///
-/// This scans all items in the crate and identifies those with #[link_name]
-/// attributes that match registered C++ functions.
+/// This scans all items in the crate and identifies those with `#[export_name]`
+/// or `#[link_name]` attributes that match registered C++ functions.
+///
+/// Supports both:
+/// - Regular Rust functions with `#[export_name]` (MIR injection method)
+/// - Foreign items with `#[link_name]` (legacy method)
 pub fn collect_cpp_def_ids<'tcx>(
     tcx: TyCtxt<'tcx>,
     cpp_function_names: &HashSet<String>,
@@ -118,15 +122,28 @@ pub fn collect_cpp_def_ids<'tcx>(
     // Iterate over all items in the crate through module tree
     for owner in hir_crate.owners.iter() {
         if let hir::MaybeOwner::Owner(owner_info) = owner {
-            // Check if this is a foreign item (extern function)
-            if let hir::OwnerNode::ForeignItem(foreign_item) = owner_info.node() {
-                let def_id = foreign_item.owner_id.def_id;
-
-                if let Some(link_name) = get_cpp_link_name(tcx, def_id) {
-                    if cpp_function_names.contains(&link_name) {
-                        result.push((def_id, link_name));
+            match owner_info.node() {
+                // Check regular items (functions with #[export_name])
+                hir::OwnerNode::Item(item) => {
+                    if let hir::ItemKind::Fn { .. } = item.kind {
+                        let def_id = item.owner_id.def_id;
+                        if let Some(export_name) = get_cpp_link_name(tcx, def_id) {
+                            if cpp_function_names.contains(&export_name) {
+                                result.push((def_id, export_name));
+                            }
+                        }
                     }
                 }
+                // Check foreign items (extern functions with #[link_name])
+                hir::OwnerNode::ForeignItem(foreign_item) => {
+                    let def_id = foreign_item.owner_id.def_id;
+                    if let Some(link_name) = get_cpp_link_name(tcx, def_id) {
+                        if cpp_function_names.contains(&link_name) {
+                            result.push((def_id, link_name));
+                        }
+                    }
+                }
+                _ => {}
             }
         }
     }
