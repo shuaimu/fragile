@@ -154,32 +154,32 @@ Each feature must work through the MIR pipeline, not clang++.
 - [x] **2.1.2** Float literals [26:01:17] (see `docs/dev/plan_2_1_2_float_literals.md`)
 - [x] **2.1.3** Boolean literals [26:01:17] (added CXXBoolLiteralExpr parsing)
 - [x] **2.1.4** String literals [26:01:17] (added CXCursor_StringLiteral parsing)
-- [ ] Binary operators (+, -, *, /, %, &, |, ^)
-- [ ] Unary operators (-, !, ~)
-- [ ] Comparison operators (==, !=, <, <=, >, >=)
-- [ ] Logical operators (&&, ||)
+- [x] **2.1.5** Binary operators (+, -, *, /, %, &, |, ^) [already implemented]
+- [x] **2.1.6** Unary operators (-, !, ~) [already implemented]
+- [x] **2.1.7** Comparison operators (==, !=, <, <=, >, >=) [already implemented]
+- [x] **2.1.8** Logical operators (&&, ||) [already implemented]
 
 ### 2.2 Statements
-- [ ] Variable declarations
-- [ ] Assignment
-- [ ] If/else
-- [ ] While loops
-- [ ] For loops
-- [ ] Return
-- [ ] Break/continue
+- [x] **2.2.1** Variable declarations [already implemented - DeclStmt/VarDecl]
+- [x] **2.2.2** Assignment [already implemented - via BinaryOperator::Assign]
+- [x] **2.2.3** If/else [already implemented - IfStmt]
+- [x] **2.2.4** While loops [already implemented - WhileStmt]
+- [x] **2.2.5** For loops [already implemented - ForStmt]
+- [x] **2.2.6** Return [already implemented - ReturnStmt]
+- [x] **2.2.7** Break/continue [already implemented - BreakStmt/ContinueStmt]
 
 ### 2.3 Functions
-- [ ] Function definitions
-- [ ] Function calls
-- [ ] Parameters (by value)
-- [ ] Return values
-- [ ] Recursion
+- [x] **2.3.1** Function definitions [already implemented - FunctionDecl]
+- [x] **2.3.2** Function calls [already implemented - CallExpr]
+- [x] **2.3.3** Parameters (by value) [already implemented - ParmVarDecl]
+- [x] **2.3.4** Return values [already implemented - via ReturnStmt]
+- [x] **2.3.5** Recursion [already implemented - via CallExpr]
 
 ### 2.4 Basic Types
-- [ ] Primitive types (int, float, bool, char)
-- [ ] Pointers (*T)
-- [ ] References (&T)
-- [ ] Arrays ([T; N])
+- [x] **2.4.1** Primitive types (int, float, bool, char) [already implemented - CppType]
+- [ ] **2.4.2** Pointers (*T)
+- [ ] **2.4.3** References (&T)
+- [ ] **2.4.4** Arrays ([T; N])
 
 ---
 
