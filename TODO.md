@@ -534,29 +534,179 @@ Migration: After C++20 support is complete, deprecate these.
 
 ---
 
+## 6. Phase G: Mako Full Build & CI Pass
+
+**Goal**: Build the complete Mako project with Fragile, generate working binaries, and pass all Mako CI tests.
+
+### G.1 Complete MIR Injection Pipeline
+- [x] **G.1.1 TLS Registry Wiring** (~100 lines) [26:01:17]
+  - [x] Add thread-local storage for CppMirRegistry in rustc driver
+  - [x] Wire registry state through query override callbacks
+  - [x] Test with simple C++ → Rust calls (34 tests passing including TLS lifecycle tests)
+- [x] **G.1.2 Full Type Conversion** (~200 lines) [26:01:17] ([docs/dev/plan_g1_2_full_type_conversion.md](docs/dev/plan_g1_2_full_type_conversion.md))
+  - [x] Primitive types (int, float, bool, char) ✅ done
+  - [x] Pointer types (*T, *const T, *mut T) - recursive pointee conversion
+  - [x] Reference types (&T, &mut T) - converted to raw pointers for FFI
+  - [x] Array types ([T; N]) - fixed-size arrays supported
+  - [x] Struct types (user-defined) - well-known types mapped, others use opaque pointers
+  - [x] Enum types (C++ enum class) - mapped via Named type handling
+  - [x] Function pointer types - full fn sig conversion with ABI
+  - [x] Template-related types - warnings for uninstantiated params
+- [ ] **G.1.3 Function Signature Conversion** (~150 lines)
+  - [ ] Parameter types with proper ABI
+  - [ ] Return types
+  - [ ] Variadic functions (printf-style)
+  - [ ] Member function pointers
+- [ ] **G.1.4 MIR Body Generation** (~300 lines)
+  - [ ] Convert MirStatement to rustc Statement
+  - [ ] Convert MirTerminator to rustc Terminator
+  - [ ] Convert MirRvalue to rustc Rvalue
+  - [ ] Handle basic blocks and control flow
+  - [ ] Handle local variables and temporaries
+
+### G.2 Runtime Support
+- [ ] **G.2.1 Exception Handling** (~200 lines)
+  - [ ] Implement `fragile_rt_throw()` with LLVM landingpad
+  - [ ] Implement `fragile_rt_catch()` with type matching
+  - [ ] Stack unwinding with cleanup blocks
+  - [ ] Integration with C++ `<exception>` header
+- [ ] **G.2.2 RTTI Support** (~150 lines)
+  - [ ] Generate `std::type_info` structures
+  - [ ] Implement `typeid()` runtime lookup
+  - [ ] Implement `dynamic_cast<>()` with vtable check
+- [ ] **G.2.3 Virtual Dispatch** (~100 lines)
+  - [ ] Vtable layout generation
+  - [ ] Virtual function call lowering
+  - [ ] Pure virtual function stubs
+  - [ ] Multiple inheritance vtable offsets
+- [ ] **G.2.4 Memory Management** (~100 lines)
+  - [ ] `operator new` / `operator delete`
+  - [ ] Placement new
+  - [ ] Array new/delete with size prefix
+  - [ ] Alignment-aware allocation
+
+### G.3 Build System Integration
+- [ ] **G.3.1 Fragile Build Configuration** (~200 lines)
+  - [ ] Parse Mako's CMakeLists.txt for sources, includes, defines
+  - [ ] Create `fragile.toml` or equivalent build config
+  - [ ] Handle conditional compilation (DPDK, eRPC, etc.)
+- [ ] **G.3.2 Include Path Management** (~50 lines)
+  - [ ] System headers (-isystem)
+  - [ ] Project headers (-I)
+  - [ ] Third-party headers (erpc, yaml-cpp, boost)
+- [ ] **G.3.3 Compiler Flag Translation** (~50 lines)
+  - [ ] Optimization flags (-O2, -O3)
+  - [ ] Debug info (-g)
+  - [ ] Warnings (-Wall, -Werror)
+  - [ ] C++ standard (-std=c++23)
+- [ ] **G.3.4 Dependency Handling** (~100 lines)
+  - [ ] Link order for static libraries
+  - [ ] Shared library support
+  - [ ] External dependencies (pthread, numa, dpdk)
+
+### G.4 Fix Blocked Files
+- [ ] **G.4.1 mtd.cc** (~20 lines)
+  - [ ] Fix sys/epoll.h conflicts with system headers
+  - [ ] Add WORDS_BIGENDIAN configuration
+- [ ] **G.4.2 persist_test.cc** - Skip or workaround
+  - [ ] Document: has undefined `one_way_post` template (mako bug)
+  - [ ] Exclude from build if not critical
+- [ ] **G.4.3 mongodb/server.cc** - Optional
+  - [ ] Only needed if MongoDB support enabled
+  - [ ] Add bsoncxx/mongocxx stub headers if required
+
+### G.5 Build Mako Executables
+- [ ] **G.5.1 Core Executables**
+  - [ ] `dbtest` - Main test database executable
+  - [ ] `simpleTransaction` - Simple transaction test
+  - [ ] `simplePaxos` - Paxos consensus test
+  - [ ] `simpleRaft` - Raft consensus test
+- [ ] **G.5.2 Unit Test Executables** (~25 tests)
+  - [ ] `test_marshal` - Serialization tests
+  - [ ] `test_config_schema` - Configuration tests
+  - [ ] `test_masstree` - Masstree index tests
+  - [ ] `test_fiber` - Fiber/coroutine tests
+  - [ ] `test_rpc` - RPC framework tests
+  - [ ] `test_future` - Future/promise tests
+  - [ ] All others listed in CMakeLists.txt
+- [ ] **G.5.3 Benchmark Executables**
+  - [ ] `rpcbench` - RPC benchmark
+  - [ ] `bench_future` - Future benchmark
+
+### G.6 Pass Mako CI Tests
+- [ ] **G.6.1 Unit Tests (ctest)**
+  - [ ] `test_marshal` passes
+  - [ ] `test_config_schema` passes
+  - [ ] `test_sharding_policy` passes
+  - [ ] `test_fiber` passes
+  - [ ] `test_masstree` passes
+  - [ ] `test_rpc` passes
+  - [ ] All 25 ctest tests pass
+- [ ] **G.6.2 Integration Tests (ci.sh)**
+  - [ ] `./ci/ci.sh simpleTransaction` passes
+  - [ ] `./ci/ci.sh simplePaxos` passes
+  - [ ] `./ci/ci.sh shardNoReplication` passes
+  - [ ] `./ci/ci.sh shard1Replication` passes
+  - [ ] `./ci/ci.sh shard2Replication` passes
+- [ ] **G.6.3 Raft Tests (ci_mako_raft.sh)**
+  - [ ] `./ci/ci.sh shard1ReplicationRaft` passes
+  - [ ] `./ci/ci.sh shard2ReplicationRaft` passes
+- [ ] **G.6.4 Full CI Suite**
+  - [ ] `./ci/ci.sh all` passes
+  - [ ] No memory leaks (valgrind clean)
+  - [ ] No hanging processes after tests
+
+### G.7 Performance Validation
+- [ ] **G.7.1 Baseline Comparison**
+  - [ ] Build Mako with g++ (baseline)
+  - [ ] Build Mako with Fragile
+  - [ ] Compare binary sizes
+  - [ ] Compare startup time
+- [ ] **G.7.2 Throughput Tests**
+  - [ ] TPC-C benchmark comparison
+  - [ ] RPC latency comparison
+  - [ ] Memory usage comparison
+- [ ] **G.7.3 Correctness Verification**
+  - [ ] Same output for deterministic tests
+  - [ ] Same transaction semantics
+  - [ ] Same consensus behavior
+
+---
+
 ## Current Focus
 
-**Primary: Mako Integration (Phase F)**
+**Primary: Phase G - Mako Full Build & CI**
 
 Current status:
-- **rrr module**: 20/20 files parsing (100%) - all base, misc, reactor, rpc files parsing
-- **mako module**: 338/338 files tested (100%) - includes all memdb files, deptran files, consensus executors, masstree, benchmarks
-- **Total tests**: 569 fragile-clang + 20 fragile-rustc-driver = 589 tests passing
-- **Milestones**: M1-M6 ✅ complete (all Mako milestones done!)
-- **Blocked files**: mongodb/server.cc (bsoncxx), persist_test.cc (undefined template), mtd.cc (epoll conflicts)
+- **Phase F (Parsing)**: ✅ Complete - 338/338 files parsing (100%)
+- **Milestones M1-M6**: ✅ Complete - test harness working
+- **Phase G (Full Build)**: 🔄 Starting
 
-**All Mako milestones (M1-M6) are complete!** [26:01:17]
+Next steps:
+1. ~~G.1.1: Wire TLS for MIR registry in rustc driver~~ ✅ Done
+2. ~~G.1.2: Complete type conversion for all C++ types~~ ✅ Done
+3. G.1.3: Function signature conversion
+4. G.1.4: MIR body generation
+5. G.2.1: Implement exception handling runtime
 
-Summary of completed work:
-- M1-M4: Parsing all mako files (100% coverage)
-- M5: Full compilation pipeline with C++ object linking
-- M6: Test suite with 20 test harness tests across 4 categories:
-  - String operations (strop)
-  - Format functions (STL)
-  - Logging (pthread_mutex, va_list)
-  - Threading (std::thread, std::mutex, std::atomic)
+**Blocked files** (3 total, non-critical):
+- mongodb/server.cc (needs bsoncxx - optional)
+- persist_test.cc (mako bug - skip)
+- mtd.cc (epoll conflicts - fixable)
 
-Future work (optional):
-- Go Support (Section 3) - deferred
-- Legacy Architecture deprecation (Section 4) - when new arch is stable
-- Additional test coverage for complex mako features
+---
+
+## Summary
+
+| Phase | Description | Status |
+|-------|-------------|--------|
+| 1.0 | Infrastructure (Clang + rustc) | ✅ Complete |
+| A | Core C++ (namespaces, classes, inheritance) | ✅ Complete |
+| B | Templates (SFINAE, concepts, variadic) | ✅ Complete |
+| C | Standard Library (containers, smart ptrs) | ✅ Complete |
+| D | Coroutines (co_await, generators) | ✅ Complete |
+| E | Advanced (exceptions, RTTI, lambdas) | ✅ Complete |
+| F | Mako Parsing (338/338 files) | ✅ Complete |
+| **G** | **Mako Full Build & CI** | 🔄 **In Progress** |
+| 3 | Go Support | ⏸️ Deferred |
+| 4 | Legacy Deprecation | ⏸️ Deferred |

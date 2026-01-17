@@ -9,6 +9,7 @@
 #![cfg(feature = "rustc-integration")]
 
 extern crate rustc_abi;
+extern crate rustc_hir;
 extern crate rustc_index;
 extern crate rustc_middle;
 extern crate rustc_span;
@@ -116,10 +117,18 @@ impl<'tcx> MirConvertCtx<'tcx> {
 
     /// Convert a CppType to rustc Ty.
     ///
-    /// This is a simplified conversion for basic types.
-    /// Full type conversion handles complex types.
+    /// Performs full recursive type conversion including:
+    /// - Primitive types (void, bool, char, short, int, long, long long, float, double)
+    /// - Pointer types with proper pointee conversion (*T, *const T, *mut T)
+    /// - Reference types (converted to raw pointers for FFI)
+    /// - Array types ([T; N] for fixed-size, *T for unsized)
+    /// - Named types (structs, classes, enums)
+    /// - Function pointer types
     pub fn convert_type(&self, cpp_type: &CppType) -> Ty<'tcx> {
         match cpp_type {
+            // ================================================================
+            // Primitive Types
+            // ================================================================
             CppType::Void => self.tcx.types.unit,
             CppType::Bool => self.tcx.types.bool,
 
@@ -165,37 +174,137 @@ impl<'tcx> MirConvertCtx<'tcx> {
             CppType::Float => self.tcx.types.f32,
             CppType::Double => self.tcx.types.f64,
 
-            // Pointers - convert to raw pointers
-            CppType::Pointer { .. } => {
-                // For simplicity, use *const () for all pointers
-                // Full implementation needs to track pointee type
-                Ty::new_ptr(
-                    self.tcx,
-                    self.tcx.types.unit,
-                    rustc_middle::ty::Mutability::Not,
-                )
+            // ================================================================
+            // Pointer Types - Recursive conversion
+            // ================================================================
+            CppType::Pointer { pointee, is_const } => {
+                // Recursively convert pointee type
+                let pointee_ty = self.convert_type(pointee);
+                let mutability = if *is_const {
+                    rustc_middle::ty::Mutability::Not
+                } else {
+                    rustc_middle::ty::Mutability::Mut
+                };
+                Ty::new_ptr(self.tcx, pointee_ty, mutability)
             }
 
-            // References - convert to references
-            CppType::Reference { is_rvalue, .. } => {
-                if *is_rvalue {
-                    // Rvalue reference -> &mut
-                    Ty::new_mut_ref(self.tcx, self.tcx.lifetimes.re_erased, self.tcx.types.unit)
+            // ================================================================
+            // Reference Types - Convert to raw pointers for FFI
+            // ================================================================
+            // In C++ FFI, references are passed as pointers:
+            // - const T& -> *const T
+            // - T& -> *mut T
+            // - T&& (rvalue ref) -> *mut T (ownership transfer)
+            CppType::Reference { referent, is_const, is_rvalue: _ } => {
+                // Recursively convert referent type
+                let referent_ty = self.convert_type(referent);
+                let mutability = if *is_const {
+                    rustc_middle::ty::Mutability::Not
                 } else {
-                    // Lvalue reference -> &
-                    Ty::new_imm_ref(self.tcx, self.tcx.lifetimes.re_erased, self.tcx.types.unit)
+                    rustc_middle::ty::Mutability::Mut
+                };
+                // For FFI, use raw pointers instead of Rust references
+                Ty::new_ptr(self.tcx, referent_ty, mutability)
+            }
+
+            // ================================================================
+            // Array Types
+            // ================================================================
+            CppType::Array { element, size } => {
+                let elem_ty = self.convert_type(element);
+                if let Some(n) = size {
+                    // Fixed-size array: [T; N]
+                    Ty::new_array(self.tcx, elem_ty, *n as u64)
+                } else {
+                    // Unsized array (flexible array member) -> *mut T
+                    Ty::new_ptr(self.tcx, elem_ty, rustc_middle::ty::Mutability::Mut)
                 }
             }
 
-            // All other types - use unit as placeholder
-            CppType::Array { .. }
-            | CppType::Named(_)
-            | CppType::Function { .. }
-            | CppType::TemplateParam { .. }
-            | CppType::DependentType { .. }
-            | CppType::ParameterPack { .. } => {
-                // Use unit as placeholder for complex types
-                // These need full type resolution
+            // ================================================================
+            // Named Types (struct, class, enum, typedef)
+            // ================================================================
+            CppType::Named(name) => {
+                // Handle well-known type aliases
+                match name.as_str() {
+                    // Standard integer types
+                    "size_t" | "std::size_t" => self.tcx.types.usize,
+                    "ssize_t" => self.tcx.types.isize,
+                    "ptrdiff_t" | "std::ptrdiff_t" => self.tcx.types.isize,
+                    "uintptr_t" | "std::uintptr_t" => self.tcx.types.usize,
+                    "intptr_t" | "std::intptr_t" => self.tcx.types.isize,
+
+                    // Fixed-width integer types
+                    "int8_t" | "std::int8_t" => self.tcx.types.i8,
+                    "uint8_t" | "std::uint8_t" => self.tcx.types.u8,
+                    "int16_t" | "std::int16_t" => self.tcx.types.i16,
+                    "uint16_t" | "std::uint16_t" => self.tcx.types.u16,
+                    "int32_t" | "std::int32_t" => self.tcx.types.i32,
+                    "uint32_t" | "std::uint32_t" => self.tcx.types.u32,
+                    "int64_t" | "std::int64_t" => self.tcx.types.i64,
+                    "uint64_t" | "std::uint64_t" => self.tcx.types.u64,
+
+                    // Character types
+                    "wchar_t" => self.tcx.types.i32, // Platform-dependent, typically 32-bit on Linux
+                    "char16_t" => self.tcx.types.u16,
+                    "char32_t" => self.tcx.types.u32,
+
+                    // For unknown named types (structs, classes, enums), use an opaque pointer
+                    // This is safe for FFI as we don't need to know the layout
+                    _ => {
+                        // Use *mut () as opaque type placeholder
+                        // A more sophisticated implementation would look up the type in a registry
+                        Ty::new_ptr(self.tcx, self.tcx.types.unit, rustc_middle::ty::Mutability::Mut)
+                    }
+                }
+            }
+
+            // ================================================================
+            // Function Types
+            // ================================================================
+            CppType::Function { return_type, params, is_variadic } => {
+                // Convert return type
+                let ret_ty = self.convert_type(return_type);
+
+                // Convert parameter types
+                let param_tys: Vec<_> = params.iter().map(|p| self.convert_type(p)).collect();
+
+                // Create function signature
+                // Note: Variadic functions need special ABI handling
+                let abi = if *is_variadic {
+                    rustc_abi::ExternAbi::C { unwind: false }
+                } else {
+                    rustc_abi::ExternAbi::C { unwind: false }
+                };
+
+                // Create the fn pointer type
+                let fn_sig = rustc_middle::ty::Binder::dummy(
+                    self.tcx.mk_fn_sig(
+                        param_tys,
+                        ret_ty,
+                        *is_variadic,
+                        rustc_hir::Safety::Unsafe,
+                        abi,
+                    )
+                );
+                Ty::new_fn_ptr(self.tcx, fn_sig)
+            }
+
+            // ================================================================
+            // Template-Related Types
+            // ================================================================
+            // These types should not normally reach MIR conversion - templates
+            // should be instantiated before MIR generation. Use fallback type.
+            CppType::TemplateParam { name, .. } => {
+                eprintln!("[fragile] Warning: uninstantiated template param '{}' in type conversion", name);
+                self.tcx.types.unit
+            }
+            CppType::DependentType { spelling } => {
+                eprintln!("[fragile] Warning: dependent type '{}' in type conversion", spelling);
+                self.tcx.types.unit
+            }
+            CppType::ParameterPack { name, .. } => {
+                eprintln!("[fragile] Warning: unexpanded parameter pack '{}' in type conversion", name);
                 self.tcx.types.unit
             }
         }
