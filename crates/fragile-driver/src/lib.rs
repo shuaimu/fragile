@@ -29,7 +29,7 @@ impl Driver {
 
     /// Parse all added source files into a program.
     pub fn parse(&self) -> Result<Program> {
-        let mut program = Program::new();
+        let program = Program::new();
 
         // Get all source files
         // Note: In a real implementation, we'd iterate over the source map properly

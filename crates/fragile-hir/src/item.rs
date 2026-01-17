@@ -1,6 +1,5 @@
 use fragile_common::{Span, Symbol};
 use crate::types::{Type, TypeParam, Field, StructDef, Mutability};
-use crate::stmt::Stmt;
 use crate::expr::Expr;
 
 /// Visibility of an item.

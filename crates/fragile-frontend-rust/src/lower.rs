@@ -1,4 +1,4 @@
-use fragile_common::{SourceFile, SourceId, Span, Symbol, SymbolInterner};
+use fragile_common::{SourceFile, Span, Symbol, SymbolInterner};
 use fragile_hir::{
     Abi, AssociatedType, Attribute, BinOp, ConstDef, EnumDef, EnumVariant, Expr, ExprKind, Field,
     FnDef, FnSig, ImplDef, Item, ItemKind, Literal, MatchArm, ModDef, Module, Mutability, Param,

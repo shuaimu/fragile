@@ -1,7 +1,6 @@
 use fragile_common::{Symbol, SymbolInterner};
 use fragile_hir::{
-    Abi, BinOp, ConstDef, Expr, ExprKind, FnDef, FnSig, Item, ItemKind, Literal, Module, Mutability,
-    Param, PrimitiveType, StaticDef, Stmt, StmtKind, StructDef, Type, TypeAlias, TypeParam, UnaryOp,
+    Abi, BinOp, ConstDef, Expr, ExprKind, FnDef, Item, ItemKind, Literal, Module, Mutability, PrimitiveType, StaticDef, Stmt, StmtKind, StructDef, Type, TypeAlias, UnaryOp,
 };
 use inkwell::builder::Builder;
 use inkwell::context::Context;
@@ -10,7 +9,7 @@ use inkwell::targets::{
     CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetMachine,
 };
 use inkwell::types::{BasicMetadataTypeEnum, BasicType, BasicTypeEnum, StructType};
-use inkwell::values::{BasicMetadataValueEnum, BasicValue, BasicValueEnum, CallSiteValue, FunctionValue, PointerValue};
+use inkwell::values::{BasicMetadataValueEnum, BasicValue, BasicValueEnum, FunctionValue, PointerValue};
 use inkwell::OptimizationLevel;
 use inkwell::{AddressSpace, IntPredicate, FloatPredicate};
 use miette::Result;
@@ -2521,8 +2520,7 @@ impl<'a, 'ctx> ModuleCompiler<'a, 'ctx> {
 
                             // Get struct info to find field indices
                             let struct_info = self.struct_types.get(name)
-                                .ok_or_else(|| miette::miette!("Unknown struct type for destructuring"))?
-                                .clone();
+                                .ok_or_else(|| miette::miette!("Unknown struct type for destructuring"))?;
 
                             // Extract and bind each field
                             for (field_name, pat) in fields {

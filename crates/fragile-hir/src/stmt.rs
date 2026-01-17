@@ -1,4 +1,4 @@
-use fragile_common::{Span, Symbol};
+use fragile_common::Span;
 use crate::types::{Type, Mutability};
 use crate::expr::{Expr, Pattern};
 use crate::item::Item;
