@@ -857,6 +857,22 @@ impl ClangParser {
                     ClangNodeKind::FloatingLiteral { value, cpp_type }
                 }
 
+                clang_sys::CXCursor_CXXBoolLiteralExpr => {
+                    // Evaluate the boolean literal using libclang
+                    let eval = clang_sys::clang_Cursor_Evaluate(cursor);
+                    let value = if !eval.is_null() {
+                        // getAsInt returns 1 for true, 0 for false
+                        let result = clang_sys::clang_EvalResult_getAsInt(eval) != 0;
+                        clang_sys::clang_EvalResult_dispose(eval);
+                        result
+                    } else {
+                        // Fallback: check the spelling ("true" or "false")
+                        let spelling = cursor_spelling(cursor);
+                        spelling == "true"
+                    };
+                    ClangNodeKind::BoolLiteral(value)
+                }
+
                 clang_sys::CXCursor_DeclRefExpr => {
                     let name = cursor_spelling(cursor);
                     let ty = self.convert_type(clang_sys::clang_getCursorType(cursor));
@@ -2804,6 +2820,76 @@ mod tests {
             assert_eq!(ty.bit_width(), Some(64), "double should be 64 bits");
         } else {
             panic!("Expected FloatingLiteral");
+        }
+    }
+
+    #[test]
+    fn test_bool_literal_true() {
+        let parser = ClangParser::new().unwrap();
+        let ast = parser
+            .parse_string(
+                r#"
+                bool foo() {
+                    return true;
+                }
+                "#,
+                "test.cpp",
+            )
+            .unwrap();
+
+        // Find the bool literal
+        fn find_bool_literal(node: &ClangNode) -> Option<&ClangNode> {
+            if matches!(&node.kind, ClangNodeKind::BoolLiteral(_)) {
+                return Some(node);
+            }
+            for child in &node.children {
+                if let Some(found) = find_bool_literal(child) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+
+        let literal = find_bool_literal(&ast.translation_unit).expect("Expected BoolLiteral");
+        if let ClangNodeKind::BoolLiteral(value) = &literal.kind {
+            assert!(*value, "Expected true");
+        } else {
+            panic!("Expected BoolLiteral");
+        }
+    }
+
+    #[test]
+    fn test_bool_literal_false() {
+        let parser = ClangParser::new().unwrap();
+        let ast = parser
+            .parse_string(
+                r#"
+                bool foo() {
+                    return false;
+                }
+                "#,
+                "test.cpp",
+            )
+            .unwrap();
+
+        // Find the bool literal
+        fn find_bool_literal(node: &ClangNode) -> Option<&ClangNode> {
+            if matches!(&node.kind, ClangNodeKind::BoolLiteral(_)) {
+                return Some(node);
+            }
+            for child in &node.children {
+                if let Some(found) = find_bool_literal(child) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+
+        let literal = find_bool_literal(&ast.translation_unit).expect("Expected BoolLiteral");
+        if let ClangNodeKind::BoolLiteral(value) = &literal.kind {
+            assert!(!*value, "Expected false");
+        } else {
+            panic!("Expected BoolLiteral");
         }
     }
 }
