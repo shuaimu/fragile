@@ -843,7 +843,15 @@ Current status:
 - bench_future: 6 benchmark tests
 - rpcbench: client/server RPC benchmark working
 - 571 Rust parsing tests passing (fragile-clang)
-- Stub header improvements (istream_iterator, hash<short>, realpath, operator""s)
+- Stub header improvements [26:01:17]:
+  - istream_iterator, ostream_iterator for <iterator>
+  - hash<short>, hash<unsigned short> for <functional>
+  - realpath() for <stdlib.h>
+  - operator""s for string literals (<string>)
+  - char_traits for wchar_t, char16_t, char32_t, char8_t (<string>)
+  - chrono duration literals (operator""h, min, s, ms, us, ns) (<chrono>)
+  - yaml-cpp Node restructure (fixed incomplete type error)
+  - event2/event.h typedef fix (evutil_socket_t)
 - **Total: 1451+ tests passing across C++ and Rust**
 
 **Blockers** (remaining tests):
@@ -854,7 +862,10 @@ Current status:
 - config_* tests: Need RocksDB persistent storage
 - sharding_* tests: Need deptran infrastructure
 - Core executables (simpleTransaction, simplePaxos): Need full eRPC/asio/deptran infrastructure (see docs/dev/plan_simpleTransaction_analysis.md)
-  - Investigation [26:01:17]: Stub headers improved but simpleTransaction still blocked on yaml-cpp, char_traits, tuple comparison operators
+  - Investigation [26:01:17]: Most stub issues resolved, remaining blockers are:
+    - Missing rusty/rusty.hpp, rusty/ptr.hpp (Rust interop headers)
+    - Missing config.h (build config)
+    - Missing masstree headers (masstree.hh, kvthread.hh, etc.)
 
 **Completed**:
 - G.1: MIR injection pipeline (TLS, type conversion, function sigs, MIR body generation)
