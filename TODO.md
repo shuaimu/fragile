@@ -183,7 +183,11 @@ Each feature must work through the MIR pipeline, not clang++.
   - Added `get_node_type()` helper method for extracting C++ type from AST nodes
   - Added 3 tests: `test_convert_address_of`, `test_convert_dereference`, `test_convert_pointer_ops_combined`
   - See: `docs/dev/plan_2_4_2_pointers.md`
-- [ ] **2.4.3** References (&T)
+- [x] **2.4.3** References (&T) [26:01:17] - Already fully implemented in parser and type system
+  - CppType::Reference supports lvalue (&T), rvalue (T&&), and const references
+  - Parser handles CXType_LValueReference and CXType_RValueReference
+  - Added 3 tests: `test_parse_lvalue_reference_parameter`, `test_parse_const_lvalue_reference_parameter`, `test_parse_rvalue_reference_parameter`
+  - Integration tests exist: `test_rvalue_reference`, `test_const_reference`, etc.
 - [ ] **2.4.4** Arrays ([T; N])
 
 ---

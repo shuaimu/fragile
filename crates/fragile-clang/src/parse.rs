@@ -2989,4 +2989,106 @@ mod tests {
             panic!("Expected StringLiteral");
         }
     }
+
+    #[test]
+    fn test_parse_lvalue_reference_parameter() {
+        let parser = ClangParser::new().unwrap();
+        let ast = parser
+            .parse_string(
+                r#"
+                void increment(int& x) {
+                    x++;
+                }
+                "#,
+                "test.cpp",
+            )
+            .unwrap();
+
+        // Find the function declaration
+        for child in &ast.translation_unit.children {
+            if let ClangNodeKind::FunctionDecl { name, params, .. } = &child.kind {
+                assert_eq!(name, "increment");
+                assert_eq!(params.len(), 1);
+                let (param_name, param_type) = &params[0];
+                assert_eq!(param_name, "x");
+                // Check that param_type is CppType::Reference
+                if let CppType::Reference { is_const, is_rvalue, .. } = param_type {
+                    assert!(!is_const, "Expected non-const reference");
+                    assert!(!is_rvalue, "Expected lvalue reference (not rvalue)");
+                } else {
+                    panic!("Expected Reference type, got {:?}", param_type);
+                }
+                return;
+            }
+        }
+        panic!("Expected to find function declaration");
+    }
+
+    #[test]
+    fn test_parse_const_lvalue_reference_parameter() {
+        let parser = ClangParser::new().unwrap();
+        let ast = parser
+            .parse_string(
+                r#"
+                int read_only(const int& x) {
+                    return x;
+                }
+                "#,
+                "test.cpp",
+            )
+            .unwrap();
+
+        // Find the function declaration
+        for child in &ast.translation_unit.children {
+            if let ClangNodeKind::FunctionDecl { name, params, .. } = &child.kind {
+                assert_eq!(name, "read_only");
+                assert_eq!(params.len(), 1);
+                let (param_name, param_type) = &params[0];
+                assert_eq!(param_name, "x");
+                // Check that param_type is CppType::Reference with is_const=true
+                if let CppType::Reference { is_const, is_rvalue, .. } = param_type {
+                    assert!(is_const, "Expected const reference");
+                    assert!(!is_rvalue, "Expected lvalue reference (not rvalue)");
+                } else {
+                    panic!("Expected Reference type, got {:?}", param_type);
+                }
+                return;
+            }
+        }
+        panic!("Expected to find function declaration");
+    }
+
+    #[test]
+    fn test_parse_rvalue_reference_parameter() {
+        let parser = ClangParser::new().unwrap();
+        let ast = parser
+            .parse_string(
+                r#"
+                void take_ownership(int&& x) {
+                    // Move semantics
+                }
+                "#,
+                "test.cpp",
+            )
+            .unwrap();
+
+        // Find the function declaration
+        for child in &ast.translation_unit.children {
+            if let ClangNodeKind::FunctionDecl { name, params, .. } = &child.kind {
+                assert_eq!(name, "take_ownership");
+                assert_eq!(params.len(), 1);
+                let (param_name, param_type) = &params[0];
+                assert_eq!(param_name, "x");
+                // Check that param_type is CppType::Reference with is_rvalue=true
+                if let CppType::Reference { is_const, is_rvalue, .. } = param_type {
+                    assert!(!is_const, "Expected non-const rvalue reference");
+                    assert!(is_rvalue, "Expected rvalue reference (T&&)");
+                } else {
+                    panic!("Expected Reference type, got {:?}", param_type);
+                }
+                return;
+            }
+        }
+        panic!("Expected to find function declaration");
+    }
 }
