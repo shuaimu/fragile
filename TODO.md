@@ -587,14 +587,15 @@ Migration: After C++20 support is complete, deprecate these.
   - [x] `fragile_rt_call_destructor()` / `fragile_rt_call_array_destructor()`
 
 ### G.3 Build System Integration ([docs/dev/plan_g3_build_system.md](docs/dev/plan_g3_build_system.md))
-- [ ] **G.3.1 Fragile Build Configuration** (~200 lines)
-  - [ ] Approach: Use compile_commands.json (pragmatic) or manual config
-  - [ ] Create `fragile.toml` or equivalent build config
-  - [ ] Handle conditional compilation (DPDK, eRPC, etc.)
+- [-] **G.3.1 Fragile Build Configuration** (~200 lines) - fragile-build crate created
+  - [x] BuildConfig struct for TOML-based config (fragile.toml)
+  - [x] CompileCommands parser for compile_commands.json
+  - [x] TargetConfig with includes, defines, libs
+  - [ ] Integration with fragile-driver
 - [ ] **G.3.2 Include Path Management** (~50 lines)
+  - [x] Include path extraction from compile_commands.json
   - [ ] System headers (-isystem)
-  - [ ] Project headers (-I)
-  - [ ] Third-party headers (erpc, yaml-cpp, boost)
+  - [ ] Integration with ClangParser
 - [ ] **G.3.3 Compiler Flag Translation** (~50 lines)
   - [ ] Optimization flags (-O2, -O3)
   - [ ] Debug info (-g)
