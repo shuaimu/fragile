@@ -30,6 +30,37 @@ public:
 using minstd_rand0 = linear_congruential_engine<uint_fast32_t, 16807, 0, 2147483647>;
 using minstd_rand = linear_congruential_engine<uint_fast32_t, 48271, 0, 2147483647>;
 
+// seed_seq - sequence of seed values
+class seed_seq {
+public:
+    using result_type = uint32_t;
+
+    seed_seq() = default;
+
+    // Initializer list constructor
+    template<typename T>
+    seed_seq(std::initializer_list<T> il) { (void)il; }
+
+    // Iterator range constructor
+    template<typename InputIterator>
+    seed_seq(InputIterator begin, InputIterator end) { (void)begin; (void)end; }
+
+    // Generate seeds into output range
+    template<typename RandomAccessIterator>
+    void generate(RandomAccessIterator begin, RandomAccessIterator end) {
+        (void)begin; (void)end;
+    }
+
+    size_t size() const { return 0; }
+
+    template<typename OutputIterator>
+    void param(OutputIterator dest) const { (void)dest; }
+
+    // Non-copyable
+    seed_seq(const seed_seq&) = delete;
+    seed_seq& operator=(const seed_seq&) = delete;
+};
+
 // Mersenne Twister engine
 class mt19937 {
 public:
@@ -40,8 +71,10 @@ public:
 
     mt19937() = default;
     explicit mt19937(result_type seed) { (void)seed; }
+    explicit mt19937(seed_seq& seq) { (void)seq; }
 
     void seed(result_type s = 0) { (void)s; }
+    void seed(seed_seq& seq) { (void)seq; }
     result_type operator()() { return 0; }
     void discard(unsigned long long n) { (void)n; }
 };

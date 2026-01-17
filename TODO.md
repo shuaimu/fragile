@@ -502,7 +502,7 @@ Migration: After C++20 support is complete, deprecate these.
 - [x] fragile-clang: 571 tests passing (all integration tests) [26:01:17]
 - [x] fragile-rustc-driver: 20 tests passing (base tests without rustc-integration feature) [26:01:17]
 - [x] fragile-runtime: Compiles
-- [x] **Mako Tests**: 54 test/benchmark executables, 880+ gtest tests [26:01:17]
+- [x] **Mako Tests**: 57 test/benchmark executables, 931+ gtest tests [26:01:17]
   - Core tests: test_fiber (37), test_marshal (23), test_sharding_policy (34), test_idempotency (32), test_completion_tracker (27)
   - Masstree tests: test_masstree (2), test_masstree_internals (13), test_masstree_multi_instance (5)
   - Silo tests: test_silo_varint (22), test_silo_runtime (8), test_silo_rcu_thread (9), test_silo_multi_site_stress (10), test_silo_allocator_tuple (18)
@@ -836,10 +836,13 @@ Current status:
   - G.5.1: Core executables blocked on full deptran/transaction infrastructure
 
 **Recent Progress** [26:01:17]:
-- 54 C++ test/benchmark executables built and verified
-- 880 gtest tests passing (51 gtest executables)
+- 57 C++ test/benchmark executables built and verified (added rpc_chaos_test, test_rpc_partition, rpc_stress_crash_test)
+- 931 gtest tests passing (54 gtest executables)
 - test_sto_transaction: 13/13 pass (newly enabled, fixed HAVE_CXX_* defines) [26:01:17]
 - test_alock: 14/16 pass (2 timing-sensitive tests fail in CI environment)
+- rpc_chaos_test: 26/26 pass (chaos engineering tests) [26:01:17]
+- test_rpc_partition: 14/14 pass (network partition tests) [26:01:17]
+- rpc_stress_crash_test: 11/11 pass (stress/crash recovery tests) [26:01:17]
 - bench_future: 6 benchmark tests
 - rpcbench: client/server RPC benchmark working
 - 571 Rust parsing tests passing (fragile-clang)
@@ -852,7 +855,8 @@ Current status:
   - chrono duration literals (operator""h, min, s, ms, us, ns) (<chrono>)
   - yaml-cpp Node restructure (fixed incomplete type error)
   - event2/event.h typedef fix (evutil_socket_t)
-- **Total: 1451+ tests passing across C++ and Rust**
+  - std::seed_seq for <random> (initializer_list, iterator range constructors) [26:01:17]
+- **Total: 1502+ tests passing across C++ and Rust**
 
 **Blockers** (remaining tests):
 - test_lambda, test_timer: Use internal TEST macro (requires deptran/all.h)
