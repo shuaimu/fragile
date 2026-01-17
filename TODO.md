@@ -292,10 +292,17 @@ Each feature must work through the MIR pipeline, not clang++.
   - AccessSpecifier enum: Public, Private, Protected
 
 ### 3.3 Inheritance
-- [ ] Single inheritance
-- [ ] Virtual functions
-- [ ] Vtable generation via MIR
-- [ ] Dynamic dispatch
+- [x] **3.3.1** Single inheritance [already implemented] - CppBaseClass in CppStruct.bases
+  - CXCursor_CXXBaseSpecifier parsed with access specifier
+  - Public/protected/private inheritance supported
+  - Virtual inheritance flag tracked
+  - Existing tests: test_single_inheritance, test_protected_inheritance, test_private_inheritance, test_virtual_inheritance
+- [x] **3.3.2** Virtual functions [already implemented] - CppMethod flags
+  - is_virtual, is_pure_virtual, is_override, is_final tracked
+  - Virtual function detection via clang_getCursorSemanticParent
+  - Existing tests: test_virtual_function, test_pure_virtual_function, test_override_specifier
+- [ ] **3.3.3** Vtable generation via MIR (runtime support needed)
+- [ ] **3.3.4** Dynamic dispatch (runtime support needed)
 
 ---
 
