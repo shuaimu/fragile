@@ -301,7 +301,14 @@ Each feature must work through the MIR pipeline, not clang++.
   - is_virtual, is_pure_virtual, is_override, is_final tracked
   - Virtual function detection via clang_getCursorSemanticParent
   - Existing tests: test_virtual_function, test_pure_virtual_function, test_override_specifier
-- [ ] **3.3.3** Vtable generation via MIR (runtime support needed)
+- [x] **3.3.3** Vtable generation via MIR [26:01:17]
+  - Added VtableEntry and CppVtable structures to lib.rs
+  - CppModule.vtables stores vtables for all polymorphic classes
+  - CppStruct.vtable_name stores mangled vtable name (if polymorphic)
+  - CppStruct.is_polymorphic() method checks for virtual methods
+  - MirStatement::InitVtable for constructor vtable pointer initialization
+  - Vtable generation in convert_struct() for classes with virtual methods
+  - 6 new tests: test_vtable_generation_for_polymorphic_class, test_no_vtable_for_non_polymorphic_class, test_is_polymorphic_method, test_vtable_with_pure_virtual, test_constructor_vtable_init, test_constructor_no_vtable_init_for_non_polymorphic
 - [ ] **3.3.4** Dynamic dispatch (runtime support needed)
 
 ---
@@ -436,14 +443,17 @@ After removing wrong crates:
 
 ## Current Status
 
-**We took a wrong turn**: Built a working hybrid system using clang++ for C++ codegen.
+**Major Milestone Achieved [26:01:17]**: C++ code now compiles through rustc MIR injection!
 
-**Correction needed**: Implement true MIR injection where ALL code goes through rustc.
+**Proven Working**:
+- `add_cpp(2, 3) = 5` - simple addition compiles via rustc
+- `factorial(5) = 120` - recursion and control flow work
+- No clang++ used for these test cases
 
-**Next action**:
-1. Create simple `add.cpp` test
-2. Make it compile through MIR pipeline only
-3. Verify no clang++ is invoked
+**Next Steps**:
+1. Add more MIR injection tests (structs, classes)
+2. Implement vtable generation (Task 3.3.3) for virtual dispatch
+3. Eventually compile doctest through MIR (blocked on template/STL support)
 
 ---
 

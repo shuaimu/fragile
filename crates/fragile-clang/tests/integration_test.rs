@@ -29892,3 +29892,201 @@ fn test_multiplication_mir() {
     }
     assert!(has_mul, "Expected Mul operation in MIR, but didn't find one");
 }
+
+// ============================================================================
+// Vtable Generation Tests (Task 3.3.3)
+// ============================================================================
+
+/// Test that a class with virtual functions generates a vtable.
+#[test]
+fn test_vtable_generation_for_polymorphic_class() {
+    let parser = ClangParser::new().unwrap();
+    let code = r#"
+        class Animal {
+        public:
+            virtual void speak() {}
+            virtual int legs() { return 0; }
+        };
+    "#;
+    let ast = parser.parse_string(code, "test.cpp").unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    // Check that a vtable was generated
+    assert_eq!(module.vtables.len(), 1, "Expected 1 vtable for polymorphic class");
+
+    let vtable = &module.vtables[0];
+    assert_eq!(vtable.class_name, "Animal");
+    assert_eq!(vtable.entries.len(), 2, "Expected 2 vtable entries for 2 virtual methods");
+
+    // Check vtable entries
+    let entry_names: Vec<&str> = vtable.entries.iter().map(|e| e.display_name.as_str()).collect();
+    assert!(entry_names.contains(&"Animal::speak"), "Missing speak entry");
+    assert!(entry_names.contains(&"Animal::legs"), "Missing legs entry");
+
+    // Check mangled name follows Itanium ABI
+    assert!(vtable.mangled_name.starts_with("_ZTV"), "Vtable name should start with _ZTV");
+
+    // Check RTTI type info name
+    assert!(vtable.type_info_name.is_some(), "Expected RTTI type info name");
+}
+
+/// Test that a non-polymorphic class does not generate a vtable.
+#[test]
+fn test_no_vtable_for_non_polymorphic_class() {
+    let parser = ClangParser::new().unwrap();
+    let code = r#"
+        class Point {
+        public:
+            Point(int x, int y) : x_(x), y_(y) {}
+            int x() const { return x_; }
+            int y() const { return y_; }
+        private:
+            int x_;
+            int y_;
+        };
+    "#;
+    let ast = parser.parse_string(code, "test.cpp").unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    // No vtable should be generated
+    assert_eq!(module.vtables.len(), 0, "Non-polymorphic class should not have a vtable");
+
+    // Check struct vtable_name is None
+    assert_eq!(module.structs.len(), 1);
+    assert!(module.structs[0].vtable_name.is_none(), "Non-polymorphic class should not have vtable_name");
+}
+
+/// Test that CppStruct.is_polymorphic() works correctly.
+#[test]
+fn test_is_polymorphic_method() {
+    let parser = ClangParser::new().unwrap();
+
+    // Polymorphic class
+    let code1 = r#"
+        class Animal {
+        public:
+            virtual void speak() {}
+        };
+    "#;
+    let ast1 = parser.parse_string(code1, "test1.cpp").unwrap();
+    let converter = MirConverter::new();
+    let module1 = converter.convert(ast1).expect("Failed to convert");
+
+    assert!(module1.structs[0].is_polymorphic(), "Class with virtual methods should be polymorphic");
+
+    // Non-polymorphic class
+    let code2 = r#"
+        class Point {
+        public:
+            int x;
+            int y;
+        };
+    "#;
+    let ast2 = parser.parse_string(code2, "test2.cpp").unwrap();
+    let module2 = converter.convert(ast2).expect("Failed to convert");
+
+    assert!(!module2.structs[0].is_polymorphic(), "Class without virtual methods should not be polymorphic");
+}
+
+/// Test vtable generation with pure virtual functions.
+#[test]
+fn test_vtable_with_pure_virtual() {
+    let parser = ClangParser::new().unwrap();
+    let code = r#"
+        class Shape {
+        public:
+            virtual double area() = 0;
+            virtual void draw() {}
+        };
+    "#;
+    let ast = parser.parse_string(code, "test.cpp").unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    assert_eq!(module.vtables.len(), 1);
+    let vtable = &module.vtables[0];
+
+    // Check that pure virtual is marked
+    let area_entry = vtable.entries.iter().find(|e| e.display_name.contains("area")).unwrap();
+    assert!(area_entry.is_pure_virtual, "area() should be marked as pure virtual");
+
+    let draw_entry = vtable.entries.iter().find(|e| e.display_name.contains("draw")).unwrap();
+    assert!(!draw_entry.is_pure_virtual, "draw() should not be marked as pure virtual");
+}
+
+/// Test constructor vtable initialization for polymorphic classes.
+#[test]
+fn test_constructor_vtable_init() {
+    use fragile_clang::MirStatement;
+
+    let parser = ClangParser::new().unwrap();
+    let code = r#"
+        class Animal {
+        public:
+            Animal() {}
+            virtual void speak() {}
+        };
+    "#;
+    let ast = parser.parse_string(code, "test.cpp").unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    // Check struct has vtable_name
+    assert!(!module.structs.is_empty(), "Should have at least one struct");
+    assert!(module.structs[0].vtable_name.is_some(), "Struct should have vtable_name");
+    let vtable_name = module.structs[0].vtable_name.as_ref().unwrap();
+
+    // Check constructor has InitVtable statement
+    assert!(!module.structs[0].constructors.is_empty(), "Should have a constructor");
+    let ctor = &module.structs[0].constructors[0];
+    assert!(ctor.mir_body.is_some(), "Constructor should have MIR body");
+
+    let mir = ctor.mir_body.as_ref().unwrap();
+    let mut has_init_vtable = false;
+    for block in &mir.blocks {
+        for stmt in &block.statements {
+            if let MirStatement::InitVtable { vtable_name: vt, .. } = stmt {
+                has_init_vtable = true;
+                assert_eq!(vt, vtable_name, "InitVtable should reference the class vtable");
+            }
+        }
+    }
+    assert!(has_init_vtable, "Constructor should have InitVtable statement");
+}
+
+/// Test that non-polymorphic class constructors don't have InitVtable.
+#[test]
+fn test_constructor_no_vtable_init_for_non_polymorphic() {
+    use fragile_clang::MirStatement;
+
+    let parser = ClangParser::new().unwrap();
+    let code = r#"
+        class Point {
+        public:
+            Point(int x, int y) : x_(x), y_(y) {}
+        private:
+            int x_;
+            int y_;
+        };
+    "#;
+    let ast = parser.parse_string(code, "test.cpp").unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    // Check struct does not have vtable_name
+    assert!(module.structs[0].vtable_name.is_none());
+
+    // Check constructor does not have InitVtable statement
+    let ctor = &module.structs[0].constructors[0];
+    let mir = ctor.mir_body.as_ref().unwrap();
+
+    for block in &mir.blocks {
+        for stmt in &block.statements {
+            if let MirStatement::InitVtable { .. } = stmt {
+                panic!("Non-polymorphic class constructor should not have InitVtable");
+            }
+        }
+    }
+}

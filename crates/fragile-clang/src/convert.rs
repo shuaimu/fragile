@@ -5,7 +5,7 @@ use crate::types::CppType;
 use crate::{
     CppBaseClass, CppClassTemplate, CppClassTemplatePartialSpec, CppConceptDecl, CppConstructor,
     CppDestructor, CppExtern, CppField, CppFriend, CppFunction, CppFunctionTemplate,
-    CppMemberTemplate, CppMethod, CppModule, CppStruct, MemberInitializer, MirBasicBlock,
+    CppMemberTemplate, CppMethod, CppModule, CppStruct, CppVtable, MemberInitializer, MirBasicBlock,
     MirBinOp, MirBody, MirConstant, MirLocal, MirOperand, MirPlace, MirProjection, MirRvalue,
     MirStatement, MirTerminator, MirUnaryOp, UsingDeclaration, UsingDirective,
 };
@@ -316,6 +316,12 @@ impl MirConverter {
                 fields: _,
             } => {
                 let struct_def = self.convert_struct(node, name, *is_class, namespace_context)?;
+
+                // Generate vtable for polymorphic classes
+                if let Some(vtable) = self.generate_vtable(&struct_def, node) {
+                    module.vtables.push(vtable);
+                }
+
                 module.structs.push(struct_def);
             }
             ClangNodeKind::UsingDirective { namespace } => {
@@ -1373,8 +1379,9 @@ impl MirConverter {
                     access,
                 } => {
                     let member_initializers = self.extract_member_initializers(child);
+                    // Class templates don't have vtables until instantiated
                     let mir_body = if *is_definition {
-                        Some(self.convert_constructor_body(child, params)?)
+                        Some(self.convert_constructor_body(child, params, None)?)
                     } else {
                         None
                     };
@@ -1512,8 +1519,9 @@ impl MirConverter {
                     access,
                 } => {
                     let member_initializers = self.extract_member_initializers(child);
+                    // Partial specializations don't have vtables until fully instantiated
                     let mir_body = if *is_definition {
-                        Some(self.convert_constructor_body(child, params)?)
+                        Some(self.convert_constructor_body(child, params, None)?)
                     } else {
                         None
                     };
@@ -1643,29 +1651,6 @@ impl MirConverter {
                         is_definition: *is_definition,
                     });
                 }
-                ClangNodeKind::ConstructorDecl {
-                    class_name: _,
-                    params,
-                    is_definition,
-                    ctor_kind,
-                    access,
-                } => {
-                    // Extract member initializers from constructor children
-                    let member_initializers = self.extract_member_initializers(child);
-
-                    let mir_body = if *is_definition {
-                        Some(self.convert_constructor_body(child, params)?)
-                    } else {
-                        None
-                    };
-                    constructors.push(CppConstructor {
-                        params: params.clone(),
-                        kind: *ctor_kind,
-                        access: *access,
-                        member_initializers,
-                        mir_body,
-                    });
-                }
                 ClangNodeKind::DestructorDecl {
                     class_name: _,
                     is_definition,
@@ -1695,7 +1680,43 @@ impl MirConverter {
                         is_virtual: *is_virtual,
                     });
                 }
+                // Skip constructors in first pass - handled below
+                ClangNodeKind::ConstructorDecl { .. } => {}
                 _ => {}
+            }
+        }
+
+        // Check if class is polymorphic and generate vtable name
+        // We need to determine this BEFORE processing constructors
+        let has_virtual_methods = methods.iter().any(|m| m.is_virtual);
+        let vtable_name = if has_virtual_methods {
+            Some(format!("_ZTV{}{}", name.len(), name))
+        } else {
+            None
+        };
+
+        // Second pass: process constructors with vtable information
+        for child in &node.children {
+            if let ClangNodeKind::ConstructorDecl {
+                class_name: _,
+                params,
+                is_definition,
+                ctor_kind,
+                access,
+            } = &child.kind {
+                let member_initializers = self.extract_member_initializers(child);
+                let mir_body = if *is_definition {
+                    Some(self.convert_constructor_body(child, params, vtable_name.as_deref())?)
+                } else {
+                    None
+                };
+                constructors.push(CppConstructor {
+                    params: params.clone(),
+                    kind: *ctor_kind,
+                    access: *access,
+                    member_initializers,
+                    mir_body,
+                });
             }
         }
 
@@ -1711,23 +1732,129 @@ impl MirConverter {
             methods,
             member_templates,
             friends,
+            vtable_name,
         })
     }
 
+    /// Generate a vtable for a polymorphic class.
+    ///
+    /// This creates a CppVtable with entries for all virtual functions.
+    /// The vtable is only generated if the class has virtual functions.
+    ///
+    /// # Arguments
+    /// * `struct_def` - The struct/class definition
+    /// * `node` - The AST node (for extracting mangled names)
+    ///
+    /// # Returns
+    /// Some(CppVtable) if the class is polymorphic, None otherwise
+    fn generate_vtable(
+        &self,
+        struct_def: &CppStruct,
+        node: &ClangNode,
+    ) -> Option<CppVtable> {
+        // Check if this class has any virtual methods
+        let has_virtual_methods = struct_def.methods.iter().any(|m| m.is_virtual);
+
+        // TODO: Also check if any base class has virtual methods
+        // For now, we only generate vtables for classes with direct virtual methods
+        if !has_virtual_methods {
+            return None;
+        }
+
+        // Generate the mangled vtable name following Itanium ABI: _ZTV<length><name>
+        let class_name = &struct_def.name;
+        let vtable_mangled_name = format!("_ZTV{}{}", class_name.len(), class_name);
+
+        // Build the fully qualified class name
+        let qualified_name = if struct_def.namespace.is_empty() {
+            class_name.clone()
+        } else {
+            format!("{}::{}", struct_def.namespace.join("::"), class_name)
+        };
+
+        let mut vtable = CppVtable::new(
+            qualified_name,
+            struct_def.namespace.clone(),
+            vtable_mangled_name,
+        );
+
+        // Add virtual function entries
+        for method in &struct_def.methods {
+            if method.is_virtual {
+                // Try to get the mangled name from the AST node
+                let mangled_name = self.find_method_mangled_name(node, &method.name)
+                    .unwrap_or_else(|| {
+                        // Generate a fallback mangled name
+                        format!("_ZN{}{}{}Ev",
+                            class_name.len(),
+                            class_name,
+                            method.name.len(),
+                        )
+                    });
+
+                let display_name = format!("{}::{}", class_name, method.name);
+                vtable.add_entry(mangled_name, display_name, method.is_pure_virtual);
+            }
+        }
+
+        // Generate RTTI type info name
+        let type_info_name = format!("_ZTI{}{}", class_name.len(), class_name);
+        vtable.type_info_name = Some(type_info_name);
+
+        Some(vtable)
+    }
+
+    /// Find the mangled name of a method in an AST node.
+    fn find_method_mangled_name(&self, node: &ClangNode, method_name: &str) -> Option<String> {
+        for child in &node.children {
+            if let ClangNodeKind::CXXMethodDecl { name, .. } = &child.kind {
+                if name == method_name {
+                    // Try to get mangled name from the child's properties
+                    // For now, return None and use fallback
+                    // TODO: Add mangled_name to CXXMethodDecl
+                    return None;
+                }
+            }
+        }
+        None
+    }
+
     /// Convert a constructor body to MIR.
+    ///
+    /// # Arguments
+    /// * `node` - The constructor AST node
+    /// * `params` - Constructor parameters
+    /// * `vtable_name` - Optional vtable name for polymorphic classes
     fn convert_constructor_body(
         &self,
         node: &ClangNode,
         params: &[(String, CppType)],
+        vtable_name: Option<&str>,
     ) -> Result<MirBody> {
         let mut builder = FunctionBuilder::new();
 
         // Local 0 is the return place (void for constructors)
         builder.add_local(None, CppType::Void, false);
 
-        // Add parameters as locals
+        // Local 1 is the implicit `this` pointer (pointer to the class type)
+        // Note: The actual class type is not available here, so we use a generic pointer
+        builder.add_local(
+            Some("this".to_string()),
+            CppType::Pointer { pointee: Box::new(CppType::Void), is_const: false },
+            true,
+        );
+
+        // Add parameters as locals (starting at local 2)
         for (param_name, param_ty) in params {
             builder.add_local(Some(param_name.clone()), param_ty.clone(), true);
+        }
+
+        // If this is a polymorphic class, initialize the vtable pointer
+        if let Some(vtable) = vtable_name {
+            builder.add_statement(MirStatement::InitVtable {
+                this_local: 1, // `this` is at local index 1
+                vtable_name: vtable.to_string(),
+            });
         }
 
         // Find the compound statement (constructor body)
@@ -1738,8 +1865,9 @@ impl MirConverter {
             }
         }
 
-        // If no explicit return, add one
-        if builder.current_statements.is_empty() && builder.blocks.is_empty() {
+        // Ensure we have at least one block with a return terminator
+        // This handles both empty constructors and constructors that only have InitVtable
+        if builder.blocks.is_empty() || !builder.current_statements.is_empty() {
             builder.finish_block(MirTerminator::Return);
         }
 

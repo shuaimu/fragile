@@ -64,6 +64,8 @@ pub struct CppModule {
     pub concepts: Vec<CppConceptDecl>,
     /// Type aliases (using declarations and typedefs)
     pub type_aliases: Vec<CppTypeAlias>,
+    /// Vtables for polymorphic classes
+    pub vtables: Vec<CppVtable>,
 }
 
 /// A using namespace directive.
@@ -97,6 +99,7 @@ impl CppModule {
             using_declarations: Vec::new(),
             concepts: Vec::new(),
             type_aliases: Vec::new(),
+            vtables: Vec::new(),
         }
     }
 
@@ -456,6 +459,15 @@ pub struct CppStruct {
     pub member_templates: Vec<CppMemberTemplate>,
     /// Friend declarations
     pub friends: Vec<CppFriend>,
+    /// Mangled vtable name (if polymorphic)
+    pub vtable_name: Option<String>,
+}
+
+impl CppStruct {
+    /// Check if this struct/class is polymorphic (has virtual functions).
+    pub fn is_polymorphic(&self) -> bool {
+        self.methods.iter().any(|m| m.is_virtual)
+    }
 }
 
 /// A C++ class template declaration.
@@ -527,6 +539,71 @@ pub struct CppBaseClass {
     pub access: AccessSpecifier,
     /// Whether this is virtual inheritance
     pub is_virtual: bool,
+}
+
+/// A vtable entry for a virtual function.
+#[derive(Debug, Clone)]
+pub struct VtableEntry {
+    /// Index in the vtable (0-based, after RTTI entries)
+    pub index: usize,
+    /// Mangled name of the virtual function
+    pub mangled_name: String,
+    /// Display name for debugging (e.g., "Base::foo")
+    pub display_name: String,
+    /// Whether this is a pure virtual function (= 0)
+    pub is_pure_virtual: bool,
+}
+
+/// A vtable definition for a polymorphic C++ class.
+///
+/// Vtables follow the Itanium C++ ABI layout:
+/// - Offset-to-top (for multiple inheritance adjustments)
+/// - RTTI pointer (for dynamic_cast)
+/// - Virtual function pointers (in declaration order)
+#[derive(Debug, Clone)]
+pub struct CppVtable {
+    /// Fully qualified class name (e.g., "MyNamespace::Derived")
+    pub class_name: String,
+    /// Namespace path for the class
+    pub namespace: Vec<String>,
+    /// Mangled vtable symbol name (e.g., "_ZTV7Derived")
+    pub mangled_name: String,
+    /// Virtual function entries (in vtable order)
+    pub entries: Vec<VtableEntry>,
+    /// Offset to top (0 for primary vtable)
+    pub offset_to_top: isize,
+    /// RTTI type info symbol name (if RTTI is enabled)
+    pub type_info_name: Option<String>,
+}
+
+impl CppVtable {
+    /// Create a new vtable for a class.
+    pub fn new(class_name: String, namespace: Vec<String>, mangled_name: String) -> Self {
+        Self {
+            class_name,
+            namespace,
+            mangled_name,
+            entries: Vec::new(),
+            offset_to_top: 0,
+            type_info_name: None,
+        }
+    }
+
+    /// Add a virtual function entry to the vtable.
+    pub fn add_entry(&mut self, mangled_name: String, display_name: String, is_pure_virtual: bool) {
+        let index = self.entries.len();
+        self.entries.push(VtableEntry {
+            index,
+            mangled_name,
+            display_name,
+            is_pure_virtual,
+        });
+    }
+
+    /// Check if this class is polymorphic (has virtual functions).
+    pub fn is_polymorphic(&self) -> bool {
+        !self.entries.is_empty()
+    }
 }
 
 /// A C++ class field (data member).
@@ -725,6 +802,14 @@ pub enum MirStatement {
     },
     /// No-op
     Nop,
+    /// Initialize vtable pointer for a polymorphic object.
+    /// This sets `this->vptr = &vtable`.
+    InitVtable {
+        /// The `this` pointer (local index)
+        this_local: usize,
+        /// Mangled vtable symbol name
+        vtable_name: String,
+    },
 }
 
 /// A terminator instruction (control flow).
