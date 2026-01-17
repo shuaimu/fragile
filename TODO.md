@@ -618,8 +618,12 @@ Migration: After C++20 support is complete, deprecate these.
   - [x] CLI `build-target` command (parse, compile, link)
   - [x] CLI `parse-cpp` command (parse and stub generation)
   - [x] fragile.toml for Mako (librrr, libmako_core, libmako_lib, executables, tests)
-  - [x] Build librrr (19 object files, ~10MB) - VERIFIED WORKING
+  - [x] Build librrr (19 object files, ~11MB static library) - VERIFIED WORKING
   - [x] Linking step automated (link_executable, create_static_library in CLI)
+  - [x] Build libmako_core (12 object files, ~4.7MB static library)
+  - [x] Fix stub headers (sstream, stdint.h, stdlib.h) for compatibility
+  - [x] Fix CONFIG_H define path, remove conflicting src/mako/lib include
+  - [-] libmako_lib - blocked by src/mako/lib/assert.h shadowing system header
 - [ ] **G.5.1 Core Executables**
   - [ ] `dbtest` - Main test database executable
   - [ ] `simpleTransaction` - Simple transaction test
