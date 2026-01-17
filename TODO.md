@@ -309,7 +309,11 @@ Each feature must work through the MIR pipeline, not clang++.
   - MirStatement::InitVtable for constructor vtable pointer initialization
   - Vtable generation in convert_struct() for classes with virtual methods
   - 6 new tests: test_vtable_generation_for_polymorphic_class, test_no_vtable_for_non_polymorphic_class, test_is_polymorphic_method, test_vtable_with_pure_virtual, test_constructor_vtable_init, test_constructor_no_vtable_init_for_non_polymorphic
-- [ ] **3.3.4** Dynamic dispatch (runtime support needed)
+- [ ] **3.3.4** Dynamic dispatch (partial - VirtualCall terminator added [26:01:17])
+  - MirTerminator::VirtualCall added with receiver, vtable_index, args
+  - Helper functions: try_extract_member_call, unwrap_casts, extract_class_name
+  - TODO: Integrate with CallExpr conversion (needs method virtuality lookup)
+  - TODO: Update rustc-driver to translate VirtualCall to rustc MIR
 
 ---
 
