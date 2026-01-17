@@ -98,6 +98,58 @@ impl CompileCommand {
 
         None
     }
+
+    /// Get the optimization level from arguments (-O0, -O1, -O2, -O3, -Os, -Oz).
+    /// Returns the level as a string (e.g., "2" for -O2, "s" for -Os).
+    pub fn get_opt_level(&self) -> Option<String> {
+        let args = self.get_args();
+
+        for arg in &args {
+            if arg.starts_with("-O") && arg.len() > 2 {
+                return Some(arg[2..].to_string());
+            }
+        }
+
+        None
+    }
+
+    /// Check if debug info is enabled (-g flag).
+    pub fn has_debug_info(&self) -> bool {
+        let args = self.get_args();
+        args.iter().any(|arg| arg == "-g" || arg.starts_with("-g"))
+    }
+
+    /// Get warning flags from arguments (-W* flags).
+    pub fn get_warning_flags(&self) -> Vec<String> {
+        let args = self.get_args();
+        args.iter()
+            .filter(|arg| arg.starts_with("-W"))
+            .cloned()
+            .collect()
+    }
+
+    /// Get all other compiler flags not covered by specific methods.
+    /// This excludes -I, -D, -std, -O, -g, -W, -c, -o flags and the compiler itself.
+    pub fn get_other_flags(&self) -> Vec<String> {
+        let args = self.get_args();
+        args.into_iter()
+            .skip(1) // Skip compiler executable
+            .filter(|arg| {
+                !arg.starts_with("-I") &&
+                !arg.starts_with("-D") &&
+                !arg.starts_with("-std=") &&
+                !arg.starts_with("-O") &&
+                !arg.starts_with("-W") &&
+                arg != "-g" &&
+                arg != "-c" &&
+                !arg.starts_with("-o") &&
+                !arg.ends_with(".cc") &&
+                !arg.ends_with(".cpp") &&
+                !arg.ends_with(".cxx") &&
+                !arg.ends_with(".c")
+            })
+            .collect()
+    }
 }
 
 /// Collection of compile commands (from compile_commands.json).
@@ -213,5 +265,93 @@ mod tests {
 
         let not_found = cmds.find_command(Path::new("src/other.cc"));
         assert!(not_found.is_none());
+    }
+
+    #[test]
+    fn test_get_opt_level() {
+        let json = r#"[
+            {
+                "directory": "/build",
+                "file": "main.cc",
+                "command": "g++ -O2 -c main.cc"
+            },
+            {
+                "directory": "/build",
+                "file": "debug.cc",
+                "command": "g++ -O0 -g -c debug.cc"
+            },
+            {
+                "directory": "/build",
+                "file": "release.cc",
+                "command": "g++ -Os -c release.cc"
+            }
+        ]"#;
+
+        let cmds = CompileCommands::from_str(json).unwrap();
+
+        assert_eq!(cmds.commands()[0].get_opt_level(), Some("2".to_string()));
+        assert_eq!(cmds.commands()[1].get_opt_level(), Some("0".to_string()));
+        assert_eq!(cmds.commands()[2].get_opt_level(), Some("s".to_string()));
+    }
+
+    #[test]
+    fn test_has_debug_info() {
+        let json = r#"[
+            {
+                "directory": "/build",
+                "file": "debug.cc",
+                "command": "g++ -g -c debug.cc"
+            },
+            {
+                "directory": "/build",
+                "file": "release.cc",
+                "command": "g++ -O2 -c release.cc"
+            }
+        ]"#;
+
+        let cmds = CompileCommands::from_str(json).unwrap();
+
+        assert!(cmds.commands()[0].has_debug_info());
+        assert!(!cmds.commands()[1].has_debug_info());
+    }
+
+    #[test]
+    fn test_get_warning_flags() {
+        let json = r#"[
+            {
+                "directory": "/build",
+                "file": "main.cc",
+                "command": "g++ -Wall -Wextra -Werror -c main.cc"
+            }
+        ]"#;
+
+        let cmds = CompileCommands::from_str(json).unwrap();
+        let warnings = cmds.commands()[0].get_warning_flags();
+
+        assert_eq!(warnings.len(), 3);
+        assert!(warnings.contains(&"-Wall".to_string()));
+        assert!(warnings.contains(&"-Wextra".to_string()));
+        assert!(warnings.contains(&"-Werror".to_string()));
+    }
+
+    #[test]
+    fn test_get_other_flags() {
+        let json = r#"[
+            {
+                "directory": "/build",
+                "file": "main.cc",
+                "command": "g++ -fPIC -pthread -march=native -I/include -DFOO -c main.cc"
+            }
+        ]"#;
+
+        let cmds = CompileCommands::from_str(json).unwrap();
+        let other = cmds.commands()[0].get_other_flags();
+
+        assert!(other.contains(&"-fPIC".to_string()));
+        assert!(other.contains(&"-pthread".to_string()));
+        assert!(other.contains(&"-march=native".to_string()));
+        // These should NOT be in other flags
+        assert!(!other.iter().any(|f| f.starts_with("-I")));
+        assert!(!other.iter().any(|f| f.starts_with("-D")));
     }
 }

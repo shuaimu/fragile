@@ -66,6 +66,7 @@
 //! driver.run(&["main.rs", "-o", "output"])?;
 //! ```
 
+mod build_integration;
 mod cpp_compiler;
 mod driver;
 #[cfg(feature = "rustc-integration")]
@@ -75,6 +76,7 @@ mod queries;
 mod rustc_integration;
 mod stubs;
 
+pub use build_integration::{CompilationJob, OutputType, build_target, build_from_config_file, jobs_from_compile_commands};
 pub use cpp_compiler::{CppCompiler, CppCompilerConfig, find_compiler};
 pub use driver::FragileDriver;
 pub use queries::CppMirRegistry;

@@ -12,6 +12,7 @@ license.workspace = true
 [dependencies]
 # Internal crates
 fragile-clang = { path = "../fragile-clang" }
+fragile-build = { path = "../fragile-build" }
 
 # Error handling
 miette.workspace = true
@@ -26,6 +27,9 @@ tempfile = "3"
 [build-dependencies]
 # For finding rustc sysroot in build.rs
 # None needed - we use rustc --print sysroot
+
+[dev-dependencies]
+toml = "0.8"
 
 [features]
 # Enable rustc integration (requires nightly + rustc-dev component)

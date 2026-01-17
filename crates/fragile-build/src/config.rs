@@ -139,6 +139,104 @@ impl BuildConfig {
     pub fn get_std(&self, target: &TargetConfig) -> Option<String> {
         target.std.clone().or_else(|| self.compiler.std.clone())
     }
+
+    /// Get all library dependencies for a target in correct link order.
+    /// This resolves internal deps (other targets) and external libs.
+    /// Returns (internal_deps, external_libs) where internal_deps are target names
+    /// and external_libs are library names to pass to -l flag.
+    pub fn get_link_deps(&self, target: &TargetConfig) -> (Vec<String>, Vec<String>) {
+        let mut internal_deps = Vec::new();
+        let mut external_libs = target.libs.clone();
+
+        // Resolve internal dependencies (topological sort)
+        self.collect_deps_recursive(target, &mut internal_deps, &mut external_libs);
+
+        // Reverse for correct link order (dependencies after dependents)
+        internal_deps.reverse();
+
+        (internal_deps, external_libs)
+    }
+
+    /// Recursively collect dependencies for a target.
+    fn collect_deps_recursive(
+        &self,
+        target: &TargetConfig,
+        internal_deps: &mut Vec<String>,
+        external_libs: &mut Vec<String>,
+    ) {
+        for dep_name in &target.deps {
+            if internal_deps.contains(dep_name) {
+                continue; // Already visited
+            }
+
+            if let Some(dep_target) = self.find_target(dep_name) {
+                internal_deps.push(dep_name.clone());
+
+                // Add dep's external libs
+                for lib in &dep_target.libs {
+                    if !external_libs.contains(lib) {
+                        external_libs.push(lib.clone());
+                    }
+                }
+
+                // Recurse
+                self.collect_deps_recursive(dep_target, internal_deps, external_libs);
+            }
+        }
+    }
+
+    /// Get library search paths for a target (includes dependent targets' lib_paths).
+    pub fn get_lib_paths(&self, target: &TargetConfig) -> Vec<String> {
+        let mut paths = target.lib_paths.clone();
+
+        // Add paths from dependencies
+        for dep_name in &target.deps {
+            if let Some(dep_target) = self.find_target(dep_name) {
+                for path in &dep_target.lib_paths {
+                    if !paths.contains(path) {
+                        paths.push(path.clone());
+                    }
+                }
+            }
+        }
+
+        paths
+    }
+
+    /// Check if a target has circular dependencies.
+    pub fn has_circular_deps(&self, target_name: &str) -> bool {
+        let mut visited = std::collections::HashSet::new();
+        let mut rec_stack = std::collections::HashSet::new();
+        self.has_circular_deps_impl(target_name, &mut visited, &mut rec_stack)
+    }
+
+    fn has_circular_deps_impl(
+        &self,
+        target_name: &str,
+        visited: &mut std::collections::HashSet<String>,
+        rec_stack: &mut std::collections::HashSet<String>,
+    ) -> bool {
+        if rec_stack.contains(target_name) {
+            return true; // Cycle detected
+        }
+        if visited.contains(target_name) {
+            return false; // Already processed
+        }
+
+        visited.insert(target_name.to_string());
+        rec_stack.insert(target_name.to_string());
+
+        if let Some(target) = self.find_target(target_name) {
+            for dep_name in &target.deps {
+                if self.has_circular_deps_impl(dep_name, visited, rec_stack) {
+                    return true;
+                }
+            }
+        }
+
+        rec_stack.remove(target_name);
+        false
+    }
 }
 
 impl TargetConfig {
@@ -247,5 +345,118 @@ libs = ["pthread", "numa"]
         let includes = config.get_includes(target);
 
         assert_eq!(includes, vec!["/usr/include", "src/include"]);
+    }
+
+    #[test]
+    fn test_get_link_deps() {
+        let toml = r#"
+[project]
+name = "test"
+
+[[target]]
+name = "libcore"
+type = "static_library"
+sources = ["core.cc"]
+libs = ["pthread"]
+
+[[target]]
+name = "libutil"
+type = "static_library"
+sources = ["util.cc"]
+deps = ["libcore"]
+libs = ["numa"]
+
+[[target]]
+name = "main"
+type = "executable"
+sources = ["main.cc"]
+deps = ["libutil"]
+libs = ["m"]
+        "#;
+
+        let config: BuildConfig = toml::from_str(toml).unwrap();
+        let main = config.find_target("main").unwrap();
+        let (internal_deps, external_libs) = config.get_link_deps(main);
+
+        // Internal deps should be in order where dependencies come first
+        // libcore is a dependency of libutil, so libcore comes first
+        assert_eq!(internal_deps, vec!["libcore", "libutil"]);
+
+        // External libs from all targets
+        assert!(external_libs.contains(&"m".to_string()));
+        assert!(external_libs.contains(&"pthread".to_string()));
+        assert!(external_libs.contains(&"numa".to_string()));
+    }
+
+    #[test]
+    fn test_get_lib_paths() {
+        let toml = r#"
+[project]
+name = "test"
+
+[[target]]
+name = "libcore"
+type = "static_library"
+sources = ["core.cc"]
+lib_paths = ["/usr/local/lib"]
+
+[[target]]
+name = "main"
+type = "executable"
+sources = ["main.cc"]
+deps = ["libcore"]
+lib_paths = ["/opt/lib"]
+        "#;
+
+        let config: BuildConfig = toml::from_str(toml).unwrap();
+        let main = config.find_target("main").unwrap();
+        let lib_paths = config.get_lib_paths(main);
+
+        assert!(lib_paths.contains(&"/opt/lib".to_string()));
+        assert!(lib_paths.contains(&"/usr/local/lib".to_string()));
+    }
+
+    #[test]
+    fn test_circular_deps_detection() {
+        // No circular deps
+        let toml = r#"
+[project]
+name = "test"
+
+[[target]]
+name = "libcore"
+type = "static_library"
+sources = ["core.cc"]
+
+[[target]]
+name = "main"
+type = "executable"
+sources = ["main.cc"]
+deps = ["libcore"]
+        "#;
+
+        let config: BuildConfig = toml::from_str(toml).unwrap();
+        assert!(!config.has_circular_deps("main"));
+
+        // With circular deps
+        let toml_circular = r#"
+[project]
+name = "test"
+
+[[target]]
+name = "libA"
+type = "static_library"
+sources = ["a.cc"]
+deps = ["libB"]
+
+[[target]]
+name = "libB"
+type = "static_library"
+sources = ["b.cc"]
+deps = ["libA"]
+        "#;
+
+        let config_circular: BuildConfig = toml::from_str(toml_circular).unwrap();
+        assert!(config_circular.has_circular_deps("libA"));
     }
 }

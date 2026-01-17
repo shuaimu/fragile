@@ -587,24 +587,26 @@ Migration: After C++20 support is complete, deprecate these.
   - [x] `fragile_rt_call_destructor()` / `fragile_rt_call_array_destructor()`
 
 ### G.3 Build System Integration ([docs/dev/plan_g3_build_system.md](docs/dev/plan_g3_build_system.md))
-- [-] **G.3.1 Fragile Build Configuration** (~200 lines) - fragile-build crate created
+- [x] **G.3.1 Fragile Build Configuration** (~200 lines) [26:01:17] - fragile-build crate created and integrated
   - [x] BuildConfig struct for TOML-based config (fragile.toml)
   - [x] CompileCommands parser for compile_commands.json
   - [x] TargetConfig with includes, defines, libs
-  - [ ] Integration with fragile-driver
-- [ ] **G.3.2 Include Path Management** (~50 lines)
+  - [x] Integration with fragile-driver (CompilationJob, parser_config())
+- [x] **G.3.2 Include Path Management** (~50 lines) [26:01:17]
   - [x] Include path extraction from compile_commands.json
-  - [ ] System headers (-isystem)
-  - [ ] Integration with ClangParser
-- [ ] **G.3.3 Compiler Flag Translation** (~50 lines)
-  - [ ] Optimization flags (-O2, -O3)
-  - [ ] Debug info (-g)
-  - [ ] Warnings (-Wall, -Werror)
-  - [ ] C++ standard (-std=c++23)
-- [ ] **G.3.4 Dependency Handling** (~100 lines)
-  - [ ] Link order for static libraries
-  - [ ] Shared library support
-  - [ ] External dependencies (pthread, numa, dpdk)
+  - [x] System headers (-isystem) - ClangParser::with_paths() supports system_include_paths
+  - [x] Integration with ClangParser - CompilationJob.parser_config() returns (include_paths, system_paths, defines)
+- [x] **G.3.3 Compiler Flag Translation** (~50 lines) [26:01:17]
+  - [x] Optimization flags (-O2, -O3) - get_opt_level() method
+  - [x] Debug info (-g) - has_debug_info() method
+  - [x] Warnings (-Wall, -Werror) - get_warning_flags() method
+  - [x] C++ standard (-std=c++23) - get_std() method (already existed)
+  - [x] Other flags (-fPIC, -pthread, etc.) - get_other_flags() method
+- [x] **G.3.4 Dependency Handling** (~100 lines) [26:01:17]
+  - [x] Link order for static libraries - get_link_deps() with topological sort
+  - [x] Shared library support - TargetType::SharedLibrary
+  - [x] External dependencies (pthread, numa, dpdk) - libs field + get_lib_paths()
+  - [x] Circular dependency detection - has_circular_deps()
 
 ### G.4 Fix Blocked Files
 - [x] **G.4.1 mtd.cc** [26:01:17] - Parsing passes (epoll.h included properly)
