@@ -499,20 +499,22 @@ Migration: After C++20 support is complete, deprecate these.
 ## 5. Testing & Milestones
 
 ### 5.1 Unit Tests
-- [x] fragile-clang: 569 tests passing (all integration tests) [26:01:17]
+- [x] fragile-clang: 571 tests passing (all integration tests) [26:01:17]
 - [x] fragile-rustc-driver: 20 tests passing (base tests without rustc-integration feature) [26:01:17]
 - [x] fragile-runtime: Compiles
-- [x] **Mako Tests**: 50 test/benchmark executables, 802+ tests [26:01:17]
+- [x] **Mako Tests**: 53 test/benchmark executables, 867+ gtest tests [26:01:17]
   - Core tests: test_fiber (37), test_marshal (23), test_sharding_policy (34), test_idempotency (32), test_completion_tracker (27)
   - Masstree tests: test_masstree (2), test_masstree_internals (13), test_masstree_multi_instance (5)
   - Silo tests: test_silo_varint (22), test_silo_runtime (8), test_silo_rcu_thread (9), test_silo_multi_site_stress (10), test_silo_allocator_tuple (18)
   - RPC unit tests: rpc_connection_state_test (30), rpc_circuit_breaker_test (21), rpc_reconnect_policy_test (19), rpc_request_queue_test (28), rpc_callbacks_test (24), rpc_heartbeat_test (20), rpc_timeout_retry_test (30), rpc_request_buffering_test (17), rpc_log_storage_test (35)
   - Reactor tests: test_timeout_race (6), test_reactor (15), test_reactor_extended (12)
-  - Transport tests: test_transport_backend (25), stress_transport_backend (13)
+  - Transport tests: test_transport_backend (25), test_transport_integration (16), stress_transport_backend (13)
+  - RPC integration tests: test_rpc (17), test_future (12), test_rpc_extended (8), test_load_balancer (19), test_rpc_partition (14)
+  - RPC stress/chaos: rpc_chaos_test (26), rpc_graceful_shutdown_test (17), rpc_restart_detection_test (11), rpc_validation_test (15), rpc_metrics_test (18), rpc_client_pool_test (20), rpc_stress_crash_test (11), rpc_state_integration_test (9), rpc_reconnect_integration_test (13), rpc_circuit_breaker_integration_test (12), rpc_error_integration_test (15), rpc_combined_reliability_test (9)
   - Timeout tests: test_txn_timeout (9)
   - Others: test_alock (14, 2 timing-sensitive fail), test_and_event (5), test_rpc_errors (28), test_config_schema (7), test_arc_mutex_thread (7)
   - Non-gtest: test_fragile_minimal (pass), test_mako_core_minimal (pass)
-  - Benchmarks: masstree_perf (pass)
+  - Benchmarks: masstree_perf (pass), bench_future (6), rpcbench (pass)
 
 ### 5.2 Mako Milestones
 - [x] **M1**: Parse `rand.cpp` (minimal deps) [26:01:16] - 26 functions, rand_r stub added
@@ -825,40 +827,38 @@ Current status:
 - **Milestones M1-M6**: ✅ Complete - test harness working
 - **Phase G (Full Build)**: 🔄 In Progress
   - G.1-G.4: ✅ Complete (MIR injection, runtime support, build system, blocked files fixed)
-  - G.5.2: ✅ **53 test/benchmark executables built, 875 tests passing**
-  - G.5.3: ✅ **Benchmarks passing** (rpcbench, bench_future)
+  - G.5.2: ✅ **53 test/benchmark executables built, 867+ gtest tests passing**
+  - G.5.3: ✅ **Benchmarks passing** (masstree_perf, bench_future, rpcbench)
   - **libmako_lib**: ✅ UNBLOCKED [26:01:17, 06:30]
   - **RPC Infrastructure**: ✅ WORKING [26:01:17] - test_rpc, test_future, rpcbench all passing
   - G.5.1: Core executables blocked on full deptran/transaction infrastructure
 
 **Recent Progress** [26:01:17]:
-- Added 17 new RPC test executables:
-  - test_rpc_extended, test_load_balancer, rpc_chaos_test
-  - rpc_graceful_shutdown_test, rpc_restart_detection_test
-  - rpc_validation_test, rpc_metrics_test, rpc_client_pool_test
-  - rpc_stress_crash_test, rpc_state_integration_test
-  - rpc_reconnect_integration_test, rpc_circuit_breaker_integration_test
-  - rpc_error_integration_test, rpc_combined_reliability_test
-  - test_transport_integration, test_txn_timeout, stress_transport_backend
-- Built and verified rpcbench - RPC client/server benchmark working
-- RPC infrastructure now fully working (server.cpp compiled and linked with librrr)
-- Added boost_context library linkage for fiber/coroutine support
-- Fixed missing get_bound_port() by recompiling server.cpp
-- Added test_rpc_partition (14 tests) - network partition testing
-- Total: 53 test/benchmark executables, 875 tests passing; 571 parsing tests
+- 53 C++ test/benchmark executables built and verified
+- 867 gtest tests passing (50 gtest executables)
+- test_alock: 14/16 pass (2 timing-sensitive tests fail in CI environment)
+- bench_future: 6 benchmark tests
+- rpcbench: client/server RPC benchmark working
+- 571 Rust parsing tests passing (fragile-clang)
+- **Total: 1438+ tests passing across C++ and Rust**
 
-**Blockers**:
-- Core executables (simpleTransaction, simplePaxos) need full deptran/transaction infrastructure
-- test_sto_transaction_real: needs full mako lib (rocksdb, erpc, txlog, etc.)
-- Config tests (config_store, config_service, config_client): need RocksDB for persistent storage
+**Blockers** (remaining tests):
+- test_sto_transaction: compiler.hh redefines `static_assert`/`constexpr`, breaking C++23 headers
+- test_lambda, test_timer: Use internal TEST macro (requires deptran/all.h)
+- test_reactor_minimal: Uses outdated PollThread API
+- test_rand, test_io_wait, test_dtxn, test_graph, test_sm: Entirely commented out
+- test_marshal_value: Requires deptran/marshal-value.h
+- config_* tests: Need RocksDB persistent storage
+- sharding_* tests: Need deptran infrastructure
+- Core executables (simpleTransaction, simplePaxos): Need full deptran/transaction infrastructure
 
 **Completed**:
 - G.1: MIR injection pipeline (TLS, type conversion, function sigs, MIR body generation)
 - G.2: Runtime support (fragile-runtime crate)
 - G.3: Build system integration (fragile.toml, compile_commands.json)
 - G.4: Fixed blocked files (mtd.cc, persist_test.cc, mongodb/server.cc)
-- G.5.2: Unit tests (50 executables, 802+ tests)
-- G.5.3: masstree_perf benchmark
+- G.5.2: Unit tests (53 executables, 867+ tests)
+- G.5.3: Benchmarks (masstree_perf, bench_future, rpcbench)
 - libmako_lib build unblocked
 
 ---
