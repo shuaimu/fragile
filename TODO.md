@@ -502,11 +502,12 @@ Migration: After C++20 support is complete, deprecate these.
 - [x] fragile-clang: 569 tests passing (all integration tests) [26:01:17]
 - [x] fragile-rustc-driver: 20 tests passing (base tests without rustc-integration feature) [26:01:17]
 - [x] fragile-runtime: Compiles
-- [x] **Mako Tests**: 29 test executables, 527 tests [26:01:17]
+- [x] **Mako Tests**: 30 test executables, 533 tests [26:01:17]
   - Core tests: test_fiber (37), test_marshal (23), test_sharding_policy (34), test_idempotency (32), test_completion_tracker (27)
   - Masstree tests: test_masstree (2), test_masstree_internals (13), test_masstree_multi_instance (5)
   - Silo tests: test_silo_varint (22), test_silo_runtime (8), test_silo_rcu_thread (9), test_silo_multi_site_stress (10), test_silo_allocator_tuple (18)
   - RPC unit tests: rpc_connection_state_test (30), rpc_circuit_breaker_test (21), rpc_reconnect_policy_test (19), rpc_request_queue_test (28), rpc_callbacks_test (24), rpc_heartbeat_test (20), rpc_timeout_retry_test (30), rpc_request_buffering_test (17), rpc_log_storage_test (35)
+  - Reactor tests: test_timeout_race (6)
   - Others: test_alock (14, 2 timing-sensitive fail), test_and_event (5), test_rpc_errors (28), test_config_schema (7), test_arc_mutex_thread (7)
   - Non-gtest: test_fragile_minimal (pass), test_mako_core_minimal (pass)
 
@@ -749,8 +750,9 @@ Migration: After C++20 support is complete, deprecate these.
   - [x] `rpc_timeout_retry_test` passes - 30/30 tests [26:01:17]
   - [x] `rpc_request_buffering_test` passes - 17/17 tests [26:01:17]
   - [x] `rpc_log_storage_test` passes - 35/35 tests [26:01:17]
+  - [x] `test_timeout_race` passes - 6/6 tests [26:01:17]
   - [ ] `test_rpc` passes (needs full rpc/server.hpp)
-  - [ ] All tests pass (29 executables, 527 tests)
+  - [ ] All tests pass (30 executables, 533 tests)
 - [ ] **G.6.2 Integration Tests (ci.sh)**
   - [ ] `./ci/ci.sh simpleTransaction` passes
   - [ ] `./ci/ci.sh simplePaxos` passes
@@ -791,15 +793,16 @@ Current status:
 - **Milestones M1-M6**: ✅ Complete - test harness working
 - **Phase G (Full Build)**: 🔄 In Progress
   - G.1-G.4: ✅ Complete (MIR injection, runtime support, build system, blocked files fixed)
-  - G.5.2: ✅ **29 test executables built, 527 tests passing**
+  - G.5.2: ✅ **30 test executables built, 533 tests passing**
   - **libmako_lib**: ✅ UNBLOCKED [26:01:17, 06:30]
   - G.5.1: Core executables blocked on full eRPC/ASIO stack
   - G.5.3: Benchmark executables blocked on full eRPC/ASIO stack
 
 **Recent Progress** [26:01:17]:
+- Added test_timeout_race (6 tests) for reactor event timing
 - Added rpc_request_buffering_test (17 tests) and rpc_log_storage_test (35 tests)
 - Fixed std::map::lower_bound/upper_bound/equal_range in stub headers
-- Total: 29 test executables, 527 tests passing
+- Total: 30 test executables, 533 tests passing
 
 **Blockers**:
 - Core executables (simpleTransaction, simplePaxos) need full eRPC with ASIO
@@ -810,7 +813,7 @@ Current status:
 - G.2: Runtime support (fragile-runtime crate)
 - G.3: Build system integration (fragile.toml, compile_commands.json)
 - G.4: Fixed blocked files (mtd.cc, persist_test.cc, mongodb/server.cc)
-- G.5.2: Unit tests (29 executables, 527 tests)
+- G.5.2: Unit tests (30 executables, 533 tests)
 - libmako_lib build unblocked
 
 ---
