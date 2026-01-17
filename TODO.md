@@ -684,7 +684,9 @@ Migration: After C++20 support is complete, deprecate these.
   - [x] `test_completion_tracker` - Built and all tests pass [26:01:17]
     - gtest-based tests for request completion tracking
     - 27/27 tests pass (Config, CompletedEntry, CompletionTracker, QueryResult)
-  - [ ] `test_masstree` - Masstree index tests
+  - [x] `test_masstree` - Built and all tests pass [26:01:17]
+    - gtest-based tests for Masstree concurrent B-tree index
+    - 2/2 tests pass (InsertSearchAndRemove, RangeScanReturnsSortedKeys)
   - [ ] `test_rpc` - RPC framework tests (full integration)
   - [ ] `test_future` - Future/promise tests
   - [ ] All others listed in CMakeLists.txt
@@ -700,7 +702,7 @@ Migration: After C++20 support is complete, deprecate these.
   - [x] `test_fiber` passes - 37/37 tests [26:01:17]
   - [x] `test_idempotency` passes - 32/32 tests [26:01:17]
   - [x] `test_completion_tracker` passes - 27/27 tests [26:01:17]
-  - [ ] `test_masstree` passes
+  - [x] `test_masstree` passes - 2/2 tests [26:01:17]
   - [ ] `test_rpc` passes
   - [ ] All 25 ctest tests pass
 - [ ] **G.6.2 Integration Tests (ci.sh)**

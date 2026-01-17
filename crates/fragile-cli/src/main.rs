@@ -268,10 +268,15 @@ fn main() -> Result<()> {
                     }
 
                     // Get library paths and libraries
-                    let lib_paths: Vec<String> = job.lib_paths
+                    let mut lib_paths: Vec<String> = job.lib_paths
                         .iter()
                         .map(|p| p.to_string_lossy().to_string())
                         .collect();
+                    // Also add the output_dir to lib_paths since that's where we place compiled libraries
+                    let output_dir_str = output_dir.to_string_lossy().to_string();
+                    if !lib_paths.contains(&output_dir_str) {
+                        lib_paths.push(output_dir_str);
+                    }
 
                     compiler.link_executable(&object_files, &exe_path, &lib_paths, &job.libs)
                         .map_err(|e| miette::miette!("Failed to link {}: {}", target, e))?;
