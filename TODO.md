@@ -340,8 +340,13 @@ Each feature must work through the MIR pipeline, not clang++.
 ## Phase 5: Test Target - doctest
 
 ### 5.1 Setup
-- [ ] Clone doctest as submodule
-- [ ] Create test file using doctest
+- [x] Clone doctest as submodule [26:01:17]
+  - Added vendor/doctest as git submodule from https://github.com/doctest/doctest
+  - Header-only library (~323KB doctest.h)
+- [x] Create test file using doctest [26:01:17]
+  - Created tests/cpp/doctest_simple.cpp with basic tests
+  - Tests factorial function, comparisons, and subcases
+  - Verified compiles with clang++ -std=c++17
 
 ### 5.2 Compile doctest Tests
 - [ ] Parse doctest.h header
@@ -350,13 +355,44 @@ Each feature must work through the MIR pipeline, not clang++.
 
 ---
 
-## Cleanup: Remove Wrong Approach
+## Cleanup: Remove Wrong Approach Code
 
-### Files to Remove/Refactor
-- [ ] `crates/fragile-rustc-driver/src/cpp_compiler.rs` - DELETE
+The following crates and files implement the WRONG approach (link-time unification via
+inkwell/tree-sitter or clang++) and must be removed or deprecated.
+
+### Crates to DELETE (Wrong Approach)
+
+These crates use tree-sitter parsing + inkwell LLVM codegen - a parallel compiler that
+only meets Rust at link time. They should be REMOVED entirely:
+
+- [ ] `crates/fragile-codegen/` - **DELETE** (inkwell LLVM codegen, wrong approach)
+- [ ] `crates/fragile-frontend-cpp/` - **DELETE** (tree-sitter C++ parsing, wrong approach)
+- [ ] `crates/fragile-frontend-rust/` - **DELETE** (tree-sitter Rust parsing, wrong approach)
+- [ ] `crates/fragile-frontend-go/` - **DELETE** (tree-sitter Go parsing, wrong approach)
+- [ ] `crates/fragile-hir/` - **DELETE** (HIR used by above, wrong approach)
+- [ ] `crates/fragile-driver/` - **DELETE** (driver for wrong approach crates)
+
+### Files to Remove in Correct Crates
+
+In `fragile-rustc-driver` (the CORRECT crate), remove clang++ codegen remnants:
+
+- [ ] `crates/fragile-rustc-driver/src/cpp_compiler.rs` - DELETE (clang++ wrapper)
 - [ ] `crates/fragile-rustc-driver/src/stubs.rs` - REFACTOR (no extern "C" stubs)
 - [ ] Remove all `compile_cpp_objects()` calls
 - [ ] Remove `CppCompilerConfig`, `CppCompiler` types
+
+### Test Files to Clean Up
+
+- [ ] Review `tests/cpp/` - some tests were for wrong approach
+- [ ] `tests/cpp/namespace.cpp` - Created for tree-sitter path, may need to be recreated for fragile-clang
+- [ ] `tests/cpp/class.cpp` - Created for tree-sitter path, may need to be recreated for fragile-clang
+
+### Cargo.toml Updates
+
+After removing wrong crates:
+- [ ] Update root `Cargo.toml` workspace members
+- [ ] Remove wrong crates from any dependency lists
+- [ ] Clean up feature flags referencing wrong crates
 
 ### Tests to Update
 - [ ] Update all tests to use MIR pipeline
