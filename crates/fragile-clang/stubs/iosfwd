@@ -1,0 +1,10 @@
+// Minimal iosfwd stub for fragile parsing
+// Forward declarations for I/O stream classes - kept minimal to avoid conflicts
+#ifndef _FRAGILE_IOSFWD_
+#define _FRAGILE_IOSFWD_
+
+// Just include the full iostream - iosfwd is typically used when you don't
+// need the full iostream, but for stub purposes this is simpler
+#include "iostream"
+
+#endif // _FRAGILE_IOSFWD_

@@ -10,6 +10,10 @@
 
 namespace std {
 
+// allocator_arg_t - tag type for uses-allocator construction
+struct allocator_arg_t { explicit allocator_arg_t() = default; };
+inline constexpr allocator_arg_t allocator_arg{};
+
 // Forward declarations
 template<typename T> class shared_ptr;
 template<typename T> class weak_ptr;
