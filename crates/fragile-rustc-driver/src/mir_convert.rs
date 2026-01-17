@@ -462,10 +462,11 @@ impl<'tcx> MirConvertCtx<'tcx> {
             let projections: Vec<_> = place.projection.iter().map(|proj| {
                 match proj {
                     fragile_clang::MirProjection::Deref => ProjectionElem::Deref,
-                    fragile_clang::MirProjection::Field(idx) => {
+                    fragile_clang::MirProjection::Field { index, name: _ } => {
                         // Note: This needs the actual field type, using unit as placeholder
+                        // TODO: Use the `name` field to look up proper type when available
                         ProjectionElem::Field(
-                            FieldIdx::from_usize(*idx),
+                            FieldIdx::from_usize(*index),
                             self.tcx.types.unit,
                         )
                     }

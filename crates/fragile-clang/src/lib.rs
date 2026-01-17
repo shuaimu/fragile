@@ -841,8 +841,12 @@ impl MirPlace {
 pub enum MirProjection {
     /// Dereference a pointer
     Deref,
-    /// Access a field by index
-    Field(usize),
+    /// Access a field by index or name
+    /// When name is Some, it should be resolved to an index during rustc conversion
+    Field {
+        index: usize,
+        name: Option<String>,
+    },
     /// Index into an array
     Index(usize),
 }

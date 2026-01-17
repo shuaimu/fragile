@@ -241,10 +241,19 @@ Each feature must work through the MIR pipeline, not clang++.
 ## Phase 3: Structs and Classes via MIR
 
 ### 3.1 Structs
-- [ ] Struct definitions
-- [ ] Field access
-- [ ] Struct literals
-- [ ] Nested structs
+- [x] **3.1.1** Struct definitions [already implemented] - CppStruct parsing and stub generation
+  - Parser handles RecordDecl (struct/class)
+  - Fields, methods, constructors, destructors extracted
+  - Rust stubs generated with #[repr(C)]
+  - Existing tests: test_struct_default_access, test_namespace_struct
+- [x] **3.1.2** Field access (MemberExpr → MirProjection::Field) [26:01:17]
+  - Added MemberExpr handling in convert_expr() for both dot (`.`) and arrow (`->`) access
+  - Updated MirProjection::Field to include field name for later resolution
+  - Arrow access generates Deref + Field projections
+  - Added 3 tests: test_convert_member_expr_dot, test_convert_member_expr_arrow, test_convert_nested_member_expr
+  - See: `docs/dev/plan_3_1_2_field_access.md`
+- [ ] **3.1.3** Struct literals / aggregate initialization
+- [ ] **3.1.4** Nested structs
 
 ### 3.2 Classes
 - [ ] Class definitions

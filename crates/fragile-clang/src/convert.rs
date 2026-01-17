@@ -1109,6 +1109,48 @@ impl MirConverter {
                 }
             }
 
+            ClangNodeKind::MemberExpr {
+                member_name,
+                is_arrow,
+                ty: _,
+            } => {
+                // Member access expression: obj.field or ptr->field
+                // First child is the base expression
+                if let Some(base_node) = node.children.first() {
+                    // Convert base to a place
+                    let base_operand = self.convert_expr(base_node, builder)?;
+                    let mut base_place = match base_operand {
+                        MirOperand::Copy(place) | MirOperand::Move(place) => place,
+                        MirOperand::Constant(c) => {
+                            // Base is a constant - store in temp first
+                            let base_ty = Self::get_node_type(base_node);
+                            let temp_local = builder.add_local(None, base_ty, false);
+                            builder.add_statement(MirStatement::Assign {
+                                target: MirPlace::local(temp_local),
+                                value: MirRvalue::Use(MirOperand::Constant(c)),
+                            });
+                            MirPlace::local(temp_local)
+                        }
+                    };
+
+                    // For arrow access (->), we need to dereference first
+                    if *is_arrow {
+                        base_place.projection.push(MirProjection::Deref);
+                    }
+
+                    // Add field access projection
+                    // We use field index 0 as placeholder; the name allows later resolution
+                    base_place.projection.push(MirProjection::Field {
+                        index: 0, // TODO: Resolve actual field index from struct definition
+                        name: Some(member_name.clone()),
+                    });
+
+                    Ok(MirOperand::Copy(base_place))
+                } else {
+                    Ok(MirOperand::Constant(MirConstant::Unit))
+                }
+            }
+
             ClangNodeKind::ArraySubscriptExpr { ty: _ } => {
                 // Array subscript expression: arr[index]
                 // First child is the array, second is the index
@@ -2058,6 +2100,147 @@ mod tests {
                 r#"
                 int get_element(int arr[3][4]) {
                     return arr[1][2];  // Nested indices
+                }
+                "#,
+                "test.cpp",
+            )
+            .unwrap();
+
+        let converter = MirConverter::new();
+        let module = converter.convert(ast).unwrap();
+
+        assert_eq!(module.functions.len(), 1);
+        let func = &module.functions[0];
+
+        // Just verify the function compiles without panicking
+        assert!(
+            !func.mir_body.blocks.is_empty(),
+            "Function should have basic blocks"
+        );
+    }
+
+    #[test]
+    fn test_convert_member_expr_dot() {
+        // Test field access with dot operator: s.field
+        let parser = ClangParser::new().unwrap();
+        let ast = parser
+            .parse_string(
+                r#"
+                struct Point {
+                    int x;
+                    int y;
+                };
+
+                int get_x(Point p) {
+                    return p.x;
+                }
+                "#,
+                "test.cpp",
+            )
+            .unwrap();
+
+        let converter = MirConverter::new();
+        let module = converter.convert(ast).unwrap();
+
+        // Should have the struct and the function
+        assert_eq!(module.structs.len(), 1);
+        assert_eq!(module.functions.len(), 1);
+
+        let func = &module.functions[0];
+        let body = &func.mir_body;
+
+        // Verify MirProjection::Field is used
+        let has_field = body
+            .blocks
+            .iter()
+            .flat_map(|bb| &bb.statements)
+            .any(|stmt| {
+                if let MirStatement::Assign {
+                    value: MirRvalue::Use(MirOperand::Copy(place)),
+                    ..
+                } = stmt
+                {
+                    place.projection.iter().any(|p| {
+                        matches!(p, MirProjection::Field { name: Some(n), .. } if n == "x")
+                    })
+                } else {
+                    false
+                }
+            });
+        assert!(has_field, "Should have MirProjection::Field for member access");
+    }
+
+    #[test]
+    fn test_convert_member_expr_arrow() {
+        // Test field access with arrow operator: ptr->field
+        let parser = ClangParser::new().unwrap();
+        let ast = parser
+            .parse_string(
+                r#"
+                struct Point {
+                    int x;
+                    int y;
+                };
+
+                int get_x_ptr(Point* p) {
+                    return p->x;
+                }
+                "#,
+                "test.cpp",
+            )
+            .unwrap();
+
+        let converter = MirConverter::new();
+        let module = converter.convert(ast).unwrap();
+
+        assert_eq!(module.functions.len(), 1);
+        let func = &module.functions[0];
+        let body = &func.mir_body;
+
+        // Verify both Deref and Field projections are used for arrow access
+        let has_deref_and_field = body
+            .blocks
+            .iter()
+            .flat_map(|bb| &bb.statements)
+            .any(|stmt| {
+                if let MirStatement::Assign {
+                    value: MirRvalue::Use(MirOperand::Copy(place)),
+                    ..
+                } = stmt
+                {
+                    let has_deref = place.projection.iter().any(|p| matches!(p, MirProjection::Deref));
+                    let has_field = place
+                        .projection
+                        .iter()
+                        .any(|p| matches!(p, MirProjection::Field { name: Some(n), .. } if n == "x"));
+                    has_deref && has_field
+                } else {
+                    false
+                }
+            });
+        assert!(
+            has_deref_and_field,
+            "Should have both Deref and Field for arrow access"
+        );
+    }
+
+    #[test]
+    fn test_convert_nested_member_expr() {
+        // Test nested field access: outer.inner.value
+        let parser = ClangParser::new().unwrap();
+        let ast = parser
+            .parse_string(
+                r#"
+                struct Inner {
+                    int value;
+                };
+
+                struct Outer {
+                    Inner inner;
+                };
+
+                int get_nested_value(Outer o) {
+                    return o.inner.value;
                 }
                 "#,
                 "test.cpp",
