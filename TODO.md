@@ -502,7 +502,7 @@ Migration: After C++20 support is complete, deprecate these.
 - [x] fragile-clang: 569 tests passing (all integration tests) [26:01:17]
 - [x] fragile-rustc-driver: 20 tests passing (base tests without rustc-integration feature) [26:01:17]
 - [x] fragile-runtime: Compiles
-- [x] **Mako Tests**: 35 test executables, 614 tests [26:01:17]
+- [x] **Mako Tests**: 38 test executables, 656 tests [26:01:17]
   - Core tests: test_fiber (37), test_marshal (23), test_sharding_policy (34), test_idempotency (32), test_completion_tracker (27)
   - Masstree tests: test_masstree (2), test_masstree_internals (13), test_masstree_multi_instance (5)
   - Silo tests: test_silo_varint (22), test_silo_runtime (8), test_silo_rcu_thread (9), test_silo_multi_site_stress (10), test_silo_allocator_tuple (18)
@@ -758,7 +758,7 @@ Migration: After C++20 support is complete, deprecate these.
   - [x] `test_transport_backend` passes - 25/25 tests [26:01:17]
   - [x] `test_rpc` passes - 17/17 tests [26:01:17]
   - [x] `test_future` passes - 12/12 tests [26:01:17]
-  - [ ] All tests pass (35 executables, 614 tests)
+  - [ ] All tests pass (38 executables, 656 tests)
 - [ ] **G.6.2 Integration Tests (ci.sh)**
   - [ ] `./ci/ci.sh simpleTransaction` passes
   - [ ] `./ci/ci.sh simplePaxos` passes
@@ -799,7 +799,7 @@ Current status:
 - **Milestones M1-M6**: ✅ Complete - test harness working
 - **Phase G (Full Build)**: 🔄 In Progress
   - G.1-G.4: ✅ Complete (MIR injection, runtime support, build system, blocked files fixed)
-  - G.5.2: ✅ **35 test executables built, 614 tests passing**
+  - G.5.2: ✅ **38 test executables built, 656 tests passing**
   - **libmako_lib**: ✅ UNBLOCKED [26:01:17, 06:30]
   - G.5.1: Core executables blocked on full eRPC/ASIO stack
   - G.5.3: Benchmark executables blocked on full eRPC/ASIO stack
@@ -807,7 +807,8 @@ Current status:
 **Recent Progress** [26:01:17]:
 - Fixed invoke_result stub to properly deduce return types (was always returning void)
 - Added test_rpc (17 tests), test_future (12 tests) - now unblocked
-- Total: 35 test executables, 614 tests passing
+- Added test_load_balancer (19 tests), test_rpc_extended (8 tests), rpc_validation_test (15 tests)
+- Total: 38 test executables, 656 tests passing
 
 **Blockers**:
 - Core executables (simpleTransaction, simplePaxos) need full eRPC with ASIO
@@ -819,7 +820,7 @@ Current status:
 - G.2: Runtime support (fragile-runtime crate)
 - G.3: Build system integration (fragile.toml, compile_commands.json)
 - G.4: Fixed blocked files (mtd.cc, persist_test.cc, mongodb/server.cc)
-- G.5.2: Unit tests (35 executables, 614 tests)
+- G.5.2: Unit tests (38 executables, 656 tests)
 - libmako_lib build unblocked
 
 ---
