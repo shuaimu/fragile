@@ -880,7 +880,7 @@ Current status:
 - sharding_* tests: Need deptran infrastructure
 - Core executables (simpleTransaction, simplePaxos): Need full eRPC/asio/deptran infrastructure (see docs/dev/plan_simpleTransaction_analysis.md)
   - Investigation [26:01:17]: Type_traits, system_error, and network stubs added, remaining blockers:
-    - String conversion issues (string_view to string)
+    - ~~String conversion issues (string_view to string)~~ ✅ Fixed [26:01:17]
     - Missing examples/common.h and tuple instantiation issues
     - Transaction class private constructor issues
     - Additional asio resolver/endpoint conversion issues
