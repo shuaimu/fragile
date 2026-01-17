@@ -29,45 +29,54 @@ use std::cell::RefCell;
 use std::collections::HashSet;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock};
 
 // ============================================================================
-// Thread-Local Storage for C++ Registry
+// Global Storage for C++ Registry
 // ============================================================================
+//
+// We use global statics instead of TLS because rustc may spawn the compilation
+// on a different thread than where `config()` is called. The `override_queries`
+// callback runs on the compiler thread, not the calling thread.
 
+/// Global storage for the C++ MIR registry.
+static CPP_REGISTRY: OnceLock<Mutex<Option<Arc<CppMirRegistry>>>> = OnceLock::new();
+
+/// Global storage for C++ function names as a HashSet for quick lookup.
+static CPP_FUNCTION_NAMES: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+
+/// Thread-local storage for the original mir_built provider for fallback.
+/// This must stay TLS because it's set in `override_queries` which runs on the compiler thread.
 thread_local! {
-    /// Thread-local storage for the C++ MIR registry.
-    ///
-    /// This is necessary because `override_queries` takes a function pointer,
-    /// not a closure, so we cannot capture state directly. Instead, we store
-    /// the registry in TLS and access it from the query override functions.
-    static CPP_REGISTRY: RefCell<Option<Arc<CppMirRegistry>>> = const { RefCell::new(None) };
-
-    /// Thread-local storage for C++ function names as a HashSet for quick lookup.
-    static CPP_FUNCTION_NAMES: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
-
-    /// Thread-local storage for the original mir_built provider for fallback.
     static ORIG_MIR_BUILT: RefCell<Option<for<'tcx> fn(TyCtxt<'tcx>, LocalDefId) -> &'tcx Steal<rustc_middle::mir::Body<'tcx>>>> = const { RefCell::new(None) };
 }
 
-/// Set the C++ registry for the current thread.
-fn set_cpp_registry(registry: Arc<CppMirRegistry>, function_names: Vec<String>) {
-    CPP_REGISTRY.with(|r| {
-        *r.borrow_mut() = Some(registry);
-    });
-    CPP_FUNCTION_NAMES.with(|names| {
-        *names.borrow_mut() = function_names.into_iter().collect();
-    });
+fn get_cpp_registry_global() -> &'static Mutex<Option<Arc<CppMirRegistry>>> {
+    CPP_REGISTRY.get_or_init(|| Mutex::new(None))
 }
 
-/// Clear the C++ registry for the current thread.
+fn get_cpp_function_names_global() -> &'static Mutex<HashSet<String>> {
+    CPP_FUNCTION_NAMES.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+/// Set the C++ registry globally (thread-safe).
+fn set_cpp_registry(registry: Arc<CppMirRegistry>, function_names: Vec<String>) {
+    let function_count = registry.function_count();
+    let names_count = function_names.len();
+    eprintln!(
+        "[fragile] set_cpp_registry: {} functions, {} names",
+        function_count,
+        names_count
+    );
+
+    *get_cpp_registry_global().lock().unwrap() = Some(registry);
+    *get_cpp_function_names_global().lock().unwrap() = function_names.into_iter().collect();
+}
+
+/// Clear the C++ registry globally.
 fn clear_cpp_registry() {
-    CPP_REGISTRY.with(|r| {
-        *r.borrow_mut() = None;
-    });
-    CPP_FUNCTION_NAMES.with(|names| {
-        names.borrow_mut().clear();
-    });
+    *get_cpp_registry_global().lock().unwrap() = None;
+    get_cpp_function_names_global().lock().unwrap().clear();
     ORIG_MIR_BUILT.with(|r| {
         *r.borrow_mut() = None;
     });
@@ -158,24 +167,25 @@ pub fn collect_cpp_def_ids<'tcx>(
 /// Custom mir_built query provider that injects C++ MIR.
 ///
 /// This function is used as a fn pointer (not closure) for the query override.
-/// All state access goes through thread-local storage.
+/// All state access goes through global statics (thread-safe).
 fn fragile_mir_built<'tcx>(
     tcx: TyCtxt<'tcx>,
     def_id: LocalDefId,
 ) -> &'tcx Steal<rustc_middle::mir::Body<'tcx>> {
     // Check if this is a C++ function by looking at link_name
-    let cpp_function_name = CPP_FUNCTION_NAMES.with(|names| {
-        let names_set = names.borrow();
-        get_cpp_link_name(tcx, def_id).filter(|name| names_set.contains(name))
-    });
+    let cpp_function_name = {
+        let names_guard = get_cpp_function_names_global().lock().unwrap();
+        get_cpp_link_name(tcx, def_id).filter(|name| names_guard.contains(name))
+    };
 
     if let Some(link_name) = cpp_function_name {
         eprintln!("[fragile] mir_built called for C++ function: {}", link_name);
 
         // Get the MIR body from the registry
-        let mir_body = CPP_REGISTRY.with(|r| {
-            r.borrow().as_ref().and_then(|reg| reg.get_mir(&link_name))
-        });
+        let mir_body = {
+            let registry_guard = get_cpp_registry_global().lock().unwrap();
+            registry_guard.as_ref().and_then(|reg| reg.get_mir(&link_name))
+        };
 
         if let Some(cpp_mir) = mir_body {
             eprintln!("[fragile] Found C++ MIR body for {}, converting...", link_name);
@@ -183,10 +193,14 @@ fn fragile_mir_built<'tcx>(
             // Convert the fragile MIR to rustc MIR
             let ctx = MirConvertCtx::new(tcx);
 
-            // Count arguments from the MIR (locals 1..=arg_count are arguments)
-            // For now, use a simple heuristic: count non-return locals as potential args
-            let arg_count = cpp_mir.locals.len().saturating_sub(1);
-            let rustc_body = ctx.convert_mir_body_full(&cpp_mir, arg_count);
+            // Count arguments from the MIR by checking the is_arg field
+            let arg_count = cpp_mir.locals.iter().filter(|l| l.is_arg).count();
+            eprintln!(
+                "[fragile] MIR has {} locals, {} are arguments",
+                cpp_mir.locals.len(),
+                arg_count
+            );
+            let rustc_body = ctx.convert_mir_body_full(&cpp_mir, arg_count, def_id);
 
             eprintln!(
                 "[fragile] Converted MIR body for {} ({} locals, {} blocks)",
@@ -260,21 +274,21 @@ fn override_queries_callback(
     // Log that the callback was invoked
     eprintln!("[fragile] Query override callback invoked");
 
-    // Check if we have a C++ registry
-    let (has_registry, function_count) = CPP_REGISTRY.with(|r| {
-        let borrow = r.borrow();
-        match borrow.as_ref() {
+    // Check if we have a C++ registry (using global statics, thread-safe)
+    let (has_registry, function_count) = {
+        let registry_guard = get_cpp_registry_global().lock().unwrap();
+        match registry_guard.as_ref() {
             Some(reg) => (true, reg.function_count()),
             None => (false, 0),
         }
-    });
+    };
 
     if !has_registry {
         eprintln!("[fragile] No C++ registry set, using default providers");
         return;
     }
 
-    let names_count = CPP_FUNCTION_NAMES.with(|n| n.borrow().len());
+    let names_count = get_cpp_function_names_global().lock().unwrap().len();
     eprintln!(
         "[fragile] Query override active with {} registered C++ functions ({} names)",
         function_count,
@@ -282,13 +296,14 @@ fn override_queries_callback(
     );
 
     // Store original providers in TLS for fallback from the fn pointer
+    // This is fine because the override runs on the same thread as the queries
     ORIG_MIR_BUILT.with(|r| {
         *r.borrow_mut() = Some(providers.queries.mir_built);
     });
 
     // Override mir_built query to inject C++ MIR
     // This must be a fn pointer (not closure) so it cannot capture state.
-    // All state access goes through TLS.
+    // All state access goes through global statics.
     providers.queries.mir_built = fragile_mir_built;
 
     eprintln!("[fragile] Query override installed for {} C++ functions", function_count);
@@ -470,6 +485,29 @@ pub fn run_rustc_with_objects(
         .write_all(cpp_stubs.as_bytes())
         .map_err(|e| miette!("Failed to write stubs: {}", e))?;
 
+    // Create a wrapper main file that includes the stubs
+    // This is needed because --extern requires a compiled rlib, but we have source.
+    // Instead, we create a crate that includes the stubs as a module.
+    let wrapper_path = temp_dir.path().join("fragile_main.rs");
+    let mut wrapper_content = String::new();
+    wrapper_content.push_str("// Auto-generated wrapper that includes C++ stubs\n");
+    wrapper_content.push_str("#[path = \"cpp_stubs.rs\"]\n");
+    wrapper_content.push_str("pub mod cpp_stubs;\n\n");
+
+    // Include the original main files as modules or inline
+    // For now, assume there's one main file and we include its contents after stubs
+    if let Some(main_file) = rust_files.first() {
+        let main_content = std::fs::read_to_string(main_file)
+            .map_err(|e| miette!("Failed to read main file: {}", e))?;
+        // If the main file has its own main function, include it directly
+        // Remove any extern crate cpp_stubs declaration since we're using #[path]
+        let main_content = main_content.replace("extern crate cpp_stubs;", "");
+        wrapper_content.push_str(&main_content);
+    }
+
+    std::fs::write(&wrapper_path, &wrapper_content)
+        .map_err(|e| miette!("Failed to write wrapper file: {}", e))?;
+
     // Build the rustc arguments
     let mut args = vec![
         "rustc".to_string(), // argv[0] is the program name
@@ -478,15 +516,8 @@ pub fn run_rustc_with_objects(
         output.to_string_lossy().to_string(),
     ];
 
-    // Add all Rust files
-    for rust_file in rust_files {
-        args.push(rust_file.to_string_lossy().to_string());
-    }
-
-    // Add the stubs file as extern crate or include
-    // For now, we'll include it as part of the crate
-    args.push("--extern".to_string());
-    args.push(format!("cpp_stubs={}", stubs_path.display()));
+    // Compile the wrapper file which includes both stubs and main
+    args.push(wrapper_path.to_string_lossy().to_string());
 
     // Add C++ object files as linker arguments
     for obj in cpp_objects {
@@ -541,37 +572,40 @@ mod tests {
 
     #[test]
     fn test_tls_registry_lifecycle() {
-        // Test that TLS registry can be set and cleared
+        // Test that global registry can be set and cleared
         let registry = Arc::new(CppMirRegistry::new());
         let function_names = vec!["test_func".to_string(), "another_func".to_string()];
 
+        // Clear any previous state (tests may run in parallel or sequence)
+        clear_cpp_registry();
+
         // Initially no registry
-        let has_registry_before = CPP_REGISTRY.with(|r| r.borrow().is_some());
+        let has_registry_before = get_cpp_registry_global().lock().unwrap().is_some();
         assert!(!has_registry_before, "Registry should not be set initially");
 
         // Set the registry
         set_cpp_registry(Arc::clone(&registry), function_names.clone());
 
         // Verify registry is set
-        let has_registry_after = CPP_REGISTRY.with(|r| r.borrow().is_some());
+        let has_registry_after = get_cpp_registry_global().lock().unwrap().is_some();
         assert!(has_registry_after, "Registry should be set after set_cpp_registry");
 
         // Verify function names are set
-        let names_count = CPP_FUNCTION_NAMES.with(|n| n.borrow().len());
+        let names_count = get_cpp_function_names_global().lock().unwrap().len();
         assert_eq!(names_count, 2, "Should have 2 function names");
 
         // Verify specific names are present
-        let has_test_func = CPP_FUNCTION_NAMES.with(|n| n.borrow().contains("test_func"));
+        let has_test_func = get_cpp_function_names_global().lock().unwrap().contains("test_func");
         assert!(has_test_func, "Should contain test_func");
 
         // Clear the registry
         clear_cpp_registry();
 
         // Verify registry is cleared
-        let has_registry_final = CPP_REGISTRY.with(|r| r.borrow().is_some());
+        let has_registry_final = get_cpp_registry_global().lock().unwrap().is_some();
         assert!(!has_registry_final, "Registry should be cleared");
 
-        let names_count_final = CPP_FUNCTION_NAMES.with(|n| n.borrow().len());
+        let names_count_final = get_cpp_function_names_global().lock().unwrap().len();
         assert_eq!(names_count_final, 0, "Function names should be cleared");
     }
 

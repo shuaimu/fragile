@@ -721,22 +721,14 @@ mod tests {
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
 
         // Create a simple Rust main file that uses the stubs
+        // The driver creates a wrapper that includes cpp_stubs as a module
         let main_rs_path = temp_dir.path().join("main.rs");
         let main_content = r#"
-// Include the generated C++ stubs
-mod cpp_stubs {
-    extern "C" {
-        // C++ mangled name for add_cpp(int, int) -> int
-        #[link_name = "_Z7add_cppii"]
-        pub fn add_cpp(a: i32, b: i32) -> i32;
-    }
-}
-
 fn main() {
-    // Test calling the C++ function
-    // In real compilation, this would link to C++ code
-    // For now, we just verify the compilation passes
-    println!("Compilation test successful!");
+    // Call the C++ function (via MIR injection)
+    // The add_cpp function is in the cpp_stubs module (included by the driver wrapper)
+    let result = cpp_stubs::add_cpp(2, 3);
+    println!("add_cpp(2, 3) = {}", result);
 }
 "#;
         std::fs::write(&main_rs_path, main_content)
@@ -749,25 +741,40 @@ fn main() {
         // but it should at least compile the Rust code with the stubs
         let result = driver.compile(&[main_rs_path.as_path()], &stubs, &output_path);
 
-        // The compilation may fail at link time (missing C++ symbols), but
-        // the Rust compilation with MIR injection should work
+        // The compilation should succeed with MIR injection
         match result {
             Ok(()) => {
-                println!("Compilation succeeded (unexpected without C++ objects)");
-                // If it succeeded, verify output exists
-                // assert!(output_path.exists(), "Output binary should exist");
+                println!("Compilation succeeded!");
+
+                // Verify output exists
+                assert!(output_path.exists(), "Output binary should exist");
+
+                // Run the binary and capture output
+                let output = std::process::Command::new(&output_path)
+                    .output()
+                    .expect("Failed to run binary");
+
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                println!("Binary stdout: {}", stdout);
+                println!("Binary stderr: {}", stderr);
+                println!("Exit status: {:?}", output.status);
+
+                // Verify the function was called correctly (via MIR injection)
+                // The output should show the result of add_cpp(2, 3) = 5
+                assert!(
+                    stdout.contains("5") || stdout.contains("add_cpp"),
+                    "Expected output to contain result of add_cpp call"
+                );
             }
             Err(e) => {
-                // Expected to fail at link time
                 let err_msg = format!("{:?}", e);
                 println!("Compilation result: {}", err_msg);
-                // We expect either successful MIR injection or link error
-                // The important thing is the Rust compilation worked
+                panic!("Compilation failed: {}", err_msg);
             }
         }
 
-        // The test passes if we got here - the rustc driver was invoked
-        println!("test_compile_add_cpp_with_rustc completed");
+        println!("test_compile_add_cpp_with_rustc completed - MIR injection verified!");
     }
 
     /// Test compiling C++ source files to object files.

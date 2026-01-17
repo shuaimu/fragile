@@ -610,7 +610,17 @@ impl<'tcx> MirConvertCtx<'tcx> {
     /// Convert a full Fragile MirBody to rustc's mir::Body.
     ///
     /// This performs a complete conversion of all MIR constructs.
-    pub fn convert_mir_body_full(&self, mir: &MirBody, arg_count: usize) -> mir::Body<'tcx> {
+    ///
+    /// # Arguments
+    /// * `mir` - The Fragile MIR body to convert
+    /// * `arg_count` - Number of function arguments
+    /// * `def_id` - The DefId of the function (for MirSource)
+    pub fn convert_mir_body_full(
+        &self,
+        mir: &MirBody,
+        arg_count: usize,
+        def_id: rustc_span::def_id::LocalDefId,
+    ) -> mir::Body<'tcx> {
         use rustc_index::IndexVec;
         use rustc_middle::mir::*;
 
@@ -652,9 +662,9 @@ impl<'tcx> MirConvertCtx<'tcx> {
             local_data: ClearCrossCrate::Clear,
         });
 
-        // Create the body
+        // Create the body with the correct function's DefId
         mir::Body::new(
-            MirSource::item(rustc_span::def_id::CRATE_DEF_ID.to_def_id()),
+            MirSource::item(def_id.to_def_id()),
             basic_blocks,
             source_scopes,
             local_decls,
