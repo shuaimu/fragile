@@ -842,14 +842,19 @@ impl ClangParser {
 
                 clang_sys::CXCursor_FloatingLiteral => {
                     let eval = clang_sys::clang_Cursor_Evaluate(cursor);
-                    let result = if !eval.is_null() {
+                    let value = if !eval.is_null() {
                         let val = clang_sys::clang_EvalResult_getAsDouble(eval);
                         clang_sys::clang_EvalResult_dispose(eval);
                         val
                     } else {
                         0.0
                     };
-                    ClangNodeKind::FloatingLiteral(result)
+
+                    // Capture the type of the literal (float, double, long double)
+                    let clang_type = clang_sys::clang_getCursorType(cursor);
+                    let cpp_type = Some(self.convert_type(clang_type));
+
+                    ClangNodeKind::FloatingLiteral { value, cpp_type }
                 }
 
                 clang_sys::CXCursor_DeclRefExpr => {
@@ -2725,6 +2730,80 @@ mod tests {
             assert_eq!(ty.is_signed(), Some(false));
         } else {
             panic!("Expected IntegerLiteral");
+        }
+    }
+
+    #[test]
+    fn test_float_literal_type_float() {
+        let parser = ClangParser::new().unwrap();
+        let ast = parser
+            .parse_string(
+                r#"
+                float foo() {
+                    return 3.14f;
+                }
+                "#,
+                "test.cpp",
+            )
+            .unwrap();
+
+        // Find the floating literal
+        fn find_float_literal(node: &ClangNode) -> Option<&ClangNode> {
+            if matches!(&node.kind, ClangNodeKind::FloatingLiteral { .. }) {
+                return Some(node);
+            }
+            for child in &node.children {
+                if let Some(found) = find_float_literal(child) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+
+        let literal = find_float_literal(&ast.translation_unit).expect("Expected FloatingLiteral");
+        if let ClangNodeKind::FloatingLiteral { value, cpp_type } = &literal.kind {
+            assert!((*value - 3.14).abs() < 0.01);
+            let ty = cpp_type.as_ref().expect("Expected type info");
+            assert_eq!(ty.bit_width(), Some(32), "float should be 32 bits");
+        } else {
+            panic!("Expected FloatingLiteral");
+        }
+    }
+
+    #[test]
+    fn test_float_literal_type_double() {
+        let parser = ClangParser::new().unwrap();
+        let ast = parser
+            .parse_string(
+                r#"
+                double foo() {
+                    return 3.14159265358979;
+                }
+                "#,
+                "test.cpp",
+            )
+            .unwrap();
+
+        // Find the floating literal
+        fn find_float_literal(node: &ClangNode) -> Option<&ClangNode> {
+            if matches!(&node.kind, ClangNodeKind::FloatingLiteral { .. }) {
+                return Some(node);
+            }
+            for child in &node.children {
+                if let Some(found) = find_float_literal(child) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+
+        let literal = find_float_literal(&ast.translation_unit).expect("Expected FloatingLiteral");
+        if let ClangNodeKind::FloatingLiteral { value, cpp_type } = &literal.kind {
+            assert!((*value - 3.14159265358979).abs() < 0.0000001);
+            let ty = cpp_type.as_ref().expect("Expected type info");
+            assert_eq!(ty.bit_width(), Some(64), "double should be 64 bits");
+        } else {
+            panic!("Expected FloatingLiteral");
         }
     }
 }

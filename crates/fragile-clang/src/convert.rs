@@ -823,10 +823,15 @@ impl MirConverter {
                 }))
             }
 
-            ClangNodeKind::FloatingLiteral(value) => {
+            ClangNodeKind::FloatingLiteral { value, cpp_type } => {
+                // Extract bit width from the C++ type (32 for float, 64 for double)
+                let bits = match cpp_type {
+                    Some(ty) => ty.bit_width().unwrap_or(64),
+                    None => 64, // Default to f64
+                };
                 Ok(MirOperand::Constant(MirConstant::Float {
                     value: *value,
-                    bits: 64, // Default to f64
+                    bits,
                 }))
             }
 
@@ -1639,7 +1644,7 @@ fn is_expression_kind(kind: &ClangNodeKind) -> bool {
     matches!(
         kind,
         ClangNodeKind::IntegerLiteral { .. }
-            | ClangNodeKind::FloatingLiteral(_)
+            | ClangNodeKind::FloatingLiteral { .. }
             | ClangNodeKind::BoolLiteral(_)
             | ClangNodeKind::StringLiteral(_)
             | ClangNodeKind::DeclRefExpr { .. }

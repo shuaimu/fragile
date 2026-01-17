@@ -278,8 +278,13 @@ pub enum ClangNodeKind {
         /// and what bit width to use.
         cpp_type: Option<CppType>,
     },
-    /// Floating-point literal
-    FloatingLiteral(f64),
+    /// Floating-point literal with value and type
+    FloatingLiteral {
+        value: f64,
+        /// The C++ type of this literal (float, double, long double)
+        /// This determines what bit width to use (32 for float, 64 for double).
+        cpp_type: Option<CppType>,
+    },
     /// Boolean literal
     BoolLiteral(bool),
     /// String literal

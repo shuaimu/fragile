@@ -151,7 +151,7 @@ Each feature must work through the MIR pipeline, not clang++.
   - [x] 2.1.1f Update rustc mir_convert.rs for unsigned types
   - [x] 2.1.1g Update all `MirConstant::Int` call sites
   - [x] 2.1.1h Add tests for integer literals (4 tests in parse.rs, 4 tests in types.rs)
-- [ ] Float literals
+- [x] **2.1.2** Float literals [26:01:17] (see `docs/dev/plan_2_1_2_float_literals.md`)
 - [ ] Boolean literals
 - [ ] String literals
 - [ ] Binary operators (+, -, *, /, %, &, |, ^)
