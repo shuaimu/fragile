@@ -392,17 +392,33 @@ impl<'tcx> MirConvertCtx<'tcx> {
         use rustc_middle::ty::ScalarInt;
 
         match constant {
-            MirConstant::Int { value, bits } => {
-                // Determine type based on bit width and sign
-                let (ty, scalar) = match bits {
-                    8 => (self.tcx.types.i8, ScalarInt::try_from_int(*value as i8, rustc_abi::Size::from_bytes(1)).unwrap()),
-                    16 => (self.tcx.types.i16, ScalarInt::try_from_int(*value as i16, rustc_abi::Size::from_bytes(2)).unwrap()),
-                    32 => (self.tcx.types.i32, ScalarInt::try_from_int(*value as i32, rustc_abi::Size::from_bytes(4)).unwrap()),
-                    64 => (self.tcx.types.i64, ScalarInt::try_from_int(*value as i64, rustc_abi::Size::from_bytes(8)).unwrap()),
-                    128 => (self.tcx.types.i128, ScalarInt::try_from_int(*value, rustc_abi::Size::from_bytes(16)).unwrap()),
-                    _ => {
-                        // Default to i32 for unrecognized sizes
-                        (self.tcx.types.i32, ScalarInt::try_from_int(*value as i32, rustc_abi::Size::from_bytes(4)).unwrap())
+            MirConstant::Int { value, bits, signed } => {
+                // Determine type and scalar based on bit width and signedness
+                let (ty, scalar) = if *signed {
+                    // Signed integer types
+                    match bits {
+                        8 => (self.tcx.types.i8, ScalarInt::try_from_int(*value as i8, rustc_abi::Size::from_bytes(1)).unwrap()),
+                        16 => (self.tcx.types.i16, ScalarInt::try_from_int(*value as i16, rustc_abi::Size::from_bytes(2)).unwrap()),
+                        32 => (self.tcx.types.i32, ScalarInt::try_from_int(*value as i32, rustc_abi::Size::from_bytes(4)).unwrap()),
+                        64 => (self.tcx.types.i64, ScalarInt::try_from_int(*value as i64, rustc_abi::Size::from_bytes(8)).unwrap()),
+                        128 => (self.tcx.types.i128, ScalarInt::try_from_int(*value, rustc_abi::Size::from_bytes(16)).unwrap()),
+                        _ => {
+                            // Default to i32 for unrecognized sizes
+                            (self.tcx.types.i32, ScalarInt::try_from_int(*value as i32, rustc_abi::Size::from_bytes(4)).unwrap())
+                        }
+                    }
+                } else {
+                    // Unsigned integer types
+                    match bits {
+                        8 => (self.tcx.types.u8, ScalarInt::try_from_uint(*value as u8 as u128, rustc_abi::Size::from_bytes(1)).unwrap()),
+                        16 => (self.tcx.types.u16, ScalarInt::try_from_uint(*value as u16 as u128, rustc_abi::Size::from_bytes(2)).unwrap()),
+                        32 => (self.tcx.types.u32, ScalarInt::try_from_uint(*value as u32 as u128, rustc_abi::Size::from_bytes(4)).unwrap()),
+                        64 => (self.tcx.types.u64, ScalarInt::try_from_uint(*value as u64 as u128, rustc_abi::Size::from_bytes(8)).unwrap()),
+                        128 => (self.tcx.types.u128, ScalarInt::try_from_uint(*value as u128, rustc_abi::Size::from_bytes(16)).unwrap()),
+                        _ => {
+                            // Default to u32 for unrecognized sizes
+                            (self.tcx.types.u32, ScalarInt::try_from_uint(*value as u32 as u128, rustc_abi::Size::from_bytes(4)).unwrap())
+                        }
                     }
                 };
                 (ty, ConstValue::Scalar(scalar.into()))

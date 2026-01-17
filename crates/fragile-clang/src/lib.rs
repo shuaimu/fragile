@@ -862,7 +862,14 @@ pub struct MirLocal {
 #[derive(Debug, Clone)]
 pub enum MirConstant {
     /// Integer constant
-    Int { value: i128, bits: u32 },
+    Int {
+        value: i128,
+        bits: u32,
+        /// Whether this is a signed integer type.
+        /// true = signed (i8, i16, i32, i64, i128)
+        /// false = unsigned (u8, u16, u32, u64, u128)
+        signed: bool,
+    },
     /// Floating-point constant
     Float { value: f64, bits: u32 },
     /// Boolean constant

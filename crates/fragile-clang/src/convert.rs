@@ -748,7 +748,7 @@ impl MirConverter {
                                 // Case/default body is in children
                                 for case_child in &child.children {
                                     // Skip the constant expr, convert the actual body
-                                    if !matches!(case_child.kind, ClangNodeKind::IntegerLiteral(_)) {
+                                    if !matches!(case_child.kind, ClangNodeKind::IntegerLiteral { .. }) {
                                         self.convert_stmt(case_child, builder)?;
                                     }
                                 }
@@ -806,10 +806,20 @@ impl MirConverter {
     /// Convert an expression and return the operand.
     fn convert_expr(&self, node: &ClangNode, builder: &mut FunctionBuilder) -> Result<MirOperand> {
         match &node.kind {
-            ClangNodeKind::IntegerLiteral(value) => {
+            ClangNodeKind::IntegerLiteral { value, cpp_type } => {
+                // Extract bit width and signedness from the C++ type
+                let (bits, signed) = match cpp_type {
+                    Some(ty) => {
+                        let bits = ty.bit_width().unwrap_or(32);
+                        let signed = ty.is_signed().unwrap_or(true);
+                        (bits, signed)
+                    }
+                    None => (32, true), // Default to i32
+                };
                 Ok(MirOperand::Constant(MirConstant::Int {
                     value: *value,
-                    bits: 32, // Default to i32
+                    bits,
+                    signed,
                 }))
             }
 
@@ -867,8 +877,8 @@ impl MirConverter {
 
                     Ok(MirOperand::Copy(MirPlace::local(result_local)))
                 } else {
-                    // Malformed - return zero
-                    Ok(MirOperand::Constant(MirConstant::Int { value: 0, bits: 32 }))
+                    // Malformed - return zero (default to signed i32)
+                    Ok(MirOperand::Constant(MirConstant::Int { value: 0, bits: 32, signed: true }))
                 }
             }
 
@@ -885,7 +895,7 @@ impl MirConverter {
 
                     Ok(MirOperand::Copy(MirPlace::local(result_local)))
                 } else {
-                    Ok(MirOperand::Constant(MirConstant::Int { value: 0, bits: 32 }))
+                    Ok(MirOperand::Constant(MirConstant::Int { value: 0, bits: 32, signed: true }))
                 }
             }
 
@@ -1628,7 +1638,7 @@ impl Default for MirConverter {
 fn is_expression_kind(kind: &ClangNodeKind) -> bool {
     matches!(
         kind,
-        ClangNodeKind::IntegerLiteral(_)
+        ClangNodeKind::IntegerLiteral { .. }
             | ClangNodeKind::FloatingLiteral(_)
             | ClangNodeKind::BoolLiteral(_)
             | ClangNodeKind::StringLiteral(_)

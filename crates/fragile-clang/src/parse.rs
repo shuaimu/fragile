@@ -817,13 +817,27 @@ impl ClangParser {
                 clang_sys::CXCursor_IntegerLiteral => {
                     // Try to evaluate the literal
                     let eval = clang_sys::clang_Cursor_Evaluate(cursor);
-                    if eval.is_null() {
-                        ClangNodeKind::IntegerLiteral(0)
+                    let value = if eval.is_null() {
+                        0i128
                     } else {
-                        let result = clang_sys::clang_EvalResult_getAsInt(eval) as i128;
+                        // Check if this is an unsigned integer to get the correct value
+                        let is_unsigned = clang_sys::clang_EvalResult_isUnsignedInt(eval) != 0;
+                        let result = if is_unsigned {
+                            // Use getAsUnsigned for unsigned integers to avoid sign extension
+                            clang_sys::clang_EvalResult_getAsUnsigned(eval) as i128
+                        } else {
+                            // Use getAsLongLong for signed integers (handles larger values)
+                            clang_sys::clang_EvalResult_getAsLongLong(eval) as i128
+                        };
                         clang_sys::clang_EvalResult_dispose(eval);
-                        ClangNodeKind::IntegerLiteral(result)
-                    }
+                        result
+                    };
+
+                    // Capture the type of the literal (e.g., int, unsigned int, long)
+                    let clang_type = clang_sys::clang_getCursorType(cursor);
+                    let cpp_type = Some(self.convert_type(clang_type));
+
+                    ClangNodeKind::IntegerLiteral { value, cpp_type }
                 }
 
                 clang_sys::CXCursor_FloatingLiteral => {
@@ -2559,5 +2573,158 @@ mod tests {
         }).collect();
         assert!(member_names.contains(&"x".to_string()));
         assert!(member_names.contains(&"y".to_string()));
+    }
+
+    #[test]
+    fn test_integer_literal_type_int() {
+        let parser = ClangParser::new().unwrap();
+        let ast = parser
+            .parse_string(
+                r#"
+                int foo() {
+                    return 42;
+                }
+                "#,
+                "test.cpp",
+            )
+            .unwrap();
+
+        // Find the integer literal
+        fn find_int_literal(node: &ClangNode) -> Option<&ClangNode> {
+            if matches!(&node.kind, ClangNodeKind::IntegerLiteral { .. }) {
+                return Some(node);
+            }
+            for child in &node.children {
+                if let Some(found) = find_int_literal(child) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+
+        let literal = find_int_literal(&ast.translation_unit).expect("Expected IntegerLiteral");
+        if let ClangNodeKind::IntegerLiteral { value, cpp_type } = &literal.kind {
+            assert_eq!(*value, 42);
+            let ty = cpp_type.as_ref().expect("Expected type info");
+            assert_eq!(ty.bit_width(), Some(32));
+            assert_eq!(ty.is_signed(), Some(true));
+        } else {
+            panic!("Expected IntegerLiteral");
+        }
+    }
+
+    #[test]
+    fn test_integer_literal_type_unsigned() {
+        let parser = ClangParser::new().unwrap();
+        let ast = parser
+            .parse_string(
+                r#"
+                unsigned int foo() {
+                    return 4294967295u;
+                }
+                "#,
+                "test.cpp",
+            )
+            .unwrap();
+
+        // Find the integer literal
+        fn find_int_literal(node: &ClangNode) -> Option<&ClangNode> {
+            if matches!(&node.kind, ClangNodeKind::IntegerLiteral { .. }) {
+                return Some(node);
+            }
+            for child in &node.children {
+                if let Some(found) = find_int_literal(child) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+
+        let literal = find_int_literal(&ast.translation_unit).expect("Expected IntegerLiteral");
+        if let ClangNodeKind::IntegerLiteral { value, cpp_type } = &literal.kind {
+            assert_eq!(*value, 4294967295i128);
+            let ty = cpp_type.as_ref().expect("Expected type info");
+            assert_eq!(ty.bit_width(), Some(32));
+            assert_eq!(ty.is_signed(), Some(false));
+        } else {
+            panic!("Expected IntegerLiteral");
+        }
+    }
+
+    #[test]
+    fn test_integer_literal_type_long() {
+        let parser = ClangParser::new().unwrap();
+        let ast = parser
+            .parse_string(
+                r#"
+                long foo() {
+                    return 9223372036854775807L;
+                }
+                "#,
+                "test.cpp",
+            )
+            .unwrap();
+
+        // Find the integer literal
+        fn find_int_literal(node: &ClangNode) -> Option<&ClangNode> {
+            if matches!(&node.kind, ClangNodeKind::IntegerLiteral { .. }) {
+                return Some(node);
+            }
+            for child in &node.children {
+                if let Some(found) = find_int_literal(child) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+
+        let literal = find_int_literal(&ast.translation_unit).expect("Expected IntegerLiteral");
+        if let ClangNodeKind::IntegerLiteral { value, cpp_type } = &literal.kind {
+            assert_eq!(*value, 9223372036854775807i128);
+            let ty = cpp_type.as_ref().expect("Expected type info");
+            assert_eq!(ty.bit_width(), Some(64));
+            assert_eq!(ty.is_signed(), Some(true));
+        } else {
+            panic!("Expected IntegerLiteral");
+        }
+    }
+
+    #[test]
+    fn test_integer_literal_type_unsigned_long() {
+        let parser = ClangParser::new().unwrap();
+        let ast = parser
+            .parse_string(
+                r#"
+                unsigned long foo() {
+                    return 18446744073709551615UL;
+                }
+                "#,
+                "test.cpp",
+            )
+            .unwrap();
+
+        // Find the integer literal
+        fn find_int_literal(node: &ClangNode) -> Option<&ClangNode> {
+            if matches!(&node.kind, ClangNodeKind::IntegerLiteral { .. }) {
+                return Some(node);
+            }
+            for child in &node.children {
+                if let Some(found) = find_int_literal(child) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+
+        let literal = find_int_literal(&ast.translation_unit).expect("Expected IntegerLiteral");
+        if let ClangNodeKind::IntegerLiteral { value, cpp_type } = &literal.kind {
+            // Note: value is stored as i128, so max u64 fits
+            assert_eq!(*value as u64, 18446744073709551615u64);
+            let ty = cpp_type.as_ref().expect("Expected type info");
+            assert_eq!(ty.bit_width(), Some(64));
+            assert_eq!(ty.is_signed(), Some(false));
+        } else {
+            panic!("Expected IntegerLiteral");
+        }
     }
 }

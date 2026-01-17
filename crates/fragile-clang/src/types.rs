@@ -442,6 +442,40 @@ impl CppType {
     pub fn is_arithmetic(&self) -> Option<bool> {
         self.properties().map(|p| p.is_integral || p.is_floating_point)
     }
+
+    /// Get the bit width of this type.
+    ///
+    /// Returns None for types that don't have a fixed bit width (named types,
+    /// dependent types, function types, etc.).
+    ///
+    /// Assumes LP64 data model (common on 64-bit Unix):
+    /// - char: 8 bits
+    /// - short: 16 bits
+    /// - int: 32 bits
+    /// - long: 64 bits
+    /// - long long: 64 bits
+    pub fn bit_width(&self) -> Option<u32> {
+        match self {
+            CppType::Bool => Some(8), // Rust bool is 1 byte for FFI compatibility
+            CppType::Char { .. } => Some(8),
+            CppType::Short { .. } => Some(16),
+            CppType::Int { .. } => Some(32),
+            CppType::Long { .. } => Some(64), // LP64 model
+            CppType::LongLong { .. } => Some(64),
+            CppType::Float => Some(32),
+            CppType::Double => Some(64),
+            CppType::Pointer { .. } => Some(64), // 64-bit pointers
+            CppType::Reference { .. } => Some(64), // References are pointer-sized
+            // Types without fixed bit width
+            CppType::Void
+            | CppType::Array { .. }
+            | CppType::Named(_)
+            | CppType::Function { .. }
+            | CppType::TemplateParam { .. }
+            | CppType::DependentType { .. }
+            | CppType::ParameterPack { .. } => None,
+        }
+    }
 }
 
 /// Type properties for SFINAE and type trait evaluation.
@@ -614,5 +648,99 @@ impl TypeTraitEvaluator {
             // Non-class types: false (not a class hierarchy relationship)
             _ => TypeTraitResult::Value(false),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_bit_width_primitive_types() {
+        // Bool
+        assert_eq!(CppType::Bool.bit_width(), Some(8));
+
+        // Char
+        assert_eq!(CppType::Char { signed: true }.bit_width(), Some(8));
+        assert_eq!(CppType::Char { signed: false }.bit_width(), Some(8));
+
+        // Short
+        assert_eq!(CppType::Short { signed: true }.bit_width(), Some(16));
+        assert_eq!(CppType::Short { signed: false }.bit_width(), Some(16));
+
+        // Int
+        assert_eq!(CppType::Int { signed: true }.bit_width(), Some(32));
+        assert_eq!(CppType::Int { signed: false }.bit_width(), Some(32));
+
+        // Long (LP64 model)
+        assert_eq!(CppType::Long { signed: true }.bit_width(), Some(64));
+        assert_eq!(CppType::Long { signed: false }.bit_width(), Some(64));
+
+        // Long Long
+        assert_eq!(CppType::LongLong { signed: true }.bit_width(), Some(64));
+        assert_eq!(CppType::LongLong { signed: false }.bit_width(), Some(64));
+
+        // Float/Double
+        assert_eq!(CppType::Float.bit_width(), Some(32));
+        assert_eq!(CppType::Double.bit_width(), Some(64));
+    }
+
+    #[test]
+    fn test_bit_width_pointer_and_reference() {
+        // Pointers are 64-bit on LP64
+        let ptr = CppType::Pointer {
+            pointee: Box::new(CppType::Int { signed: true }),
+            is_const: false,
+        };
+        assert_eq!(ptr.bit_width(), Some(64));
+
+        // References are also pointer-sized
+        let ref_ = CppType::Reference {
+            referent: Box::new(CppType::Int { signed: true }),
+            is_const: false,
+            is_rvalue: false,
+        };
+        assert_eq!(ref_.bit_width(), Some(64));
+    }
+
+    #[test]
+    fn test_bit_width_no_fixed_width() {
+        // Void
+        assert_eq!(CppType::Void.bit_width(), None);
+
+        // Named types
+        assert_eq!(CppType::Named("Foo".to_string()).bit_width(), None);
+
+        // Template parameters
+        let tp = CppType::TemplateParam {
+            name: "T".to_string(),
+            depth: 0,
+            index: 0,
+        };
+        assert_eq!(tp.bit_width(), None);
+    }
+
+    #[test]
+    fn test_is_signed_integer_types() {
+        // Signed types return Some(true)
+        assert_eq!(CppType::Char { signed: true }.is_signed(), Some(true));
+        assert_eq!(CppType::Short { signed: true }.is_signed(), Some(true));
+        assert_eq!(CppType::Int { signed: true }.is_signed(), Some(true));
+        assert_eq!(CppType::Long { signed: true }.is_signed(), Some(true));
+        assert_eq!(CppType::LongLong { signed: true }.is_signed(), Some(true));
+
+        // Unsigned types return Some(false)
+        assert_eq!(CppType::Char { signed: false }.is_signed(), Some(false));
+        assert_eq!(CppType::Short { signed: false }.is_signed(), Some(false));
+        assert_eq!(CppType::Int { signed: false }.is_signed(), Some(false));
+        assert_eq!(CppType::Long { signed: false }.is_signed(), Some(false));
+        assert_eq!(CppType::LongLong { signed: false }.is_signed(), Some(false));
+
+        // Bool is unsigned
+        assert_eq!(CppType::Bool.is_signed(), Some(false));
+
+        // Floating point is signed
+        assert_eq!(CppType::Float.is_signed(), Some(true));
+        assert_eq!(CppType::Double.is_signed(), Some(true));
     }
 }

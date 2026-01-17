@@ -142,7 +142,15 @@ the full Fragile pipeline (CLI, Mako compilation) still requires clang++ for:
 Each feature must work through the MIR pipeline, not clang++.
 
 ### 2.1 Expressions
-- [ ] Integer literals
+- [x] **2.1.1** Integer literals [26:01:17] (see `docs/dev/plan_2_1_integer_literals.md`)
+  - [x] 2.1.1a Add `signed` field to `MirConstant::Int`
+  - [x] 2.1.1b Add `bit_width()` method to `CppType`
+  - [x] 2.1.1c Add `cpp_type` field to `IntegerLiteral` AST node
+  - [x] 2.1.1d Update parser to capture type from Clang (uses getAsUnsigned/getAsLongLong for proper values)
+  - [x] 2.1.1e Update converter to use actual type info
+  - [x] 2.1.1f Update rustc mir_convert.rs for unsigned types
+  - [x] 2.1.1g Update all `MirConstant::Int` call sites
+  - [x] 2.1.1h Add tests for integer literals (4 tests in parse.rs, 4 tests in types.rs)
 - [ ] Float literals
 - [ ] Boolean literals
 - [ ] String literals

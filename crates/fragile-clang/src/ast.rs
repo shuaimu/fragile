@@ -270,8 +270,14 @@ pub enum ClangNodeKind {
     DefaultStmt,
 
     // Expressions
-    /// Integer literal
-    IntegerLiteral(i128),
+    /// Integer literal with value and type
+    IntegerLiteral {
+        value: i128,
+        /// The C++ type of this literal (e.g., int, unsigned int, long)
+        /// This determines how the value should be interpreted (signed vs unsigned)
+        /// and what bit width to use.
+        cpp_type: Option<CppType>,
+    },
     /// Floating-point literal
     FloatingLiteral(f64),
     /// Boolean literal
