@@ -193,18 +193,19 @@ impl MirConverter {
             }
             ClangNodeKind::FunctionDecl {
                 name,
+                mangled_name,
                 return_type,
                 params,
                 is_definition,
                 is_noexcept,
             } => {
                 if *is_definition {
-                    let func = self.convert_function(node, name, return_type, params, *is_noexcept, namespace_context)?;
+                    let func = self.convert_function(node, name, mangled_name, return_type, params, *is_noexcept, namespace_context)?;
                     module.functions.push(func);
                 } else {
                     // Just a declaration, add as extern
                     module.externs.push(CppExtern {
-                        mangled_name: name.clone(), // TODO: proper mangling
+                        mangled_name: mangled_name.clone(),
                         display_name: name.clone(),
                         namespace: namespace_context.to_vec(),
                         params: params.clone(),
@@ -346,6 +347,7 @@ impl MirConverter {
         &self,
         node: &ClangNode,
         name: &str,
+        mangled_name: &str,
         return_type: &CppType,
         params: &[(String, CppType)],
         is_noexcept: bool,
@@ -377,7 +379,7 @@ impl MirConverter {
         let mir_body = builder.build();
 
         Ok(CppFunction {
-            mangled_name: name.to_string(), // TODO: proper C++ mangling
+            mangled_name: mangled_name.to_string(),
             display_name: name.to_string(),
             namespace: namespace_context.to_vec(),
             params: params.to_vec(),

@@ -67,6 +67,8 @@ pub enum ClangNodeKind {
     /// Function declaration/definition
     FunctionDecl {
         name: String,
+        /// Mangled name for linking (e.g., "_Z3addii" for "int add(int, int)")
+        mangled_name: String,
         return_type: CppType,
         params: Vec<(String, CppType)>,
         is_definition: bool,

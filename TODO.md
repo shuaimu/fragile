@@ -104,6 +104,11 @@ int add(int a, int b) {
   - Stub body: `unreachable!("Fragile: C++ MIR should be injected")`
   - Added `generate_rust_stubs_extern()` for backwards compatibility
   - Updated `rustc_integration.rs` to detect regular functions (not just ForeignItems)
+- [x] **1.3.3b** Implement proper C++ name mangling [26:01:17]
+  - Added `cursor_mangled_name()` using `clang_Cursor_getMangling` from libclang
+  - Added `mangled_name` field to `ClangNodeKind::FunctionDecl`
+  - Updated `convert.rs` to pass mangled_name through to CppFunction
+  - Added test `test_mangled_name_for_simple_function` verifying `_Z7add_cppii`
 - [ ] **1.3.4** Compile via rustc (mir_built override active)
 - [ ] **1.3.5** Link and run: `add(2, 3) == 5`
 

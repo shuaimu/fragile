@@ -440,6 +440,7 @@ impl ClangParser {
                 // Declarations
                 clang_sys::CXCursor_FunctionDecl => {
                     let name = cursor_spelling(cursor);
+                    let mangled_name = cursor_mangled_name(cursor);
                     let cursor_type = clang_sys::clang_getCursorType(cursor);
                     let return_type = self.convert_type(clang_sys::clang_getResultType(cursor_type));
                     let num_args = clang_sys::clang_Cursor_getNumArguments(cursor);
@@ -457,6 +458,7 @@ impl ClangParser {
 
                     ClangNodeKind::FunctionDecl {
                         name,
+                        mangled_name,
                         return_type,
                         params,
                         is_definition,
@@ -2308,6 +2310,23 @@ fn cursor_spelling(cursor: clang_sys::CXCursor) -> String {
     }
 }
 
+/// Get the mangled name of a cursor (for function declarations).
+///
+/// Uses libclang's `clang_Cursor_getMangling` to get the platform-specific
+/// mangled name (e.g., "_Z3addii" for `int add(int, int)` on Linux/Itanium ABI).
+fn cursor_mangled_name(cursor: clang_sys::CXCursor) -> String {
+    unsafe {
+        let mangled = clang_sys::clang_Cursor_getMangling(cursor);
+        let name = cx_string_to_string(mangled);
+        // If mangling returns empty string (e.g., for extern "C"), use display name
+        if name.is_empty() {
+            cursor_spelling(cursor)
+        } else {
+            name
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2368,11 +2387,40 @@ mod tests {
         // Namespace should have a function child
         assert!(!ns.children.is_empty());
         match &ns.children[0].kind {
-            ClangNodeKind::FunctionDecl { name, .. } => {
+            ClangNodeKind::FunctionDecl { name, mangled_name, .. } => {
                 assert_eq!(name, "bar");
+                // C++ mangling: namespace foo, function bar() -> _ZN3foo3barEv
+                assert_eq!(mangled_name, "_ZN3foo3barEv", "Expected C++ mangled name");
             }
             _ => panic!("Expected FunctionDecl inside namespace"),
         }
+    }
+
+    #[test]
+    fn test_mangled_name_for_simple_function() {
+        // Test that mangled names are correctly extracted for functions
+        let parser = ClangParser::new().unwrap();
+        let ast = parser
+            .parse_string(
+                r#"
+                int add_cpp(int a, int b) {
+                    return a + b;
+                }
+                "#,
+                "test.cpp",
+            )
+            .unwrap();
+
+        // Find the function declaration
+        for child in &ast.translation_unit.children {
+            if let ClangNodeKind::FunctionDecl { name, mangled_name, .. } = &child.kind {
+                assert_eq!(name, "add_cpp");
+                // C++ mangling: add_cpp(int, int) -> _Z7add_cppii
+                assert_eq!(mangled_name, "_Z7add_cppii", "Expected C++ mangled name for add_cpp(int, int)");
+                return;
+            }
+        }
+        panic!("Expected to find function declaration");
     }
 
     #[test]
