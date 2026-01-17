@@ -651,6 +651,10 @@ Migration: After C++20 support is complete, deprecate these.
   - [x] `test_fragile_minimal` - Built and runs successfully [26:01:17]
     - Tests basic rrr library: logging, timer, Time::now(), lambdas with std::function
     - First Fragile-built Mako executable that runs!
+  - [x] `test_mako_core_minimal` - Built and runs successfully [26:01:17]
+    - Tests mako varint encoding/decoding (write_uvint32/read_uvint32)
+    - Tests ALWAYS_ASSERT and INVARIANT macros from mako/macros.h
+    - Second Fragile-built Mako executable that uses libmako_core!
   - [x] Fixed CompilationJob to resolve internal deps (librrr) and add build dir to lib_paths [26:01:17]
   - [-] Other tests blocked on unittest.hpp TEST macro (commented out in all.hpp)
   - [ ] `test_marshal` - Serialization tests
