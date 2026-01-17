@@ -675,6 +675,9 @@ Migration: After C++20 support is complete, deprecate these.
   - [x] `test_config_schema` - Built and all tests pass [26:01:17]
     - gtest-based tests for config schema serialization
     - 7/7 tests pass (SiteInfo, ReplicaGroup, ProtocolSettings, FullConfig, etc.)
+  - [x] `test_sharding_policy` - Built and all tests pass [26:01:17]
+    - gtest-based tests for range-based sharding policy
+    - 34/34 tests pass (KeyExtractor, RangeMapping, TableShardingPolicy, Builder, TPC-C helpers, etc.)
   - [ ] `test_masstree` - Masstree index tests
   - [ ] `test_rpc` - RPC framework tests (full integration)
   - [ ] `test_future` - Future/promise tests
@@ -687,7 +690,7 @@ Migration: After C++20 support is complete, deprecate these.
 - [-] **G.6.1 Unit Tests (ctest)**
   - [x] `test_marshal` passes - 23/23 tests [26:01:17]
   - [x] `test_config_schema` passes - 7/7 tests [26:01:17]
-  - [ ] `test_sharding_policy` passes
+  - [x] `test_sharding_policy` passes - 34/34 tests [26:01:17]
   - [x] `test_fiber` passes - 37/37 tests [26:01:17]
   - [ ] `test_masstree` passes
   - [ ] `test_rpc` passes
