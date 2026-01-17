@@ -227,15 +227,47 @@ fn main() -> Result<()> {
 
             println!("Built {} object files for target '{}'", object_files.len(), target);
 
-            // For executables, also link (TODO: implement link step)
-            if job.output_type == OutputType::Executable {
-                let exe_path = output_dir.join(&target);
-                println!("Note: Linking not yet implemented. Object files in: {}", output_dir.display());
-                println!("To link manually: g++ -o {} {:?} -l{}",
-                    exe_path.display(),
-                    object_files.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join(" "),
-                    job.libs.join(" -l")
-                );
+            // Link based on output type
+            match job.output_type {
+                OutputType::Executable => {
+                    let exe_path = output_dir.join(&target);
+                    if verbose {
+                        println!("Linking executable: {}", exe_path.display());
+                    }
+
+                    // Get library paths and libraries
+                    let lib_paths: Vec<String> = job.lib_paths
+                        .iter()
+                        .map(|p| p.to_string_lossy().to_string())
+                        .collect();
+
+                    compiler.link_executable(&object_files, &exe_path, &lib_paths, &job.libs)
+                        .map_err(|e| miette::miette!("Failed to link {}: {}", target, e))?;
+
+                    println!("Linked executable: {}", exe_path.display());
+                }
+                OutputType::StaticLibrary => {
+                    let lib_name = if target.starts_with("lib") {
+                        format!("{}.a", target)
+                    } else {
+                        format!("lib{}.a", target)
+                    };
+                    let lib_path = output_dir.join(&lib_name);
+                    if verbose {
+                        println!("Creating static library: {}", lib_path.display());
+                    }
+
+                    compiler.create_static_library(&object_files, &lib_path)
+                        .map_err(|e| miette::miette!("Failed to create library {}: {}", target, e))?;
+
+                    println!("Created static library: {}", lib_path.display());
+                }
+                OutputType::SharedLibrary => {
+                    println!("Note: Shared library linking not yet implemented for target '{}'", target);
+                }
+                OutputType::ObjectFile => {
+                    // Already done - object files are the output
+                }
             }
         }
 

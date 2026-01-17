@@ -252,6 +252,91 @@ impl CppCompiler {
 
         Ok(objects)
     }
+
+    /// Link object files into an executable.
+    ///
+    /// # Arguments
+    /// * `objects` - Paths to object files
+    /// * `output` - Path for the output executable
+    /// * `lib_paths` - Library search paths (-L)
+    /// * `libs` - Libraries to link (-l)
+    pub fn link_executable(
+        &self,
+        objects: &[PathBuf],
+        output: &Path,
+        lib_paths: &[String],
+        libs: &[String],
+    ) -> Result<()> {
+        let mut cmd = Command::new(&self.compiler_path);
+
+        // Add all object files
+        for obj in objects {
+            cmd.arg(obj);
+        }
+
+        // Output path
+        cmd.arg("-o");
+        cmd.arg(output);
+
+        // Library search paths
+        for lib_path in lib_paths {
+            cmd.arg(format!("-L{}", lib_path));
+        }
+
+        // Libraries
+        for lib in libs {
+            cmd.arg(format!("-l{}", lib));
+        }
+
+        // Standard library linkage
+        cmd.arg("-lstdc++");
+
+        let output = cmd.output().map_err(|e| {
+            miette!("Failed to run linker: {}", e)
+        })?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            return Err(miette!(
+                "Link failed:\nstderr: {}\nstdout: {}",
+                stderr,
+                stdout
+            ));
+        }
+
+        Ok(())
+    }
+
+    /// Create a static library from object files.
+    ///
+    /// # Arguments
+    /// * `objects` - Paths to object files
+    /// * `output` - Path for the output library (lib*.a)
+    pub fn create_static_library(
+        &self,
+        objects: &[PathBuf],
+        output: &Path,
+    ) -> Result<()> {
+        let mut cmd = Command::new("ar");
+        cmd.arg("rcs");
+        cmd.arg(output);
+
+        for obj in objects {
+            cmd.arg(obj);
+        }
+
+        let output_result = cmd.output().map_err(|e| {
+            miette!("Failed to run ar: {}", e)
+        })?;
+
+        if !output_result.status.success() {
+            let stderr = String::from_utf8_lossy(&output_result.stderr);
+            return Err(miette!("ar failed: {}", stderr));
+        }
+
+        Ok(())
+    }
 }
 
 /// Find a C++ compiler on the system.
