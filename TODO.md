@@ -868,6 +868,10 @@ Current status:
   - iosfwd stub (includes iostream) [26:01:17]
   - std::allocator_arg_t for uses-allocator construction (<memory>) [26:01:17]
   - basic_string constructors from string_view (C++17) for asio compatibility [26:01:17]
+  - istream stub (forwards to iostream) [26:01:17]
+  - streambuf stub with full basic_streambuf<CharT, Traits> class [26:01:17]
+  - std::error_code/error_condition constrained template constructors (SFINAE) [26:01:17]
+  - unique_ptr operator==/!= with nullptr [26:01:17]
 - test_transport_integration: 16/16 pass (transport backend tests) [26:01:17]
 - **Total: 1524+ tests passing across C++ and Rust**
 

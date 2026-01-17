@@ -54,15 +54,19 @@ class error_code {
 public:
     error_code() noexcept : val_(0), cat_(&system_category()) {}
     error_code(int val, const error_category& cat) noexcept : val_(val), cat_(&cat) {}
-    template<class ErrorCodeEnum>
-    error_code(ErrorCodeEnum e) noexcept;
+    // Constructor from error code enums (only enabled when is_error_code_enum_v<ErrorCodeEnum> is true)
+    template<class ErrorCodeEnum, class = typename enable_if<is_error_code_enum<ErrorCodeEnum>::value>::type>
+    error_code(ErrorCodeEnum e) noexcept : error_code(make_error_code(e)) {}
 
     void assign(int val, const error_category& cat) noexcept {
         val_ = val;
         cat_ = &cat;
     }
-    template<class ErrorCodeEnum>
-    error_code& operator=(ErrorCodeEnum e) noexcept;
+    template<class ErrorCodeEnum, class = typename enable_if<is_error_code_enum<ErrorCodeEnum>::value>::type>
+    error_code& operator=(ErrorCodeEnum e) noexcept {
+        *this = make_error_code(e);
+        return *this;
+    }
 
     void clear() noexcept {
         val_ = 0;
@@ -85,15 +89,19 @@ class error_condition {
 public:
     error_condition() noexcept : val_(0), cat_(&generic_category()) {}
     error_condition(int val, const error_category& cat) noexcept : val_(val), cat_(&cat) {}
-    template<class ErrorConditionEnum>
-    error_condition(ErrorConditionEnum e) noexcept;
+    // Constructor from error condition enums (only enabled when is_error_condition_enum_v<ErrorConditionEnum> is true)
+    template<class ErrorConditionEnum, class = typename enable_if<is_error_condition_enum<ErrorConditionEnum>::value>::type>
+    error_condition(ErrorConditionEnum e) noexcept : error_condition(make_error_condition(e)) {}
 
     void assign(int val, const error_category& cat) noexcept {
         val_ = val;
         cat_ = &cat;
     }
-    template<class ErrorConditionEnum>
-    error_condition& operator=(ErrorConditionEnum e) noexcept;
+    template<class ErrorConditionEnum, class = typename enable_if<is_error_condition_enum<ErrorConditionEnum>::value>::type>
+    error_condition& operator=(ErrorConditionEnum e) noexcept {
+        *this = make_error_condition(e);
+        return *this;
+    }
 
     void clear() noexcept {
         val_ = 0;
@@ -110,7 +118,7 @@ private:
     const error_category* cat_;
 };
 
-// Comparison operators
+// Comparison operators between error_code/error_condition
 inline bool operator==(const error_code& lhs, const error_code& rhs) noexcept {
     return lhs.category() == rhs.category() && lhs.value() == rhs.value();
 }

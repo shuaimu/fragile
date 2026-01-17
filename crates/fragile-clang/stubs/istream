@@ -1,0 +1,8 @@
+// Minimal istream stub for fragile parsing
+// This just forwards to iostream where basic_istream is defined
+#ifndef _FRAGILE_ISTREAM_
+#define _FRAGILE_ISTREAM_
+
+#include "iostream"
+
+#endif // _FRAGILE_ISTREAM_

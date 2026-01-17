@@ -1,0 +1,170 @@
+// Minimal streambuf stub for fragile parsing
+#ifndef _FRAGILE_STREAMBUF_
+#define _FRAGILE_STREAMBUF_
+
+#include "iostream"
+#include "cstddef"
+
+namespace std {
+
+// Forward declarations
+template<typename CharT, typename Traits = char_traits<CharT>>
+class basic_streambuf;
+
+template<typename CharT, typename Traits>
+class basic_streambuf {
+public:
+    using char_type = CharT;
+    using traits_type = Traits;
+    using int_type = typename Traits::int_type;
+    using pos_type = streampos;
+    using off_type = streamoff;
+
+    virtual ~basic_streambuf() = default;
+
+    // Positioning
+    pos_type pubseekoff(off_type off, ios_base::seekdir way,
+                        ios_base::openmode which = ios_base::in | ios_base::out) {
+        return seekoff(off, way, which);
+    }
+    pos_type pubseekpos(pos_type pos,
+                        ios_base::openmode which = ios_base::in | ios_base::out) {
+        return seekpos(pos, which);
+    }
+    basic_streambuf* pubsetbuf(char_type* s, streamsize n) {
+        return setbuf(s, n);
+    }
+    int pubsync() { return sync(); }
+
+    // Get area
+    streamsize in_avail() { return egptr() - gptr(); }
+    int_type snextc() {
+        if (sbumpc() == traits_type::eof()) return traits_type::eof();
+        return sgetc();
+    }
+    int_type sbumpc() {
+        if (gptr() < egptr()) {
+            char_type c = *gptr();
+            gbump(1);
+            return traits_type::to_int_type(c);
+        }
+        return uflow();
+    }
+    int_type sgetc() {
+        if (gptr() < egptr()) return traits_type::to_int_type(*gptr());
+        return underflow();
+    }
+    streamsize sgetn(char_type* s, streamsize count) { return xsgetn(s, count); }
+
+    // Put area
+    int_type sputc(char_type c) {
+        if (pptr() < epptr()) {
+            *pptr() = c;
+            pbump(1);
+            return traits_type::to_int_type(c);
+        }
+        return overflow(traits_type::to_int_type(c));
+    }
+    streamsize sputn(const char_type* s, streamsize count) { return xsputn(s, count); }
+
+    // Putback
+    int_type sputbackc(char_type c) {
+        if (gptr() > eback() && traits_type::eq(c, gptr()[-1])) {
+            gbump(-1);
+            return traits_type::to_int_type(*gptr());
+        }
+        return pbackfail(traits_type::to_int_type(c));
+    }
+    int_type sungetc() {
+        if (gptr() > eback()) {
+            gbump(-1);
+            return traits_type::to_int_type(*gptr());
+        }
+        return pbackfail();
+    }
+
+protected:
+    basic_streambuf() = default;
+    basic_streambuf(const basic_streambuf&) = default;
+    basic_streambuf& operator=(const basic_streambuf&) = default;
+
+    // Get area pointers
+    char_type* eback() const { return eback_; }
+    char_type* gptr() const { return gptr_; }
+    char_type* egptr() const { return egptr_; }
+
+    void gbump(int count) { gptr_ += count; }
+    void setg(char_type* gbeg, char_type* gcur, char_type* gend) {
+        eback_ = gbeg;
+        gptr_ = gcur;
+        egptr_ = gend;
+    }
+
+    // Put area pointers
+    char_type* pbase() const { return pbase_; }
+    char_type* pptr() const { return pptr_; }
+    char_type* epptr() const { return epptr_; }
+
+    void pbump(int count) { pptr_ += count; }
+    void setp(char_type* pbeg, char_type* pend) {
+        pbase_ = pbeg;
+        pptr_ = pbeg;
+        epptr_ = pend;
+    }
+
+    // Virtual functions
+    virtual basic_streambuf* setbuf(char_type*, streamsize) { return this; }
+    virtual pos_type seekoff(off_type, ios_base::seekdir,
+                            ios_base::openmode = ios_base::in | ios_base::out) {
+        return pos_type(off_type(-1));
+    }
+    virtual pos_type seekpos(pos_type,
+                            ios_base::openmode = ios_base::in | ios_base::out) {
+        return pos_type(off_type(-1));
+    }
+    virtual int sync() { return 0; }
+
+    virtual streamsize showmanyc() { return 0; }
+    virtual int_type underflow() { return traits_type::eof(); }
+    virtual int_type uflow() {
+        if (underflow() == traits_type::eof()) return traits_type::eof();
+        return sbumpc();
+    }
+    virtual streamsize xsgetn(char_type* s, streamsize count) {
+        streamsize extracted = 0;
+        while (extracted < count) {
+            int_type c = sbumpc();
+            if (c == traits_type::eof()) break;
+            s[extracted++] = traits_type::to_char_type(c);
+        }
+        return extracted;
+    }
+
+    virtual int_type overflow(int_type = traits_type::eof()) { return traits_type::eof(); }
+    virtual streamsize xsputn(const char_type* s, streamsize count) {
+        streamsize written = 0;
+        while (written < count) {
+            if (sputc(s[written]) == traits_type::eof()) break;
+            written++;
+        }
+        return written;
+    }
+
+    virtual int_type pbackfail(int_type = traits_type::eof()) { return traits_type::eof(); }
+
+private:
+    char_type* eback_ = nullptr;
+    char_type* gptr_ = nullptr;
+    char_type* egptr_ = nullptr;
+    char_type* pbase_ = nullptr;
+    char_type* pptr_ = nullptr;
+    char_type* epptr_ = nullptr;
+};
+
+// Type aliases
+using streambuf = basic_streambuf<char>;
+using wstreambuf = basic_streambuf<wchar_t>;
+
+} // namespace std
+
+#endif // _FRAGILE_STREAMBUF_
