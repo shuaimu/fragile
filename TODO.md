@@ -502,7 +502,7 @@ Migration: After C++20 support is complete, deprecate these.
 - [x] fragile-clang: 569 tests passing (all integration tests) [26:01:17]
 - [x] fragile-rustc-driver: 20 tests passing (base tests without rustc-integration feature) [26:01:17]
 - [x] fragile-runtime: Compiles
-- [x] **Mako Tests**: 33 test executables, 585 tests [26:01:17]
+- [x] **Mako Tests**: 35 test executables, 614 tests [26:01:17]
   - Core tests: test_fiber (37), test_marshal (23), test_sharding_policy (34), test_idempotency (32), test_completion_tracker (27)
   - Masstree tests: test_masstree (2), test_masstree_internals (13), test_masstree_multi_instance (5)
   - Silo tests: test_silo_varint (22), test_silo_runtime (8), test_silo_rcu_thread (9), test_silo_multi_site_stress (10), test_silo_allocator_tuple (18)
@@ -652,11 +652,8 @@ Migration: After C++20 support is complete, deprecate these.
   - **Next steps**:
     1. ~~Fix fragile-clang cross-namespace inheritance issue~~ ✅ Done
     2. ~~libmako_lib blocked on eRPC~~ ✅ Fixed with compile_stubs
-    3. ~~Add test_rpc to fragile.toml~~ ⚠️ BLOCKED: JoinHandle<pair> template issue [26:01:17]
-       - std::vector<JoinHandle<pair<int,int>>> push_back fails in stub headers
-       - Real clang++ compiles fine; issue is with fragile stubs
-       - Fixed rusty::thread::spawn void return type (if constexpr)
-    4. test_future also blocked (uses same JoinHandle pattern)
+    3. ~~Add test_rpc to fragile.toml~~ ✅ Fixed invoke_result stub [26:01:17]
+    4. ~~test_future also blocked~~ ✅ Fixed invoke_result stub [26:01:17]
 - [-] **G.5.2 Unit Test Executables** (~25 tests)
   - [x] `test_fragile_minimal` - Built and runs successfully [26:01:17]
     - Tests basic rrr library: logging, timer, Time::now(), lambdas with std::function
@@ -722,8 +719,8 @@ Migration: After C++20 support is complete, deprecate these.
     - First test using libmako_lib (after unblocking)
     - gtest-based tests for Silo allocator and tuple system
     - 18/18 tests pass (9 allocator, 6 tuple, 3 integration)
-  - [ ] `test_rpc` - RPC framework tests (full integration, needs rpc/server.hpp)
-  - [ ] `test_future` - Future/promise tests (needs rpc/server.hpp)
+  - [x] `test_rpc` - RPC framework tests, 17 tests passing [26:01:17]
+  - [x] `test_future` - Future/promise tests, 12 tests passing [26:01:17]
   - [ ] All others listed in CMakeLists.txt
 - [ ] **G.5.3 Benchmark Executables**
   - [ ] `rpcbench` - RPC benchmark
@@ -759,8 +756,9 @@ Migration: After C++20 support is complete, deprecate these.
   - [x] `test_reactor` passes - 15/15 tests [26:01:17]
   - [x] `test_reactor_extended` passes - 12/12 tests [26:01:17]
   - [x] `test_transport_backend` passes - 25/25 tests [26:01:17]
-  - [ ] `test_rpc` passes (needs full rpc/server.hpp)
-  - [ ] All tests pass (33 executables, 585 tests)
+  - [x] `test_rpc` passes - 17/17 tests [26:01:17]
+  - [x] `test_future` passes - 12/12 tests [26:01:17]
+  - [ ] All tests pass (35 executables, 614 tests)
 - [ ] **G.6.2 Integration Tests (ci.sh)**
   - [ ] `./ci/ci.sh simpleTransaction` passes
   - [ ] `./ci/ci.sh simplePaxos` passes
@@ -801,16 +799,15 @@ Current status:
 - **Milestones M1-M6**: ✅ Complete - test harness working
 - **Phase G (Full Build)**: 🔄 In Progress
   - G.1-G.4: ✅ Complete (MIR injection, runtime support, build system, blocked files fixed)
-  - G.5.2: ✅ **33 test executables built, 585 tests passing**
+  - G.5.2: ✅ **35 test executables built, 614 tests passing**
   - **libmako_lib**: ✅ UNBLOCKED [26:01:17, 06:30]
   - G.5.1: Core executables blocked on full eRPC/ASIO stack
   - G.5.3: Benchmark executables blocked on full eRPC/ASIO stack
 
 **Recent Progress** [26:01:17]:
-- Added test_reactor (15 tests), test_reactor_extended (12 tests), test_transport_backend (25 tests)
-- Added test_timeout_race (6 tests), rpc_request_buffering_test (17 tests), rpc_log_storage_test (35 tests)
-- Fixed std::map::lower_bound/upper_bound/equal_range in stub headers
-- Total: 33 test executables, 585 tests passing
+- Fixed invoke_result stub to properly deduce return types (was always returning void)
+- Added test_rpc (17 tests), test_future (12 tests) - now unblocked
+- Total: 35 test executables, 614 tests passing
 
 **Blockers**:
 - Core executables (simpleTransaction, simplePaxos) need full eRPC with ASIO
@@ -822,7 +819,7 @@ Current status:
 - G.2: Runtime support (fragile-runtime crate)
 - G.3: Build system integration (fragile.toml, compile_commands.json)
 - G.4: Fixed blocked files (mtd.cc, persist_test.cc, mongodb/server.cc)
-- G.5.2: Unit tests (33 executables, 585 tests)
+- G.5.2: Unit tests (35 executables, 614 tests)
 - libmako_lib build unblocked
 
 ---
