@@ -177,7 +177,12 @@ Each feature must work through the MIR pipeline, not clang++.
 
 ### 2.4 Basic Types
 - [x] **2.4.1** Primitive types (int, float, bool, char) [already implemented - CppType]
-- [ ] **2.4.2** Pointers (*T)
+- [x] **2.4.2** Pointers (*T) [26:01:17] - Fixed address-of (`&x`) and dereference (`*ptr`) in MIR conversion
+  - Address-of now generates `MirRvalue::Ref { place, mutability }` instead of incorrect `MirUnaryOp::Neg`
+  - Dereference now adds `MirProjection::Deref` to place projections
+  - Added `get_node_type()` helper method for extracting C++ type from AST nodes
+  - Added 3 tests: `test_convert_address_of`, `test_convert_dereference`, `test_convert_pointer_ops_combined`
+  - See: `docs/dev/plan_2_4_2_pointers.md`
 - [ ] **2.4.3** References (&T)
 - [ ] **2.4.4** Arrays ([T; N])
 

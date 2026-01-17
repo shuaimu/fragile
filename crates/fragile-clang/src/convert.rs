@@ -6,8 +6,8 @@ use crate::{
     CppBaseClass, CppClassTemplate, CppClassTemplatePartialSpec, CppConceptDecl, CppConstructor,
     CppDestructor, CppExtern, CppField, CppFriend, CppFunction, CppFunctionTemplate,
     CppMemberTemplate, CppMethod, CppModule, CppStruct, MemberInitializer, MirBasicBlock,
-    MirBinOp, MirBody, MirConstant, MirLocal, MirOperand, MirPlace, MirRvalue, MirStatement,
-    MirTerminator, MirUnaryOp, UsingDeclaration, UsingDirective,
+    MirBinOp, MirBody, MirConstant, MirLocal, MirOperand, MirPlace, MirProjection, MirRvalue,
+    MirStatement, MirTerminator, MirUnaryOp, UsingDeclaration, UsingDirective,
 };
 use miette::Result;
 
@@ -889,16 +889,64 @@ impl MirConverter {
 
             ClangNodeKind::UnaryOperator { op, ty } => {
                 if let Some(operand_node) = node.children.first() {
-                    let operand = self.convert_expr(operand_node, builder)?;
-                    let result_local = builder.add_local(None, ty.clone(), false);
-
-                    let mir_op = convert_unaryop(*op);
-                    builder.add_statement(MirStatement::Assign {
-                        target: MirPlace::local(result_local),
-                        value: MirRvalue::UnaryOp { op: mir_op, operand },
-                    });
-
-                    Ok(MirOperand::Copy(MirPlace::local(result_local)))
+                    match op {
+                        UnaryOp::AddrOf => {
+                            // Address-of: convert operand to a place, then take reference
+                            let operand = self.convert_expr(operand_node, builder)?;
+                            let place = match operand {
+                                MirOperand::Copy(place) | MirOperand::Move(place) => place,
+                                MirOperand::Constant(c) => {
+                                    // Can't take address of constant - store in temp first
+                                    let operand_ty = Self::get_node_type(operand_node);
+                                    let temp_local = builder.add_local(None, operand_ty, false);
+                                    builder.add_statement(MirStatement::Assign {
+                                        target: MirPlace::local(temp_local),
+                                        value: MirRvalue::Use(MirOperand::Constant(c)),
+                                    });
+                                    MirPlace::local(temp_local)
+                                }
+                            };
+                            let result_local = builder.add_local(None, ty.clone(), false);
+                            builder.add_statement(MirStatement::Assign {
+                                target: MirPlace::local(result_local),
+                                value: MirRvalue::Ref { place, mutability: true },
+                            });
+                            Ok(MirOperand::Copy(MirPlace::local(result_local)))
+                        }
+                        UnaryOp::Deref => {
+                            // Dereference: convert operand to place, add Deref projection
+                            let operand = self.convert_expr(operand_node, builder)?;
+                            match operand {
+                                MirOperand::Copy(mut place) | MirOperand::Move(mut place) => {
+                                    place.projection.push(MirProjection::Deref);
+                                    Ok(MirOperand::Copy(place))
+                                }
+                                MirOperand::Constant(c) => {
+                                    // Dereferencing a constant pointer - store in temp first
+                                    let operand_ty = Self::get_node_type(operand_node);
+                                    let temp_local = builder.add_local(None, operand_ty, false);
+                                    builder.add_statement(MirStatement::Assign {
+                                        target: MirPlace::local(temp_local),
+                                        value: MirRvalue::Use(MirOperand::Constant(c)),
+                                    });
+                                    let mut place = MirPlace::local(temp_local);
+                                    place.projection.push(MirProjection::Deref);
+                                    Ok(MirOperand::Copy(place))
+                                }
+                            }
+                        }
+                        _ => {
+                            // Other unary ops: use existing path
+                            let operand = self.convert_expr(operand_node, builder)?;
+                            let result_local = builder.add_local(None, ty.clone(), false);
+                            let mir_op = convert_unaryop(*op);
+                            builder.add_statement(MirStatement::Assign {
+                                target: MirPlace::local(result_local),
+                                value: MirRvalue::UnaryOp { op: mir_op, operand },
+                            });
+                            Ok(MirOperand::Copy(MirPlace::local(result_local)))
+                        }
+                    }
                 } else {
                     Ok(MirOperand::Constant(MirConstant::Int { value: 0, bits: 32, signed: true }))
                 }
@@ -1586,6 +1634,40 @@ impl MirConverter {
         initializers
     }
 
+    /// Get the C++ type from a ClangNode.
+    ///
+    /// Extracts the type information from the node's kind. Used for operations
+    /// like address-of where we need to know the operand's type.
+    fn get_node_type(node: &ClangNode) -> CppType {
+        match &node.kind {
+            ClangNodeKind::IntegerLiteral { cpp_type, .. } => {
+                cpp_type.clone().unwrap_or(CppType::Int { signed: true })
+            }
+            ClangNodeKind::FloatingLiteral { cpp_type, .. } => {
+                cpp_type.clone().unwrap_or(CppType::Double)
+            }
+            ClangNodeKind::BoolLiteral(_) => CppType::Bool,
+            ClangNodeKind::StringLiteral(_) => {
+                CppType::Pointer {
+                    pointee: Box::new(CppType::Char { signed: true }),
+                    is_const: true,
+                }
+            }
+            ClangNodeKind::UnaryOperator { ty, .. } => ty.clone(),
+            ClangNodeKind::BinaryOperator { ty, .. } => ty.clone(),
+            ClangNodeKind::CallExpr { ty } => ty.clone(),
+            ClangNodeKind::DeclRefExpr { ty, .. } => ty.clone(),
+            ClangNodeKind::MemberExpr { ty, .. } => ty.clone(),
+            ClangNodeKind::ArraySubscriptExpr { ty } => ty.clone(),
+            ClangNodeKind::CastExpr { ty, .. } => ty.clone(),
+            ClangNodeKind::ImplicitCastExpr { ty, .. } => ty.clone(),
+            ClangNodeKind::ConditionalOperator { ty } => ty.clone(),
+            ClangNodeKind::VarDecl { ty, .. } => ty.clone(),
+            ClangNodeKind::ParmVarDecl { ty, .. } => ty.clone(),
+            _ => CppType::Int { signed: true }, // Default fallback
+        }
+    }
+
     /// Extract function name from a CallExpr's first child, unwrapping casts.
     ///
     /// Clang often wraps function references in ImplicitCastExpr or UnexposedExpr,
@@ -1695,6 +1777,9 @@ fn convert_binop(op: BinaryOp) -> MirBinOp {
 }
 
 /// Convert Clang unary operator to MIR unary operator.
+///
+/// Note: AddrOf and Deref are handled specially in convert_expr and should never
+/// reach this function.
 fn convert_unaryop(op: UnaryOp) -> MirUnaryOp {
     match op {
         UnaryOp::Minus => MirUnaryOp::Neg,
@@ -1703,8 +1788,9 @@ fn convert_unaryop(op: UnaryOp) -> MirUnaryOp {
         UnaryOp::LNot => MirUnaryOp::Not, // Logical not (!x) - treated as bitwise for now
         UnaryOp::PreInc | UnaryOp::PostInc => MirUnaryOp::Neg, // TODO: Inc/Dec need special handling
         UnaryOp::PreDec | UnaryOp::PostDec => MirUnaryOp::Neg, // TODO: Inc/Dec need special handling
-        UnaryOp::AddrOf => MirUnaryOp::Neg, // TODO: Address-of needs special handling
-        UnaryOp::Deref => MirUnaryOp::Neg,  // TODO: Dereference needs special handling
+        // Address-of and dereference are handled specially in convert_expr
+        UnaryOp::AddrOf => unreachable!("AddrOf should be handled in convert_expr"),
+        UnaryOp::Deref => unreachable!("Deref should be handled in convert_expr"),
     }
 }
 
@@ -1732,5 +1818,108 @@ mod tests {
 
         assert_eq!(module.functions.len(), 1);
         assert_eq!(module.functions[0].display_name, "add");
+    }
+
+    #[test]
+    fn test_convert_address_of() {
+        let parser = ClangParser::new().unwrap();
+        let ast = parser
+            .parse_string(
+                r#"
+                int* get_addr() {
+                    int x = 42;
+                    int* ptr = &x;
+                    return ptr;
+                }
+                "#,
+                "test.cpp",
+            )
+            .unwrap();
+
+        let converter = MirConverter::new();
+        let module = converter.convert(ast).unwrap();
+
+        assert_eq!(module.functions.len(), 1);
+        let func = &module.functions[0];
+        assert_eq!(func.display_name, "get_addr");
+
+        // Verify MirRvalue::Ref is used for address-of
+        let body = &func.mir_body;
+        let has_ref = body
+            .blocks
+            .iter()
+            .flat_map(|bb| &bb.statements)
+            .any(|stmt| matches!(stmt, MirStatement::Assign { value: MirRvalue::Ref { .. }, .. }));
+        assert!(has_ref, "Should have MirRvalue::Ref for address-of operation");
+    }
+
+    #[test]
+    fn test_convert_dereference() {
+        let parser = ClangParser::new().unwrap();
+        let ast = parser
+            .parse_string(
+                r#"
+                int deref_ptr(int* ptr) {
+                    return *ptr;
+                }
+                "#,
+                "test.cpp",
+            )
+            .unwrap();
+
+        let converter = MirConverter::new();
+        let module = converter.convert(ast).unwrap();
+
+        assert_eq!(module.functions.len(), 1);
+        let func = &module.functions[0];
+        assert_eq!(func.display_name, "deref_ptr");
+
+        // Verify MirProjection::Deref is used for dereference
+        let body = &func.mir_body;
+        let has_deref = body
+            .blocks
+            .iter()
+            .flat_map(|bb| &bb.statements)
+            .any(|stmt| {
+                if let MirStatement::Assign { value, .. } = stmt {
+                    match value {
+                        MirRvalue::Use(MirOperand::Copy(place)) | MirRvalue::Use(MirOperand::Move(place)) => {
+                            place.projection.iter().any(|p| matches!(p, MirProjection::Deref))
+                        }
+                        _ => false,
+                    }
+                } else {
+                    false
+                }
+            });
+        assert!(has_deref, "Should have MirProjection::Deref for dereference operation");
+    }
+
+    #[test]
+    fn test_convert_pointer_ops_combined() {
+        // Test that combined pointer operations compile without panic
+        let parser = ClangParser::new().unwrap();
+        let ast = parser
+            .parse_string(
+                r#"
+                int ptr_ops(int* ptr) {
+                    int x = *ptr;       // dereference
+                    int* addr = &x;     // address-of
+                    return *addr;       // dereference again
+                }
+                "#,
+                "test.cpp",
+            )
+            .unwrap();
+
+        let converter = MirConverter::new();
+        let module = converter.convert(ast).unwrap();
+
+        assert_eq!(module.functions.len(), 1);
+        let func = &module.functions[0];
+        assert_eq!(func.display_name, "ptr_ops");
+
+        // Just verify the function has MIR blocks - individual operations are tested separately
+        assert!(!func.mir_body.blocks.is_empty(), "Function should have basic blocks");
     }
 }
