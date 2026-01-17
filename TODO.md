@@ -661,12 +661,14 @@ Migration: After C++20 support is complete, deprecate these.
   - [x] `test_and_event` - Built and all tests pass [26:01:17]
     - gtest-based tests for reactor event composition
     - 5/5 tests pass (BasicAndEvent, ThreeEventAnd, etc.)
+  - [x] `test_fiber` - Built and all tests pass [26:01:17]
+    - gtest-based tests for Fiber API (this_fiber namespace)
+    - 37/37 tests pass (type aliases, context checks, sleep, futures)
   - [x] Fixed CompilationJob to resolve internal deps (librrr) and add build dir to lib_paths [26:01:17]
   - [-] Tests using internal unittest.hpp TEST macro blocked (commented out in all.hpp)
   - [ ] `test_marshal` - Serialization tests
   - [ ] `test_config_schema` - Configuration tests
   - [ ] `test_masstree` - Masstree index tests
-  - [ ] `test_fiber` - Fiber/coroutine tests
   - [ ] `test_rpc` - RPC framework tests
   - [ ] `test_future` - Future/promise tests
   - [ ] All others listed in CMakeLists.txt
@@ -675,11 +677,11 @@ Migration: After C++20 support is complete, deprecate these.
   - [ ] `bench_future` - Future benchmark
 
 ### G.6 Pass Mako CI Tests
-- [ ] **G.6.1 Unit Tests (ctest)**
+- [-] **G.6.1 Unit Tests (ctest)**
   - [ ] `test_marshal` passes
   - [ ] `test_config_schema` passes
   - [ ] `test_sharding_policy` passes
-  - [ ] `test_fiber` passes
+  - [x] `test_fiber` passes - 37/37 tests [26:01:17]
   - [ ] `test_masstree` passes
   - [ ] `test_rpc` passes
   - [ ] All 25 ctest tests pass
