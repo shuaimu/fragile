@@ -1,0 +1,25 @@
+[project]
+name = "mako"
+version = "1.0.0"
+
+[compiler]
+std = "c++23"
+includes = [
+    "vendor/mako/src",
+    "vendor/mako/src/mako",
+    "vendor/mako/src/rrr",
+]
+
+# Masstree performance benchmark - B-tree performance tests, no gtest
+[[target]]
+name = "masstree_perf"
+type = "executable"
+sources = ["vendor/mako/test/masstree_perf.cc"]
+includes = [
+    "vendor/mako/src",
+    "vendor/mako/src/mako",
+    "vendor/mako/src/mako/masstree",
+    "vendor/mako/src/rrr",
+]
+deps = ["libmako_core", "librrr"]
+libs = ["pthread", "numa"]
