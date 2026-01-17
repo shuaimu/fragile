@@ -30,6 +30,12 @@ typedef long time_t;
 #define __time_t_defined
 #endif
 
+// clock_t
+#ifndef __clock_t_defined
+typedef long clock_t;
+#define __clock_t_defined
+#endif
+
 // timespec structure - use same guard as Linux kernel/glibc
 #ifndef _STRUCT_TIMESPEC
 #define _STRUCT_TIMESPEC 1
@@ -79,6 +85,13 @@ int clock_getres(clockid_t clk_id, struct timespec* res);
 
 // nanosleep
 int nanosleep(const struct timespec* req, struct timespec* rem);
+
+// clock()
+clock_t clock(void);
+
+// C++17 timespec_get
+int timespec_get(struct timespec* ts, int base);
+#define TIME_UTC 1
 
 }
 

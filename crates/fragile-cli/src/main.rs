@@ -169,12 +169,33 @@ fn main() -> Result<()> {
             std::fs::create_dir_all(&output_dir)
                 .map_err(|e| miette::miette!("Failed to create output dir: {}", e))?;
 
-            // Configure C++ compiler - use real system headers for compilation
-            // (stubs are only for parsing with libclang)
+            // Stubs directory for parsing (full set of stub headers for libclang)
+            let stubs_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .parent()
+                .unwrap()
+                .join("fragile-clang/stubs");
+
+            // Compile stubs directory (minimal, only headers that need to override eRPC)
+            // This allows real system headers to be used while providing stub rpc.h
+            let compile_stubs_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .parent()
+                .unwrap()
+                .join("fragile-clang/compile_stubs");
+
+            // Configure C++ compiler
             let mut compiler_config = CppCompilerConfig::default();
+
+            // Add compile stubs first so they take precedence over real eRPC headers
+            // This allows libmako_lib to compile without ASIO dependency
+            if compile_stubs_dir.exists() {
+                compiler_config.include_dirs.push(compile_stubs_dir.clone());
+            }
+
+            // Add target-specific includes (from job, respects inherit_includes)
             for inc in &job.includes {
                 compiler_config.include_dirs.push(inc.clone());
             }
+
             for def in &job.defines {
                 compiler_config.defines.push(def.clone());
             }
@@ -187,15 +208,10 @@ fn main() -> Result<()> {
 
             if verbose {
                 println!("Using compiler: {:?}", compiler.compiler_path());
+                if compile_stubs_dir.exists() {
+                    println!("Compile stubs directory: {}", compile_stubs_dir.display());
+                }
             }
-
-            // Add fragile-clang stubs directory for parsing only
-            // Stubs provide minimal headers that satisfy clang AST parsing
-            // but should NOT be used for actual compilation
-            let stubs_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .parent()
-                .unwrap()
-                .join("fragile-clang/stubs");
 
             // Parse and compile each source file
             let (mut include_paths, mut system_paths, defines) = job.parser_config();

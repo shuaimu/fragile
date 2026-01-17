@@ -780,10 +780,15 @@ Current status:
 - **Phase G (Full Build)**: 🔄 In Progress
   - G.1-G.4: ✅ Complete (MIR injection, runtime support, build system, blocked files fixed)
   - G.5.2: ✅ 19 test executables built, 285 tests passing
-  - G.5.1, G.5.3: ⏸️ Blocked on libmako_lib (requires eRPC stubs)
+  - **libmako_lib**: ✅ UNBLOCKED [26:01:17, 06:30] - Created compile_stubs directory with rpc.h stub for compilation
+  - G.5.1, G.5.3: Can now proceed with libmako_lib available
 
-**Blocker**: libmako_lib requires eRPC headers which have complex internal dependencies
-- Options: 1) Complete eRPC stub implementation, 2) Use hybrid CMake+Fragile approach, 3) Focus on non-eRPC tests
+**Recent Progress** [26:01:17]:
+- Fixed eRPC include order issue by creating separate `compile_stubs/` directory for compilation
+  - Stubs in `stubs/` are for libclang parsing (with `-nostdinc++`)
+  - Stubs in `compile_stubs/` are for clang++ compilation (minimal, only rpc.h)
+  - This allows libmako_lib to compile without ASIO dependency
+- libmako_lib now builds successfully (6 object files → libmako_lib.a)
 
 **Completed**:
 - G.1: MIR injection pipeline (TLS, type conversion, function sigs, MIR body generation)
@@ -791,6 +796,7 @@ Current status:
 - G.3: Build system integration (fragile.toml, compile_commands.json)
 - G.4: Fixed blocked files (mtd.cc, persist_test.cc, mongodb/server.cc)
 - G.5.2: Unit tests (19 executables, 285 tests)
+- libmako_lib build unblocked
 
 ---
 
