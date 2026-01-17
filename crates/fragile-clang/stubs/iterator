@@ -507,6 +507,112 @@ constexpr auto data(const C& c) -> decltype(c.data()) { return c.data(); }
 template<typename T, size_t N>
 constexpr T* data(T (&array)[N]) noexcept { return array; }
 
+// istreambuf_iterator - reads from a streambuf
+template<typename CharT, typename Traits = void>
+class istreambuf_iterator {
+public:
+    using iterator_category = input_iterator_tag;
+    using value_type = CharT;
+    using difference_type = long;
+    using pointer = const CharT*;
+    using reference = CharT;
+    using char_type = CharT;
+    using traits_type = Traits;
+    using int_type = int;
+
+    // Constructors
+    constexpr istreambuf_iterator() noexcept : sbuf_(nullptr) {}
+
+    // Constructor from streambuf pointer (common usage)
+    template<typename StreamBuf>
+    istreambuf_iterator(StreamBuf* sb) noexcept : sbuf_(reinterpret_cast<void*>(sb)) {}
+
+    // Constructor from input stream (e.g., std::istream)
+    template<typename IStream>
+    istreambuf_iterator(IStream& is) noexcept : sbuf_(nullptr) {
+        // Try to get rdbuf if available
+        if constexpr (requires { is.rdbuf(); }) {
+            sbuf_ = reinterpret_cast<void*>(is.rdbuf());
+        }
+    }
+
+    // Dereference
+    CharT operator*() const { return current_; }
+
+    // Increment
+    istreambuf_iterator& operator++() {
+        // Move to next character
+        return *this;
+    }
+
+    istreambuf_iterator operator++(int) {
+        istreambuf_iterator tmp = *this;
+        ++(*this);
+        return tmp;
+    }
+
+    // Equality comparison
+    friend bool operator==(const istreambuf_iterator& a, const istreambuf_iterator& b) {
+        return a.sbuf_ == b.sbuf_;
+    }
+
+    friend bool operator!=(const istreambuf_iterator& a, const istreambuf_iterator& b) {
+        return !(a == b);
+    }
+
+    // Check if at end-of-stream
+    bool equal(const istreambuf_iterator& other) const {
+        return sbuf_ == other.sbuf_;
+    }
+
+private:
+    void* sbuf_;
+    CharT current_{};
+};
+
+// ostreambuf_iterator - writes to a streambuf
+template<typename CharT, typename Traits = void>
+class ostreambuf_iterator {
+public:
+    using iterator_category = output_iterator_tag;
+    using value_type = void;
+    using difference_type = void;
+    using pointer = void;
+    using reference = void;
+    using char_type = CharT;
+    using traits_type = Traits;
+
+    // Constructor from streambuf pointer
+    template<typename StreamBuf>
+    ostreambuf_iterator(StreamBuf* sb) noexcept : sbuf_(reinterpret_cast<void*>(sb)), failed_(false) {}
+
+    // Constructor from output stream
+    template<typename OStream>
+    ostreambuf_iterator(OStream& os) noexcept : sbuf_(nullptr), failed_(false) {
+        if constexpr (requires { os.rdbuf(); }) {
+            sbuf_ = reinterpret_cast<void*>(os.rdbuf());
+        }
+    }
+
+    // Assign character to output
+    ostreambuf_iterator& operator=(CharT c) {
+        // Write character to stream buffer
+        return *this;
+    }
+
+    // No-op operations for output iterators
+    ostreambuf_iterator& operator*() { return *this; }
+    ostreambuf_iterator& operator++() { return *this; }
+    ostreambuf_iterator& operator++(int) { return *this; }
+
+    // Check if a write operation failed
+    bool failed() const noexcept { return failed_; }
+
+private:
+    void* sbuf_;
+    bool failed_;
+};
+
 } // namespace std
 
 #endif // _FRAGILE_ITERATOR_

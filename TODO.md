@@ -817,13 +817,14 @@ Current status:
 - Added STL stubs: stod, stoull, stoul, stof, stold, shuffle, put_time, get_time, to_time_t
 - Added stress_transport_backend (13 tests) - mock-based transport stress tests
 - Fixed chrono stub to use long instead of long long for duration types (matches libc++)
+- Added std::istreambuf_iterator and std::ostreambuf_iterator to iterator stub [26:01:17]
 - Total: 50 test/benchmark executables, 802+ tests passing
 
 **Blockers**:
 - Core executables (simpleTransaction, simplePaxos) need full eRPC with ASIO
 - Full integration tests need rpc/server.hpp and benchmark_service.h
 - Remaining test executables blocked on:
-  - test_sto_transaction_real: needs std::istreambuf_iterator, always_assert macro
+  - test_sto_transaction_real: needs always_assert macro (istreambuf_iterator done)
   - bench_future, rpcbench: need full RPC server infrastructure
 
 **Completed**:
