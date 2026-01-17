@@ -552,17 +552,17 @@ Migration: After C++20 support is complete, deprecate these.
   - [x] Enum types (C++ enum class) - mapped via Named type handling
   - [x] Function pointer types - full fn sig conversion with ABI
   - [x] Template-related types - warnings for uninstantiated params
-- [ ] **G.1.3 Function Signature Conversion** (~150 lines)
-  - [ ] Parameter types with proper ABI
-  - [ ] Return types
-  - [ ] Variadic functions (printf-style)
-  - [ ] Member function pointers
-- [ ] **G.1.4 MIR Body Generation** (~300 lines)
-  - [ ] Convert MirStatement to rustc Statement
-  - [ ] Convert MirTerminator to rustc Terminator
-  - [ ] Convert MirRvalue to rustc Rvalue
-  - [ ] Handle basic blocks and control flow
-  - [ ] Handle local variables and temporaries
+- [x] **G.1.3 Function Signature Conversion** (~150 lines) [26:01:17]
+  - [x] Parameter types with proper ABI - via CppType.to_rust_type_str() and convert_type()
+  - [x] Return types - via CppType.to_rust_type_str() and convert_type()
+  - [x] Variadic functions (printf-style) - is_variadic flag handled in type conversion
+  - [-] Member function pointers - deferred (rare in Mako, would need CppType extension)
+- [x] **G.1.4 MIR Body Generation** (~300 lines) [26:01:17]
+  - [x] Convert MirStatement to rustc Statement - Assign, Nop
+  - [x] Convert MirTerminator to rustc Terminator - Return, Goto, SwitchInt, Call, Unreachable, Resume, Yield, Await, CoroutineReturn
+  - [x] Convert MirRvalue to rustc Rvalue - Use, BinaryOp, UnaryOp, Ref
+  - [x] Handle basic blocks and control flow - convert_basic_block, is_cleanup support
+  - [x] Handle local variables and temporaries - convert_local, convert_mir_body_full
 
 ### G.2 Runtime Support
 - [ ] **G.2.1 Exception Handling** (~200 lines)
@@ -685,9 +685,10 @@ Current status:
 Next steps:
 1. ~~G.1.1: Wire TLS for MIR registry in rustc driver~~ ✅ Done
 2. ~~G.1.2: Complete type conversion for all C++ types~~ ✅ Done
-3. G.1.3: Function signature conversion
-4. G.1.4: MIR body generation
+3. ~~G.1.3: Function signature conversion~~ ✅ Done
+4. ~~G.1.4: MIR body generation~~ ✅ Done
 5. G.2.1: Implement exception handling runtime
+6. G.2.2: RTTI support
 
 **Blocked files** (3 total, non-critical):
 - mongodb/server.cc (needs bsoncxx - optional)
