@@ -267,11 +267,29 @@ Each feature must work through the MIR pipeline, not clang++.
   - Added 3 tests: test_nested_struct_definition, test_nested_aggregate_initialization, test_nested_struct_assignment
 
 ### 3.2 Classes
-- [ ] Class definitions
-- [ ] Constructors
-- [ ] Destructors
-- [ ] Member functions
-- [ ] Access specifiers (public/private)
+- [x] **3.2.1** Class definitions [already implemented] - Classes parsed via CXCursor_ClassDecl
+  - Classes use same infrastructure as structs (CppStruct with is_class flag)
+  - Access specifiers properly handled via libclang's clang_getCXXAccessSpecifier()
+  - Default private access for class members works correctly
+  - Existing test: test_class_access_specifiers
+- [x] **3.2.2** Constructors [already implemented] - CppConstructor with kind detection
+  - Default, copy, move, and parameterized constructors parsed
+  - Member initializer lists extracted
+  - Constructor bodies converted to MIR
+  - Existing tests: test_default_constructor, test_copy_constructor, test_move_constructor
+- [x] **3.2.3** Destructors [already implemented] - CppDestructor with optional body
+  - Destructors parsed and stored in CppStruct
+  - Destructor bodies converted to MIR when present
+  - Existing test: test_destructor
+- [x] **3.2.4** Member functions [already implemented] - CppMethod with MIR body
+  - Methods parsed with return type, params, const/static modifiers
+  - Method bodies converted to MIR
+  - Static methods supported
+  - Existing tests in integration_test.rs
+- [x] **3.2.5** Access specifiers (public/private) [already implemented]
+  - libclang's clang_getCXXAccessSpecifier returns effective access
+  - Default access differs between struct (public) and class (private)
+  - AccessSpecifier enum: Public, Private, Protected
 
 ### 3.3 Inheritance
 - [ ] Single inheritance
