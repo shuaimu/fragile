@@ -101,6 +101,12 @@ struct ipv6_mreq {
 #define IPV6_MULTICAST_HOPS 18
 #define IPV6_MULTICAST_LOOP 19
 #define IPV6_V6ONLY 26
+#define IPV6_UNICAST_HOPS 16
+#define IPV6_CHECKSUM 7
+#define IPV6_NEXTHOP 9
+#define IPV6_RTHDR 57
+#define IPV6_HOPOPTS 54
+#define IPV6_DSTOPTS 60
 
 // Special addresses
 #define INADDR_ANY ((in_addr_t)0x00000000)
