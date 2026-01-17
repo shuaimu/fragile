@@ -153,7 +153,7 @@ Each feature must work through the MIR pipeline, not clang++.
   - [x] 2.1.1h Add tests for integer literals (4 tests in parse.rs, 4 tests in types.rs)
 - [x] **2.1.2** Float literals [26:01:17] (see `docs/dev/plan_2_1_2_float_literals.md`)
 - [x] **2.1.3** Boolean literals [26:01:17] (added CXXBoolLiteralExpr parsing)
-- [ ] String literals
+- [x] **2.1.4** String literals [26:01:17] (added CXCursor_StringLiteral parsing)
 - [ ] Binary operators (+, -, *, /, %, &, |, ^)
 - [ ] Unary operators (-, !, ~)
 - [ ] Comparison operators (==, !=, <, <=, >, >=)

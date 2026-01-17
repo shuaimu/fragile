@@ -873,6 +873,33 @@ impl ClangParser {
                     ClangNodeKind::BoolLiteral(value)
                 }
 
+                clang_sys::CXCursor_StringLiteral => {
+                    // Get the string value using evaluation
+                    let eval = clang_sys::clang_Cursor_Evaluate(cursor);
+                    let value = if !eval.is_null() {
+                        let str_ptr = clang_sys::clang_EvalResult_getAsStr(eval);
+                        let result = if !str_ptr.is_null() {
+                            std::ffi::CStr::from_ptr(str_ptr)
+                                .to_string_lossy()
+                                .into_owned()
+                        } else {
+                            String::new()
+                        };
+                        clang_sys::clang_EvalResult_dispose(eval);
+                        result
+                    } else {
+                        // Fallback: use cursor spelling (may include quotes)
+                        let spelling = cursor_spelling(cursor);
+                        // Remove surrounding quotes if present
+                        if spelling.starts_with('"') && spelling.ends_with('"') && spelling.len() >= 2 {
+                            spelling[1..spelling.len()-1].to_string()
+                        } else {
+                            spelling
+                        }
+                    };
+                    ClangNodeKind::StringLiteral(value)
+                }
+
                 clang_sys::CXCursor_DeclRefExpr => {
                     let name = cursor_spelling(cursor);
                     let ty = self.convert_type(clang_sys::clang_getCursorType(cursor));
@@ -2890,6 +2917,76 @@ mod tests {
             assert!(!*value, "Expected false");
         } else {
             panic!("Expected BoolLiteral");
+        }
+    }
+
+    #[test]
+    fn test_string_literal() {
+        let parser = ClangParser::new().unwrap();
+        let ast = parser
+            .parse_string(
+                r#"
+                const char* foo() {
+                    return "hello world";
+                }
+                "#,
+                "test.cpp",
+            )
+            .unwrap();
+
+        // Find the string literal
+        fn find_string_literal(node: &ClangNode) -> Option<&ClangNode> {
+            if matches!(&node.kind, ClangNodeKind::StringLiteral(_)) {
+                return Some(node);
+            }
+            for child in &node.children {
+                if let Some(found) = find_string_literal(child) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+
+        let literal = find_string_literal(&ast.translation_unit).expect("Expected StringLiteral");
+        if let ClangNodeKind::StringLiteral(value) = &literal.kind {
+            assert_eq!(value, "hello world");
+        } else {
+            panic!("Expected StringLiteral");
+        }
+    }
+
+    #[test]
+    fn test_string_literal_empty() {
+        let parser = ClangParser::new().unwrap();
+        let ast = parser
+            .parse_string(
+                r#"
+                const char* foo() {
+                    return "";
+                }
+                "#,
+                "test.cpp",
+            )
+            .unwrap();
+
+        // Find the string literal
+        fn find_string_literal(node: &ClangNode) -> Option<&ClangNode> {
+            if matches!(&node.kind, ClangNodeKind::StringLiteral(_)) {
+                return Some(node);
+            }
+            for child in &node.children {
+                if let Some(found) = find_string_literal(child) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+
+        let literal = find_string_literal(&ast.translation_unit).expect("Expected StringLiteral");
+        if let ClangNodeKind::StringLiteral(value) = &literal.kind {
+            assert_eq!(value, "");
+        } else {
+            panic!("Expected StringLiteral");
         }
     }
 }
