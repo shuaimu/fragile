@@ -614,6 +614,12 @@ Migration: After C++20 support is complete, deprecate these.
 - [x] **G.4.3 mongodb/server.cc** [26:01:17] - Parsing passes (5 mongodb tests pass)
 
 ### G.5 Build Mako Executables
+- [-] **G.5.0 Build Infrastructure** [26:01:17]
+  - [x] CLI `build-target` command (parse, compile, link)
+  - [x] CLI `parse-cpp` command (parse and stub generation)
+  - [x] fragile.toml for Mako (librrr, libmako_core, libmako_lib, executables, tests)
+  - [x] Build librrr (19 object files, ~10MB) - VERIFIED WORKING
+  - [ ] Linking step (manual for now, needs automation)
 - [ ] **G.5.1 Core Executables**
   - [ ] `dbtest` - Main test database executable
   - [ ] `simpleTransaction` - Simple transaction test
