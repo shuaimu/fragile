@@ -644,10 +644,15 @@ Migration: After C++20 support is complete, deprecate these.
   - [ ] `simplePaxos` - Paxos consensus test
   - [ ] `simpleRaft` - Raft consensus test
   - **Next steps**:
-    1. Fix fragile-clang cross-namespace inheritance issue
+    1. ~~Fix fragile-clang cross-namespace inheritance issue~~ ✅ Done
     2. Either complete eRPC stubs OR use hybrid CMake+Fragile approach
     3. Build simpler targets first (mako_core tests, masstree tests)
-- [ ] **G.5.2 Unit Test Executables** (~25 tests)
+- [-] **G.5.2 Unit Test Executables** (~25 tests)
+  - [x] `test_fragile_minimal` - Built and runs successfully [26:01:17]
+    - Tests basic rrr library: logging, timer, Time::now(), lambdas with std::function
+    - First Fragile-built Mako executable that runs!
+  - [x] Fixed CompilationJob to resolve internal deps (librrr) and add build dir to lib_paths [26:01:17]
+  - [-] Other tests blocked on unittest.hpp TEST macro (commented out in all.hpp)
   - [ ] `test_marshal` - Serialization tests
   - [ ] `test_config_schema` - Configuration tests
   - [ ] `test_masstree` - Masstree index tests

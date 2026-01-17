@@ -77,7 +77,8 @@ impl CompilationJob {
         let std = config.get_std(target);
         let cflags = target.cflags.clone();
 
-        let lib_paths = target
+        // Get library paths - include build directory for internal deps
+        let mut lib_paths: Vec<PathBuf> = target
             .lib_paths
             .iter()
             .map(|s| {
@@ -90,6 +91,33 @@ impl CompilationJob {
             })
             .collect();
 
+        // Add build directory to lib_paths for internal dependency libraries
+        let build_dir = project_root.join("build");
+        if !lib_paths.contains(&build_dir) {
+            lib_paths.push(build_dir);
+        }
+
+        // Get link dependencies - this resolves internal deps (other targets) and external libs
+        let (internal_deps, external_libs) = config.get_link_deps(target);
+
+        // Build libs list: internal deps (without lib prefix) + external libs
+        let mut libs = Vec::new();
+        for dep in &internal_deps {
+            // Convert target name to library name (e.g., "librrr" -> "rrr")
+            let lib_name = if dep.starts_with("lib") {
+                dep[3..].to_string()
+            } else {
+                dep.clone()
+            };
+            libs.push(lib_name);
+        }
+        // Add external libs
+        for lib in &external_libs {
+            if !libs.contains(lib) {
+                libs.push(lib.clone());
+            }
+        }
+
         Self {
             sources,
             includes,
@@ -98,7 +126,7 @@ impl CompilationJob {
             cflags,
             output_type: target.target_type.into(),
             output_name: target.name.clone(),
-            libs: target.libs.clone(),
+            libs,
             lib_paths,
         }
     }
