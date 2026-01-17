@@ -693,8 +693,17 @@ Migration: After C++20 support is complete, deprecate these.
   - [x] `test_masstree_multi_instance` - Built and all tests pass [26:01:17]
     - gtest-based tests for multiple Masstree instance isolation
     - 5/5 tests pass
-  - [ ] `test_rpc` - RPC framework tests (full integration)
-  - [ ] `test_future` - Future/promise tests
+  - [x] `test_silo_varint` - Built and all tests pass [26:01:17]
+    - gtest-based tests for varint encoding/decoding
+    - 22/22 tests pass
+  - [x] `test_silo_runtime` - Built and all tests pass [26:01:17]
+    - gtest-based tests for per-site runtime context
+    - 8/8 tests pass
+  - [x] `test_silo_rcu_thread` - Built and all tests pass [26:01:17]
+    - gtest-based tests for RCU memory management
+    - 9/9 tests pass
+  - [ ] `test_rpc` - RPC framework tests (full integration, BLOCKED on libmako_lib)
+  - [ ] `test_future` - Future/promise tests (BLOCKED on libmako_lib)
   - [ ] All others listed in CMakeLists.txt
 - [ ] **G.5.3 Benchmark Executables**
   - [ ] `rpcbench` - RPC benchmark
@@ -711,7 +720,10 @@ Migration: After C++20 support is complete, deprecate these.
   - [x] `test_masstree` passes - 2/2 tests [26:01:17]
   - [x] `test_masstree_internals` passes - 13/13 tests [26:01:17]
   - [x] `test_masstree_multi_instance` passes - 5/5 tests [26:01:17]
-  - [ ] `test_rpc` passes
+  - [x] `test_silo_varint` passes - 22/22 tests [26:01:17]
+  - [x] `test_silo_runtime` passes - 8/8 tests [26:01:17]
+  - [x] `test_silo_rcu_thread` passes - 9/9 tests [26:01:17]
+  - [ ] `test_rpc` passes (BLOCKED on libmako_lib)
   - [ ] All 25 ctest tests pass
 - [ ] **G.6.2 Integration Tests (ci.sh)**
   - [ ] `./ci/ci.sh simpleTransaction` passes
