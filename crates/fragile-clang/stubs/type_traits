@@ -294,9 +294,11 @@ template<typename R, typename F, typename... Args> inline constexpr bool is_invo
 template<typename F, typename... Args> inline constexpr bool is_nothrow_invocable_v = is_nothrow_invocable<F, Args...>::value;
 template<typename R, typename F, typename... Args> inline constexpr bool is_nothrow_invocable_r_v = is_nothrow_invocable_r<R, F, Args...>::value;
 
-// invoke_result (C++17)
+// invoke_result (C++17) - uses decltype to properly deduce return type
 template<typename F, typename... Args>
-struct invoke_result { using type = void; };
+struct invoke_result {
+    using type = decltype(declval<F>()(declval<Args>()...));
+};
 template<typename F, typename... Args>
 using invoke_result_t = typename invoke_result<F, Args...>::type;
 
