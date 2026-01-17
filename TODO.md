@@ -74,7 +74,7 @@ Hand-written C++ files for testing each feature incrementally.
 - [x] **1.2.2** Arithmetic operations (add, sub, mul, div) [26:01:17] - convert_binop() maps Add, Sub, Mul, Div, Rem + bit ops
 - [x] **1.2.3** Comparison operations (eq, lt, gt) [26:01:17] - convert_binop() maps Eq, Ne, Lt, Le, Gt, Ge
 - [x] **1.2.4** Local variables and assignments [26:01:17] - convert_statement() handles Assign, convert_local() handles locals
-- [-] **1.2.5** Function calls - convert_terminator() handles Call but uses placeholder func operand (needs resolution)
+- [x] **1.2.5** Function calls [26:01:17] - resolve_function_call() resolves display names to DefIds via registry lookup; fixed CXToken_Punctuation constant (0 not 1)
 - [x] **1.2.6** Control flow (if/else, loops) [26:01:17] - convert_terminator() handles Goto, SwitchInt
 - [x] **1.2.7** Return statements [26:01:17] - convert_terminator() handles Return terminator
 

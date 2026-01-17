@@ -20,9 +20,12 @@ use fragile_clang::{
     CppType, MirBasicBlock, MirBinOp, MirBody, MirConstant, MirLocal, MirOperand, MirPlace,
     MirRvalue, MirStatement, MirTerminator, MirUnaryOp,
 };
+use rustc_hir::def_id::LocalDefId;
 use rustc_middle::mir::{self, BinOp, UnOp};
 use rustc_middle::ty::{Ty, TyCtxt};
 use rustc_span::DUMMY_SP;
+
+use crate::rustc_integration::{lookup_def_id_by_export_name, lookup_mangled_name_by_display};
 
 /// Context for MIR conversion, holding the type context and other state.
 pub struct MirConvertCtx<'tcx> {
@@ -38,6 +41,46 @@ impl<'tcx> MirConvertCtx<'tcx> {
     /// Get the type context.
     pub fn tcx(&self) -> TyCtxt<'tcx> {
         self.tcx
+    }
+
+    /// Resolve a function call to a rustc Operand.
+    ///
+    /// Given a function name (display name like "helper" or qualified like "foo::helper"),
+    /// look up the DefId and create a proper function operand for a Call terminator.
+    ///
+    /// The resolution process:
+    /// 1. Try looking up as mangled name directly (if already mangled)
+    /// 2. Try looking up display name to get mangled name, then find DefId
+    ///
+    /// Returns None if the function cannot be resolved (external function, not in crate).
+    fn resolve_function_call(&self, func_name: &str) -> Option<mir::Operand<'tcx>> {
+        // First, try to look up directly by export name (in case it's already mangled)
+        if let Some(def_id) = lookup_def_id_by_export_name(self.tcx, func_name) {
+            eprintln!("[fragile] Resolved function call '{}' directly to {:?}", func_name, def_id);
+            return Some(self.create_function_operand(def_id));
+        }
+
+        // Try looking up display name -> mangled name -> DefId
+        if let Some(mangled_name) = lookup_mangled_name_by_display(func_name) {
+            eprintln!("[fragile] Found mangled name '{}' for display name '{}'", mangled_name, func_name);
+            if let Some(def_id) = lookup_def_id_by_export_name(self.tcx, &mangled_name) {
+                eprintln!("[fragile] Resolved function call '{}' via mangled name to {:?}", func_name, def_id);
+                return Some(self.create_function_operand(def_id));
+            }
+        }
+
+        eprintln!("[fragile] Could not resolve function call '{}'", func_name);
+        None
+    }
+
+    /// Create a function operand from a DefId.
+    fn create_function_operand(&self, def_id: LocalDefId) -> mir::Operand<'tcx> {
+        mir::Operand::function_handle(
+            self.tcx,
+            def_id.to_def_id(),
+            [], // No generic arguments for simple C++ functions
+            DUMMY_SP,
+        )
     }
 
     /// Convert a Fragile MirBody to rustc's mir::Body.
@@ -513,9 +556,8 @@ impl<'tcx> MirConvertCtx<'tcx> {
                 let switch_targets = SwitchTargets::new(targets_vec.into_iter(), otherwise_block);
                 TerminatorKind::SwitchInt { discr, targets: switch_targets }
             }
-            MirTerminator::Call { func: _, args, destination, target, unwind } => {
-                // Note: func is a string, we need to resolve it to an actual function
-                // For now, create a placeholder call to a dummy function
+            MirTerminator::Call { func, args, destination, target, unwind } => {
+                // Resolve the function name to a rustc function operand
                 let args_converted: Box<[Spanned<mir::Operand<'tcx>>]> = args
                     .iter()
                     .map(|a| Spanned {
@@ -531,10 +573,21 @@ impl<'tcx> MirConvertCtx<'tcx> {
                 } else {
                     mir::UnwindAction::Continue
                 };
-                // Create a placeholder function operand - this needs proper function resolution
-                // For now, use unreachable which will be replaced with actual call later
+
+                // Try to resolve the function call
+                // func is the mangled C++ name (e.g., "_Z6helperv")
+                let func_operand = match self.resolve_function_call(func) {
+                    Some(operand) => operand,
+                    None => {
+                        // Fall back to placeholder if function cannot be resolved
+                        // This happens for external functions (libc, STL, etc.)
+                        eprintln!("[fragile] Warning: Using placeholder for unresolved call to '{}'", func);
+                        mir::Operand::Copy(mir::Place::from(mir::Local::from_u32(0)))
+                    }
+                };
+
                 TerminatorKind::Call {
-                    func: mir::Operand::Copy(mir::Place::from(mir::Local::from_u32(0))),
+                    func: func_operand,
                     args: args_converted,
                     destination: dest,
                     target: target_block,

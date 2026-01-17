@@ -1077,8 +1077,8 @@ impl ClangParser {
                 let token = *tokens.add(i as usize);
                 let token_kind = clang_sys::clang_getTokenKind(token);
 
-                // CXToken_Punctuation = 1
-                if token_kind == 1 {
+                // CXToken_Punctuation = 0 (not 1!)
+                if token_kind == 0 {
                     let token_spelling = clang_sys::clang_getTokenSpelling(tu, token);
                     let token_str = cx_string_to_string(token_spelling);
 
@@ -1153,8 +1153,8 @@ impl ClangParser {
                 let token = *tokens.add(i as usize);
                 let token_kind = clang_sys::clang_getTokenKind(token);
 
-                // CXToken_Punctuation = 1
-                if token_kind == 1 {
+                // CXToken_Punctuation = 0 (not 1!)
+                if token_kind == 0 {
                     let token_spelling = clang_sys::clang_getTokenSpelling(tu, token);
                     let token_str = cx_string_to_string(token_spelling);
 

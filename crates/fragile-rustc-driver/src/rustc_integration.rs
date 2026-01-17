@@ -160,6 +160,55 @@ pub fn collect_cpp_def_ids<'tcx>(
     result
 }
 
+/// Look up a DefId by its export name.
+///
+/// This scans the HIR to find a function with the given export_name attribute.
+/// Used for resolving function calls in MIR conversion.
+pub fn lookup_def_id_by_export_name<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    export_name: &str,
+) -> Option<LocalDefId> {
+    let hir_crate = tcx.hir_crate(());
+
+    for owner in hir_crate.owners.iter() {
+        if let hir::MaybeOwner::Owner(owner_info) = owner {
+            match owner_info.node() {
+                hir::OwnerNode::Item(item) => {
+                    if let hir::ItemKind::Fn { .. } = item.kind {
+                        let def_id = item.owner_id.def_id;
+                        if let Some(name) = get_cpp_link_name(tcx, def_id) {
+                            if name == export_name {
+                                return Some(def_id);
+                            }
+                        }
+                    }
+                }
+                hir::OwnerNode::ForeignItem(foreign_item) => {
+                    let def_id = foreign_item.owner_id.def_id;
+                    if let Some(name) = get_cpp_link_name(tcx, def_id) {
+                        if name == export_name {
+                            return Some(def_id);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    None
+}
+
+/// Look up the mangled name for a C++ function by its display name.
+///
+/// This is used for resolving function calls in MIR conversion where the
+/// Call terminator contains the display/qualified name (e.g., "helper")
+/// but we need the mangled name (e.g., "_Z6helperi") to find the DefId.
+pub fn lookup_mangled_name_by_display(display_name: &str) -> Option<String> {
+    let registry_guard = get_cpp_registry_global().lock().unwrap();
+    registry_guard.as_ref().and_then(|reg| reg.get_mangled_name_by_display(display_name))
+}
+
 // ============================================================================
 // Custom mir_built Query Provider
 // ============================================================================

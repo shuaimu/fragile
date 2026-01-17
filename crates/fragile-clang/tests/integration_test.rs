@@ -29858,3 +29858,37 @@ fn test_rrr_reactor_fiber_impl_cc_rrr() {
         }
     }
 }
+
+#[test]
+fn test_multiplication_mir() {
+    use fragile_clang::{MirStatement, MirRvalue, MirBinOp};
+    
+    let parser = ClangParser::new().unwrap();
+    let code = r#"
+        int helper(int x) {
+            return x * 2;
+        }
+    "#;
+    let ast = parser.parse_string(code, "test.cpp").unwrap();
+    let converter = MirConverter::new();
+    let module = converter.convert(ast).expect("Failed to convert");
+
+    assert_eq!(module.functions.len(), 1);
+    let func = &module.functions[0];
+    assert_eq!(func.display_name, "helper");
+    
+    // Check MIR has Mul operation
+    let mut has_mul = false;
+    for block in &func.mir_body.blocks {
+        for stmt in &block.statements {
+            if let MirStatement::Assign { value, .. } = stmt {
+                if let MirRvalue::BinaryOp { op: MirBinOp::Mul, .. } = value {
+                    has_mul = true;
+                }
+                // Debug print
+                println!("Statement: {:?}", stmt);
+            }
+        }
+    }
+    assert!(has_mul, "Expected Mul operation in MIR, but didn't find one");
+}

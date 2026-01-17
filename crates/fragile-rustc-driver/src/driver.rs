@@ -777,6 +777,106 @@ fn main() {
         println!("test_compile_add_cpp_with_rustc completed - MIR injection verified!");
     }
 
+    /// End-to-end test: Compile C++ with function calls via MIR injection.
+    /// This tests Task 1.2.5: Function call resolution.
+    ///
+    /// Tests that a C++ function calling another C++ function compiles and runs correctly.
+    #[test]
+    #[cfg(feature = "rustc-integration")]
+    fn test_function_call_resolution() {
+        use tempfile::TempDir;
+
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let project_root = Path::new(manifest_dir).parent().unwrap().parent().unwrap();
+        let call_cpp = project_root.join("tests/clang_integration/call.cpp");
+
+        // Check if test file exists
+        if !call_cpp.exists() {
+            eprintln!("Skipping test: call.cpp not found at {:?}", call_cpp);
+            return;
+        }
+
+        // Parse the C++ file
+        let module = fragile_clang::compile_cpp_file(&call_cpp)
+            .expect("Failed to parse call.cpp");
+
+        // Verify we got both functions
+        let has_helper = module.functions.iter().any(|f| f.display_name == "helper");
+        let has_double_and_add = module.functions.iter().any(|f| f.display_name == "double_and_add");
+        assert!(has_helper, "Expected to find 'helper' function");
+        assert!(has_double_and_add, "Expected to find 'double_and_add' function");
+
+        // Print function info for debugging
+        for func in &module.functions {
+            println!("Found function: {} (mangled: {})", func.display_name, func.mangled_name);
+        }
+
+        // Create driver and register module
+        let driver = FragileDriver::new();
+        driver.register_cpp_module(&module);
+
+        // Generate stubs
+        let stubs = generate_rust_stubs(&[module]);
+        println!("Generated stubs:\n{}", stubs);
+
+        // Create a temporary directory for the output
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+
+        // Create a Rust main file that calls double_and_add which internally calls helper
+        let main_rs_path = temp_dir.path().join("main.rs");
+        let main_content = r#"
+fn main() {
+    // Call double_and_add(2, 3) which should:
+    // - call helper(2) = 4
+    // - call helper(3) = 6
+    // - return 4 + 6 = 10
+    let result = cpp_stubs::double_and_add(2, 3);
+    println!("double_and_add(2, 3) = {}", result);
+}
+"#;
+        std::fs::write(&main_rs_path, main_content)
+            .expect("Failed to write main.rs");
+
+        let output_path = temp_dir.path().join("test_binary");
+
+        // Compile with MIR injection
+        let result = driver.compile(&[main_rs_path.as_path()], &stubs, &output_path);
+
+        match result {
+            Ok(()) => {
+                println!("Compilation succeeded!");
+                assert!(output_path.exists(), "Output binary should exist");
+
+                // Run the binary and capture output
+                let output = std::process::Command::new(&output_path)
+                    .output()
+                    .expect("Failed to run binary");
+
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                println!("Binary stdout: {}", stdout);
+                println!("Binary stderr: {}", stderr);
+                println!("Exit status: {:?}", output.status);
+
+                // Verify the function call chain worked correctly
+                // double_and_add(2, 3) = helper(2) + helper(3) = 4 + 6 = 10
+                assert!(
+                    stdout.contains("10"),
+                    "Expected output to contain result 10 from double_and_add(2, 3)"
+                );
+            }
+            Err(e) => {
+                let err_msg = format!("{:?}", e);
+                println!("Compilation failed: {}", err_msg);
+                // For now, we expect this might fail due to function call resolution
+                // This is the test to verify the fix
+                panic!("Compilation failed: {}", err_msg);
+            }
+        }
+
+        println!("test_function_call_resolution completed - function calls verified!");
+    }
+
     /// Test compiling C++ source files to object files.
     /// M5.7.2: Build C++ object files
     #[test]

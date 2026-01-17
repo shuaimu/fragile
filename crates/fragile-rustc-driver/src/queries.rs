@@ -9,8 +9,10 @@ use std::sync::RwLock;
 /// This stores the MIR bodies generated from C++ source files,
 /// which are then injected into rustc via query overrides.
 pub struct CppMirRegistry {
-    /// Map from function name to MIR body
+    /// Map from mangled name to MIR body
     functions: RwLock<FxHashMap<String, CppFunctionEntry>>,
+    /// Map from display name to mangled name (for function call resolution)
+    display_to_mangled: RwLock<FxHashMap<String, String>>,
     /// Map from struct name to struct info
     structs: RwLock<FxHashMap<String, CppStructEntry>>,
 }
@@ -42,6 +44,7 @@ impl CppMirRegistry {
     pub fn new() -> Self {
         Self {
             functions: RwLock::new(FxHashMap::default()),
+            display_to_mangled: RwLock::new(FxHashMap::default()),
             structs: RwLock::new(FxHashMap::default()),
         }
     }
@@ -49,6 +52,7 @@ impl CppMirRegistry {
     /// Register all functions and structs from a C++ module.
     pub fn register_module(&self, module: &CppModule) {
         let mut functions = self.functions.write().unwrap();
+        let mut display_to_mangled = self.display_to_mangled.write().unwrap();
         let mut structs = self.structs.write().unwrap();
 
         // Register functions
@@ -62,6 +66,8 @@ impl CppMirRegistry {
                     referenced: false,
                 },
             );
+            // Also register display name -> mangled name mapping
+            display_to_mangled.insert(func.display_name.clone(), func.mangled_name.clone());
         }
 
         // Register structs
@@ -92,6 +98,14 @@ impl CppMirRegistry {
     pub fn is_cpp_function(&self, name: &str) -> bool {
         let functions = self.functions.read().unwrap();
         functions.contains_key(name)
+    }
+
+    /// Get the mangled name for a function given its display name.
+    /// This is used to resolve function calls in MIR where the func field
+    /// contains the display/qualified name, not the mangled name.
+    pub fn get_mangled_name_by_display(&self, display_name: &str) -> Option<String> {
+        let display_to_mangled = self.display_to_mangled.read().unwrap();
+        display_to_mangled.get(display_name).cloned()
     }
 
     /// Get the number of registered functions.
