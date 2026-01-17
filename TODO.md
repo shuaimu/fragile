@@ -852,7 +852,7 @@ Current status:
 - test_marshal_value: Requires deptran/marshal-value.h
 - config_* tests: Need RocksDB persistent storage
 - sharding_* tests: Need deptran infrastructure
-- Core executables (simpleTransaction, simplePaxos): Need full deptran/transaction infrastructure
+- Core executables (simpleTransaction, simplePaxos): Need full eRPC/asio/deptran infrastructure (see docs/dev/plan_simpleTransaction_analysis.md)
 
 **Completed**:
 - G.1: MIR injection pipeline (TLS, type conversion, function sigs, MIR body generation)
