@@ -652,7 +652,11 @@ Migration: After C++20 support is complete, deprecate these.
   - **Next steps**:
     1. ~~Fix fragile-clang cross-namespace inheritance issue~~ ✅ Done
     2. ~~libmako_lib blocked on eRPC~~ ✅ Fixed with compile_stubs
-    3. Add test_rpc and test_future to fragile.toml
+    3. ~~Add test_rpc to fragile.toml~~ ⚠️ BLOCKED: JoinHandle<pair> template issue [26:01:17]
+       - std::vector<JoinHandle<pair<int,int>>> push_back fails in stub headers
+       - Real clang++ compiles fine; issue is with fragile stubs
+       - Fixed rusty::thread::spawn void return type (if constexpr)
+    4. test_future also blocked (uses same JoinHandle pattern)
 - [-] **G.5.2 Unit Test Executables** (~25 tests)
   - [x] `test_fragile_minimal` - Built and runs successfully [26:01:17]
     - Tests basic rrr library: logging, timer, Time::now(), lambdas with std::function
@@ -811,6 +815,7 @@ Current status:
 **Blockers**:
 - Core executables (simpleTransaction, simplePaxos) need full eRPC with ASIO
 - Full integration tests need rpc/server.hpp and benchmark_service.h
+- test_rpc: JoinHandle<pair<int,int>> template with vector stub (compiles with real clang++)
 
 **Completed**:
 - G.1: MIR injection pipeline (TLS, type conversion, function sigs, MIR body generation)
