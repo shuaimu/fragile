@@ -293,6 +293,7 @@ mod tests {
             methods: vec![],
             member_templates: vec![],
             friends: vec![],
+            vtable_name: None,
         };
 
         let stub = generate_struct_stub(&struct_def);
@@ -323,6 +324,7 @@ mod tests {
             methods: vec![],
             member_templates: vec![],
             friends: vec![],
+            vtable_name: None,
         };
 
         let stub = generate_struct_stub(&struct_def);
