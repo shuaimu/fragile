@@ -702,6 +702,9 @@ Migration: After C++20 support is complete, deprecate these.
   - [x] `test_silo_rcu_thread` - Built and all tests pass [26:01:17]
     - gtest-based tests for RCU memory management
     - 9/9 tests pass
+  - [x] `test_silo_multi_site_stress` - Built and all tests pass [26:01:17]
+    - gtest-based stress tests for multi-site isolation
+    - 10/10 tests pass
   - [ ] `test_rpc` - RPC framework tests (full integration, BLOCKED on libmako_lib)
   - [ ] `test_future` - Future/promise tests (BLOCKED on libmako_lib)
   - [ ] All others listed in CMakeLists.txt
@@ -723,6 +726,7 @@ Migration: After C++20 support is complete, deprecate these.
   - [x] `test_silo_varint` passes - 22/22 tests [26:01:17]
   - [x] `test_silo_runtime` passes - 8/8 tests [26:01:17]
   - [x] `test_silo_rcu_thread` passes - 9/9 tests [26:01:17]
+  - [x] `test_silo_multi_site_stress` passes - 10/10 tests [26:01:17]
   - [ ] `test_rpc` passes (BLOCKED on libmako_lib)
   - [ ] All 25 ctest tests pass
 - [ ] **G.6.2 Integration Tests (ci.sh)**
