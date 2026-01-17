@@ -637,22 +637,19 @@ Migration: After C++20 support is complete, deprecate these.
     - Ignores "is a private member of" (template false positives)
   - [x] Add thread include to mutex stub (std::this_thread commonly used together) [26:01:17]
   - [x] Add non-const data() to string stub (C++17 feature) [26:01:17]
-  - [-] libmako_lib - BLOCKED: requires eRPC + asio complex headers for both parsing and compilation
-    - lib/common.h includes "rpc.h" which pulls in full eRPC header chain
-    - eRPC headers require: config.h (created), asio (external), proper build environment
-    - **Workaround options**:
-      1. Build Mako with CMake first, then use Fragile for linking (hybrid approach)
-      2. Create minimal libmako_lib without eRPC-dependent files
-      3. Complete eRPC stub implementation (significant effort)
-- [-] **G.5.1 Core Executables** - BLOCKED on libmako_lib
+  - [x] libmako_lib - UNBLOCKED [26:01:17]
+    - Created compile_stubs/rpc.h for clang++ compilation
+    - lib/common.h includes "rpc.h" which now finds our stub before eRPC
+    - Successfully builds 6 object files → libmako_lib.a
+- [-] **G.5.1 Core Executables** - libmako_lib now available
   - [ ] `dbtest` - Main test database executable
   - [ ] `simpleTransaction` - Simple transaction test
   - [ ] `simplePaxos` - Paxos consensus test
   - [ ] `simpleRaft` - Raft consensus test
   - **Next steps**:
     1. ~~Fix fragile-clang cross-namespace inheritance issue~~ ✅ Done
-    2. Either complete eRPC stubs OR use hybrid CMake+Fragile approach
-    3. Build simpler targets first (mako_core tests, masstree tests)
+    2. ~~libmako_lib blocked on eRPC~~ ✅ Fixed with compile_stubs
+    3. Add test_rpc and test_future to fragile.toml
 - [-] **G.5.2 Unit Test Executables** (~25 tests)
   - [x] `test_fragile_minimal` - Built and runs successfully [26:01:17]
     - Tests basic rrr library: logging, timer, Time::now(), lambdas with std::function
@@ -714,8 +711,12 @@ Migration: After C++20 support is complete, deprecate these.
   - [x] `test_arc_mutex_thread` - Built and all tests pass [26:01:17]
     - gtest-based tests for rusty-cpp Arc/Mutex concurrency
     - 7/7 tests pass
-  - [ ] `test_rpc` - RPC framework tests (full integration, BLOCKED on libmako_lib)
-  - [ ] `test_future` - Future/promise tests (BLOCKED on libmako_lib)
+  - [x] `test_silo_allocator_tuple` - Built and all tests pass [26:01:17]
+    - First test using libmako_lib (after unblocking)
+    - gtest-based tests for Silo allocator and tuple system
+    - 18/18 tests pass (9 allocator, 6 tuple, 3 integration)
+  - [ ] `test_rpc` - RPC framework tests (full integration, needs rpc/server.hpp)
+  - [ ] `test_future` - Future/promise tests (needs rpc/server.hpp)
   - [ ] All others listed in CMakeLists.txt
 - [ ] **G.5.3 Benchmark Executables**
   - [ ] `rpcbench` - RPC benchmark
@@ -737,8 +738,9 @@ Migration: After C++20 support is complete, deprecate these.
   - [x] `test_silo_rcu_thread` passes - 9/9 tests [26:01:17]
   - [x] `test_silo_multi_site_stress` passes - 10/10 tests [26:01:17]
   - [x] `test_arc_mutex_thread` passes - 7/7 tests [26:01:17]
-  - [ ] `test_rpc` passes (BLOCKED on libmako_lib)
-  - [ ] All 25 ctest tests pass
+  - [x] `test_silo_allocator_tuple` passes - 18/18 tests [26:01:17]
+  - [ ] `test_rpc` passes (needs RPC headers)
+  - [ ] All tests pass (20 executables, 303+ tests)
 - [ ] **G.6.2 Integration Tests (ci.sh)**
   - [ ] `./ci/ci.sh simpleTransaction` passes
   - [ ] `./ci/ci.sh simplePaxos` passes
@@ -779,8 +781,8 @@ Current status:
 - **Milestones M1-M6**: ✅ Complete - test harness working
 - **Phase G (Full Build)**: 🔄 In Progress
   - G.1-G.4: ✅ Complete (MIR injection, runtime support, build system, blocked files fixed)
-  - G.5.2: ✅ 19 test executables built, 285 tests passing
-  - **libmako_lib**: ✅ UNBLOCKED [26:01:17, 06:30] - Created compile_stubs directory with rpc.h stub for compilation
+  - G.5.2: ✅ **20 test executables built, 303+ tests passing**
+  - **libmako_lib**: ✅ UNBLOCKED [26:01:17, 06:30]
   - G.5.1, G.5.3: Can now proceed with libmako_lib available
 
 **Recent Progress** [26:01:17]:
@@ -789,13 +791,14 @@ Current status:
   - Stubs in `compile_stubs/` are for clang++ compilation (minimal, only rpc.h)
   - This allows libmako_lib to compile without ASIO dependency
 - libmako_lib now builds successfully (6 object files → libmako_lib.a)
+- **test_silo_allocator_tuple**: First test using libmako_lib - 18/18 tests pass
 
 **Completed**:
 - G.1: MIR injection pipeline (TLS, type conversion, function sigs, MIR body generation)
 - G.2: Runtime support (fragile-runtime crate)
 - G.3: Build system integration (fragile.toml, compile_commands.json)
 - G.4: Fixed blocked files (mtd.cc, persist_test.cc, mongodb/server.cc)
-- G.5.2: Unit tests (19 executables, 285 tests)
+- G.5.2: Unit tests (20 executables, 303+ tests)
 - libmako_lib build unblocked
 
 ---
