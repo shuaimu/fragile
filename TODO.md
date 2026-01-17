@@ -502,7 +502,7 @@ Migration: After C++20 support is complete, deprecate these.
 - [x] fragile-clang: 571 tests passing (all integration tests) [26:01:17]
 - [x] fragile-rustc-driver: 20 tests passing (base tests without rustc-integration feature) [26:01:17]
 - [x] fragile-runtime: Compiles
-- [x] **Mako Tests**: 59 test/benchmark executables, 937+ gtest tests [26:01:17]
+- [x] **Mako Tests**: 60 test/benchmark executables, 953+ gtest tests [26:01:17]
   - Core tests: test_fiber (37), test_marshal (23), test_sharding_policy (34), test_idempotency (32), test_completion_tracker (27)
   - Masstree tests: test_masstree (2), test_masstree_internals (13), test_masstree_multi_instance (5)
   - Silo tests: test_silo_varint (22), test_silo_runtime (8), test_silo_rcu_thread (9), test_silo_multi_site_stress (10), test_silo_allocator_tuple (18)
@@ -836,8 +836,8 @@ Current status:
   - G.5.1: Core executables blocked on full deptran/transaction infrastructure
 
 **Recent Progress** [26:01:17]:
-- 59 C++ test/benchmark executables built and verified
-- 937 gtest tests passing (55 gtest executables)
+- 60 C++ test/benchmark executables built and verified
+- 953 gtest tests passing (56 gtest executables)
 - test_sto_transaction: 13/13 pass (newly enabled, fixed HAVE_CXX_* defines) [26:01:17]
 - test_alock: 14/16 pass (2 timing-sensitive tests fail in CI environment)
 - rpc_chaos_test: 26/26 pass (chaos engineering tests) [26:01:17]
@@ -857,7 +857,8 @@ Current status:
   - event2/event.h typedef fix (evutil_socket_t)
   - std::seed_seq for <random> (initializer_list, iterator range constructors) [26:01:17]
   - basic_ios::imbue() for locale support (<iostream>) [26:01:17]
-- **Total: 1508+ tests passing across C++ and Rust**
+- test_transport_integration: 16/16 pass (transport backend tests) [26:01:17]
+- **Total: 1524+ tests passing across C++ and Rust**
 
 **Blockers** (remaining tests):
 - test_lambda, test_timer: Use internal TEST macro (requires deptran/all.h)
