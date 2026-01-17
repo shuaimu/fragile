@@ -502,10 +502,11 @@ Migration: After C++20 support is complete, deprecate these.
 - [x] fragile-clang: 569 tests passing (all integration tests) [26:01:17]
 - [x] fragile-rustc-driver: 20 tests passing (base tests without rustc-integration feature) [26:01:17]
 - [x] fragile-runtime: Compiles
-- [x] **Mako Tests**: 20 test executables, 303 tests [26:01:17]
+- [x] **Mako Tests**: 27 test executables, 475 tests [26:01:17]
   - Core tests: test_fiber (37), test_marshal (23), test_sharding_policy (34), test_idempotency (32), test_completion_tracker (27)
   - Masstree tests: test_masstree (2), test_masstree_internals (13), test_masstree_multi_instance (5)
   - Silo tests: test_silo_varint (22), test_silo_runtime (8), test_silo_rcu_thread (9), test_silo_multi_site_stress (10), test_silo_allocator_tuple (18)
+  - RPC unit tests: rpc_connection_state_test (30), rpc_circuit_breaker_test (21), rpc_reconnect_policy_test (19), rpc_request_queue_test (28), rpc_callbacks_test (24), rpc_heartbeat_test (20), rpc_timeout_retry_test (30)
   - Others: test_alock (14, 2 timing-sensitive fail), test_and_event (5), test_rpc_errors (28), test_config_schema (7), test_arc_mutex_thread (7)
   - Non-gtest: test_fragile_minimal (pass), test_mako_core_minimal (pass)
 
@@ -739,8 +740,15 @@ Migration: After C++20 support is complete, deprecate these.
   - [x] `test_silo_multi_site_stress` passes - 10/10 tests [26:01:17]
   - [x] `test_arc_mutex_thread` passes - 7/7 tests [26:01:17]
   - [x] `test_silo_allocator_tuple` passes - 18/18 tests [26:01:17]
-  - [ ] `test_rpc` passes (needs RPC headers)
-  - [ ] All tests pass (20 executables, 303+ tests)
+  - [x] `rpc_connection_state_test` passes - 30/30 tests [26:01:17]
+  - [x] `rpc_circuit_breaker_test` passes - 21/21 tests [26:01:17]
+  - [x] `rpc_reconnect_policy_test` passes - 19/19 tests [26:01:17]
+  - [x] `rpc_request_queue_test` passes - 28/28 tests [26:01:17]
+  - [x] `rpc_callbacks_test` passes - 24/24 tests [26:01:17]
+  - [x] `rpc_heartbeat_test` passes - 20/20 tests [26:01:17]
+  - [x] `rpc_timeout_retry_test` passes - 30/30 tests [26:01:17]
+  - [ ] `test_rpc` passes (needs full rpc/server.hpp)
+  - [ ] All tests pass (27 executables, 475 tests)
 - [ ] **G.6.2 Integration Tests (ci.sh)**
   - [ ] `./ci/ci.sh simpleTransaction` passes
   - [ ] `./ci/ci.sh simplePaxos` passes
@@ -781,24 +789,26 @@ Current status:
 - **Milestones M1-M6**: ✅ Complete - test harness working
 - **Phase G (Full Build)**: 🔄 In Progress
   - G.1-G.4: ✅ Complete (MIR injection, runtime support, build system, blocked files fixed)
-  - G.5.2: ✅ **20 test executables built, 303+ tests passing**
+  - G.5.2: ✅ **27 test executables built, 475 tests passing**
   - **libmako_lib**: ✅ UNBLOCKED [26:01:17, 06:30]
-  - G.5.1, G.5.3: Can now proceed with libmako_lib available
+  - G.5.1: Core executables blocked on full eRPC/ASIO stack
+  - G.5.3: Benchmark executables blocked on full eRPC/ASIO stack
 
 **Recent Progress** [26:01:17]:
-- Fixed eRPC include order issue by creating separate `compile_stubs/` directory for compilation
-  - Stubs in `stubs/` are for libclang parsing (with `-nostdinc++`)
-  - Stubs in `compile_stubs/` are for clang++ compilation (minimal, only rpc.h)
-  - This allows libmako_lib to compile without ASIO dependency
-- libmako_lib now builds successfully (6 object files → libmako_lib.a)
-- **test_silo_allocator_tuple**: First test using libmako_lib - 18/18 tests pass
+- Added 7 new RPC unit tests (connection_state, circuit_breaker, reconnect_policy, request_queue, callbacks, heartbeat, timeout_retry)
+- Total RPC unit tests: 192 new tests added (all passing)
+- Updated from 20 to 27 test executables, 303 to 475 tests
+
+**Blockers**:
+- Core executables (simpleTransaction, simplePaxos) need full eRPC with ASIO
+- Full integration tests need rpc/server.hpp and benchmark_service.h
 
 **Completed**:
 - G.1: MIR injection pipeline (TLS, type conversion, function sigs, MIR body generation)
 - G.2: Runtime support (fragile-runtime crate)
 - G.3: Build system integration (fragile.toml, compile_commands.json)
 - G.4: Fixed blocked files (mtd.cc, persist_test.cc, mongodb/server.cc)
-- G.5.2: Unit tests (20 executables, 303+ tests)
+- G.5.2: Unit tests (27 executables, 475 tests)
 - libmako_lib build unblocked
 
 ---
