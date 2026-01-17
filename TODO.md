@@ -783,7 +783,8 @@ Migration: After C++20 support is complete, deprecate these.
   - [x] `test_transport_integration` passes - 16/16 tests [26:01:17]
   - [x] `test_txn_timeout` passes - 9/9 tests [26:01:17]
   - [x] `stress_transport_backend` passes - 13/13 tests [26:01:17]
-  - [ ] All tests pass (52 executables, 861 tests)
+  - [x] `test_rpc_partition` passes - 14/14 tests [26:01:17]
+  - [ ] All tests pass (53 executables, 875 tests)
 - [ ] **G.6.2 Integration Tests (ci.sh)**
   - [ ] `./ci/ci.sh simpleTransaction` passes
   - [ ] `./ci/ci.sh simplePaxos` passes
@@ -824,7 +825,7 @@ Current status:
 - **Milestones M1-M6**: ✅ Complete - test harness working
 - **Phase G (Full Build)**: 🔄 In Progress
   - G.1-G.4: ✅ Complete (MIR injection, runtime support, build system, blocked files fixed)
-  - G.5.2: ✅ **52 test/benchmark executables built, 861 tests passing**
+  - G.5.2: ✅ **53 test/benchmark executables built, 875 tests passing**
   - G.5.3: ✅ **Benchmarks passing** (rpcbench, bench_future)
   - **libmako_lib**: ✅ UNBLOCKED [26:01:17, 06:30]
   - **RPC Infrastructure**: ✅ WORKING [26:01:17] - test_rpc, test_future, rpcbench all passing
@@ -842,7 +843,9 @@ Current status:
 - Built and verified rpcbench - RPC client/server benchmark working
 - RPC infrastructure now fully working (server.cpp compiled and linked with librrr)
 - Added boost_context library linkage for fiber/coroutine support
-- Total: 52 test/benchmark executables, 861 tests passing; 571 parsing tests
+- Fixed missing get_bound_port() by recompiling server.cpp
+- Added test_rpc_partition (14 tests) - network partition testing
+- Total: 53 test/benchmark executables, 875 tests passing; 571 parsing tests
 
 **Blockers**:
 - Core executables (simpleTransaction, simplePaxos) need full deptran/transaction infrastructure
