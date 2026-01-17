@@ -564,26 +564,27 @@ Migration: After C++20 support is complete, deprecate these.
   - [x] Handle basic blocks and control flow - convert_basic_block, is_cleanup support
   - [x] Handle local variables and temporaries - convert_local, convert_mir_body_full
 
-### G.2 Runtime Support
-- [ ] **G.2.1 Exception Handling** (~200 lines)
-  - [ ] Implement `fragile_rt_throw()` with LLVM landingpad
-  - [ ] Implement `fragile_rt_catch()` with type matching
-  - [ ] Stack unwinding with cleanup blocks
-  - [ ] Integration with C++ `<exception>` header
-- [ ] **G.2.2 RTTI Support** (~150 lines)
-  - [ ] Generate `std::type_info` structures
-  - [ ] Implement `typeid()` runtime lookup
-  - [ ] Implement `dynamic_cast<>()` with vtable check
-- [ ] **G.2.3 Virtual Dispatch** (~100 lines)
-  - [ ] Vtable layout generation
-  - [ ] Virtual function call lowering
-  - [ ] Pure virtual function stubs
-  - [ ] Multiple inheritance vtable offsets
-- [ ] **G.2.4 Memory Management** (~100 lines)
-  - [ ] `operator new` / `operator delete`
-  - [ ] Placement new
-  - [ ] Array new/delete with size prefix
-  - [ ] Alignment-aware allocation
+### G.2 Runtime Support (fragile-runtime crate)
+- [x] **G.2.1 Exception Handling** (~200 lines) [26:01:17]
+  - [x] `fragile_rt_throw()` - stores exception, begins unwinding
+  - [x] `fragile_rt_catch()` - returns/clears current exception
+  - [x] `fragile_rt_exception_matches()` - type matching for catch clauses
+  - [x] `fragile_rt_try_begin/end()` - try block management
+  - [-] LLVM landingpad integration - deferred (requires LLVM backend work)
+- [x] **G.2.2 RTTI Support** (~150 lines) [26:01:17]
+  - [x] `Vtable` struct with type_info pointer
+  - [x] `fragile_rt_get_type_info()` - get RTTI from object
+  - [x] `fragile_rt_dynamic_cast()` - type-safe downcasting
+- [x] **G.2.3 Virtual Dispatch** (~100 lines) [26:01:17]
+  - [x] `fragile_rt_vfunc_get()` - get vfunc pointer from vtable
+  - [x] `fragile_rt_vcall_0/1/2()` - call virtual functions
+  - [x] `fragile_rt_init_vtable()` - initialize object vtable
+  - [x] `fragile_rt_static_cast()` - offset adjustment for multiple inheritance
+- [x] **G.2.4 Memory Management** (~100 lines) [26:01:17]
+  - [x] `fragile_rt_new()` / `fragile_rt_delete()` - operator new/delete
+  - [x] `fragile_rt_placement_new()` - placement new
+  - [x] `fragile_rt_new_array()` / `fragile_rt_delete_array()` - array operators
+  - [x] `fragile_rt_call_destructor()` / `fragile_rt_call_array_destructor()`
 
 ### G.3 Build System Integration
 - [ ] **G.3.1 Fragile Build Configuration** (~200 lines)
@@ -687,8 +688,9 @@ Next steps:
 2. ~~G.1.2: Complete type conversion for all C++ types~~ ✅ Done
 3. ~~G.1.3: Function signature conversion~~ ✅ Done
 4. ~~G.1.4: MIR body generation~~ ✅ Done
-5. G.2.1: Implement exception handling runtime
-6. G.2.2: RTTI support
+5. ~~G.2.1-G.2.4: Runtime support~~ ✅ Done (fragile-runtime crate)
+6. G.3.1: Build system integration
+7. G.5.1: Build first executable (simpleTransaction)
 
 **Blocked files** (3 total, non-critical):
 - mongodb/server.cc (needs bsoncxx - optional)
