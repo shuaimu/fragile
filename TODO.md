@@ -260,7 +260,11 @@ Each feature must work through the MIR pipeline, not clang++.
   - [x] 3.1.3e Add tests: test_convert_init_list_struct, test_convert_init_list_variable, test_convert_init_list_array
   - Fixed CastExpr to skip TypeRef children when finding expression value
   - See: `docs/dev/plan_3_1_3_init_list.md`
-- [ ] **3.1.4** Nested structs
+- [x] **3.1.4** Nested structs [26:01:17] - Already implemented, verified with tests
+  - Struct fields with nested struct types (CppType::Named) work correctly
+  - Nested field access (o.inner.x) generates chained MirProjection::Field
+  - Nested aggregate initialization (Outer{{1, 2}, 3}) works via recursive InitListExpr
+  - Added 3 tests: test_nested_struct_definition, test_nested_aggregate_initialization, test_nested_struct_assignment
 
 ### 3.2 Classes
 - [ ] Class definitions

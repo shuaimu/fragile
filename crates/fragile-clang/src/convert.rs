@@ -2407,4 +2407,118 @@ mod tests {
             "Function should have basic blocks"
         );
     }
+
+    #[test]
+    fn test_nested_struct_definition() {
+        // Test parsing struct with nested struct field
+        let parser = ClangParser::new().unwrap();
+        let ast = parser
+            .parse_string(
+                r#"
+                struct Inner {
+                    int x;
+                    int y;
+                };
+
+                struct Outer {
+                    Inner inner;
+                    int z;
+                };
+
+                int get_inner_x(Outer o) {
+                    return o.inner.x;
+                }
+                "#,
+                "test.cpp",
+            )
+            .unwrap();
+
+        let converter = MirConverter::new();
+        let module = converter.convert(ast).unwrap();
+
+        // Should have both Inner and Outer structs
+        assert_eq!(module.structs.len(), 2);
+        assert_eq!(module.functions.len(), 1);
+
+        // Verify struct names
+        let struct_names: Vec<_> = module.structs.iter().map(|s| s.name.as_str()).collect();
+        assert!(struct_names.contains(&"Inner"), "Should have Inner struct");
+        assert!(struct_names.contains(&"Outer"), "Should have Outer struct");
+    }
+
+    #[test]
+    fn test_nested_aggregate_initialization() {
+        // Test nested aggregate initialization with braced init list
+        let parser = ClangParser::new().unwrap();
+        let ast = parser
+            .parse_string(
+                r#"
+                struct Inner {
+                    int x;
+                    int y;
+                };
+
+                struct Outer {
+                    Inner inner;
+                    int z;
+                };
+
+                Outer create_outer() {
+                    return Outer{{1, 2}, 3};
+                }
+                "#,
+                "test.cpp",
+            )
+            .unwrap();
+
+        let converter = MirConverter::new();
+        let module = converter.convert(ast).unwrap();
+
+        assert_eq!(module.functions.len(), 1);
+        let func = &module.functions[0];
+
+        // Just verify the function compiles without panicking
+        assert!(
+            !func.mir_body.blocks.is_empty(),
+            "Function should have basic blocks"
+        );
+    }
+
+    #[test]
+    fn test_nested_struct_assignment() {
+        // Test assigning nested struct values
+        let parser = ClangParser::new().unwrap();
+        let ast = parser
+            .parse_string(
+                r#"
+                struct Inner {
+                    int value;
+                };
+
+                struct Outer {
+                    Inner inner;
+                };
+
+                int nested_assign() {
+                    Outer o;
+                    o.inner.value = 42;
+                    return o.inner.value;
+                }
+                "#,
+                "test.cpp",
+            )
+            .unwrap();
+
+        let converter = MirConverter::new();
+        let module = converter.convert(ast).unwrap();
+
+        assert_eq!(module.functions.len(), 1);
+        let func = &module.functions[0];
+
+        // Just verify the function compiles without panicking
+        assert!(
+            !func.mir_body.blocks.is_empty(),
+            "Function should have basic blocks"
+        );
+    }
 }
