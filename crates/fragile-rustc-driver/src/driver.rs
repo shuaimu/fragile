@@ -348,6 +348,67 @@ mod tests {
         assert!(names.contains(&"_Z3addii".to_string()));
     }
 
+    /// End-to-end test: Parse factorial.cpp with recursion and control flow
+    /// This tests Phase 5.2: More complex MIR generation with if/else and recursion.
+    #[test]
+    fn test_end_to_end_factorial_cpp() {
+        // Path to the test file
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let project_root = Path::new(manifest_dir).parent().unwrap().parent().unwrap();
+        let factorial_cpp = project_root.join("tests/clang_integration/factorial.cpp");
+
+        // Check if test file exists
+        if !factorial_cpp.exists() {
+            eprintln!("Skipping test: factorial.cpp not found at {:?}", factorial_cpp);
+            return;
+        }
+
+        // Parse the C++ file
+        let module = fragile_clang::compile_cpp_file(&factorial_cpp)
+            .expect("Failed to parse factorial.cpp");
+
+        // Debug: print found functions
+        println!("Found {} functions:", module.functions.len());
+        for f in &module.functions {
+            println!("  - display_name: '{}', mangled: '{}'", f.display_name, f.mangled_name);
+            println!("    MIR blocks: {}, locals: {}",
+                f.mir_body.blocks.len(), f.mir_body.locals.len());
+        }
+
+        // Verify the module contains the factorial function
+        let has_factorial = module.functions.iter().any(|f| f.display_name == "factorial");
+        assert!(has_factorial, "Expected to find 'factorial' function in module");
+
+        // Find the factorial function and verify its MIR structure
+        let factorial_func = module.functions.iter()
+            .find(|f| f.display_name == "factorial")
+            .expect("factorial function not found");
+
+        // Factorial should have: 1 param, int return type
+        assert_eq!(factorial_func.params.len(), 1, "factorial should have 1 parameter");
+        assert!(factorial_func.return_type.is_integral() == Some(true), "factorial should return integral type");
+
+        // MIR should have multiple basic blocks (for if/else and recursion)
+        let block_count = factorial_func.mir_body.blocks.len();
+        assert!(block_count >= 3, "factorial MIR should have at least 3 basic blocks (got {})", block_count);
+        println!("factorial has {} basic blocks", block_count);
+
+        // Register the module with the driver
+        let driver = FragileDriver::new();
+        driver.register_cpp_module(&module);
+
+        // Verify registration
+        assert!(driver.mir_registry.function_count() >= 1,
+            "Module should have registered at least 1 function");
+
+        // Generate Rust stubs
+        let stubs = generate_rust_stubs(&[module]);
+        assert!(stubs.contains("factorial"), "Stubs should reference factorial function");
+
+        println!("Generated stubs:\n{}", stubs);
+        println!("test_end_to_end_factorial_cpp completed successfully!");
+    }
+
     /// End-to-end test: Parse rand.cpp from mako, generate stubs, register module
     /// This tests parsing a real-world C++ file through the full pipeline.
     #[test]
