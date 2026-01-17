@@ -76,6 +76,20 @@ struct addrinfo {
 #define NI_NAMEREQD    0x0008
 #define NI_DGRAM       0x0010
 
+// Maximum lengths for getnameinfo buffers
+#define NI_MAXHOST 1025
+#define NI_MAXSERV 32
+
+// h_errno values for resolver errors
+#define HOST_NOT_FOUND 1
+#define TRY_AGAIN 2
+#define NO_RECOVERY 3
+#define NO_DATA 4
+#define NO_ADDRESS NO_DATA
+
+// External error variable for resolver functions
+extern int h_errno;
+
 // Function declarations
 struct hostent* gethostbyname(const char* name);
 struct hostent* gethostbyaddr(const void* addr, socklen_t len, int type);

@@ -137,6 +137,9 @@ int setsockopt(int sockfd, int level, int optname, const void* optval, socklen_t
 int getsockname(int sockfd, struct sockaddr* addr, socklen_t* addrlen);
 int getpeername(int sockfd, struct sockaddr* addr, socklen_t* addrlen);
 
+// Out-of-band data check
+int sockatmark(int sockfd);
+
 }
 
 #endif // _FRAGILE_SYS_SOCKET_H_

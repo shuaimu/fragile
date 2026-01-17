@@ -94,6 +94,24 @@ extern int errno;
 #define EHOSTUNREACH 113
 #define EALREADY 114
 #define EINPROGRESS 115
+#define ESTALE 116
+#define EUCLEAN 117
+#define ENOTNAM 118
+#define ENAVAIL 119
+#define EISNAM 120
+#define EREMOTEIO 121
+#define EDQUOT 122
+#define ENOMEDIUM 123
+#define EMEDIUMTYPE 124
+#define ECANCELED 125
+#define ENOKEY 126
+#define EKEYEXPIRED 127
+#define EKEYREVOKED 128
+#define EKEYREJECTED 129
+#define EOWNERDEAD 130
+#define ENOTRECOVERABLE 131
+#define ERFKILL 132
+#define EHWPOISON 133
 
 namespace std {
     using ::errno;

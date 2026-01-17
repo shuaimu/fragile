@@ -53,6 +53,41 @@ struct sockaddr_in6 {
     uint32_t sin6_scope_id;
 };
 
+// Address string length constants
+#define INET_ADDRSTRLEN 16
+#define INET6_ADDRSTRLEN 46
+
+// Multicast group membership structures
+struct ip_mreq {
+    struct in_addr imr_multiaddr;  // Multicast group address
+    struct in_addr imr_interface;  // Local interface address
+};
+
+struct ip_mreqn {
+    struct in_addr imr_multiaddr;  // Multicast group address
+    struct in_addr imr_address;    // Local interface address
+    int imr_ifindex;               // Interface index
+};
+
+struct ipv6_mreq {
+    struct in6_addr ipv6mr_multiaddr;  // IPv6 multicast address
+    unsigned int ipv6mr_interface;     // Interface index
+};
+
+// Socket options for multicast
+#define IP_MULTICAST_IF 32
+#define IP_MULTICAST_TTL 33
+#define IP_MULTICAST_LOOP 34
+#define IP_ADD_MEMBERSHIP 35
+#define IP_DROP_MEMBERSHIP 36
+
+#define IPV6_JOIN_GROUP 20
+#define IPV6_LEAVE_GROUP 21
+#define IPV6_MULTICAST_IF 17
+#define IPV6_MULTICAST_HOPS 18
+#define IPV6_MULTICAST_LOOP 19
+#define IPV6_V6ONLY 26
+
 // Special addresses
 #define INADDR_ANY ((in_addr_t)0x00000000)
 #define INADDR_BROADCAST ((in_addr_t)0xffffffff)

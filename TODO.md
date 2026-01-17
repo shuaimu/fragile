@@ -857,6 +857,14 @@ Current status:
   - event2/event.h typedef fix (evutil_socket_t)
   - std::seed_seq for <random> (initializer_list, iterator range constructors) [26:01:17]
   - basic_ios::imbue() for locale support (<iostream>) [26:01:17]
+  - std::alignment_of, std::is_class, std::is_union, std::is_enum for type_traits [26:01:17]
+  - std::result_of (deprecated) for asio compatibility [26:01:17]
+  - std::is_error_code_enum, std::is_error_condition_enum for system_error [26:01:17]
+  - INET_ADDRSTRLEN, ip_mreq, ipv6_mreq, multicast options for netinet/in.h [26:01:17]
+  - NI_MAXHOST, NI_MAXSERV, HOST_NOT_FOUND, TRY_AGAIN, NO_DATA, h_errno for netdb.h [26:01:17]
+  - ECANCELED and additional error codes for cerrno [26:01:17]
+  - sockatmark() for sys/socket.h [26:01:17]
+  - Fixed asio include path in fragile.toml (third-party/erpc/third_party/asio/include) [26:01:17]
 - test_transport_integration: 16/16 pass (transport backend tests) [26:01:17]
 - **Total: 1524+ tests passing across C++ and Rust**
 
@@ -868,10 +876,11 @@ Current status:
 - config_* tests: Need RocksDB persistent storage
 - sharding_* tests: Need deptran infrastructure
 - Core executables (simpleTransaction, simplePaxos): Need full eRPC/asio/deptran infrastructure (see docs/dev/plan_simpleTransaction_analysis.md)
-  - Investigation [26:01:17]: Most stub issues resolved, remaining blockers are:
-    - Missing rusty/rusty.hpp, rusty/ptr.hpp (Rust interop headers)
-    - Missing config.h (build config)
-    - Missing masstree headers (masstree.hh, kvthread.hh, etc.)
+  - Investigation [26:01:17]: Type_traits, system_error, and network stubs added, remaining blockers:
+    - String conversion issues (string_view to string)
+    - Missing examples/common.h and tuple instantiation issues
+    - Transaction class private constructor issues
+    - Additional asio resolver/endpoint conversion issues
 
 **Completed**:
 - G.1: MIR injection pipeline (TLS, type conversion, function sigs, MIR body generation)
