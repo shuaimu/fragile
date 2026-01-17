@@ -672,7 +672,9 @@ Migration: After C++20 support is complete, deprecate these.
   - [x] `test_marshal` - Built and all tests pass [26:01:17]
     - gtest-based tests for Marshal serialization/deserialization
     - 23/23 tests pass (integers, floats, strings, containers, nested structures, etc.)
-  - [ ] `test_config_schema` - Configuration tests
+  - [x] `test_config_schema` - Built and all tests pass [26:01:17]
+    - gtest-based tests for config schema serialization
+    - 7/7 tests pass (SiteInfo, ReplicaGroup, ProtocolSettings, FullConfig, etc.)
   - [ ] `test_masstree` - Masstree index tests
   - [ ] `test_rpc` - RPC framework tests (full integration)
   - [ ] `test_future` - Future/promise tests
@@ -684,7 +686,7 @@ Migration: After C++20 support is complete, deprecate these.
 ### G.6 Pass Mako CI Tests
 - [-] **G.6.1 Unit Tests (ctest)**
   - [x] `test_marshal` passes - 23/23 tests [26:01:17]
-  - [ ] `test_config_schema` passes
+  - [x] `test_config_schema` passes - 7/7 tests [26:01:17]
   - [ ] `test_sharding_policy` passes
   - [x] `test_fiber` passes - 37/37 tests [26:01:17]
   - [ ] `test_masstree` passes
