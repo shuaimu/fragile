@@ -502,11 +502,11 @@ Migration: After C++20 support is complete, deprecate these.
 - [x] fragile-clang: 569 tests passing (all integration tests) [26:01:17]
 - [x] fragile-rustc-driver: 20 tests passing (base tests without rustc-integration feature) [26:01:17]
 - [x] fragile-runtime: Compiles
-- [x] **Mako Tests**: 19 test executables, 285 tests [26:01:17]
+- [x] **Mako Tests**: 20 test executables, 303 tests [26:01:17]
   - Core tests: test_fiber (37), test_marshal (23), test_sharding_policy (34), test_idempotency (32), test_completion_tracker (27)
   - Masstree tests: test_masstree (2), test_masstree_internals (13), test_masstree_multi_instance (5)
-  - Silo tests: test_silo_varint (22), test_silo_runtime (8), test_silo_rcu_thread (9), test_silo_multi_site_stress (10)
-  - Others: test_alock (16, 3 timing-sensitive fail), test_and_event (5), test_rpc_errors (28), test_config_schema (7), test_arc_mutex_thread (7)
+  - Silo tests: test_silo_varint (22), test_silo_runtime (8), test_silo_rcu_thread (9), test_silo_multi_site_stress (10), test_silo_allocator_tuple (18)
+  - Others: test_alock (14, 2 timing-sensitive fail), test_and_event (5), test_rpc_errors (28), test_config_schema (7), test_arc_mutex_thread (7)
   - Non-gtest: test_fragile_minimal (pass), test_mako_core_minimal (pass)
 
 ### 5.2 Mako Milestones
