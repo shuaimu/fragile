@@ -3,6 +3,8 @@
 #define _FRAGILE_STRING_
 
 #include "cstdint"
+#include "string_view"
+#include "type_traits"
 
 namespace std {
 
@@ -235,6 +237,34 @@ public:
         for (InputIt it = first; it != last; ++it) {
             push_back(*it);
         }
+    }
+
+    // Constructor from string_view (C++17)
+    template<typename T, typename = decltype(basic_string_view<CharT>(declval<const T&>()))>
+    explicit basic_string(const T& t) : data_(nullptr), size_(0), capacity_(0) {
+        basic_string_view<CharT> sv(t);
+        size_ = sv.size();
+        capacity_ = size_ + 1;
+        data_ = new CharT[capacity_];
+        for (size_type i = 0; i < size_; ++i) {
+            data_[i] = sv[i];
+        }
+        data_[size_] = CharT();
+    }
+
+    // Constructor from string_view with position and count (C++17)
+    template<typename T, typename = decltype(basic_string_view<CharT>(declval<const T&>()))>
+    basic_string(const T& t, size_type pos, size_type n = npos) : data_(nullptr), size_(0), capacity_(0) {
+        basic_string_view<CharT> sv(t);
+        if (pos > sv.size()) pos = sv.size();
+        size_type count = (n == npos || pos + n > sv.size()) ? sv.size() - pos : n;
+        size_ = count;
+        capacity_ = size_ + 1;
+        data_ = new CharT[capacity_];
+        for (size_type i = 0; i < size_; ++i) {
+            data_[i] = sv[pos + i];
+        }
+        data_[size_] = CharT();
     }
 
     ~basic_string() { delete[] data_; }
