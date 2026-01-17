@@ -586,9 +586,9 @@ Migration: After C++20 support is complete, deprecate these.
   - [x] `fragile_rt_new_array()` / `fragile_rt_delete_array()` - array operators
   - [x] `fragile_rt_call_destructor()` / `fragile_rt_call_array_destructor()`
 
-### G.3 Build System Integration
+### G.3 Build System Integration ([docs/dev/plan_g3_build_system.md](docs/dev/plan_g3_build_system.md))
 - [ ] **G.3.1 Fragile Build Configuration** (~200 lines)
-  - [ ] Parse Mako's CMakeLists.txt for sources, includes, defines
+  - [ ] Approach: Use compile_commands.json (pragmatic) or manual config
   - [ ] Create `fragile.toml` or equivalent build config
   - [ ] Handle conditional compilation (DPDK, eRPC, etc.)
 - [ ] **G.3.2 Include Path Management** (~50 lines)
