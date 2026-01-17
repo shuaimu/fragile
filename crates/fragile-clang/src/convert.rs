@@ -26,6 +26,17 @@ struct LoopContext {
     break_target: usize,
 }
 
+/// Information about a member function call.
+struct MemberCallInfo {
+    /// The class name (e.g., "Animal")
+    class_name: String,
+    /// The method name (e.g., "speak")
+    method_name: String,
+    /// Whether the call uses arrow operator (->)
+    #[allow(dead_code)]
+    is_arrow: bool,
+}
+
 /// Builder for constructing MIR bodies.
 struct FunctionBuilder {
     /// Local variables
@@ -1949,6 +1960,57 @@ impl MirConverter {
             ClangNodeKind::VarDecl { ty, .. } => ty.clone(),
             ClangNodeKind::ParmVarDecl { ty, .. } => ty.clone(),
             _ => CppType::Int { signed: true }, // Default fallback
+        }
+    }
+
+    /// Try to extract member call information from a CallExpr's first child.
+    /// Returns Some if this is a member function call (obj.method() or ptr->method()).
+    fn try_extract_member_call(func_ref: &ClangNode) -> Option<MemberCallInfo> {
+        // Unwrap any casts to get to the MemberExpr
+        let member_node = Self::unwrap_casts(func_ref);
+
+        if let ClangNodeKind::MemberExpr { member_name, is_arrow, ty: _ } = &member_node.kind {
+            // The receiver is the first child of MemberExpr
+            if let Some(receiver) = member_node.children.first() {
+                // Get the class name from the receiver's type
+                let receiver_type = Self::get_node_type(receiver);
+                let class_name = Self::extract_class_name(&receiver_type);
+
+                if !class_name.is_empty() {
+                    return Some(MemberCallInfo {
+                        class_name,
+                        method_name: member_name.clone(),
+                        is_arrow: *is_arrow,
+                    });
+                }
+            }
+        }
+        None
+    }
+
+    /// Unwrap cast nodes to get the underlying expression.
+    fn unwrap_casts(node: &ClangNode) -> &ClangNode {
+        match &node.kind {
+            ClangNodeKind::ImplicitCastExpr { .. }
+            | ClangNodeKind::CastExpr { .. }
+            | ClangNodeKind::Unknown(_) => {
+                if let Some(inner) = node.children.first() {
+                    Self::unwrap_casts(inner)
+                } else {
+                    node
+                }
+            }
+            _ => node,
+        }
+    }
+
+    /// Extract the class name from a CppType (strips pointers and references).
+    fn extract_class_name(ty: &CppType) -> String {
+        match ty {
+            CppType::Named(name) => name.clone(),
+            CppType::Pointer { pointee, .. } => Self::extract_class_name(pointee),
+            CppType::Reference { referent, .. } => Self::extract_class_name(referent),
+            _ => String::new(),
         }
     }
 

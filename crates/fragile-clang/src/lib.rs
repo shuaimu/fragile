@@ -834,6 +834,22 @@ pub enum MirTerminator {
         /// Cleanup block for unwinding (stack unwinding support)
         unwind: Option<usize>,
     },
+    /// Virtual method call (dynamic dispatch through vtable).
+    /// Used when calling a virtual method on an object or pointer.
+    VirtualCall {
+        /// The object on which the method is called (contains vtable pointer)
+        receiver: MirOperand,
+        /// Index of the method in the vtable
+        vtable_index: usize,
+        /// Method arguments (NOT including the implicit `this` pointer)
+        args: Vec<MirOperand>,
+        /// Destination place for the return value
+        destination: MirPlace,
+        /// Block to continue to after the call
+        target: Option<usize>,
+        /// Cleanup block for unwinding
+        unwind: Option<usize>,
+    },
     /// Unreachable
     Unreachable,
     /// Resume unwinding (used in cleanup blocks after running destructors)
