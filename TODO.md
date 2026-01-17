@@ -118,11 +118,22 @@ int add(int a, int b) {
   - End-to-end test passes: binary executes and outputs "add_cpp(2, 3) = 5"
   - **MILESTONE ACHIEVED**: C++ compiles through rustc codegen, not clang++!
 
-### 1.4 Verification: No clang++ in Pipeline
-- [ ] Remove `cpp_compiler.rs` (clang++ wrapper)
-- [ ] Remove `compile_cpp_objects()` function
-- [ ] All `.o` files come from rustc only
-- [ ] Add CI check that clang++ is never invoked for codegen
+### 1.4 Verification: No clang++ in Pipeline (DEFERRED)
+
+**Status**: Deferred until MIR injection handles more complex cases.
+
+**Rationale**: While MIR injection works for simple leaf functions (like `add_cpp`),
+the full Fragile pipeline (CLI, Mako compilation) still requires clang++ for:
+- Complex C++ with function calls, templates, STL
+- Object file generation for linking with Rust
+- The CLI build system integration
+
+**Prerequisite**: Complete Phase 2 (Basic C++ Features) to enable pure MIR path.
+
+- [ ] Remove `cpp_compiler.rs` (clang++ wrapper) - AFTER Phase 2
+- [ ] Remove `compile_cpp_objects()` function - AFTER Phase 2
+- [ ] All `.o` files come from rustc only - AFTER Phase 2
+- [ ] Add CI check that clang++ is never invoked for codegen - AFTER Phase 2
 
 ---
 
