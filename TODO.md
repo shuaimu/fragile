@@ -309,13 +309,31 @@ Each feature must work through the MIR pipeline, not clang++.
 ## Phase 4: Templates via MIR
 
 ### 4.1 Function Templates
-- [ ] Basic function templates
-- [ ] Template instantiation
-- [ ] Type deduction
+- [x] **4.1.1** Basic function templates [already implemented] - CppFunctionTemplate
+  - CXCursor_FunctionTemplate (cursor kind 30) parsed
+  - Template parameters with variadic (typename...) support
+  - Return type and params with template types (CppType::TemplateParam)
+  - Requires clause support for C++20 constraints
+  - Comprehensive test coverage (30+ tests)
+- [x] **4.1.2** Template instantiation [already implemented]
+  - `instantiate()` method on CppFunctionTemplate
+  - `add_specialization()` for explicit specializations
+  - Test: test_template_instantiation
+- [x] **4.1.3** Type deduction [already implemented] - TypeDeducer in deduce.rs
+  - Basic deduction from call arguments
+  - Explicit template argument support
+  - Conflict detection for incompatible deductions
+  - Tests: test_deduce_simple_*, test_explicit_*
 
 ### 4.2 Class Templates
-- [ ] Basic class templates
-- [ ] Template specialization
+- [x] **4.2.1** Basic class templates [already implemented] - CppClassTemplate
+  - CXCursor_ClassTemplate (cursor kind 31) parsed
+  - Fields, constructors, methods, member templates all preserved
+  - Tests: test_class_template_basic, test_class_template_with_methods
+- [x] **4.2.2** Template specialization [already implemented]
+  - CXCursor_ClassTemplatePartialSpecialization (cursor kind 32)
+  - CppClassTemplatePartialSpec with specialization_args pattern
+  - Tests: test_partial_specialization_*
 
 ---
 
