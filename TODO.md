@@ -109,8 +109,14 @@ int add(int a, int b) {
   - Added `mangled_name` field to `ClangNodeKind::FunctionDecl`
   - Updated `convert.rs` to pass mangled_name through to CppFunction
   - Added test `test_mangled_name_for_simple_function` verifying `_Z7add_cppii`
-- [ ] **1.3.4** Compile via rustc (mir_built override active)
-- [ ] **1.3.5** Link and run: `add(2, 3) == 5`
+- [x] **1.3.4** Compile via rustc (mir_built override active) [26:01:17]
+  - Fixed threading issue: use global statics instead of TLS for C++ registry
+  - Fixed MirSource: pass correct DefId instead of CRATE_DEF_ID
+  - Fixed arg_count: count locals with is_arg=true
+  - Created wrapper source to include stubs as module
+- [x] **1.3.5** Link and run: `add(2, 3) == 5` [26:01:17] ✓
+  - End-to-end test passes: binary executes and outputs "add_cpp(2, 3) = 5"
+  - **MILESTONE ACHIEVED**: C++ compiles through rustc codegen, not clang++!
 
 ### 1.4 Verification: No clang++ in Pipeline
 - [ ] Remove `cpp_compiler.rs` (clang++ wrapper)
