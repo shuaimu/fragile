@@ -654,9 +654,15 @@ Migration: After C++20 support is complete, deprecate these.
   - [x] `test_mako_core_minimal` - Built and runs successfully [26:01:17]
     - Tests mako varint encoding/decoding (write_uvint32/read_uvint32)
     - Tests ALWAYS_ASSERT and INVARIANT macros from mako/macros.h
-    - Second Fragile-built Mako executable that uses libmako_core!
+    - Uses both libmako_core and librrr
+  - [x] `test_alock` - Built and mostly passes [26:01:17]
+    - gtest-based tests for lock primitives (TimeoutALock, WaitDieALock, etc.)
+    - 14/16 tests pass (2 timing-sensitive tests fail in CI environment)
+  - [x] `test_and_event` - Built and all tests pass [26:01:17]
+    - gtest-based tests for reactor event composition
+    - 5/5 tests pass (BasicAndEvent, ThreeEventAnd, etc.)
   - [x] Fixed CompilationJob to resolve internal deps (librrr) and add build dir to lib_paths [26:01:17]
-  - [-] Other tests blocked on unittest.hpp TEST macro (commented out in all.hpp)
+  - [-] Tests using internal unittest.hpp TEST macro blocked (commented out in all.hpp)
   - [ ] `test_marshal` - Serialization tests
   - [ ] `test_config_schema` - Configuration tests
   - [ ] `test_masstree` - Masstree index tests
