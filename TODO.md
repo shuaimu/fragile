@@ -867,6 +867,7 @@ Current status:
   - Fixed asio include path in fragile.toml (third-party/erpc/third_party/asio/include) [26:01:17]
   - iosfwd stub (includes iostream) [26:01:17]
   - std::allocator_arg_t for uses-allocator construction (<memory>) [26:01:17]
+  - basic_string constructors from string_view (C++17) for asio compatibility [26:01:17]
 - test_transport_integration: 16/16 pass (transport backend tests) [26:01:17]
 - **Total: 1524+ tests passing across C++ and Rust**
 
