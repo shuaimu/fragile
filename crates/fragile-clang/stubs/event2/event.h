@@ -14,8 +14,8 @@ extern "C" {
 struct event_base;
 struct event;
 struct timeval;
-struct evutil_socket_t;
 
+// evutil_socket_t is a typedef, not a struct
 typedef int evutil_socket_t;
 
 // Event flags

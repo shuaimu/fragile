@@ -91,6 +91,10 @@ struct NodeData {
     NodeData(const std::string& s) : type(NodeType::Scalar), scalar_value(s) {}
 };
 
+// Forward declarations for iterator types
+class NodeIterator;
+class NodeConstIterator;
+
 // YAML node class
 class Node {
 public:
@@ -232,146 +236,15 @@ public:
     Node operator[](const char* key) { return operator[](std::string(key)); }
     const Node operator[](const char* key) const { return operator[](std::string(key)); }
 
-    // Forward declare iterator types for iterator_value
-    class iterator;
-    class const_iterator;
+    // Iterator typedefs - point to external classes
+    using iterator = NodeIterator;
+    using const_iterator = NodeConstIterator;
 
-    // Iterator value type for dereferencing iterators
-    struct iterator_value {
-        Node first;   // key
-        Node second;  // value
-
-        iterator_value() = default;
-        iterator_value(const Node& k, const Node& v) : first(k), second(v) {}
-        iterator_value(const std::string& k, const Node& v) : first(k), second(v) {}
-        explicit iterator_value(const Node& v) : first(), second(v) {}
-
-        // Allow treating the value like a Node for sequences
-        template<typename T>
-        T as() const { return second.as<T>(); }
-
-        template<typename T>
-        T as(const T& fallback) const { return second.as<T>(fallback); }
-
-        // Implicit conversion to Node (delegates to second)
-        operator Node() const { return second; }
-
-        // Node-like interface (delegates to second)
-        bool IsDefined() const { return second.IsDefined(); }
-        bool IsNull() const { return second.IsNull(); }
-        bool IsScalar() const { return second.IsScalar(); }
-        bool IsSequence() const { return second.IsSequence(); }
-        bool IsMap() const { return second.IsMap(); }
-        std::size_t size() const { return second.size(); }
-        explicit operator bool() const { return second.IsDefined(); }
-
-        // Iteration support - delegates to second (Node)
-        iterator begin() { return second.begin(); }
-        iterator end() { return second.end(); }
-        const_iterator begin() const { return second.begin(); }
-        const_iterator end() const { return second.end(); }
-
-        // Subscript access - delegates to second (Node)
-        Node operator[](std::size_t index) { return second[index]; }
-        const Node operator[](std::size_t index) const { return second[index]; }
-        Node operator[](const std::string& key) { return second[key]; }
-        const Node operator[](const std::string& key) const { return second[key]; }
-        Node operator[](const char* key) { return second[key]; }
-        const Node operator[](const char* key) const { return second[key]; }
-    };
-
-    // Sequence iteration - simplified using indices
-    class iterator {
-    public:
-        using value_type = iterator_value;
-        using reference = iterator_value;
-        using pointer = iterator_value*;
-        using difference_type = std::ptrdiff_t;
-        using iterator_category = std::forward_iterator_tag;
-
-        iterator() = default;
-        iterator(Node* node, std::size_t index, bool is_map)
-            : node_(node), index_(index), is_map_(is_map) {}
-
-        iterator_value operator*();
-
-        // Arrow operator returns proxy that provides first/second access
-        struct arrow_proxy {
-            iterator_value value;
-            iterator_value* operator->() { return &value; }
-        };
-        arrow_proxy operator->() { return arrow_proxy{operator*()}; }
-
-        iterator& operator++() { ++index_; return *this; }
-        iterator operator++(int) {
-            iterator tmp(*this);
-            ++(*this);
-            return tmp;
-        }
-        bool operator==(const iterator& other) const {
-            return node_ == other.node_ && index_ == other.index_;
-        }
-        bool operator!=(const iterator& other) const { return !(*this == other); }
-
-    private:
-        Node* node_ = nullptr;
-        std::size_t index_ = 0;
-        bool is_map_ = false;
-    };
-
-    class const_iterator {
-    public:
-        using value_type = const iterator_value;
-        using reference = const iterator_value;
-        using pointer = const iterator_value*;
-        using difference_type = std::ptrdiff_t;
-        using iterator_category = std::forward_iterator_tag;
-
-        const_iterator() = default;
-        const_iterator(const Node* node, std::size_t index, bool is_map)
-            : node_(node), index_(index), is_map_(is_map) {}
-
-        iterator_value operator*() const;
-
-        struct arrow_proxy {
-            iterator_value value;
-            const iterator_value* operator->() const { return &value; }
-        };
-        arrow_proxy operator->() const { return arrow_proxy{operator*()}; }
-
-        const_iterator& operator++() { ++index_; return *this; }
-        const_iterator operator++(int) {
-            const_iterator tmp(*this);
-            ++(*this);
-            return tmp;
-        }
-        bool operator==(const const_iterator& other) const {
-            return node_ == other.node_ && index_ == other.index_;
-        }
-        bool operator!=(const const_iterator& other) const { return !(*this == other); }
-
-    private:
-        const Node* node_ = nullptr;
-        std::size_t index_ = 0;
-        bool is_map_ = false;
-    };
-
-    iterator begin() {
-        if (data_->type == NodeType::Sequence || data_->type == NodeType::Map)
-            return iterator(this, 0, data_->type == NodeType::Map);
-        return iterator(this, 0, false);
-    }
-    iterator end() {
-        return iterator(this, size(), data_->type == NodeType::Map);
-    }
-    const_iterator begin() const {
-        if (data_->type == NodeType::Sequence || data_->type == NodeType::Map)
-            return const_iterator(this, 0, data_->type == NodeType::Map);
-        return const_iterator(this, 0, false);
-    }
-    const_iterator end() const {
-        return const_iterator(this, size(), data_->type == NodeType::Map);
-    }
+    // Iteration - implementations after iterator_value is defined
+    iterator begin();
+    iterator end();
+    const_iterator begin() const;
+    const_iterator end() const;
 
     // Push back for sequences
     void push_back(const Node& node) {
@@ -407,39 +280,184 @@ public:
         return keys;
     }
 
+    // Access to internal data for iterator
+    std::shared_ptr<NodeData> data() const { return data_; }
+
 private:
     std::shared_ptr<NodeData> data_;
 
-    friend class iterator;
-    friend class const_iterator;
+    friend class NodeIterator;
+    friend class NodeConstIterator;
 };
 
-// Implement iterator operator* (needs complete Node type)
-inline Node::iterator_value Node::iterator::operator*() {
-    if (!node_) return iterator_value();
-    if (is_map_) {
-        auto keys = node_->getMapKeys();
-        if (index_ < keys.size()) {
-            return iterator_value(keys[index_], (*node_)[keys[index_]]);
+// Iterator value type - defined after Node is complete
+struct iterator_value {
+    Node first;   // key
+    Node second;  // value
+
+    iterator_value() = default;
+    iterator_value(const Node& k, const Node& v) : first(k), second(v) {}
+    iterator_value(const std::string& k, const Node& v) : first(k), second(v) {}
+    explicit iterator_value(const Node& v) : first(), second(v) {}
+
+    // Allow treating the value like a Node for sequences
+    template<typename T>
+    T as() const { return second.as<T>(); }
+
+    template<typename T>
+    T as(const T& fallback) const { return second.as<T>(fallback); }
+
+    // Implicit conversion to Node (delegates to second)
+    operator Node() const { return second; }
+
+    // Node-like interface (delegates to second)
+    bool IsDefined() const { return second.IsDefined(); }
+    bool IsNull() const { return second.IsNull(); }
+    bool IsScalar() const { return second.IsScalar(); }
+    bool IsSequence() const { return second.IsSequence(); }
+    bool IsMap() const { return second.IsMap(); }
+    std::size_t size() const { return second.size(); }
+    explicit operator bool() const { return second.IsDefined(); }
+
+    // Iteration support - delegates to second (Node)
+    Node::iterator begin();
+    Node::iterator end();
+    Node::const_iterator begin() const;
+    Node::const_iterator end() const;
+
+    // Subscript access - delegates to second (Node)
+    Node operator[](std::size_t index) { return second[index]; }
+    const Node operator[](std::size_t index) const { return second[index]; }
+    Node operator[](const std::string& key) { return second[key]; }
+    const Node operator[](const std::string& key) const { return second[key]; }
+    Node operator[](const char* key) { return second[key]; }
+    const Node operator[](const char* key) const { return second[key]; }
+};
+
+// NodeIterator - external iterator class
+class NodeIterator {
+public:
+    using value_type = iterator_value;
+    using reference = iterator_value;
+    using pointer = iterator_value*;
+    using difference_type = std::ptrdiff_t;
+    using iterator_category = std::forward_iterator_tag;
+
+    NodeIterator() = default;
+    NodeIterator(Node* node, std::size_t index, bool is_map)
+        : node_(node), index_(index), is_map_(is_map) {}
+
+    iterator_value operator*() {
+        if (!node_) return iterator_value();
+        if (is_map_) {
+            auto keys = node_->getMapKeys();
+            if (index_ < keys.size()) {
+                return iterator_value(keys[index_], (*node_)[keys[index_]]);
+            }
+        } else {
+            return iterator_value((*node_)[index_]);
         }
-    } else {
-        return iterator_value((*node_)[index_]);
+        return iterator_value();
     }
-    return iterator_value();
+
+    struct arrow_proxy {
+        iterator_value value;
+        iterator_value* operator->() { return &value; }
+    };
+    arrow_proxy operator->() { return arrow_proxy{operator*()}; }
+
+    NodeIterator& operator++() { ++index_; return *this; }
+    NodeIterator operator++(int) {
+        NodeIterator tmp(*this);
+        ++(*this);
+        return tmp;
+    }
+    bool operator==(const NodeIterator& other) const {
+        return node_ == other.node_ && index_ == other.index_;
+    }
+    bool operator!=(const NodeIterator& other) const { return !(*this == other); }
+
+private:
+    Node* node_ = nullptr;
+    std::size_t index_ = 0;
+    bool is_map_ = false;
+};
+
+// NodeConstIterator - external const iterator class
+class NodeConstIterator {
+public:
+    using value_type = const iterator_value;
+    using reference = const iterator_value;
+    using pointer = const iterator_value*;
+    using difference_type = std::ptrdiff_t;
+    using iterator_category = std::forward_iterator_tag;
+
+    NodeConstIterator() = default;
+    NodeConstIterator(const Node* node, std::size_t index, bool is_map)
+        : node_(node), index_(index), is_map_(is_map) {}
+
+    iterator_value operator*() const {
+        if (!node_) return iterator_value();
+        if (is_map_) {
+            auto keys = node_->getMapKeys();
+            if (index_ < keys.size()) {
+                return iterator_value(keys[index_], (*node_)[keys[index_]]);
+            }
+        } else {
+            return iterator_value((*node_)[index_]);
+        }
+        return iterator_value();
+    }
+
+    struct arrow_proxy {
+        iterator_value value;
+        const iterator_value* operator->() const { return &value; }
+    };
+    arrow_proxy operator->() const { return arrow_proxy{operator*()}; }
+
+    NodeConstIterator& operator++() { ++index_; return *this; }
+    NodeConstIterator operator++(int) {
+        NodeConstIterator tmp(*this);
+        ++(*this);
+        return tmp;
+    }
+    bool operator==(const NodeConstIterator& other) const {
+        return node_ == other.node_ && index_ == other.index_;
+    }
+    bool operator!=(const NodeConstIterator& other) const { return !(*this == other); }
+
+private:
+    const Node* node_ = nullptr;
+    std::size_t index_ = 0;
+    bool is_map_ = false;
+};
+
+// Implement Node iteration methods
+inline Node::iterator Node::begin() {
+    if (data_->type == NodeType::Sequence || data_->type == NodeType::Map)
+        return iterator(this, 0, data_->type == NodeType::Map);
+    return iterator(this, 0, false);
 }
 
-inline Node::iterator_value Node::const_iterator::operator*() const {
-    if (!node_) return iterator_value();
-    if (is_map_) {
-        auto keys = node_->getMapKeys();
-        if (index_ < keys.size()) {
-            return iterator_value(keys[index_], (*node_)[keys[index_]]);
-        }
-    } else {
-        return iterator_value((*node_)[index_]);
-    }
-    return iterator_value();
+inline Node::iterator Node::end() {
+    return iterator(this, size(), data_->type == NodeType::Map);
 }
+
+inline Node::const_iterator Node::begin() const {
+    if (data_->type == NodeType::Sequence || data_->type == NodeType::Map)
+        return const_iterator(this, 0, data_->type == NodeType::Map);
+    return const_iterator(this, 0, false);
+}
+
+inline Node::const_iterator Node::end() const {
+    return const_iterator(this, size(), data_->type == NodeType::Map);
+}
+
+// Implement iterator_value iteration methods
+inline Node::iterator iterator_value::begin() { return second.begin(); }
+inline Node::iterator iterator_value::end() { return second.end(); }
+inline Node::const_iterator iterator_value::begin() const { return second.begin(); }
+inline Node::const_iterator iterator_value::end() const { return second.end(); }
 
 // Load functions
 inline Node Load(const std::string& input) {
