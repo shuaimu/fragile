@@ -150,6 +150,8 @@ public:
     const_reference front() const { return data_[0]; }
     reference back() { return data_[size_ - 1]; }
     const_reference back() const { return data_[size_ - 1]; }
+    // C++17: non-const data() for mutable access
+    CharT* data() noexcept { return data_; }
     const CharT* data() const noexcept { return data_; }
     const CharT* c_str() const noexcept { return data_ ? data_ : ""; }
 

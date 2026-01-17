@@ -2,6 +2,9 @@
 #ifndef _FRAGILE_MUTEX_
 #define _FRAGILE_MUTEX_
 
+// Include thread for std::this_thread (commonly used together)
+#include "thread"
+
 namespace std {
 
 // Basic mutex stub

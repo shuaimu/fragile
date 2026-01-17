@@ -5,6 +5,7 @@
 #define _FRAGILE_RANDOM_
 
 #include "cstdint"
+#include "climits"
 
 namespace std {
 

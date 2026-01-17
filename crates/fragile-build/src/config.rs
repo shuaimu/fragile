@@ -74,6 +74,15 @@ pub struct TargetConfig {
     /// Dependencies on other targets.
     #[serde(default)]
     pub deps: Vec<String>,
+
+    /// Whether to inherit global compiler includes (default: true).
+    /// Set to false to only use target-specific includes.
+    #[serde(default = "default_inherit")]
+    pub inherit_includes: bool,
+}
+
+fn default_inherit() -> bool {
+    true
 }
 
 /// Target type.
@@ -121,11 +130,15 @@ impl BuildConfig {
         self.targets.iter().find(|t| t.name == name)
     }
 
-    /// Get all include directories for a target (including global).
+    /// Get all include directories for a target (including global if inherit_includes is true).
     pub fn get_includes(&self, target: &TargetConfig) -> Vec<String> {
-        let mut includes = self.compiler.includes.clone();
-        includes.extend(target.includes.clone());
-        includes
+        if target.inherit_includes {
+            let mut includes = self.compiler.includes.clone();
+            includes.extend(target.includes.clone());
+            includes
+        } else {
+            target.includes.clone()
+        }
     }
 
     /// Get all defines for a target (including global).
@@ -253,6 +266,7 @@ impl TargetConfig {
             libs: Vec::new(),
             lib_paths: Vec::new(),
             deps: Vec::new(),
+            inherit_includes: true,
         }
     }
 

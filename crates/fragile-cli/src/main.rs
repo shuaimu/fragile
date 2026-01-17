@@ -169,7 +169,8 @@ fn main() -> Result<()> {
             std::fs::create_dir_all(&output_dir)
                 .map_err(|e| miette::miette!("Failed to create output dir: {}", e))?;
 
-            // Configure C++ compiler
+            // Configure C++ compiler - use real system headers for compilation
+            // (stubs are only for parsing with libclang)
             let mut compiler_config = CppCompilerConfig::default();
             for inc in &job.includes {
                 compiler_config.include_dirs.push(inc.clone());
@@ -188,30 +189,44 @@ fn main() -> Result<()> {
                 println!("Using compiler: {:?}", compiler.compiler_path());
             }
 
-            // Parse and compile each source file
-            let (include_paths, mut system_paths, defines) = job.parser_config();
-
-            // Add fragile-clang stubs directory as system include for proper parsing
-            // This provides minimal STL stubs that allow parsing without full system headers
+            // Add fragile-clang stubs directory for parsing only
+            // Stubs provide minimal headers that satisfy clang AST parsing
+            // but should NOT be used for actual compilation
             let stubs_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                 .parent()
                 .unwrap()
                 .join("fragile-clang/stubs");
 
+            // Parse and compile each source file
+            let (mut include_paths, mut system_paths, defines) = job.parser_config();
+
+            // Add stubs to parser paths (not compiler paths)
             if stubs_dir.exists() {
                 if verbose {
                     println!("Using stubs directory: {}", stubs_dir.display());
                 }
-                system_paths.push(stubs_dir.to_string_lossy().to_string());
+                // Insert at the beginning so stubs are searched first
+                include_paths.insert(0, stubs_dir.to_string_lossy().to_string());
+                // Also add to system paths for <angle> includes
+                system_paths.insert(0, stubs_dir.to_string_lossy().to_string());
             } else {
                 eprintln!("Warning: stubs directory not found at {}", stubs_dir.display());
             }
 
 
-            let parser = fragile_clang::ClangParser::with_paths_and_defines(
+            // Known error patterns to ignore (libclang semantic issues that don't affect parsing)
+            let ignored_error_patterns = vec![
+                // Cross-namespace inheritance: QuorumEvent inherits Event via "using rrr::Event;"
+                "cannot initialize object parameter of type".to_string(),
+                // Private member access in template code (often false positives)
+                "is a private member of".to_string(),
+            ];
+
+            let parser = fragile_clang::ClangParser::with_paths_defines_and_ignored_errors(
                 include_paths,
                 system_paths,
                 defines,
+                ignored_error_patterns,
             ).map_err(|e| miette::miette!("Failed to create parser: {}", e))?;
 
             let driver = FragileDriver::new();

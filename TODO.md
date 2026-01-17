@@ -618,17 +618,35 @@ Migration: After C++20 support is complete, deprecate these.
   - [x] CLI `build-target` command (parse, compile, link)
   - [x] CLI `parse-cpp` command (parse and stub generation)
   - [x] fragile.toml for Mako (librrr, libmako_core, libmako_lib, executables, tests)
-  - [x] Build librrr (19 object files, ~11MB static library) - VERIFIED WORKING
+  - [x] Build librrr (19 object files, ~11MB static library) - VERIFIED WORKING [26:01:17]
   - [x] Linking step automated (link_executable, create_static_library in CLI)
-  - [x] Build libmako_core (12 object files, ~4.7MB static library)
+  - [x] Build libmako_core (12 object files, ~4.7MB static library) - VERIFIED WORKING [26:01:17]
   - [x] Fix stub headers (sstream, stdint.h, stdlib.h) for compatibility
   - [x] Fix CONFIG_H define path, remove conflicting src/mako/lib include
-  - [-] libmako_lib - blocked by src/mako/lib/assert.h shadowing system header
-- [ ] **G.5.1 Core Executables**
+  - [x] Fix assert.h shadowing issue (use src/mako not src/mako/lib in includes) [26:01:17]
+  - [x] Add inherit_includes field to TargetConfig for selective global include inheritance [26:01:17]
+  - [x] Created eRPC config.h for FakeTransport [26:01:17]
+  - [x] Add ignored_error_patterns to CLI for cross-namespace inheritance [26:01:17]
+    - Ignores "cannot initialize object parameter of type" (QuorumEvent inherits Event)
+    - Ignores "is a private member of" (template false positives)
+  - [x] Add thread include to mutex stub (std::this_thread commonly used together) [26:01:17]
+  - [x] Add non-const data() to string stub (C++17 feature) [26:01:17]
+  - [-] libmako_lib - BLOCKED: requires eRPC + asio complex headers for both parsing and compilation
+    - lib/common.h includes "rpc.h" which pulls in full eRPC header chain
+    - eRPC headers require: config.h (created), asio (external), proper build environment
+    - **Workaround options**:
+      1. Build Mako with CMake first, then use Fragile for linking (hybrid approach)
+      2. Create minimal libmako_lib without eRPC-dependent files
+      3. Complete eRPC stub implementation (significant effort)
+- [-] **G.5.1 Core Executables** - BLOCKED on libmako_lib
   - [ ] `dbtest` - Main test database executable
   - [ ] `simpleTransaction` - Simple transaction test
   - [ ] `simplePaxos` - Paxos consensus test
   - [ ] `simpleRaft` - Raft consensus test
+  - **Next steps**:
+    1. Fix fragile-clang cross-namespace inheritance issue
+    2. Either complete eRPC stubs OR use hybrid CMake+Fragile approach
+    3. Build simpler targets first (mako_core tests, masstree tests)
 - [ ] **G.5.2 Unit Test Executables** (~25 tests)
   - [ ] `test_marshal` - Serialization tests
   - [ ] `test_config_schema` - Configuration tests
