@@ -687,6 +687,12 @@ Migration: After C++20 support is complete, deprecate these.
   - [x] `test_masstree` - Built and all tests pass [26:01:17]
     - gtest-based tests for Masstree concurrent B-tree index
     - 2/2 tests pass (InsertSearchAndRemove, RangeScanReturnsSortedKeys)
+  - [x] `test_masstree_internals` - Built and all tests pass [26:01:17]
+    - gtest-based tests for Masstree threadinfo, context, RCU
+    - 13/13 tests pass
+  - [x] `test_masstree_multi_instance` - Built and all tests pass [26:01:17]
+    - gtest-based tests for multiple Masstree instance isolation
+    - 5/5 tests pass
   - [ ] `test_rpc` - RPC framework tests (full integration)
   - [ ] `test_future` - Future/promise tests
   - [ ] All others listed in CMakeLists.txt
@@ -703,6 +709,8 @@ Migration: After C++20 support is complete, deprecate these.
   - [x] `test_idempotency` passes - 32/32 tests [26:01:17]
   - [x] `test_completion_tracker` passes - 27/27 tests [26:01:17]
   - [x] `test_masstree` passes - 2/2 tests [26:01:17]
+  - [x] `test_masstree_internals` passes - 13/13 tests [26:01:17]
+  - [x] `test_masstree_multi_instance` passes - 5/5 tests [26:01:17]
   - [ ] `test_rpc` passes
   - [ ] All 25 ctest tests pass
 - [ ] **G.6.2 Integration Tests (ci.sh)**
