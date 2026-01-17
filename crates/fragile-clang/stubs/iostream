@@ -132,6 +132,10 @@ public:
     bool fail() const { return (state_ & (failbit | badbit)) != 0; }
     bool bad() const { return (state_ & badbit) != 0; }
 
+    // Locale support (stub)
+    template<typename Locale>
+    Locale imbue(const Locale& loc) { (void)loc; return Locale(); }
+
 protected:
     basic_ios() : state_(goodbit) {}
     iostate state_ = goodbit;
