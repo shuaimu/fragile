@@ -309,11 +309,22 @@ Each feature must work through the MIR pipeline, not clang++.
   - MirStatement::InitVtable for constructor vtable pointer initialization
   - Vtable generation in convert_struct() for classes with virtual methods
   - 6 new tests: test_vtable_generation_for_polymorphic_class, test_no_vtable_for_non_polymorphic_class, test_is_polymorphic_method, test_vtable_with_pure_virtual, test_constructor_vtable_init, test_constructor_no_vtable_init_for_non_polymorphic
-- [ ] **3.3.4** Dynamic dispatch (partial - VirtualCall terminator added [26:01:17])
-  - MirTerminator::VirtualCall added with receiver, vtable_index, args
-  - Helper functions: try_extract_member_call, unwrap_casts, extract_class_name
-  - TODO: Integrate with CallExpr conversion (needs method virtuality lookup)
-  - TODO: Update rustc-driver to translate VirtualCall to rustc MIR
+- [ ] **3.3.4** Dynamic dispatch (see `docs/dev/plan_3_3_4_dynamic_dispatch.md`)
+  - MirTerminator::VirtualCall added with receiver, vtable_index, args [26:01:17]
+  - Helper functions: try_extract_member_call, unwrap_casts, extract_class_name [26:01:17]
+  - [x] **3.3.4a** Add vtable index lookup helper function [26:01:17, 19:10]
+    - VirtualDispatchContext struct with find_vtable_index, find_struct, is_method_virtual
+    - Passed through convert_function -> convert_stmt -> convert_expr chain
+  - [x] **3.3.4b** Integrate VirtualCall generation in CallExpr handling [26:01:17, 19:10]
+    - CallExpr now detects member calls via try_extract_member_call()
+    - If method is virtual, generates MirTerminator::VirtualCall with vtable_index
+    - If method is non-virtual, generates regular MirTerminator::Call
+  - [ ] **3.3.4c** Add rustc-driver VirtualCall translation (TODO: Translate to rustc MIR)
+  - [x] **3.3.4d** Add comprehensive tests for virtual dispatch [26:01:17, 19:10]
+    - test_virtual_call_generation: Virtual method call generates VirtualCall
+    - test_non_virtual_call_uses_regular_call: Non-virtual uses regular Call
+    - test_virtual_call_with_multiple_virtual_methods: Correct vtable indices
+    - test_virtual_dispatch_context_find_vtable_index: Unit test for context
 
 ---
 

@@ -37,6 +37,50 @@ struct MemberCallInfo {
     is_arrow: bool,
 }
 
+/// Context for virtual dispatch resolution during conversion.
+/// Provides access to struct definitions and vtables for method lookup.
+struct VirtualDispatchContext<'a> {
+    /// All struct/class definitions parsed so far
+    structs: &'a [CppStruct],
+    /// All vtables generated so far
+    vtables: &'a [CppVtable],
+}
+
+impl<'a> VirtualDispatchContext<'a> {
+    /// Create a new virtual dispatch context.
+    fn new(structs: &'a [CppStruct], vtables: &'a [CppVtable]) -> Self {
+        Self { structs, vtables }
+    }
+
+    /// Find a struct/class by name.
+    fn find_struct(&self, name: &str) -> Option<&CppStruct> {
+        self.structs.iter().find(|s| s.name == name)
+    }
+
+    /// Find a vtable by class name.
+    fn find_vtable(&self, class_name: &str) -> Option<&CppVtable> {
+        self.vtables.iter().find(|v| v.class_name == class_name)
+    }
+
+    /// Check if a method is virtual in the given class.
+    fn is_method_virtual(&self, class_name: &str, method_name: &str) -> bool {
+        if let Some(s) = self.find_struct(class_name) {
+            s.methods.iter().any(|m| m.name == method_name && m.is_virtual)
+        } else {
+            false
+        }
+    }
+
+    /// Find the vtable index for a virtual method.
+    /// Returns None if the method is not virtual or not found.
+    fn find_vtable_index(&self, class_name: &str, method_name: &str) -> Option<usize> {
+        let vtable = self.find_vtable(class_name)?;
+        vtable.entries.iter()
+            .find(|e| e.display_name.ends_with(&format!("::{}", method_name)))
+            .map(|e| e.index)
+    }
+}
+
 /// Builder for constructing MIR bodies.
 struct FunctionBuilder {
     /// Local variables
@@ -233,7 +277,9 @@ impl MirConverter {
                 is_noexcept,
             } => {
                 if *is_definition {
-                    let func = self.convert_function(node, name, mangled_name, return_type, params, *is_noexcept, namespace_context)?;
+                    // Create virtual dispatch context from already-parsed structs and vtables
+                    let vd_ctx = VirtualDispatchContext::new(&module.structs, &module.vtables);
+                    let func = self.convert_function(node, name, mangled_name, return_type, params, *is_noexcept, namespace_context, &vd_ctx)?;
                     module.functions.push(func);
                 } else {
                     // Just a declaration, add as extern
@@ -391,6 +437,7 @@ impl MirConverter {
         params: &[(String, CppType)],
         is_noexcept: bool,
         namespace_context: &[String],
+        vd_ctx: &VirtualDispatchContext<'_>,
     ) -> Result<CppFunction> {
         let mut builder = FunctionBuilder::new();
 
@@ -405,7 +452,7 @@ impl MirConverter {
         // Find the compound statement (function body)
         for child in &node.children {
             if matches!(child.kind, ClangNodeKind::CompoundStmt) {
-                self.convert_compound_stmt(child, &mut builder)?;
+                self.convert_compound_stmt(child, &mut builder, vd_ctx)?;
                 break;
             }
         }
@@ -429,6 +476,8 @@ impl MirConverter {
     }
 
     /// Convert just a function/method body to MIR (without creating CppFunction).
+    /// Uses an empty VirtualDispatchContext since method bodies in class definitions
+    /// don't have access to the full module yet.
     fn convert_method_body(
         &self,
         node: &ClangNode,
@@ -445,10 +494,14 @@ impl MirConverter {
             builder.add_local(Some(param_name.clone()), param_ty.clone(), true);
         }
 
+        // Use empty context since we don't have access to the full module here
+        // TODO: Consider a two-pass approach for method bodies with virtual calls
+        let empty_ctx = VirtualDispatchContext::new(&[], &[]);
+
         // Find the compound statement (function body)
         for child in &node.children {
             if matches!(child.kind, ClangNodeKind::CompoundStmt) {
-                self.convert_compound_stmt(child, &mut builder)?;
+                self.convert_compound_stmt(child, &mut builder, &empty_ctx)?;
                 break;
             }
         }
@@ -462,20 +515,30 @@ impl MirConverter {
     }
 
     /// Convert a compound statement (block).
-    fn convert_compound_stmt(&self, node: &ClangNode, builder: &mut FunctionBuilder) -> Result<()> {
+    fn convert_compound_stmt(
+        &self,
+        node: &ClangNode,
+        builder: &mut FunctionBuilder,
+        vd_ctx: &VirtualDispatchContext<'_>,
+    ) -> Result<()> {
         for child in &node.children {
-            self.convert_stmt(child, builder)?;
+            self.convert_stmt(child, builder, vd_ctx)?;
         }
         Ok(())
     }
 
     /// Convert a statement.
-    fn convert_stmt(&self, node: &ClangNode, builder: &mut FunctionBuilder) -> Result<()> {
+    fn convert_stmt(
+        &self,
+        node: &ClangNode,
+        builder: &mut FunctionBuilder,
+        vd_ctx: &VirtualDispatchContext<'_>,
+    ) -> Result<()> {
         match &node.kind {
             ClangNodeKind::ReturnStmt => {
                 if let Some(expr) = node.children.first() {
                     // Evaluate expression and store in return place (_0)
-                    let operand = self.convert_expr(expr, builder)?;
+                    let operand = self.convert_expr(expr, builder, vd_ctx)?;
                     builder.add_statement(MirStatement::Assign {
                         target: MirPlace::local(0),
                         value: MirRvalue::Use(operand),
@@ -492,7 +555,7 @@ impl MirConverter {
 
                         // Check for initializer (first child of VarDecl)
                         if let Some(init_expr) = child.children.first() {
-                            let operand = self.convert_expr(init_expr, builder)?;
+                            let operand = self.convert_expr(init_expr, builder, vd_ctx)?;
                             builder.add_statement(MirStatement::Assign {
                                 target: MirPlace::local(local_idx),
                                 value: MirRvalue::Use(operand),
@@ -503,7 +566,7 @@ impl MirConverter {
             }
 
             ClangNodeKind::CompoundStmt => {
-                self.convert_compound_stmt(node, builder)?;
+                self.convert_compound_stmt(node, builder, vd_ctx)?;
             }
 
             ClangNodeKind::IfStmt => {
@@ -513,7 +576,7 @@ impl MirConverter {
                     let then_branch = &node.children[1];
                     let else_branch = node.children.get(2);
 
-                    let cond_operand = self.convert_expr(condition, builder)?;
+                    let cond_operand = self.convert_expr(condition, builder, vd_ctx)?;
 
                     // Reserve blocks for then, else (if present), and merge
                     // Use reserve_block() to get unique indices even before blocks are created
@@ -538,7 +601,7 @@ impl MirConverter {
                     });
 
                     // Convert then branch
-                    self.convert_stmt(then_branch, builder)?;
+                    self.convert_stmt(then_branch, builder, vd_ctx)?;
                     // Only add Goto if the branch needs a terminator
                     // (i.e., it didn't already terminate with return/break/continue)
                     if builder.needs_terminator() {
@@ -549,7 +612,7 @@ impl MirConverter {
 
                     // Convert else branch if present
                     if let Some(else_stmt) = else_branch {
-                        self.convert_stmt(else_stmt, builder)?;
+                        self.convert_stmt(else_stmt, builder, vd_ctx)?;
                         if builder.needs_terminator() {
                             builder.finish_block(MirTerminator::Goto {
                                 target: merge_block,
@@ -575,7 +638,7 @@ impl MirConverter {
                     });
 
                     // Loop header: evaluate condition
-                    let cond_operand = self.convert_expr(condition, builder)?;
+                    let cond_operand = self.convert_expr(condition, builder, vd_ctx)?;
                     builder.finish_block(MirTerminator::SwitchInt {
                         operand: cond_operand,
                         targets: vec![(1, loop_body)],
@@ -586,7 +649,7 @@ impl MirConverter {
                     builder.push_loop(loop_header, loop_exit);
 
                     // Loop body
-                    self.convert_stmt(body, builder)?;
+                    self.convert_stmt(body, builder, vd_ctx)?;
                     builder.finish_block(MirTerminator::Goto {
                         target: loop_header,
                     });
@@ -629,7 +692,7 @@ impl MirConverter {
                 if let Some(init_node) = init {
                     // Only convert if it's not an empty/placeholder node
                     if !matches!(init_node.kind, ClangNodeKind::Unknown(_)) {
-                        self.convert_stmt(init_node, builder)?;
+                        self.convert_stmt(init_node, builder, vd_ctx)?;
                     }
                 }
 
@@ -645,7 +708,7 @@ impl MirConverter {
                 // Loop header: evaluate condition
                 if let Some(cond_node) = cond {
                     if !matches!(cond_node.kind, ClangNodeKind::Unknown(_)) {
-                        let cond_operand = self.convert_expr(cond_node, builder)?;
+                        let cond_operand = self.convert_expr(cond_node, builder, vd_ctx)?;
                         builder.finish_block(MirTerminator::SwitchInt {
                             operand: cond_operand,
                             targets: vec![(1, loop_body)],
@@ -669,13 +732,13 @@ impl MirConverter {
 
                 // Loop body
                 if let Some(body_node) = body {
-                    self.convert_stmt(body_node, builder)?;
+                    self.convert_stmt(body_node, builder, vd_ctx)?;
                 }
 
                 // Increment expression (evaluated for side effects)
                 if let Some(incr_node) = incr {
                     if !matches!(incr_node.kind, ClangNodeKind::Unknown(_)) {
-                        let _ = self.convert_expr(incr_node, builder)?;
+                        let _ = self.convert_expr(incr_node, builder, vd_ctx)?;
                     }
                 }
 
@@ -718,7 +781,7 @@ impl MirConverter {
             ClangNodeKind::CoreturnStmt { value_ty: _ } => {
                 // co_return statement - terminates the coroutine
                 let value = if let Some(expr) = node.children.first() {
-                    Some(self.convert_expr(expr, builder)?)
+                    Some(self.convert_expr(expr, builder, vd_ctx)?)
                 } else {
                     None
                 };
@@ -744,7 +807,7 @@ impl MirConverter {
                     let body_node = &node.children[1];
 
                     // Evaluate the switch condition
-                    let cond_operand = self.convert_expr(cond_node, builder)?;
+                    let cond_operand = self.convert_expr(cond_node, builder, vd_ctx)?;
 
                     // Collect case values and their indices
                     let mut case_values: Vec<(i128, usize)> = Vec::new();
@@ -796,7 +859,7 @@ impl MirConverter {
                                 for case_child in &child.children {
                                     // Skip the constant expr, convert the actual body
                                     if !matches!(case_child.kind, ClangNodeKind::IntegerLiteral { .. }) {
-                                        self.convert_stmt(case_child, builder)?;
+                                        self.convert_stmt(case_child, builder, vd_ctx)?;
                                     }
                                 }
                                 // Jump to exit (break - simplified, no fallthrough)
@@ -806,7 +869,7 @@ impl MirConverter {
                             }
                             _ => {
                                 // Other statements in switch body (shouldn't normally happen)
-                                self.convert_stmt(child, builder)?;
+                                self.convert_stmt(child, builder, vd_ctx)?;
                             }
                         }
                     }
@@ -817,7 +880,7 @@ impl MirConverter {
                 // These are handled as part of SwitchStmt processing
                 // If encountered standalone, convert children
                 for child in &node.children {
-                    self.convert_stmt(child, builder)?;
+                    self.convert_stmt(child, builder, vd_ctx)?;
                 }
             }
 
@@ -827,7 +890,7 @@ impl MirConverter {
                 // remaining children are catch handlers
                 // For now, just convert the try block; catch handlers are placeholders
                 for child in &node.children {
-                    self.convert_stmt(child, builder)?;
+                    self.convert_stmt(child, builder, vd_ctx)?;
                 }
             }
 
@@ -835,7 +898,7 @@ impl MirConverter {
                 // Catch handler: first child is exception decl, second is body
                 // For now, just convert children
                 for child in &node.children {
-                    self.convert_stmt(child, builder)?;
+                    self.convert_stmt(child, builder, vd_ctx)?;
                 }
             }
 
@@ -843,7 +906,7 @@ impl MirConverter {
             _ => {
                 if is_expression_kind(&node.kind) {
                     // Evaluate for side effects, discard result
-                    let _ = self.convert_expr(node, builder)?;
+                    let _ = self.convert_expr(node, builder, vd_ctx)?;
                 }
             }
         }
@@ -851,7 +914,12 @@ impl MirConverter {
     }
 
     /// Convert an expression and return the operand.
-    fn convert_expr(&self, node: &ClangNode, builder: &mut FunctionBuilder) -> Result<MirOperand> {
+    fn convert_expr(
+        &self,
+        node: &ClangNode,
+        builder: &mut FunctionBuilder,
+        vd_ctx: &VirtualDispatchContext<'_>,
+    ) -> Result<MirOperand> {
         match &node.kind {
             ClangNodeKind::IntegerLiteral { value, cpp_type } => {
                 // Extract bit width and signedness from the C++ type
@@ -899,8 +967,8 @@ impl MirConverter {
             ClangNodeKind::BinaryOperator { op, ty } => {
                 // Binary operators have 2 children: left and right
                 if node.children.len() >= 2 {
-                    let left = self.convert_expr(&node.children[0], builder)?;
-                    let right = self.convert_expr(&node.children[1], builder)?;
+                    let left = self.convert_expr(&node.children[0], builder, vd_ctx)?;
+                    let right = self.convert_expr(&node.children[1], builder, vd_ctx)?;
 
                     // Check for assignment
                     if matches!(op, BinaryOp::Assign) {
@@ -939,7 +1007,7 @@ impl MirConverter {
                     match op {
                         UnaryOp::AddrOf => {
                             // Address-of: convert operand to a place, then take reference
-                            let operand = self.convert_expr(operand_node, builder)?;
+                            let operand = self.convert_expr(operand_node, builder, vd_ctx)?;
                             let place = match operand {
                                 MirOperand::Copy(place) | MirOperand::Move(place) => place,
                                 MirOperand::Constant(c) => {
@@ -962,7 +1030,7 @@ impl MirConverter {
                         }
                         UnaryOp::Deref => {
                             // Dereference: convert operand to place, add Deref projection
-                            let operand = self.convert_expr(operand_node, builder)?;
+                            let operand = self.convert_expr(operand_node, builder, vd_ctx)?;
                             match operand {
                                 MirOperand::Copy(mut place) | MirOperand::Move(mut place) => {
                                     place.projection.push(MirProjection::Deref);
@@ -984,7 +1052,7 @@ impl MirConverter {
                         }
                         _ => {
                             // Other unary ops: use existing path
-                            let operand = self.convert_expr(operand_node, builder)?;
+                            let operand = self.convert_expr(operand_node, builder, vd_ctx)?;
                             let result_local = builder.add_local(None, ty.clone(), false);
                             let mir_op = convert_unaryop(*op);
                             builder.add_statement(MirStatement::Assign {
@@ -1008,7 +1076,7 @@ impl MirConverter {
                     // Handle std::move as a builtin - it's just a cast to rvalue reference
                     if Self::is_std_move(&func_name) {
                         if let Some(arg) = node.children.get(1) {
-                            let operand = self.convert_expr(arg, builder)?;
+                            let operand = self.convert_expr(arg, builder, vd_ctx)?;
                             // Convert Copy operand to Move operand
                             return Ok(match operand {
                                 MirOperand::Copy(place) => MirOperand::Move(place),
@@ -1022,7 +1090,7 @@ impl MirConverter {
                     // Handle std::forward as a builtin - conditionally moves or copies
                     if Self::is_std_forward(&func_name) {
                         if let Some(arg) = node.children.get(1) {
-                            let operand = self.convert_expr(arg, builder)?;
+                            let operand = self.convert_expr(arg, builder, vd_ctx)?;
                             // For now, treat forward like move since we don't track reference collapsing
                             // A more complete implementation would check the template argument
                             return Ok(match operand {
@@ -1033,15 +1101,52 @@ impl MirConverter {
                         return Ok(MirOperand::Constant(MirConstant::Unit));
                     }
 
-                    let mut args = Vec::new();
-                    for arg_node in node.children.iter().skip(1) {
-                        args.push(self.convert_expr(arg_node, builder)?);
-                    }
-
                     let result_local = builder.add_local(None, ty.clone(), false);
                     let destination = MirPlace::local(result_local);
-
                     let next_block = builder.new_block();
+
+                    // Check if this is a member function call on a polymorphic class
+                    if let Some(member_info) = Self::try_extract_member_call(func_ref) {
+                        // Check if the method is virtual and get its vtable index
+                        if let Some(vtable_index) = vd_ctx.find_vtable_index(
+                            &member_info.class_name,
+                            &member_info.method_name,
+                        ) {
+                            // Get the receiver (the object on which the method is called)
+                            let receiver_node = Self::unwrap_casts(func_ref);
+                            let receiver = if let Some(base) = receiver_node.children.first() {
+                                self.convert_expr(base, builder, vd_ctx)?
+                            } else {
+                                // Fallback: shouldn't happen, but generate a unit operand
+                                MirOperand::Constant(MirConstant::Unit)
+                            };
+
+                            // Convert arguments (skip the function reference child)
+                            let mut args = Vec::new();
+                            for arg_node in node.children.iter().skip(1) {
+                                args.push(self.convert_expr(arg_node, builder, vd_ctx)?);
+                            }
+
+                            // Generate VirtualCall terminator
+                            builder.finish_block(MirTerminator::VirtualCall {
+                                receiver,
+                                vtable_index,
+                                args,
+                                destination: destination.clone(),
+                                target: Some(next_block),
+                                unwind: None,
+                            });
+
+                            return Ok(MirOperand::Copy(destination));
+                        }
+                    }
+
+                    // Regular function call (non-virtual)
+                    let mut args = Vec::new();
+                    for arg_node in node.children.iter().skip(1) {
+                        args.push(self.convert_expr(arg_node, builder, vd_ctx)?);
+                    }
+
                     builder.finish_block(MirTerminator::Call {
                         func: func_name,
                         args,
@@ -1059,7 +1164,7 @@ impl MirConverter {
             ClangNodeKind::ParenExpr { .. } => {
                 // Just unwrap the parentheses
                 if let Some(inner) = node.children.first() {
-                    self.convert_expr(inner, builder)
+                    self.convert_expr(inner, builder, vd_ctx)
                 } else {
                     Ok(MirOperand::Constant(MirConstant::Unit))
                 }
@@ -1070,10 +1175,10 @@ impl MirConverter {
                 // TODO: Handle actual type conversions
                 // Skip non-expression children (like TypeRef) and find the actual value
                 if let Some(inner) = node.children.iter().find(|c| is_expression_kind(&c.kind)) {
-                    self.convert_expr(inner, builder)
+                    self.convert_expr(inner, builder, vd_ctx)
                 } else if let Some(inner) = node.children.first() {
                     // Fallback: try first child
-                    self.convert_expr(inner, builder)
+                    self.convert_expr(inner, builder, vd_ctx)
                 } else {
                     Ok(MirOperand::Constant(MirConstant::Unit))
                 }
@@ -1083,7 +1188,7 @@ impl MirConverter {
             ClangNodeKind::CoawaitExpr { operand_ty: _, result_ty } => {
                 // co_await expression - suspends until the awaitable is ready
                 let awaitable = if let Some(expr) = node.children.first() {
-                    self.convert_expr(expr, builder)?
+                    self.convert_expr(expr, builder, vd_ctx)?
                 } else {
                     MirOperand::Constant(MirConstant::Unit)
                 };
@@ -1108,7 +1213,7 @@ impl MirConverter {
             ClangNodeKind::CoyieldExpr { value_ty: _, result_ty: _ } => {
                 // co_yield expression - yields a value and suspends
                 let value = if let Some(expr) = node.children.first() {
-                    self.convert_expr(expr, builder)?
+                    self.convert_expr(expr, builder, vd_ctx)?
                 } else {
                     MirOperand::Constant(MirConstant::Unit)
                 };
@@ -1131,7 +1236,7 @@ impl MirConverter {
                 // For now, just evaluate children for side effects
                 // Proper exception handling would need runtime support
                 if let Some(expr) = node.children.first() {
-                    let _ = self.convert_expr(expr, builder)?;
+                    let _ = self.convert_expr(expr, builder, vd_ctx)?;
                 }
                 // throw is like an unreachable after the expression is evaluated
                 builder.finish_block(MirTerminator::Unreachable);
@@ -1144,7 +1249,7 @@ impl MirConverter {
                 // For now, just evaluate children for side effects
                 // Full RTTI requires runtime support
                 if let Some(expr) = node.children.first() {
-                    let _ = self.convert_expr(expr, builder)?;
+                    let _ = self.convert_expr(expr, builder, vd_ctx)?;
                 }
                 Ok(MirOperand::Constant(MirConstant::Unit))
             }
@@ -1154,7 +1259,7 @@ impl MirConverter {
                 // For now, just convert the child expression
                 // Full RTTI requires runtime support
                 if let Some(expr) = node.children.first() {
-                    self.convert_expr(expr, builder)
+                    self.convert_expr(expr, builder, vd_ctx)
                 } else {
                     Ok(MirOperand::Constant(MirConstant::Unit))
                 }
@@ -1169,7 +1274,7 @@ impl MirConverter {
                 // First child is the base expression
                 if let Some(base_node) = node.children.first() {
                     // Convert base to a place
-                    let base_operand = self.convert_expr(base_node, builder)?;
+                    let base_operand = self.convert_expr(base_node, builder, vd_ctx)?;
                     let mut base_place = match base_operand {
                         MirOperand::Copy(place) | MirOperand::Move(place) => place,
                         MirOperand::Constant(c) => {
@@ -1210,7 +1315,7 @@ impl MirConverter {
                     let index_node = &node.children[1];
 
                     // Convert array to a place
-                    let array_operand = self.convert_expr(array_node, builder)?;
+                    let array_operand = self.convert_expr(array_node, builder, vd_ctx)?;
                     let array_place = match array_operand {
                         MirOperand::Copy(place) | MirOperand::Move(place) => place,
                         MirOperand::Constant(c) => {
@@ -1226,7 +1331,7 @@ impl MirConverter {
                     };
 
                     // Convert index
-                    let index_operand = self.convert_expr(index_node, builder)?;
+                    let index_operand = self.convert_expr(index_node, builder, vd_ctx)?;
 
                     // For MirProjection::Index, we need a compile-time known index
                     // Runtime indices would require a different approach (using variable indexing)
@@ -1259,7 +1364,7 @@ impl MirConverter {
                 let mut fields = Vec::new();
 
                 for child in &node.children {
-                    let operand = self.convert_expr(child, builder)?;
+                    let operand = self.convert_expr(child, builder, vd_ctx)?;
                     // For now, we don't have field names from the init list
                     // Field names can be resolved later if we have struct type info
                     fields.push((None, operand));
@@ -1285,7 +1390,7 @@ impl MirConverter {
                 // Unknown/UnexposedExpr nodes often wrap other expressions
                 // Unwrap and recurse into the child
                 if let Some(inner) = node.children.first() {
-                    self.convert_expr(inner, builder)
+                    self.convert_expr(inner, builder, vd_ctx)
                 } else {
                     Ok(MirOperand::Constant(MirConstant::Unit))
                 }
@@ -1868,10 +1973,14 @@ impl MirConverter {
             });
         }
 
+        // Use empty context since constructor bodies in class definitions
+        // don't have access to the full module yet
+        let empty_ctx = VirtualDispatchContext::new(&[], &[]);
+
         // Find the compound statement (constructor body)
         for child in &node.children {
             if matches!(child.kind, ClangNodeKind::CompoundStmt) {
-                self.convert_compound_stmt(child, &mut builder)?;
+                self.convert_compound_stmt(child, &mut builder, &empty_ctx)?;
                 break;
             }
         }
@@ -1892,10 +2001,14 @@ impl MirConverter {
         // Local 0 is the return place (void for destructors)
         builder.add_local(None, CppType::Void, false);
 
+        // Use empty context since destructor bodies in class definitions
+        // don't have access to the full module yet
+        let empty_ctx = VirtualDispatchContext::new(&[], &[]);
+
         // Find the compound statement (destructor body)
         for child in &node.children {
             if matches!(child.kind, ClangNodeKind::CompoundStmt) {
-                self.convert_compound_stmt(child, &mut builder)?;
+                self.convert_compound_stmt(child, &mut builder, &empty_ctx)?;
                 break;
             }
         }
@@ -1970,8 +2083,10 @@ impl MirConverter {
         let member_node = Self::unwrap_casts(func_ref);
 
         if let ClangNodeKind::MemberExpr { member_name, is_arrow, ty: _ } = &member_node.kind {
-            // The receiver is the first child of MemberExpr
-            if let Some(receiver) = member_node.children.first() {
+            // The receiver is the first child of MemberExpr (may be wrapped in casts/Unknown)
+            if let Some(receiver_raw) = member_node.children.first() {
+                // Unwrap casts/Unknown wrappers to get the actual receiver
+                let receiver = Self::unwrap_casts(receiver_raw);
                 // Get the class name from the receiver's type
                 let receiver_type = Self::get_node_type(receiver);
                 let class_name = Self::extract_class_name(&receiver_type);
@@ -2740,5 +2855,216 @@ mod tests {
             !func.mir_body.blocks.is_empty(),
             "Function should have basic blocks"
         );
+    }
+
+    // =========================================================================
+    // Task 3.3.4 - Dynamic Dispatch Tests
+    // =========================================================================
+
+    #[test]
+    fn test_virtual_call_generation() {
+        // Test that calling a virtual method generates VirtualCall terminator
+        let parser = ClangParser::new().unwrap();
+        let ast = parser
+            .parse_string(
+                r#"
+                class Animal {
+                public:
+                    virtual int speak() { return 0; }
+                };
+
+                int call_speak(Animal* a) {
+                    return a->speak();
+                }
+                "#,
+                "test.cpp",
+            )
+            .unwrap();
+
+        let converter = MirConverter::new();
+        let module = converter.convert(ast).unwrap();
+
+        // Should have Animal struct and call_speak function
+        assert_eq!(module.structs.len(), 1);
+        assert_eq!(module.structs[0].name, "Animal");
+        assert!(module.structs[0].is_polymorphic(), "Animal should be polymorphic");
+
+        // Should have vtable generated
+        assert_eq!(module.vtables.len(), 1);
+        assert_eq!(module.vtables[0].class_name, "Animal");
+        assert_eq!(module.vtables[0].entries.len(), 1);
+        assert!(module.vtables[0].entries[0].display_name.ends_with("::speak"));
+
+        // Check the call_speak function
+        assert_eq!(module.functions.len(), 1);
+        let func = &module.functions[0];
+        assert_eq!(func.display_name, "call_speak");
+
+        // The function should have a VirtualCall terminator
+        let has_virtual_call = func.mir_body.blocks.iter().any(|block| {
+            matches!(
+                &block.terminator,
+                MirTerminator::VirtualCall { vtable_index: 0, .. }
+            )
+        });
+        assert!(has_virtual_call, "call_speak should use VirtualCall terminator for virtual method");
+    }
+
+    #[test]
+    fn test_non_virtual_call_uses_regular_call() {
+        // Test that calling a non-virtual method uses regular Call terminator
+        let parser = ClangParser::new().unwrap();
+        let ast = parser
+            .parse_string(
+                r#"
+                class Widget {
+                public:
+                    int get_value() { return 42; }
+                };
+
+                int call_get(Widget* w) {
+                    return w->get_value();
+                }
+                "#,
+                "test.cpp",
+            )
+            .unwrap();
+
+        let converter = MirConverter::new();
+        let module = converter.convert(ast).unwrap();
+
+        // Widget has no virtual methods
+        assert_eq!(module.structs.len(), 1);
+        assert!(!module.structs[0].is_polymorphic(), "Widget should not be polymorphic");
+        assert!(module.vtables.is_empty(), "No vtable for non-polymorphic class");
+
+        // Check the call_get function
+        assert_eq!(module.functions.len(), 1);
+        let func = &module.functions[0];
+
+        // Should use regular Call, not VirtualCall
+        let has_virtual_call = func.mir_body.blocks.iter().any(|block| {
+            matches!(&block.terminator, MirTerminator::VirtualCall { .. })
+        });
+        assert!(!has_virtual_call, "Non-virtual method should not use VirtualCall");
+
+        let has_regular_call = func.mir_body.blocks.iter().any(|block| {
+            matches!(&block.terminator, MirTerminator::Call { .. })
+        });
+        assert!(has_regular_call, "Non-virtual method should use regular Call");
+    }
+
+    #[test]
+    fn test_virtual_call_with_multiple_virtual_methods() {
+        // Test vtable with multiple virtual methods
+        let parser = ClangParser::new().unwrap();
+        let ast = parser
+            .parse_string(
+                r#"
+                class Shape {
+                public:
+                    virtual int area() { return 0; }
+                    virtual int perimeter() { return 0; }
+                    virtual void draw() { }
+                };
+
+                int get_area(Shape* s) {
+                    return s->area();
+                }
+
+                int get_perimeter(Shape* s) {
+                    return s->perimeter();
+                }
+                "#,
+                "test.cpp",
+            )
+            .unwrap();
+
+        let converter = MirConverter::new();
+        let module = converter.convert(ast).unwrap();
+
+        // Vtable should have 3 entries
+        assert_eq!(module.vtables.len(), 1);
+        assert_eq!(module.vtables[0].entries.len(), 3);
+
+        // Find vtable indices for area and perimeter
+        let area_entry = module.vtables[0]
+            .entries
+            .iter()
+            .find(|e| e.display_name.ends_with("::area"));
+        let perimeter_entry = module.vtables[0]
+            .entries
+            .iter()
+            .find(|e| e.display_name.ends_with("::perimeter"));
+
+        assert!(area_entry.is_some(), "Should have area in vtable");
+        assert!(perimeter_entry.is_some(), "Should have perimeter in vtable");
+
+        // Check get_area uses correct vtable index
+        let get_area_func = module.functions.iter().find(|f| f.display_name == "get_area").unwrap();
+        let area_call = get_area_func.mir_body.blocks.iter().find_map(|block| {
+            if let MirTerminator::VirtualCall { vtable_index, .. } = &block.terminator {
+                Some(*vtable_index)
+            } else {
+                None
+            }
+        });
+        assert_eq!(area_call, Some(area_entry.unwrap().index), "get_area should call vtable index for area");
+
+        // Check get_perimeter uses correct vtable index
+        let get_perimeter_func = module.functions.iter().find(|f| f.display_name == "get_perimeter").unwrap();
+        let perimeter_call = get_perimeter_func.mir_body.blocks.iter().find_map(|block| {
+            if let MirTerminator::VirtualCall { vtable_index, .. } = &block.terminator {
+                Some(*vtable_index)
+            } else {
+                None
+            }
+        });
+        assert_eq!(perimeter_call, Some(perimeter_entry.unwrap().index), "get_perimeter should call vtable index for perimeter");
+    }
+
+    #[test]
+    fn test_virtual_dispatch_context_find_vtable_index() {
+        // Unit test for VirtualDispatchContext
+        let structs = vec![CppStruct {
+            name: "Test".to_string(),
+            is_class: true,
+            namespace: vec![],
+            bases: vec![],
+            fields: vec![],
+            static_fields: vec![],
+            constructors: vec![],
+            destructor: None,
+            methods: vec![CppMethod {
+                name: "foo".to_string(),
+                return_type: CppType::Int { signed: true },
+                params: vec![],
+                is_static: false,
+                is_virtual: true,
+                is_pure_virtual: false,
+                is_override: false,
+                is_final: false,
+                access: crate::ast::AccessSpecifier::Public,
+                mir_body: None,
+            }],
+            member_templates: vec![],
+            friends: vec![],
+            vtable_name: Some("_ZTV4Test".to_string()),
+        }];
+
+        let mut vtable = CppVtable::new("Test".to_string(), vec![], "_ZTV4Test".to_string());
+        vtable.add_entry("_ZN4Test3fooEv".to_string(), "Test::foo".to_string(), false);
+        let vtables = vec![vtable];
+
+        let ctx = VirtualDispatchContext::new(&structs, &vtables);
+
+        // Should find the vtable index
+        assert_eq!(ctx.find_vtable_index("Test", "foo"), Some(0));
+
+        // Should return None for non-existent method
+        assert_eq!(ctx.find_vtable_index("Test", "bar"), None);
+
+        // Should return None for non-existent class
+        assert_eq!(ctx.find_vtable_index("Other", "foo"), None);
     }
 }
