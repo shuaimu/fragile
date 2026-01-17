@@ -727,10 +727,10 @@ Migration: After C++20 support is complete, deprecate these.
   - [x] `stress_transport_backend` - Transport stress tests (mock-based), 13 tests passing [26:01:17]
   - [x] `masstree_perf` - Masstree B-tree benchmark (non-gtest), passing [26:01:17]
   - [ ] All others listed in CMakeLists.txt
-- [-] **G.5.3 Benchmark Executables**
+- [x] **G.5.3 Benchmark Executables** [26:01:17]
   - [x] `masstree_perf` - Masstree benchmark (passing) [26:01:17]
-  - [ ] `rpcbench` - RPC benchmark (blocked on RPC server)
-  - [ ] `bench_future` - Future benchmark (blocked on RPC server)
+  - [x] `rpcbench` - RPC benchmark (passing) [26:01:17] - client/server tested
+  - [x] `bench_future` - Future benchmark, 6 tests passing [26:01:17]
 
 ### G.6 Pass Mako CI Tests
 - [-] **G.6.1 Unit Tests (ctest)**
@@ -807,29 +807,26 @@ Current status:
 - **Milestones M1-M6**: ✅ Complete - test harness working
 - **Phase G (Full Build)**: 🔄 In Progress
   - G.1-G.4: ✅ Complete (MIR injection, runtime support, build system, blocked files fixed)
-  - G.5.2: ✅ **50 test/benchmark executables built, 802+ tests passing**
-  - G.5.3: 🔄 `masstree_perf` benchmark passing, others blocked on RPC server
+  - G.5.2: ✅ **53 test/benchmark executables built, 837+ tests passing**
+  - G.5.3: ✅ **All benchmarks passing** (masstree_perf, rpcbench, bench_future)
   - **libmako_lib**: ✅ UNBLOCKED [26:01:17, 06:30]
-  - G.5.1: Core executables blocked on full eRPC/ASIO stack
+  - **RPC Infrastructure**: ✅ WORKING [26:01:17] - test_rpc, test_future, rpcbench all passing
+  - G.5.1: Core executables blocked on full deptran/transaction infrastructure
 
 **Recent Progress** [26:01:17]:
-- Added masstree_perf benchmark - unblocked by adding STL stubs
-- Added STL stubs: stod, stoull, stoul, stof, stold, shuffle, put_time, get_time, to_time_t
-- Added stress_transport_backend (13 tests) - mock-based transport stress tests
-- Fixed chrono stub to use long instead of long long for duration types (matches libc++)
-- Added std::istreambuf_iterator and std::ostreambuf_iterator to iterator stub [26:01:17]
-- Fixed fragile.toml with proper project configuration and paths [26:01:17]
-- Added test for rpc/server.cpp parsing (4688 functions, parses successfully) [26:01:17]
-- Added test for benchmark_service.h parsing (4694 functions, parses successfully) [26:01:17]
-- Created RPC server infrastructure plan: docs/dev/plan_rpc_server_infrastructure.md
-- Total: 50 test/benchmark executables, 802+ tests passing; 571 parsing tests
+- Built and verified test_rpc (17/17 tests passing) with full RPC client/server
+- Built and verified test_future (12/12 tests passing) with Future/Promise support
+- Built and verified bench_future (6 tests passing) - Future benchmarking
+- Built and verified rpcbench - RPC client/server benchmark working
+- RPC infrastructure now fully working (server.cpp compiled and linked with librrr)
+- Added boost_context library linkage for fiber/coroutine support
+- Added std::istreambuf_iterator and std::ostreambuf_iterator to iterator stub
+- Total: 53 test/benchmark executables, 837+ tests passing; 571 parsing tests
 
 **Blockers**:
-- Core executables (simpleTransaction, simplePaxos) need full eRPC with ASIO
-- RPC infrastructure parsing complete (server.cpp, benchmark_service.h) - need build/link
-- Remaining test executables blocked on:
-  - test_sto_transaction_real: needs full mako lib (rocksdb, erpc, txlog, etc.)
-  - bench_future, rpcbench: need RPC server build integration
+- Core executables (simpleTransaction, simplePaxos) need full deptran/transaction infrastructure
+- test_sto_transaction_real: needs full mako lib (rocksdb, erpc, txlog, etc.)
+- Config tests (config_store, config_service, config_client): need RocksDB for persistent storage
 
 **Completed**:
 - G.1: MIR injection pipeline (TLS, type conversion, function sigs, MIR body generation)
