@@ -30,6 +30,7 @@ namespace std {
     using size_t = unsigned long;
     using ssize_t = long;  // POSIX signed size type
     using ptrdiff_t = long;
+    using wint_t = unsigned int;  // Wide character int type
     using intptr_t = long;
     using uintptr_t = unsigned long;
 
@@ -72,6 +73,7 @@ using uint64_t = std::uint64_t;
 using size_t = std::size_t;
 using ssize_t = std::ssize_t;
 using ptrdiff_t = std::ptrdiff_t;
+using wint_t = std::wint_t;
 using intptr_t = std::intptr_t;
 using uintptr_t = std::uintptr_t;
 using intmax_t = std::intmax_t;
