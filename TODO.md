@@ -777,18 +777,20 @@ Migration: After C++20 support is complete, deprecate these.
 Current status:
 - **Phase F (Parsing)**: ✅ Complete - 338/338 files parsing (100%)
 - **Milestones M1-M6**: ✅ Complete - test harness working
-- **Phase G (Full Build)**: 🔄 Starting
+- **Phase G (Full Build)**: 🔄 In Progress
+  - G.1-G.4: ✅ Complete (MIR injection, runtime support, build system, blocked files fixed)
+  - G.5.2: ✅ 19 test executables built, 285 tests passing
+  - G.5.1, G.5.3: ⏸️ Blocked on libmako_lib (requires eRPC stubs)
 
-Next steps:
-1. ~~G.1.1: Wire TLS for MIR registry in rustc driver~~ ✅ Done
-2. ~~G.1.2: Complete type conversion for all C++ types~~ ✅ Done
-3. ~~G.1.3: Function signature conversion~~ ✅ Done
-4. ~~G.1.4: MIR body generation~~ ✅ Done
-5. ~~G.2.1-G.2.4: Runtime support~~ ✅ Done (fragile-runtime crate)
-6. G.3.1: Build system integration
-7. G.5.1: Build first executable (simpleTransaction)
+**Blocker**: libmako_lib requires eRPC headers which have complex internal dependencies
+- Options: 1) Complete eRPC stub implementation, 2) Use hybrid CMake+Fragile approach, 3) Focus on non-eRPC tests
 
-**Previously blocked files**: All now parsing (G.4 complete)
+**Completed**:
+- G.1: MIR injection pipeline (TLS, type conversion, function sigs, MIR body generation)
+- G.2: Runtime support (fragile-runtime crate)
+- G.3: Build system integration (fragile.toml, compile_commands.json)
+- G.4: Fixed blocked files (mtd.cc, persist_test.cc, mongodb/server.cc)
+- G.5.2: Unit tests (19 executables, 285 tests)
 
 ---
 
