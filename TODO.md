@@ -820,15 +820,16 @@ Current status:
 - Added std::istreambuf_iterator and std::ostreambuf_iterator to iterator stub [26:01:17]
 - Fixed fragile.toml with proper project configuration and paths [26:01:17]
 - Added test for rpc/server.cpp parsing (4688 functions, parses successfully) [26:01:17]
+- Added test for benchmark_service.h parsing (4694 functions, parses successfully) [26:01:17]
 - Created RPC server infrastructure plan: docs/dev/plan_rpc_server_infrastructure.md
-- Total: 50 test/benchmark executables, 802+ tests passing
+- Total: 50 test/benchmark executables, 802+ tests passing; 571 parsing tests
 
 **Blockers**:
 - Core executables (simpleTransaction, simplePaxos) need full eRPC with ASIO
-- Full integration tests need rpc/server.hpp and benchmark_service.h
+- RPC infrastructure parsing complete (server.cpp, benchmark_service.h) - need build/link
 - Remaining test executables blocked on:
   - test_sto_transaction_real: needs full mako lib (rocksdb, erpc, txlog, etc.)
-  - bench_future, rpcbench: need full RPC server infrastructure
+  - bench_future, rpcbench: need RPC server build integration
 
 **Completed**:
 - G.1: MIR injection pipeline (TLS, type conversion, function sigs, MIR body generation)
