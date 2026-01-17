@@ -251,6 +251,68 @@ constexpr time_point<Clock, Dur1> operator-(const time_point<Clock, Dur1>& lhs,
 }
 
 } // namespace chrono
+
+// C++14 chrono duration literals
+inline namespace literals {
+inline namespace chrono_literals {
+
+constexpr chrono::hours operator""h(unsigned long long h) {
+    return chrono::hours(static_cast<long>(h));
+}
+
+constexpr chrono::minutes operator""min(unsigned long long m) {
+    return chrono::minutes(static_cast<long>(m));
+}
+
+constexpr chrono::seconds operator""s(unsigned long long s) {
+    return chrono::seconds(static_cast<long>(s));
+}
+
+constexpr chrono::milliseconds operator""ms(unsigned long long ms) {
+    return chrono::milliseconds(static_cast<long>(ms));
+}
+
+constexpr chrono::microseconds operator""us(unsigned long long us) {
+    return chrono::microseconds(static_cast<long>(us));
+}
+
+constexpr chrono::nanoseconds operator""ns(unsigned long long ns) {
+    return chrono::nanoseconds(static_cast<long>(ns));
+}
+
+// Floating-point versions
+constexpr chrono::duration<long double> operator""h(long double h) {
+    return chrono::duration<long double>(h * 3600.0L);
+}
+
+constexpr chrono::duration<long double> operator""min(long double m) {
+    return chrono::duration<long double>(m * 60.0L);
+}
+
+constexpr chrono::duration<long double> operator""s(long double s) {
+    return chrono::duration<long double>(s);
+}
+
+constexpr chrono::duration<long double> operator""ms(long double ms) {
+    return chrono::duration<long double>(ms / 1000.0L);
+}
+
+constexpr chrono::duration<long double> operator""us(long double us) {
+    return chrono::duration<long double>(us / 1000000.0L);
+}
+
+constexpr chrono::duration<long double> operator""ns(long double ns) {
+    return chrono::duration<long double>(ns / 1000000000.0L);
+}
+
+} // namespace chrono_literals
+} // namespace literals
+
+// Also make chrono_literals available in std::chrono namespace
+namespace chrono {
+using namespace literals::chrono_literals;
+} // namespace chrono
+
 } // namespace std
 
 #endif // _FRAGILE_CHRONO_
