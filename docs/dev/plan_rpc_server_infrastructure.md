@@ -147,13 +147,34 @@ enum class ShutdownPhase {
 - No parsing errors
 - Uses same include paths as client.cpp
 
+**benchmark_service.h parses successfully!** (tested 26:01:17)
+- 4694 functions extracted
+- No parsing errors
+- Added test to integration_test.rs
+
 ## Next Steps
 
 1. ~~Try parsing server.hpp with fragile-clang~~ ✅ Done
 2. ~~Document any parsing errors~~ ✅ None found
-3. Add server.cpp to the Mako build configuration
-4. Test with benchmark_service.h
+3. ~~Test benchmark_service.h parsing~~ ✅ Done (4694 functions)
+4. Add server.cpp to the Mako build configuration
 5. Enable additional RPC-dependent tests
+
+## Build Integration Tasks
+
+To enable RPC-dependent tests:
+
+1. **Compile server.cpp**
+   - Use same build infrastructure as client.cpp
+   - Add to librrr or create librpc
+
+2. **Link with test executables**
+   - rpcbench, bench_future need librrr with server support
+   - Integration tests need full RPC stack
+
+3. **Handle eRPC dependency**
+   - compile_stubs/rpc.h provides minimal eRPC stub
+   - Full eRPC needed for actual network I/O
 
 ## Related Documentation
 
