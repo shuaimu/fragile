@@ -630,6 +630,72 @@ impl<'tcx> MirConvertCtx<'tcx> {
                     fn_span: DUMMY_SP,
                 }
             }
+            MirTerminator::VirtualCall {
+                receiver,
+                vtable_index,
+                args,
+                destination,
+                target,
+                unwind,
+            } => {
+                // Virtual method call via vtable lookup
+                // For now, we generate a placeholder call since proper vtable runtime
+                // integration requires the fragile-runtime to be linked in.
+                //
+                // TODO (future enhancement):
+                // 1. Load vtable pointer from receiver's first field
+                // 2. Index into vtable to get function pointer
+                // 3. Generate indirect call through function pointer
+                //
+                // For now, generate a direct call to the virtual method (static dispatch)
+                // which allows testing the pipeline without full runtime support.
+
+                // Convert receiver as first argument (implicit this pointer in C++)
+                let receiver_operand = self.convert_operand(receiver);
+                let mut args_converted: Vec<Spanned<mir::Operand<'tcx>>> = vec![Spanned {
+                    node: receiver_operand,
+                    span: DUMMY_SP,
+                }];
+
+                // Convert remaining arguments
+                for arg in args {
+                    args_converted.push(Spanned {
+                        node: self.convert_operand(arg),
+                        span: DUMMY_SP,
+                    });
+                }
+
+                let dest = self.convert_place(destination);
+                let target_block = target.map(BasicBlock::from_usize);
+                let unwind_action = if let Some(uw) = unwind {
+                    mir::UnwindAction::Cleanup(BasicBlock::from_usize(*uw))
+                } else {
+                    mir::UnwindAction::Continue
+                };
+
+                // Use a placeholder function operand
+                // In a full implementation, this would be an indirect call through the vtable
+                eprintln!(
+                    "[fragile] Warning: VirtualCall at vtable_index={} using placeholder. \
+                     Full dynamic dispatch requires fragile-runtime integration.",
+                    vtable_index
+                );
+
+                // Create a placeholder function pointer (local 0)
+                // In the future, this should be the result of:
+                //   fragile_rt_vfunc_get(receiver, vtable_index)
+                let func_operand = mir::Operand::Copy(mir::Place::from(mir::Local::from_u32(0)));
+
+                TerminatorKind::Call {
+                    func: func_operand,
+                    args: args_converted.into_boxed_slice(),
+                    destination: dest,
+                    target: target_block,
+                    unwind: unwind_action,
+                    call_source: mir::CallSource::Normal,
+                    fn_span: DUMMY_SP,
+                }
+            }
             MirTerminator::Unreachable => TerminatorKind::Unreachable,
             MirTerminator::Resume => TerminatorKind::UnwindResume,
             // Coroutine terminators - these need special handling
