@@ -780,7 +780,10 @@ Migration: After C++20 support is complete, deprecate these.
   - [x] `rpc_circuit_breaker_integration_test` passes - 12/12 tests [26:01:17]
   - [x] `rpc_error_integration_test` passes - 15/15 tests [26:01:17]
   - [x] `rpc_combined_reliability_test` passes - 9/9 tests [26:01:17]
-  - [ ] All tests pass (67 executables, 1040+ tests)
+  - [x] `test_transport_integration` passes - 16/16 tests [26:01:17]
+  - [x] `test_txn_timeout` passes - 9/9 tests [26:01:17]
+  - [x] `stress_transport_backend` passes - 13/13 tests [26:01:17]
+  - [ ] All tests pass (52 executables, 861 tests)
 - [ ] **G.6.2 Integration Tests (ci.sh)**
   - [ ] `./ci/ci.sh simpleTransaction` passes
   - [ ] `./ci/ci.sh simplePaxos` passes
@@ -821,24 +824,25 @@ Current status:
 - **Milestones M1-M6**: ✅ Complete - test harness working
 - **Phase G (Full Build)**: 🔄 In Progress
   - G.1-G.4: ✅ Complete (MIR injection, runtime support, build system, blocked files fixed)
-  - G.5.2: ✅ **67 test/benchmark executables built, 1040+ tests passing**
-  - G.5.3: ✅ **All benchmarks passing** (masstree_perf, rpcbench, bench_future, microbench)
+  - G.5.2: ✅ **52 test/benchmark executables built, 861 tests passing**
+  - G.5.3: ✅ **Benchmarks passing** (rpcbench, bench_future)
   - **libmako_lib**: ✅ UNBLOCKED [26:01:17, 06:30]
   - **RPC Infrastructure**: ✅ WORKING [26:01:17] - test_rpc, test_future, rpcbench all passing
   - G.5.1: Core executables blocked on full deptran/transaction infrastructure
 
 **Recent Progress** [26:01:17]:
-- Added 14 new RPC test executables (203 new tests):
-  - test_rpc_extended (8), test_load_balancer (19), rpc_chaos_test (26)
-  - rpc_graceful_shutdown_test (17), rpc_restart_detection_test (11)
-  - rpc_validation_test (15), rpc_metrics_test (18), rpc_client_pool_test (20)
-  - rpc_stress_crash_test (11), rpc_state_integration_test (9)
-  - rpc_reconnect_integration_test (13), rpc_circuit_breaker_integration_test (12)
-  - rpc_error_integration_test (15), rpc_combined_reliability_test (9)
+- Added 17 new RPC test executables:
+  - test_rpc_extended, test_load_balancer, rpc_chaos_test
+  - rpc_graceful_shutdown_test, rpc_restart_detection_test
+  - rpc_validation_test, rpc_metrics_test, rpc_client_pool_test
+  - rpc_stress_crash_test, rpc_state_integration_test
+  - rpc_reconnect_integration_test, rpc_circuit_breaker_integration_test
+  - rpc_error_integration_test, rpc_combined_reliability_test
+  - test_transport_integration, test_txn_timeout, stress_transport_backend
 - Built and verified rpcbench - RPC client/server benchmark working
 - RPC infrastructure now fully working (server.cpp compiled and linked with librrr)
 - Added boost_context library linkage for fiber/coroutine support
-- Total: 67 test/benchmark executables, 1040+ tests passing; 571 parsing tests
+- Total: 52 test/benchmark executables, 861 tests passing; 571 parsing tests
 
 **Blockers**:
 - Core executables (simpleTransaction, simplePaxos) need full deptran/transaction infrastructure
