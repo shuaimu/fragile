@@ -245,6 +245,7 @@ public:
     static constexpr float epsilon() noexcept { return 1.19209290e-07F; }
     static constexpr float infinity() noexcept { return __builtin_huge_valf(); }
     static constexpr float quiet_NaN() noexcept { return __builtin_nanf(""); }
+    static constexpr float denorm_min() noexcept { return 1.40129846e-45F; }
 };
 
 // Specialization for double
@@ -268,6 +269,7 @@ public:
     static constexpr double epsilon() noexcept { return 2.2204460492503131e-16; }
     static constexpr double infinity() noexcept { return __builtin_huge_val(); }
     static constexpr double quiet_NaN() noexcept { return __builtin_nan(""); }
+    static constexpr double denorm_min() noexcept { return 4.9406564584124654e-324; }
 };
 
 // Specialization for long double
@@ -291,6 +293,7 @@ public:
     static constexpr long double epsilon() noexcept { return 1.08420217248550443401e-19L; }
     static constexpr long double infinity() noexcept { return __builtin_huge_vall(); }
     static constexpr long double quiet_NaN() noexcept { return __builtin_nanl(""); }
+    static constexpr long double denorm_min() noexcept { return 3.64519953188247460253e-4951L; }
 };
 
 } // namespace std

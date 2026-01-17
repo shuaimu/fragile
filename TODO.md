@@ -669,7 +669,9 @@ Migration: After C++20 support is complete, deprecate these.
     - 28/28 tests pass (error categories, codes, exceptions)
   - [x] Fixed CompilationJob to resolve internal deps (librrr) and add build dir to lib_paths [26:01:17]
   - [-] Tests using internal unittest.hpp TEST macro blocked (commented out in all.hpp)
-  - [ ] `test_marshal` - Serialization tests
+  - [x] `test_marshal` - Built and all tests pass [26:01:17]
+    - gtest-based tests for Marshal serialization/deserialization
+    - 23/23 tests pass (integers, floats, strings, containers, nested structures, etc.)
   - [ ] `test_config_schema` - Configuration tests
   - [ ] `test_masstree` - Masstree index tests
   - [ ] `test_rpc` - RPC framework tests (full integration)
@@ -681,7 +683,7 @@ Migration: After C++20 support is complete, deprecate these.
 
 ### G.6 Pass Mako CI Tests
 - [-] **G.6.1 Unit Tests (ctest)**
-  - [ ] `test_marshal` passes
+  - [x] `test_marshal` passes - 23/23 tests [26:01:17]
   - [ ] `test_config_schema` passes
   - [ ] `test_sharding_policy` passes
   - [x] `test_fiber` passes - 37/37 tests [26:01:17]
