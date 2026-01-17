@@ -502,7 +502,7 @@ Migration: After C++20 support is complete, deprecate these.
 - [x] fragile-clang: 571 tests passing (all integration tests) [26:01:17]
 - [x] fragile-rustc-driver: 20 tests passing (base tests without rustc-integration feature) [26:01:17]
 - [x] fragile-runtime: Compiles
-- [x] **Mako Tests**: 60 test/benchmark executables, 953+ gtest tests [26:01:17]
+- [x] **Mako Tests**: 61 test/benchmark executables, 963+ gtest tests [26:01:17]
   - Core tests: test_fiber (37), test_marshal (23), test_sharding_policy (34), test_idempotency (32), test_completion_tracker (27)
   - Masstree tests: test_masstree (2), test_masstree_internals (13), test_masstree_multi_instance (5)
   - Silo tests: test_silo_varint (22), test_silo_runtime (8), test_silo_rcu_thread (9), test_silo_multi_site_stress (10), test_silo_allocator_tuple (18)
@@ -513,6 +513,7 @@ Migration: After C++20 support is complete, deprecate these.
   - RPC stress/chaos: rpc_chaos_test (26), rpc_graceful_shutdown_test (17), rpc_restart_detection_test (11), rpc_validation_test (15), rpc_metrics_test (18), rpc_client_pool_test (20), rpc_stress_crash_test (11), rpc_state_integration_test (9), rpc_reconnect_integration_test (13), rpc_circuit_breaker_integration_test (12), rpc_error_integration_test (15), rpc_combined_reliability_test (9)
   - Timeout tests: test_txn_timeout (9)
   - STO tests: test_sto_transaction (13) [26:01:17]
+  - Coroutine tests: test_coroutine (10) [26:01:17]
   - Others: test_alock (14, 2 timing-sensitive fail), test_and_event (5), test_rpc_errors (28), test_config_schema (7), test_arc_mutex_thread (7)
   - Non-gtest: test_fragile_minimal (pass), test_mako_core_minimal (pass)
   - Benchmarks: masstree_perf (pass), bench_future (6), rpcbench (pass)
@@ -788,7 +789,8 @@ Migration: After C++20 support is complete, deprecate these.
   - [x] `stress_transport_backend` passes - 13/13 tests [26:01:17]
   - [x] `test_rpc_partition` passes - 14/14 tests [26:01:17]
   - [x] `test_sto_transaction` passes - 13/13 tests [26:01:17] (STO TRcu transactional RCU tests)
-  - [x] All buildable tests pass (54 executables, 880+ gtest tests, 1451+ total with Rust)
+  - [x] `test_coroutine` passes - 10/10 tests [26:01:17] (Fiber/Reactor coroutine tests)
+  - [x] All buildable tests pass (55 executables, 890+ gtest tests, 1461+ total with Rust)
 - [ ] **G.6.2 Integration Tests (ci.sh)**
   - [ ] `./ci/ci.sh simpleTransaction` passes
   - [ ] `./ci/ci.sh simplePaxos` passes
@@ -829,15 +831,16 @@ Current status:
 - **Milestones M1-M6**: ✅ Complete - test harness working
 - **Phase G (Full Build)**: 🔄 In Progress
   - G.1-G.4: ✅ Complete (MIR injection, runtime support, build system, blocked files fixed)
-  - G.5.2: ✅ **54 test/benchmark executables built, 880+ gtest tests passing**
+  - G.5.2: ✅ **55 test/benchmark executables built, 890+ gtest tests passing**
   - G.5.3: ✅ **Benchmarks passing** (masstree_perf, bench_future, rpcbench)
   - **libmako_lib**: ✅ UNBLOCKED [26:01:17, 06:30]
   - **RPC Infrastructure**: ✅ WORKING [26:01:17] - test_rpc, test_future, rpcbench all passing
   - G.5.1: Core executables blocked on full deptran/transaction infrastructure
 
 **Recent Progress** [26:01:17]:
-- 60 C++ test/benchmark executables built and verified
-- 953 gtest tests passing (56 gtest executables)
+- 61 C++ test/benchmark executables built and verified
+- 963 gtest tests passing (57 gtest executables)
+- test_coroutine: 10/10 pass (Fiber/Reactor coroutine tests) [26:01:17]
 - test_sto_transaction: 13/13 pass (newly enabled, fixed HAVE_CXX_* defines) [26:01:17]
 - test_alock: 14/16 pass (2 timing-sensitive tests fail in CI environment)
 - rpc_chaos_test: 26/26 pass (chaos engineering tests) [26:01:17]
@@ -873,7 +876,7 @@ Current status:
   - std::error_code/error_condition constrained template constructors (SFINAE) [26:01:17]
   - unique_ptr operator==/!= with nullptr [26:01:17]
 - test_transport_integration: 16/16 pass (transport backend tests) [26:01:17]
-- **Total: 1524+ tests passing across C++ and Rust**
+- **Total: 1534+ tests passing across C++ and Rust**
 
 **Blockers** (remaining tests):
 - test_lambda, test_timer: Use internal TEST macro (requires deptran/all.h)
