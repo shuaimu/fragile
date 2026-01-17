@@ -78,21 +78,34 @@ enum class NodeType {
     Map
 };
 
+// Internal storage for Node to allow self-referential types
+struct NodeData {
+    NodeType type = NodeType::Undefined;
+    std::string scalar_value;
+    std::string tag;
+    std::shared_ptr<std::vector<std::shared_ptr<NodeData>>> sequence;
+    std::shared_ptr<std::map<std::string, std::shared_ptr<NodeData>>> map;
+
+    NodeData() = default;
+    NodeData(NodeType t) : type(t) {}
+    NodeData(const std::string& s) : type(NodeType::Scalar), scalar_value(s) {}
+};
+
 // YAML node class
 class Node {
 public:
     // Constructors
-    Node() : type_(NodeType::Undefined) {}
+    Node() : data_(std::make_shared<NodeData>()) {}
     Node(const Node& other) = default;
     Node(Node&& other) noexcept = default;
 
     template<typename T>
-    Node(const T& value) : type_(NodeType::Scalar), scalar_value_(std::to_string(value)) {}
+    Node(const T& value) : data_(std::make_shared<NodeData>(std::to_string(value))) {}
 
-    Node(const char* value) : type_(NodeType::Scalar), scalar_value_(value) {}
-    Node(const std::string& value) : type_(NodeType::Scalar), scalar_value_(value) {}
-    Node(bool value) : type_(NodeType::Scalar), scalar_value_(value ? "true" : "false") {}
-    Node(std::nullptr_t) : type_(NodeType::Null) {}
+    Node(const char* value) : data_(std::make_shared<NodeData>(value)) {}
+    Node(const std::string& value) : data_(std::make_shared<NodeData>(value)) {}
+    Node(bool value) : data_(std::make_shared<NodeData>(value ? "true" : "false")) {}
+    Node(std::nullptr_t) : data_(std::make_shared<NodeData>(NodeType::Null)) {}
 
     // Assignment
     Node& operator=(const Node& other) = default;
@@ -100,38 +113,40 @@ public:
 
     template<typename T>
     Node& operator=(const T& value) {
-        type_ = NodeType::Scalar;
-        scalar_value_ = std::to_string(value);
+        data_->type = NodeType::Scalar;
+        data_->scalar_value = std::to_string(value);
         return *this;
     }
 
     Node& operator=(const std::string& value) {
-        type_ = NodeType::Scalar;
-        scalar_value_ = value;
+        data_->type = NodeType::Scalar;
+        data_->scalar_value = value;
         return *this;
     }
 
     Node& operator=(const char* value) {
-        type_ = NodeType::Scalar;
-        scalar_value_ = value;
+        data_->type = NodeType::Scalar;
+        data_->scalar_value = value;
         return *this;
     }
 
     // Node type queries
-    NodeType Type() const { return type_; }
-    bool IsDefined() const { return type_ != NodeType::Undefined; }
-    bool IsNull() const { return type_ == NodeType::Null; }
-    bool IsScalar() const { return type_ == NodeType::Scalar; }
-    bool IsSequence() const { return type_ == NodeType::Sequence; }
-    bool IsMap() const { return type_ == NodeType::Map; }
+    NodeType Type() const { return data_->type; }
+    bool IsDefined() const { return data_->type != NodeType::Undefined; }
+    bool IsNull() const { return data_->type == NodeType::Null; }
+    bool IsScalar() const { return data_->type == NodeType::Scalar; }
+    bool IsSequence() const { return data_->type == NodeType::Sequence; }
+    bool IsMap() const { return data_->type == NodeType::Map; }
 
     // Explicit bool conversion
     explicit operator bool() const { return IsDefined(); }
 
     // Size for sequences and maps
     std::size_t size() const {
-        if (type_ == NodeType::Sequence) return sequence_.size();
-        if (type_ == NodeType::Map) return map_.size();
+        if (data_->type == NodeType::Sequence && data_->sequence)
+            return data_->sequence->size();
+        if (data_->type == NodeType::Map && data_->map)
+            return data_->map->size();
         return 0;
     }
 
@@ -139,13 +154,13 @@ public:
     template<typename T>
     T as() const {
         if constexpr (std::is_same_v<T, std::string>) {
-            return scalar_value_;
+            return data_->scalar_value;
         } else if constexpr (std::is_same_v<T, bool>) {
-            return scalar_value_ == "true" || scalar_value_ == "1" || scalar_value_ == "yes";
+            return data_->scalar_value == "true" || data_->scalar_value == "1" || data_->scalar_value == "yes";
         } else if constexpr (std::is_integral_v<T>) {
-            return static_cast<T>(std::stoll(scalar_value_));
+            return static_cast<T>(std::stoll(data_->scalar_value));
         } else if constexpr (std::is_floating_point_v<T>) {
-            return static_cast<T>(std::stod(scalar_value_));
+            return static_cast<T>(std::stod(data_->scalar_value));
         }
         return T();
     }
@@ -162,40 +177,54 @@ public:
 
     // Sequence access
     Node operator[](std::size_t index) {
-        if (type_ == NodeType::Undefined) {
-            type_ = NodeType::Sequence;
+        if (data_->type == NodeType::Undefined) {
+            data_->type = NodeType::Sequence;
+            data_->sequence = std::make_shared<std::vector<std::shared_ptr<NodeData>>>();
         }
-        if (type_ == NodeType::Sequence) {
-            while (sequence_.size() <= index) {
-                sequence_.push_back(Node());
+        if (data_->type == NodeType::Sequence && data_->sequence) {
+            while (data_->sequence->size() <= index) {
+                data_->sequence->push_back(std::make_shared<NodeData>());
             }
-            return sequence_[index];
+            Node result;
+            result.data_ = (*data_->sequence)[index];
+            return result;
         }
         return Node();
     }
 
     const Node operator[](std::size_t index) const {
-        if (type_ == NodeType::Sequence && index < sequence_.size()) {
-            return sequence_[index];
+        if (data_->type == NodeType::Sequence && data_->sequence && index < data_->sequence->size()) {
+            Node result;
+            result.data_ = (*data_->sequence)[index];
+            return result;
         }
         return Node();
     }
 
     // Map access
     Node operator[](const std::string& key) {
-        if (type_ == NodeType::Undefined) {
-            type_ = NodeType::Map;
+        if (data_->type == NodeType::Undefined) {
+            data_->type = NodeType::Map;
+            data_->map = std::make_shared<std::map<std::string, std::shared_ptr<NodeData>>>();
         }
-        if (type_ == NodeType::Map) {
-            return map_[key];
+        if (data_->type == NodeType::Map && data_->map) {
+            auto& entry = (*data_->map)[key];
+            if (!entry) entry = std::make_shared<NodeData>();
+            Node result;
+            result.data_ = entry;
+            return result;
         }
         return Node();
     }
 
     const Node operator[](const std::string& key) const {
-        if (type_ == NodeType::Map) {
-            auto it = map_.find(key);
-            if (it != map_.end()) return it->second;
+        if (data_->type == NodeType::Map && data_->map) {
+            auto it = data_->map->find(key);
+            if (it != data_->map->end()) {
+                Node result;
+                result.data_ = it->second;
+                return result;
+            }
         }
         return Node();
     }
@@ -203,19 +232,19 @@ public:
     Node operator[](const char* key) { return operator[](std::string(key)); }
     const Node operator[](const char* key) const { return operator[](std::string(key)); }
 
-    // Forward declaration for iterator
+    // Forward declare iterator types for iterator_value
     class iterator;
     class const_iterator;
 
-    // Iterator pair for map iteration - yaml-cpp iterators dereference to a pair-like type
-    // This type must be usable as both a pair (with first/second) and as a Node
+    // Iterator value type for dereferencing iterators
     struct iterator_value {
         Node first;   // key
         Node second;  // value
 
         iterator_value() = default;
+        iterator_value(const Node& k, const Node& v) : first(k), second(v) {}
         iterator_value(const std::string& k, const Node& v) : first(k), second(v) {}
-        iterator_value(const Node& v) : first(), second(v) {}
+        explicit iterator_value(const Node& v) : first(), second(v) {}
 
         // Allow treating the value like a Node for sequences
         template<typename T>
@@ -237,10 +266,10 @@ public:
         explicit operator bool() const { return second.IsDefined(); }
 
         // Iteration support - delegates to second (Node)
-        iterator begin();
-        iterator end();
-        const_iterator begin() const;
-        const_iterator end() const;
+        iterator begin() { return second.begin(); }
+        iterator end() { return second.end(); }
+        const_iterator begin() const { return second.begin(); }
+        const_iterator end() const { return second.end(); }
 
         // Subscript access - delegates to second (Node)
         Node operator[](std::size_t index) { return second[index]; }
@@ -251,7 +280,7 @@ public:
         const Node operator[](const char* key) const { return second[key]; }
     };
 
-    // Sequence iteration
+    // Sequence iteration - simplified using indices
     class iterator {
     public:
         using value_type = iterator_value;
@@ -261,55 +290,33 @@ public:
         using iterator_category = std::forward_iterator_tag;
 
         iterator() = default;
-        iterator(std::vector<Node>::iterator it) : seq_it_(it), is_seq_(true) {}
-        iterator(std::map<std::string, Node>::iterator it) : map_it_(it), is_seq_(false) {}
+        iterator(Node* node, std::size_t index, bool is_map)
+            : node_(node), index_(index), is_map_(is_map) {}
 
-        iterator_value operator*() {
-            if (is_seq_) return iterator_value(*seq_it_);
-            return iterator_value(map_it_->first, map_it_->second);
-        }
+        iterator_value operator*();
 
         // Arrow operator returns proxy that provides first/second access
         struct arrow_proxy {
             iterator_value value;
             iterator_value* operator->() { return &value; }
         };
-        arrow_proxy operator->() {
-            if (is_seq_) return arrow_proxy{iterator_value(*seq_it_)};
-            return arrow_proxy{iterator_value(map_it_->first, map_it_->second)};
-        }
+        arrow_proxy operator->() { return arrow_proxy{operator*()}; }
 
-        iterator& operator++() {
-            if (is_seq_) ++seq_it_;
-            else ++map_it_;
-            return *this;
-        }
+        iterator& operator++() { ++index_; return *this; }
         iterator operator++(int) {
             iterator tmp(*this);
             ++(*this);
             return tmp;
         }
         bool operator==(const iterator& other) const {
-            if (is_seq_ != other.is_seq_) return false;
-            if (is_seq_) return seq_it_ == other.seq_it_;
-            return map_it_ == other.map_it_;
+            return node_ == other.node_ && index_ == other.index_;
         }
         bool operator!=(const iterator& other) const { return !(*this == other); }
 
-        // For map iteration
-        Node first() const {
-            if (is_seq_) return Node();
-            return Node(map_it_->first);
-        }
-        Node second() const {
-            if (is_seq_) return *seq_it_;
-            return map_it_->second;
-        }
-
     private:
-        std::vector<Node>::iterator seq_it_;
-        std::map<std::string, Node>::iterator map_it_;
-        bool is_seq_ = true;
+        Node* node_ = nullptr;
+        std::size_t index_ = 0;
+        bool is_map_ = false;
     };
 
     class const_iterator {
@@ -321,81 +328,59 @@ public:
         using iterator_category = std::forward_iterator_tag;
 
         const_iterator() = default;
-        const_iterator(std::vector<Node>::const_iterator it) : seq_it_(it), is_seq_(true) {}
-        const_iterator(std::map<std::string, Node>::const_iterator it) : map_it_(it), is_seq_(false) {}
+        const_iterator(const Node* node, std::size_t index, bool is_map)
+            : node_(node), index_(index), is_map_(is_map) {}
 
-        iterator_value operator*() const {
-            if (is_seq_) return iterator_value(*seq_it_);
-            return iterator_value(map_it_->first, map_it_->second);
-        }
+        iterator_value operator*() const;
 
         struct arrow_proxy {
             iterator_value value;
             const iterator_value* operator->() const { return &value; }
         };
-        arrow_proxy operator->() const {
-            if (is_seq_) return arrow_proxy{iterator_value(*seq_it_)};
-            return arrow_proxy{iterator_value(map_it_->first, map_it_->second)};
-        }
+        arrow_proxy operator->() const { return arrow_proxy{operator*()}; }
 
-        const_iterator& operator++() {
-            if (is_seq_) ++seq_it_;
-            else ++map_it_;
-            return *this;
-        }
+        const_iterator& operator++() { ++index_; return *this; }
         const_iterator operator++(int) {
             const_iterator tmp(*this);
             ++(*this);
             return tmp;
         }
         bool operator==(const const_iterator& other) const {
-            if (is_seq_ != other.is_seq_) return false;
-            if (is_seq_) return seq_it_ == other.seq_it_;
-            return map_it_ == other.map_it_;
+            return node_ == other.node_ && index_ == other.index_;
         }
         bool operator!=(const const_iterator& other) const { return !(*this == other); }
 
-        Node first() const {
-            if (is_seq_) return Node();
-            return Node(map_it_->first);
-        }
-        Node second() const {
-            if (is_seq_) return *seq_it_;
-            return map_it_->second;
-        }
-
     private:
-        std::vector<Node>::const_iterator seq_it_;
-        std::map<std::string, Node>::const_iterator map_it_;
-        bool is_seq_ = true;
+        const Node* node_ = nullptr;
+        std::size_t index_ = 0;
+        bool is_map_ = false;
     };
 
     iterator begin() {
-        if (type_ == NodeType::Sequence) return iterator(sequence_.begin());
-        if (type_ == NodeType::Map) return iterator(map_.begin());
-        return iterator();
+        if (data_->type == NodeType::Sequence || data_->type == NodeType::Map)
+            return iterator(this, 0, data_->type == NodeType::Map);
+        return iterator(this, 0, false);
     }
     iterator end() {
-        if (type_ == NodeType::Sequence) return iterator(sequence_.end());
-        if (type_ == NodeType::Map) return iterator(map_.end());
-        return iterator();
+        return iterator(this, size(), data_->type == NodeType::Map);
     }
     const_iterator begin() const {
-        if (type_ == NodeType::Sequence) return const_iterator(sequence_.begin());
-        if (type_ == NodeType::Map) return const_iterator(map_.begin());
-        return const_iterator();
+        if (data_->type == NodeType::Sequence || data_->type == NodeType::Map)
+            return const_iterator(this, 0, data_->type == NodeType::Map);
+        return const_iterator(this, 0, false);
     }
     const_iterator end() const {
-        if (type_ == NodeType::Sequence) return const_iterator(sequence_.end());
-        if (type_ == NodeType::Map) return const_iterator(map_.end());
-        return const_iterator();
+        return const_iterator(this, size(), data_->type == NodeType::Map);
     }
 
     // Push back for sequences
     void push_back(const Node& node) {
-        if (type_ == NodeType::Undefined) type_ = NodeType::Sequence;
-        if (type_ == NodeType::Sequence) {
-            sequence_.push_back(node);
+        if (data_->type == NodeType::Undefined) {
+            data_->type = NodeType::Sequence;
+            data_->sequence = std::make_shared<std::vector<std::shared_ptr<NodeData>>>();
+        }
+        if (data_->type == NodeType::Sequence && data_->sequence) {
+            data_->sequence->push_back(node.data_);
         }
     }
 
@@ -405,35 +390,55 @@ public:
     }
 
     // Scalar value
-    const std::string& Scalar() const { return scalar_value_; }
+    const std::string& Scalar() const { return data_->scalar_value; }
 
     // Tag
-    std::string Tag() const { return tag_; }
-    void SetTag(const std::string& tag) { tag_ = tag; }
+    std::string Tag() const { return data_->tag; }
+    void SetTag(const std::string& tag) { data_->tag = tag; }
+
+    // Get map keys (for iteration support)
+    std::vector<std::string> getMapKeys() const {
+        std::vector<std::string> keys;
+        if (data_->type == NodeType::Map && data_->map) {
+            for (const auto& pair : *data_->map) {
+                keys.push_back(pair.first);
+            }
+        }
+        return keys;
+    }
 
 private:
-    NodeType type_ = NodeType::Undefined;
-    std::string scalar_value_;
-    std::string tag_;
-    mutable std::vector<Node> sequence_;
-    mutable std::map<std::string, Node> map_;
+    std::shared_ptr<NodeData> data_;
+
+    friend class iterator;
+    friend class const_iterator;
 };
 
-// Implement iterator_value methods that depend on iterator definitions
-inline Node::iterator Node::iterator_value::begin() {
-    return second.begin();
+// Implement iterator operator* (needs complete Node type)
+inline Node::iterator_value Node::iterator::operator*() {
+    if (!node_) return iterator_value();
+    if (is_map_) {
+        auto keys = node_->getMapKeys();
+        if (index_ < keys.size()) {
+            return iterator_value(keys[index_], (*node_)[keys[index_]]);
+        }
+    } else {
+        return iterator_value((*node_)[index_]);
+    }
+    return iterator_value();
 }
 
-inline Node::iterator Node::iterator_value::end() {
-    return second.end();
-}
-
-inline Node::const_iterator Node::iterator_value::begin() const {
-    return second.begin();
-}
-
-inline Node::const_iterator Node::iterator_value::end() const {
-    return second.end();
+inline Node::iterator_value Node::const_iterator::operator*() const {
+    if (!node_) return iterator_value();
+    if (is_map_) {
+        auto keys = node_->getMapKeys();
+        if (index_ < keys.size()) {
+            return iterator_value(keys[index_], (*node_)[keys[index_]]);
+        }
+    } else {
+        return iterator_value((*node_)[index_]);
+    }
+    return iterator_value();
 }
 
 // Load functions
