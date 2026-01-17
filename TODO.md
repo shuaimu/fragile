@@ -877,7 +877,7 @@ Current status:
 
 **Blockers** (remaining tests):
 - test_lambda, test_timer: Use internal TEST macro (requires deptran/all.h)
-- test_reactor_minimal: Uses outdated PollThread API
+- ~~test_reactor_minimal: Uses outdated PollThread API~~ ✅ Fixed [26:01:17]
 - test_rand, test_io_wait, test_dtxn, test_graph, test_sm: Entirely commented out
 - test_marshal_value: Requires deptran/marshal-value.h
 - config_* tests: Need RocksDB persistent storage
