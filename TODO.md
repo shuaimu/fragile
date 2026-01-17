@@ -664,12 +664,15 @@ Migration: After C++20 support is complete, deprecate these.
   - [x] `test_fiber` - Built and all tests pass [26:01:17]
     - gtest-based tests for Fiber API (this_fiber namespace)
     - 37/37 tests pass (type aliases, context checks, sleep, futures)
+  - [x] `test_rpc_errors` - Built and all tests pass [26:01:17]
+    - gtest-based tests for RPC error types and exceptions
+    - 28/28 tests pass (error categories, codes, exceptions)
   - [x] Fixed CompilationJob to resolve internal deps (librrr) and add build dir to lib_paths [26:01:17]
   - [-] Tests using internal unittest.hpp TEST macro blocked (commented out in all.hpp)
   - [ ] `test_marshal` - Serialization tests
   - [ ] `test_config_schema` - Configuration tests
   - [ ] `test_masstree` - Masstree index tests
-  - [ ] `test_rpc` - RPC framework tests
+  - [ ] `test_rpc` - RPC framework tests (full integration)
   - [ ] `test_future` - Future/promise tests
   - [ ] All others listed in CMakeLists.txt
 - [ ] **G.5.3 Benchmark Executables**
