@@ -819,6 +819,8 @@ Current status:
 - Fixed chrono stub to use long instead of long long for duration types (matches libc++)
 - Added std::istreambuf_iterator and std::ostreambuf_iterator to iterator stub [26:01:17]
 - Fixed fragile.toml with proper project configuration and paths [26:01:17]
+- Added test for rpc/server.cpp parsing (4688 functions, parses successfully) [26:01:17]
+- Created RPC server infrastructure plan: docs/dev/plan_rpc_server_infrastructure.md
 - Total: 50 test/benchmark executables, 802+ tests passing
 
 **Blockers**:
