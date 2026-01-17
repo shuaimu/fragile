@@ -74,6 +74,20 @@ struct ipv6_mreq {
     unsigned int ipv6mr_interface;     // Interface index
 };
 
+// IP socket options
+#define IP_OPTIONS 4
+#define IP_HDRINCL 3
+#define IP_TOS 1
+#define IP_TTL 2
+#define IP_RECVOPTS 6
+#define IP_RETOPTS 7
+#define IP_PKTINFO 8
+#define IP_PKTOPTIONS 9
+#define IP_MTU_DISCOVER 10
+#define IP_RECVERR 11
+#define IP_RECVTTL 12
+#define IP_RECVTOS 13
+
 // Socket options for multicast
 #define IP_MULTICAST_IF 32
 #define IP_MULTICAST_TTL 33
