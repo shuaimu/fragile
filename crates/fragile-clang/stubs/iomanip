@@ -3,11 +3,54 @@
 #define _FRAGILE_IOMANIP_
 
 #include "sstream"
+#include "ctime"
+
+namespace std {
 
 // The manipulators are already defined in sstream:
 // - std::setprecision(int)
 // - std::setw(int)
 // - std::setfill(char)
 // - std::fixed, std::scientific, std::hex, std::dec, etc.
+
+// put_time for formatting tm structures (C++11)
+// Returns an unspecified type that can be used with ostream<<
+struct _PutTimeManip {
+    const std::tm* tm;
+    const char* fmt;
+};
+
+inline _PutTimeManip put_time(const std::tm* tm, const char* fmt) {
+    return _PutTimeManip{tm, fmt};
+}
+
+// get_time for parsing time strings (C++11)
+struct _GetTimeManip {
+    std::tm* tm;
+    const char* fmt;
+};
+
+inline _GetTimeManip get_time(std::tm* tm, const char* fmt) {
+    return _GetTimeManip{tm, fmt};
+}
+
+// ostream operator for put_time
+template<typename CharT, typename Traits>
+basic_ostream<CharT, Traits>& operator<<(basic_ostream<CharT, Traits>& os, const _PutTimeManip& m) {
+    // Stub: just output a placeholder
+    (void)m;
+    os << "TIME";
+    return os;
+}
+
+// istream operator for get_time
+template<typename CharT, typename Traits>
+basic_istream<CharT, Traits>& operator>>(basic_istream<CharT, Traits>& is, const _GetTimeManip& m) {
+    // Stub: don't actually parse
+    (void)m;
+    return is;
+}
+
+} // namespace std
 
 #endif // _FRAGILE_IOMANIP_

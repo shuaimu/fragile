@@ -626,10 +626,15 @@ inline string to_string(float value) { return string("0.0"); }
 inline string to_string(double value) { return string("0.0"); }
 inline string to_string(long double value) { return string("0.0"); }
 
-// stoi, stol, etc. (minimal stubs)
+// stoi, stol, stoul, stoull, stof, stod, stold (minimal stubs)
 inline int stoi(const string& str, size_t* pos = nullptr, int base = 10) { (void)str; (void)pos; (void)base; return 0; }
 inline long stol(const string& str, size_t* pos = nullptr, int base = 10) { (void)str; (void)pos; (void)base; return 0; }
 inline long long stoll(const string& str, size_t* pos = nullptr, int base = 10) { (void)str; (void)pos; (void)base; return 0; }
+inline unsigned long stoul(const string& str, size_t* pos = nullptr, int base = 10) { (void)str; (void)pos; (void)base; return 0; }
+inline unsigned long long stoull(const string& str, size_t* pos = nullptr, int base = 10) { (void)str; (void)pos; (void)base; return 0; }
+inline float stof(const string& str, size_t* pos = nullptr) { (void)str; (void)pos; return 0.0f; }
+inline double stod(const string& str, size_t* pos = nullptr) { (void)str; (void)pos; return 0.0; }
+inline long double stold(const string& str, size_t* pos = nullptr) { (void)str; (void)pos; return 0.0L; }
 
 // Non-member comparison operators (const char* on left side)
 template<typename CharT, typename Traits, typename Alloc>

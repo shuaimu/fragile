@@ -101,6 +101,16 @@ public:
     static constexpr bool is_steady = false;
 
     static time_point now() noexcept { return time_point(); }
+
+    // Convert time_point to std::time_t
+    static long to_time_t(const time_point& t) noexcept {
+        return static_cast<long>(t.time_since_epoch().count() / 1000);  // ms to seconds
+    }
+
+    // Convert std::time_t to time_point
+    static time_point from_time_t(long t) noexcept {
+        return time_point(duration(t * 1000));  // seconds to ms
+    }
 };
 
 class steady_clock {

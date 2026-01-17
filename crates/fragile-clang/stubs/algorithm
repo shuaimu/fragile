@@ -469,6 +469,23 @@ void sort_heap(RandomIt first, RandomIt last) {}
 template<typename RandomIt>
 bool is_heap(RandomIt first, RandomIt last) { return true; }
 
+// shuffle (C++11) - random reordering
+template<typename RandomIt, typename URBG>
+void shuffle(RandomIt first, RandomIt last, URBG&& g) {
+    auto n = last - first;
+    for (auto i = n - 1; i > 0; --i) {
+        auto j = g() % (i + 1);
+        iter_swap(first + i, first + j);
+    }
+}
+
+// random_shuffle (deprecated in C++14, removed in C++17, but some code still uses it)
+template<typename RandomIt>
+void random_shuffle(RandomIt first, RandomIt last) {
+    // Simple shuffle stub
+    (void)first; (void)last;
+}
+
 } // namespace std
 
 // Include numeric for accumulate (some code expects it from algorithm)

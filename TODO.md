@@ -502,7 +502,7 @@ Migration: After C++20 support is complete, deprecate these.
 - [x] fragile-clang: 569 tests passing (all integration tests) [26:01:17]
 - [x] fragile-rustc-driver: 20 tests passing (base tests without rustc-integration feature) [26:01:17]
 - [x] fragile-runtime: Compiles
-- [x] **Mako Tests**: 49 test executables, 802 tests [26:01:17]
+- [x] **Mako Tests**: 50 test/benchmark executables, 802+ tests [26:01:17]
   - Core tests: test_fiber (37), test_marshal (23), test_sharding_policy (34), test_idempotency (32), test_completion_tracker (27)
   - Masstree tests: test_masstree (2), test_masstree_internals (13), test_masstree_multi_instance (5)
   - Silo tests: test_silo_varint (22), test_silo_runtime (8), test_silo_rcu_thread (9), test_silo_multi_site_stress (10), test_silo_allocator_tuple (18)
@@ -512,6 +512,7 @@ Migration: After C++20 support is complete, deprecate these.
   - Timeout tests: test_txn_timeout (9)
   - Others: test_alock (14, 2 timing-sensitive fail), test_and_event (5), test_rpc_errors (28), test_config_schema (7), test_arc_mutex_thread (7)
   - Non-gtest: test_fragile_minimal (pass), test_mako_core_minimal (pass)
+  - Benchmarks: masstree_perf (pass)
 
 ### 5.2 Mako Milestones
 - [x] **M1**: Parse `rand.cpp` (minimal deps) [26:01:16] - 26 functions, rand_r stub added
@@ -724,10 +725,12 @@ Migration: After C++20 support is complete, deprecate these.
   - [x] `test_future` - Future/promise tests, 12 tests passing [26:01:17]
   - [x] `test_txn_timeout` - Transaction timeout/shard failure tests, 9 tests passing [26:01:17]
   - [x] `stress_transport_backend` - Transport stress tests (mock-based), 13 tests passing [26:01:17]
+  - [x] `masstree_perf` - Masstree B-tree benchmark (non-gtest), passing [26:01:17]
   - [ ] All others listed in CMakeLists.txt
-- [ ] **G.5.3 Benchmark Executables**
-  - [ ] `rpcbench` - RPC benchmark
-  - [ ] `bench_future` - Future benchmark
+- [-] **G.5.3 Benchmark Executables**
+  - [x] `masstree_perf` - Masstree benchmark (passing) [26:01:17]
+  - [ ] `rpcbench` - RPC benchmark (blocked on RPC server)
+  - [ ] `bench_future` - Future benchmark (blocked on RPC server)
 
 ### G.6 Pass Mako CI Tests
 - [-] **G.6.1 Unit Tests (ctest)**
@@ -804,25 +807,22 @@ Current status:
 - **Milestones M1-M6**: ✅ Complete - test harness working
 - **Phase G (Full Build)**: 🔄 In Progress
   - G.1-G.4: ✅ Complete (MIR injection, runtime support, build system, blocked files fixed)
-  - G.5.2: ✅ **49 test executables built, 802 tests passing**
+  - G.5.2: ✅ **50 test/benchmark executables built, 802+ tests passing**
+  - G.5.3: 🔄 `masstree_perf` benchmark passing, others blocked on RPC server
   - **libmako_lib**: ✅ UNBLOCKED [26:01:17, 06:30]
   - G.5.1: Core executables blocked on full eRPC/ASIO stack
-  - G.5.3: Benchmark executables blocked on full eRPC/ASIO stack
 
 **Recent Progress** [26:01:17]:
+- Added masstree_perf benchmark - unblocked by adding STL stubs
+- Added STL stubs: stod, stoull, stoul, stof, stold, shuffle, put_time, get_time, to_time_t
 - Added stress_transport_backend (13 tests) - mock-based transport stress tests
 - Fixed chrono stub to use long instead of long long for duration types (matches libc++)
-- Added random stub include for algorithm (std::max visibility)
-- Added test_txn_timeout (9 tests) - ShardFailureController and TXN_TIMEOUT tests
-- Fixed invoke_result stub to properly deduce return types (was always returning void)
-- Added test_rpc (17 tests), test_future (12 tests) - now unblocked
-- Total: 49 test executables, 802 tests passing
+- Total: 50 test/benchmark executables, 802+ tests passing
 
 **Blockers**:
 - Core executables (simpleTransaction, simplePaxos) need full eRPC with ASIO
 - Full integration tests need rpc/server.hpp and benchmark_service.h
-- Remaining test executables blocked on stub limitations:
-  - masstree_perf: needs std::chrono::to_time_t, std::put_time, std::shuffle, std::stod, std::stoull
+- Remaining test executables blocked on:
   - test_sto_transaction_real: needs std::istreambuf_iterator, always_assert macro
   - bench_future, rpcbench: need full RPC server infrastructure
 
@@ -831,7 +831,8 @@ Current status:
 - G.2: Runtime support (fragile-runtime crate)
 - G.3: Build system integration (fragile.toml, compile_commands.json)
 - G.4: Fixed blocked files (mtd.cc, persist_test.cc, mongodb/server.cc)
-- G.5.2: Unit tests (49 executables, 802 tests)
+- G.5.2: Unit tests (50 executables, 802+ tests)
+- G.5.3: masstree_perf benchmark
 - libmako_lib build unblocked
 
 ---
