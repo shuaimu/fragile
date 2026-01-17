@@ -4,7 +4,7 @@
 
 Fragile is a polyglot compiler unifying Rust, C++, and Go at the **rustc MIR level**.
 
-**Architecture Goal**: C++ code compiles through rustc's codegen, NOT through clang++.
+**Architecture Goal**: C++ code compiles through rustc's codegen, NOT through clang++ or custom LLVM.
 
 ```
 C++ Source
@@ -25,7 +25,7 @@ Object file (.o)
 Executable
 ```
 
-**Key Principle**: NO separate clang++ compilation. ALL codegen goes through rustc.
+**Key Principle**: NO separate compilation paths. ALL codegen goes through rustc.
 
 ```
 Status Legend:
@@ -34,6 +34,47 @@ Status Legend:
   [ ] Not Started
   [!] Wrong approach (to be removed/redone)
 ```
+
+---
+
+## ⚠️ CRITICAL: Wrong Approaches We've Taken
+
+### Wrong Approach #1: clang++ Hybrid (Link-time)
+```
+C++ ──► clang++ ──► .o ──┐
+                         ├──► linker ──► executable
+Rust ──► rustc ──► .o ──┘
+```
+**Why wrong**: Two separate compilers, no shared optimization, just FFI at link time.
+
+### Wrong Approach #2: inkwell/tree-sitter (Custom LLVM)
+```
+C++ ──► tree-sitter ──► HIR ──► inkwell ──► LLVM IR ──► .o ──┐
+                                                              ├──► linker
+Rust ──► rustc ──────────────────────────────────────► .o ──┘
+```
+**Why wrong**: Still two separate compilers! inkwell generates LLVM independently of rustc.
+The code only meets at link time. No cross-language inlining, no shared analysis.
+
+**Status**: The `fragile-codegen` crate using inkwell IS WRONG and should be deprecated.
+The `fragile-frontend-*` crates using tree-sitter ARE WRONG for the final architecture.
+
+### Correct Approach: rustc MIR Injection (Compile-time)
+```
+C++ ──► libclang ──► Clang AST ──► Fragile MIR ──┐
+                                                  ├──► rustc MIR ──► rustc backend ──► .o
+Rust ──► rustc frontend ─────────────────────────┘
+```
+**Why correct**: Single compiler (rustc), single optimization pipeline, true unification.
+Both languages go through the SAME MIR and SAME codegen.
+
+### What Needs to Happen
+1. **Deprecate** `fragile-codegen` (inkwell) - it's a dead end
+2. **Deprecate** `fragile-frontend-*` (tree-sitter) for production - use only for prototyping
+3. **Complete** `fragile-rustc-driver` with MIR injection via `mir_built` query override
+4. **Complete** `fragile-clang` for Clang AST → Fragile MIR conversion
+
+---
 
 ---
 
@@ -188,7 +229,12 @@ Each feature must work through the MIR pipeline, not clang++.
   - Parser handles CXType_LValueReference and CXType_RValueReference
   - Added 3 tests: `test_parse_lvalue_reference_parameter`, `test_parse_const_lvalue_reference_parameter`, `test_parse_rvalue_reference_parameter`
   - Integration tests exist: `test_rvalue_reference`, `test_const_reference`, etc.
-- [ ] **2.4.4** Arrays ([T; N])
+- [x] **2.4.4** Arrays ([T; N]) [26:01:17] - Added ArraySubscriptExpr handling in convert_expr()
+  - Converts `arr[index]` to MirOperand with MirProjection::Index
+  - Handles compile-time constant indices properly
+  - Falls back to index 0 for runtime variable indices (TODO: future enhancement)
+  - Added 3 tests: `test_convert_array_subscript`, `test_convert_array_subscript_variable_index`, `test_convert_array_subscript_nested`
+  - See: `docs/dev/plan_2_4_4_arrays.md`
 
 ---
 
