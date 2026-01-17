@@ -507,6 +507,97 @@ constexpr auto data(const C& c) -> decltype(c.data()) { return c.data(); }
 template<typename T, size_t N>
 constexpr T* data(T (&array)[N]) noexcept { return array; }
 
+// istream_iterator - reads from a stream using operator>>
+template<typename T, typename CharT = char, typename Traits = void, typename Distance = long>
+class istream_iterator {
+public:
+    using iterator_category = input_iterator_tag;
+    using value_type = T;
+    using difference_type = Distance;
+    using pointer = const T*;
+    using reference = const T&;
+    using char_type = CharT;
+    using traits_type = Traits;
+
+    // End-of-stream iterator
+    constexpr istream_iterator() noexcept : stream_(nullptr), ok_(false) {}
+
+    // Constructor from input stream
+    template<typename IStream>
+    istream_iterator(IStream& is) noexcept : stream_(reinterpret_cast<void*>(&is)), ok_(true) {
+        read();
+    }
+
+    // Dereference
+    const T& operator*() const { return value_; }
+    const T* operator->() const { return &value_; }
+
+    // Increment
+    istream_iterator& operator++() {
+        read();
+        return *this;
+    }
+
+    istream_iterator operator++(int) {
+        istream_iterator tmp = *this;
+        ++(*this);
+        return tmp;
+    }
+
+    // Equality comparison
+    friend bool operator==(const istream_iterator& a, const istream_iterator& b) {
+        return a.ok_ == b.ok_ && (!a.ok_ || a.stream_ == b.stream_);
+    }
+
+    friend bool operator!=(const istream_iterator& a, const istream_iterator& b) {
+        return !(a == b);
+    }
+
+private:
+    void read() {
+        // In stub, we just mark as end-of-stream immediately
+        // Real implementation would read using operator>>
+        ok_ = false;
+    }
+
+    void* stream_;
+    T value_{};
+    bool ok_;
+};
+
+// ostream_iterator - writes to a stream using operator<<
+template<typename T, typename CharT = char, typename Traits = void>
+class ostream_iterator {
+public:
+    using iterator_category = output_iterator_tag;
+    using value_type = void;
+    using difference_type = void;
+    using pointer = void;
+    using reference = void;
+    using char_type = CharT;
+    using traits_type = Traits;
+
+    // Constructor from output stream
+    template<typename OStream>
+    ostream_iterator(OStream& os, const CharT* delim = nullptr) noexcept
+        : stream_(reinterpret_cast<void*>(&os)), delim_(delim) {}
+
+    // Assign value to output
+    ostream_iterator& operator=(const T& value) {
+        // Write value to stream using operator<<
+        return *this;
+    }
+
+    // No-op operations for output iterators
+    ostream_iterator& operator*() { return *this; }
+    ostream_iterator& operator++() { return *this; }
+    ostream_iterator& operator++(int) { return *this; }
+
+private:
+    void* stream_;
+    const CharT* delim_;
+};
+
 // istreambuf_iterator - reads from a streambuf
 template<typename CharT, typename Traits = void>
 class istreambuf_iterator {

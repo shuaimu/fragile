@@ -106,6 +106,8 @@ private:
     bool valid_;
     template<typename> friend class promise;
     template<typename> friend class packaged_task;
+    template<typename> friend class shared_future;
+    friend class shared_future<void>;  // For shared_future<void> constructor
 };
 
 // shared_future<R> - provides access to the result from multiple threads

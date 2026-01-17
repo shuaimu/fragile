@@ -180,6 +180,16 @@ struct hash<int> {
 };
 
 template<>
+struct hash<short> {
+    size_t operator()(short v) const noexcept { return static_cast<size_t>(v); }
+};
+
+template<>
+struct hash<unsigned short> {
+    size_t operator()(unsigned short v) const noexcept { return static_cast<size_t>(v); }
+};
+
+template<>
 struct hash<unsigned int> {
     size_t operator()(unsigned int v) const noexcept { return static_cast<size_t>(v); }
 };

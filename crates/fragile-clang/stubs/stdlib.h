@@ -40,4 +40,9 @@ using std::bsearch;
 using std::abs;
 using std::labs;
 
+// POSIX realpath function (resolves symlinks and relative paths)
+extern "C" {
+char* realpath(const char* path, char* resolved_path);
+}
+
 #endif // _FRAGILE_STDLIB_H_

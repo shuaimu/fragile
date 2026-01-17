@@ -843,6 +843,7 @@ Current status:
 - bench_future: 6 benchmark tests
 - rpcbench: client/server RPC benchmark working
 - 571 Rust parsing tests passing (fragile-clang)
+- Stub header improvements (istream_iterator, hash<short>, realpath, operator""s)
 - **Total: 1451+ tests passing across C++ and Rust**
 
 **Blockers** (remaining tests):
@@ -853,6 +854,7 @@ Current status:
 - config_* tests: Need RocksDB persistent storage
 - sharding_* tests: Need deptran infrastructure
 - Core executables (simpleTransaction, simplePaxos): Need full eRPC/asio/deptran infrastructure (see docs/dev/plan_simpleTransaction_analysis.md)
+  - Investigation [26:01:17]: Stub headers improved but simpleTransaction still blocked on yaml-cpp, char_traits, tuple comparison operators
 
 **Completed**:
 - G.1: MIR injection pipeline (TLS, type conversion, function sigs, MIR body generation)
