@@ -162,7 +162,76 @@ impl CppType {
                     format!("*mut {}", element.to_rust_type_str())
                 }
             }
-            CppType::Named(name) => name.clone(),
+            CppType::Named(name) => {
+                // Handle special C++ types that don't map directly to Rust
+                match name.as_str() {
+                    "long double" => "f64".to_string(),  // Rust doesn't have long double
+                    "long long" | "long long int" => "i64".to_string(),
+                    "unsigned long long" | "unsigned long long int" => "u64".to_string(),
+                    "long" | "long int" => "i64".to_string(),
+                    "unsigned long" | "unsigned long int" => "u64".to_string(),
+                    "int" => "i32".to_string(),
+                    "unsigned" | "unsigned int" => "u32".to_string(),
+                    "short" | "short int" => "i16".to_string(),
+                    "unsigned short" | "unsigned short int" => "u16".to_string(),
+                    "signed char" => "i8".to_string(),
+                    "unsigned char" => "u8".to_string(),
+                    "char" => "i8".to_string(),
+                    "wchar_t" => "i32".to_string(),
+                    "char8_t" => "u8".to_string(),
+                    "char16_t" => "u16".to_string(),
+                    "char32_t" => "u32".to_string(),
+                    "size_t" => "usize".to_string(),
+                    "ssize_t" | "ptrdiff_t" => "isize".to_string(),
+                    "intptr_t" => "isize".to_string(),
+                    "uintptr_t" => "usize".to_string(),
+                    _ => {
+                        // Handle decltype expressions - replace with unit type placeholder
+                        if name.starts_with("decltype(") {
+                            return "()".to_string();
+                        }
+                        // Handle typeof expressions similarly
+                        if name.starts_with("typeof(") || name.starts_with("__typeof__(") {
+                            return "()".to_string();
+                        }
+                        // Strip C++ qualifiers that aren't valid in Rust type names
+                        let cleaned = name
+                            .trim_start_matches("const ")
+                            .trim_start_matches("volatile ")
+                            .trim_start_matches("struct ")
+                            .trim_start_matches("class ")
+                            .trim_start_matches("enum ")
+                            .trim_end();  // Remove trailing whitespace
+
+                        // Handle remaining "unsigned TYPE" patterns
+                        let cleaned = if cleaned.starts_with("unsigned ") {
+                            match cleaned.trim_start_matches("unsigned ") {
+                                "int" => "u32",
+                                "long" => "u64",
+                                "short" => "u16",
+                                "char" => "u8",
+                                _ => cleaned
+                            }
+                        } else if cleaned.starts_with("signed ") {
+                            match cleaned.trim_start_matches("signed ") {
+                                "int" => "i32",
+                                "long" => "i64",
+                                "short" => "i16",
+                                "char" => "i8",
+                                _ => cleaned
+                            }
+                        } else {
+                            cleaned
+                        };
+
+                        // Replace :: with _ for namespaced types, remove other invalid chars
+                        cleaned.replace("::", "_")
+                            .replace(" *", "")  // Remove trailing pointer indicators
+                            .replace("*", "")
+                            .replace(" ", "_")
+                    }
+                }
+            }
             CppType::Function { return_type, params, is_variadic } => {
                 let params_str: Vec<_> = params.iter().map(|p| p.to_rust_type_str()).collect();
                 let params_joined = if *is_variadic {

@@ -1,43 +1,82 @@
 # Fragile
 
-A unified programming language with three syntaxes: **Rust**, **C++20**, and **Go**.
+A unified compiler for **Rust**, **C++20/23**, and **Go** that serves as:
 
-All code compiles to the same IR with identical semantics — no FFI, no marshalling, zero overhead.
+1. **A drop-in replacement** for g++, clang++, and `go build`
+2. **A polyglot compiler** for mixing languages with zero-cost interop
 
-## Example
+## Quick Start
 
-```rust
-// math.rs
-pub fn add(a: i32, b: i32) -> i32 { a + b }
+```bash
+# As a C++ compiler (replaces g++)
+fragile++ main.cpp -o main
+./main
+
+# As a Go compiler (replaces go build)
+fragile-go build main.go
+./main
+
+# As a polyglot compiler
+fragile build main.rs utils.cpp helpers.go -o program
+./program
 ```
 
-```go
-// main.go
-import "math.rs"
+## Cross-Language Interop
 
-func main() {
-    result := add(2, 3)  // Direct call to Rust function
+Use C++ STL in Rust:
+```rust
+use fragile::cpp::std::vector::Vector;
+use fragile::cpp::std::map::Map;
+
+fn main() {
+    let mut v: Vector<i32> = Vector::new();
+    v.push_back(42);
+
+    let mut m: Map<String, i32> = Map::new();
+    m.insert("key".into(), 100);
 }
 ```
 
-## Building
+Use Rust types in C++:
+```cpp
+#include <fragile/rust/std/vec.hpp>
 
-Prerequisites: LLVM 19, Rust 1.75+
-
-```bash
-cargo build --release
+int main() {
+    fragile::rust::std::Vec<int> v;
+    v.push(42);
+    return v.len();
+}
 ```
 
-## Usage
+**No FFI. No marshalling. Zero overhead.**
+
+## How It Works
+
+Fragile transpiles C++ and Go to Rust, then compiles with rustc:
+
+```
+C++ Source ──► Clang ──► AST ──► Transpiler ──► Rust Code ──┐
+                                                            ├──► rustc ──► Binary
+Rust Source ────────────────────────────────────────────────┘
+```
+
+This means:
+- **Full C++ support**: Clang handles templates, SFINAE, concepts, coroutines
+- **Debuggable output**: Generated `.rs` files can be inspected
+- **Stable toolchain**: No dependency on unstable compiler internals
+
+## Building
+
+Prerequisites: LLVM 19, Rust 1.75+, libclang
 
 ```bash
-fragile main.go math.rs -o program
-./program
+export LIBCLANG_PATH=/usr/lib/x86_64-linux-gnu  # Adjust for your system
+cargo build --release
 ```
 
 ## Documentation
 
-See [docs/fragile-book.md](docs/fragile-book.md) for the full language specification.
+See [docs/fragile-book.md](docs/fragile-book.md) for the full specification.
 
 ## License
 

@@ -305,7 +305,18 @@ impl ClangParser {
 
             // Get children
             let mut children = Vec::new();
-            let children_ptr: *mut Vec<ClangNode> = &mut children;
+
+            // Create a context struct to pass both parser and children to visitor
+            struct VisitorContext<'a> {
+                parser: &'a ClangParser,
+                children: &'a mut Vec<ClangNode>,
+            }
+
+            let mut ctx = VisitorContext {
+                parser: self,
+                children: &mut children,
+            };
+            let ctx_ptr: *mut VisitorContext = &mut ctx;
 
             extern "C" fn visitor(
                 child: clang_sys::CXCursor,
@@ -313,21 +324,20 @@ impl ClangParser {
                 data: clang_sys::CXClientData,
             ) -> clang_sys::CXChildVisitResult {
                 unsafe {
-                    let parser = &*(data as *const ClangParser);
-                    let children = &mut *(data as *mut Vec<ClangNode>);
+                    let ctx = &mut *(data as *mut VisitorContext);
 
                     // Skip null cursors
                     if clang_sys::clang_Cursor_isNull(child) != 0 {
                         return clang_sys::CXChildVisit_Continue;
                     }
 
-                    children.push(parser.convert_cursor(child));
+                    ctx.children.push(ctx.parser.convert_cursor(child));
                     clang_sys::CXChildVisit_Continue
                 }
             }
 
             // Visit children
-            clang_sys::clang_visitChildren(cursor, visitor, children_ptr as clang_sys::CXClientData);
+            clang_sys::clang_visitChildren(cursor, visitor, ctx_ptr as clang_sys::CXClientData);
 
             ClangNode {
                 kind: node_kind,
@@ -964,6 +974,13 @@ impl ClangParser {
                 clang_sys::CXCursor_InitListExpr => {
                     let ty = self.convert_type(clang_sys::clang_getCursorType(cursor));
                     ClangNodeKind::InitListExpr { ty }
+                }
+
+                // C++ this expression (explicit or implicit)
+                // CXCursor_CXXThisExpr = 132
+                132 => {
+                    let ty = self.convert_type(clang_sys::clang_getCursorType(cursor));
+                    ClangNodeKind::CXXThisExpr { ty }
                 }
 
                 // C++20 Concepts

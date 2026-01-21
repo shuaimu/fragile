@@ -8,10 +8,8 @@ name = "fragile"
 path = "src/main.rs"
 
 [dependencies]
-fragile-driver.workspace = true
 fragile-common.workspace = true
-fragile-build = { path = "../fragile-build" }
-fragile-rustc-driver = { path = "../fragile-rustc-driver" }
-fragile-clang = { path = "../fragile-clang" }
+fragile-build.workspace = true
+fragile-clang.workspace = true
 clap.workspace = true
 miette.workspace = true

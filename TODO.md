@@ -2,30 +2,27 @@
 
 ## Overview
 
-Fragile is a polyglot compiler unifying Rust, C++, and Go at the **rustc MIR level**.
+Fragile is a unified compiler for Rust, C++, and Go that:
+1. **Replaces g++/clang++/go build** - Drop-in compiler replacement
+2. **Enables cross-language interop** - Use C++ STL in Rust, Rust Vec in C++
 
-**Architecture Goal**: C++ code compiles through rustc's codegen, NOT through clang++ or custom LLVM.
+**Architecture**: Transpile C++/Go to Rust source code, then compile with rustc.
 
 ```
-C++ Source
-    │
-    ▼ (libclang - parsing)
-Clang AST
-    │
-    ▼ (fragile-clang - conversion)
-Fragile MIR
-    │
-    ▼ (mir_built query override)
-rustc MIR  ◄── Unified with Rust code
-    │
-    ▼ (rustc LLVM backend)
-Object file (.o)
-    │
-    ▼ (linker)
-Executable
+C++ Source                          Go Source
+    │                                   │
+    ▼ (libclang)                        ▼ (go/ssa - planned)
+Clang AST                           Go SSA
+    │                                   │
+    ▼ (fragile-clang)                   ▼ (fragile-go)
+    │                                   │
+    └──────────► Rust Source ◄──────────┘
+                    │
+                    ▼ (rustc)
+                 Binary
 ```
 
-**Key Principle**: NO separate compilation paths. ALL codegen goes through rustc.
+**Key Principle**: Transpile to Rust source (not MIR) for stability and debuggability.
 
 ```
 Status Legend:
@@ -34,6 +31,39 @@ Status Legend:
   [ ] Not Started
   [!] Wrong approach (to be removed/redone)
 ```
+
+---
+
+## Architecture Decision: Transpile to Rust Source
+
+### Previous Approach: MIR Injection
+```
+C++ ──► Clang AST ──► Fragile MIR ──► rustc MIR (via mir_built override)
+```
+**Problems**:
+- MIR format changes every rustc version
+- Hard to debug (MIR is not human-readable)
+- Tight coupling to rustc internals
+
+### New Approach: Transpile to Rust Source
+```
+C++ ──► Clang AST ──► Rust Source (.rs files) ──► rustc
+```
+**Benefits**:
+- Stable interface (Rust syntax is stable)
+- Debuggable output (can read generated .rs files)
+- Works with any rustc version
+- Simpler toolchain
+
+### Why This Still Works as a Complete Compiler
+
+Clang handles all the hard parts of C++:
+- Template instantiation → Already done before we see it
+- Overload resolution → Already resolved
+- SFINAE evaluation → Already evaluated
+- Type deduction → Already deduced
+
+We just convert the fully-resolved AST to Rust code.
 
 ---
 
@@ -59,22 +89,30 @@ The code only meets at link time. No cross-language inlining, no shared analysis
 **Status**: The `fragile-codegen` crate using inkwell IS WRONG and should be deprecated.
 The `fragile-frontend-*` crates using tree-sitter ARE WRONG for the final architecture.
 
-### Correct Approach: rustc MIR Injection (Compile-time)
+### Wrong Approach #3: MIR Injection (Abandoned)
 ```
-C++ ──► libclang ──► Clang AST ──► Fragile MIR ──┐
-                                                  ├──► rustc MIR ──► rustc backend ──► .o
-Rust ──► rustc frontend ─────────────────────────┘
+C++ ──► libclang ──► Clang AST ──► Fragile MIR ──► rustc MIR (mir_built override)
 ```
-**Why correct**: Single compiler (rustc), single optimization pipeline, true unification.
-Both languages go through the SAME MIR and SAME codegen.
+**Why abandoned**: MIR is unstable, hard to debug, tight coupling to rustc internals.
+Work done on MIR injection was useful for learning but not the final approach.
+
+### Correct Approach: Transpile to Rust Source
+```
+C++ ──► libclang ──► Clang AST ──► Rust Source ──► rustc ──► Binary
+```
+**Why correct**:
+- Single compiler (rustc) handles all codegen
+- Stable interface (Rust source syntax)
+- Debuggable output (can inspect .rs files)
+- Full C++ support via Clang parsing
 
 ### What Needs to Happen
-1. **Deprecate** `fragile-codegen` (inkwell) - it's a dead end
-2. **Deprecate** `fragile-frontend-*` (tree-sitter) for production - use only for prototyping
-3. **Complete** `fragile-rustc-driver` with MIR injection via `mir_built` query override
-4. **Complete** `fragile-clang` for Clang AST → Fragile MIR conversion
-
----
+1. **Delete** `fragile-codegen` (inkwell) - wrong approach
+2. **Delete** `fragile-frontend-*` (tree-sitter) - wrong approach
+3. **Delete** `fragile-hir` - used by wrong approach
+4. **Delete** `fragile-driver` - uses wrong approach
+5. **Keep** `fragile-clang` - reuse Clang parsing, add Rust code generation
+6. **Refactor** `fragile-rustc-driver` - remove MIR injection, add transpiled code compilation
 
 ---
 
@@ -397,37 +435,41 @@ Each feature must work through the MIR pipeline, not clang++.
 
 ---
 
-## Cleanup: Remove Wrong Approach Code
+## Cleanup: Remove Obsolete Code
 
-The following crates and files implement the WRONG approach (link-time unification via
-inkwell/tree-sitter or clang++) and must be removed or deprecated.
+We've had multiple architecture pivots. Now using **transpiler approach** (C++ → Rust source → rustc).
+The following code from previous approaches should be removed.
 
-### Crates to DELETE (Wrong Approach)
+### Wrong Approach #1: tree-sitter + inkwell (DELETE)
 
 These crates use tree-sitter parsing + inkwell LLVM codegen - a parallel compiler that
-only meets Rust at link time. They should be REMOVED entirely:
+only meets Rust at link time:
 
-- [ ] `crates/fragile-codegen/` - **DELETE** (inkwell LLVM codegen, wrong approach)
-- [ ] `crates/fragile-frontend-cpp/` - **DELETE** (tree-sitter C++ parsing, wrong approach)
-- [ ] `crates/fragile-frontend-rust/` - **DELETE** (tree-sitter Rust parsing, wrong approach)
-- [ ] `crates/fragile-frontend-go/` - **DELETE** (tree-sitter Go parsing, wrong approach)
-- [ ] `crates/fragile-hir/` - **DELETE** (HIR used by above, wrong approach)
+- [ ] `crates/fragile-codegen/` - **DELETE** (inkwell LLVM codegen)
+- [ ] `crates/fragile-frontend-cpp/` - **DELETE** (tree-sitter C++ parsing)
+- [ ] `crates/fragile-frontend-rust/` - **DELETE** (tree-sitter Rust parsing)
+- [ ] `crates/fragile-frontend-go/` - **DELETE** (tree-sitter Go parsing)
+- [ ] `crates/fragile-hir/` - **DELETE** (HIR used by above)
 - [ ] `crates/fragile-driver/` - **DELETE** (driver for wrong approach crates)
 
-### Files to Remove in Correct Crates
+### Wrong Approach #2: MIR Injection (DEPRECATE)
 
-In `fragile-rustc-driver` (the CORRECT crate), remove clang++ codegen remnants:
+MIR injection worked but is unstable across rustc versions. Now obsolete with transpiler approach:
 
-- [ ] `crates/fragile-rustc-driver/src/cpp_compiler.rs` - DELETE (clang++ wrapper)
-- [ ] `crates/fragile-rustc-driver/src/stubs.rs` - REFACTOR (no extern "C" stubs)
-- [ ] Remove all `compile_cpp_objects()` calls
-- [ ] Remove `CppCompilerConfig`, `CppCompiler` types
+- [ ] `crates/fragile-rustc-driver/src/mir_convert.rs` - **DEPRECATE** (MIR injection, no longer needed)
+- [ ] `crates/fragile-rustc-driver/src/rustc_integration.rs` - **DEPRECATE** (query overrides for MIR)
+- [ ] `crates/fragile-rustc-driver/src/stubs.rs` - **REFACTOR** (keep stub generation, remove MIR parts)
+- [ ] `crates/fragile-rustc-driver/src/cpp_compiler.rs` - **DELETE** (clang++ wrapper)
+- [ ] Remove `CppMirRegistry`, `mir_built` override code
+- [ ] Remove `compile_cpp_objects()` calls
 
-### Test Files to Clean Up
+### Files in fragile-clang to Clean Up
 
-- [ ] Review `tests/cpp/` - some tests were for wrong approach
-- [ ] `tests/cpp/namespace.cpp` - Created for tree-sitter path, may need to be recreated for fragile-clang
-- [ ] `tests/cpp/class.cpp` - Created for tree-sitter path, may need to be recreated for fragile-clang
+Now that we use `rust_codegen.rs` for transpilation, some MIR-related code can be simplified:
+
+- [ ] `crates/fragile-clang/src/convert.rs` - **KEEP** but simplify (MIR still useful for codegen)
+- [ ] Remove `VirtualDispatchContext` if not used by transpiler
+- [ ] Remove `MirTerminator::VirtualCall` if transpiler handles differently
 
 ### Cargo.toml Updates
 
@@ -435,62 +477,173 @@ After removing wrong crates:
 - [ ] Update root `Cargo.toml` workspace members
 - [ ] Remove wrong crates from any dependency lists
 - [ ] Clean up feature flags referencing wrong crates
+- [ ] Remove `rustc-integration` feature if MIR injection removed
 
 ### Tests to Update
-- [ ] Update all tests to use MIR pipeline
-- [ ] Remove tests that rely on clang++ codegen
+
+- [ ] Remove tests that rely on MIR injection (`test_compile_*_with_rustc`)
+- [ ] Add tests for transpiler output (`cargo run --example transpile`)
+- [ ] Verify transpiled Rust code compiles with rustc
 
 ---
 
 ## What We Keep (Correct Parts)
 
-### fragile-clang crate
-- [x] Clang AST parsing via libclang
-- [x] CppModule, CppFunction, CppStruct types
-- [x] MirBody, MirStatement, MirTerminator types
-- [x] Type conversion (CppType)
+### fragile-clang crate (KEEP - Core of Transpiler)
+- [x] Clang AST parsing via libclang (`parse.rs`)
+- [x] CppModule, CppFunction, CppStruct types (`lib.rs`)
+- [x] MIR conversion for method bodies (`convert.rs`)
+- [x] **Rust code generation** (`rust_codegen.rs`) - NEW, core of transpiler
+- [x] Type conversion (`types.rs`)
+- [x] `transpile_cpp_to_rust()` API
 
-### fragile-rustc-driver crate
-- [x] mir_convert.rs - MIR conversion (needs completion)
-- [x] rustc_integration.rs - Query override infrastructure
-- [x] CppMirRegistry - Function registry
+### fragile-rustc-driver crate (REVIEW - may be simplified)
+- [ ] Keep stub generation for extern "C" interop
+- [ ] Remove MIR injection code (mir_convert.rs, rustc_integration.rs)
+- [ ] Simplify to just compile generated Rust code
 
-### fragile-runtime crate
-- [x] Runtime support functions (keep for later)
+### fragile-runtime crate (KEEP)
+- [x] Runtime support functions (vtable dispatch, etc.)
 
 ---
 
 ## Current Status
 
-**Major Milestone Achieved [26:01:17]**: C++ code now compiles through rustc MIR injection!
+**Architecture Pivot [26:01:19]**: Switched from MIR injection to **transpiler approach**.
 
-**Proven Working**:
-- `add_cpp(2, 3) = 5` - simple addition compiles via rustc
-- `factorial(5) = 120` - recursion and control flow work
-- No clang++ used for these test cases
+**Previous Milestone [26:01:17]**: MIR injection worked (`add_cpp`, `factorial`)
+- Proved concept but MIR is unstable across rustc versions
+- Decision: Transpile to Rust source instead for stability
 
-**Next Steps**:
-1. Add more MIR injection tests (structs, classes)
-2. Implement vtable generation (Task 3.3.3) for virtual dispatch
-3. Eventually compile doctest through MIR (blocked on template/STL support)
+**Current Milestone [26:01:19]**: C++ transpiles to valid Rust source code!
+
+**Transpiler Working**:
+- Struct definitions with `#[repr(C)]`
+- Method bodies with `(*self).field` access
+- Constructor bodies with `Self { field: value }` initialization
+- Simple functions with control flow
+
+**Transpiler Issues** (see Phase 6.2):
+- Constructor calls generate `()` instead of `StructName::new()`
+- Method calls generate `unknown()` instead of proper calls
+
+---
+
+## Phase 6: C++ to Rust Transpiler (New Approach)
+
+**Status**: Transpile C++ to Rust source code instead of MIR injection.
+
+### 6.1 Recent Fixes [26:01:19]
+- [x] **6.1.1** Method body generation with `this` parameter
+  - Added `this` as local variable for non-static methods in MIR conversion
+  - Added `CXXThisExpr` (cursor kind 132) handling in parser
+  - Fixed implicit `this` handling when `MemberExpr` has no children
+  - Translated C++ `this` to Rust `self` in codegen
+- [x] **6.1.2** Constructor body generation
+  - Enhanced `generate_constructor` to accept struct field information
+  - Implemented positional mapping from constructor parameters to fields
+  - Default constructor uses `0` for initialized fields
+  - Parameterized constructor maps params to fields by position
+- [x] **6.1.3** Parser bug fix
+  - Fixed visitor context passing in libclang AST traversal
+  - Created `VisitorContext` struct to pass both parser and children vec
+
+### 6.2 Immediate Priority (Blocking Issues) - COMPLETED
+- [x] **6.2.1** Fix constructor calls in MIR conversion
+  - Added `MirStatement::ConstructorCall` variant
+  - Detects constructor calls by checking for function references vs TypeRef
+  - Generates `Point::new()` or `Point::new_1(args)` in Rust codegen
+- [x] **6.2.2** Fix method calls in MIR conversion
+  - Added `MirTerminator::MethodCall` for non-virtual method calls
+  - Generates `receiver.method_name(args)` syntax in Rust codegen
+
+### 6.3 After Blocking Issues
+- [x] **6.3.1** Add destructor → `Drop` trait mapping
+  - Added `generate_drop_impl()` in rust_codegen.rs
+  - Fixed destructor body MIR conversion (added `this` parameter)
+  - Generates `impl Drop for Struct { fn drop(&mut self) { ... } }`
+- [ ] **6.3.2** Improve code quality (reduce temporaries)
+- [ ] **6.3.3** Add namespace → module mapping
+
+### 6.4 Cleanup - COMPLETED
+- [x] Removed obsolete crates: fragile-driver, fragile-hir, fragile-frontend-*, fragile-codegen
+- [x] Updated workspace Cargo.toml
+- [x] Updated fragile-cli to deprecate old commands
+
+### 6.5 Test Files
+- `tests/cpp/class.cpp` - Methods work, generates `(*self).field`
+- `tests/cpp/constructor.cpp` - Constructor calls now work
+- `tests/cpp/add_simple.cpp` - Simple function + struct works
+
+---
+
+## Next Steps (Prioritized)
+
+1. ~~**Test end-to-end compilation**~~ - **COMPLETED** [26:01:21]
+   - Added `--full` option to parse-cpp command for full Rust output
+   - Fixed variable initialization (Rust requires default init for cross-block vars)
+   - Fixed bool match patterns (use `true/false` instead of `1/0`)
+   - Fixed ternary operator (ConditionalOperator) to generate proper control flow
+   - Fixed reserve_block() to sync with actual block count
+   - **Result**: 6/7 test files compile successfully
+2. ~~**Fix reserved keyword collision**~~ - **COMPLETED** [26:01:21]
+   - Rust keywords (`in`, `fn`, `type`, etc.) now use raw identifier syntax (`r#in`)
+   - C++ operator names (`operator=`, `operator[]`) converted to valid names (`op_assign`, `op_index`)
+   - Anonymous parameters get placeholder names (`_arg0`, `_arg1`)
+   - Anonymous struct fields get placeholder names (`_field0`, `_field1`)
+   - C++ type qualifiers stripped (`const`, `volatile`, `struct`, `class`, `enum`)
+   - Special types handled (`long double` → `f64`, `unsigned int` → `u32`, etc.)
+   - `decltype()` and `typeof()` expressions → `()` placeholder
+   - Function pointers → `unsafe { std::mem::zeroed() }`
+   - **Result**: 6/7 test files compile, doctest_simple has 28 errors from STL internals
+3. **Handle STL internals** - Complex SFINAE, typename enable_if, etc. (low priority)
+4. **Improve code quality** - Reduce temporaries, handle nullptr, etc.
+5. **Add namespace → module mapping** - C++ namespaces to Rust modules
+
+### 6.6 End-to-End Compilation Fixes [26:01:21]
+- [x] **6.6.1** Add `--full` flag to parse-cpp for complete Rust output
+- [x] **6.6.2** Fix variable initialization with `default_value_for_type()`
+  - Rust requires all variables to be initialized before use across match arms
+  - Added default values: `0` for integers, `0.0` for floats, `false` for bool, etc.
+  - Function pointers use `unsafe { std::mem::zeroed() }`
+  - References converted to null pointers
+- [x] **6.6.6** Fix identifier sanitization for Rust compatibility
+  - Rust keywords use raw identifier syntax (`r#in`, `r#type`)
+  - C++ operators become `op_assign`, `op_index`, `op_eq`, etc. (40+ operators)
+  - Anonymous params/fields get `_arg0`, `_field0` names
+  - Invalid chars (`%`, `=`, `&`, `|`, etc.) replaced with `_`
+- [x] **6.6.7** Fix C++ type name sanitization
+  - Strip `const`, `volatile`, `struct`, `class`, `enum` prefixes
+  - Handle `long double` → `f64`, `unsigned int` → `u32`, etc.
+  - Handle `decltype()` and `typeof()` → `()` placeholder
+  - Handle standard C++ types: `size_t`, `intptr_t`, `char16_t`, etc.
+- [x] **6.6.3** Fix bool SwitchInt patterns
+  - Use `true/false` patterns instead of `1/0` for boolean match
+  - Added `operand_is_bool()` helper to detect boolean operands
+- [x] **6.6.4** Add ConditionalOperator (ternary `?:`) support
+  - Generates proper MIR blocks for true/false branches
+  - Result stored in a local and returned after merge
+- [x] **6.6.5** Fix block numbering in reserve_block()
+  - Sync `next_reserved_block` with `blocks.len() + 1`
+  - Prevents block ID collision when reserves happen after blocks created
+- [x] **6.6.8** Improve code quality - reduce temporaries
+  - Added `try_simplify_single_assignment()` to inline simple expressions
+  - Single-block functions with one assignment to return place → direct expression
+  - Pattern `_localN = expr; _local0 = _localN;` → inline `expr` directly
+  - Example: `get_value() { return 42; }` → `fn get_value() -> i32 { 42i32 }`
+  - Example: `add(a,b) { return a+b; }` → `fn add(a: i32, b: i32) -> i32 { a + b }`
+  - Getter methods now just emit field access: `(*self).x`
 
 ---
 
 ## Architecture Reference
 
-### Correct Flow (Goal)
+### Current Flow (Transpiler)
 ```
-add.cpp ──► libclang ──► Clang AST ──► Fragile MIR ──► rustc MIR ──► LLVM ──► add.o
+file.cpp ──► libclang ──► Clang AST ──► MIR ──► Rust source ──► rustc ──► binary
 ```
 
-### Wrong Flow (Current - to be removed)
-```
-add.cpp ──► libclang ──► Clang AST ──► Rust stubs (extern "C")
-                                              │
-add.cpp ──► clang++ ─────────────────────────►├──► linker ──► executable
-                                              │
-main.rs ──► rustc ────────────────────────────┘
-```
+This is the correct approach: generate Rust source code that rustc compiles normally.
 
 ---
 

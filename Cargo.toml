@@ -2,16 +2,8 @@
 resolver = "2"
 members = [
     "crates/fragile-cli",
-    "crates/fragile-driver",
     "crates/fragile-common",
-    "crates/fragile-hir",
-    "crates/fragile-frontend-rust",
-    "crates/fragile-frontend-cpp",
-    "crates/fragile-frontend-go",
-    "crates/fragile-codegen",
-    # New crates for Clang + rustc integration
     "crates/fragile-clang",
-    "crates/fragile-rustc-driver",
     "crates/fragile-runtime",
     "crates/fragile-build",
 ]
@@ -25,32 +17,15 @@ rust-version = "1.75"
 [workspace.dependencies]
 # Internal crates
 fragile-common = { path = "crates/fragile-common" }
-fragile-hir = { path = "crates/fragile-hir" }
-fragile-frontend-rust = { path = "crates/fragile-frontend-rust" }
-fragile-frontend-cpp = { path = "crates/fragile-frontend-cpp" }
-fragile-frontend-go = { path = "crates/fragile-frontend-go" }
-fragile-codegen = { path = "crates/fragile-codegen" }
-fragile-driver = { path = "crates/fragile-driver" }
-# New crates for Clang + rustc integration
 fragile-clang = { path = "crates/fragile-clang" }
-fragile-rustc-driver = { path = "crates/fragile-rustc-driver" }
 fragile-runtime = { path = "crates/fragile-runtime" }
-
-# Parsing
-tree-sitter = "0.24"
-tree-sitter-rust = "0.23"
-tree-sitter-cpp = "0.23"
-tree-sitter-go = "0.23"
+fragile-build = { path = "crates/fragile-build" }
 
 # Clang integration
-# Using static linking to avoid runtime loading issues in tests
 clang-sys = { version = "1.8", features = ["clang_17_0"] }
 
 # Runtime support
 libc = "0.2"
-
-# LLVM backend
-inkwell = { version = "0.7", features = ["llvm19-1", "llvm19-1-prefer-dynamic"] }
 
 # Error handling & diagnostics
 miette = { version = "7", features = ["fancy"] }

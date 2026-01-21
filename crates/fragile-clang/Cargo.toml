@@ -18,4 +18,3 @@ smol_str.workspace = true
 rustc-hash.workspace = true
 
 [dev-dependencies]
-fragile-rustc-driver.workspace = true

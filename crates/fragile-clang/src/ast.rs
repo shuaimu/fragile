@@ -345,6 +345,14 @@ pub enum ClangNodeKind {
         ty: CppType,
     },
 
+    /// C++ `this` expression (implicit or explicit reference to the current object).
+    /// In a method like `int get() { return value; }`, Clang generates
+    /// `this->value` with an implicit CXXThisExpr for `this`.
+    CXXThisExpr {
+        /// Type of `this` (pointer to the class type)
+        ty: CppType,
+    },
+
     /// Type trait expression (e.g., __is_integral(T), __is_same(T, U))
     /// These are Clang's built-in type trait intrinsics.
     TypeTraitExpr {

@@ -1,8 +1,0 @@
-[package]
-name = "fragile-hir"
-version.workspace = true
-edition.workspace = true
-
-[dependencies]
-fragile-common.workspace = true
-smol_str.workspace = true

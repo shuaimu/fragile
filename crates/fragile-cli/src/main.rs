@@ -1,13 +1,10 @@
 use clap::{Parser, Subcommand};
-use fragile_driver::Driver;
-use fragile_build::BuildConfig;
-use fragile_rustc_driver::{FragileDriver, CppCompiler, CppCompilerConfig, build_target, OutputType, generate_rust_stubs};
 use miette::Result;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 #[derive(Parser)]
 #[command(name = "fragile")]
-#[command(author, version, about = "A polyglot compiler for Rust, C++, and Go")]
+#[command(author, version, about = "C++ to Rust transpiler")]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -15,46 +12,37 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Compile source files to an executable or object file (legacy)
-    Build {
-        /// Source files to compile
+    /// Transpile C++ files to Rust source code
+    Transpile {
+        /// C++ source files to transpile
         #[arg(required = true)]
         files: Vec<PathBuf>,
 
-        /// Output file path
+        /// Output file path (default: stdout)
         #[arg(short, long)]
         output: Option<PathBuf>,
 
-        /// Emit LLVM IR instead of object code
+        /// Include directories
+        #[arg(short = 'I', long)]
+        include: Vec<PathBuf>,
+
+        /// Preprocessor definitions
+        #[arg(short = 'D', long)]
+        define: Vec<String>,
+
+        /// Generate stubs only (function signatures, no bodies)
         #[arg(long)]
-        emit_ir: bool,
+        stubs_only: bool,
     },
 
-    /// Build a target from fragile.toml
-    BuildTarget {
-        /// Target name to build
-        target: String,
-
-        /// Path to fragile.toml (default: ./fragile.toml)
-        #[arg(short, long)]
-        config: Option<PathBuf>,
-
-        /// Output directory for build artifacts
-        #[arg(short, long)]
-        output_dir: Option<PathBuf>,
-
-        /// Verbose output
-        #[arg(short, long)]
-        verbose: bool,
-    },
-
-    /// Parse C++ files and generate Rust stubs
+    /// Parse C++ files and show AST information (deprecated, use 'transpile')
+    #[command(hide = true)]
     ParseCpp {
         /// C++ source files to parse
         #[arg(required = true)]
         files: Vec<PathBuf>,
 
-        /// Output directory for stubs
+        /// Output directory for generated code
         #[arg(short, long)]
         output_dir: Option<PathBuf>,
 
@@ -65,32 +53,11 @@ enum Commands {
         /// Preprocessor definitions
         #[arg(short = 'D', long)]
         define: Vec<String>,
+
+        /// Output full Rust code instead of stubs
+        #[arg(long)]
+        full: bool,
     },
-
-    /// Check source files for errors without compiling
-    Check {
-        /// Source files to check
-        #[arg(required = true)]
-        files: Vec<PathBuf>,
-    },
-
-    /// Print the AST/HIR of a source file
-    Dump {
-        /// Source file to dump
-        file: PathBuf,
-
-        /// What to dump
-        #[arg(long, default_value = "hir")]
-        format: DumpFormat,
-    },
-}
-
-#[derive(Clone, Copy, clap::ValueEnum)]
-enum DumpFormat {
-    /// Dump High-level IR
-    Hir,
-    /// Dump LLVM IR
-    Llvm,
 }
 
 fn main() -> Result<()> {
@@ -107,230 +74,15 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Build {
+        Commands::Transpile {
             files,
             output,
-            emit_ir,
-        } => {
-            let driver = Driver::new();
-
-            for file in &files {
-                if emit_ir {
-                    let ir = driver.compile_to_ir(file)?;
-                    if let Some(ref output_path) = output {
-                        std::fs::write(output_path, &ir)
-                            .map_err(|e| miette::miette!("Failed to write IR: {}", e))?;
-                        println!("Wrote IR to {}", output_path.display());
-                    } else {
-                        println!("{}", ir);
-                    }
-                } else {
-                    let output_path = output.clone().unwrap_or_else(|| {
-                        let stem = file.file_stem().unwrap().to_str().unwrap();
-                        PathBuf::from(format!("{}.o", stem))
-                    });
-                    driver.compile_to_object(file, &output_path)?;
-                    println!("Compiled {} -> {}", file.display(), output_path.display());
-                }
-            }
-        }
-
-        Commands::BuildTarget {
-            target,
-            config,
-            output_dir,
-            verbose,
-        } => {
-            let config_path = config.unwrap_or_else(|| PathBuf::from("fragile.toml"));
-
-            if !config_path.exists() {
-                return Err(miette::miette!("Config file not found: {}", config_path.display()));
-            }
-
-            let project_root = config_path.parent().unwrap_or(Path::new("."));
-            let output_dir = output_dir.unwrap_or_else(|| project_root.join("build"));
-
-            // Load build configuration
-            let build_config = BuildConfig::from_file(&config_path)
-                .map_err(|e| miette::miette!("Failed to load config: {}", e))?;
-
-            // Get the target
-            let job = build_target(&build_config, &target, project_root)
-                .map_err(|e| miette::miette!("{}", e))?;
-
-            if verbose {
-                println!("Building target: {}", target);
-                println!("Sources: {:?}", job.sources);
-                println!("Includes: {:?}", job.includes);
-                println!("Defines: {:?}", job.defines);
-            }
-
-            // Create output directory
-            std::fs::create_dir_all(&output_dir)
-                .map_err(|e| miette::miette!("Failed to create output dir: {}", e))?;
-
-            // Stubs directory for parsing (full set of stub headers for libclang)
-            let stubs_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .parent()
-                .unwrap()
-                .join("fragile-clang/stubs");
-
-            // Compile stubs directory (minimal, only headers that need to override eRPC)
-            // This allows real system headers to be used while providing stub rpc.h
-            let compile_stubs_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .parent()
-                .unwrap()
-                .join("fragile-clang/compile_stubs");
-
-            // Configure C++ compiler
-            let mut compiler_config = CppCompilerConfig::default();
-
-            // Add compile stubs first so they take precedence over real eRPC headers
-            // This allows libmako_lib to compile without ASIO dependency
-            if compile_stubs_dir.exists() {
-                compiler_config.include_dirs.push(compile_stubs_dir.clone());
-            }
-
-            // Add target-specific includes (from job, respects inherit_includes)
-            for inc in &job.includes {
-                compiler_config.include_dirs.push(inc.clone());
-            }
-
-            for def in &job.defines {
-                compiler_config.defines.push(def.clone());
-            }
-            if let Some(std) = &job.std {
-                compiler_config.std_version = std.clone();
-            }
-
-            let compiler = CppCompiler::new(compiler_config)
-                .map_err(|e| miette::miette!("Failed to create C++ compiler: {}", e))?;
-
-            if verbose {
-                println!("Using compiler: {:?}", compiler.compiler_path());
-                if compile_stubs_dir.exists() {
-                    println!("Compile stubs directory: {}", compile_stubs_dir.display());
-                }
-            }
-
-            // Parse and compile each source file
-            let (mut include_paths, mut system_paths, defines) = job.parser_config();
-
-            // Add stubs to parser paths (not compiler paths)
-            if stubs_dir.exists() {
-                if verbose {
-                    println!("Using stubs directory: {}", stubs_dir.display());
-                }
-                // Insert at the beginning so stubs are searched first
-                include_paths.insert(0, stubs_dir.to_string_lossy().to_string());
-                // Also add to system paths for <angle> includes
-                system_paths.insert(0, stubs_dir.to_string_lossy().to_string());
-            } else {
-                eprintln!("Warning: stubs directory not found at {}", stubs_dir.display());
-            }
-
-
-            // Known error patterns to ignore (libclang semantic issues that don't affect parsing)
-            let ignored_error_patterns = vec![
-                // Cross-namespace inheritance: QuorumEvent inherits Event via "using rrr::Event;"
-                "cannot initialize object parameter of type".to_string(),
-                // Private member access in template code (often false positives)
-                "is a private member of".to_string(),
-            ];
-
-            let parser = fragile_clang::ClangParser::with_paths_defines_and_ignored_errors(
-                include_paths,
-                system_paths,
-                defines,
-                ignored_error_patterns,
-            ).map_err(|e| miette::miette!("Failed to create parser: {}", e))?;
-
-            let driver = FragileDriver::new();
-            let mut object_files = Vec::new();
-
-            for source in &job.sources {
-                if verbose {
-                    println!("Parsing: {}", source.display());
-                }
-
-                // Parse the C++ file to AST, then convert to module
-                let ast = parser.parse_file(source)
-                    .map_err(|e| miette::miette!("Failed to parse {}: {}", source.display(), e))?;
-                let module = fragile_clang::MirConverter::new().convert(ast)
-                    .map_err(|e| miette::miette!("Failed to convert {}: {}", source.display(), e))?;
-
-                // Register with driver
-                driver.register_cpp_module(&module);
-
-                // Compile to object file
-                if verbose {
-                    println!("Compiling: {}", source.display());
-                }
-
-                let obj_path = compiler.compile_to_object(source, &output_dir)
-                    .map_err(|e| miette::miette!("Failed to compile {}: {}", source.display(), e))?;
-
-                object_files.push(obj_path);
-            }
-
-            println!("Built {} object files for target '{}'", object_files.len(), target);
-
-            // Link based on output type
-            match job.output_type {
-                OutputType::Executable => {
-                    let exe_path = output_dir.join(&target);
-                    if verbose {
-                        println!("Linking executable: {}", exe_path.display());
-                    }
-
-                    // Get library paths and libraries
-                    let mut lib_paths: Vec<String> = job.lib_paths
-                        .iter()
-                        .map(|p| p.to_string_lossy().to_string())
-                        .collect();
-                    // Also add the output_dir to lib_paths since that's where we place compiled libraries
-                    let output_dir_str = output_dir.to_string_lossy().to_string();
-                    if !lib_paths.contains(&output_dir_str) {
-                        lib_paths.push(output_dir_str);
-                    }
-
-                    compiler.link_executable(&object_files, &exe_path, &lib_paths, &job.libs)
-                        .map_err(|e| miette::miette!("Failed to link {}: {}", target, e))?;
-
-                    println!("Linked executable: {}", exe_path.display());
-                }
-                OutputType::StaticLibrary => {
-                    let lib_name = if target.starts_with("lib") {
-                        format!("{}.a", target)
-                    } else {
-                        format!("lib{}.a", target)
-                    };
-                    let lib_path = output_dir.join(&lib_name);
-                    if verbose {
-                        println!("Creating static library: {}", lib_path.display());
-                    }
-
-                    compiler.create_static_library(&object_files, &lib_path)
-                        .map_err(|e| miette::miette!("Failed to create library {}: {}", target, e))?;
-
-                    println!("Created static library: {}", lib_path.display());
-                }
-                OutputType::SharedLibrary => {
-                    println!("Note: Shared library linking not yet implemented for target '{}'", target);
-                }
-                OutputType::ObjectFile => {
-                    // Already done - object files are the output
-                }
-            }
-        }
-
-        Commands::ParseCpp {
-            files,
-            output_dir,
             include,
             define,
+            stubs_only,
         } => {
-            let include_paths: Vec<String> = include.iter()
+            let include_paths: Vec<String> = include
+                .iter()
                 .map(|p| p.to_string_lossy().to_string())
                 .collect();
 
@@ -338,71 +90,96 @@ fn main() -> Result<()> {
                 include_paths,
                 Vec::new(),
                 define.clone(),
-            ).map_err(|e| miette::miette!("Failed to create parser: {}", e))?;
+            )
+            .map_err(|e| miette::miette!("Failed to create parser: {}", e))?;
 
-            let driver = FragileDriver::new();
-            let mut modules = Vec::new();
+            let mut all_output = String::new();
 
             for file in &files {
-                println!("Parsing: {}", file.display());
+                eprintln!("Transpiling: {}", file.display());
 
-                let ast = parser.parse_file(file)
+                let ast = parser
+                    .parse_file(file)
                     .map_err(|e| miette::miette!("Failed to parse {}: {}", file.display(), e))?;
 
-                println!("  AST root: {:?}", ast.translation_unit.kind);
+                let code = if stubs_only {
+                    fragile_clang::AstCodeGen::new().generate_stubs(&ast.translation_unit)
+                } else {
+                    fragile_clang::AstCodeGen::new().generate(&ast.translation_unit)
+                };
 
-                let module = fragile_clang::MirConverter::new().convert(ast)
-                    .map_err(|e| miette::miette!("Failed to convert {}: {}", file.display(), e))?;
-
-                println!("  Functions: {}", module.functions.len());
-
-                driver.register_cpp_module(&module);
-                modules.push(module);
+                all_output.push_str(&code);
+                all_output.push('\n');
             }
 
-            // Generate stubs
-            let stubs = generate_rust_stubs(&modules);
+            if let Some(out_path) = output {
+                if let Some(parent) = out_path.parent() {
+                    if !parent.as_os_str().is_empty() {
+                        std::fs::create_dir_all(parent)
+                            .map_err(|e| miette::miette!("Failed to create output dir: {}", e))?;
+                    }
+                }
+                std::fs::write(&out_path, &all_output)
+                    .map_err(|e| miette::miette!("Failed to write output: {}", e))?;
+                eprintln!("Wrote: {}", out_path.display());
+            } else {
+                print!("{}", all_output);
+            }
+        }
+
+        // Legacy command - redirect to transpile
+        Commands::ParseCpp {
+            files,
+            output_dir,
+            include,
+            define,
+            full,
+        } => {
+            eprintln!("Note: 'parse-cpp' is deprecated, use 'transpile' instead");
+
+            let include_paths: Vec<String> = include
+                .iter()
+                .map(|p| p.to_string_lossy().to_string())
+                .collect();
+
+            let parser = fragile_clang::ClangParser::with_paths_and_defines(
+                include_paths,
+                Vec::new(),
+                define.clone(),
+            )
+            .map_err(|e| miette::miette!("Failed to create parser: {}", e))?;
+
+            let mut all_output = String::new();
+
+            for file in &files {
+                eprintln!("Parsing: {}", file.display());
+
+                let ast = parser
+                    .parse_file(file)
+                    .map_err(|e| miette::miette!("Failed to parse {}: {}", file.display(), e))?;
+
+                let code = if full {
+                    fragile_clang::AstCodeGen::new().generate(&ast.translation_unit)
+                } else {
+                    fragile_clang::AstCodeGen::new().generate_stubs(&ast.translation_unit)
+                };
+
+                all_output.push_str(&code);
+                all_output.push('\n');
+            }
 
             if let Some(out_dir) = output_dir {
                 std::fs::create_dir_all(&out_dir)
                     .map_err(|e| miette::miette!("Failed to create output dir: {}", e))?;
 
-                let stubs_path = out_dir.join("stubs.rs");
-                std::fs::write(&stubs_path, &stubs)
-                    .map_err(|e| miette::miette!("Failed to write stubs: {}", e))?;
+                let filename = if full { "output.rs" } else { "stubs.rs" };
+                let out_path = out_dir.join(filename);
+                std::fs::write(&out_path, &all_output)
+                    .map_err(|e| miette::miette!("Failed to write output: {}", e))?;
 
-                println!("Wrote stubs to: {}", stubs_path.display());
+                eprintln!("Wrote: {}", out_path.display());
             } else {
-                println!("\n--- Generated Stubs ---\n{}", stubs);
-            }
-        }
-
-        Commands::Check { files } => {
-            let driver = Driver::new();
-
-            for file in &files {
-                match driver.parse_file(file) {
-                    Ok(_) => println!("{}: OK", file.display()),
-                    Err(e) => {
-                        eprintln!("{}: Error", file.display());
-                        return Err(e);
-                    }
-                }
-            }
-        }
-
-        Commands::Dump { file, format } => {
-            let driver = Driver::new();
-
-            match format {
-                DumpFormat::Hir => {
-                    let module = driver.parse_file(&file)?;
-                    println!("{:#?}", module);
-                }
-                DumpFormat::Llvm => {
-                    let ir = driver.compile_to_ir(&file)?;
-                    println!("{}", ir);
-                }
+                print!("{}", all_output);
             }
         }
     }
