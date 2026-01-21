@@ -92,9 +92,27 @@ impl AstCodeGen {
             ClangNodeKind::RecordDecl { name, is_class, .. } => {
                 self.generate_struct_stub(name, *is_class, &node.children);
             }
-            ClangNodeKind::NamespaceDecl { .. } => {
-                for child in &node.children {
-                    self.generate_stub_top_level(child);
+            ClangNodeKind::NamespaceDecl { name } => {
+                // Generate Rust module for namespace stubs
+                if let Some(ns_name) = name {
+                    if ns_name.starts_with("__") || ns_name == "std" {
+                        for child in &node.children {
+                            self.generate_stub_top_level(child);
+                        }
+                    } else {
+                        self.writeln(&format!("pub mod {} {{", sanitize_identifier(ns_name)));
+                        self.indent += 1;
+                        for child in &node.children {
+                            self.generate_stub_top_level(child);
+                        }
+                        self.indent -= 1;
+                        self.writeln("}");
+                        self.writeln("");
+                    }
+                } else {
+                    for child in &node.children {
+                        self.generate_stub_top_level(child);
+                    }
                 }
             }
             _ => {}
@@ -173,10 +191,31 @@ impl AstCodeGen {
             ClangNodeKind::RecordDecl { name, is_class, .. } => {
                 self.generate_struct(name, *is_class, &node.children);
             }
-            ClangNodeKind::NamespaceDecl { .. } => {
-                // Process namespace contents
-                for child in &node.children {
-                    self.generate_top_level(child);
+            ClangNodeKind::NamespaceDecl { name } => {
+                // Generate Rust module for namespace
+                if let Some(ns_name) = name {
+                    // Skip anonymous namespaces or standard library namespaces
+                    if ns_name.starts_with("__") || ns_name == "std" {
+                        // Just process children without module wrapper for internal namespaces
+                        for child in &node.children {
+                            self.generate_top_level(child);
+                        }
+                    } else {
+                        // Create a module for the namespace
+                        self.writeln(&format!("pub mod {} {{", sanitize_identifier(ns_name)));
+                        self.indent += 1;
+                        for child in &node.children {
+                            self.generate_top_level(child);
+                        }
+                        self.indent -= 1;
+                        self.writeln("}");
+                        self.writeln("");
+                    }
+                } else {
+                    // Anonymous namespace - process children at current level
+                    for child in &node.children {
+                        self.generate_top_level(child);
+                    }
                 }
             }
             _ => {}
@@ -1260,16 +1299,25 @@ impl AstCodeGen {
                 }
             }
             ClangNodeKind::StringLiteral(s) => format!("\"{}\"", s.escape_default()),
-            ClangNodeKind::DeclRefExpr { name, .. } => {
+            ClangNodeKind::DeclRefExpr { name, namespace_path, .. } => {
                 if name == "this" {
                     "self".to_string()
                 } else {
                     let ident = sanitize_identifier(name);
+                    // Add namespace path if present
+                    let full_path = if namespace_path.is_empty() {
+                        ident.clone()
+                    } else {
+                        let path: Vec<_> = namespace_path.iter()
+                            .map(|s| sanitize_identifier(s))
+                            .collect();
+                        format!("{}::{}", path.join("::"), ident)
+                    };
                     // Dereference reference variables (parameters or locals with & type)
                     if self.ref_vars.contains(name) {
-                        format!("*{}", ident)
+                        format!("*{}", full_path)
                     } else {
-                        ident
+                        full_path
                     }
                 }
             }
@@ -1747,11 +1795,13 @@ mod tests {
                             vec![
                                 make_node(ClangNodeKind::DeclRefExpr {
                                     name: "a".to_string(),
-                                    ty: CppType::Int { signed: true }
+                                    ty: CppType::Int { signed: true },
+                                    namespace_path: vec![],
                                 }, vec![]),
                                 make_node(ClangNodeKind::DeclRefExpr {
                                     name: "b".to_string(),
-                                    ty: CppType::Int { signed: true }
+                                    ty: CppType::Int { signed: true },
+                                    namespace_path: vec![],
                                 }, vec![]),
                             ],
                         )],
@@ -1793,25 +1843,29 @@ mod tests {
                             }, vec![
                                 make_node(ClangNodeKind::DeclRefExpr {
                                     name: "a".to_string(),
-                                    ty: CppType::Int { signed: true }
+                                    ty: CppType::Int { signed: true },
+                                    namespace_path: vec![],
                                 }, vec![]),
                                 make_node(ClangNodeKind::DeclRefExpr {
                                     name: "b".to_string(),
-                                    ty: CppType::Int { signed: true }
+                                    ty: CppType::Int { signed: true },
+                                    namespace_path: vec![],
                                 }, vec![]),
                             ]),
                             // Then: return a
                             make_node(ClangNodeKind::ReturnStmt, vec![
                                 make_node(ClangNodeKind::DeclRefExpr {
                                     name: "a".to_string(),
-                                    ty: CppType::Int { signed: true }
+                                    ty: CppType::Int { signed: true },
+                                    namespace_path: vec![],
                                 }, vec![]),
                             ]),
                             // Else: return b
                             make_node(ClangNodeKind::ReturnStmt, vec![
                                 make_node(ClangNodeKind::DeclRefExpr {
                                     name: "b".to_string(),
-                                    ty: CppType::Int { signed: true }
+                                    ty: CppType::Int { signed: true },
+                                    namespace_path: vec![],
                                 }, vec![]),
                             ]),
                         ],

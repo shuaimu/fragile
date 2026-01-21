@@ -297,6 +297,8 @@ pub enum ClangNodeKind {
     DeclRefExpr {
         name: String,
         ty: CppType,
+        /// Namespace path for the referenced declaration (e.g., ["math", "utils"] for math::utils::func)
+        namespace_path: Vec<String>,
     },
     /// Binary operator
     BinaryOperator {

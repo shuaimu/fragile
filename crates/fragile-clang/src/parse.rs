@@ -466,6 +466,60 @@ impl ClangParser {
         }
     }
 
+    /// Get the namespace path for a referenced declaration.
+    /// Returns a vector of namespace names from outermost to innermost.
+    /// Returns empty for local variables, parameters, and other function-scoped declarations.
+    fn get_namespace_path(&self, cursor: clang_sys::CXCursor) -> Vec<String> {
+        unsafe {
+            let mut path = Vec::new();
+
+            // Get the referenced cursor (the actual declaration being referenced)
+            let referenced = clang_sys::clang_getCursorReferenced(cursor);
+            if clang_sys::clang_Cursor_isNull(referenced) != 0 {
+                return path;
+            }
+
+            // Check if this is a local declaration (parameter, local variable)
+            // Local declarations have a function as their immediate semantic parent
+            let direct_parent = clang_sys::clang_getCursorSemanticParent(referenced);
+            if clang_sys::clang_Cursor_isNull(direct_parent) == 0 {
+                let parent_kind = clang_sys::clang_getCursorKind(direct_parent);
+                // If the direct parent is a function or method, this is a local variable/parameter
+                if parent_kind == clang_sys::CXCursor_FunctionDecl
+                    || parent_kind == clang_sys::CXCursor_CXXMethod
+                    || parent_kind == clang_sys::CXCursor_Constructor
+                    || parent_kind == clang_sys::CXCursor_Destructor
+                {
+                    // Local variables don't need namespace qualification
+                    return path;
+                }
+            }
+
+            // Traverse up through semantic parents to collect namespace names
+            let mut current = direct_parent;
+            while clang_sys::clang_Cursor_isNull(current) == 0 {
+                let kind = clang_sys::clang_getCursorKind(current);
+
+                if kind == clang_sys::CXCursor_Namespace {
+                    let name = cursor_spelling(current);
+                    // Skip anonymous namespaces, std, and internal namespaces
+                    if !name.is_empty() && !name.starts_with("__") && name != "std" {
+                        path.push(name);
+                    }
+                } else if kind == clang_sys::CXCursor_TranslationUnit {
+                    // Reached the top
+                    break;
+                }
+
+                current = clang_sys::clang_getCursorSemanticParent(current);
+            }
+
+            // Reverse to get outermost namespace first
+            path.reverse();
+            path
+        }
+    }
+
     /// Convert a Clang cursor kind to our AST node kind.
     fn convert_cursor_kind(
         &self,
@@ -963,7 +1017,8 @@ impl ClangParser {
                 clang_sys::CXCursor_DeclRefExpr => {
                     let name = cursor_spelling(cursor);
                     let ty = self.convert_type(clang_sys::clang_getCursorType(cursor));
-                    ClangNodeKind::DeclRefExpr { name, ty }
+                    let namespace_path = self.get_namespace_path(cursor);
+                    ClangNodeKind::DeclRefExpr { name, ty, namespace_path }
                 }
 
                 clang_sys::CXCursor_BinaryOperator => {
@@ -1761,21 +1816,6 @@ impl ClangParser {
             clang_sys::clang_visitChildren(cursor, namespace_visitor, namespace_path_ptr as clang_sys::CXClientData);
 
             namespace_path
-        }
-    }
-
-    /// Get the namespace path from a UsingDirective cursor.
-    #[allow(dead_code)]
-    fn get_namespace_path(&self, cursor: clang_sys::CXCursor) -> Vec<String> {
-        unsafe {
-            // Get the nominated namespace from the using directive
-            let referenced = clang_sys::clang_getCursorReferenced(cursor);
-            if clang_sys::clang_Cursor_isNull(referenced) != 0 {
-                return Vec::new();
-            }
-
-            // Build the namespace path by traversing semantic parents
-            self.build_namespace_path(referenced)
         }
     }
 

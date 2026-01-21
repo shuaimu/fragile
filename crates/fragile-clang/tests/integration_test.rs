@@ -755,3 +755,34 @@ fn test_e2e_exception_handling() {
 
     assert_eq!(exit_code, 0, "Exception handling should compile and run");
 }
+
+#[test]
+fn test_e2e_namespaces() {
+    let source = r#"
+        namespace math {
+            int add(int a, int b) {
+                return a + b;
+            }
+
+            namespace utils {
+                int multiply(int a, int b) {
+                    return a * b;
+                }
+            }
+        }
+
+        int main() {
+            int r1 = math::add(2, 3);
+            int r2 = math::utils::multiply(4, 5);
+            if (r1 == 5 && r2 == 20) {
+                return 0;
+            }
+            return 1;
+        }
+    "#;
+
+    let (exit_code, _stdout, _stderr) = transpile_compile_run(source, "e2e_namespace.cpp")
+        .expect("E2E test failed");
+
+    assert_eq!(exit_code, 0, "Namespace functions should compile and run");
+}
