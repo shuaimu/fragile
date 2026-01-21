@@ -101,6 +101,15 @@ impl CppType {
         }
     }
 
+    /// Get the pointee type for a pointer type.
+    /// Returns None if this is not a pointer type.
+    pub fn pointee(&self) -> Option<&CppType> {
+        match self {
+            CppType::Pointer { pointee, .. } => Some(pointee.as_ref()),
+            _ => None,
+        }
+    }
+
     /// Create an lvalue reference to this type.
     pub fn ref_(self) -> Self {
         CppType::Reference {
@@ -150,10 +159,9 @@ impl CppType {
                 format!("{} {}", ptr_type, pointee.to_rust_type_str())
             }
             CppType::Reference { referent, is_const, is_rvalue: _ } => {
-                // Both lvalue and rvalue references are lowered to raw pointers for FFI
-                // The is_rvalue distinction is semantic for C++ but not for FFI
-                let ptr_type = if *is_const { "*const" } else { "*mut" };
-                format!("{} {}", ptr_type, referent.to_rust_type_str())
+                // C++ references map to Rust references for transpilation
+                let ref_type = if *is_const { "&" } else { "&mut " };
+                format!("{}{}", ref_type, referent.to_rust_type_str())
             }
             CppType::Array { element, size } => {
                 if let Some(n) = size {

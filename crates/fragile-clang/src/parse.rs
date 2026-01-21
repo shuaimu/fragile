@@ -437,6 +437,35 @@ impl ClangParser {
         }
     }
 
+    /// Get the declaring class name for a member expression.
+    /// This is used to detect inherited member access.
+    fn get_member_declaring_class(&self, cursor: clang_sys::CXCursor) -> Option<String> {
+        unsafe {
+            // Get the referenced cursor (the FieldDecl or CXXMethodDecl being accessed)
+            let referenced = clang_sys::clang_getCursorReferenced(cursor);
+            if clang_sys::clang_Cursor_isNull(referenced) != 0 {
+                return None;
+            }
+
+            // Get the semantic parent (the class that declares this member)
+            let parent = clang_sys::clang_getCursorSemanticParent(referenced);
+            if clang_sys::clang_Cursor_isNull(parent) != 0 {
+                return None;
+            }
+
+            // Check if parent is a struct/class
+            let kind = clang_sys::clang_getCursorKind(parent);
+            if kind == clang_sys::CXCursor_StructDecl || kind == clang_sys::CXCursor_ClassDecl {
+                let name = cursor_spelling(parent);
+                if !name.is_empty() {
+                    return Some(name);
+                }
+            }
+
+            None
+        }
+    }
+
     /// Convert a Clang cursor kind to our AST node kind.
     fn convert_cursor_kind(
         &self,
@@ -756,6 +785,7 @@ impl ClangParser {
                 clang_sys::CXCursor_IfStmt => ClangNodeKind::IfStmt,
                 clang_sys::CXCursor_WhileStmt => ClangNodeKind::WhileStmt,
                 clang_sys::CXCursor_ForStmt => ClangNodeKind::ForStmt,
+                clang_sys::CXCursor_DoStmt => ClangNodeKind::DoStmt,
                 clang_sys::CXCursor_DeclStmt => ClangNodeKind::DeclStmt,
                 clang_sys::CXCursor_BreakStmt => ClangNodeKind::BreakStmt,
                 clang_sys::CXCursor_ContinueStmt => ClangNodeKind::ContinueStmt,
@@ -883,6 +913,26 @@ impl ClangParser {
                     ClangNodeKind::BoolLiteral(value)
                 }
 
+                clang_sys::CXCursor_CXXNullPtrLiteralExpr => {
+                    // C++ nullptr literal
+                    ClangNodeKind::NullPtrLiteral
+                }
+
+                clang_sys::CXCursor_CXXNewExpr => {
+                    // C++ new expression
+                    let ty = self.convert_type(clang_sys::clang_getCursorType(cursor));
+                    // Check if this is array new by tokenizing the source
+                    let is_array = self.check_new_is_array(cursor);
+                    ClangNodeKind::CXXNewExpr { ty, is_array }
+                }
+
+                clang_sys::CXCursor_CXXDeleteExpr => {
+                    // C++ delete expression
+                    // Check if this is array delete by tokenizing the source
+                    let is_array = self.check_delete_is_array(cursor);
+                    ClangNodeKind::CXXDeleteExpr { is_array }
+                }
+
                 clang_sys::CXCursor_StringLiteral => {
                     // Get the string value using evaluation
                     let eval = clang_sys::clang_Cursor_Evaluate(cursor);
@@ -939,10 +989,13 @@ impl ClangParser {
                     let ty = self.convert_type(clang_sys::clang_getCursorType(cursor));
                     // Check if arrow or dot using token-based detection
                     let is_arrow = self.is_arrow_access(cursor);
+                    // Get the declaring class for inherited member detection
+                    let declaring_class = self.get_member_declaring_class(cursor);
                     ClangNodeKind::MemberExpr {
                         member_name,
                         is_arrow,
                         ty,
+                        declaring_class,
                     }
                 }
 
@@ -961,6 +1014,30 @@ impl ClangParser {
                     let ty = self.convert_type(clang_sys::clang_getCursorType(cursor));
                     ClangNodeKind::CastExpr {
                         cast_kind: CastKind::Other,
+                        ty,
+                    }
+                }
+
+                clang_sys::CXCursor_CXXStaticCastExpr => {
+                    let ty = self.convert_type(clang_sys::clang_getCursorType(cursor));
+                    ClangNodeKind::CastExpr {
+                        cast_kind: CastKind::Static,
+                        ty,
+                    }
+                }
+
+                clang_sys::CXCursor_CXXReinterpretCastExpr => {
+                    let ty = self.convert_type(clang_sys::clang_getCursorType(cursor));
+                    ClangNodeKind::CastExpr {
+                        cast_kind: CastKind::Reinterpret,
+                        ty,
+                    }
+                }
+
+                clang_sys::CXCursor_CXXConstCastExpr => {
+                    let ty = self.convert_type(clang_sys::clang_getCursorType(cursor));
+                    ClangNodeKind::CastExpr {
+                        cast_kind: CastKind::Const,
                         ty,
                     }
                 }
@@ -1145,10 +1222,60 @@ impl ClangParser {
         }
     }
 
-    /// Get binary operator from cursor by tokenizing and finding the operator token.
+    /// Get binary operator from cursor by tokenizing and finding the ROOT operator token.
+    /// For `a + b * c`, the root operator depends on which BinaryOperator cursor we're examining.
     fn get_binary_op(&self, cursor: clang_sys::CXCursor) -> BinaryOp {
         unsafe {
             let tu = clang_sys::clang_Cursor_getTranslationUnit(cursor);
+
+            // Get the two children (left and right operands)
+            let mut children: Vec<clang_sys::CXCursor> = Vec::new();
+            extern "C" fn child_visitor(
+                cursor: clang_sys::CXCursor,
+                _parent: clang_sys::CXCursor,
+                client_data: clang_sys::CXClientData,
+            ) -> clang_sys::CXChildVisitResult {
+                let children = unsafe { &mut *(client_data as *mut Vec<clang_sys::CXCursor>) };
+                children.push(cursor);
+                clang_sys::CXChildVisit_Continue
+            }
+
+            clang_sys::clang_visitChildren(
+                cursor,
+                child_visitor,
+                &mut children as *mut Vec<clang_sys::CXCursor> as clang_sys::CXClientData,
+            );
+
+            // We need exactly 2 children for a binary operator
+            if children.len() < 2 {
+                return BinaryOp::Add; // Fallback
+            }
+
+            // Get the end of first child and start of second child
+            let first_extent = clang_sys::clang_getCursorExtent(children[0]);
+            let second_extent = clang_sys::clang_getCursorExtent(children[1]);
+            let first_end = clang_sys::clang_getRangeEnd(first_extent);
+            let second_start = clang_sys::clang_getRangeStart(second_extent);
+
+            // Get file and offsets
+            let mut first_end_offset: u32 = 0;
+            let mut second_start_offset: u32 = 0;
+            clang_sys::clang_getSpellingLocation(
+                first_end,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                &mut first_end_offset,
+            );
+            clang_sys::clang_getSpellingLocation(
+                second_start,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                &mut second_start_offset,
+            );
+
+            // Tokenize the region between children
             let extent = clang_sys::clang_getCursorExtent(cursor);
             let mut tokens: *mut clang_sys::CXToken = std::ptr::null_mut();
             let mut num_tokens: u32 = 0;
@@ -1157,55 +1284,33 @@ impl ClangParser {
 
             let mut result = BinaryOp::Add; // Default
 
-            // Binary operators have the pattern: left_expr OP right_expr
-            // We look for punctuation tokens that are operators
+            // Find operator token between first child end and second child start
             for i in 0..num_tokens {
                 let token = *tokens.add(i as usize);
                 let token_kind = clang_sys::clang_getTokenKind(token);
 
-                // CXToken_Punctuation = 0 (not 1!)
+                // CXToken_Punctuation = 0
                 if token_kind == 0 {
-                    let token_spelling = clang_sys::clang_getTokenSpelling(tu, token);
-                    let token_str = cx_string_to_string(token_spelling);
+                    let token_loc = clang_sys::clang_getTokenLocation(tu, token);
+                    let mut token_offset: u32 = 0;
+                    clang_sys::clang_getSpellingLocation(
+                        token_loc,
+                        std::ptr::null_mut(),
+                        std::ptr::null_mut(),
+                        std::ptr::null_mut(),
+                        &mut token_offset,
+                    );
 
-                    result = match token_str.as_str() {
-                        "+" => BinaryOp::Add,
-                        "-" => BinaryOp::Sub,
-                        "*" => BinaryOp::Mul,
-                        "/" => BinaryOp::Div,
-                        "%" => BinaryOp::Rem,
-                        "&" => BinaryOp::And,
-                        "|" => BinaryOp::Or,
-                        "^" => BinaryOp::Xor,
-                        "<<" => BinaryOp::Shl,
-                        ">>" => BinaryOp::Shr,
-                        "==" => BinaryOp::Eq,
-                        "!=" => BinaryOp::Ne,
-                        "<" => BinaryOp::Lt,
-                        "<=" => BinaryOp::Le,
-                        ">" => BinaryOp::Gt,
-                        ">=" => BinaryOp::Ge,
-                        "&&" => BinaryOp::LAnd,
-                        "||" => BinaryOp::LOr,
-                        "=" => BinaryOp::Assign,
-                        "+=" => BinaryOp::AddAssign,
-                        "-=" => BinaryOp::SubAssign,
-                        "*=" => BinaryOp::MulAssign,
-                        "/=" => BinaryOp::DivAssign,
-                        "%=" => BinaryOp::RemAssign,
-                        "&=" => BinaryOp::AndAssign,
-                        "|=" => BinaryOp::OrAssign,
-                        "^=" => BinaryOp::XorAssign,
-                        "<<=" => BinaryOp::ShlAssign,
-                        ">>=" => BinaryOp::ShrAssign,
-                        "," => BinaryOp::Comma,
-                        _ => continue, // Not an operator we recognize, keep looking
-                    };
-                    // Found an operator, but keep going to find compound operators
-                    // (e.g., << comes before <)
-                    // Actually, Clang tokenizes compound operators as single tokens,
-                    // so break on first match
-                    break;
+                    // Only consider tokens between the two children
+                    if token_offset >= first_end_offset && token_offset < second_start_offset {
+                        let token_spelling = clang_sys::clang_getTokenSpelling(tu, token);
+                        let token_str = cx_string_to_string(token_spelling);
+
+                        if let Some(op) = str_to_binary_op(&token_str) {
+                            result = op;
+                            break;
+                        }
+                    }
                 }
             }
 
@@ -1530,6 +1635,75 @@ impl ClangParser {
             } else {
                 ConstructorKind::Other
             }
+        }
+    }
+
+    /// Check if a CXXNewExpr is an array new (new T[n]).
+    fn check_new_is_array(&self, cursor: clang_sys::CXCursor) -> bool {
+        unsafe {
+            // Get the translation unit from the cursor
+            let tu = clang_sys::clang_Cursor_getTranslationUnit(cursor);
+            // Get the source range and check tokens for '['
+            let range = clang_sys::clang_getCursorExtent(cursor);
+            let mut tokens: *mut clang_sys::CXToken = std::ptr::null_mut();
+            let mut num_tokens: u32 = 0;
+
+            clang_sys::clang_tokenize(tu, range, &mut tokens, &mut num_tokens);
+
+            let mut found_bracket = false;
+            for i in 0..num_tokens {
+                let token = *tokens.add(i as usize);
+                let spelling = clang_sys::clang_getTokenSpelling(tu, token);
+                let s = std::ffi::CStr::from_ptr(clang_sys::clang_getCString(spelling))
+                    .to_string_lossy()
+                    .to_string();
+                clang_sys::clang_disposeString(spelling);
+
+                if s == "[" {
+                    found_bracket = true;
+                    break;
+                }
+            }
+
+            clang_sys::clang_disposeTokens(tu, tokens, num_tokens);
+            found_bracket
+        }
+    }
+
+    /// Check if a CXXDeleteExpr is an array delete (delete[]).
+    fn check_delete_is_array(&self, cursor: clang_sys::CXCursor) -> bool {
+        unsafe {
+            // Get the translation unit from the cursor
+            let tu = clang_sys::clang_Cursor_getTranslationUnit(cursor);
+            // Get the source range and check tokens for '[]'
+            let range = clang_sys::clang_getCursorExtent(cursor);
+            let mut tokens: *mut clang_sys::CXToken = std::ptr::null_mut();
+            let mut num_tokens: u32 = 0;
+
+            clang_sys::clang_tokenize(tu, range, &mut tokens, &mut num_tokens);
+
+            let mut found_bracket = false;
+            let mut prev_was_open = false;
+            for i in 0..num_tokens {
+                let token = *tokens.add(i as usize);
+                let spelling = clang_sys::clang_getTokenSpelling(tu, token);
+                let s = std::ffi::CStr::from_ptr(clang_sys::clang_getCString(spelling))
+                    .to_string_lossy()
+                    .to_string();
+                clang_sys::clang_disposeString(spelling);
+
+                if s == "[" {
+                    prev_was_open = true;
+                } else if s == "]" && prev_was_open {
+                    found_bracket = true;
+                    break;
+                } else {
+                    prev_was_open = false;
+                }
+            }
+
+            clang_sys::clang_disposeTokens(tu, tokens, num_tokens);
+            found_bracket
         }
     }
 
@@ -3114,5 +3288,42 @@ mod tests {
             }
         }
         panic!("Expected to find function declaration");
+    }
+}
+
+/// Convert string to binary operator.
+fn str_to_binary_op(s: &str) -> Option<BinaryOp> {
+    match s {
+        "+" => Some(BinaryOp::Add),
+        "-" => Some(BinaryOp::Sub),
+        "*" => Some(BinaryOp::Mul),
+        "/" => Some(BinaryOp::Div),
+        "%" => Some(BinaryOp::Rem),
+        "&" => Some(BinaryOp::And),
+        "|" => Some(BinaryOp::Or),
+        "^" => Some(BinaryOp::Xor),
+        "<<" => Some(BinaryOp::Shl),
+        ">>" => Some(BinaryOp::Shr),
+        "==" => Some(BinaryOp::Eq),
+        "!=" => Some(BinaryOp::Ne),
+        "<" => Some(BinaryOp::Lt),
+        "<=" => Some(BinaryOp::Le),
+        ">" => Some(BinaryOp::Gt),
+        ">=" => Some(BinaryOp::Ge),
+        "&&" => Some(BinaryOp::LAnd),
+        "||" => Some(BinaryOp::LOr),
+        "=" => Some(BinaryOp::Assign),
+        "+=" => Some(BinaryOp::AddAssign),
+        "-=" => Some(BinaryOp::SubAssign),
+        "*=" => Some(BinaryOp::MulAssign),
+        "/=" => Some(BinaryOp::DivAssign),
+        "%=" => Some(BinaryOp::RemAssign),
+        "&=" => Some(BinaryOp::AndAssign),
+        "|=" => Some(BinaryOp::OrAssign),
+        "^=" => Some(BinaryOp::XorAssign),
+        "<<=" => Some(BinaryOp::ShlAssign),
+        ">>=" => Some(BinaryOp::ShrAssign),
+        "," => Some(BinaryOp::Comma),
+        _ => None,
     }
 }

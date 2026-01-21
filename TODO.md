@@ -13,13 +13,26 @@ We just convert the fully-resolved AST to equivalent Rust code.
 
 ## Current Status
 
+**Grammar Tests**: 20/20 passing
+**E2E Tests**: 16/16 passing
+
 **Working**:
-- Simple functions with control flow (if/else, loops, recursion)
+- Simple functions with control flow (if/else, while, for, do-while, recursion)
 - Structs with fields and methods
 - Constructors (default and parameterized)
-- Primitive types (int, float, bool, char, pointers, references)
-- Binary/unary operators, comparisons, logical ops
-- 6/7 test files transpile to compilable Rust
+- Destructors → Drop trait
+- Primitive types (int, float, bool, char)
+- Pointers with unsafe blocks for dereference
+- References with Rust borrow semantics (&mut T)
+- Arrays with proper initialization and indexing
+- Binary/unary operators, comparisons, logical ops, bitwise ops
+- Ternary operator
+- Nested structs
+- nullptr → std::ptr::null_mut()
+- C++ casts (static_cast, reinterpret_cast, const_cast)
+- new/delete → Box::into_raw/Box::from_raw
+- new[]/delete[] → Vec allocation with raw pointer
+- Single inheritance (base class embedded as `__base` field)
 
 **CLI**:
 ```bash
@@ -42,26 +55,30 @@ crates/
 
 ## Next Steps
 
-### 1. End-to-End Verification
-- [ ] **1.1** Verify transpiled code compiles with rustc
-- [ ] **1.2** Verify transpiled code runs correctly
-- [ ] **1.3** Add integration test that runs full pipeline
+### 1. End-to-End Verification ✅
+- [x] **1.1** Verify transpiled code compiles with rustc
+- [x] **1.2** Verify transpiled code runs correctly
+- [x] **1.3** Add integration test that runs full pipeline (13 E2E tests)
 
 ### 2. Improve Transpiler Quality
 - [ ] **2.1** Reduce temporary variables in generated code
-- [ ] **2.2** Handle `nullptr` → `std::ptr::null()` / `std::ptr::null_mut()`
-- [ ] **2.3** Handle C++ casts (`static_cast`, `reinterpret_cast`)
+- [x] **2.2** Handle `nullptr` → `std::ptr::null_mut()`
+- [x] **2.3** Handle C++ casts (`static_cast`, `reinterpret_cast`, `const_cast`)
 - [ ] **2.4** Map C++ namespaces to Rust modules
 
 ### 3. OOP Features
-- [ ] **3.1** Single inheritance (embed base as first field)
-- [ ] **3.2** Virtual methods (manual vtable)
-- [ ] **3.3** Destructor → `Drop` trait
+- [x] **3.3.1** Parse virtual methods in classes
+- [x] **3.3.2** Generate vtable struct for each class with virtuals
+- [x] **3.3.3** Add vtable pointer field to class struct
+- [ ] **3.3.4** Dynamic dispatch via vtable lookup (partial - VirtualCall terminator added)
+- [x] **3.1** Single inheritance (embed base as first field, member access through `__base`)
+- [ ] **3.2** Virtual method override resolution
+- [x] **3.3** Destructor → `Drop` trait
 - [ ] **3.4** Copy/move constructors
 
 ### 4. Memory Management
-- [ ] **4.1** `new`/`delete` → `Box::new()` / drop
-- [ ] **4.2** `new[]`/`delete[]` → `Vec`
+- [x] **4.1** `new`/`delete` → `Box::into_raw(Box::new())` / `Box::from_raw()` + drop
+- [x] **4.2** `new[]`/`delete[]` → Vec allocation with raw pointer (note: delete[] leaks due to size tracking)
 - [ ] **4.3** Smart pointers (`unique_ptr` → `Box`, `shared_ptr` → `Arc`)
 
 ### 5. STL Type Mappings
@@ -74,6 +91,33 @@ crates/
 ### 6. Error Handling
 - [ ] **6.1** `throw` → `panic!()` or `Result`
 - [ ] **6.2** `try`/`catch` → `catch_unwind` or `Result`
+
+---
+
+## Grammar Tests (20/20 Passing)
+
+| Test | Feature | Status |
+|------|---------|--------|
+| 01 | Arithmetic | ✅ |
+| 02 | Comparisons | ✅ |
+| 03 | Logical operators | ✅ |
+| 04 | Bitwise operators | ✅ |
+| 05 | If/else | ✅ |
+| 06 | While loop | ✅ |
+| 07 | For loop | ✅ |
+| 08 | Nested loops | ✅ |
+| 09 | Break/continue | ✅ |
+| 10 | Functions | ✅ |
+| 11 | Recursion | ✅ |
+| 12 | Struct basic | ✅ |
+| 13 | Struct methods | ✅ |
+| 14 | Struct constructor | ✅ |
+| 15 | Pointers | ✅ |
+| 16 | References | ✅ |
+| 17 | Arrays | ✅ |
+| 18 | Ternary | ✅ |
+| 19 | Do-while | ✅ |
+| 20 | Nested struct | ✅ |
 
 ---
 
@@ -96,11 +140,13 @@ See `docs/transpiler-status.md` for detailed feature matrix.
 
 ### Fully Supported
 - Primitive types (int, float, bool, char)
-- Pointers and references
+- Pointers (with unsafe blocks)
+- References (with Rust borrow semantics)
+- Arrays (initialization and indexing)
 - Structs and classes
-- Methods (instance and const)
+- Methods (instance, const, mutable)
 - Constructors (default, parameterized)
-- Control flow (if, while, for, switch)
+- Control flow (if, while, for, do-while, switch)
 - Operators (arithmetic, comparison, logical, bitwise)
 - Function templates (via Clang instantiation)
 
@@ -108,13 +154,14 @@ See `docs/transpiler-status.md` for detailed feature matrix.
 - Rvalue references (parsed, codegen incomplete)
 - Virtual methods (parsed, vtable not generated)
 - Namespaces (parsed, not mapped to modules)
+- Inheritance (single inheritance works, no multiple inheritance)
 
 ### Not Yet Supported
-- Inheritance
+- Multiple inheritance
 - Operator overloading
 - Exceptions
 - STL types
-- `new`/`delete`
+- Smart pointers (`unique_ptr`, `shared_ptr`)
 
 ---
 

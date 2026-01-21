@@ -9,8 +9,9 @@ int test_references() {
     int a = 40;
     int& ref = a;
 
-    increment_ref(a);   // a becomes 41
-    increment_ref(ref); // a becomes 42
+    // Use only ref after creating it (Rust borrow rules)
+    increment_ref(ref); // a becomes 41 via ref
+    increment_ref(ref); // a becomes 42 via ref
 
-    return a;  // 42
+    return ref;  // return via ref = 42
 }

@@ -251,6 +251,8 @@ pub enum ClangNodeKind {
     WhileStmt,
     /// For statement
     ForStmt,
+    /// Do-while statement
+    DoStmt,
     /// Declaration statement
     DeclStmt,
     /// Expression statement
@@ -287,6 +289,8 @@ pub enum ClangNodeKind {
     },
     /// Boolean literal
     BoolLiteral(bool),
+    /// C++ nullptr literal
+    NullPtrLiteral,
     /// String literal
     StringLiteral(String),
     /// Reference to a declared entity
@@ -313,6 +317,8 @@ pub enum ClangNodeKind {
         member_name: String,
         is_arrow: bool,
         ty: CppType,
+        /// The class that declares this member (for detecting inherited member access)
+        declaring_class: Option<String>,
     },
     /// Array subscript (a[i])
     ArraySubscriptExpr {
@@ -446,6 +452,20 @@ pub enum ClangNodeKind {
     DynamicCastExpr {
         /// Target type of the cast
         target_ty: CppType,
+    },
+
+    /// C++ new expression (e.g., new int(42), new Foo())
+    CXXNewExpr {
+        /// Type being allocated
+        ty: CppType,
+        /// Whether this is an array new (new T[n])
+        is_array: bool,
+    },
+
+    /// C++ delete expression (e.g., delete p, delete[] arr)
+    CXXDeleteExpr {
+        /// Whether this is array delete (delete[])
+        is_array: bool,
     },
 
     /// Unknown or unhandled node kind
@@ -606,6 +626,14 @@ pub enum CastKind {
     LValueToRValue,
     /// Null pointer to type
     NullToPointer,
+    /// C++ static_cast
+    Static,
+    /// C++ reinterpret_cast
+    Reinterpret,
+    /// C++ const_cast
+    Const,
+    /// C++ dynamic_cast (handled separately, but included for completeness)
+    Dynamic,
     /// Unknown/other cast
     Other,
 }

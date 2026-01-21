@@ -4,8 +4,9 @@
 //! without going through an intermediate MIR representation.
 //! This produces cleaner, more idiomatic Rust code.
 
-use crate::ast::{ClangNode, ClangNodeKind, BinaryOp, UnaryOp, ConstructorKind};
+use crate::ast::{ClangNode, ClangNodeKind, BinaryOp, UnaryOp, CastKind};
 use crate::types::CppType;
+use std::collections::HashSet;
 
 /// Rust reserved keywords that need raw identifier syntax.
 const RUST_KEYWORDS: &[&str] = &[
@@ -22,6 +23,12 @@ const RUST_KEYWORDS: &[&str] = &[
 pub struct AstCodeGen {
     output: String,
     indent: usize,
+    /// Track variable names that are declared as reference types
+    ref_vars: HashSet<String>,
+    /// Track variable names that are declared as pointer types
+    ptr_vars: HashSet<String>,
+    /// Track variable names that are declared as array types
+    arr_vars: HashSet<String>,
 }
 
 impl AstCodeGen {
@@ -29,6 +36,9 @@ impl AstCodeGen {
         Self {
             output: String::new(),
             indent: 0,
+            ref_vars: HashSet::new(),
+            ptr_vars: HashSet::new(),
+            arr_vars: HashSet::new(),
         }
     }
 
@@ -125,6 +135,17 @@ impl AstCodeGen {
         self.writeln(&format!("pub struct {} {{", name));
         self.indent += 1;
 
+        // First, embed base classes as fields
+        for child in children {
+            if let ClangNodeKind::CXXBaseSpecifier { base_type, access, .. } = &child.kind {
+                if !matches!(access, crate::ast::AccessSpecifier::Private) {
+                    let base_name = base_type.to_rust_type_str();
+                    self.writeln(&format!("pub __base: {},", base_name));
+                }
+            }
+        }
+
+        // Then add derived class fields
         for child in children {
             if let ClangNodeKind::FieldDecl { name: field_name, ty, .. } = &child.kind {
                 let field_name = if field_name.is_empty() {
@@ -165,9 +186,33 @@ impl AstCodeGen {
     /// Generate a function definition.
     fn generate_function(&mut self, name: &str, mangled_name: &str, return_type: &CppType,
                          params: &[(String, CppType)], children: &[ClangNode]) {
+        // Special handling for C++ main function
+        let is_main = name == "main" && params.is_empty();
+        let func_name = if is_main { "cpp_main" } else { name };
+
         // Doc comment
         self.writeln(&format!("/// C++ function `{}`", name));
         self.writeln(&format!("/// Mangled: `{}`", mangled_name));
+
+        // Track reference, pointer, and array parameters - clear any from previous function
+        self.ref_vars.clear();
+        self.ptr_vars.clear();
+        self.arr_vars.clear();
+        for (param_name, param_type) in params {
+            if matches!(param_type, CppType::Reference { .. }) {
+                self.ref_vars.insert(param_name.clone());
+            }
+            // Unsized arrays in function parameters are actually pointers in C++
+            // (int arr[] is equivalent to int* arr)
+            if matches!(param_type, CppType::Pointer { .. })
+                || matches!(param_type, CppType::Array { size: None, .. }) {
+                self.ptr_vars.insert(param_name.clone());
+            }
+            // Only track sized arrays as arrays
+            if matches!(param_type, CppType::Array { size: Some(_), .. }) {
+                self.arr_vars.insert(param_name.clone());
+            }
+        }
 
         // Function signature
         let params_str = params.iter()
@@ -181,7 +226,7 @@ impl AstCodeGen {
             format!(" -> {}", return_type.to_rust_type_str())
         };
 
-        self.writeln(&format!("pub fn {}({}){} {{", sanitize_identifier(name), params_str, ret_str));
+        self.writeln(&format!("pub fn {}({}){} {{", sanitize_identifier(func_name), params_str, ret_str));
         self.indent += 1;
 
         // Find the compound statement (function body)
@@ -194,6 +239,16 @@ impl AstCodeGen {
         self.indent -= 1;
         self.writeln("}");
         self.writeln("");
+
+        // Generate Rust main wrapper for C++ main
+        if is_main {
+            self.writeln("fn main() {");
+            self.indent += 1;
+            self.writeln("std::process::exit(cpp_main());");
+            self.indent -= 1;
+            self.writeln("}");
+            self.writeln("");
+        }
     }
 
     /// Generate struct definition.
@@ -201,10 +256,24 @@ impl AstCodeGen {
         let kind = if is_class { "class" } else { "struct" };
         self.writeln(&format!("/// C++ {} `{}`", kind, name));
         self.writeln("#[repr(C)]");
+        self.writeln("#[derive(Default)]");
         self.writeln(&format!("pub struct {} {{", name));
         self.indent += 1;
 
-        // Collect fields
+        // First, embed base classes as fields (for single inheritance)
+        // Base classes must come first to maintain C++ memory layout
+        for child in children {
+            if let ClangNodeKind::CXXBaseSpecifier { base_type, access, .. } = &child.kind {
+                // Only include public/protected bases (private inheritance is more complex)
+                if !matches!(access, crate::ast::AccessSpecifier::Private) {
+                    let base_name = base_type.to_rust_type_str();
+                    self.writeln(&format!("/// Inherited from `{}`", base_name));
+                    self.writeln(&format!("pub __base: {},", base_name));
+                }
+            }
+        }
+
+        // Then collect derived class fields
         for child in children {
             if let ClangNodeKind::FieldDecl { name: field_name, ty, .. } = &child.kind {
                 let field_name = if field_name.is_empty() {
@@ -219,16 +288,32 @@ impl AstCodeGen {
         self.indent -= 1;
         self.writeln("}");
 
+        // Check if there's an explicit default constructor (0 params)
+        let has_default_ctor = children.iter().any(|c| {
+            matches!(&c.kind, ClangNodeKind::ConstructorDecl { params, is_definition: true, .. } if params.is_empty())
+        });
+
         // Generate impl block for methods
         let methods: Vec<_> = children.iter().filter(|c| {
             matches!(&c.kind, ClangNodeKind::CXXMethodDecl { is_definition: true, .. } |
                               ClangNodeKind::ConstructorDecl { is_definition: true, .. })
         }).collect();
 
-        if !methods.is_empty() {
+        // Always generate impl block if we need new_0 or have other methods
+        if !methods.is_empty() || !has_default_ctor {
             self.writeln("");
             self.writeln(&format!("impl {} {{", name));
             self.indent += 1;
+
+            // Generate default new_0() if no explicit default constructor
+            if !has_default_ctor {
+                self.writeln("pub fn new_0() -> Self {");
+                self.indent += 1;
+                self.writeln("Default::default()");
+                self.indent -= 1;
+                self.writeln("}");
+                self.writeln("");
+            }
 
             for method in methods {
                 self.generate_method(method, name);
@@ -238,14 +323,294 @@ impl AstCodeGen {
             self.writeln("}");
         }
 
+        // Generate Drop impl if there's a destructor
+        for child in children {
+            if let ClangNodeKind::DestructorDecl { is_definition: true, .. } = &child.kind {
+                self.writeln("");
+                self.writeln(&format!("impl Drop for {} {{", name));
+                self.indent += 1;
+                self.writeln("fn drop(&mut self) {");
+                self.indent += 1;
+                // Find the destructor body
+                for dtor_child in &child.children {
+                    if let ClangNodeKind::CompoundStmt = &dtor_child.kind {
+                        self.generate_block_contents(&dtor_child.children, &CppType::Void);
+                    }
+                }
+                self.indent -= 1;
+                self.writeln("}");
+                self.indent -= 1;
+                self.writeln("}");
+                break; // Only one destructor per class
+            }
+        }
+
         self.writeln("");
+    }
+
+    /// Check if a method modifies self (has assignments to member fields).
+    fn method_modifies_self(node: &ClangNode) -> bool {
+        // Check if this node is an assignment to a member
+        if let ClangNodeKind::BinaryOperator { op: BinaryOp::Assign, .. } = &node.kind {
+            // Left side of assignment - check if it's a member expression
+            if !node.children.is_empty() {
+                if Self::is_member_access(&node.children[0]) {
+                    return true;
+                }
+            }
+        }
+        // Also check compound assignment operators
+        if let ClangNodeKind::BinaryOperator { op, .. } = &node.kind {
+            match op {
+                BinaryOp::AddAssign | BinaryOp::SubAssign | BinaryOp::MulAssign |
+                BinaryOp::DivAssign | BinaryOp::RemAssign | BinaryOp::AndAssign |
+                BinaryOp::OrAssign | BinaryOp::XorAssign | BinaryOp::ShlAssign |
+                BinaryOp::ShrAssign => {
+                    if !node.children.is_empty() {
+                        if Self::is_member_access(&node.children[0]) {
+                            return true;
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        // Recursively check children
+        for child in &node.children {
+            if Self::method_modifies_self(child) {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Check if a node is a member access (directly or through implicit this).
+    fn is_member_access(node: &ClangNode) -> bool {
+        match &node.kind {
+            ClangNodeKind::MemberExpr { .. } => true,
+            ClangNodeKind::ImplicitCastExpr { .. } => {
+                // Check through implicit casts
+                !node.children.is_empty() && Self::is_member_access(&node.children[0])
+            }
+            _ => false,
+        }
+    }
+
+    /// Extract member assignments from a constructor body.
+    /// Looks for patterns like `this->field = value;` or `field = value;`
+    fn extract_member_assignments(node: &ClangNode, initializers: &mut Vec<(String, String)>, codegen: &AstCodeGen) {
+        for child in &node.children {
+            // Look for ExprStmt containing BinaryOperator with Assign
+            if let ClangNodeKind::ExprStmt = &child.kind {
+                if !child.children.is_empty() {
+                    Self::extract_assignment(&child.children[0], initializers, codegen);
+                }
+            } else if let ClangNodeKind::BinaryOperator { op: BinaryOp::Assign, .. } = &child.kind {
+                Self::extract_assignment(child, initializers, codegen);
+            }
+            // Recursively check compound statements
+            if let ClangNodeKind::CompoundStmt = &child.kind {
+                Self::extract_member_assignments(child, initializers, codegen);
+            }
+        }
+    }
+
+    /// Extract a single member assignment from a BinaryOperator node.
+    fn extract_assignment(node: &ClangNode, initializers: &mut Vec<(String, String)>, codegen: &AstCodeGen) {
+        if let ClangNodeKind::BinaryOperator { op: BinaryOp::Assign, .. } = &node.kind {
+            if node.children.len() >= 2 {
+                // Get member name from left side
+                if let Some(member_name) = Self::get_member_name(&node.children[0]) {
+                    // Get value from right side
+                    let value = codegen.expr_to_string(&node.children[1]);
+                    initializers.push((member_name, value));
+                }
+            }
+        }
+    }
+
+    /// Get member name from a member expression (possibly wrapped in casts).
+    fn get_member_name(node: &ClangNode) -> Option<String> {
+        match &node.kind {
+            ClangNodeKind::MemberExpr { member_name, .. } => Some(member_name.clone()),
+            ClangNodeKind::ImplicitCastExpr { .. } => {
+                if !node.children.is_empty() {
+                    Self::get_member_name(&node.children[0])
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// Check if a node is a pointer dereference (possibly wrapped in casts).
+    fn is_pointer_deref(node: &ClangNode) -> bool {
+        match &node.kind {
+            ClangNodeKind::UnaryOperator { op: UnaryOp::Deref, .. } => true,
+            ClangNodeKind::ImplicitCastExpr { .. } => {
+                !node.children.is_empty() && Self::is_pointer_deref(&node.children[0])
+            }
+            _ => false,
+        }
+    }
+
+    /// Check if a node is an array subscript on a pointer (needs unsafe for assignment).
+    fn is_pointer_subscript(&self, node: &ClangNode) -> bool {
+        match &node.kind {
+            ClangNodeKind::ArraySubscriptExpr { .. } => {
+                if !node.children.is_empty() {
+                    // Check if the array expression is a pointer type
+                    let arr_type = Self::get_expr_type(&node.children[0]);
+                    matches!(arr_type, Some(CppType::Pointer { .. }))
+                        || matches!(arr_type, Some(CppType::Array { size: None, .. }))
+                        || self.is_ptr_var_expr(&node.children[0])
+                } else {
+                    false
+                }
+            }
+            ClangNodeKind::ImplicitCastExpr { .. } => {
+                !node.children.is_empty() && self.is_pointer_subscript(&node.children[0])
+            }
+            _ => false,
+        }
+    }
+
+    /// Get the raw identifier for a reference variable expression (without dereferencing).
+    /// Returns None if not a reference variable expression.
+    fn get_ref_var_ident(&self, node: &ClangNode) -> Option<String> {
+        match &node.kind {
+            ClangNodeKind::DeclRefExpr { name, .. } => {
+                if self.ref_vars.contains(name) {
+                    Some(sanitize_identifier(name))
+                } else {
+                    None
+                }
+            }
+            ClangNodeKind::ImplicitCastExpr { .. } => {
+                if !node.children.is_empty() {
+                    self.get_ref_var_ident(&node.children[0])
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// Check if an expression is a pointer variable (parameter or local with pointer type).
+    fn is_ptr_var_expr(&self, node: &ClangNode) -> bool {
+        match &node.kind {
+            ClangNodeKind::DeclRefExpr { name, .. } => {
+                self.ptr_vars.contains(name)
+            }
+            ClangNodeKind::ImplicitCastExpr { .. } | ClangNodeKind::Unknown(_) => {
+                // Look through casts and unknown wrappers
+                !node.children.is_empty() && self.is_ptr_var_expr(&node.children[0])
+            }
+            _ => {
+                // Also check all children recursively for cases where the structure differs
+                node.children.iter().any(|c| self.is_ptr_var_expr(c))
+            }
+        }
+    }
+
+    /// Check if an expression is an array variable and get its identifier.
+    fn get_array_var_ident(&self, node: &ClangNode) -> Option<String> {
+        match &node.kind {
+            ClangNodeKind::DeclRefExpr { name, ty, .. } => {
+                // Check both the type from AST and our tracked arrays
+                if matches!(ty, CppType::Array { .. }) || self.arr_vars.contains(name) {
+                    Some(sanitize_identifier(name))
+                } else {
+                    None
+                }
+            }
+            ClangNodeKind::ImplicitCastExpr { .. } | ClangNodeKind::Unknown(_) => {
+                // Look through casts and unknown wrappers
+                if !node.children.is_empty() {
+                    self.get_array_var_ident(&node.children[0])
+                } else {
+                    None
+                }
+            }
+            _ => {
+                // Also check children recursively
+                for child in &node.children {
+                    if let Some(ident) = self.get_array_var_ident(child) {
+                        return Some(ident);
+                    }
+                }
+                None
+            }
+        }
+    }
+
+    /// Get the type of an expression node.
+    fn get_expr_type(node: &ClangNode) -> Option<CppType> {
+        match &node.kind {
+            ClangNodeKind::DeclRefExpr { ty, .. } => Some(ty.clone()),
+            ClangNodeKind::BinaryOperator { ty, .. } => Some(ty.clone()),
+            ClangNodeKind::UnaryOperator { ty, .. } => Some(ty.clone()),
+            ClangNodeKind::MemberExpr { ty, .. } => Some(ty.clone()),
+            ClangNodeKind::CallExpr { ty } => Some(ty.clone()),
+            ClangNodeKind::ImplicitCastExpr { ty, .. } => Some(ty.clone()),
+            ClangNodeKind::CastExpr { ty, .. } => Some(ty.clone()),
+            ClangNodeKind::ArraySubscriptExpr { ty } => Some(ty.clone()),
+            ClangNodeKind::ParmVarDecl { ty, .. } => Some(ty.clone()),
+            // For unknown or wrapper nodes, look through to children
+            ClangNodeKind::Unknown(_) | ClangNodeKind::ParenExpr { .. } => {
+                if !node.children.is_empty() {
+                    Self::get_expr_type(&node.children[0])
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// Get function parameter types from a function reference node.
+    fn get_function_param_types(node: &ClangNode) -> Option<Vec<CppType>> {
+        match &node.kind {
+            ClangNodeKind::DeclRefExpr { ty, .. } => {
+                if let CppType::Function { params, .. } = ty {
+                    Some(params.clone())
+                } else {
+                    None
+                }
+            }
+            ClangNodeKind::ImplicitCastExpr { .. } => {
+                // Look through casts (e.g., FunctionToPointerDecay)
+                if !node.children.is_empty() {
+                    Self::get_function_param_types(&node.children[0])
+                } else {
+                    None
+                }
+            }
+            ClangNodeKind::Unknown(_) => {
+                // Unknown nodes (like UnexposedExpr) may wrap DeclRefExpr, recurse
+                if !node.children.is_empty() {
+                    Self::get_function_param_types(&node.children[0])
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
     }
 
     /// Generate a method or constructor.
     fn generate_method(&mut self, node: &ClangNode, _struct_name: &str) {
         match &node.kind {
             ClangNodeKind::CXXMethodDecl { name, return_type, params, is_static, .. } => {
-                let self_param = if *is_static { "" } else { "&self, " };
+                let self_param = if *is_static {
+                    "".to_string()
+                } else {
+                    // Check if method modifies self
+                    let modifies_self = Self::method_modifies_self(node);
+                    if modifies_self { "&mut self, ".to_string() } else { "&self, ".to_string() }
+                };
                 let params_str = params.iter()
                     .map(|(n, t)| format!("{}: {}", sanitize_identifier(n), t.to_rust_type_str()))
                     .collect::<Vec<_>>()
@@ -272,11 +637,9 @@ impl AstCodeGen {
                 self.writeln("}");
                 self.writeln("");
             }
-            ClangNodeKind::ConstructorDecl { params, ctor_kind, .. } => {
-                let fn_name = match ctor_kind {
-                    ConstructorKind::Default => "new",
-                    _ => "new_1",
-                };
+            ClangNodeKind::ConstructorDecl { params, .. } => {
+                // Always use new_N format (new_0, new_1, new_2) for consistency
+                let fn_name = format!("new_{}", params.len());
 
                 let params_str = params.iter()
                     .map(|(n, t)| format!("{}: {}", sanitize_identifier(n), t.to_rust_type_str()))
@@ -287,7 +650,8 @@ impl AstCodeGen {
                 self.indent += 1;
 
                 // Extract member initializers from constructor children
-                // Pattern: MemberRef { name } followed by initialization expression
+                // Pattern 1: MemberRef { name } followed by initialization expression (member initializer list)
+                // Pattern 2: CompoundStmt with assignments to member fields (body assignments)
                 let mut initializers: Vec<(String, String)> = Vec::new();
                 let mut i = 0;
                 while i < node.children.len() {
@@ -300,6 +664,9 @@ impl AstCodeGen {
                             "Default::default()".to_string()
                         };
                         initializers.push((name.clone(), init_val));
+                    } else if let ClangNodeKind::CompoundStmt = &node.children[i].kind {
+                        // Look for assignments in constructor body
+                        Self::extract_member_assignments(&node.children[i], &mut initializers, self);
                     }
                     i += 1;
                 }
@@ -307,13 +674,14 @@ impl AstCodeGen {
                 self.writeln("Self {");
                 self.indent += 1;
                 if initializers.is_empty() {
-                    // Default constructor - use default values
-                    // We don't have field info here, so use ..Default::default() pattern
+                    // Default constructor - use Default
                     self.writeln("..Default::default()");
                 } else {
-                    for (field, value) in initializers {
-                        self.writeln(&format!("{}: {},", sanitize_identifier(&field), value));
+                    for (field, value) in &initializers {
+                        self.writeln(&format!("{}: {},", sanitize_identifier(field), value));
                     }
+                    // Fill in remaining fields with default
+                    self.writeln("..Default::default()");
                 }
                 self.indent -= 1;
                 self.writeln("}");
@@ -341,14 +709,63 @@ impl AstCodeGen {
             ClangNodeKind::DeclStmt => {
                 // Variable declaration
                 for child in &node.children {
-                    if let ClangNodeKind::VarDecl { name, ty, has_init } = &child.kind {
-                        let init = if *has_init && !child.children.is_empty() {
-                            format!(" = {}", self.expr_to_string(&child.children[0]))
+                    if let ClangNodeKind::VarDecl { name, ty, .. } = &child.kind {
+                        // Check if this is a reference, array, or pointer type
+                        let is_ref = matches!(ty, CppType::Reference { .. });
+                        let is_const_ref = matches!(ty, CppType::Reference { is_const: true, .. });
+                        let is_array = matches!(ty, CppType::Array { .. });
+                        let is_ptr = matches!(ty, CppType::Pointer { .. });
+
+                        // Track typed variables for later
+                        if is_ref {
+                            self.ref_vars.insert(name.clone());
+                        }
+                        if is_array {
+                            self.arr_vars.insert(name.clone());
+                        }
+                        if is_ptr {
+                            self.ptr_vars.insert(name.clone());
+                        }
+
+                        // Find the actual initializer, skipping TypeRef and Unknown("TypeRef") nodes
+                        let initializer = child.children.iter().find(|c| {
+                            !matches!(&c.kind, ClangNodeKind::Unknown(s) if s == "TypeRef")
+                                && !matches!(&c.kind, ClangNodeKind::Unknown(s) if s.contains("Type"))
+                        });
+
+                        // Check if we have a real initializer
+                        let has_real_init = if let Some(init_node) = &initializer {
+                            // For arrays with just an integer literal child, it might be the array size
+                            if is_array {
+                                !matches!(&init_node.kind, ClangNodeKind::IntegerLiteral { .. })
+                            } else {
+                                true
+                            }
+                        } else {
+                            false
+                        };
+
+                        let init = if has_real_init {
+                            let init_node = initializer.unwrap();
+                            let expr = self.expr_to_string(init_node);
+                            // If expression is unsupported, fall back to default
+                            if expr.contains("unsupported") {
+                                format!(" = {}", default_value_for_type(ty))
+                            } else if is_ref {
+                                // Reference initialization: add &mut or & prefix
+                                let prefix = if is_const_ref { "&" } else { "&mut " };
+                                format!(" = {}{}", prefix, expr)
+                            } else {
+                                format!(" = {}", expr)
+                            }
                         } else {
                             format!(" = {}", default_value_for_type(ty))
                         };
-                        self.writeln(&format!("let mut {}: {}{};",
-                            sanitize_identifier(name), ty.to_rust_type_str(), init));
+
+                        // References don't need mut keyword
+                        let mut_kw = if is_ref { "" } else { "mut " };
+                        self.writeln(&format!("let {}{}: {}{};",
+                            mut_kw, sanitize_identifier(name), ty.to_rust_type_str(), init));
                     }
                 }
             }
@@ -368,6 +785,9 @@ impl AstCodeGen {
             }
             ClangNodeKind::ForStmt => {
                 self.generate_for_stmt(node);
+            }
+            ClangNodeKind::DoStmt => {
+                self.generate_do_stmt(node);
             }
             ClangNodeKind::CompoundStmt => {
                 self.writeln("{");
@@ -443,36 +863,58 @@ impl AstCodeGen {
         }
     }
 
+    /// Generate a do-while statement.
+    fn generate_do_stmt(&mut self, node: &ClangNode) {
+        // Children: body, condition
+        // do { body } while (cond); => loop { body; if !cond { break; } }
+        if node.children.len() >= 2 {
+            self.writeln("loop {");
+            self.indent += 1;
+            // Body first (executes at least once)
+            self.generate_stmt(&node.children[0], false);
+            // Then condition check
+            let cond = self.expr_to_string(&node.children[1]);
+            self.writeln(&format!("if !({}) {{ break; }}", cond));
+            self.indent -= 1;
+            self.writeln("}");
+        }
+    }
+
     /// Generate a for statement.
     fn generate_for_stmt(&mut self, node: &ClangNode) {
-        // C++ for loops don't map directly to Rust for loops
-        // Convert to: { init; while cond { body; inc; } }
+        // C++ for loops: for (init; cond; inc) { body }
+        // Convert to: { init; loop { if !cond { break; } body; inc; } }
+        // This correctly handles continue (which should go to inc, then cond)
         // Children: [init], [cond], [inc], body
 
-        // For simplicity, generate a loop with manual control
         self.writeln("{");
         self.indent += 1;
 
-        // This is a simplified version - real impl would be more sophisticated
         if node.children.len() >= 4 {
             // Init
             self.generate_stmt(&node.children[0], false);
 
-            // While loop
+            // Get condition and increment
             let cond = if matches!(&node.children[1].kind, ClangNodeKind::IntegerLiteral { .. }) {
                 "true".to_string()
             } else {
                 self.expr_to_string(&node.children[1])
             };
 
-            self.writeln(&format!("while {} {{", cond));
+            let inc = self.expr_to_string(&node.children[2]);
+
+            // Use loop with break for condition to handle continue correctly
+            self.writeln("loop {");
             self.indent += 1;
 
-            // Body
-            self.generate_stmt(&node.children[3], false);
+            // Condition check with break
+            self.writeln(&format!("if !({}) {{ break; }}", cond));
 
-            // Increment
-            let inc = self.expr_to_string(&node.children[2]);
+            // Body - we need to handle continue specially
+            // Generate body with continue handling
+            self.generate_for_body(&node.children[3], &inc);
+
+            // Increment at end (only reached if no continue/break)
             if !inc.is_empty() {
                 self.writeln(&format!("{};", inc));
             }
@@ -483,6 +925,171 @@ impl AstCodeGen {
 
         self.indent -= 1;
         self.writeln("}");
+    }
+
+    /// Generate for loop body with special continue handling.
+    /// Continue needs to run the increment before looping back.
+    fn generate_for_body(&mut self, node: &ClangNode, inc: &str) {
+        match &node.kind {
+            ClangNodeKind::CompoundStmt => {
+                self.writeln("{");
+                self.indent += 1;
+                for stmt in &node.children {
+                    self.generate_for_body_stmt(stmt, inc);
+                }
+                self.indent -= 1;
+                self.writeln("}");
+            }
+            ClangNodeKind::ContinueStmt => {
+                // For continue in for loop: increment then continue
+                if !inc.is_empty() {
+                    self.writeln(&format!("{}; continue;", inc));
+                } else {
+                    self.writeln("continue;");
+                }
+            }
+            _ => {
+                self.generate_for_body_stmt(node, inc);
+            }
+        }
+    }
+
+    /// Generate a statement inside a for loop body, handling continue specially.
+    fn generate_for_body_stmt(&mut self, node: &ClangNode, inc: &str) {
+        match &node.kind {
+            ClangNodeKind::ContinueStmt => {
+                // For continue in for loop: increment then continue
+                if !inc.is_empty() {
+                    self.writeln(&format!("{}; continue;", inc));
+                } else {
+                    self.writeln("continue;");
+                }
+            }
+            ClangNodeKind::CompoundStmt => {
+                self.writeln("{");
+                self.indent += 1;
+                for stmt in &node.children {
+                    self.generate_for_body_stmt(stmt, inc);
+                }
+                self.indent -= 1;
+                self.writeln("}");
+            }
+            ClangNodeKind::IfStmt => {
+                // Need special handling for if statements containing continue
+                self.generate_for_if_stmt(node, inc);
+            }
+            _ => {
+                self.generate_stmt(node, false);
+            }
+        }
+    }
+
+    /// Generate if statement inside for loop body, handling continue in branches.
+    fn generate_for_if_stmt(&mut self, node: &ClangNode, inc: &str) {
+        if node.children.len() >= 2 {
+            let cond = self.expr_to_string(&node.children[0]);
+            self.writeln(&format!("if {} {{", cond));
+            self.indent += 1;
+            self.generate_for_body_stmt(&node.children[1], inc);
+            self.indent -= 1;
+
+            if node.children.len() > 2 {
+                if let ClangNodeKind::IfStmt = &node.children[2].kind {
+                    self.write("} else ");
+                    self.generate_for_if_stmt(&node.children[2], inc);
+                    return;
+                }
+                self.writeln("} else {");
+                self.indent += 1;
+                self.generate_for_body_stmt(&node.children[2], inc);
+                self.indent -= 1;
+            }
+            self.writeln("}");
+        }
+    }
+
+    /// Convert an expression node to a Rust string (without unsafe wrapping for derefs).
+    /// Used inside unsafe blocks where we don't want nested unsafe.
+    fn expr_to_string_raw(&self, node: &ClangNode) -> String {
+        match &node.kind {
+            ClangNodeKind::UnaryOperator { op, ty } => {
+                if !node.children.is_empty() {
+                    let operand = self.expr_to_string_raw(&node.children[0]);
+                    match op {
+                        UnaryOp::Deref => format!("*{}", operand),
+                        UnaryOp::Minus => format!("-{}", operand),
+                        UnaryOp::Plus => operand,
+                        UnaryOp::LNot => format!("!{}", operand),
+                        UnaryOp::Not => format!("!{}", operand),
+                        UnaryOp::AddrOf => {
+                            let rust_ty = ty.to_rust_type_str();
+                            if rust_ty.starts_with("*mut ") {
+                                format!("&mut {} as {}", operand, rust_ty)
+                            } else if rust_ty.starts_with("*const ") {
+                                format!("&{} as {}", operand, rust_ty)
+                            } else {
+                                format!("&{}", operand)
+                            }
+                        }
+                        UnaryOp::PreInc => format!("{{ {} += 1; {} }}", operand, operand),
+                        UnaryOp::PreDec => format!("{{ {} -= 1; {} }}", operand, operand),
+                        UnaryOp::PostInc => format!("{{ let v = {}; {} += 1; v }}", operand, operand),
+                        UnaryOp::PostDec => format!("{{ let v = {}; {} -= 1; v }}", operand, operand),
+                    }
+                } else {
+                    "/* unary op error */".to_string()
+                }
+            }
+            ClangNodeKind::ImplicitCastExpr { .. } => {
+                // Pass through casts
+                if !node.children.is_empty() {
+                    self.expr_to_string_raw(&node.children[0])
+                } else {
+                    "/* cast error */".to_string()
+                }
+            }
+            ClangNodeKind::DeclRefExpr { name, .. } => {
+                if name == "this" {
+                    "self".to_string()
+                } else {
+                    sanitize_identifier(name)
+                }
+            }
+            ClangNodeKind::IntegerLiteral { value, cpp_type } => {
+                let suffix = match cpp_type {
+                    Some(CppType::Int { signed: true }) => "i32",
+                    Some(CppType::Int { signed: false }) => "u32",
+                    Some(CppType::Long { signed: true }) => "i64",
+                    Some(CppType::Long { signed: false }) => "u64",
+                    _ => "i32",
+                };
+                format!("{}{}", value, suffix)
+            }
+            ClangNodeKind::ArraySubscriptExpr { .. } => {
+                // For array subscript in raw context (inside unsafe block),
+                // generate pointer arithmetic without wrapping in unsafe
+                if node.children.len() >= 2 {
+                    let arr = self.expr_to_string_raw(&node.children[0]);
+                    let idx = self.expr_to_string_raw(&node.children[1]);
+                    // Check if the array expression is a pointer type
+                    let arr_type = Self::get_expr_type(&node.children[0]);
+                    let is_pointer = matches!(arr_type, Some(CppType::Pointer { .. }))
+                        || matches!(arr_type, Some(CppType::Array { size: None, .. }))
+                        || self.is_ptr_var_expr(&node.children[0]);
+                    if is_pointer {
+                        // Raw pointer indexing without unsafe wrapper
+                        format!("*{}.add({} as usize)", arr, idx)
+                    } else {
+                        // Array indexing
+                        format!("{}[{} as usize]", arr, idx)
+                    }
+                } else {
+                    "/* array subscript error */".to_string()
+                }
+            }
+            // For other expressions, use the regular conversion
+            _ => self.expr_to_string(node),
+        }
     }
 
     /// Convert an expression node to a Rust string.
@@ -512,38 +1119,101 @@ impl AstCodeGen {
                 format!("{}{}", value, suffix)
             }
             ClangNodeKind::BoolLiteral(b) => b.to_string(),
+            ClangNodeKind::NullPtrLiteral => "std::ptr::null_mut()".to_string(),
+            ClangNodeKind::CXXNewExpr { ty, is_array } => {
+                if *is_array {
+                    // new T[n] → allocate n elements and return raw pointer
+                    // ty is the result type (T*), we need the element type (T)
+                    let element_type = ty.pointee().unwrap_or(ty);
+                    // Children[0] should be the size expression
+                    let size_expr = if !node.children.is_empty() {
+                        self.expr_to_string(&node.children[0])
+                    } else {
+                        "0".to_string()
+                    };
+                    let default_val = default_value_for_type(element_type);
+                    // Use Vec to allocate, then leak it to get a raw pointer
+                    format!("{{ let mut v: Vec<{}> = vec![{}; {} as usize]; let p = v.as_mut_ptr(); std::mem::forget(v); p }}",
+                        element_type.to_rust_type_str(), default_val, size_expr)
+                } else {
+                    // new T(args) → Box::into_raw(Box::new(value))
+                    let init = if !node.children.is_empty() {
+                        // Constructor argument or initializer
+                        self.expr_to_string(&node.children[0])
+                    } else {
+                        // Default value for type
+                        default_value_for_type(ty)
+                    };
+                    format!("Box::into_raw(Box::new({}))", init)
+                }
+            }
+            ClangNodeKind::CXXDeleteExpr { is_array } => {
+                if *is_array {
+                    // delete[] p → We can't safely deallocate without knowing the array size.
+                    // For now, generate code that at least compiles but leaks memory.
+                    // A proper implementation would track array sizes at allocation.
+                    if !node.children.is_empty() {
+                        let ptr = self.expr_to_string(&node.children[0]);
+                        // Note: This is a memory leak. The Vec was forgotten during new[],
+                        // and we don't have the size to reconstruct it.
+                        // Generate a no-op that at least uses the pointer to avoid warnings.
+                        format!("{{ let _ = {}; /* delete[] memory leak - size unknown */ }}", ptr)
+                    } else {
+                        "/* delete[] error: no pointer */".to_string()
+                    }
+                } else if !node.children.is_empty() {
+                    // delete p → drop(unsafe { Box::from_raw(p) })
+                    let ptr = self.expr_to_string(&node.children[0]);
+                    format!("drop(unsafe {{ Box::from_raw({}) }})", ptr)
+                } else {
+                    "/* delete error */".to_string()
+                }
+            }
             ClangNodeKind::StringLiteral(s) => format!("\"{}\"", s.escape_default()),
             ClangNodeKind::DeclRefExpr { name, .. } => {
                 if name == "this" {
                     "self".to_string()
                 } else {
-                    sanitize_identifier(name)
+                    let ident = sanitize_identifier(name);
+                    // Dereference reference variables (parameters or locals with & type)
+                    if self.ref_vars.contains(name) {
+                        format!("*{}", ident)
+                    } else {
+                        ident
+                    }
                 }
             }
             ClangNodeKind::CXXThisExpr { .. } => "self".to_string(),
             ClangNodeKind::BinaryOperator { op, .. } => {
                 if node.children.len() >= 2 {
-                    let left = self.expr_to_string(&node.children[0]);
-                    let right = self.expr_to_string(&node.children[1]);
                     let op_str = binop_to_string(op);
 
+                    // Check if left side is a pointer dereference or pointer subscript
+                    // (needs whole assignment in unsafe)
+                    let left_is_deref = Self::is_pointer_deref(&node.children[0]);
+                    let left_is_ptr_subscript = self.is_pointer_subscript(&node.children[0]);
+                    let needs_unsafe = left_is_deref || left_is_ptr_subscript;
+
                     // Handle assignment specially
-                    if matches!(op, BinaryOp::Assign) {
-                        format!("{} = {}", left, right)
-                    } else if matches!(op, BinaryOp::AddAssign | BinaryOp::SubAssign |
-                                          BinaryOp::MulAssign | BinaryOp::DivAssign |
-                                          BinaryOp::RemAssign | BinaryOp::AndAssign |
-                                          BinaryOp::OrAssign | BinaryOp::XorAssign |
-                                          BinaryOp::ShlAssign | BinaryOp::ShrAssign) {
-                        format!("{} {} {}", left, op_str, right)
+                    if matches!(op, BinaryOp::Assign | BinaryOp::AddAssign | BinaryOp::SubAssign |
+                                   BinaryOp::MulAssign | BinaryOp::DivAssign |
+                                   BinaryOp::RemAssign | BinaryOp::AndAssign |
+                                   BinaryOp::OrAssign | BinaryOp::XorAssign |
+                                   BinaryOp::ShlAssign | BinaryOp::ShrAssign) && needs_unsafe {
+                        // For pointer dereference or subscript on left side, wrap entire assignment in unsafe
+                        let left_raw = self.expr_to_string_raw(&node.children[0]);
+                        let right_raw = self.expr_to_string_raw(&node.children[1]);
+                        format!("unsafe {{ {} {} {} }}", left_raw, op_str, right_raw)
                     } else {
+                        let left = self.expr_to_string(&node.children[0]);
+                        let right = self.expr_to_string(&node.children[1]);
                         format!("{} {} {}", left, op_str, right)
                     }
                 } else {
                     "/* binary op error */".to_string()
                 }
             }
-            ClangNodeKind::UnaryOperator { op, .. } => {
+            ClangNodeKind::UnaryOperator { op, ty } => {
                 if !node.children.is_empty() {
                     let operand = self.expr_to_string(&node.children[0]);
                     match op {
@@ -551,8 +1221,21 @@ impl AstCodeGen {
                         UnaryOp::Plus => operand,
                         UnaryOp::LNot => format!("!{}", operand),
                         UnaryOp::Not => format!("!{}", operand),  // bitwise not ~ in C++
-                        UnaryOp::AddrOf => format!("&{}", operand),
-                        UnaryOp::Deref => format!("*{}", operand),
+                        UnaryOp::AddrOf => {
+                            // For C++ pointers, cast reference to raw pointer
+                            let rust_ty = ty.to_rust_type_str();
+                            if rust_ty.starts_with("*mut ") {
+                                format!("&mut {} as {}", operand, rust_ty)
+                            } else if rust_ty.starts_with("*const ") {
+                                format!("&{} as {}", operand, rust_ty)
+                            } else {
+                                format!("&{}", operand)
+                            }
+                        }
+                        UnaryOp::Deref => {
+                            // Raw pointer dereference needs unsafe
+                            format!("unsafe {{ *{} }}", operand)
+                        }
                         UnaryOp::PreInc => format!("{{ let v = {}; {} += 1; v + 1 }}", operand, operand),
                         UnaryOp::PreDec => format!("{{ let v = {}; {} -= 1; v - 1 }}", operand, operand),
                         UnaryOp::PostInc => format!("{{ let v = {}; {} += 1; v }}", operand, operand),
@@ -562,25 +1245,94 @@ impl AstCodeGen {
                     "/* unary op error */".to_string()
                 }
             }
-            ClangNodeKind::CallExpr { .. } => {
-                // First child is the function reference, rest are arguments
-                if !node.children.is_empty() {
-                    let func = self.expr_to_string(&node.children[0]);
-                    let args: Vec<String> = node.children[1..].iter()
+            ClangNodeKind::CallExpr { ty } => {
+                // Check if this is a constructor call (CallExpr with Named type)
+                if let CppType::Named(struct_name) = ty {
+                    // Constructor call: all children are arguments
+                    let args: Vec<String> = node.children.iter()
                         .map(|c| self.expr_to_string(c))
+                        .collect();
+                    let num_args = args.len();
+                    // Always use StructName::new_N(args) to ensure custom constructor bodies run
+                    format!("{}::new_{}({})", struct_name, num_args, args.join(", "))
+                } else if !node.children.is_empty() {
+                    // Regular function call: first child is the function reference, rest are arguments
+                    let func = self.expr_to_string(&node.children[0]);
+
+                    // Try to get function parameter types to handle reference parameters
+                    let param_types = Self::get_function_param_types(&node.children[0]);
+
+                    let args: Vec<String> = node.children[1..].iter()
+                        .enumerate()
+                        .map(|(i, c)| {
+                            // Check if this parameter expects specific handling
+                            if let Some(ref types) = param_types {
+                                if i < types.len() {
+                                    // Handle reference parameters
+                                    if let CppType::Reference { is_const, .. } = &types[i] {
+                                        // Check if argument is a reference variable
+                                        if let Some(ref_ident) = self.get_ref_var_ident(c) {
+                                            // Pass the reference variable directly (without dereferencing)
+                                            return ref_ident;
+                                        } else {
+                                            // Add borrow for non-reference-variable arguments
+                                            let arg_str = self.expr_to_string(c);
+                                            let prefix = if *is_const { "&" } else { "&mut " };
+                                            return format!("{}{}", prefix, arg_str);
+                                        }
+                                    }
+                                    // Handle pointer parameters with array arguments
+                                    // Also handle unsized array parameters (which are really pointers)
+                                    if matches!(&types[i], CppType::Pointer { .. })
+                                        || matches!(&types[i], CppType::Array { size: None, .. }) {
+                                        let arg_type = Self::get_expr_type(c);
+                                        let is_array = matches!(arg_type, Some(CppType::Array { .. }));
+                                        if is_array {
+                                            // Array to pointer decay
+                                            let arg_str = self.expr_to_string(c);
+                                            return format!("{}.as_mut_ptr()", arg_str);
+                                        }
+                                        // Also check using variable tracking
+                                        if let Some(arr_ident) = self.get_array_var_ident(c) {
+                                            return format!("{}.as_mut_ptr()", arr_ident);
+                                        }
+                                    }
+                                }
+                            }
+                            self.expr_to_string(c)
+                        })
                         .collect();
                     format!("{}({})", func, args.join(", "))
                 } else {
                     "/* call error */".to_string()
                 }
             }
-            ClangNodeKind::MemberExpr { member_name, is_arrow, .. } => {
+            ClangNodeKind::MemberExpr { member_name, is_arrow, declaring_class, .. } => {
                 if !node.children.is_empty() {
                     let base = self.expr_to_string(&node.children[0]);
-                    if *is_arrow {
-                        format!("(*{}).{}", base, sanitize_identifier(member_name))
+                    // Check if this is accessing an inherited member
+                    let base_type = Self::get_expr_type(&node.children[0]);
+                    let needs_base_access = if let (Some(CppType::Named(base_type_name)), Some(decl_class)) = (&base_type, declaring_class) {
+                        // If the declaring class differs from the base expression's type,
+                        // we need to access through __base
+                        base_type_name != decl_class
                     } else {
-                        format!("{}.{}", base, sanitize_identifier(member_name))
+                        false
+                    };
+
+                    let member = sanitize_identifier(member_name);
+                    if *is_arrow {
+                        if needs_base_access {
+                            format!("(*{}).__base.{}", base, member)
+                        } else {
+                            format!("(*{}).{}", base, member)
+                        }
+                    } else {
+                        if needs_base_access {
+                            format!("{}.__base.{}", base, member)
+                        } else {
+                            format!("{}.{}", base, member)
+                        }
                     }
                 } else {
                     // Implicit this
@@ -591,7 +1343,19 @@ impl AstCodeGen {
                 if node.children.len() >= 2 {
                     let arr = self.expr_to_string(&node.children[0]);
                     let idx = self.expr_to_string(&node.children[1]);
-                    format!("{}[{}]", arr, idx)
+                    // Check if the array expression is a pointer type
+                    // (also check for unsized arrays which decay to pointers)
+                    let arr_type = Self::get_expr_type(&node.children[0]);
+                    let is_pointer = matches!(arr_type, Some(CppType::Pointer { .. }))
+                        || matches!(arr_type, Some(CppType::Array { size: None, .. }))
+                        || self.is_ptr_var_expr(&node.children[0]);
+                    if is_pointer {
+                        // Pointer indexing requires unsafe pointer arithmetic
+                        format!("unsafe {{ *{}.add({} as usize) }}", arr, idx)
+                    } else {
+                        // Array indexing - cast index to usize
+                        format!("{}[{} as usize]", arr, idx)
+                    }
                 } else {
                     "/* array subscript error */".to_string()
                 }
@@ -606,10 +1370,41 @@ impl AstCodeGen {
                     "/* ternary error */".to_string()
                 }
             }
-            ClangNodeKind::ParenExpr { .. } | ClangNodeKind::ImplicitCastExpr { .. } | ClangNodeKind::CastExpr { .. } => {
-                // Pass through to child
+            ClangNodeKind::ParenExpr { .. } => {
+                // Preserve parentheses
+                if !node.children.is_empty() {
+                    format!("({})", self.expr_to_string(&node.children[0]))
+                } else {
+                    "()".to_string()
+                }
+            }
+            ClangNodeKind::ImplicitCastExpr { .. } => {
+                // Pass through implicit casts
                 if !node.children.is_empty() {
                     self.expr_to_string(&node.children[0])
+                } else {
+                    "()".to_string()
+                }
+            }
+            ClangNodeKind::CastExpr { ty, cast_kind } => {
+                // Explicit C++ casts: static_cast, reinterpret_cast, const_cast, C-style
+                if !node.children.is_empty() {
+                    let inner = self.expr_to_string(&node.children[0]);
+                    let rust_type = ty.to_rust_type_str();
+                    match cast_kind {
+                        CastKind::Static | CastKind::Reinterpret | CastKind::Other => {
+                            // Generate Rust "as" cast
+                            format!("{} as {}", inner, rust_type)
+                        }
+                        CastKind::Const => {
+                            // const_cast usually just changes mutability, pass through
+                            inner
+                        }
+                        _ => {
+                            // For other cast kinds, generate as cast
+                            format!("{} as {}", inner, rust_type)
+                        }
+                    }
                 } else {
                     "()".to_string()
                 }
@@ -754,7 +1549,15 @@ fn default_value_for_type(ty: &CppType) -> String {
         CppType::Double => "0.0f64".to_string(),
         CppType::Pointer { .. } => "std::ptr::null_mut()".to_string(),
         CppType::Reference { .. } => "std::ptr::null_mut()".to_string(),
-        CppType::Named(name) => format!("{}::new()", name),
+        CppType::Named(_) => "Default::default()".to_string(),
+        CppType::Array { element, size } => {
+            let elem_default = default_value_for_type(element);
+            if let Some(n) = size {
+                format!("[{}; {}]", elem_default, n)
+            } else {
+                "Default::default()".to_string()
+            }
+        }
         _ => "Default::default()".to_string(),
     }
 }
