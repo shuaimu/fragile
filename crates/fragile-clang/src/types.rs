@@ -193,7 +193,57 @@ impl CppType {
                     "ssize_t" | "ptrdiff_t" => "isize".to_string(),
                     "intptr_t" => "isize".to_string(),
                     "uintptr_t" => "usize".to_string(),
+                    // STL type mappings
+                    "std::string" | "const std::string" |
+                    "std::__cxx11::basic_string<char>" | "const std::__cxx11::basic_string<char>" |
+                    "basic_string<char>" | "const basic_string<char>" |
+                    "basic_string<char, char_traits<char>, allocator<char>>" |
+                    "std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char>>" => "String".to_string(),
                     _ => {
+                        // Handle STL string types with patterns (including const variants)
+                        let check_name = name.strip_prefix("const ").unwrap_or(name);
+                        if check_name.contains("basic_string<char") || check_name == "std::string" {
+                            return "String".to_string();
+                        }
+                        // Handle std::vector<T> -> Vec<T>
+                        if let Some(rest) = name.strip_prefix("std::vector<") {
+                            if let Some(inner) = rest.strip_suffix(">") {
+                                // Handle allocator suffix: "int, std::allocator<int>" -> "int"
+                                let element = if let Some(idx) = inner.find(", std::allocator<") {
+                                    &inner[..idx]
+                                } else if let Some(idx) = inner.find(", allocator<") {
+                                    &inner[..idx]
+                                } else {
+                                    inner
+                                };
+                                let element_type = CppType::Named(element.trim().to_string());
+                                return format!("Vec<{}>", element_type.to_rust_type_str());
+                            }
+                        }
+                        // Handle std::optional<T> -> Option<T>
+                        if let Some(rest) = name.strip_prefix("std::optional<") {
+                            if let Some(inner) = rest.strip_suffix(">") {
+                                let element_type = CppType::Named(inner.trim().to_string());
+                                return format!("Option<{}>", element_type.to_rust_type_str());
+                            }
+                        }
+                        // Handle std::map<K,V> -> BTreeMap<K,V>
+                        if let Some(rest) = name.strip_prefix("std::map<") {
+                            // For now, map key-value pairs directly
+                            if let Some(inner) = rest.strip_suffix(">") {
+                                // Try to split at first comma for key, value
+                                let trimmed = inner.trim();
+                                // This is simplified - complex nested types may need better parsing
+                                return format!("BTreeMap<{}>", trimmed);
+                            }
+                        }
+                        // Handle std::unordered_map<K,V> -> HashMap<K,V>
+                        if let Some(rest) = name.strip_prefix("std::unordered_map<") {
+                            if let Some(inner) = rest.strip_suffix(">") {
+                                let trimmed = inner.trim();
+                                return format!("HashMap<{}>", trimmed);
+                            }
+                        }
                         // Handle decltype expressions - replace with unit type placeholder
                         if name.starts_with("decltype(") {
                             return "()".to_string();

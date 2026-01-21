@@ -14,12 +14,13 @@ We just convert the fully-resolved AST to equivalent Rust code.
 ## Current Status
 
 **Grammar Tests**: 20/20 passing
-**E2E Tests**: 16/16 passing
+**E2E Tests**: 25/25 passing
 
 **Working**:
 - Simple functions with control flow (if/else, while, for, do-while, recursion)
 - Structs with fields and methods
-- Constructors (default and parameterized)
+- Constructors (default, parameterized, copy)
+- Copy constructor → Clone trait
 - Destructors → Drop trait
 - Primitive types (int, float, bool, char)
 - Pointers with unsafe blocks for dereference
@@ -74,23 +75,23 @@ crates/
 - [x] **3.1** Single inheritance (embed base as first field, member access through `__base`)
 - [ ] **3.2** Virtual method override resolution
 - [x] **3.3** Destructor → `Drop` trait
-- [ ] **3.4** Copy/move constructors
+- [x] **3.4** Copy constructor → `Clone` trait (move constructors work via Rust's natural move semantics)
 
 ### 4. Memory Management
 - [x] **4.1** `new`/`delete` → `Box::into_raw(Box::new())` / `Box::from_raw()` + drop
 - [x] **4.2** `new[]`/`delete[]` → Vec allocation with raw pointer (note: delete[] leaks due to size tracking)
 - [ ] **4.3** Smart pointers (`unique_ptr` → `Box`, `shared_ptr` → `Arc`)
 
-### 5. STL Type Mappings
-- [ ] **5.1** `std::string` → `String`
-- [ ] **5.2** `std::vector<T>` → `Vec<T>`
-- [ ] **5.3** `std::map<K,V>` → `BTreeMap<K,V>`
-- [ ] **5.4** `std::unordered_map<K,V>` → `HashMap<K,V>`
-- [ ] **5.5** `std::optional<T>` → `Option<T>`
+### 5. STL Type Mappings (Type names converted, constructor/operator semantics need work)
+- [x] **5.1** `std::string` → `String` (type mapping done)
+- [x] **5.2** `std::vector<T>` → `Vec<T>` (type mapping done)
+- [x] **5.3** `std::map<K,V>` → `BTreeMap<K,V>` (type mapping done)
+- [x] **5.4** `std::unordered_map<K,V>` → `HashMap<K,V>` (type mapping done)
+- [x] **5.5** `std::optional<T>` → `Option<T>` (type mapping done)
 
 ### 6. Error Handling
-- [ ] **6.1** `throw` → `panic!()` or `Result`
-- [ ] **6.2** `try`/`catch` → `catch_unwind` or `Result`
+- [x] **6.1** `throw` → `panic!("message")`
+- [x] **6.2** `try`/`catch` → `std::panic::catch_unwind`
 
 ---
 

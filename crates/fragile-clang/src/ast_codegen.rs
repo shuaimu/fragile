@@ -4,7 +4,7 @@
 //! without going through an intermediate MIR representation.
 //! This produces cleaner, more idiomatic Rust code.
 
-use crate::ast::{ClangNode, ClangNodeKind, BinaryOp, UnaryOp, CastKind};
+use crate::ast::{ClangNode, ClangNodeKind, BinaryOp, UnaryOp, CastKind, ConstructorKind};
 use crate::types::CppType;
 use std::collections::HashSet;
 
@@ -345,6 +345,24 @@ impl AstCodeGen {
             }
         }
 
+        // Generate Clone impl if there's a copy constructor
+        for child in children {
+            if let ClangNodeKind::ConstructorDecl { ctor_kind: ConstructorKind::Copy, is_definition: true, .. } = &child.kind {
+                self.writeln("");
+                self.writeln(&format!("impl Clone for {} {{", name));
+                self.indent += 1;
+                self.writeln("fn clone(&self) -> Self {");
+                self.indent += 1;
+                // Copy constructor is always new_1 (takes one argument: const T&)
+                self.writeln("Self::new_1(self)");
+                self.indent -= 1;
+                self.writeln("}");
+                self.indent -= 1;
+                self.writeln("}");
+                break; // Only one copy constructor per class
+            }
+        }
+
         self.writeln("");
     }
 
@@ -566,6 +584,26 @@ impl AstCodeGen {
                     None
                 }
             }
+            _ => None,
+        }
+    }
+
+    /// Extract the class name from a type, handling const qualifiers, references, and pointers.
+    /// For example, "const Point" -> "Point", Reference { pointee: Named("Point") } -> "Point"
+    fn extract_class_name(ty: &Option<CppType>) -> Option<String> {
+        ty.as_ref().and_then(|t| Self::extract_class_name_from_type(t))
+    }
+
+    /// Helper to extract class name from a CppType.
+    fn extract_class_name_from_type(ty: &CppType) -> Option<String> {
+        match ty {
+            CppType::Named(name) => {
+                // Strip "const " prefix if present
+                let stripped = name.strip_prefix("const ").unwrap_or(name);
+                Some(stripped.to_string())
+            }
+            CppType::Reference { referent, .. } => Self::extract_class_name_from_type(referent),
+            CppType::Pointer { pointee, .. } => Self::extract_class_name_from_type(pointee),
             _ => None,
         }
     }
@@ -811,6 +849,58 @@ impl AstCodeGen {
             }
             ClangNodeKind::ContinueStmt => {
                 self.writeln("continue;");
+            }
+            ClangNodeKind::TryStmt => {
+                // try { ... } catch { ... } => match std::panic::catch_unwind(|| { ... })
+                // Find the try body (first CompoundStmt) and catch handlers
+                let mut try_body = None;
+                let mut catch_handlers = Vec::new();
+
+                for child in &node.children {
+                    match &child.kind {
+                        ClangNodeKind::CompoundStmt => {
+                            if try_body.is_none() {
+                                try_body = Some(child);
+                            }
+                        }
+                        ClangNodeKind::CatchStmt { .. } => {
+                            catch_handlers.push(child);
+                        }
+                        _ => {}
+                    }
+                }
+
+                if let Some(body) = try_body {
+                    // Generate: match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| { ... }))
+                    self.writeln("match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {");
+                    self.indent += 1;
+                    self.generate_block_contents(&body.children, &CppType::Void);
+                    self.indent -= 1;
+                    self.writeln("})) {");
+                    self.indent += 1;
+                    self.writeln("Ok(result) => result,");
+                    self.writeln("Err(_e) => {");
+                    self.indent += 1;
+
+                    // Generate catch handler body (use first catch handler if any)
+                    if let Some(catch) = catch_handlers.first() {
+                        for catch_child in &catch.children {
+                            if let ClangNodeKind::CompoundStmt = &catch_child.kind {
+                                self.generate_block_contents(&catch_child.children, &CppType::Void);
+                            }
+                        }
+                    } else {
+                        self.writeln("// No catch handler");
+                    }
+
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.indent -= 1;
+                    self.writeln("}");
+                }
+            }
+            ClangNodeKind::CatchStmt { .. } => {
+                // Handled as part of TryStmt
             }
             _ => {
                 // For expressions at statement level
@@ -1249,8 +1339,21 @@ impl AstCodeGen {
                 // Check if this is a constructor call (CallExpr with Named type)
                 if let CppType::Named(struct_name) = ty {
                     // Constructor call: all children are arguments
+                    // For copy constructors (1 argument of same type), pass by reference
                     let args: Vec<String> = node.children.iter()
-                        .map(|c| self.expr_to_string(c))
+                        .map(|c| {
+                            let arg_str = self.expr_to_string(c);
+                            // Check if this is a copy constructor call (arg type matches struct)
+                            let arg_type = Self::get_expr_type(c);
+                            let arg_class = Self::extract_class_name(&arg_type);
+                            if let Some(name) = arg_class {
+                                if name == *struct_name {
+                                    // Pass by reference for copy constructor
+                                    return format!("&{}", arg_str);
+                                }
+                            }
+                            arg_str
+                        })
                         .collect();
                     let num_args = args.len();
                     // Always use StructName::new_N(args) to ensure custom constructor bodies run
@@ -1312,10 +1415,16 @@ impl AstCodeGen {
                     let base = self.expr_to_string(&node.children[0]);
                     // Check if this is accessing an inherited member
                     let base_type = Self::get_expr_type(&node.children[0]);
-                    let needs_base_access = if let (Some(CppType::Named(base_type_name)), Some(decl_class)) = (&base_type, declaring_class) {
-                        // If the declaring class differs from the base expression's type,
-                        // we need to access through __base
-                        base_type_name != decl_class
+                    let needs_base_access = if let Some(decl_class) = declaring_class {
+                        // Extract the actual class name from the base type, handling const, references, pointers
+                        let base_class_name = Self::extract_class_name(&base_type);
+                        if let Some(name) = base_class_name {
+                            // If the declaring class differs from the base expression's type,
+                            // we need to access through __base
+                            name != *decl_class
+                        } else {
+                            false
+                        }
                     } else {
                         false
                     };
@@ -1423,6 +1532,24 @@ impl AstCodeGen {
                     format!("[{}]", elems.join(", "))
                 }
             }
+            ClangNodeKind::ThrowExpr { exception_ty } => {
+                // throw expr → panic!("message")
+                // If there's a child expression, try to extract a message
+                if !node.children.is_empty() {
+                    // Try to get the thrown value - look for StringLiteral in children
+                    let msg = Self::extract_throw_message(node);
+                    if let Some(m) = msg {
+                        format!("panic!(\"{}\")", m)
+                    } else if let Some(ty) = exception_ty {
+                        format!("panic!(\"Threw {:?}\")", ty)
+                    } else {
+                        "panic!(\"Exception thrown\")".to_string()
+                    }
+                } else {
+                    // throw; (rethrow) - in Rust, just continue panicking
+                    "panic!(\"Rethrow\")".to_string()
+                }
+            }
             _ => {
                 // Fallback: try children
                 if !node.children.is_empty() {
@@ -1430,6 +1557,23 @@ impl AstCodeGen {
                 } else {
                     format!("/* unsupported: {:?} */", std::mem::discriminant(&node.kind))
                 }
+            }
+        }
+    }
+
+    /// Try to extract a string message from a throw expression.
+    /// Looks recursively for StringLiteral nodes.
+    fn extract_throw_message(node: &ClangNode) -> Option<String> {
+        match &node.kind {
+            ClangNodeKind::StringLiteral(s) => Some(s.clone()),
+            _ => {
+                // Recursively search children
+                for child in &node.children {
+                    if let Some(msg) = Self::extract_throw_message(child) {
+                        return Some(msg);
+                    }
+                }
+                None
             }
         }
     }

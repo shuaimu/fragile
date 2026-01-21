@@ -673,3 +673,85 @@ fn test_e2e_destructor() {
 
     assert_eq!(exit_code, 0, "Struct with destructor should compile and run");
 }
+
+#[test]
+fn test_e2e_copy_constructor() {
+    let source = r#"
+        struct Point {
+            int x;
+            int y;
+
+            Point() {
+                x = 0;
+                y = 0;
+            }
+
+            Point(int px, int py) {
+                x = px;
+                y = py;
+            }
+
+            // Copy constructor
+            Point(const Point& other) {
+                x = other.x;
+                y = other.y;
+            }
+
+            int sum() {
+                return x + y;
+            }
+        };
+
+        int main() {
+            Point a(10, 20);
+            Point b = a;  // Uses copy constructor
+            // Verify both a and b have the same values
+            if (a.sum() == 30 && b.sum() == 30) {
+                return 0;
+            }
+            return 1;
+        }
+    "#;
+
+    let (exit_code, _stdout, _stderr) = transpile_compile_run(source, "e2e_copy_ctor.cpp")
+        .expect("E2E test failed");
+
+    assert_eq!(exit_code, 0, "Struct with copy constructor should compile and run");
+}
+
+#[test]
+fn test_e2e_exception_handling() {
+    let source = r#"
+        int divide(int a, int b) {
+            if (b == 0) {
+                throw "Division by zero";
+            }
+            return a / b;
+        }
+
+        int safe_divide(int a, int b) {
+            try {
+                return divide(a, b);
+            } catch (...) {
+                return -1;
+            }
+        }
+
+        int main() {
+            // Test normal division
+            int r1 = safe_divide(10, 2);
+            if (r1 != 5) return 1;
+
+            // Test division by zero (should catch and return -1)
+            int r2 = safe_divide(10, 0);
+            if (r2 != -1) return 2;
+
+            return 0;
+        }
+    "#;
+
+    let (exit_code, _stdout, _stderr) = transpile_compile_run(source, "e2e_exception.cpp")
+        .expect("E2E test failed");
+
+    assert_eq!(exit_code, 0, "Exception handling should compile and run");
+}
