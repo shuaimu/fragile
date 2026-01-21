@@ -1,654 +1,136 @@
-# Fragile Compiler - TODO
+# Fragile - C++ to Rust Transpiler
 
 ## Overview
 
-Fragile is a unified compiler for Rust, C++, and Go that:
-1. **Replaces g++/clang++/go build** - Drop-in compiler replacement
-2. **Enables cross-language interop** - Use C++ STL in Rust, Rust Vec in C++
-
-**Architecture**: Transpile C++/Go to Rust source code, then compile with rustc.
+Fragile transpiles C++ source code to Rust source code.
 
 ```
-C++ Source                          Go Source
-    │                                   │
-    ▼ (libclang)                        ▼ (go/ssa - planned)
-Clang AST                           Go SSA
-    │                                   │
-    ▼ (fragile-clang)                   ▼ (fragile-go)
-    │                                   │
-    └──────────► Rust Source ◄──────────┘
-                    │
-                    ▼ (rustc)
-                 Binary
+C++ Source → libclang → Clang AST → Rust Source → rustc → Binary
 ```
 
-**Key Principle**: Transpile to Rust source (not MIR) for stability and debuggability.
-
-```
-Status Legend:
-  [x] Completed
-  [-] In Progress
-  [ ] Not Started
-  [!] Wrong approach (to be removed/redone)
-```
-
----
-
-## Architecture Decision: Transpile to Rust Source
-
-### Previous Approach: MIR Injection
-```
-C++ ──► Clang AST ──► Fragile MIR ──► rustc MIR (via mir_built override)
-```
-**Problems**:
-- MIR format changes every rustc version
-- Hard to debug (MIR is not human-readable)
-- Tight coupling to rustc internals
-
-### New Approach: Transpile to Rust Source
-```
-C++ ──► Clang AST ──► Rust Source (.rs files) ──► rustc
-```
-**Benefits**:
-- Stable interface (Rust syntax is stable)
-- Debuggable output (can read generated .rs files)
-- Works with any rustc version
-- Simpler toolchain
-
-### Why This Still Works as a Complete Compiler
-
-Clang handles all the hard parts of C++:
-- Template instantiation → Already done before we see it
-- Overload resolution → Already resolved
-- SFINAE evaluation → Already evaluated
-- Type deduction → Already deduced
-
-We just convert the fully-resolved AST to Rust code.
-
----
-
-## ⚠️ CRITICAL: Wrong Approaches We've Taken
-
-### Wrong Approach #1: clang++ Hybrid (Link-time)
-```
-C++ ──► clang++ ──► .o ──┐
-                         ├──► linker ──► executable
-Rust ──► rustc ──► .o ──┘
-```
-**Why wrong**: Two separate compilers, no shared optimization, just FFI at link time.
-
-### Wrong Approach #2: inkwell/tree-sitter (Custom LLVM)
-```
-C++ ──► tree-sitter ──► HIR ──► inkwell ──► LLVM IR ──► .o ──┐
-                                                              ├──► linker
-Rust ──► rustc ──────────────────────────────────────► .o ──┘
-```
-**Why wrong**: Still two separate compilers! inkwell generates LLVM independently of rustc.
-The code only meets at link time. No cross-language inlining, no shared analysis.
-
-**Status**: The `fragile-codegen` crate using inkwell IS WRONG and should be deprecated.
-The `fragile-frontend-*` crates using tree-sitter ARE WRONG for the final architecture.
-
-### Wrong Approach #3: MIR Injection (Abandoned)
-```
-C++ ──► libclang ──► Clang AST ──► Fragile MIR ──► rustc MIR (mir_built override)
-```
-**Why abandoned**: MIR is unstable, hard to debug, tight coupling to rustc internals.
-Work done on MIR injection was useful for learning but not the final approach.
-
-### Correct Approach: Transpile to Rust Source
-```
-C++ ──► libclang ──► Clang AST ──► Rust Source ──► rustc ──► Binary
-```
-**Why correct**:
-- Single compiler (rustc) handles all codegen
-- Stable interface (Rust source syntax)
-- Debuggable output (can inspect .rs files)
-- Full C++ support via Clang parsing
-
-### What Needs to Happen
-1. **Delete** `fragile-codegen` (inkwell) - wrong approach
-2. **Delete** `fragile-frontend-*` (tree-sitter) - wrong approach
-3. **Delete** `fragile-hir` - used by wrong approach
-4. **Delete** `fragile-driver` - uses wrong approach
-5. **Keep** `fragile-clang` - reuse Clang parsing, add Rust code generation
-6. **Refactor** `fragile-rustc-driver` - remove MIR injection, add transpiled code compilation
-
----
-
-## Test Targets (Progressive Complexity)
-
-### Target 1: Simple Test Files
-Hand-written C++ files for testing each feature incrementally.
-- Location: `tests/cpp/`
-- Examples: add.cpp, fibonacci.cpp, struct.cpp, class.cpp
-
-### Target 2: doctest (Single-Header Testing Framework)
-- Repository: https://github.com/doctest/doctest
-- Size: ~5000 lines, single header
-- Why: Popular, exercises templates/macros, no external deps
-
-### Target 3: fmt (Formatting Library)
-- Repository: https://github.com/fmtlib/fmt
-- Size: Small library, high-quality modern C++
-- Why: Popular, real-world usage
-
-### Future: Mako (Deferred)
-- The original target, deferred until core infrastructure is solid
-
----
-
-## Phase 1: Core MIR Pipeline (Current Focus)
-
-### 1.1 Validate Existing Infrastructure
-- [x] Clang AST parsing works (fragile-clang, 571 tests)
-- [x] MIR representation exists (MirBody, MirStatement, etc.)
-- [x] rustc query override infrastructure exists
-- [!] **WRONG**: Current builds use clang++ for codegen
-- [ ] **TODO**: Remove clang++ codegen path entirely
-
-### 1.2 MIR-to-rustc Conversion (mir_convert.rs)
-- [x] Basic structure exists
-- [x] **1.2.1** Primitive types (i32, f64, bool, char) [26:01:17] - convert_type() handles all primitive types (void, bool, char, short, int, long, long long, float, double with signed/unsigned variants)
-- [x] **1.2.2** Arithmetic operations (add, sub, mul, div) [26:01:17] - convert_binop() maps Add, Sub, Mul, Div, Rem + bit ops
-- [x] **1.2.3** Comparison operations (eq, lt, gt) [26:01:17] - convert_binop() maps Eq, Ne, Lt, Le, Gt, Ge
-- [x] **1.2.4** Local variables and assignments [26:01:17] - convert_statement() handles Assign, convert_local() handles locals
-- [x] **1.2.5** Function calls [26:01:17] - resolve_function_call() resolves display names to DefIds via registry lookup; fixed CXToken_Punctuation constant (0 not 1)
-- [x] **1.2.6** Control flow (if/else, loops) [26:01:17] - convert_terminator() handles Goto, SwitchInt
-- [x] **1.2.7** Return statements [26:01:17] - convert_terminator() handles Return terminator
-
-### 1.3 End-to-End Test: add.cpp
-First complete test through the correct pipeline:
-
-```cpp
-// tests/cpp/add.cpp
-int add(int a, int b) {
-    return a + b;
-}
-```
-
-**Milestone**: `add.cpp` compiles to `.o` via rustc codegen (not clang++)
-
-**Critical Discovery [26:01:17]**: extern "C" functions don't have MIR!
-- `extern "C" { fn foo(); }` creates ForeignItem, not Function
-- ForeignItems are resolved by linker, `mir_built` is never called
-- **Solution**: Generate regular Rust functions with stub bodies, then inject MIR
-- See: `docs/dev/plan_1_3_end_to_end_add_cpp.md`
-
-- [x] **1.3.1** Parse add.cpp → Clang AST - Already works (fragile-clang)
-- [x] **1.3.2** Convert Clang AST → Fragile MIR - Already works (MirConverter)
-- [x] **1.3.3** Generate Rust function stubs (NOT extern "C") for MIR injection [26:01:17]
-  - Modified `stubs.rs` to generate regular Rust functions with stub bodies
-  - Functions use `#[export_name = "mangled"]` instead of extern "C"
-  - Stub body: `unreachable!("Fragile: C++ MIR should be injected")`
-  - Added `generate_rust_stubs_extern()` for backwards compatibility
-  - Updated `rustc_integration.rs` to detect regular functions (not just ForeignItems)
-- [x] **1.3.3b** Implement proper C++ name mangling [26:01:17]
-  - Added `cursor_mangled_name()` using `clang_Cursor_getMangling` from libclang
-  - Added `mangled_name` field to `ClangNodeKind::FunctionDecl`
-  - Updated `convert.rs` to pass mangled_name through to CppFunction
-  - Added test `test_mangled_name_for_simple_function` verifying `_Z7add_cppii`
-- [x] **1.3.4** Compile via rustc (mir_built override active) [26:01:17]
-  - Fixed threading issue: use global statics instead of TLS for C++ registry
-  - Fixed MirSource: pass correct DefId instead of CRATE_DEF_ID
-  - Fixed arg_count: count locals with is_arg=true
-  - Created wrapper source to include stubs as module
-- [x] **1.3.5** Link and run: `add(2, 3) == 5` [26:01:17] ✓
-  - End-to-end test passes: binary executes and outputs "add_cpp(2, 3) = 5"
-  - **MILESTONE ACHIEVED**: C++ compiles through rustc codegen, not clang++!
-
-### 1.4 Verification: No clang++ in Pipeline (DEFERRED)
-
-**Status**: Deferred until MIR injection handles more complex cases.
-
-**Rationale**: While MIR injection works for simple leaf functions (like `add_cpp`),
-the full Fragile pipeline (CLI, Mako compilation) still requires clang++ for:
-- Complex C++ with function calls, templates, STL
-- Object file generation for linking with Rust
-- The CLI build system integration
-
-**Prerequisite**: Complete Phase 2 (Basic C++ Features) to enable pure MIR path.
-
-- [ ] Remove `cpp_compiler.rs` (clang++ wrapper) - AFTER Phase 2
-- [ ] Remove `compile_cpp_objects()` function - AFTER Phase 2
-- [ ] All `.o` files come from rustc only - AFTER Phase 2
-- [ ] Add CI check that clang++ is never invoked for codegen - AFTER Phase 2
-
----
-
-## Phase 2: Basic C++ Features via MIR
-
-Each feature must work through the MIR pipeline, not clang++.
-
-### 2.1 Expressions
-- [x] **2.1.1** Integer literals [26:01:17] (see `docs/dev/plan_2_1_integer_literals.md`)
-  - [x] 2.1.1a Add `signed` field to `MirConstant::Int`
-  - [x] 2.1.1b Add `bit_width()` method to `CppType`
-  - [x] 2.1.1c Add `cpp_type` field to `IntegerLiteral` AST node
-  - [x] 2.1.1d Update parser to capture type from Clang (uses getAsUnsigned/getAsLongLong for proper values)
-  - [x] 2.1.1e Update converter to use actual type info
-  - [x] 2.1.1f Update rustc mir_convert.rs for unsigned types
-  - [x] 2.1.1g Update all `MirConstant::Int` call sites
-  - [x] 2.1.1h Add tests for integer literals (4 tests in parse.rs, 4 tests in types.rs)
-- [x] **2.1.2** Float literals [26:01:17] (see `docs/dev/plan_2_1_2_float_literals.md`)
-- [x] **2.1.3** Boolean literals [26:01:17] (added CXXBoolLiteralExpr parsing)
-- [x] **2.1.4** String literals [26:01:17] (added CXCursor_StringLiteral parsing)
-- [x] **2.1.5** Binary operators (+, -, *, /, %, &, |, ^) [already implemented]
-- [x] **2.1.6** Unary operators (-, !, ~) [already implemented]
-- [x] **2.1.7** Comparison operators (==, !=, <, <=, >, >=) [already implemented]
-- [x] **2.1.8** Logical operators (&&, ||) [already implemented]
-
-### 2.2 Statements
-- [x] **2.2.1** Variable declarations [already implemented - DeclStmt/VarDecl]
-- [x] **2.2.2** Assignment [already implemented - via BinaryOperator::Assign]
-- [x] **2.2.3** If/else [already implemented - IfStmt]
-- [x] **2.2.4** While loops [already implemented - WhileStmt]
-- [x] **2.2.5** For loops [already implemented - ForStmt]
-- [x] **2.2.6** Return [already implemented - ReturnStmt]
-- [x] **2.2.7** Break/continue [already implemented - BreakStmt/ContinueStmt]
-
-### 2.3 Functions
-- [x] **2.3.1** Function definitions [already implemented - FunctionDecl]
-- [x] **2.3.2** Function calls [already implemented - CallExpr]
-- [x] **2.3.3** Parameters (by value) [already implemented - ParmVarDecl]
-- [x] **2.3.4** Return values [already implemented - via ReturnStmt]
-- [x] **2.3.5** Recursion [already implemented - via CallExpr]
-
-### 2.4 Basic Types
-- [x] **2.4.1** Primitive types (int, float, bool, char) [already implemented - CppType]
-- [x] **2.4.2** Pointers (*T) [26:01:17] - Fixed address-of (`&x`) and dereference (`*ptr`) in MIR conversion
-  - Address-of now generates `MirRvalue::Ref { place, mutability }` instead of incorrect `MirUnaryOp::Neg`
-  - Dereference now adds `MirProjection::Deref` to place projections
-  - Added `get_node_type()` helper method for extracting C++ type from AST nodes
-  - Added 3 tests: `test_convert_address_of`, `test_convert_dereference`, `test_convert_pointer_ops_combined`
-  - See: `docs/dev/plan_2_4_2_pointers.md`
-- [x] **2.4.3** References (&T) [26:01:17] - Already fully implemented in parser and type system
-  - CppType::Reference supports lvalue (&T), rvalue (T&&), and const references
-  - Parser handles CXType_LValueReference and CXType_RValueReference
-  - Added 3 tests: `test_parse_lvalue_reference_parameter`, `test_parse_const_lvalue_reference_parameter`, `test_parse_rvalue_reference_parameter`
-  - Integration tests exist: `test_rvalue_reference`, `test_const_reference`, etc.
-- [x] **2.4.4** Arrays ([T; N]) [26:01:17] - Added ArraySubscriptExpr handling in convert_expr()
-  - Converts `arr[index]` to MirOperand with MirProjection::Index
-  - Handles compile-time constant indices properly
-  - Falls back to index 0 for runtime variable indices (TODO: future enhancement)
-  - Added 3 tests: `test_convert_array_subscript`, `test_convert_array_subscript_variable_index`, `test_convert_array_subscript_nested`
-  - See: `docs/dev/plan_2_4_4_arrays.md`
-
----
-
-## Phase 3: Structs and Classes via MIR
-
-### 3.1 Structs
-- [x] **3.1.1** Struct definitions [already implemented] - CppStruct parsing and stub generation
-  - Parser handles RecordDecl (struct/class)
-  - Fields, methods, constructors, destructors extracted
-  - Rust stubs generated with #[repr(C)]
-  - Existing tests: test_struct_default_access, test_namespace_struct
-- [x] **3.1.2** Field access (MemberExpr → MirProjection::Field) [26:01:17]
-  - Added MemberExpr handling in convert_expr() for both dot (`.`) and arrow (`->`) access
-  - Updated MirProjection::Field to include field name for later resolution
-  - Arrow access generates Deref + Field projections
-  - Added 3 tests: test_convert_member_expr_dot, test_convert_member_expr_arrow, test_convert_nested_member_expr
-  - See: `docs/dev/plan_3_1_2_field_access.md`
-- [x] **3.1.3** Struct literals / aggregate initialization [26:01:17]
-  - [x] 3.1.3a Add `InitListExpr` AST node kind in ast.rs
-  - [x] 3.1.3b Add parser handling for `CXCursor_InitListExpr` and `CXXFunctionalCastExpr` in parse.rs
-  - [x] 3.1.3c Add MIR aggregate initialization support (MirRvalue::Aggregate)
-  - [x] 3.1.3d Add conversion from InitListExpr to MIR in convert.rs
-  - [x] 3.1.3e Add tests: test_convert_init_list_struct, test_convert_init_list_variable, test_convert_init_list_array
-  - Fixed CastExpr to skip TypeRef children when finding expression value
-  - See: `docs/dev/plan_3_1_3_init_list.md`
-- [x] **3.1.4** Nested structs [26:01:17] - Already implemented, verified with tests
-  - Struct fields with nested struct types (CppType::Named) work correctly
-  - Nested field access (o.inner.x) generates chained MirProjection::Field
-  - Nested aggregate initialization (Outer{{1, 2}, 3}) works via recursive InitListExpr
-  - Added 3 tests: test_nested_struct_definition, test_nested_aggregate_initialization, test_nested_struct_assignment
-
-### 3.2 Classes
-- [x] **3.2.1** Class definitions [already implemented] - Classes parsed via CXCursor_ClassDecl
-  - Classes use same infrastructure as structs (CppStruct with is_class flag)
-  - Access specifiers properly handled via libclang's clang_getCXXAccessSpecifier()
-  - Default private access for class members works correctly
-  - Existing test: test_class_access_specifiers
-- [x] **3.2.2** Constructors [already implemented] - CppConstructor with kind detection
-  - Default, copy, move, and parameterized constructors parsed
-  - Member initializer lists extracted
-  - Constructor bodies converted to MIR
-  - Existing tests: test_default_constructor, test_copy_constructor, test_move_constructor
-- [x] **3.2.3** Destructors [already implemented] - CppDestructor with optional body
-  - Destructors parsed and stored in CppStruct
-  - Destructor bodies converted to MIR when present
-  - Existing test: test_destructor
-- [x] **3.2.4** Member functions [already implemented] - CppMethod with MIR body
-  - Methods parsed with return type, params, const/static modifiers
-  - Method bodies converted to MIR
-  - Static methods supported
-  - Existing tests in integration_test.rs
-- [x] **3.2.5** Access specifiers (public/private) [already implemented]
-  - libclang's clang_getCXXAccessSpecifier returns effective access
-  - Default access differs between struct (public) and class (private)
-  - AccessSpecifier enum: Public, Private, Protected
-
-### 3.3 Inheritance
-- [x] **3.3.1** Single inheritance [already implemented] - CppBaseClass in CppStruct.bases
-  - CXCursor_CXXBaseSpecifier parsed with access specifier
-  - Public/protected/private inheritance supported
-  - Virtual inheritance flag tracked
-  - Existing tests: test_single_inheritance, test_protected_inheritance, test_private_inheritance, test_virtual_inheritance
-- [x] **3.3.2** Virtual functions [already implemented] - CppMethod flags
-  - is_virtual, is_pure_virtual, is_override, is_final tracked
-  - Virtual function detection via clang_getCursorSemanticParent
-  - Existing tests: test_virtual_function, test_pure_virtual_function, test_override_specifier
-- [x] **3.3.3** Vtable generation via MIR [26:01:17]
-  - Added VtableEntry and CppVtable structures to lib.rs
-  - CppModule.vtables stores vtables for all polymorphic classes
-  - CppStruct.vtable_name stores mangled vtable name (if polymorphic)
-  - CppStruct.is_polymorphic() method checks for virtual methods
-  - MirStatement::InitVtable for constructor vtable pointer initialization
-  - Vtable generation in convert_struct() for classes with virtual methods
-  - 6 new tests: test_vtable_generation_for_polymorphic_class, test_no_vtable_for_non_polymorphic_class, test_is_polymorphic_method, test_vtable_with_pure_virtual, test_constructor_vtable_init, test_constructor_no_vtable_init_for_non_polymorphic
-- [x] **3.3.4** Dynamic dispatch (see `docs/dev/plan_3_3_4_dynamic_dispatch.md`) [26:01:17]
-  - MirTerminator::VirtualCall added with receiver, vtable_index, args [26:01:17]
-  - Helper functions: try_extract_member_call, unwrap_casts, extract_class_name [26:01:17]
-  - [x] **3.3.4a** Add vtable index lookup helper function [26:01:17, 19:10]
-    - VirtualDispatchContext struct with find_vtable_index, find_struct, is_method_virtual
-    - Passed through convert_function -> convert_stmt -> convert_expr chain
-  - [x] **3.3.4b** Integrate VirtualCall generation in CallExpr handling [26:01:17, 19:10]
-    - CallExpr now detects member calls via try_extract_member_call()
-    - If method is virtual, generates MirTerminator::VirtualCall with vtable_index
-    - If method is non-virtual, generates regular MirTerminator::Call
-  - [x] **3.3.4c** Add rustc-driver VirtualCall translation [26:01:17, 19:35]
-    - Added VirtualCall handler in mir_convert.rs convert_terminator()
-    - Converts receiver to first argument (implicit this pointer)
-    - Uses placeholder function operand for now (full runtime dispatch deferred)
-    - TODO: Integrate with fragile_rt_vfunc_get for true dynamic dispatch
-  - [x] **3.3.4d** Add comprehensive tests for virtual dispatch [26:01:17, 19:10]
-    - test_virtual_call_generation: Virtual method call generates VirtualCall
-    - test_non_virtual_call_uses_regular_call: Non-virtual uses regular Call
-    - test_virtual_call_with_multiple_virtual_methods: Correct vtable indices
-    - test_virtual_dispatch_context_find_vtable_index: Unit test for context
-
----
-
-## Phase 4: Templates via MIR
-
-### 4.1 Function Templates
-- [x] **4.1.1** Basic function templates [already implemented] - CppFunctionTemplate
-  - CXCursor_FunctionTemplate (cursor kind 30) parsed
-  - Template parameters with variadic (typename...) support
-  - Return type and params with template types (CppType::TemplateParam)
-  - Requires clause support for C++20 constraints
-  - Comprehensive test coverage (30+ tests)
-- [x] **4.1.2** Template instantiation [already implemented]
-  - `instantiate()` method on CppFunctionTemplate
-  - `add_specialization()` for explicit specializations
-  - Test: test_template_instantiation
-- [x] **4.1.3** Type deduction [already implemented] - TypeDeducer in deduce.rs
-  - Basic deduction from call arguments
-  - Explicit template argument support
-  - Conflict detection for incompatible deductions
-  - Tests: test_deduce_simple_*, test_explicit_*
-
-### 4.2 Class Templates
-- [x] **4.2.1** Basic class templates [already implemented] - CppClassTemplate
-  - CXCursor_ClassTemplate (cursor kind 31) parsed
-  - Fields, constructors, methods, member templates all preserved
-  - Tests: test_class_template_basic, test_class_template_with_methods
-- [x] **4.2.2** Template specialization [already implemented]
-  - CXCursor_ClassTemplatePartialSpecialization (cursor kind 32)
-  - CppClassTemplatePartialSpec with specialization_args pattern
-  - Tests: test_partial_specialization_*
-
----
-
-## Phase 5: Test Target - doctest
-
-### 5.1 Setup
-- [x] Clone doctest as submodule [26:01:17]
-  - Added vendor/doctest as git submodule from https://github.com/doctest/doctest
-  - Header-only library (~323KB doctest.h)
-- [x] Create test file using doctest [26:01:17]
-  - Created tests/cpp/doctest_simple.cpp with basic tests
-  - Tests factorial function, comparisons, and subcases
-  - Verified compiles with clang++ -std=c++17
-
-### 5.2 Compile doctest Tests
-- [x] Parse doctest.h header [26:01:17]
-  - fragile-clang successfully parses doctest_simple.cpp (includes doctest.h)
-  - Finds 3,145 functions, 1,905 function templates, 792 structs/classes, 667 class templates
-  - Correctly identifies `factorial` function and generated test case functions
-  - Created parse_doctest.rs example for testing
-- [x] Compile simple test file [26:01:17]
-  - [x] Created factorial.cpp standalone test (without doctest) [26:01:17]
-    - tests/cpp/factorial.cpp - minimal test with recursion and control flow
-    - tests/clang_integration/factorial.cpp - integration test version
-    - MIR conversion verified: 4 basic blocks, 6 locals, recursive calls work
-    - Added test_end_to_end_factorial_cpp test - passes
-    - Stub generation works: factorial function produces correct extern "C" stub
-  - [x] Test full MIR injection via rustc-integration feature [26:01:17]
-    - Fixed MIR block allocation bug in if/else handling
-    - Added reserve_block() method for forward references
-    - Added needs_terminator() to avoid spurious Goto blocks after return
-    - test_compile_factorial_with_rustc passes: factorial(5) = 120
-  - [ ] Test doctest_simple.cpp (blocked on template/STL support)
-- [ ] Run tests successfully (blocked on doctest_simple.cpp)
-
----
-
-## Cleanup: Remove Obsolete Code
-
-We've had multiple architecture pivots. Now using **transpiler approach** (C++ → Rust source → rustc).
-The following code from previous approaches should be removed.
-
-### Wrong Approach #1: tree-sitter + inkwell (DELETE)
-
-These crates use tree-sitter parsing + inkwell LLVM codegen - a parallel compiler that
-only meets Rust at link time:
-
-- [ ] `crates/fragile-codegen/` - **DELETE** (inkwell LLVM codegen)
-- [ ] `crates/fragile-frontend-cpp/` - **DELETE** (tree-sitter C++ parsing)
-- [ ] `crates/fragile-frontend-rust/` - **DELETE** (tree-sitter Rust parsing)
-- [ ] `crates/fragile-frontend-go/` - **DELETE** (tree-sitter Go parsing)
-- [ ] `crates/fragile-hir/` - **DELETE** (HIR used by above)
-- [ ] `crates/fragile-driver/` - **DELETE** (driver for wrong approach crates)
-
-### Wrong Approach #2: MIR Injection (DEPRECATE)
-
-MIR injection worked but is unstable across rustc versions. Now obsolete with transpiler approach:
-
-- [ ] `crates/fragile-rustc-driver/src/mir_convert.rs` - **DEPRECATE** (MIR injection, no longer needed)
-- [ ] `crates/fragile-rustc-driver/src/rustc_integration.rs` - **DEPRECATE** (query overrides for MIR)
-- [ ] `crates/fragile-rustc-driver/src/stubs.rs` - **REFACTOR** (keep stub generation, remove MIR parts)
-- [ ] `crates/fragile-rustc-driver/src/cpp_compiler.rs` - **DELETE** (clang++ wrapper)
-- [ ] Remove `CppMirRegistry`, `mir_built` override code
-- [ ] Remove `compile_cpp_objects()` calls
-
-### Files in fragile-clang to Clean Up
-
-Now that we use `rust_codegen.rs` for transpilation, some MIR-related code can be simplified:
-
-- [ ] `crates/fragile-clang/src/convert.rs` - **KEEP** but simplify (MIR still useful for codegen)
-- [ ] Remove `VirtualDispatchContext` if not used by transpiler
-- [ ] Remove `MirTerminator::VirtualCall` if transpiler handles differently
-
-### Cargo.toml Updates
-
-After removing wrong crates:
-- [ ] Update root `Cargo.toml` workspace members
-- [ ] Remove wrong crates from any dependency lists
-- [ ] Clean up feature flags referencing wrong crates
-- [ ] Remove `rustc-integration` feature if MIR injection removed
-
-### Tests to Update
-
-- [ ] Remove tests that rely on MIR injection (`test_compile_*_with_rustc`)
-- [ ] Add tests for transpiler output (`cargo run --example transpile`)
-- [ ] Verify transpiled Rust code compiles with rustc
-
----
-
-## What We Keep (Correct Parts)
-
-### fragile-clang crate (KEEP - Core of Transpiler)
-- [x] Clang AST parsing via libclang (`parse.rs`)
-- [x] CppModule, CppFunction, CppStruct types (`lib.rs`)
-- [x] MIR conversion for method bodies (`convert.rs`)
-- [x] **Rust code generation** (`rust_codegen.rs`) - NEW, core of transpiler
-- [x] Type conversion (`types.rs`)
-- [x] `transpile_cpp_to_rust()` API
-
-### fragile-rustc-driver crate (REVIEW - may be simplified)
-- [ ] Keep stub generation for extern "C" interop
-- [ ] Remove MIR injection code (mir_convert.rs, rustc_integration.rs)
-- [ ] Simplify to just compile generated Rust code
-
-### fragile-runtime crate (KEEP)
-- [x] Runtime support functions (vtable dispatch, etc.)
-
----
+**Why this works**: Clang handles all the hard C++ stuff (templates, overloads, SFINAE).
+We just convert the fully-resolved AST to equivalent Rust code.
 
 ## Current Status
 
-**Architecture Pivot [26:01:19]**: Switched from MIR injection to **transpiler approach**.
+**Working**:
+- Simple functions with control flow (if/else, loops, recursion)
+- Structs with fields and methods
+- Constructors (default and parameterized)
+- Primitive types (int, float, bool, char, pointers, references)
+- Binary/unary operators, comparisons, logical ops
+- 6/7 test files transpile to compilable Rust
 
-**Previous Milestone [26:01:17]**: MIR injection worked (`add_cpp`, `factorial`)
-- Proved concept but MIR is unstable across rustc versions
-- Decision: Transpile to Rust source instead for stability
-
-**Current Milestone [26:01:19]**: C++ transpiles to valid Rust source code!
-
-**Transpiler Working**:
-- Struct definitions with `#[repr(C)]`
-- Method bodies with `(*self).field` access
-- Constructor bodies with `Self { field: value }` initialization
-- Simple functions with control flow
-
-**Transpiler Issues** (see Phase 6.2):
-- Constructor calls generate `()` instead of `StructName::new()`
-- Method calls generate `unknown()` instead of proper calls
-
----
-
-## Phase 6: C++ to Rust Transpiler (New Approach)
-
-**Status**: Transpile C++ to Rust source code instead of MIR injection.
-
-### 6.1 Recent Fixes [26:01:19]
-- [x] **6.1.1** Method body generation with `this` parameter
-  - Added `this` as local variable for non-static methods in MIR conversion
-  - Added `CXXThisExpr` (cursor kind 132) handling in parser
-  - Fixed implicit `this` handling when `MemberExpr` has no children
-  - Translated C++ `this` to Rust `self` in codegen
-- [x] **6.1.2** Constructor body generation
-  - Enhanced `generate_constructor` to accept struct field information
-  - Implemented positional mapping from constructor parameters to fields
-  - Default constructor uses `0` for initialized fields
-  - Parameterized constructor maps params to fields by position
-- [x] **6.1.3** Parser bug fix
-  - Fixed visitor context passing in libclang AST traversal
-  - Created `VisitorContext` struct to pass both parser and children vec
-
-### 6.2 Immediate Priority (Blocking Issues) - COMPLETED
-- [x] **6.2.1** Fix constructor calls in MIR conversion
-  - Added `MirStatement::ConstructorCall` variant
-  - Detects constructor calls by checking for function references vs TypeRef
-  - Generates `Point::new()` or `Point::new_1(args)` in Rust codegen
-- [x] **6.2.2** Fix method calls in MIR conversion
-  - Added `MirTerminator::MethodCall` for non-virtual method calls
-  - Generates `receiver.method_name(args)` syntax in Rust codegen
-
-### 6.3 After Blocking Issues
-- [x] **6.3.1** Add destructor → `Drop` trait mapping
-  - Added `generate_drop_impl()` in rust_codegen.rs
-  - Fixed destructor body MIR conversion (added `this` parameter)
-  - Generates `impl Drop for Struct { fn drop(&mut self) { ... } }`
-- [ ] **6.3.2** Improve code quality (reduce temporaries)
-- [ ] **6.3.3** Add namespace → module mapping
-
-### 6.4 Cleanup - COMPLETED
-- [x] Removed obsolete crates: fragile-driver, fragile-hir, fragile-frontend-*, fragile-codegen
-- [x] Updated workspace Cargo.toml
-- [x] Updated fragile-cli to deprecate old commands
-
-### 6.5 Test Files
-- `tests/cpp/class.cpp` - Methods work, generates `(*self).field`
-- `tests/cpp/constructor.cpp` - Constructor calls now work
-- `tests/cpp/add_simple.cpp` - Simple function + struct works
-
----
-
-## Next Steps (Prioritized)
-
-1. ~~**Test end-to-end compilation**~~ - **COMPLETED** [26:01:21]
-   - Added `--full` option to parse-cpp command for full Rust output
-   - Fixed variable initialization (Rust requires default init for cross-block vars)
-   - Fixed bool match patterns (use `true/false` instead of `1/0`)
-   - Fixed ternary operator (ConditionalOperator) to generate proper control flow
-   - Fixed reserve_block() to sync with actual block count
-   - **Result**: 6/7 test files compile successfully
-2. ~~**Fix reserved keyword collision**~~ - **COMPLETED** [26:01:21]
-   - Rust keywords (`in`, `fn`, `type`, etc.) now use raw identifier syntax (`r#in`)
-   - C++ operator names (`operator=`, `operator[]`) converted to valid names (`op_assign`, `op_index`)
-   - Anonymous parameters get placeholder names (`_arg0`, `_arg1`)
-   - Anonymous struct fields get placeholder names (`_field0`, `_field1`)
-   - C++ type qualifiers stripped (`const`, `volatile`, `struct`, `class`, `enum`)
-   - Special types handled (`long double` → `f64`, `unsigned int` → `u32`, etc.)
-   - `decltype()` and `typeof()` expressions → `()` placeholder
-   - Function pointers → `unsafe { std::mem::zeroed() }`
-   - **Result**: 6/7 test files compile, doctest_simple has 28 errors from STL internals
-3. **Handle STL internals** - Complex SFINAE, typename enable_if, etc. (low priority)
-4. **Improve code quality** - Reduce temporaries, handle nullptr, etc.
-5. **Add namespace → module mapping** - C++ namespaces to Rust modules
-
-### 6.6 End-to-End Compilation Fixes [26:01:21]
-- [x] **6.6.1** Add `--full` flag to parse-cpp for complete Rust output
-- [x] **6.6.2** Fix variable initialization with `default_value_for_type()`
-  - Rust requires all variables to be initialized before use across match arms
-  - Added default values: `0` for integers, `0.0` for floats, `false` for bool, etc.
-  - Function pointers use `unsafe { std::mem::zeroed() }`
-  - References converted to null pointers
-- [x] **6.6.6** Fix identifier sanitization for Rust compatibility
-  - Rust keywords use raw identifier syntax (`r#in`, `r#type`)
-  - C++ operators become `op_assign`, `op_index`, `op_eq`, etc. (40+ operators)
-  - Anonymous params/fields get `_arg0`, `_field0` names
-  - Invalid chars (`%`, `=`, `&`, `|`, etc.) replaced with `_`
-- [x] **6.6.7** Fix C++ type name sanitization
-  - Strip `const`, `volatile`, `struct`, `class`, `enum` prefixes
-  - Handle `long double` → `f64`, `unsigned int` → `u32`, etc.
-  - Handle `decltype()` and `typeof()` → `()` placeholder
-  - Handle standard C++ types: `size_t`, `intptr_t`, `char16_t`, etc.
-- [x] **6.6.3** Fix bool SwitchInt patterns
-  - Use `true/false` patterns instead of `1/0` for boolean match
-  - Added `operand_is_bool()` helper to detect boolean operands
-- [x] **6.6.4** Add ConditionalOperator (ternary `?:`) support
-  - Generates proper MIR blocks for true/false branches
-  - Result stored in a local and returned after merge
-- [x] **6.6.5** Fix block numbering in reserve_block()
-  - Sync `next_reserved_block` with `blocks.len() + 1`
-  - Prevents block ID collision when reserves happen after blocks created
-- [x] **6.6.8** Improve code quality - reduce temporaries
-  - Added `try_simplify_single_assignment()` to inline simple expressions
-  - Single-block functions with one assignment to return place → direct expression
-  - Pattern `_localN = expr; _local0 = _localN;` → inline `expr` directly
-  - Example: `get_value() { return 42; }` → `fn get_value() -> i32 { 42i32 }`
-  - Example: `add(a,b) { return a+b; }` → `fn add(a: i32, b: i32) -> i32 { a + b }`
-  - Getter methods now just emit field access: `(*self).x`
-
----
-
-## Architecture Reference
-
-### Current Flow (Transpiler)
-```
-file.cpp ──► libclang ──► Clang AST ──► MIR ──► Rust source ──► rustc ──► binary
+**CLI**:
+```bash
+fragile transpile file.cpp -o output.rs
+rustc output.rs -o program
 ```
 
-This is the correct approach: generate Rust source code that rustc compiles normally.
+## Project Structure
+
+```
+crates/
+├── fragile-cli      # CLI: fragile transpile
+├── fragile-clang    # Core: Clang parsing + Rust codegen
+├── fragile-common   # Shared types
+├── fragile-runtime  # Runtime support (future)
+└── fragile-build    # Build config parsing
+```
 
 ---
 
-## References
+## Next Steps
 
-- [awesome-hpp](https://github.com/p-ranav/awesome-hpp) - Header-only C++ libraries
-- [doctest](https://github.com/doctest/doctest) - Testing framework (Target 2)
-- [fmt](https://github.com/fmtlib/fmt) - Formatting library (Target 3)
+### 1. End-to-End Verification
+- [ ] **1.1** Verify transpiled code compiles with rustc
+- [ ] **1.2** Verify transpiled code runs correctly
+- [ ] **1.3** Add integration test that runs full pipeline
+
+### 2. Improve Transpiler Quality
+- [ ] **2.1** Reduce temporary variables in generated code
+- [ ] **2.2** Handle `nullptr` → `std::ptr::null()` / `std::ptr::null_mut()`
+- [ ] **2.3** Handle C++ casts (`static_cast`, `reinterpret_cast`)
+- [ ] **2.4** Map C++ namespaces to Rust modules
+
+### 3. OOP Features
+- [ ] **3.1** Single inheritance (embed base as first field)
+- [ ] **3.2** Virtual methods (manual vtable)
+- [ ] **3.3** Destructor → `Drop` trait
+- [ ] **3.4** Copy/move constructors
+
+### 4. Memory Management
+- [ ] **4.1** `new`/`delete` → `Box::new()` / drop
+- [ ] **4.2** `new[]`/`delete[]` → `Vec`
+- [ ] **4.3** Smart pointers (`unique_ptr` → `Box`, `shared_ptr` → `Arc`)
+
+### 5. STL Type Mappings
+- [ ] **5.1** `std::string` → `String`
+- [ ] **5.2** `std::vector<T>` → `Vec<T>`
+- [ ] **5.3** `std::map<K,V>` → `BTreeMap<K,V>`
+- [ ] **5.4** `std::unordered_map<K,V>` → `HashMap<K,V>`
+- [ ] **5.5** `std::optional<T>` → `Option<T>`
+
+### 6. Error Handling
+- [ ] **6.1** `throw` → `panic!()` or `Result`
+- [ ] **6.2** `try`/`catch` → `catch_unwind` or `Result`
+
+---
+
+## Test Files
+
+| File | Status | Notes |
+|------|--------|-------|
+| `tests/cpp/add_simple.cpp` | Compiles | Simple function + struct |
+| `tests/cpp/class.cpp` | Compiles | Methods with `(*self).field` |
+| `tests/cpp/constructor.cpp` | Compiles | Constructor calls |
+| `tests/cpp/namespace.cpp` | Compiles | Namespace handling |
+| `tests/cpp/factorial.cpp` | Compiles | Recursion |
+| `tests/cpp/doctest_simple.cpp` | 28 errors | STL internals (low priority) |
+
+---
+
+## Feature Support
+
+See `docs/transpiler-status.md` for detailed feature matrix.
+
+### Fully Supported
+- Primitive types (int, float, bool, char)
+- Pointers and references
+- Structs and classes
+- Methods (instance and const)
+- Constructors (default, parameterized)
+- Control flow (if, while, for, switch)
+- Operators (arithmetic, comparison, logical, bitwise)
+- Function templates (via Clang instantiation)
+
+### Partial Support
+- Rvalue references (parsed, codegen incomplete)
+- Virtual methods (parsed, vtable not generated)
+- Namespaces (parsed, not mapped to modules)
+
+### Not Yet Supported
+- Inheritance
+- Operator overloading
+- Exceptions
+- STL types
+- `new`/`delete`
+
+---
+
+## Commands
+
+```bash
+# Transpile C++ to Rust
+fragile transpile file.cpp -o output.rs
+
+# Transpile with include paths
+fragile transpile file.cpp -I /path/to/headers -o output.rs
+
+# Generate stubs only (no function bodies)
+fragile transpile file.cpp --stubs-only
+
+# Build and test
+cargo build
+cargo test --package fragile-clang
+```
