@@ -506,6 +506,12 @@ impl ClangParser {
                     if !name.is_empty() && !name.starts_with("__") && name != "std" {
                         path.push(name);
                     }
+                } else if kind == clang_sys::CXCursor_EnumDecl {
+                    // For enum constants, include the enum type name for scoped access
+                    let name = cursor_spelling(current);
+                    if !name.is_empty() {
+                        path.push(name);
+                    }
                 } else if kind == clang_sys::CXCursor_TranslationUnit {
                     // Reached the top
                     break;
@@ -702,6 +708,21 @@ impl ClangParser {
                     let access = self.get_access_specifier(cursor);
                     // Regular field declarations are never static
                     ClangNodeKind::FieldDecl { name, ty, access, is_static: false }
+                }
+
+                clang_sys::CXCursor_EnumDecl => {
+                    let name = cursor_spelling(cursor);
+                    // Check if it's a scoped enum (enum class)
+                    let is_scoped = clang_sys::clang_EnumDecl_isScoped(cursor) != 0;
+                    // Get underlying type
+                    let underlying_type = self.convert_type(clang_sys::clang_getEnumDeclIntegerType(cursor));
+                    ClangNodeKind::EnumDecl { name, is_scoped, underlying_type }
+                }
+
+                clang_sys::CXCursor_EnumConstantDecl => {
+                    let name = cursor_spelling(cursor);
+                    let value = clang_sys::clang_getEnumConstantDeclValue(cursor);
+                    ClangNodeKind::EnumConstantDecl { name, value: Some(value) }
                 }
 
                 clang_sys::CXCursor_CXXMethod => {

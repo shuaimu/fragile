@@ -1,0 +1,60 @@
+warning: use of deprecated method `inkwell::types::IntType::<'ctx>::ptr_type`: Starting from version 15.0, LLVM doesn't differentiate between pointer types. Use Context::ptr_type instead.
+    --> crates/fragile-codegen/src/codegen.rs:1206:45
+     |
+1206 | ...                   data_ty.ptr_type(inkwell::AddressSpace::default()),
+     |                               ^^^^^^^^
+     |
+     = note: `#[warn(deprecated)]` on by default
+
+warning: use of deprecated method `inkwell::types::BasicType::ptr_type`: Starting from version 15.0, LLVM doesn't differentiate between pointer types. Use Context::ptr_type instead.
+    --> crates/fragile-codegen/src/codegen.rs:2185:70
+     |
+2185 | ...                   field_ty.ptr_type(inkwell::AddressSpace::default()),
+     |                                ^^^^^^^^
+
+warning: unused variable: `fn_name`
+   --> crates/fragile-codegen/src/codegen.rs:119:25
+    |
+119 |                     let fn_name = compiler.interner.resolve(fn_def.name);
+    |                         ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_fn_name`
+    |
+    = note: `#[warn(unused_variables)]` on by default
+
+warning: unused variable: `receiver_val`
+    --> crates/fragile-codegen/src/codegen.rs:1359:21
+     |
+1359 |                 let receiver_val = self
+     |                     ^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_receiver_val`
+
+warning: unused variable: `ptr`
+    --> crates/fragile-codegen/src/codegen.rs:1713:43
+     |
+1713 | ...                   if let Some(&(ptr, ty)) = self.variables.get(name.as_str()) {
+     |                                     ^^^ help: if this is intentional, prefix it with an underscore: `_ptr`
+
+warning: unused variable: `field_name`
+    --> crates/fragile-codegen/src/codegen.rs:1715:41
+     |
+1715 | ...                   let field_name = self.interner.resolve(*field);
+     |                           ^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_field_name`
+
+warning: unused variable: `function`
+    --> crates/fragile-codegen/src/codegen.rs:3033:9
+     |
+3033 |         function: FunctionValue<'ctx>,
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_function`
+
+warning: unused variable: `span`
+   --> crates/fragile-frontend-cpp/src/lower.rs:186:13
+    |
+186 |         let span = self.span(node);
+    |             ^^^^ help: if this is intentional, prefix it with an underscore: `_span`
+    |
+    = note: `#[warn(unused_variables)]` on by default
+
+warning: `fragile-codegen` (lib) generated 7 warnings
+warning: `fragile-frontend-cpp` (lib) generated 1 warning
+    Finished `release` profile [optimized] target(s) in 0.08s
+     Running `target/release/fragile build-target --config vendor/mako/fragile.toml test_coroutine`
+Built 1 object files for target 'test_coroutine'
+Linked executable: vendor/mako/build/test_coroutine

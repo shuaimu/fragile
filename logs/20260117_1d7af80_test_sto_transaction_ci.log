@@ -1,0 +1,85 @@
+=== Test Report: test_sto_transaction Fix ===
+Date: Sat Jan 17 05:39:46 AM EST 2026
+Commit: 1d7af80
+
+=== Cargo tests ===
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests fragile_frontend_rust
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests fragile_hir
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests fragile_runtime
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests fragile_rustc_driver
+
+running 1 test
+test crates/fragile-rustc-driver/src/lib.rs - (line 50) ... ignored
+
+test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+=== Building and running key executables ===
+
+=== test_marshal ===
+Built 1 object files for target 'test_marshal'
+Linked executable: vendor/mako/build/test_marshal
+[----------] 23 tests from MarshalTest (21 ms total)
+
+[----------] Global test environment tear-down
+[==========] 23 tests from 1 test suite ran. (21 ms total)
+[  PASSED  ] 23 tests.
+
+=== test_fiber ===
+Built 1 object files for target 'test_fiber'
+Linked executable: vendor/mako/build/test_fiber
+[----------] 37 tests from FiberTest (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 37 tests from 1 test suite ran. (0 ms total)
+[  PASSED  ] 37 tests.
+
+=== test_masstree ===
+Built 1 object files for target 'test_masstree'
+Linked executable: vendor/mako/build/test_masstree
+[----------] 2 tests from MasstreeTest (1 ms total)
+
+[----------] Global test environment tear-down
+[==========] 2 tests from 1 test suite ran. (1 ms total)
+[  PASSED  ] 2 tests.
+
+=== test_sto_transaction ===
+Built 2 object files for target 'test_sto_transaction'
+Linked executable: vendor/mako/build/test_sto_transaction
+[----------] 13 tests from STOTRcuTest (1 ms total)
+
+[----------] Global test environment tear-down
+[==========] 13 tests from 1 test suite ran. (1 ms total)
+[  PASSED  ] 13 tests.
+
+=== test_rpc ===
+Built 2 object files for target 'test_rpc'
+Linked executable: vendor/mako/build/test_rpc
+[----------] 3 tests from ConnectionErrorTest (30 ms total)
+
+[----------] Global test environment tear-down
+[==========] 17 tests from 2 test suites ran. (3455 ms total)
+[  PASSED  ] 17 tests.
+
+=== Summary ===
+All tests passed successfully!

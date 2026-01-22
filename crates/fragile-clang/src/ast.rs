@@ -150,6 +150,20 @@ pub enum ClangNodeKind {
         access: AccessSpecifier,
         is_static: bool,
     },
+    /// Enum declaration (enum class or plain enum)
+    EnumDecl {
+        name: String,
+        /// Whether this is a scoped enum (enum class)
+        is_scoped: bool,
+        /// Underlying integer type (e.g., i32, u8)
+        underlying_type: CppType,
+    },
+    /// Enum constant declaration
+    EnumConstantDecl {
+        name: String,
+        /// Optional explicit value
+        value: Option<i64>,
+    },
     /// C++ method declaration
     CXXMethodDecl {
         name: String,

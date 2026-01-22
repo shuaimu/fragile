@@ -1009,3 +1009,27 @@ fn test_e2e_multiple_inheritance() {
 
     assert_eq!(exit_code, 0, "Multiple inheritance should work correctly with access to both base classes");
 }
+
+/// Test enum class (scoped enums).
+#[test]
+fn test_e2e_enum_class() {
+    let source = r#"
+        enum class Color { Red = 0, Green = 1, Blue = 2 };
+
+        int main() {
+            Color c = Color::Red;
+            if (c == Color::Red) {
+                c = Color::Green;
+            }
+            if (c == Color::Green) {
+                return 0;
+            }
+            return 1;
+        }
+    "#;
+
+    let (exit_code, _stdout, _stderr) = transpile_compile_run(source, "e2e_enum_class.cpp")
+        .expect("E2E test failed");
+
+    assert_eq!(exit_code, 0, "Enum class should work correctly with scoped access");
+}

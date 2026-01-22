@@ -185,6 +185,9 @@ impl AstCodeGen {
             ClangNodeKind::RecordDecl { name, is_class, .. } => {
                 self.generate_struct_stub(name, *is_class, &node.children);
             }
+            ClangNodeKind::EnumDecl { name, is_scoped, underlying_type } => {
+                self.generate_enum_stub(name, *is_scoped, underlying_type, &node.children);
+            }
             ClangNodeKind::NamespaceDecl { name } => {
                 // Generate Rust module for namespace stubs
                 if let Some(ns_name) = name {
@@ -277,6 +280,33 @@ impl AstCodeGen {
         self.writeln("");
     }
 
+    /// Generate an enum stub.
+    fn generate_enum_stub(&mut self, name: &str, is_scoped: bool, underlying_type: &CppType, children: &[ClangNode]) {
+        let kind = if is_scoped { "enum class" } else { "enum" };
+        self.writeln(&format!("/// C++ {} `{}`", kind, name));
+
+        // Generate as Rust enum
+        let repr_type = underlying_type.to_rust_type_str();
+        self.writeln(&format!("#[repr({})]", repr_type));
+        self.writeln("#[derive(Clone, Copy, PartialEq, Eq, Debug)]");
+        self.writeln(&format!("pub enum {} {{", name));
+        self.indent += 1;
+
+        for child in children {
+            if let ClangNodeKind::EnumConstantDecl { name: const_name, value } = &child.kind {
+                if let Some(v) = value {
+                    self.writeln(&format!("{} = {},", const_name, v));
+                } else {
+                    self.writeln(&format!("{},", const_name));
+                }
+            }
+        }
+
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("");
+    }
+
     /// Generate a top-level declaration.
     fn generate_top_level(&mut self, node: &ClangNode) {
         match &node.kind {
@@ -287,6 +317,9 @@ impl AstCodeGen {
             }
             ClangNodeKind::RecordDecl { name, is_class, .. } => {
                 self.generate_struct(name, *is_class, &node.children);
+            }
+            ClangNodeKind::EnumDecl { name, is_scoped, underlying_type } => {
+                self.generate_enum(name, *is_scoped, underlying_type, &node.children);
             }
             ClangNodeKind::NamespaceDecl { name } => {
                 // Generate Rust module for namespace
@@ -529,6 +562,39 @@ impl AstCodeGen {
             }
         }
 
+        self.writeln("");
+    }
+
+    /// Generate an enum definition.
+    fn generate_enum(&mut self, name: &str, is_scoped: bool, underlying_type: &CppType, children: &[ClangNode]) {
+        let kind = if is_scoped { "enum class" } else { "enum" };
+        self.writeln(&format!("/// C++ {} `{}`", kind, name));
+
+        // Generate as Rust enum
+        let repr_type = underlying_type.to_rust_type_str();
+        self.writeln(&format!("#[repr({})]", repr_type));
+        self.writeln("#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]");
+        self.writeln(&format!("pub enum {} {{", name));
+        self.indent += 1;
+
+        let mut first = true;
+        for child in children {
+            if let ClangNodeKind::EnumConstantDecl { name: const_name, value } = &child.kind {
+                if first {
+                    // First variant is the default
+                    self.writeln("#[default]");
+                    first = false;
+                }
+                if let Some(v) = value {
+                    self.writeln(&format!("{} = {},", const_name, v));
+                } else {
+                    self.writeln(&format!("{},", const_name));
+                }
+            }
+        }
+
+        self.indent -= 1;
+        self.writeln("}");
         self.writeln("");
     }
 
