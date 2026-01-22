@@ -54,6 +54,7 @@ We just convert the fully-resolved AST to equivalent Rust code.
 - Type aliases (typedef and using declarations → Rust pub type)
 - Global variables (static mut with unsafe access)
 - Global arrays (const-safe initialization with [0; N])
+- Pointer arithmetic (++, --, +=, -= using .add()/.sub())
 
 **CLI**:
 ```bash
