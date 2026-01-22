@@ -57,6 +57,18 @@ pub enum ConstructorKind {
     Other,
 }
 
+/// Lambda capture default mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CaptureDefault {
+    /// No default capture []
+    #[default]
+    None,
+    /// Capture by copy [=]
+    ByCopy,
+    /// Capture by reference [&]
+    ByRef,
+}
+
 /// Kinds of Clang AST nodes we care about.
 #[derive(Debug)]
 pub enum ClangNodeKind {
@@ -456,6 +468,18 @@ pub enum ClangNodeKind {
     ThrowExpr {
         /// Type being thrown (None for `throw;` rethrow)
         exception_ty: Option<CppType>,
+    },
+
+    /// Lambda expression (e.g., [](int x) { return x * 2; })
+    LambdaExpr {
+        /// Parameters of the lambda (name, type)
+        params: Vec<(String, CppType)>,
+        /// Return type (if explicitly specified or inferred)
+        return_type: CppType,
+        /// Capture mode: None = [], Copy = [=], Ref = [&]
+        capture_default: CaptureDefault,
+        /// Explicit captures: (name, by_ref)
+        captures: Vec<(String, bool)>,
     },
 
     // C++ RTTI (Run-Time Type Information)

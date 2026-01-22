@@ -1,8 +1,8 @@
 //! Clang AST parsing using libclang.
 
 use crate::ast::{
-    AccessSpecifier, BinaryOp, CastKind, ClangAst, ClangNode, ClangNodeKind, ConstructorKind,
-    Requirement, SourceLocation, UnaryOp,
+    AccessSpecifier, BinaryOp, CaptureDefault, CastKind, ClangAst, ClangNode, ClangNodeKind,
+    ConstructorKind, Requirement, SourceLocation, UnaryOp,
 };
 use crate::types::CppType;
 use miette::{miette, Result};
@@ -1223,6 +1223,18 @@ impl ClangParser {
                     }
                 }
 
+                // C++11 Lambda expressions
+                // CXCursor_LambdaExpr = 144
+                144 => {
+                    let (params, return_type, capture_default, captures) = self.parse_lambda_info(cursor);
+                    ClangNodeKind::LambdaExpr {
+                        params,
+                        return_type,
+                        capture_default,
+                        captures,
+                    }
+                }
+
                 // C++20 Coroutines - libclang maps these to UnexposedExpr/UnexposedStmt
                 // We detect them by tokenizing and looking for co_await, co_yield, co_return keywords
                 clang_sys::CXCursor_UnexposedExpr => {
@@ -1523,6 +1535,130 @@ impl ClangParser {
             }
 
             result
+        }
+    }
+
+    /// Parse lambda expression information.
+    /// Returns (params, return_type, capture_default, captures).
+    fn parse_lambda_info(&self, cursor: clang_sys::CXCursor) -> (Vec<(String, CppType)>, CppType, CaptureDefault, Vec<(String, bool)>) {
+        unsafe {
+            let mut params = Vec::new();
+            let mut return_type = CppType::Void;
+            let mut capture_default = CaptureDefault::None;
+            let mut captures = Vec::new();
+
+            // Visit children to find parameters and body
+            // Lambda structure: CXXRecordDecl (implicit class), then CompoundStmt (body)
+            // The operator() method contains the parameters and return type
+            let mut visit_data = (
+                &mut params,
+                &mut return_type,
+                &mut capture_default,
+                &mut captures,
+                self,
+            );
+
+            extern "C" fn visitor(
+                child: clang_sys::CXCursor,
+                _parent: clang_sys::CXCursor,
+                data: clang_sys::CXClientData,
+            ) -> clang_sys::CXChildVisitResult {
+                unsafe {
+                    let (params, return_type, capture_default, captures, parser): &mut (
+                        &mut Vec<(String, CppType)>,
+                        &mut CppType,
+                        &mut CaptureDefault,
+                        &mut Vec<(String, bool)>,
+                        &ClangParser,
+                    ) = &mut *(data as *mut _);
+
+                    let kind = clang_sys::clang_getCursorKind(child);
+
+                    match kind {
+                        // ParmDecl - lambda parameters
+                        clang_sys::CXCursor_ParmDecl => {
+                            let name = cursor_spelling(child);
+                            let ty = (*parser).convert_type(clang_sys::clang_getCursorType(child));
+                            params.push((name, ty));
+                        }
+                        // CXXMethod - operator() contains return type
+                        clang_sys::CXCursor_CXXMethod => {
+                            let method_name = cursor_spelling(child);
+                            if method_name == "operator()" {
+                                let func_type = clang_sys::clang_getCursorType(child);
+                                let ret_type = clang_sys::clang_getResultType(func_type);
+                                **return_type = (*parser).convert_type(ret_type);
+                            }
+                        }
+                        // Check for capture variables
+                        clang_sys::CXCursor_VarDecl => {
+                            // Captured variables appear as VarDecl children
+                            let name = cursor_spelling(child);
+                            if !name.is_empty() {
+                                // Check if captured by reference
+                                let ty = clang_sys::clang_getCursorType(child);
+                                let is_ref = ty.kind == clang_sys::CXType_LValueReference;
+                                captures.push((name, is_ref));
+                            }
+                        }
+                        _ => {}
+                    }
+
+                    clang_sys::CXChildVisit_Continue
+                }
+            }
+
+            clang_sys::clang_visitChildren(
+                cursor,
+                visitor,
+                &mut visit_data as *mut _ as clang_sys::CXClientData,
+            );
+
+            // Try to determine capture default from tokens
+            let tu = clang_sys::clang_Cursor_getTranslationUnit(cursor);
+            let extent = clang_sys::clang_getCursorExtent(cursor);
+            let mut tokens: *mut clang_sys::CXToken = ptr::null_mut();
+            let mut num_tokens: u32 = 0;
+
+            clang_sys::clang_tokenize(tu, extent, &mut tokens, &mut num_tokens);
+
+            if !tokens.is_null() && num_tokens > 0 {
+                // Look for [=] or [&] at the start
+                let mut found_bracket = false;
+                for i in 0..num_tokens {
+                    let token = *tokens.add(i as usize);
+                    let spelling = clang_sys::clang_getTokenSpelling(tu, token);
+                    let s = cx_string_to_string(spelling);
+
+                    if s == "[" {
+                        found_bracket = true;
+                    } else if found_bracket {
+                        if s == "=" {
+                            capture_default = CaptureDefault::ByCopy;
+                            break;
+                        } else if s == "&" && i + 1 < num_tokens {
+                            // Check if next token is ] for [&] default capture
+                            let next_token = *tokens.add((i + 1) as usize);
+                            let next_spelling = clang_sys::clang_getTokenSpelling(tu, next_token);
+                            let next_s = cx_string_to_string(next_spelling);
+                            if next_s == "]" {
+                                capture_default = CaptureDefault::ByRef;
+                            }
+                            break;
+                        } else if s == "]" {
+                            // Empty capture []
+                            break;
+                        } else {
+                            // Some specific capture, not default
+                            break;
+                        }
+                    }
+                }
+
+                clang_sys::clang_disposeTokens(tu, tokens, num_tokens);
+            }
+
+            (params, return_type, capture_default, captures)
         }
     }
 

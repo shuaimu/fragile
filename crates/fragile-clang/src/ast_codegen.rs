@@ -1211,18 +1211,26 @@ impl AstCodeGen {
 
     /// Check if a CallExpr is an operator overload call.
     /// Returns Some((operator_name, left_operand_index, right_operand_index)) for binary operators,
-    /// or Some((operator_name, operand_index, None)) for unary operators.
+    /// or Some((operator_name, operand_index, None)) for unary operators or operator() calls.
     fn get_operator_call_info(node: &ClangNode) -> Option<(String, usize, Option<usize>)> {
         // Operator calls have the pattern:
         // CallExpr
         //   UnexposedExpr -> left_operand
         //   UnexposedExpr -> DeclRefExpr { name: "operator+" }
         //   UnexposedExpr -> right_operand (for binary)
+        // For operator() (function call operator), pattern is:
+        //   UnexposedExpr -> callee
+        //   UnexposedExpr -> DeclRefExpr { name: "operator()" }
+        //   args...
         for (i, child) in node.children.iter().enumerate() {
             if let Some(op_name) = Self::find_operator_name(child) {
                 if op_name.starts_with("operator") {
-                    // Found an operator - determine binary vs unary
-                    if node.children.len() == 3 {
+                    // Found an operator - determine type
+                    if op_name == "operator()" {
+                        // Function call operator: callee is before the operator ref
+                        let callee = if i > 0 { i - 1 } else { 0 };
+                        return Some((op_name, callee, None));
+                    } else if node.children.len() == 3 {
                         // Binary operator: left is before, right is after
                         let left = if i > 0 { i - 1 } else { 0 };
                         let right = if i + 1 < node.children.len() { i + 1 } else { i };
@@ -2163,7 +2171,31 @@ impl AstCodeGen {
                 }
             }
             ClangNodeKind::CallExpr { ty } => {
-                // First, check if this is an operator overload call (e.g., a + b)
+                // Check if this is a lambda/closure call (operator() on a lambda type)
+                // Lambda types look like "(lambda at /path/file.cpp:line:col)"
+                if let Some((op_name, left_idx, _)) = Self::get_operator_call_info(node) {
+                    if op_name == "operator()" {
+                        // Check if the left operand is a lambda variable
+                        let callee_type = Self::get_expr_type(&node.children[left_idx]);
+                        if let Some(CppType::Named(name)) = callee_type {
+                            if name.contains("lambda at ") {
+                                // This is a closure call - generate simple function call syntax
+                                let callee = self.expr_to_string(&node.children[left_idx]);
+                                let args: Vec<String> = node.children.iter()
+                                    .enumerate()
+                                    .filter(|(i, c)| {
+                                        // Skip the callee and the operator() reference
+                                        *i != left_idx && !Self::is_function_reference(c)
+                                    })
+                                    .map(|(_, c)| self.expr_to_string(c))
+                                    .collect();
+                                return format!("{}({})", callee, args.join(", "));
+                            }
+                        }
+                    }
+                }
+
+                // Check if this is an operator overload call (e.g., a + b)
                 if let Some((op_name, left_idx, right_idx_opt)) = Self::get_operator_call_info(node) {
                     // Convert operator name to method name (operator+ -> op_add)
                     let method_name = sanitize_identifier(&op_name);
@@ -2483,6 +2515,64 @@ impl AstCodeGen {
                     format!("[{}]", elems.join(", "))
                 }
             }
+            ClangNodeKind::LambdaExpr { params, return_type, capture_default, captures } => {
+                // Generate Rust closure
+                // C++: [captures](params) -> ret { body }
+                // Rust: |params| -> ret { body } or move |params| { body }
+                use crate::ast::CaptureDefault;
+
+                // Determine if we need 'move' keyword
+                let needs_move = *capture_default == CaptureDefault::ByCopy ||
+                    captures.iter().any(|(_, by_ref)| !*by_ref);
+
+                // Generate parameter list
+                let params_str = params.iter()
+                    .map(|(name, ty)| format!("{}: {}", sanitize_identifier(name), ty.to_rust_type_str()))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+
+                // Generate return type (omit if void)
+                let ret_str = if *return_type == CppType::Void {
+                    String::new()
+                } else {
+                    format!(" -> {}", return_type.to_rust_type_str())
+                };
+
+                // Find the body (CompoundStmt child)
+                let body = node.children.iter()
+                    .find(|c| matches!(&c.kind, ClangNodeKind::CompoundStmt));
+
+                let body_str = if let Some(body_node) = body {
+                    // Check for simple single-return lambdas
+                    if body_node.children.len() == 1 {
+                        if let ClangNodeKind::ReturnStmt = &body_node.children[0].kind {
+                            if !body_node.children[0].children.is_empty() {
+                                // Single return with expression - Rust closure can omit return
+                                return if needs_move {
+                                    format!("move |{}|{} {}", params_str, ret_str,
+                                        self.expr_to_string(&body_node.children[0].children[0]))
+                                } else {
+                                    format!("|{}|{} {}", params_str, ret_str,
+                                        self.expr_to_string(&body_node.children[0].children[0]))
+                                };
+                            }
+                        }
+                    }
+                    // Multi-statement body - generate block
+                    let stmts: Vec<String> = body_node.children.iter()
+                        .map(|stmt| self.lambda_stmt_to_string(stmt))
+                        .collect();
+                    format!("{{ {} }}", stmts.join(" "))
+                } else {
+                    "{}".to_string()
+                };
+
+                if needs_move {
+                    format!("move |{}|{} {}", params_str, ret_str, body_str)
+                } else {
+                    format!("|{}|{} {}", params_str, ret_str, body_str)
+                }
+            }
             ClangNodeKind::ThrowExpr { exception_ty } => {
                 // throw expr → panic!("message")
                 // If there's a child expression, try to extract a message
@@ -2525,6 +2615,45 @@ impl AstCodeGen {
                     }
                 }
                 None
+            }
+        }
+    }
+
+    /// Convert a statement node to a string for lambda bodies.
+    fn lambda_stmt_to_string(&self, node: &ClangNode) -> String {
+        match &node.kind {
+            ClangNodeKind::ReturnStmt => {
+                if node.children.is_empty() {
+                    "return;".to_string()
+                } else {
+                    format!("return {};", self.expr_to_string(&node.children[0]))
+                }
+            }
+            ClangNodeKind::DeclStmt => {
+                // Variable declaration - simplified handling
+                for child in &node.children {
+                    if let ClangNodeKind::VarDecl { name, ty, .. } = &child.kind {
+                        let init = if !child.children.is_empty() {
+                            format!(" = {}", self.expr_to_string(&child.children[0]))
+                        } else {
+                            String::new()
+                        };
+                        return format!("let mut {}: {}{};",
+                            sanitize_identifier(name), ty.to_rust_type_str(), init);
+                    }
+                }
+                "/* decl error */".to_string()
+            }
+            ClangNodeKind::ExprStmt => {
+                if !node.children.is_empty() {
+                    format!("{};", self.expr_to_string(&node.children[0]))
+                } else {
+                    ";".to_string()
+                }
+            }
+            _ => {
+                // For other statements, try as expression
+                format!("{};", self.expr_to_string(node))
             }
         }
     }

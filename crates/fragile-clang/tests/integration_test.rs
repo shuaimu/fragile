@@ -1065,3 +1065,27 @@ fn test_e2e_static_members() {
 
     assert_eq!(exit_code, 0, "Static class members should work correctly");
 }
+
+/// Test basic lambda expressions.
+#[test]
+fn test_e2e_lambda_basic() {
+    let source = r#"
+        int main() {
+            auto double_it = [](int x) { return x * 2; };
+            auto add = [](int a, int b) { return a + b; };
+
+            int result = double_it(10);
+            result = add(result, 5);
+
+            if (result == 25) {
+                return 0;
+            }
+            return 1;
+        }
+    "#;
+
+    let (exit_code, _stdout, _stderr) = transpile_compile_run(source, "e2e_lambda_basic.cpp")
+        .expect("E2E test failed");
+
+    assert_eq!(exit_code, 0, "Basic lambda expressions should work correctly");
+}

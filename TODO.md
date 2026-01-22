@@ -14,7 +14,7 @@ We just convert the fully-resolved AST to equivalent Rust code.
 ## Current Status
 
 **Grammar Tests**: 20/20 passing
-**E2E Tests**: 33/33 passing
+**E2E Tests**: 35/35 passing
 
 **Working**:
 - Simple functions with control flow (if/else, while, for, do-while, recursion)
@@ -42,6 +42,8 @@ We just convert the fully-resolved AST to equivalent Rust code.
 - Dynamic dispatch (polymorphism through base pointers via trait objects)
 - STL smart pointer type mappings (unique_ptr→Box, shared_ptr→Arc, weak_ptr→Weak)
 - Enum class (scoped enums) → Rust enums with #[repr]
+- Static class members → `static mut` globals with unsafe access
+- Basic lambda expressions → Rust closures with type inference
 
 **CLI**:
 ```bash

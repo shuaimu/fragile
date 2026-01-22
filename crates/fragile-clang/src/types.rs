@@ -295,6 +295,11 @@ impl CppType {
                         if name.starts_with("typeof(") || name.starts_with("__typeof__(") {
                             return "()".to_string();
                         }
+                        // Handle lambda types - use inference placeholder
+                        // Lambda types look like "(lambda at /path/file.cpp:line:col)"
+                        if name.starts_with("(lambda at ") || name.contains("lambda at ") {
+                            return "_".to_string();  // Let Rust infer the closure type
+                        }
                         // Strip C++ qualifiers that aren't valid in Rust type names
                         let cleaned = name
                             .trim_start_matches("const ")
