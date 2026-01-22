@@ -244,6 +244,49 @@ impl CppType {
                                 return format!("HashMap<{}>", trimmed);
                             }
                         }
+                        // Handle std::unique_ptr<T> -> Box<T>
+                        if let Some(rest) = name.strip_prefix("std::unique_ptr<") {
+                            if let Some(inner) = rest.strip_suffix(">") {
+                                // Handle default deleter: "int, std::default_delete<int>" -> "int"
+                                let element = if let Some(idx) = inner.find(", std::default_delete<") {
+                                    &inner[..idx]
+                                } else if let Some(idx) = inner.find(", default_delete<") {
+                                    &inner[..idx]
+                                } else {
+                                    inner
+                                };
+                                let element_type = CppType::Named(element.trim().to_string());
+                                return format!("Box<{}>", element_type.to_rust_type_str());
+                            }
+                        }
+                        // Handle __detail::__unique_ptr_t<T> -> Box<T> (libstdc++ internal)
+                        if let Some(rest) = name.strip_prefix("__detail::__unique_ptr_t<") {
+                            if let Some(inner) = rest.strip_suffix(">") {
+                                let element_type = CppType::Named(inner.trim().to_string());
+                                return format!("Box<{}>", element_type.to_rust_type_str());
+                            }
+                        }
+                        // Handle std::shared_ptr<T> -> Arc<T>
+                        if let Some(rest) = name.strip_prefix("std::shared_ptr<") {
+                            if let Some(inner) = rest.strip_suffix(">") {
+                                let element_type = CppType::Named(inner.trim().to_string());
+                                return format!("Arc<{}>", element_type.to_rust_type_str());
+                            }
+                        }
+                        // Handle shared_ptr<_NonArray<T>> (libstdc++ internal) -> Arc<T>
+                        if let Some(rest) = name.strip_prefix("shared_ptr<_NonArray<") {
+                            if let Some(inner) = rest.strip_suffix(">>") {
+                                let element_type = CppType::Named(inner.trim().to_string());
+                                return format!("Arc<{}>", element_type.to_rust_type_str());
+                            }
+                        }
+                        // Handle std::weak_ptr<T> -> Weak<T>
+                        if let Some(rest) = name.strip_prefix("std::weak_ptr<") {
+                            if let Some(inner) = rest.strip_suffix(">") {
+                                let element_type = CppType::Named(inner.trim().to_string());
+                                return format!("Weak<{}>", element_type.to_rust_type_str());
+                            }
+                        }
                         // Handle decltype expressions - replace with unit type placeholder
                         if name.starts_with("decltype(") {
                             return "()".to_string();
@@ -869,5 +912,54 @@ mod tests {
         // Floating point is signed
         assert_eq!(CppType::Float.is_signed(), Some(true));
         assert_eq!(CppType::Double.is_signed(), Some(true));
+    }
+
+    #[test]
+    fn test_smart_pointer_type_mappings() {
+        // std::unique_ptr<T> -> Box<T>
+        assert_eq!(
+            CppType::Named("std::unique_ptr<int>".to_string()).to_rust_type_str(),
+            "Box<i32>"
+        );
+        assert_eq!(
+            CppType::Named("std::unique_ptr<int, std::default_delete<int>>".to_string()).to_rust_type_str(),
+            "Box<i32>"
+        );
+        assert_eq!(
+            CppType::Named("std::unique_ptr<MyClass>".to_string()).to_rust_type_str(),
+            "Box<MyClass>"
+        );
+
+        // __detail::__unique_ptr_t<T> -> Box<T> (libstdc++ internal)
+        assert_eq!(
+            CppType::Named("__detail::__unique_ptr_t<int>".to_string()).to_rust_type_str(),
+            "Box<i32>"
+        );
+
+        // std::shared_ptr<T> -> Arc<T>
+        assert_eq!(
+            CppType::Named("std::shared_ptr<int>".to_string()).to_rust_type_str(),
+            "Arc<i32>"
+        );
+        assert_eq!(
+            CppType::Named("std::shared_ptr<MyClass>".to_string()).to_rust_type_str(),
+            "Arc<MyClass>"
+        );
+
+        // shared_ptr<_NonArray<T>> -> Arc<T> (libstdc++ internal)
+        assert_eq!(
+            CppType::Named("shared_ptr<_NonArray<int>>".to_string()).to_rust_type_str(),
+            "Arc<i32>"
+        );
+
+        // std::weak_ptr<T> -> Weak<T>
+        assert_eq!(
+            CppType::Named("std::weak_ptr<int>".to_string()).to_rust_type_str(),
+            "Weak<i32>"
+        );
+        assert_eq!(
+            CppType::Named("std::weak_ptr<MyClass>".to_string()).to_rust_type_str(),
+            "Weak<MyClass>"
+        );
     }
 }
