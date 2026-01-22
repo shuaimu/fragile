@@ -1220,3 +1220,37 @@ fn test_e2e_default_params() {
 
     assert_eq!(exit_code, 0, "Default function parameters should be evaluated correctly");
 }
+
+/// Test E2E: Const vs non-const methods (mut self detection)
+#[test]
+fn test_e2e_const_methods() {
+    let source = r#"
+        struct Counter {
+            int value;
+
+            int get() const {
+                return value;
+            }
+
+            void increment() {
+                value++;
+            }
+        };
+
+        int main() {
+            Counter c;
+            c.value = 5;
+            c.increment();
+
+            if (c.get() == 6) {
+                return 0;
+            }
+            return 1;
+        }
+    "#;
+
+    let (exit_code, _stdout, _stderr) = transpile_compile_run(source, "e2e_const_methods.cpp")
+        .expect("E2E test failed");
+
+    assert_eq!(exit_code, 0, "Const methods should use &self, non-const should use &mut self");
+}

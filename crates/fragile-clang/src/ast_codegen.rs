@@ -778,6 +778,19 @@ impl AstCodeGen {
                 _ => {}
             }
         }
+        // Check for increment/decrement operators on member fields
+        if let ClangNodeKind::UnaryOperator { op, .. } = &node.kind {
+            match op {
+                UnaryOp::PreInc | UnaryOp::PostInc | UnaryOp::PreDec | UnaryOp::PostDec => {
+                    if !node.children.is_empty() {
+                        if Self::is_member_access(&node.children[0]) {
+                            return true;
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
         // Recursively check children
         for child in &node.children {
             if Self::method_modifies_self(child) {

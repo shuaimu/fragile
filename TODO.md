@@ -14,7 +14,7 @@ We just convert the fully-resolved AST to equivalent Rust code.
 ## Current Status
 
 **Grammar Tests**: 20/20 passing
-**E2E Tests**: 40/40 passing
+**E2E Tests**: 41/41 passing
 
 **Working**:
 - Simple functions with control flow (if/else, while, for, do-while, recursion)
@@ -49,6 +49,7 @@ We just convert the fully-resolved AST to equivalent Rust code.
 - Range-based for loops (for x : container → for x in container.iter())
 - Increment/decrement operators (++x, x++, --x, x-- with correct pre/post semantics)
 - Default function parameters (evaluated at call site via clang_Cursor_Evaluate)
+- Const vs non-const methods (auto-detect &self vs &mut self based on modifications)
 
 **CLI**:
 ```bash
