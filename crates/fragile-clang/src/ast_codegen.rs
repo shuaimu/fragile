@@ -48,6 +48,8 @@ pub struct AstCodeGen {
     class_bases: HashMap<String, Vec<String>>,
     /// Map from class name to its virtual methods
     virtual_methods: HashMap<String, Vec<VirtualMethodInfo>>,
+    /// Map from (class_name, member_name) to global variable name for static members
+    static_members: HashMap<(String, String), String>,
 }
 
 impl AstCodeGen {
@@ -63,6 +65,7 @@ impl AstCodeGen {
             polymorphic_classes: HashSet::new(),
             class_bases: HashMap::new(),
             virtual_methods: HashMap::new(),
+            static_members: HashMap::new(),
         }
     }
 
@@ -449,9 +452,12 @@ impl AstCodeGen {
             }
         }
 
-        // Then collect derived class fields
+        // Then collect derived class fields (skip static fields - they become globals)
         for child in children {
-            if let ClangNodeKind::FieldDecl { name: field_name, ty, .. } = &child.kind {
+            if let ClangNodeKind::FieldDecl { name: field_name, ty, is_static, .. } = &child.kind {
+                if *is_static {
+                    continue; // Static fields handled separately
+                }
                 let field_name = if field_name.is_empty() {
                     "_field".to_string()
                 } else {
@@ -463,6 +469,22 @@ impl AstCodeGen {
 
         self.indent -= 1;
         self.writeln("}");
+
+        // Generate static member variables as globals
+        for child in children {
+            if let ClangNodeKind::FieldDecl { name: field_name, ty, is_static: true, .. } = &child.kind {
+                let sanitized_field = sanitize_identifier(field_name);
+                let rust_ty = ty.to_rust_type_str();
+                let global_name = format!("{}_{}", name.to_uppercase(), sanitized_field.to_uppercase());
+                self.writeln("");
+                self.writeln(&format!("/// Static member `{}::{}`", name, field_name));
+                self.writeln(&format!("static mut {}: {} = {};",
+                    global_name, rust_ty,
+                    Self::default_value_for_type(ty)));
+                // Register the static member for later lookup
+                self.static_members.insert((name.to_string(), field_name.clone()), global_name);
+            }
+        }
 
         // Check if there's an explicit default constructor (0 params)
         let has_default_ctor = children.iter().any(|c| {
@@ -825,6 +847,76 @@ impl AstCodeGen {
         }
     }
 
+    /// Check if a statement is a member field assignment (for filtering in ctor body)
+    fn is_member_assignment(node: &ClangNode) -> bool {
+        match &node.kind {
+            ClangNodeKind::ExprStmt => {
+                if !node.children.is_empty() {
+                    return Self::is_member_assignment(&node.children[0]);
+                }
+                false
+            }
+            ClangNodeKind::BinaryOperator { op: BinaryOp::Assign, .. } => {
+                if node.children.len() >= 2 {
+                    // Check if left side is a member access (instance field)
+                    if let Some(_name) = Self::get_member_name(&node.children[0]) {
+                        // Check if it's a non-static member (has implicit this)
+                        // Static members use DeclRefExpr, not MemberExpr with implicit this
+                        return Self::has_implicit_this_or_member(&node.children[0]);
+                    }
+                }
+                false
+            }
+            _ => false,
+        }
+    }
+
+    /// Check if a node is a member expression with implicit this (instance member)
+    fn has_implicit_this_or_member(node: &ClangNode) -> bool {
+        match &node.kind {
+            ClangNodeKind::MemberExpr { is_static, .. } => {
+                // Non-static member expressions with no children have implicit this
+                !*is_static && node.children.is_empty()
+            }
+            ClangNodeKind::ImplicitCastExpr { .. } => {
+                if !node.children.is_empty() {
+                    Self::has_implicit_this_or_member(&node.children[0])
+                } else {
+                    false
+                }
+            }
+            _ => false,
+        }
+    }
+
+    /// Generate non-member statements from constructor body (like static member modifications)
+    fn generate_non_member_ctor_stmts(&mut self, compound_stmt: &ClangNode) {
+        for child in &compound_stmt.children {
+            // Skip member field assignments - those are handled in struct initializer
+            if Self::is_member_assignment(child) {
+                continue;
+            }
+
+            // Generate the statement
+            match &child.kind {
+                ClangNodeKind::ExprStmt => {
+                    if !child.children.is_empty() {
+                        let expr = self.expr_to_string(&child.children[0]);
+                        self.writeln(&format!("{};", expr));
+                    }
+                }
+                ClangNodeKind::CompoundStmt => {
+                    // Recursively handle nested compound statements
+                    self.generate_non_member_ctor_stmts(child);
+                }
+                _ => {
+                    // For other statement types, generate them
+                    self.generate_stmt(child, false);
+                }
+            }
+        }
+    }
+
     /// Extract constructor arguments from a CallExpr or CXXConstructExpr node.
     fn extract_constructor_args(&self, node: &ClangNode) -> Vec<String> {
         let mut args = Vec::new();
@@ -892,6 +984,32 @@ impl AstCodeGen {
             }
             ClangNodeKind::ImplicitCastExpr { .. } => {
                 !node.children.is_empty() && self.is_pointer_subscript(&node.children[0])
+            }
+            _ => false,
+        }
+    }
+
+    /// Check if a node is a static member access (needs unsafe for assignment).
+    fn is_static_member_access(&self, node: &ClangNode) -> bool {
+        match &node.kind {
+            ClangNodeKind::MemberExpr { is_static, .. } => *is_static,
+            ClangNodeKind::DeclRefExpr { ty, namespace_path, name, .. } => {
+                // Static members accessed via Class::member have namespace_path with class name
+                if !namespace_path.is_empty() && !matches!(ty, CppType::Function { .. }) {
+                    return true;
+                }
+                // Also check if this is a static member of the current class (accessed without Class:: prefix)
+                if namespace_path.is_empty() && !matches!(ty, CppType::Function { .. }) {
+                    if let Some(ref current_class) = self.current_class {
+                        if self.static_members.contains_key(&(current_class.clone(), name.clone())) {
+                            return true;
+                        }
+                    }
+                }
+                false
+            }
+            ClangNodeKind::ImplicitCastExpr { .. } => {
+                !node.children.is_empty() && self.is_static_member_access(&node.children[0])
             }
             _ => false,
         }
@@ -1070,6 +1188,27 @@ impl AstCodeGen {
         }
     }
 
+    /// Get a default value for a C++ type (for static member initialization).
+    fn default_value_for_type(ty: &CppType) -> String {
+        match ty {
+            CppType::Int { .. } | CppType::Long { .. } | CppType::Short { .. } |
+            CppType::Char { .. } | CppType::LongLong { .. } => "0".to_string(),
+            CppType::Float => "0.0f32".to_string(),
+            CppType::Double => "0.0f64".to_string(),
+            CppType::Bool => "false".to_string(),
+            CppType::Pointer { .. } => "std::ptr::null_mut()".to_string(),
+            CppType::Array { element, size } => {
+                let elem_default = Self::default_value_for_type(element);
+                if let Some(n) = size {
+                    format!("[{}; {}]", elem_default, n)
+                } else {
+                    "[]".to_string()
+                }
+            }
+            _ => "Default::default()".to_string(),
+        }
+    }
+
     /// Check if a CallExpr is an operator overload call.
     /// Returns Some((operator_name, left_operand_index, right_operand_index)) for binary operators,
     /// or Some((operator_name, operand_index, None)) for unary operators.
@@ -1244,6 +1383,8 @@ impl AstCodeGen {
                     } else if let ClangNodeKind::CompoundStmt = &node.children[i].kind {
                         // Look for assignments in constructor body
                         Self::extract_member_assignments(&node.children[i], &mut initializers, self);
+                        // Also generate non-member statements (like static member modifications)
+                        self.generate_non_member_ctor_stmts(&node.children[i]);
                     }
                     i += 1;
                 }
@@ -1702,11 +1843,35 @@ impl AstCodeGen {
                     "/* cast error */".to_string()
                 }
             }
-            ClangNodeKind::DeclRefExpr { name, .. } => {
+            ClangNodeKind::DeclRefExpr { name, namespace_path, ty, .. } => {
                 if name == "this" {
                     "self".to_string()
                 } else {
-                    sanitize_identifier(name)
+                    let ident = sanitize_identifier(name);
+                    // For static member access (class name in namespace path, non-function type),
+                    // convert to global variable name (no unsafe wrapper since we're already in unsafe)
+                    if !namespace_path.is_empty() && !matches!(ty, CppType::Function { .. }) {
+                        let class_name = &namespace_path[namespace_path.len() - 1];
+                        // Try to find the global name from static_members
+                        if let Some(global_name) = self.static_members.get(&(class_name.clone(), name.clone())) {
+                            return global_name.clone();
+                        }
+                        // Fallback: generate from convention
+                        let global_name = format!("{}_{}", class_name.to_uppercase(), ident.to_uppercase());
+                        let is_static_member = self.static_members.values().any(|g| g == &global_name);
+                        if is_static_member {
+                            return global_name;
+                        }
+                    }
+                    // Check if this is a static member of the current class (accessed without Class:: prefix)
+                    if namespace_path.is_empty() && !matches!(ty, CppType::Function { .. }) {
+                        if let Some(ref current_class) = self.current_class {
+                            if let Some(global_name) = self.static_members.get(&(current_class.clone(), name.clone())) {
+                                return global_name.clone();
+                            }
+                        }
+                    }
+                    ident
                 }
             }
             ClangNodeKind::IntegerLiteral { value, cpp_type } => {
@@ -1739,6 +1904,40 @@ impl AstCodeGen {
                     }
                 } else {
                     "/* array subscript error */".to_string()
+                }
+            }
+            ClangNodeKind::MemberExpr { member_name, is_static, declaring_class, .. } => {
+                // For static member access, return the global name without unsafe wrapper
+                if *is_static {
+                    if let Some(class_name) = declaring_class {
+                        if let Some(global_name) = self.static_members.get(&(class_name.clone(), member_name.clone())) {
+                            return global_name.clone();
+                        }
+                        // Fallback: generate from convention
+                        return format!("{}_{}", class_name.to_uppercase(), sanitize_identifier(member_name).to_uppercase());
+                    }
+                }
+                // Non-static members: use regular conversion
+                self.expr_to_string(node)
+            }
+            ClangNodeKind::BinaryOperator { op, .. } => {
+                // Inside unsafe block, don't wrap sub-expressions in additional unsafe
+                if node.children.len() >= 2 {
+                    let op_str = binop_to_string(op);
+                    let left = self.expr_to_string_raw(&node.children[0]);
+                    let right = self.expr_to_string_raw(&node.children[1]);
+                    format!("{} {} {}", left, op_str, right)
+                } else {
+                    "/* binary op error */".to_string()
+                }
+            }
+            ClangNodeKind::Unknown(_) => {
+                // For unknown wrapper nodes (like UnexposedExpr for implicit casts),
+                // recursively use raw conversion to avoid nested unsafe
+                if !node.children.is_empty() {
+                    self.expr_to_string_raw(&node.children[0])
+                } else {
+                    "/* unknown raw */".to_string()
                 }
             }
             // For other expressions, use the regular conversion
@@ -1838,11 +2037,38 @@ impl AstCodeGen {
                 }
             }
             ClangNodeKind::StringLiteral(s) => format!("\"{}\"", s.escape_default()),
-            ClangNodeKind::DeclRefExpr { name, namespace_path, .. } => {
+            ClangNodeKind::DeclRefExpr { name, namespace_path, ty, .. } => {
                 if name == "this" {
                     "self".to_string()
                 } else {
                     let ident = sanitize_identifier(name);
+                    // Check if this is a static member access (class name in namespace path)
+                    // For static member variables (not functions), convert to global with unsafe
+                    if !namespace_path.is_empty() && !matches!(ty, CppType::Function { .. }) {
+                        // Check if the last component is a class name with a static member
+                        let class_name = &namespace_path[namespace_path.len() - 1];
+                        if let Some(global_name) = self.static_members.get(&(class_name.clone(), name.clone())) {
+                            return format!("unsafe {{ {} }}", global_name);
+                        }
+                        // Try fallback: generate from convention if it looks like a static member
+                        // (class name followed by member name, no function type)
+                        let global_name = format!("{}_{}", class_name.to_uppercase(), ident.to_uppercase());
+                        // Check if this global exists in our static_members for any class
+                        let is_static_member = self.static_members.values().any(|g| g == &global_name);
+                        if is_static_member {
+                            return format!("unsafe {{ {} }}", global_name);
+                        }
+                    }
+
+                    // Check if this is a static member of the current class (accessed without Class:: prefix)
+                    if namespace_path.is_empty() && !matches!(ty, CppType::Function { .. }) {
+                        if let Some(ref current_class) = self.current_class {
+                            if let Some(global_name) = self.static_members.get(&(current_class.clone(), name.clone())) {
+                                return format!("unsafe {{ {} }}", global_name);
+                            }
+                        }
+                    }
+
                     // Add namespace path if present
                     let full_path = if namespace_path.is_empty() {
                         ident.clone()
@@ -1865,11 +2091,12 @@ impl AstCodeGen {
                 if node.children.len() >= 2 {
                     let op_str = binop_to_string(op);
 
-                    // Check if left side is a pointer dereference or pointer subscript
+                    // Check if left side is a pointer dereference, pointer subscript, or static member
                     // (needs whole assignment in unsafe)
                     let left_is_deref = Self::is_pointer_deref(&node.children[0]);
                     let left_is_ptr_subscript = self.is_pointer_subscript(&node.children[0]);
-                    let needs_unsafe = left_is_deref || left_is_ptr_subscript;
+                    let left_is_static_member = self.is_static_member_access(&node.children[0]);
+                    let needs_unsafe = left_is_deref || left_is_ptr_subscript || left_is_static_member;
 
                     // Handle assignment specially
                     if matches!(op, BinaryOp::Assign | BinaryOp::AddAssign | BinaryOp::SubAssign |
@@ -1877,7 +2104,7 @@ impl AstCodeGen {
                                    BinaryOp::RemAssign | BinaryOp::AndAssign |
                                    BinaryOp::OrAssign | BinaryOp::XorAssign |
                                    BinaryOp::ShlAssign | BinaryOp::ShrAssign) && needs_unsafe {
-                        // For pointer dereference or subscript on left side, wrap entire assignment in unsafe
+                        // For pointer dereference, subscript, or static member on left side, wrap entire assignment in unsafe
                         let left_raw = self.expr_to_string_raw(&node.children[0]);
                         let right_raw = self.expr_to_string_raw(&node.children[1]);
                         format!("unsafe {{ {} {} {} }}", left_raw, op_str, right_raw)
@@ -2047,7 +2274,22 @@ impl AstCodeGen {
                     "/* call error */".to_string()
                 }
             }
-            ClangNodeKind::MemberExpr { member_name, is_arrow, declaring_class, .. } => {
+            ClangNodeKind::MemberExpr { member_name, is_arrow, declaring_class, is_static, .. } => {
+                // Check for static member access first
+                if *is_static {
+                    // Look up the global variable name for this static member
+                    if let Some(class_name) = declaring_class {
+                        if let Some(global_name) = self.static_members.get(&(class_name.clone(), member_name.clone())) {
+                            return format!("unsafe {{ {} }}", global_name);
+                        }
+                    }
+                    // Fallback: generate global name from convention
+                    if let Some(class_name) = declaring_class {
+                        let global_name = format!("{}_{}", class_name.to_uppercase(), sanitize_identifier(member_name).to_uppercase());
+                        return format!("unsafe {{ {} }}", global_name);
+                    }
+                }
+
                 if !node.children.is_empty() {
                     let base = self.expr_to_string(&node.children[0]);
                     // Check if this is accessing an inherited member

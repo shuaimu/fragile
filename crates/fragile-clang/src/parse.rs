@@ -466,6 +466,22 @@ impl ClangParser {
         }
     }
 
+    /// Check if a member expression references a static member.
+    fn is_static_member(&self, cursor: clang_sys::CXCursor) -> bool {
+        unsafe {
+            // Get the referenced cursor (the FieldDecl or CXXMethodDecl being accessed)
+            let referenced = clang_sys::clang_getCursorReferenced(cursor);
+            if clang_sys::clang_Cursor_isNull(referenced) != 0 {
+                return false;
+            }
+
+            // Check the storage class of the referenced member
+            // CX_SC_Static = 3
+            let storage = clang_sys::clang_Cursor_getStorageClass(referenced);
+            storage == 3
+        }
+    }
+
     /// Get the namespace path for a referenced declaration.
     /// Returns a vector of namespace names from outermost to innermost.
     /// Returns empty for local variables, parameters, and other function-scoped declarations.
@@ -511,6 +527,26 @@ impl ClangParser {
                     let name = cursor_spelling(current);
                     if !name.is_empty() {
                         path.push(name);
+                    }
+                } else if kind == clang_sys::CXCursor_ClassDecl || kind == clang_sys::CXCursor_StructDecl {
+                    // For static members/methods, include the class name for qualified access
+                    // Check if the referenced item is static
+                    let ref_kind = clang_sys::clang_getCursorKind(referenced);
+                    let is_static = if ref_kind == clang_sys::CXCursor_CXXMethod
+                        || ref_kind == clang_sys::CXCursor_FieldDecl
+                        || ref_kind == clang_sys::CXCursor_VarDecl
+                    {
+                        // CX_SC_Static = 3
+                        let storage = clang_sys::clang_Cursor_getStorageClass(referenced);
+                        storage == 3
+                    } else {
+                        false
+                    };
+                    if is_static {
+                        let name = cursor_spelling(current);
+                        if !name.is_empty() {
+                            path.push(name);
+                        }
                     }
                 } else if kind == clang_sys::CXCursor_TranslationUnit {
                     // Reached the top
@@ -1080,11 +1116,14 @@ impl ClangParser {
                     let is_arrow = self.is_arrow_access(cursor);
                     // Get the declaring class for inherited member detection
                     let declaring_class = self.get_member_declaring_class(cursor);
+                    // Check if this is a static member access
+                    let is_static = self.is_static_member(cursor);
                     ClangNodeKind::MemberExpr {
                         member_name,
                         is_arrow,
                         ty,
                         declaring_class,
+                        is_static,
                     }
                 }
 

@@ -24,8 +24,8 @@ fn print_node(node: &ClangNode, indent: usize) {
         ClangNodeKind::CallExpr { ty } => {
             println!("{}CallExpr {{ ty: {:?} }}", prefix, ty);
         }
-        ClangNodeKind::MemberExpr { member_name, is_arrow, ty, declaring_class } => {
-            println!("{}MemberExpr {{ member_name: \"{}\", is_arrow: {}, ty: {:?}, declaring_class: {:?} }}", prefix, member_name, is_arrow, ty, declaring_class);
+        ClangNodeKind::MemberExpr { member_name, is_arrow, ty, declaring_class, is_static } => {
+            println!("{}MemberExpr {{ member_name: \"{}\", is_arrow: {}, ty: {:?}, declaring_class: {:?}, is_static: {} }}", prefix, member_name, is_arrow, ty, declaring_class, is_static);
         }
         other => {
             println!("{}{:?}", prefix, other);

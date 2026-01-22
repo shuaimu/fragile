@@ -1033,3 +1033,35 @@ fn test_e2e_enum_class() {
 
     assert_eq!(exit_code, 0, "Enum class should work correctly with scoped access");
 }
+
+/// Test static class members.
+#[test]
+fn test_e2e_static_members() {
+    let source = r#"
+        class Counter {
+        public:
+            static int count;
+            static void inc() { count = count + 1; }
+            static void dec() { count = count - 1; }
+            static int getCount() { return count; }
+        };
+        int Counter::count = 0;
+
+        int main() {
+            Counter::inc();
+            Counter::inc();
+            Counter::inc();
+            Counter::dec();
+
+            if (Counter::getCount() == 2) {
+                return 0;
+            }
+            return 1;
+        }
+    "#;
+
+    let (exit_code, _stdout, _stderr) = transpile_compile_run(source, "e2e_static_members.cpp")
+        .expect("E2E test failed");
+
+    assert_eq!(exit_code, 0, "Static class members should work correctly");
+}

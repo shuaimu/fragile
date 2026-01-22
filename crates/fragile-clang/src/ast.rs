@@ -335,6 +335,8 @@ pub enum ClangNodeKind {
         ty: CppType,
         /// The class that declares this member (for detecting inherited member access)
         declaring_class: Option<String>,
+        /// Whether this is a static member access
+        is_static: bool,
     },
     /// Array subscript (a[i])
     ArraySubscriptExpr {
