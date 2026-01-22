@@ -83,3 +83,47 @@ let full_path = if namespace_path.is_empty() {
 
 - `ast_codegen.rs`: ~50 lines added/modified
 - Add helper function `compute_relative_path(&self, target_ns: &[String]) -> String`
+
+## Implementation Status
+
+**Completed: 2026-01-22**
+
+### Changes Made
+
+1. Added `current_namespace: Vec<String>` field to `AstCodeGen` struct
+2. Push/pop namespace names in `generate_top_level` when processing `NamespaceDecl`
+3. Added `compute_relative_path()` helper function that:
+   - Computes common prefix between current and target namespaces
+   - Calculates how many `super::` levels needed
+   - Builds relative path from common ancestor
+4. Updated `DeclRefExpr` handling to always use `compute_relative_path()`
+
+### Algorithm
+
+```rust
+fn compute_relative_path(&self, target_ns: &[String], ident: &str) -> String {
+    // If target matches current, just use identifier
+    if target_ns == self.current_namespace { return ident; }
+
+    // Find common prefix length
+    let common_len = target_ns.zip(current_namespace).take_while(|(a,b)| a==b).count();
+
+    // Go up from current to common ancestor
+    let levels_up = current_namespace.len() - common_len;
+    let mut parts = vec!["super"; levels_up];
+
+    // Go down to target from common ancestor
+    parts.extend(target_ns[common_len..].iter());
+    parts.push(ident);
+
+    parts.join("::")
+}
+```
+
+### Test Coverage
+
+The `test_e2e_namespace_path_resolution` E2E test verifies:
+- Same namespace calls
+- Parent namespace calls
+- Nested namespace calls
+- Global function calls from within namespaces
