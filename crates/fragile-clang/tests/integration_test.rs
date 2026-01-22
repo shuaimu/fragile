@@ -1089,3 +1089,33 @@ fn test_e2e_lambda_basic() {
 
     assert_eq!(exit_code, 0, "Basic lambda expressions should work correctly");
 }
+
+/// Test lambda captures (by value and by reference).
+#[test]
+fn test_e2e_lambda_captures() {
+    let source = r#"
+        int main() {
+            int x = 10;
+            int y = 5;
+
+            // Capture by value [=]
+            auto sum_all = [=]() { return x + y; };
+
+            // Capture by reference [&]
+            auto inc_both = [&]() { x++; y++; };
+
+            int result = sum_all();  // 15
+            inc_both();              // x=11, y=6
+
+            if (result == 15 && x == 11 && y == 6) {
+                return 0;
+            }
+            return 1;
+        }
+    "#;
+
+    let (exit_code, _stdout, _stderr) = transpile_compile_run(source, "e2e_lambda_captures.cpp")
+        .expect("E2E test failed");
+
+    assert_eq!(exit_code, 0, "Lambda captures should work correctly");
+}
