@@ -14,7 +14,7 @@ We just convert the fully-resolved AST to equivalent Rust code.
 ## Current Status
 
 **Grammar Tests**: 20/20 passing
-**E2E Tests**: 36/36 passing
+**E2E Tests**: 37/37 passing
 
 **Working**:
 - Simple functions with control flow (if/else, while, for, do-while, recursion)
@@ -45,6 +45,7 @@ We just convert the fully-resolved AST to equivalent Rust code.
 - Static class members → `static mut` globals with unsafe access
 - Basic lambda expressions → Rust closures with type inference
 - Lambda captures ([=] → move, [&] → borrow)
+- Generic lambdas (auto params → _ type inference, single-type only)
 
 **CLI**:
 ```bash

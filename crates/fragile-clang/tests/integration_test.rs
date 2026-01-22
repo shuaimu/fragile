@@ -1119,3 +1119,29 @@ fn test_e2e_lambda_captures() {
 
     assert_eq!(exit_code, 0, "Lambda captures should work correctly");
 }
+
+/// Test generic lambdas (auto parameters).
+/// Note: In Rust, closures can only have one concrete type, so generic lambdas
+/// can only be used with one type instantiation.
+#[test]
+fn test_e2e_generic_lambda() {
+    let source = r#"
+        int main() {
+            auto identity = [](auto x) { return x; };
+            auto add_one = [](auto x) { return x + 1; };
+
+            int a = identity(42);
+            int b = add_one(9);
+
+            if (a == 42 && b == 10) {
+                return 0;
+            }
+            return 1;
+        }
+    "#;
+
+    let (exit_code, _stdout, _stderr) = transpile_compile_run(source, "e2e_generic_lambda.cpp")
+        .expect("E2E test failed");
+
+    assert_eq!(exit_code, 0, "Generic lambdas with single type usage should work");
+}

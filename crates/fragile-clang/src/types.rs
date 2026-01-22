@@ -300,6 +300,10 @@ impl CppType {
                         if name.starts_with("(lambda at ") || name.contains("lambda at ") {
                             return "_".to_string();  // Let Rust infer the closure type
                         }
+                        // Handle auto type (C++11) - use Rust type inference
+                        if name == "auto" {
+                            return "_".to_string();
+                        }
                         // Strip C++ qualifiers that aren't valid in Rust type names
                         let cleaned = name
                             .trim_start_matches("const ")
