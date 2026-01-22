@@ -6,7 +6,7 @@ This document tracks the implementation status of the C++ to Rust transpiler.
 
 The transpiler converts C++ source code to Rust source code via:
 ```
-C++ Source → Clang (libclang) → Clang AST → MIR → Rust Source → rustc → Binary
+C++ Source → Clang (libclang) → Clang AST → Rust Source → rustc → Binary
 ```
 
 ## Feature Status Legend
@@ -123,7 +123,7 @@ C++ Source → Clang (libclang) → Clang AST → MIR → Rust Source → rustc 
 | Assignment (=) | ✅ | |
 | Compound assignment (+=, etc.) | ⚠️ | Parsed, codegen may be incomplete |
 | Increment/decrement (++, --) | ⚠️ | |
-| Ternary operator (?:) | ⚠️ | Converted to if/else in MIR |
+| Ternary operator (?:) | ⚠️ | Converted to if/else in codegen |
 | Comma operator | ❌ | |
 | `sizeof` | ❌ | Should use `std::mem::size_of` |
 | `alignof` | ❌ | Should use `std::mem::align_of` |
@@ -137,11 +137,11 @@ C++ Source → Clang (libclang) → Clang AST → MIR → Rust Source → rustc 
 | Feature | Status | Notes |
 |---------|--------|-------|
 | Variable declaration | ✅ | `let mut` |
-| If/else | ✅ | Via MIR SwitchInt |
-| While loop | ✅ | Via MIR Goto |
-| For loop | ✅ | Via MIR Goto |
-| Do-while loop | ✅ | Via MIR Goto |
-| Switch/case | ⚠️ | Via MIR SwitchInt |
+| If/else | ✅ | AST codegen handles control flow |
+| While loop | ✅ | AST codegen handles control flow |
+| For loop | ✅ | AST codegen handles control flow |
+| Do-while loop | ✅ | AST codegen handles control flow |
+| Switch/case | ⚠️ | AST codegen with match/switch lowering |
 | Break | ✅ | |
 | Continue | ✅ | |
 | Return | ✅ | |
@@ -235,7 +235,7 @@ C++ Source → Clang (libclang) → Clang AST → MIR → Rust Source → rustc 
 |---------|--------|-------|
 | Minimize temporaries | ❌ | Currently generates many locals |
 | Dead code elimination | ❌ | |
-| Readable variable names | ⚠️ | Uses MIR names when available |
+| Readable variable names | ⚠️ | Preserves source identifiers when available |
 | Proper indentation | ✅ | |
 | Comments | ⚠️ | Doc comments for functions |
 

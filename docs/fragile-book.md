@@ -296,7 +296,7 @@ Fragile preserves each language's native semantics rather than forcing a single 
 | Null | `Option<T>` | `nullptr`/`optional` | `nil` |
 | Generics | Monomorphization | Templates | Type parameters |
 
-**Key Insight:** Rather than imposing one language's model on others, Fragile compiles each language with its native semantics. Interoperability is achieved at the MIR level.
+**Key Insight:** Rather than imposing one language's model on others, Fragile compiles each language with its native semantics. Interoperability is achieved by generating compatible Rust APIs and shared runtime helpers.
 
 ### Source-First Ecosystem
 
@@ -1414,12 +1414,9 @@ Fragile transpiles C++ and Go to **unsafe Rust source code**, which is then comp
                                            └──────────────┘
 ```
 
-**Why transpile to Rust source instead of MIR?**
+**Why transpile to Rust source?**
 
-| Approach | Pros | Cons |
-|----------|------|------|
-| **Transpile to Rust (chosen)** | Stable interface, debuggable output, simpler toolchain | Less optimization control |
-| MIR injection | Direct control, potential optimization | Unstable API, hard to debug |
+Rust source is a stable, debuggable interface that keeps the toolchain simple and transparent.
 
 ### Generated Code Structure
 
@@ -1526,7 +1523,7 @@ target/fragile/
 
 ### Advantages of This Approach
 
-1. **Stable API**: Rust source syntax is stable; MIR is internal
+1. **Stable API**: Rust source syntax is stable; compiler internals are not
 2. **Debuggable**: Can inspect generated `.rs` files
 3. **Tooling works**: IDE support, rustfmt, clippy all work on generated code
 4. **Incremental**: Only regenerate changed files

@@ -28,6 +28,18 @@ struct VirtualMethodInfo {
     is_const: bool,
 }
 
+#[derive(Clone)]
+struct BaseInfo {
+    name: String,
+    is_virtual: bool,
+}
+
+enum BaseAccess {
+    DirectField(String),
+    FieldChain(String),
+    VirtualPtr(String),
+}
+
 /// Rust code generator that works directly with Clang AST.
 pub struct AstCodeGen {
     output: String,
@@ -45,7 +57,9 @@ pub struct AstCodeGen {
     /// Classes that have virtual methods (need trait generation)
     polymorphic_classes: HashSet<String>,
     /// Map from class name to its base class names (supports multiple inheritance)
-    class_bases: HashMap<String, Vec<String>>,
+    class_bases: HashMap<String, Vec<BaseInfo>>,
+    /// Map from class name to its transitive virtual bases
+    virtual_bases: HashMap<String, Vec<String>>,
     /// Map from class name to its virtual methods
     virtual_methods: HashMap<String, Vec<VirtualMethodInfo>>,
     /// Map from (class_name, member_name) to global variable name for static members
@@ -66,6 +80,7 @@ impl AstCodeGen {
             current_class: None,
             polymorphic_classes: HashSet::new(),
             class_bases: HashMap::new(),
+            virtual_bases: HashMap::new(),
             virtual_methods: HashMap::new(),
             static_members: HashMap::new(),
             global_vars: HashSet::new(),
@@ -78,6 +93,7 @@ impl AstCodeGen {
         if let ClangNodeKind::TranslationUnit = &ast.kind {
             self.collect_polymorphic_info(&ast.children);
         }
+        self.compute_virtual_bases();
 
         // File header
         self.writeln("#![allow(dead_code)]");
@@ -86,6 +102,7 @@ impl AstCodeGen {
         self.writeln("#![allow(non_camel_case_types)]");
         self.writeln("#![allow(non_snake_case)]");
         self.writeln("");
+        self.write_array_helpers();
 
         // Second pass: generate code
         if let ClangNodeKind::TranslationUnit = &ast.kind {
@@ -116,7 +133,7 @@ impl AstCodeGen {
     /// Analyze a class for virtual methods and inheritance.
     fn analyze_class(&mut self, class_name: &str, children: &[ClangNode]) {
         let mut virtual_methods = Vec::new();
-        let mut base_classes: Vec<String> = Vec::new();
+        let mut base_classes: Vec<BaseInfo> = Vec::new();
 
         for child in children {
             match &child.kind {
@@ -132,10 +149,11 @@ impl AstCodeGen {
                         });
                     }
                 }
-                ClangNodeKind::CXXBaseSpecifier { base_type, .. } => {
+                ClangNodeKind::CXXBaseSpecifier { base_type, is_virtual, .. } => {
                     // Extract base class name - collect ALL bases for MI
                     if let CppType::Named(base_name) = base_type {
-                        base_classes.push(base_name.clone());
+                        let base_name = base_name.strip_prefix("const ").unwrap_or(base_name).to_string();
+                        base_classes.push(BaseInfo { name: base_name, is_virtual: *is_virtual });
                     }
                 }
                 _ => {}
@@ -152,13 +170,60 @@ impl AstCodeGen {
         if !base_classes.is_empty() {
             // If any base class is polymorphic, this class is too
             for base in &base_classes {
-                if self.polymorphic_classes.contains(base) {
+                if self.polymorphic_classes.contains(&base.name) {
                     self.polymorphic_classes.insert(class_name.to_string());
                     break;
                 }
             }
             self.class_bases.insert(class_name.to_string(), base_classes);
         }
+    }
+
+    fn compute_virtual_bases(&mut self) {
+        let class_names: Vec<String> = self.class_bases.keys().cloned().collect();
+        for class_name in class_names {
+            let mut set = HashSet::new();
+            let mut visiting = HashSet::new();
+            self.collect_virtual_bases(&class_name, &mut set, &mut visiting);
+            if !set.is_empty() {
+                let mut list: Vec<String> = set.into_iter().collect();
+                list.sort();
+                self.virtual_bases.insert(class_name, list);
+            }
+        }
+    }
+
+    fn collect_virtual_bases(&self, class_name: &str, out: &mut HashSet<String>, visiting: &mut HashSet<String>) {
+        if visiting.contains(class_name) {
+            return;
+        }
+        visiting.insert(class_name.to_string());
+        if let Some(bases) = self.class_bases.get(class_name) {
+            for base in bases {
+                if base.is_virtual {
+                    out.insert(base.name.clone());
+                }
+                self.collect_virtual_bases(&base.name, out, visiting);
+                if let Some(vb) = self.virtual_bases.get(&base.name) {
+                    out.extend(vb.iter().cloned());
+                }
+            }
+        }
+        visiting.remove(class_name);
+    }
+
+    fn virtual_base_field_name(&self, base_name: &str) -> String {
+        let sanitized = base_name.replace("::", "_");
+        format!("__vbase_{}", sanitize_identifier(&sanitized))
+    }
+
+    fn virtual_base_storage_field_name(&self, base_name: &str) -> String {
+        let sanitized = base_name.replace("::", "_");
+        format!("__vbase_storage_{}", sanitize_identifier(&sanitized))
+    }
+
+    fn class_has_virtual_bases(&self, class_name: &str) -> bool {
+        self.virtual_bases.get(class_name).map_or(false, |v| !v.is_empty())
     }
 
     /// Generate Rust stubs (signatures only, no bodies) from a Clang AST.
@@ -178,6 +243,56 @@ impl AstCodeGen {
         }
 
         self.output
+    }
+
+    fn write_array_helpers(&mut self) {
+        self.writeln("// Helper for C++ new[] / delete[] with size tracking");
+        self.writeln("#[inline]");
+        self.writeln("unsafe fn fragile_new_array<T: Clone>(len: usize, init: T) -> *mut T {");
+        self.indent += 1;
+        self.writeln("let align = std::mem::align_of::<T>().max(std::mem::align_of::<usize>());");
+        self.writeln("let header_size = std::mem::size_of::<usize>();");
+        self.writeln("let padding = (align - (header_size % align)) % align;");
+        self.writeln("let offset = header_size + padding;");
+        self.writeln("let elem_size = std::mem::size_of::<T>();");
+        self.writeln("let total_size = offset + elem_size.saturating_mul(len);");
+        self.writeln("let layout = std::alloc::Layout::from_size_align(total_size, align).unwrap();");
+        self.writeln("let base = std::alloc::alloc(layout);");
+        self.writeln("if base.is_null() { std::alloc::handle_alloc_error(layout); }");
+        self.writeln("let header = base as *mut usize;");
+        self.writeln("*header = len;");
+        self.writeln("let data = base.add(offset) as *mut T;");
+        self.writeln("for i in 0..len {");
+        self.indent += 1;
+        self.writeln("std::ptr::write(data.add(i), init.clone());");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("data");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("");
+        self.writeln("#[inline]");
+        self.writeln("unsafe fn fragile_delete_array<T>(ptr: *mut T) {");
+        self.indent += 1;
+        self.writeln("if ptr.is_null() { return; }");
+        self.writeln("let align = std::mem::align_of::<T>().max(std::mem::align_of::<usize>());");
+        self.writeln("let header_size = std::mem::size_of::<usize>();");
+        self.writeln("let padding = (align - (header_size % align)) % align;");
+        self.writeln("let offset = header_size + padding;");
+        self.writeln("let base = (ptr as *mut u8).sub(offset);");
+        self.writeln("let len = *(base as *mut usize);");
+        self.writeln("for i in 0..len {");
+        self.indent += 1;
+        self.writeln("std::ptr::drop_in_place(ptr.add(i));");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("let elem_size = std::mem::size_of::<T>();");
+        self.writeln("let total_size = offset + elem_size.saturating_mul(len);");
+        self.writeln("let layout = std::alloc::Layout::from_size_align(total_size, align).unwrap();");
+        self.writeln("std::alloc::dealloc(base, layout);");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("");
     }
 
     /// Generate a top-level stub declaration (signatures only).
@@ -255,17 +370,30 @@ impl AstCodeGen {
         self.writeln(&format!("pub struct {} {{", name));
         self.indent += 1;
 
-        // First, embed base classes as fields (supports multiple inheritance)
+        // First, embed non-virtual base classes as fields (supports multiple inheritance)
         let mut base_idx = 0;
         for child in children {
-            if let ClangNodeKind::CXXBaseSpecifier { base_type, access, .. } = &child.kind {
+            if let ClangNodeKind::CXXBaseSpecifier { base_type, access, is_virtual, .. } = &child.kind {
                 if !matches!(access, crate::ast::AccessSpecifier::Private) {
+                    if *is_virtual {
+                        continue;
+                    }
                     let base_name = base_type.to_rust_type_str();
                     // Use __base for single inheritance, __base0/__base1/etc for MI
                     let field_name = if base_idx == 0 { "__base".to_string() } else { format!("__base{}", base_idx) };
                     self.writeln(&format!("pub {}: {},", field_name, base_name));
                     base_idx += 1;
                 }
+            }
+        }
+
+        // Add virtual base pointers and storage if needed
+        if let Some(vbases) = self.virtual_bases.get(name) {
+            for vb in vbases {
+                let field = self.virtual_base_field_name(vb);
+                let storage = self.virtual_base_storage_field_name(vb);
+                self.writeln(&format!("pub {}: *mut {},", field, vb));
+                self.writeln(&format!("pub {}: Option<Box<{}>>,", storage, vb));
             }
         }
 
@@ -454,13 +582,16 @@ impl AstCodeGen {
         self.writeln(&format!("pub struct {} {{", name));
         self.indent += 1;
 
-        // First, embed base classes as fields (supports multiple inheritance)
+        // First, embed non-virtual base classes as fields (supports multiple inheritance)
         // Base classes must come first to maintain C++ memory layout
         let mut base_idx = 0;
         for child in children {
-            if let ClangNodeKind::CXXBaseSpecifier { base_type, access, .. } = &child.kind {
+            if let ClangNodeKind::CXXBaseSpecifier { base_type, access, is_virtual, .. } = &child.kind {
                 // Only include public/protected bases (private inheritance is more complex)
                 if !matches!(access, crate::ast::AccessSpecifier::Private) {
+                    if *is_virtual {
+                        continue;
+                    }
                     let base_name = base_type.to_rust_type_str();
                     // Use __base for first base (backward compatible), __base1/__base2/etc for MI
                     let field_name = if base_idx == 0 { "__base".to_string() } else { format!("__base{}", base_idx) };
@@ -468,6 +599,17 @@ impl AstCodeGen {
                     self.writeln(&format!("pub {}: {},", field_name, base_name));
                     base_idx += 1;
                 }
+            }
+        }
+
+        // Add virtual base pointers and storage if needed
+        if let Some(vbases) = self.virtual_bases.get(name) {
+            for vb in vbases {
+                let field = self.virtual_base_field_name(vb);
+                let storage = self.virtual_base_storage_field_name(vb);
+                self.writeln(&format!("/// Virtual base `{}`", vb));
+                self.writeln(&format!("pub {}: *mut {},", field, vb));
+                self.writeln(&format!("pub {}: Option<Box<{}>>,", storage, vb));
             }
         }
 
@@ -591,14 +733,22 @@ impl AstCodeGen {
         }
 
         // If this class derives from polymorphic bases, implement each base's trait
-        if let Some(base_names) = self.class_bases.get(name).cloned() {
-            for (base_idx, base_name) in base_names.iter().enumerate() {
-                if self.polymorphic_classes.contains(base_name) {
-                    if let Some(methods) = self.virtual_methods.get(base_name).cloned() {
-                        // Use __base for first base, __base1/__base2/etc for MI
-                        let base_field = if base_idx == 0 { "__base".to_string() } else { format!("__base{}", base_idx) };
-                        self.generate_trait_impl(name, base_name, &methods, children, Some(base_field));
+        if let Some(base_infos) = self.class_bases.get(name).cloned() {
+            let mut non_virtual_idx = 0;
+            for base in base_infos {
+                if self.polymorphic_classes.contains(&base.name) {
+                    if let Some(methods) = self.virtual_methods.get(&base.name).cloned() {
+                        let base_access = if base.is_virtual {
+                            BaseAccess::VirtualPtr(self.virtual_base_field_name(&base.name))
+                        } else {
+                            let field_name = if non_virtual_idx == 0 { "__base".to_string() } else { format!("__base{}", non_virtual_idx) };
+                            BaseAccess::DirectField(field_name)
+                        };
+                        self.generate_trait_impl(name, &base.name, &methods, children, Some(base_access));
                     }
+                }
+                if !base.is_virtual {
+                    non_virtual_idx += 1;
                 }
             }
         }
@@ -758,8 +908,8 @@ impl AstCodeGen {
     }
 
     /// Generate trait implementation for a class.
-    /// base_field is the field name to delegate to (e.g., "__base", "__base1") if this is a derived class.
-    fn generate_trait_impl(&mut self, class_name: &str, trait_class: &str, methods: &[VirtualMethodInfo], children: &[ClangNode], base_field: Option<String>) {
+    /// base_access is the access path to delegate to if this is a derived class.
+    fn generate_trait_impl(&mut self, class_name: &str, trait_class: &str, methods: &[VirtualMethodInfo], children: &[ClangNode], base_access: Option<BaseAccess>) {
         self.writeln("");
         self.writeln(&format!("impl {}Trait for {} {{", trait_class, class_name));
         self.indent += 1;
@@ -802,15 +952,26 @@ impl AstCodeGen {
                 } else {
                     self.writeln(&format!("self.{}({})", method_name, args.join(", ")));
                 }
-            } else if let Some(ref bf) = base_field {
+            } else if let Some(ref base_access) = base_access {
                 // Delegate to the correct base class field
                 let args: Vec<String> = method.params.iter()
                     .map(|(pname, _)| sanitize_identifier(pname))
                     .collect();
-                if args.is_empty() {
-                    self.writeln(&format!("self.{}.{}()", bf, method_name));
-                } else {
-                    self.writeln(&format!("self.{}.{}({})", bf, method_name, args.join(", ")));
+                match base_access {
+                    BaseAccess::VirtualPtr(field) => {
+                        if args.is_empty() {
+                            self.writeln(&format!("unsafe {{ (*self.{}).{}() }}", field, method_name));
+                        } else {
+                            self.writeln(&format!("unsafe {{ (*self.{}).{}({}) }}", field, method_name, args.join(", ")));
+                        }
+                    }
+                    BaseAccess::DirectField(field) | BaseAccess::FieldChain(field) => {
+                        if args.is_empty() {
+                            self.writeln(&format!("self.{}.{}()", field, method_name));
+                        } else {
+                            self.writeln(&format!("self.{}.{}({})", field, method_name, args.join(", ")));
+                        }
+                    }
                 }
             } else {
                 // Fallback to __base (shouldn't happen with proper calls)
@@ -1292,33 +1453,51 @@ impl AstCodeGen {
         }
     }
 
-    /// Get the base field name for accessing a member declared in a specific base class.
-    /// For single inheritance returns "__base", for MI returns "__base", "__base1", "__base2", etc.
-    fn get_base_field_for_class(&self, current_class: &str, declaring_class: &str) -> String {
+    /// Get the base access path for a member declared in a specific base class.
+    fn get_base_access_for_class(&self, current_class: &str, declaring_class: &str) -> BaseAccess {
+        if let Some(vbases) = self.virtual_bases.get(current_class) {
+            if vbases.iter().any(|b| b == declaring_class) {
+                return BaseAccess::VirtualPtr(self.virtual_base_field_name(declaring_class));
+            }
+        }
+
         if let Some(base_classes) = self.class_bases.get(current_class) {
-            if let Some(idx) = base_classes.iter().position(|b| b == declaring_class) {
-                if idx == 0 {
-                    "__base".to_string()
-                } else {
-                    format!("__base{}", idx)
+            let mut non_virtual_idx = 0;
+            for base in base_classes {
+                if base.name == declaring_class {
+                    if base.is_virtual {
+                        return BaseAccess::VirtualPtr(self.virtual_base_field_name(declaring_class));
+                    }
+                    let field = if non_virtual_idx == 0 { "__base".to_string() } else { format!("__base{}", non_virtual_idx) };
+                    return BaseAccess::DirectField(field);
                 }
-            } else {
-                // Declaring class not found in immediate bases - could be transitive
-                // For now, check if any base has this class in their chain
-                for (base_idx, base_name) in base_classes.iter().enumerate() {
-                    if let Some(base_bases) = self.class_bases.get(base_name) {
-                        if base_bases.contains(&declaring_class.to_string()) {
-                            // Declaring class is in the chain of this base
-                            let first_base = if base_idx == 0 { "__base".to_string() } else { format!("__base{}", base_idx) };
-                            return format!("{}.__base", first_base);
+                if !base.is_virtual {
+                    non_virtual_idx += 1;
+                }
+            }
+
+            // Declaring class not found in immediate bases - could be transitive
+            for (base_idx, base) in base_classes.iter().enumerate() {
+                if let Some(base_bases) = self.class_bases.get(&base.name) {
+                    if base_bases.iter().any(|b| b.name == declaring_class) {
+                        // Declaring class is in the chain of this base
+                        let mut non_virtual_base_idx = 0;
+                        for (i, b) in base_classes.iter().enumerate() {
+                            if i == base_idx {
+                                break;
+                            }
+                            if !b.is_virtual {
+                                non_virtual_base_idx += 1;
+                            }
                         }
+                        let first_base = if non_virtual_base_idx == 0 { "__base".to_string() } else { format!("__base{}", non_virtual_base_idx) };
+                        return BaseAccess::FieldChain(format!("{}.__base", first_base));
                     }
                 }
-                "__base".to_string() // fallback
             }
-        } else {
-            "__base".to_string() // fallback
         }
+
+        BaseAccess::DirectField("__base".to_string())
     }
 
     /// Get function parameter types from a function reference node.
@@ -1493,14 +1672,16 @@ impl AstCodeGen {
             ClangNodeKind::ConstructorDecl { params, .. } => {
                 // Always use new_N format (new_0, new_1, new_2) for consistency
                 let fn_name = format!("new_{}", params.len());
+                let internal_name = format!("__new_without_vbases_{}", params.len());
 
                 let params_str = params.iter()
                     .map(|(n, t)| format!("{}: {}", sanitize_identifier(n), t.to_rust_type_str()))
                     .collect::<Vec<_>>()
                     .join(", ");
-
-                self.writeln(&format!("pub fn {}({}) -> Self {{", fn_name, params_str));
-                self.indent += 1;
+                let params_names = params.iter()
+                    .map(|(n, _)| sanitize_identifier(n))
+                    .collect::<Vec<_>>()
+                    .join(", ");
 
                 // Extract member initializers and base class initializers from constructor children
                 // Pattern 1: MemberRef { name } followed by initialization expression (member initializer list)
@@ -1509,6 +1690,7 @@ impl AstCodeGen {
                 let mut initializers: Vec<(String, String)> = Vec::new();
                 // base_inits: Vec<(field_name, constructor_call)> - supports multiple inheritance
                 let mut base_inits: Vec<(String, String)> = Vec::new();
+                let mut virtual_base_inits: Vec<(String, String)> = Vec::new();
 
                 // Get base classes for current class to determine field names
                 let base_classes = self.current_class.as_ref()
@@ -1537,17 +1719,39 @@ impl AstCodeGen {
                                 if matches!(&node.children[i].kind, ClangNodeKind::CallExpr { .. }) {
                                     // Extract constructor arguments
                                     let args = self.extract_constructor_args(&node.children[i]);
-                                    let ctor_name = format!("{}::new_{}", base_class, args.len());
-                                    let ctor_call = format!("{}({})", ctor_name, args.join(", "));
+                                    let ctor_call = format!("{}::new_{}({})", base_class, args.len(), args.join(", "));
 
                                     // Find the index of this base class to determine field name
-                                    let field_name = if let Some(base_idx) = base_classes.iter().position(|b| b == base_class) {
-                                        if base_idx == 0 { "__base".to_string() } else { format!("__base{}", base_idx) }
-                                    } else {
-                                        "__base".to_string() // fallback
-                                    };
+                                    let mut non_virtual_idx = 0;
+                                    let mut base_info: Option<BaseInfo> = None;
+                                    for b in &base_classes {
+                                        if b.name == base_class {
+                                            base_info = Some(b.clone());
+                                            break;
+                                        }
+                                        if !b.is_virtual {
+                                            non_virtual_idx += 1;
+                                        }
+                                    }
 
-                                    base_inits.push((field_name, ctor_call));
+                                    if let Some(info) = base_info {
+                                        if info.is_virtual {
+                                            virtual_base_inits.push((info.name, ctor_call));
+                                        } else {
+                                            let base_has_vbases = self.class_has_virtual_bases(&info.name);
+                                            let ctor_name = if base_has_vbases {
+                                                format!("{}::__new_without_vbases_{}", info.name, args.len())
+                                            } else {
+                                                format!("{}::new_{}", info.name, args.len())
+                                            };
+                                            let ctor_call = format!("{}({})", ctor_name, args.join(", "));
+                                            let field_name = if non_virtual_idx == 0 { "__base".to_string() } else { format!("__base{}", non_virtual_idx) };
+                                            base_inits.push((field_name, ctor_call));
+                                        }
+                                    } else {
+                                        // Fallback to __base
+                                        base_inits.push(("__base".to_string(), ctor_call));
+                                    }
                                 }
                             }
                         }
@@ -1560,30 +1764,100 @@ impl AstCodeGen {
                     i += 1;
                 }
 
-                self.writeln("Self {");
-                self.indent += 1;
+                let class_has_vbases = self.class_has_virtual_bases(struct_name);
 
-                // First, initialize base classes if present (supports multiple inheritance)
-                for (field_name, base_call) in &base_inits {
-                    self.writeln(&format!("{}: {},", field_name, base_call));
-                }
-
-                if initializers.is_empty() && base_inits.is_empty() {
-                    // Default constructor - use Default
-                    self.writeln("..Default::default()");
-                } else {
+                if class_has_vbases {
+                    // Internal constructor that does not allocate virtual bases
+                    self.writeln(&format!("pub(crate) fn {}({}) -> Self {{", internal_name, params_str));
+                    self.indent += 1;
+                    self.writeln("Self {");
+                    self.indent += 1;
+                    for (field_name, base_call) in &base_inits {
+                        self.writeln(&format!("{}: {},", field_name, base_call));
+                    }
+                    if let Some(vbases) = self.virtual_bases.get(struct_name) {
+                        for vb in vbases {
+                            let field = self.virtual_base_field_name(vb);
+                            let storage = self.virtual_base_storage_field_name(vb);
+                            self.writeln(&format!("{}: std::ptr::null_mut(),", field));
+                            self.writeln(&format!("{}: None,", storage));
+                        }
+                    }
                     for (field, value) in &initializers {
                         self.writeln(&format!("{}: {},", sanitize_identifier(field), value));
                     }
-                    // Fill in remaining fields with default
                     self.writeln("..Default::default()");
-                }
-                self.indent -= 1;
-                self.writeln("}");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("");
 
-                self.indent -= 1;
-                self.writeln("}");
-                self.writeln("");
+                    // Public constructor that allocates virtual bases
+                    self.writeln(&format!("pub fn {}({}) -> Self {{", fn_name, params_str));
+                    self.indent += 1;
+                    self.writeln(&format!("let mut __self = Self::{}({});", internal_name, params_names));
+
+                    if let Some(vbases) = self.virtual_bases.get(struct_name) {
+                        for vb in vbases {
+                            let ctor = if let Some((_, call)) = virtual_base_inits.iter().find(|(name, _)| name == vb) {
+                                call.clone()
+                            } else {
+                                format!("{}::new_0()", vb)
+                            };
+                            let vb_field = self.virtual_base_field_name(vb);
+                            let vb_storage = self.virtual_base_storage_field_name(vb);
+                            let temp_name = format!("__vb_{}", vb_field.trim_start_matches("__vbase_"));
+                            self.writeln(&format!("let mut {} = Box::new({});", temp_name, ctor));
+                            self.writeln(&format!("let {}_ptr = {}.as_mut() as *mut {};", temp_name, temp_name, vb));
+                            self.writeln(&format!("__self.{} = {}_ptr;", vb_field, temp_name));
+                            self.writeln(&format!("__self.{} = Some({});", vb_storage, temp_name));
+                        }
+                    }
+
+                    // Propagate virtual base pointers into embedded bases that need them
+                    let mut non_virtual_idx = 0;
+                    for base in &base_classes {
+                        if !base.is_virtual {
+                            if self.class_has_virtual_bases(&base.name) {
+                                let base_field = if non_virtual_idx == 0 { "__base".to_string() } else { format!("__base{}", non_virtual_idx) };
+                                if let Some(vbases) = self.virtual_bases.get(&base.name) {
+                                    for vb in vbases {
+                                        let vb_field = self.virtual_base_field_name(vb);
+                                        self.writeln(&format!("__self.{}.{} = __self.{};", base_field, vb_field, vb_field));
+                                    }
+                                }
+                            }
+                            non_virtual_idx += 1;
+                        }
+                    }
+
+                    self.writeln("__self");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("");
+                } else {
+                    self.writeln(&format!("pub fn {}({}) -> Self {{", fn_name, params_str));
+                    self.indent += 1;
+                    self.writeln("Self {");
+                    self.indent += 1;
+                    for (field_name, base_call) in &base_inits {
+                        self.writeln(&format!("{}: {},", field_name, base_call));
+                    }
+                    if initializers.is_empty() && base_inits.is_empty() {
+                        self.writeln("..Default::default()");
+                    } else {
+                        for (field, value) in &initializers {
+                            self.writeln(&format!("{}: {},", sanitize_identifier(field), value));
+                        }
+                        self.writeln("..Default::default()");
+                    }
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("");
+                }
             }
             _ => {}
         }
@@ -2420,9 +2694,13 @@ impl AstCodeGen {
                         "0".to_string()
                     };
                     let default_val = default_value_for_type(element_type);
-                    // Use Vec to allocate, then leak it to get a raw pointer
-                    format!("{{ let mut v: Vec<{}> = vec![{}; {} as usize]; let p = v.as_mut_ptr(); std::mem::forget(v); p }}",
-                        element_type.to_rust_type_str(), default_val, size_expr)
+                    // Allocate with size header so delete[] can free correctly
+                    format!(
+                        "unsafe {{ fragile_new_array::<{}>({} as usize, {}) }}",
+                        element_type.to_rust_type_str(),
+                        size_expr,
+                        default_val
+                    )
                 } else {
                     // new T(args) → Box::into_raw(Box::new(value))
                     let init = if !node.children.is_empty() {
@@ -2437,15 +2715,14 @@ impl AstCodeGen {
             }
             ClangNodeKind::CXXDeleteExpr { is_array } => {
                 if *is_array {
-                    // delete[] p → We can't safely deallocate without knowing the array size.
-                    // For now, generate code that at least compiles but leaks memory.
-                    // A proper implementation would track array sizes at allocation.
                     if !node.children.is_empty() {
                         let ptr = self.expr_to_string(&node.children[0]);
-                        // Note: This is a memory leak. The Vec was forgotten during new[],
-                        // and we don't have the size to reconstruct it.
-                        // Generate a no-op that at least uses the pointer to avoid warnings.
-                        format!("{{ let _ = {}; /* delete[] memory leak - size unknown */ }}", ptr)
+                        let elem_type = Self::get_expr_type(&node.children[0])
+                            .and_then(|t| t.pointee().cloned());
+                        let elem_type_str = elem_type
+                            .map(|t| t.to_rust_type_str())
+                            .unwrap_or_else(|| "u8".to_string());
+                        format!("unsafe {{ fragile_delete_array::<{}>({}) }}", elem_type_str, ptr)
                     } else {
                         "/* delete[] error: no pointer */".to_string()
                     }
@@ -2803,21 +3080,21 @@ impl AstCodeGen {
                     let base_type = Self::get_expr_type(&node.children[0]);
 
                     // Determine if we need base access and get the correct base field name
-                    let (needs_base_access, base_field) = if let Some(decl_class) = declaring_class {
+                    let (needs_base_access, base_access) = if let Some(decl_class) = declaring_class {
                         let base_class_name = Self::extract_class_name(&base_type);
                         if let Some(name) = base_class_name {
                             if name != *decl_class {
                                 // Need base access - get correct field for MI support
-                                let field = self.get_base_field_for_class(&name, decl_class);
-                                (true, field)
+                                let access = self.get_base_access_for_class(&name, decl_class);
+                                (true, access)
                             } else {
-                                (false, String::new())
+                                (false, BaseAccess::DirectField(String::new()))
                             }
                         } else {
-                            (false, String::new())
+                            (false, BaseAccess::DirectField(String::new()))
                         }
                     } else {
-                        (false, String::new())
+                        (false, BaseAccess::DirectField(String::new()))
                     };
 
                     let member = sanitize_identifier(member_name);
@@ -2842,13 +3119,27 @@ impl AstCodeGen {
                             // For trait objects, no dereference - call method directly
                             format!("{}.{}", base, member)
                         } else if needs_base_access {
-                            format!("(*{}).{}.{}", base, base_field, member)
+                            match base_access {
+                                BaseAccess::VirtualPtr(field) => {
+                                    format!("unsafe {{ (*(*{}).{}).{} }}", base, field, member)
+                                }
+                                BaseAccess::DirectField(field) | BaseAccess::FieldChain(field) => {
+                                    format!("(*{}).{}.{}", base, field, member)
+                                }
+                            }
                         } else {
                             format!("(*{}).{}", base, member)
                         }
                     } else {
                         if needs_base_access {
-                            format!("{}.{}.{}", base, base_field, member)
+                            match base_access {
+                                BaseAccess::VirtualPtr(field) => {
+                                    format!("unsafe {{ (*{}.{}).{} }}", base, field, member)
+                                }
+                                BaseAccess::DirectField(field) | BaseAccess::FieldChain(field) => {
+                                    format!("{}.{}.{}", base, field, member)
+                                }
+                            }
                         } else {
                             format!("{}.{}", base, member)
                         }
@@ -2856,18 +3147,25 @@ impl AstCodeGen {
                 } else {
                     // Implicit this - check if member is inherited
                     let member = sanitize_identifier(member_name);
-                    let (needs_base_access, base_field) = if let (Some(current), Some(decl_class)) = (&self.current_class, declaring_class) {
+                    let (needs_base_access, base_access) = if let (Some(current), Some(decl_class)) = (&self.current_class, declaring_class) {
                         if current != decl_class {
-                            let field = self.get_base_field_for_class(current, decl_class);
-                            (true, field)
+                            let access = self.get_base_access_for_class(current, decl_class);
+                            (true, access)
                         } else {
-                            (false, String::new())
+                            (false, BaseAccess::DirectField(String::new()))
                         }
                     } else {
-                        (false, String::new())
+                        (false, BaseAccess::DirectField(String::new()))
                     };
                     if needs_base_access {
-                        format!("self.{}.{}", base_field, member)
+                        match base_access {
+                            BaseAccess::VirtualPtr(field) => {
+                                format!("unsafe {{ (*self.{}).{} }}", field, member)
+                            }
+                            BaseAccess::DirectField(field) | BaseAccess::FieldChain(field) => {
+                                format!("self.{}.{}", field, member)
+                            }
+                        }
                     } else {
                         format!("self.{}", member)
                     }
