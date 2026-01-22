@@ -14,7 +14,7 @@ We just convert the fully-resolved AST to equivalent Rust code.
 ## Current Status
 
 **Grammar Tests**: 20/20 passing
-**E2E Tests**: 45/45 passing
+**E2E Tests**: 46/46 passing
 
 **Working**:
 - Simple functions with control flow (if/else, while, for, do-while, switch, recursion)
@@ -53,6 +53,7 @@ We just convert the fully-resolved AST to equivalent Rust code.
 - Comma operator (C++ (a, b) → Rust block expression { a; b })
 - Type aliases (typedef and using declarations → Rust pub type)
 - Global variables (static mut with unsafe access)
+- Global arrays (const-safe initialization with [0; N])
 
 **CLI**:
 ```bash

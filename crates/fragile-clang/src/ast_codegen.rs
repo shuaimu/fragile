@@ -653,20 +653,38 @@ impl AstCodeGen {
         let init_value = if has_init && !children.is_empty() {
             self.expr_to_string(&children[0])
         } else {
-            // Default value for the type
-            match ty {
-                CppType::Int { .. } | CppType::Short { .. } | CppType::Long { .. } | CppType::LongLong { .. }
-                | CppType::Char { .. } => "0".to_string(),
-                CppType::Float => "0.0f32".to_string(),
-                CppType::Double => "0.0f64".to_string(),
-                CppType::Bool => "false".to_string(),
-                CppType::Pointer { .. } => "std::ptr::null_mut()".to_string(),
-                _ => "Default::default()".to_string(),
-            }
+            // Default value for the type (must be const for statics)
+            Self::default_value_for_static(ty)
         };
 
         self.writeln(&format!("static mut {}: {} = {};", name, rust_type, init_value));
         self.writeln("");
+    }
+
+    /// Generate a const-safe default value for static variables.
+    fn default_value_for_static(ty: &CppType) -> String {
+        match ty {
+            CppType::Int { .. } | CppType::Short { .. } | CppType::Long { .. } | CppType::LongLong { .. }
+            | CppType::Char { .. } => "0".to_string(),
+            CppType::Float => "0.0f32".to_string(),
+            CppType::Double => "0.0f64".to_string(),
+            CppType::Bool => "false".to_string(),
+            CppType::Pointer { .. } => "std::ptr::null_mut()".to_string(),
+            CppType::Array { element, size } => {
+                let elem_default = Self::default_value_for_static(element);
+                if let Some(n) = size {
+                    format!("[{}; {}]", elem_default, n)
+                } else {
+                    // Unsized arrays shouldn't appear as globals, but fallback
+                    "[]".to_string()
+                }
+            }
+            _ => {
+                // For named types (structs), try to generate a const default
+                // This may fail for complex types, but works for simple cases
+                "unsafe { std::mem::zeroed() }".to_string()
+            }
+        }
     }
 
     /// Generate a trait for a polymorphic class.
@@ -1046,6 +1064,23 @@ impl AstCodeGen {
             }
             ClangNodeKind::ImplicitCastExpr { .. } => {
                 !node.children.is_empty() && self.is_pointer_subscript(&node.children[0])
+            }
+            _ => false,
+        }
+    }
+
+    /// Check if a node is an array subscript on a global array (needs unsafe for assignment).
+    fn is_global_array_subscript(&self, node: &ClangNode) -> bool {
+        match &node.kind {
+            ClangNodeKind::ArraySubscriptExpr { .. } => {
+                if !node.children.is_empty() {
+                    self.is_global_var_expr(&node.children[0])
+                } else {
+                    false
+                }
+            }
+            ClangNodeKind::ImplicitCastExpr { .. } => {
+                !node.children.is_empty() && self.is_global_array_subscript(&node.children[0])
             }
             _ => false,
         }
@@ -2452,12 +2487,13 @@ impl AstCodeGen {
 
                     let op_str = binop_to_string(op);
 
-                    // Check if left side is a pointer dereference, pointer subscript, or static member
-                    // (needs whole assignment in unsafe)
+                    // Check if left side is a pointer dereference, pointer subscript, static member,
+                    // or global array subscript (needs whole assignment in unsafe)
                     let left_is_deref = Self::is_pointer_deref(&node.children[0]);
                     let left_is_ptr_subscript = self.is_pointer_subscript(&node.children[0]);
                     let left_is_static_member = self.is_static_member_access(&node.children[0]);
-                    let needs_unsafe = left_is_deref || left_is_ptr_subscript || left_is_static_member;
+                    let left_is_global_subscript = self.is_global_array_subscript(&node.children[0]);
+                    let needs_unsafe = left_is_deref || left_is_ptr_subscript || left_is_static_member || left_is_global_subscript;
 
                     // Handle assignment specially
                     if matches!(op, BinaryOp::Assign | BinaryOp::AddAssign | BinaryOp::SubAssign |
@@ -2774,7 +2810,9 @@ impl AstCodeGen {
             }
             ClangNodeKind::ArraySubscriptExpr { .. } => {
                 if node.children.len() >= 2 {
-                    let arr = self.expr_to_string(&node.children[0]);
+                    // Check if the array expression is a global variable
+                    let is_global_array = self.is_global_var_expr(&node.children[0]);
+
                     let idx = self.expr_to_string(&node.children[1]);
                     // Check if the array expression is a pointer type
                     // (also check for unsized arrays which decay to pointers)
@@ -2782,10 +2820,18 @@ impl AstCodeGen {
                     let is_pointer = matches!(arr_type, Some(CppType::Pointer { .. }))
                         || matches!(arr_type, Some(CppType::Array { size: None, .. }))
                         || self.is_ptr_var_expr(&node.children[0]);
-                    if is_pointer {
+
+                    if is_global_array {
+                        // For global arrays, get raw name and put indexing inside unsafe
+                        let raw_name = self.get_raw_var_name(&node.children[0])
+                            .unwrap_or_else(|| self.expr_to_string(&node.children[0]));
+                        format!("unsafe {{ {}[{} as usize] }}", raw_name, idx)
+                    } else if is_pointer {
+                        let arr = self.expr_to_string(&node.children[0]);
                         // Pointer indexing requires unsafe pointer arithmetic
                         format!("unsafe {{ *{}.add({} as usize) }}", arr, idx)
                     } else {
+                        let arr = self.expr_to_string(&node.children[0]);
                         // Array indexing - cast index to usize
                         format!("{}[{} as usize]", arr, idx)
                     }

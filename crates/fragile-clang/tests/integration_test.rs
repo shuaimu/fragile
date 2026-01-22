@@ -1363,3 +1363,31 @@ fn test_e2e_global_var() {
 
     assert_eq!(exit_code, 0, "Global variables should work with unsafe access");
 }
+
+/// Test E2E: Global arrays
+#[test]
+fn test_e2e_global_array() {
+    let source = r#"
+        int array[5];
+
+        int main() {
+            for (int i = 0; i < 5; i++) {
+                array[i] = i * 2;
+            }
+            int sum = 0;
+            for (int i = 0; i < 5; i++) {
+                sum += array[i];
+            }
+            // Sum of 0, 2, 4, 6, 8 = 20
+            if (sum == 20) {
+                return 0;
+            }
+            return 1;
+        }
+    "#;
+
+    let (exit_code, _stdout, _stderr) = transpile_compile_run(source, "e2e_global_array.cpp")
+        .expect("E2E test failed");
+
+    assert_eq!(exit_code, 0, "Global arrays should work with unsafe access and proper initialization");
+}
