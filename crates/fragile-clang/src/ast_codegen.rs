@@ -72,6 +72,8 @@ pub struct AstCodeGen {
     use_ctor_self: bool,
     /// Current method return type (for reference return handling)
     current_return_type: Option<CppType>,
+    /// Map from class name to its field names (for constructor generation)
+    class_fields: HashMap<String, Vec<(String, CppType)>>,
 }
 
 impl AstCodeGen {
@@ -93,6 +95,7 @@ impl AstCodeGen {
             current_namespace: Vec::new(),
             use_ctor_self: false,
             current_return_type: None,
+            class_fields: HashMap::new(),
         }
     }
 
@@ -414,6 +417,8 @@ impl AstCodeGen {
         self.indent += 1;
 
         // First, embed non-virtual base classes as fields (supports multiple inheritance)
+        // Also collect base fields for class_fields tracking
+        let mut base_fields = Vec::new();
         let mut base_idx = 0;
         for child in children {
             if let ClangNodeKind::CXXBaseSpecifier { base_type, access, is_virtual, .. } = &child.kind {
@@ -425,6 +430,7 @@ impl AstCodeGen {
                     // Use __base for single inheritance, __base0/__base1/etc for MI
                     let field_name = if base_idx == 0 { "__base".to_string() } else { format!("__base{}", base_idx) };
                     self.writeln(&format!("pub {}: {},", field_name, base_name));
+                    base_fields.push((field_name, base_type.clone()));
                     base_idx += 1;
                 }
             }
@@ -440,16 +446,22 @@ impl AstCodeGen {
         }
 
         // Then add derived class fields
+        let mut fields = Vec::new();
         for child in children {
             if let ClangNodeKind::FieldDecl { name: field_name, ty, .. } = &child.kind {
-                let field_name = if field_name.is_empty() {
+                let sanitized_name = if field_name.is_empty() {
                     "_field".to_string()
                 } else {
                     sanitize_identifier(field_name)
                 };
-                self.writeln(&format!("pub {}: {},", field_name, ty.to_rust_type_str()));
+                self.writeln(&format!("pub {}: {},", sanitized_name, ty.to_rust_type_str()));
+                fields.push((sanitized_name, ty.clone()));
             }
         }
+        // Store field info for constructor generation (including base fields)
+        let mut all_fields = base_fields;
+        all_fields.extend(fields);
+        self.class_fields.insert(name.to_string(), all_fields);
 
         self.indent -= 1;
         self.writeln("}");
@@ -1753,13 +1765,15 @@ impl AstCodeGen {
 
         match &node.kind {
             ClangNodeKind::CXXMethodDecl { name, return_type, params, is_static, .. } => {
+                // Check if method modifies self or returns a mutable reference
+                let modifies_self = Self::method_modifies_self(node);
+                let returns_mut_ref = matches!(return_type, CppType::Reference { is_const: false, .. });
+                let is_mutable_method = modifies_self || returns_mut_ref;
+
                 let self_param = if *is_static {
                     "".to_string()
                 } else {
-                    // Check if method modifies self or returns a mutable reference
-                    let modifies_self = Self::method_modifies_self(node);
-                    let returns_mut_ref = matches!(return_type, CppType::Reference { is_const: false, .. });
-                    if modifies_self || returns_mut_ref { "&mut self, ".to_string() } else { "&self, ".to_string() }
+                    if is_mutable_method { "&mut self, ".to_string() } else { "&self, ".to_string() }
                 };
                 let params_str = params.iter()
                     .map(|(n, t)| format!("{}: {}", sanitize_identifier(n), t.to_rust_type_str()))
@@ -1772,8 +1786,28 @@ impl AstCodeGen {
                     format!(" -> {}", return_type.to_rust_type_str())
                 };
 
+                // Special handling for operators that have const/non-const overloads
+                // Skip the const version - only generate the mutable one (Rust borrow rules handle immutability)
+                let skip_method = (name == "operator*" && params.is_empty() && !is_mutable_method) ||
+                                  (name == "operator->" && !is_mutable_method);
+
+                if skip_method {
+                    self.current_class = old_class;
+                    return;
+                }
+
+                let method_name = if name == "operator*" && params.is_empty() {
+                    // Unary dereference operator (mutable version only)
+                    "op_deref".to_string()
+                } else if name == "operator->" {
+                    // Arrow operator (mutable version only)
+                    "op_arrow".to_string()
+                } else {
+                    sanitize_identifier(name)
+                };
+
                 self.writeln(&format!("pub fn {}({}{}){} {{",
-                    sanitize_identifier(name), self_param, params_str, ret_str));
+                    method_name, self_param, params_str, ret_str));
                 self.indent += 1;
 
                 // Track return type for reference return handling
@@ -1988,14 +2022,14 @@ impl AstCodeGen {
                     for (field_name, base_call) in &base_inits {
                         self.writeln(&format!("{}: {},", field_name, base_call));
                     }
-                    if initializers.is_empty() && base_inits.is_empty() {
-                        self.writeln("..Default::default()");
-                    } else {
-                        for (field, value) in &initializers {
-                            self.writeln(&format!("{}: {},", sanitize_identifier(field), value));
-                        }
-                        self.writeln("..Default::default()");
+                    // Generate field initializers
+                    for (field, value) in &initializers {
+                        self.writeln(&format!("{}: {},", sanitize_identifier(field), value));
                     }
+                    // Always add ..Default::default() to handle base class fields and any
+                    // uninitialized fields. This is simpler and more robust than tracking
+                    // every field including inherited ones.
+                    self.writeln("..Default::default()");
                     self.indent -= 1;
 
                     if has_non_member_stmts {
@@ -2111,6 +2145,12 @@ impl AstCodeGen {
                         // because Rust's &mut self already provides the reference
                         if expr == "self" || expr == "__self" {
                             expr
+                        } else if expr.starts_with("unsafe { ") && expr.ends_with(" }") {
+                            // If expression is an unsafe block like "unsafe { *ptr }",
+                            // put the & or &mut inside: "unsafe { &mut *ptr }"
+                            let inner = &expr[9..expr.len()-2]; // Extract content between "unsafe { " and " }"
+                            let prefix = if *is_const { "&" } else { "&mut " };
+                            format!("unsafe {{ {}{} }}", prefix, inner)
                         } else if *is_const {
                             format!("&{}", expr)
                         } else {
@@ -2232,6 +2272,14 @@ impl AstCodeGen {
         // Children: condition, then-branch, [else-branch]
         if node.children.len() >= 2 {
             let cond = self.expr_to_string(&node.children[0]);
+            // In C++, pointers can be used in boolean context (non-null = true)
+            // In Rust, we need to explicitly check .is_null()
+            let cond_type = Self::get_expr_type(&node.children[0]);
+            let cond = if matches!(cond_type, Some(CppType::Pointer { .. })) {
+                format!("!{}.is_null()", cond)
+            } else {
+                cond
+            };
             self.writeln(&format!("if {} {{", cond));
             self.indent += 1;
             self.generate_stmt(&node.children[1], false);
@@ -2258,6 +2306,13 @@ impl AstCodeGen {
         // Children: condition, body
         if node.children.len() >= 2 {
             let cond = self.expr_to_string(&node.children[0]);
+            // In C++, pointers can be used in boolean context (non-null = true)
+            let cond_type = Self::get_expr_type(&node.children[0]);
+            let cond = if matches!(cond_type, Some(CppType::Pointer { .. })) {
+                format!("!{}.is_null()", cond)
+            } else {
+                cond
+            };
             self.writeln(&format!("while {} {{", cond));
             self.indent += 1;
             self.generate_stmt(&node.children[1], false);
@@ -3155,6 +3210,14 @@ impl AstCodeGen {
                         } else {
                             format!("*{}.{}()", left_operand, method_name)
                         }
+                    } else if op_name == "operator*" && right_idx_opt.is_none() {
+                        // Unary dereference operator: *ptr → *ptr.op_deref()
+                        // The operator returns a reference, so we dereference it
+                        format!("*{}.op_deref()", left_operand)
+                    } else if op_name == "operator->" {
+                        // Arrow operator: ptr->member
+                        // This is handled in MemberExpr, but if called directly, returns the pointer
+                        format!("{}.op_arrow()", left_operand)
                     } else if let Some(right_idx) = right_idx_opt {
                         // Binary operator: left.op_X(right) or left.op_X(&right)
                         let right_operand = self.expr_to_string(&node.children[right_idx]);
@@ -3167,7 +3230,7 @@ impl AstCodeGen {
                             format!("{}.{}({})", left_operand, method_name, right_operand)
                         }
                     } else {
-                        // Unary operator: operand.op_X()
+                        // Other unary operators: operand.op_X()
                         format!("{}.{}()", left_operand, method_name)
                     }
                 } else if let CppType::Named(struct_name) = ty {

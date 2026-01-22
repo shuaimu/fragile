@@ -1635,3 +1635,45 @@ fn test_e2e_assignment_operators() {
 
     assert_eq!(exit_code, 0, "Assignment operators should work correctly");
 }
+
+/// Test dereference operator * for smart pointer types.
+#[test]
+fn test_e2e_deref_operator() {
+    let source = r#"
+        class SmartPtr {
+            int* ptr;
+        public:
+            SmartPtr(int val) : ptr(new int(val)) {}
+            ~SmartPtr() {
+                if (ptr) delete ptr;
+            }
+
+            int& operator*() {
+                return *ptr;
+            }
+        };
+
+        int main() {
+            SmartPtr sp(42);
+
+            // Read through dereference
+            int val = *sp;
+            if (val != 42) return 1;
+
+            // Write through dereference
+            *sp = 100;
+            if (*sp != 100) return 2;
+
+            // Arithmetic with dereference
+            *sp += 50;
+            if (*sp != 150) return 3;
+
+            return 0;
+        }
+    "#;
+
+    let (exit_code, _stdout, _stderr) = transpile_compile_run(source, "e2e_deref_op.cpp")
+        .expect("E2E test failed");
+
+    assert_eq!(exit_code, 0, "Dereference operator should work with reads and writes");
+}
