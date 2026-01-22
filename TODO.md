@@ -14,7 +14,7 @@ We just convert the fully-resolved AST to equivalent Rust code.
 ## Current Status
 
 **Grammar Tests**: 20/20 passing
-**E2E Tests**: 47/47 passing
+**E2E Tests**: 48/48 passing
 
 **Working**:
 - Simple functions with control flow (if/else, while, for, do-while, switch, recursion)
@@ -36,7 +36,7 @@ We just convert the fully-resolved AST to equivalent Rust code.
 - Single inheritance (base class embedded as `__base` field)
 - Multiple inheritance (multiple `__base` fields)
 - Virtual/diamond inheritance (shared virtual base via pointers)
-- C++ namespaces → Rust modules
+- C++ namespaces → Rust modules (with relative path resolution)
 - Virtual method override (static dispatch)
 - Inherited field access via `__base`
 - Base class constructor delegation in derived constructors

@@ -1442,3 +1442,39 @@ fn test_e2e_virtual_diamond() {
 
     assert_eq!(exit_code, 0, "Virtual diamond inheritance should share a single virtual base instance");
 }
+
+/// Test namespace function call path resolution.
+#[test]
+fn test_e2e_namespace_path_resolution() {
+    let source = r#"
+        namespace foo {
+            int helper() { return 42; }
+            int test() { return helper(); }  // Same namespace call
+
+            namespace inner {
+                int innerHelper() { return 10; }
+                int useParent() { return helper(); }  // Parent namespace call
+                int useLocal() { return innerHelper(); }  // Same namespace call
+            }
+        }
+
+        int globalFunc() { return 100; }
+
+        namespace bar {
+            int useGlobal() { return globalFunc(); }  // Global function call
+        }
+
+        int main() {
+            if (foo::test() != 42) return 1;
+            if (foo::inner::useParent() != 42) return 2;
+            if (foo::inner::useLocal() != 10) return 3;
+            if (bar::useGlobal() != 100) return 4;
+            return 0;
+        }
+    "#;
+
+    let (exit_code, _stdout, _stderr) = transpile_compile_run(source, "e2e_namespace_path.cpp")
+        .expect("E2E test failed");
+
+    assert_eq!(exit_code, 0, "Namespace function calls should use correct relative paths");
+}

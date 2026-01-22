@@ -66,6 +66,8 @@ pub struct AstCodeGen {
     static_members: HashMap<(String, String), String>,
     /// Track global variable names (require unsafe access)
     global_vars: HashSet<String>,
+    /// Current namespace path during code generation (for relative path computation)
+    current_namespace: Vec<String>,
 }
 
 impl AstCodeGen {
@@ -84,6 +86,7 @@ impl AstCodeGen {
             virtual_methods: HashMap::new(),
             static_members: HashMap::new(),
             global_vars: HashSet::new(),
+            current_namespace: Vec::new(),
         }
     }
 
@@ -224,6 +227,40 @@ impl AstCodeGen {
 
     fn class_has_virtual_bases(&self, class_name: &str) -> bool {
         self.virtual_bases.get(class_name).map_or(false, |v| !v.is_empty())
+    }
+
+    /// Compute the relative Rust path from current namespace to target namespace.
+    /// Returns the path string to use for referring to an item in target_ns from current_namespace.
+    fn compute_relative_path(&self, target_ns: &[String], ident: &str) -> String {
+        // If target namespace matches current namespace, just use the identifier
+        if target_ns == self.current_namespace.as_slice() {
+            return ident.to_string();
+        }
+
+        // Find the common prefix length
+        let common_len = target_ns.iter()
+            .zip(self.current_namespace.iter())
+            .take_while(|(a, b)| a == b)
+            .count();
+
+        // Calculate how many levels to go up
+        let levels_up = self.current_namespace.len() - common_len;
+
+        // Build the path: super:: for going up, then the remaining target path
+        let mut parts: Vec<String> = Vec::new();
+        for _ in 0..levels_up {
+            parts.push("super".to_string());
+        }
+
+        // Add the remaining path segments from target_ns (after common prefix)
+        for ns in target_ns.iter().skip(common_len) {
+            parts.push(sanitize_identifier(ns));
+        }
+
+        // Add the identifier at the end
+        parts.push(ident.to_string());
+
+        parts.join("::")
     }
 
     /// Generate Rust stubs (signatures only, no bodies) from a Clang AST.
@@ -483,9 +520,12 @@ impl AstCodeGen {
                         // Create a module for the namespace
                         self.writeln(&format!("pub mod {} {{", sanitize_identifier(ns_name)));
                         self.indent += 1;
+                        // Track current namespace for relative path computation
+                        self.current_namespace.push(ns_name.clone());
                         for child in &node.children {
                             self.generate_top_level(child);
                         }
+                        self.current_namespace.pop();
                         self.indent -= 1;
                         self.writeln("}");
                         self.writeln("");
@@ -2831,14 +2871,17 @@ impl AstCodeGen {
                         return format!("unsafe {{ {} }}", ident);
                     }
 
-                    // Add namespace path if present
-                    let full_path = if namespace_path.is_empty() {
+                    // Compute relative path based on current namespace context
+                    // Only apply to functions (not local variables or parameters)
+                    // For functions, even if namespace_path is empty, we may need super:: to reach global scope
+                    let full_path = if matches!(ty, CppType::Function { .. }) {
+                        self.compute_relative_path(namespace_path, &ident)
+                    } else if namespace_path.is_empty() {
+                        // Local variable or parameter - just use the identifier
                         ident.clone()
                     } else {
-                        let path: Vec<_> = namespace_path.iter()
-                            .map(|s| sanitize_identifier(s))
-                            .collect();
-                        format!("{}::{}", path.join("::"), ident)
+                        // Namespaced non-function (shouldn't happen often)
+                        self.compute_relative_path(namespace_path, &ident)
                     };
                     // Dereference reference variables (parameters or locals with & type)
                     if self.ref_vars.contains(name) {
