@@ -3318,6 +3318,7 @@ impl AstCodeGen {
                 } else {
                     // Implicit this - check if member is inherited
                     let member = sanitize_identifier(member_name);
+                    let self_name = if self.use_ctor_self { "__self" } else { "self" };
                     let (needs_base_access, base_access) = if let (Some(current), Some(decl_class)) = (&self.current_class, declaring_class) {
                         if current != decl_class {
                             let access = self.get_base_access_for_class(current, decl_class);
@@ -3331,14 +3332,14 @@ impl AstCodeGen {
                     if needs_base_access {
                         match base_access {
                             BaseAccess::VirtualPtr(field) => {
-                                format!("unsafe {{ (*self.{}).{} }}", field, member)
+                                format!("unsafe {{ (*{}.{}).{} }}", self_name, field, member)
                             }
                             BaseAccess::DirectField(field) | BaseAccess::FieldChain(field) => {
-                                format!("self.{}.{}", field, member)
+                                format!("{}.{}.{}", self_name, field, member)
                             }
                         }
                     } else {
-                        format!("self.{}", member)
+                        format!("{}.{}", self_name, member)
                     }
                 }
             }

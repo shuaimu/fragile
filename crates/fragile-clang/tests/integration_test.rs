@@ -1505,3 +1505,36 @@ fn test_e2e_functor() {
 
     assert_eq!(exit_code, 0, "Function call operator should work with arguments");
 }
+
+/// Test constructor body statements (non-initializer assignments).
+#[test]
+fn test_e2e_ctor_body_stmts() {
+    let source = r#"
+        class Array {
+            int data[5];
+        public:
+            Array() {
+                // These are body statements, not member initializers
+                data[0] = 100;
+                data[1] = 200;
+                data[2] = 300;
+            }
+            int get(int idx) {
+                return data[idx];
+            }
+        };
+
+        int main() {
+            Array arr;
+            if (arr.get(0) != 100) return 1;
+            if (arr.get(1) != 200) return 2;
+            if (arr.get(2) != 300) return 3;
+            return 0;
+        }
+    "#;
+
+    let (exit_code, _stdout, _stderr) = transpile_compile_run(source, "e2e_ctor_body.cpp")
+        .expect("E2E test failed");
+
+    assert_eq!(exit_code, 0, "Constructor body statements should execute correctly");
+}
