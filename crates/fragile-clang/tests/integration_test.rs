@@ -1677,3 +1677,47 @@ fn test_e2e_deref_operator() {
 
     assert_eq!(exit_code, 0, "Dereference operator should work with reads and writes");
 }
+
+/// Test arrow operator -> for smart pointer types.
+#[test]
+fn test_e2e_arrow_operator() {
+    let source = r#"
+        class Point {
+        public:
+            int x, y;
+            Point(int a, int b) : x(a), y(b) {}
+            int sum() const { return x + y; }
+        };
+
+        class PointPtr {
+            Point* ptr;
+        public:
+            PointPtr(Point* p) : ptr(p) {}
+            ~PointPtr() { delete ptr; }
+
+            Point* operator->() { return ptr; }
+        };
+
+        int main() {
+            PointPtr pp(new Point(10, 20));
+
+            // Arrow operator for member access
+            if (pp->x != 10) return 1;
+            if (pp->y != 20) return 2;
+
+            // Arrow operator for method call
+            if (pp->sum() != 30) return 3;
+
+            // Arrow operator for member assignment
+            pp->x = 100;
+            if (pp->x != 100) return 4;
+
+            return 0;
+        }
+    "#;
+
+    let (exit_code, _stdout, _stderr) = transpile_compile_run(source, "e2e_arrow_op.cpp")
+        .expect("E2E test failed");
+
+    assert_eq!(exit_code, 0, "Arrow operator should work for member access and method calls");
+}

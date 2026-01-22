@@ -1331,6 +1331,17 @@ impl AstCodeGen {
         }
     }
 
+    /// Check if a node is an arrow member access (needs unsafe).
+    fn is_arrow_member_access(node: &ClangNode) -> bool {
+        match &node.kind {
+            ClangNodeKind::MemberExpr { is_arrow, .. } => *is_arrow,
+            ClangNodeKind::ImplicitCastExpr { .. } => {
+                !node.children.is_empty() && Self::is_arrow_member_access(&node.children[0])
+            }
+            _ => false,
+        }
+    }
+
     /// Check if a node is an array subscript on a pointer (needs unsafe for assignment).
     fn is_pointer_subscript(&self, node: &ClangNode) -> bool {
         match &node.kind {
@@ -2827,7 +2838,7 @@ impl AstCodeGen {
                     "/* array subscript error */".to_string()
                 }
             }
-            ClangNodeKind::MemberExpr { member_name, is_static, declaring_class, .. } => {
+            ClangNodeKind::MemberExpr { member_name, is_static, is_arrow, declaring_class, .. } => {
                 // For static member access, return the global name without unsafe wrapper
                 if *is_static {
                     if let Some(class_name) = declaring_class {
@@ -2838,8 +2849,19 @@ impl AstCodeGen {
                         return format!("{}_{}", class_name.to_uppercase(), sanitize_identifier(member_name).to_uppercase());
                     }
                 }
-                // Non-static members: use regular conversion
-                self.expr_to_string(node)
+                // Non-static members: generate raw without unsafe wrapper
+                if !node.children.is_empty() {
+                    let base = self.expr_to_string_raw(&node.children[0]);
+                    let member = sanitize_identifier(member_name);
+                    if *is_arrow {
+                        // Arrow access without unsafe wrapper (caller handles unsafe)
+                        format!("(*{}).{}", base, member)
+                    } else {
+                        format!("{}.{}", base, member)
+                    }
+                } else {
+                    sanitize_identifier(member_name)
+                }
             }
             ClangNodeKind::BinaryOperator { op, .. } => {
                 // Inside unsafe block, don't wrap sub-expressions in additional unsafe
@@ -2969,9 +2991,13 @@ impl AstCodeGen {
                     )
                 } else {
                     // new T(args) → Box::into_raw(Box::new(value))
-                    let init = if !node.children.is_empty() {
+                    // Find the actual initializer, skipping TypeRef nodes
+                    let init_node = node.children.iter().find(|c| {
+                        !matches!(&c.kind, ClangNodeKind::Unknown(s) if s.starts_with("TypeRef"))
+                    });
+                    let init = if let Some(init_node) = init_node {
                         // Constructor argument or initializer
-                        self.expr_to_string(&node.children[0])
+                        self.expr_to_string(init_node)
                     } else {
                         // Default value for type
                         default_value_for_type(ty)
@@ -3073,13 +3099,14 @@ impl AstCodeGen {
                     let op_str = binop_to_string(op);
 
                     // Check if left side is a pointer dereference, pointer subscript, static member,
-                    // global array subscript, or global variable (needs whole assignment in unsafe)
+                    // global array subscript, global variable, or arrow member access (needs whole assignment in unsafe)
                     let left_is_deref = Self::is_pointer_deref(&node.children[0]);
                     let left_is_ptr_subscript = self.is_pointer_subscript(&node.children[0]);
                     let left_is_static_member = self.is_static_member_access(&node.children[0]);
                     let left_is_global_subscript = self.is_global_array_subscript(&node.children[0]);
                     let left_is_global_var = self.is_global_var_expr(&node.children[0]);
-                    let needs_unsafe = left_is_deref || left_is_ptr_subscript || left_is_static_member || left_is_global_subscript || left_is_global_var;
+                    let left_is_arrow = Self::is_arrow_member_access(&node.children[0]);
+                    let needs_unsafe = left_is_deref || left_is_ptr_subscript || left_is_static_member || left_is_global_subscript || left_is_global_var || left_is_arrow;
 
                     // Check if left side is a pointer type for += / -= (need .add() / .sub())
                     let left_type = Self::get_expr_type(&node.children[0]);
@@ -3374,7 +3401,14 @@ impl AstCodeGen {
                             self.expr_to_string(c)
                         })
                         .collect();
-                    format!("{}({})", func, args.join(", "))
+                    // Check if the function expression is wrapped in unsafe (from arrow member access)
+                    // If so, put the function call inside the unsafe block
+                    if func.starts_with("unsafe { ") && func.ends_with(" }") {
+                        let inner = &func[9..func.len()-2]; // Extract "(*...).method" from "unsafe { (*...).method }"
+                        format!("unsafe {{ {}({}) }}", inner, args.join(", "))
+                    } else {
+                        format!("{}({})", func, args.join(", "))
+                    }
                 } else {
                     "/* call error */".to_string()
                 }

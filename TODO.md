@@ -14,7 +14,7 @@ We just convert the fully-resolved AST to equivalent Rust code.
 ## Current Status
 
 **Grammar Tests**: 20/20 passing
-**E2E Tests**: 53/53 passing
+**E2E Tests**: 54/54 passing
 
 **Working**:
 - Simple functions with control flow (if/else, while, for, do-while, switch, recursion)
@@ -61,6 +61,7 @@ We just convert the fully-resolved AST to equivalent Rust code.
 - Subscript operator [] (returns &mut, correct argument passing, auto-dereference)
 - Assignment operators (=, +=, -=, *=, /=, etc. with correct *this return)
 - Dereference operator * (op_deref → returns &mut, pointer-to-bool via .is_null())
+- Arrow operator -> (op_arrow method → pointer dereference with unsafe block)
 
 **CLI**:
 ```bash
@@ -124,7 +125,7 @@ crates/
 - [x] **7.1** Subscript operator [] (returns mutable reference, correct argument passing, auto-dereference) ✅ 2026-01-22
 - [x] **7.2** Assignment operators (=, +=, -=, etc.) for custom types ✅ 2026-01-22
 - [x] **7.3** Dereference operator * for smart pointer types ✅ 2026-01-22
-- [ ] **7.4** Arrow operator -> for smart pointer types
+- [x] **7.4** Arrow operator -> for smart pointer types ✅ 2026-01-22
 
 ---
 
