@@ -641,6 +641,7 @@ impl AstCodeGen {
 
         // First, embed non-virtual base classes as fields (supports multiple inheritance)
         // Base classes must come first to maintain C++ memory layout
+        let mut base_fields = Vec::new();
         let mut base_idx = 0;
         for child in children {
             if let ClangNodeKind::CXXBaseSpecifier { base_type, access, is_virtual, .. } = &child.kind {
@@ -654,6 +655,7 @@ impl AstCodeGen {
                     let field_name = if base_idx == 0 { "__base".to_string() } else { format!("__base{}", base_idx) };
                     self.writeln(&format!("/// Inherited from `{}`", base_name));
                     self.writeln(&format!("pub {}: {},", field_name, base_name));
+                    base_fields.push((field_name, base_type.clone()));
                     base_idx += 1;
                 }
             }
@@ -670,19 +672,26 @@ impl AstCodeGen {
         }
 
         // Then collect derived class fields (skip static fields - they become globals)
+        let mut fields = Vec::new();
         for child in children {
             if let ClangNodeKind::FieldDecl { name: field_name, ty, is_static, .. } = &child.kind {
                 if *is_static {
                     continue; // Static fields handled separately
                 }
-                let field_name = if field_name.is_empty() {
+                let sanitized_name = if field_name.is_empty() {
                     "_field".to_string()
                 } else {
                     sanitize_identifier(field_name)
                 };
-                self.writeln(&format!("pub {}: {},", field_name, ty.to_rust_type_str()));
+                self.writeln(&format!("pub {}: {},", sanitized_name, ty.to_rust_type_str()));
+                fields.push((sanitized_name, ty.clone()));
             }
         }
+
+        // Store field info for constructor generation (including base fields)
+        let mut all_fields = base_fields;
+        all_fields.extend(fields);
+        self.class_fields.insert(name.to_string(), all_fields);
 
         self.indent -= 1;
         self.writeln("}");
@@ -1787,9 +1796,9 @@ impl AstCodeGen {
                 };
 
                 // Special handling for operators that have const/non-const overloads
-                // Skip the const version - only generate the mutable one (Rust borrow rules handle immutability)
-                let skip_method = (name == "operator*" && params.is_empty() && !is_mutable_method) ||
-                                  (name == "operator->" && !is_mutable_method);
+                // Skip the const version of operator* - only generate the mutable one
+                // Note: operator-> always returns a pointer (not reference), so we don't skip it
+                let skip_method = name == "operator*" && params.is_empty() && !is_mutable_method;
 
                 if skip_method {
                     self.current_class = old_class;
@@ -1942,8 +1951,12 @@ impl AstCodeGen {
                     self.indent += 1;
                     self.writeln("Self {");
                     self.indent += 1;
+
+                    let mut initialized_vbase: std::collections::HashSet<String> = std::collections::HashSet::new();
+
                     for (field_name, base_call) in &base_inits {
                         self.writeln(&format!("{}: {},", field_name, base_call));
+                        initialized_vbase.insert(field_name.clone());
                     }
                     let vbases_internal = self.virtual_bases.get(struct_name).cloned().unwrap_or_default();
                     for vb in &vbases_internal {
@@ -1951,11 +1964,24 @@ impl AstCodeGen {
                         let storage = self.virtual_base_storage_field_name(vb);
                         self.writeln(&format!("{}: std::ptr::null_mut(),", field));
                         self.writeln(&format!("{}: None,", storage));
+                        initialized_vbase.insert(field);
+                        initialized_vbase.insert(storage);
                     }
                     for (field, value) in &initializers {
-                        self.writeln(&format!("{}: {},", sanitize_identifier(field), value));
+                        let sanitized = sanitize_identifier(field);
+                        self.writeln(&format!("{}: {},", sanitized, value));
+                        initialized_vbase.insert(sanitized);
                     }
-                    self.writeln("..Default::default()");
+
+                    // Generate default values for uninitialized fields
+                    let all_fields_vbase = self.class_fields.get(struct_name).cloned().unwrap_or_default();
+                    for (field_name, field_type) in &all_fields_vbase {
+                        if !initialized_vbase.contains(field_name) {
+                            let default_val = default_value_for_type(field_type);
+                            self.writeln(&format!("{}: {},", field_name, default_val));
+                        }
+                    }
+
                     self.indent -= 1;
                     self.writeln("}");
                     self.indent -= 1;
@@ -2019,17 +2045,32 @@ impl AstCodeGen {
                         self.writeln("Self {");
                     }
                     self.indent += 1;
+
+                    // Collect initialized field names
+                    let mut initialized: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+                    // Generate base class initializers
                     for (field_name, base_call) in &base_inits {
                         self.writeln(&format!("{}: {},", field_name, base_call));
+                        initialized.insert(field_name.clone());
                     }
                     // Generate field initializers
                     for (field, value) in &initializers {
-                        self.writeln(&format!("{}: {},", sanitize_identifier(field), value));
+                        let sanitized = sanitize_identifier(field);
+                        self.writeln(&format!("{}: {},", sanitized, value));
+                        initialized.insert(sanitized);
                     }
-                    // Always add ..Default::default() to handle base class fields and any
-                    // uninitialized fields. This is simpler and more robust than tracking
-                    // every field including inherited ones.
-                    self.writeln("..Default::default()");
+
+                    // Generate default values for uninitialized fields
+                    // This avoids using ..Default::default() which can cause issues with Drop
+                    let all_fields = self.class_fields.get(struct_name).cloned().unwrap_or_default();
+                    for (field_name, field_type) in &all_fields {
+                        if !initialized.contains(field_name) {
+                            let default_val = default_value_for_type(field_type);
+                            self.writeln(&format!("{}: {},", field_name, default_val));
+                        }
+                    }
+
                     self.indent -= 1;
 
                     if has_non_member_stmts {
@@ -3404,11 +3445,13 @@ impl AstCodeGen {
                                     format!("unsafe {{ (*(*{}).{}).{} }}", base, field, member)
                                 }
                                 BaseAccess::DirectField(field) | BaseAccess::FieldChain(field) => {
-                                    format!("(*{}).{}.{}", base, field, member)
+                                    // Dereferencing raw pointers requires unsafe
+                                    format!("unsafe {{ (*{}).{}.{} }}", base, field, member)
                                 }
                             }
                         } else {
-                            format!("(*{}).{}", base, member)
+                            // Dereferencing raw pointers requires unsafe
+                            format!("unsafe {{ (*{}).{} }}", base, member)
                         }
                     } else {
                         if needs_base_access {
