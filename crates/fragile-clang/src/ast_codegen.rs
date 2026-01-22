@@ -978,6 +978,20 @@ impl AstCodeGen {
         None
     }
 
+    /// Check if a node is a function reference (DeclRefExpr with Function type).
+    fn is_function_reference(node: &ClangNode) -> bool {
+        match &node.kind {
+            ClangNodeKind::DeclRefExpr { ty, .. } => {
+                matches!(ty, CppType::Function { .. })
+            }
+            ClangNodeKind::Unknown(_) | ClangNodeKind::ImplicitCastExpr { .. } => {
+                // Look through wrapper nodes
+                node.children.iter().any(|c| Self::is_function_reference(c))
+            }
+            _ => false,
+        }
+    }
+
     /// Recursively find an operator name in a node tree.
     fn find_operator_name(node: &ClangNode) -> Option<String> {
         match &node.kind {
@@ -1799,35 +1813,50 @@ impl AstCodeGen {
                         format!("{}.{}()", left_operand, method_name)
                     }
                 } else if let CppType::Named(struct_name) = ty {
-                    // Constructor call: all children are arguments (but skip TypeRef nodes)
-                    // For copy constructors (1 argument of same type), pass by reference
-                    let args: Vec<String> = node.children.iter()
-                        .filter(|c| {
-                            // Skip TypeRef nodes (they're type references, not arguments)
-                            if let ClangNodeKind::Unknown(s) = &c.kind {
-                                if s.starts_with("TypeRef:") || s == "TypeRef" {
-                                    return false;
+                    // Check if this is a function call (not a constructor)
+                    // A function call has a DeclRefExpr child with Function type
+                    let is_function_call = node.children.iter().any(|c| {
+                        Self::is_function_reference(c)
+                    });
+
+                    if is_function_call && !node.children.is_empty() {
+                        // Regular function call that returns a struct
+                        let func = self.expr_to_string(&node.children[0]);
+                        let args: Vec<String> = node.children[1..].iter()
+                            .map(|c| self.expr_to_string(c))
+                            .collect();
+                        format!("{}({})", func, args.join(", "))
+                    } else {
+                        // Constructor call: all children are arguments (but skip TypeRef nodes)
+                        // For copy constructors (1 argument of same type), pass by reference
+                        let args: Vec<String> = node.children.iter()
+                            .filter(|c| {
+                                // Skip TypeRef nodes (they're type references, not arguments)
+                                if let ClangNodeKind::Unknown(s) = &c.kind {
+                                    if s.starts_with("TypeRef:") || s == "TypeRef" {
+                                        return false;
+                                    }
                                 }
-                            }
-                            true
-                        })
-                        .map(|c| {
-                            let arg_str = self.expr_to_string(c);
-                            // Check if this is a copy constructor call (arg type matches struct)
-                            let arg_type = Self::get_expr_type(c);
-                            let arg_class = Self::extract_class_name(&arg_type);
-                            if let Some(name) = arg_class {
-                                if name == *struct_name {
-                                    // Pass by reference for copy constructor
-                                    return format!("&{}", arg_str);
+                                true
+                            })
+                            .map(|c| {
+                                let arg_str = self.expr_to_string(c);
+                                // Check if this is a copy constructor call (arg type matches struct)
+                                let arg_type = Self::get_expr_type(c);
+                                let arg_class = Self::extract_class_name(&arg_type);
+                                if let Some(name) = arg_class {
+                                    if name == *struct_name {
+                                        // Pass by reference for copy constructor
+                                        return format!("&{}", arg_str);
+                                    }
                                 }
-                            }
-                            arg_str
-                        })
-                        .collect();
-                    let num_args = args.len();
-                    // Always use StructName::new_N(args) to ensure custom constructor bodies run
-                    format!("{}::new_{}({})", struct_name, num_args, args.join(", "))
+                                arg_str
+                            })
+                            .collect();
+                        let num_args = args.len();
+                        // Always use StructName::new_N(args) to ensure custom constructor bodies run
+                        format!("{}::new_{}({})", struct_name, num_args, args.join(", "))
+                    }
                 } else if !node.children.is_empty() {
                     // Regular function call: first child is the function reference, rest are arguments
                     let func = self.expr_to_string(&node.children[0]);
@@ -1997,16 +2026,49 @@ impl AstCodeGen {
             ClangNodeKind::CastExpr { ty, cast_kind } => {
                 // Explicit C++ casts: static_cast, reinterpret_cast, const_cast, C-style
                 if !node.children.is_empty() {
+                    // Check for functional cast to Named type (like Widget(v))
+                    // This is a constructor call, just pass through
+                    if let CppType::Named(_) = ty {
+                        if *cast_kind == CastKind::Other {
+                            // This is likely a CXXFunctionalCastExpr (constructor syntax)
+                            // Find the CallExpr among children (skip TypeRef nodes)
+                            for child in &node.children {
+                                if matches!(&child.kind, ClangNodeKind::CallExpr { .. }) {
+                                    return self.expr_to_string(child);
+                                }
+                                // Also check through Unknown wrappers
+                                if let ClangNodeKind::Unknown(s) = &child.kind {
+                                    if !s.starts_with("TypeRef") {
+                                        return self.expr_to_string(child);
+                                    }
+                                }
+                            }
+                            // Fallback to first non-TypeRef child
+                            for child in &node.children {
+                                if let ClangNodeKind::Unknown(s) = &child.kind {
+                                    if s.starts_with("TypeRef") {
+                                        continue;
+                                    }
+                                }
+                                return self.expr_to_string(child);
+                            }
+                        }
+                    }
+
                     let inner = self.expr_to_string(&node.children[0]);
                     let rust_type = ty.to_rust_type_str();
                     match cast_kind {
-                        CastKind::Static | CastKind::Reinterpret | CastKind::Other => {
+                        CastKind::Static | CastKind::Reinterpret => {
                             // Generate Rust "as" cast
                             format!("{} as {}", inner, rust_type)
                         }
                         CastKind::Const => {
                             // const_cast usually just changes mutability, pass through
                             inner
+                        }
+                        CastKind::Other => {
+                            // For other cast kinds (primitive types), generate as cast
+                            format!("{} as {}", inner, rust_type)
                         }
                         _ => {
                             // For other cast kinds, generate as cast

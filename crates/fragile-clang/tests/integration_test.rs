@@ -935,3 +935,33 @@ fn test_e2e_dynamic_dispatch() {
 
     assert_eq!(exit_code, 0, "Dynamic dispatch should correctly call derived class methods");
 }
+
+/// Test function returning struct (rvalue handling).
+#[test]
+fn test_e2e_function_returning_struct() {
+    let source = r#"
+        class Widget {
+            int value;
+        public:
+            Widget(int v) : value(v) {}
+            int getValue() const { return value; }
+        };
+
+        Widget createWidget(int v) {
+            return Widget(v);
+        }
+
+        int main() {
+            Widget w = createWidget(42);
+            if (w.getValue() == 42) {
+                return 0;
+            }
+            return 1;
+        }
+    "#;
+
+    let (exit_code, _stdout, _stderr) = transpile_compile_run(source, "e2e_function_returning_struct.cpp")
+        .expect("E2E test failed");
+
+    assert_eq!(exit_code, 0, "Function returning struct should work correctly");
+}

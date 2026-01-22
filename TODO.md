@@ -14,7 +14,7 @@ We just convert the fully-resolved AST to equivalent Rust code.
 ## Current Status
 
 **Grammar Tests**: 20/20 passing
-**E2E Tests**: 30/30 passing
+**E2E Tests**: 31/31 passing
 
 **Working**:
 - Simple functions with control flow (if/else, while, for, do-while, recursion)
@@ -159,7 +159,7 @@ See `docs/transpiler-status.md` for detailed feature matrix.
 - Function templates (via Clang instantiation)
 
 ### Partial Support
-- Rvalue references (parsed, codegen incomplete)
+- Rvalue references (parsed, basic return-by-value works)
 - Inheritance (single inheritance works, no multiple inheritance)
 
 ### Not Yet Supported

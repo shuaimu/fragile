@@ -602,7 +602,7 @@ pub enum UnaryOp {
 }
 
 /// Cast kinds.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CastKind {
     /// No-op cast (e.g., const removal for value)
     NoOp,
