@@ -6,7 +6,7 @@
 
 use crate::ast::{ClangNode, ClangNodeKind, BinaryOp, UnaryOp, CastKind, ConstructorKind};
 use crate::types::CppType;
-use std::collections::HashSet;
+use std::collections::{HashSet, HashMap};
 
 /// Rust reserved keywords that need raw identifier syntax.
 const RUST_KEYWORDS: &[&str] = &[
@@ -18,6 +18,15 @@ const RUST_KEYWORDS: &[&str] = &[
     "abstract", "become", "box", "do", "final", "macro", "override",
     "priv", "try", "typeof", "unsized", "virtual", "yield",
 ];
+
+/// Information about a virtual method for trait generation.
+#[derive(Clone)]
+struct VirtualMethodInfo {
+    name: String,
+    return_type: CppType,
+    params: Vec<(String, CppType)>,
+    is_const: bool,
+}
 
 /// Rust code generator that works directly with Clang AST.
 pub struct AstCodeGen {
@@ -33,6 +42,12 @@ pub struct AstCodeGen {
     skip_literal_suffix: bool,
     /// Current class being generated (for inherited member access)
     current_class: Option<String>,
+    /// Classes that have virtual methods (need trait generation)
+    polymorphic_classes: HashSet<String>,
+    /// Map from class name to its base class name (for single inheritance)
+    class_bases: HashMap<String, String>,
+    /// Map from class name to its virtual methods
+    virtual_methods: HashMap<String, Vec<VirtualMethodInfo>>,
 }
 
 impl AstCodeGen {
@@ -45,11 +60,19 @@ impl AstCodeGen {
             arr_vars: HashSet::new(),
             skip_literal_suffix: false,
             current_class: None,
+            polymorphic_classes: HashSet::new(),
+            class_bases: HashMap::new(),
+            virtual_methods: HashMap::new(),
         }
     }
 
     /// Generate Rust source code from a Clang AST.
     pub fn generate(mut self, ast: &ClangNode) -> String {
+        // First pass: collect polymorphic class information
+        if let ClangNodeKind::TranslationUnit = &ast.kind {
+            self.collect_polymorphic_info(&ast.children);
+        }
+
         // File header
         self.writeln("#![allow(dead_code)]");
         self.writeln("#![allow(unused_variables)]");
@@ -58,7 +81,7 @@ impl AstCodeGen {
         self.writeln("#![allow(non_snake_case)]");
         self.writeln("");
 
-        // Process translation unit
+        // Second pass: generate code
         if let ClangNodeKind::TranslationUnit = &ast.kind {
             for child in &ast.children {
                 self.generate_top_level(child);
@@ -66,6 +89,67 @@ impl AstCodeGen {
         }
 
         self.output
+    }
+
+    /// First pass: collect information about polymorphic classes.
+    fn collect_polymorphic_info(&mut self, children: &[ClangNode]) {
+        for child in children {
+            match &child.kind {
+                ClangNodeKind::RecordDecl { name, .. } => {
+                    self.analyze_class(name, &child.children);
+                }
+                ClangNodeKind::NamespaceDecl { .. } => {
+                    // Recurse into namespaces
+                    self.collect_polymorphic_info(&child.children);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Analyze a class for virtual methods and inheritance.
+    fn analyze_class(&mut self, class_name: &str, children: &[ClangNode]) {
+        let mut virtual_methods = Vec::new();
+        let mut base_class: Option<String> = None;
+
+        for child in children {
+            match &child.kind {
+                ClangNodeKind::CXXMethodDecl {
+                    name, return_type, params, is_virtual, ..
+                } => {
+                    if *is_virtual {
+                        virtual_methods.push(VirtualMethodInfo {
+                            name: name.clone(),
+                            return_type: return_type.clone(),
+                            params: params.clone(),
+                            is_const: false, // TODO: track const-ness
+                        });
+                    }
+                }
+                ClangNodeKind::CXXBaseSpecifier { base_type, .. } => {
+                    // Extract base class name
+                    if let CppType::Named(base_name) = base_type {
+                        base_class = Some(base_name.clone());
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // If this class has virtual methods, mark it as polymorphic
+        if !virtual_methods.is_empty() {
+            self.polymorphic_classes.insert(class_name.to_string());
+            self.virtual_methods.insert(class_name.to_string(), virtual_methods);
+        }
+
+        // Record inheritance relationship
+        if let Some(base) = base_class {
+            self.class_bases.insert(class_name.to_string(), base.clone());
+            // If base class is polymorphic, this class is too
+            if self.polymorphic_classes.contains(&base) {
+                self.polymorphic_classes.insert(class_name.to_string());
+            }
+        }
     }
 
     /// Generate Rust stubs (signatures only, no bodies) from a Clang AST.
@@ -259,9 +343,12 @@ impl AstCodeGen {
             }
         }
 
-        // Function signature
+        // Function signature - convert polymorphic pointers to trait objects
         let params_str = params.iter()
-            .map(|(n, t)| format!("{}: {}", sanitize_identifier(n), t.to_rust_type_str()))
+            .map(|(n, t)| {
+                let type_str = self.convert_type_for_polymorphism(t);
+                format!("{}: {}", sanitize_identifier(n), type_str)
+            })
             .collect::<Vec<_>>()
             .join(", ");
 
@@ -408,7 +495,146 @@ impl AstCodeGen {
             }
         }
 
+        // Generate trait for polymorphic base classes
+        // Only generate trait if this class declares virtual methods AND is not a derived class
+        let is_base_class = !self.class_bases.contains_key(name);
+        if is_base_class && self.polymorphic_classes.contains(name) {
+            if let Some(methods) = self.virtual_methods.get(name).cloned() {
+                self.generate_trait_for_class(name, &methods);
+                self.generate_trait_impl(name, name, &methods, children);
+            }
+        }
+
+        // If this class derives from a polymorphic base, implement the base's trait
+        if let Some(base_name) = self.class_bases.get(name).cloned() {
+            if self.polymorphic_classes.contains(&base_name) {
+                if let Some(methods) = self.virtual_methods.get(&base_name).cloned() {
+                    self.generate_trait_impl(name, &base_name, &methods, children);
+                }
+            }
+        }
+
         self.writeln("");
+    }
+
+    /// Generate a trait for a polymorphic class.
+    fn generate_trait_for_class(&mut self, name: &str, methods: &[VirtualMethodInfo]) {
+        self.writeln("");
+        self.writeln(&format!("/// Trait for polymorphic dispatch of `{}`", name));
+        self.writeln(&format!("pub trait {}Trait {{", name));
+        self.indent += 1;
+
+        for method in methods {
+            let method_name = sanitize_identifier(&method.name);
+            let return_type = method.return_type.to_rust_type_str();
+
+            // Build parameter list (skip first param which is self)
+            let params: Vec<String> = method.params.iter()
+                .map(|(pname, ptype)| format!("{}: {}", sanitize_identifier(pname), ptype.to_rust_type_str()))
+                .collect();
+
+            let params_str = if params.is_empty() {
+                "&self".to_string()
+            } else {
+                format!("&self, {}", params.join(", "))
+            };
+
+            if return_type == "()" {
+                self.writeln(&format!("fn {}({});", method_name, params_str));
+            } else {
+                self.writeln(&format!("fn {}({}) -> {};", method_name, params_str, return_type));
+            }
+        }
+
+        self.indent -= 1;
+        self.writeln("}");
+    }
+
+    /// Generate trait implementation for a class.
+    fn generate_trait_impl(&mut self, class_name: &str, trait_class: &str, methods: &[VirtualMethodInfo], children: &[ClangNode]) {
+        self.writeln("");
+        self.writeln(&format!("impl {}Trait for {} {{", trait_class, class_name));
+        self.indent += 1;
+
+        for method in methods {
+            let method_name = sanitize_identifier(&method.name);
+            let return_type = method.return_type.to_rust_type_str();
+
+            // Build parameter list
+            let params: Vec<String> = method.params.iter()
+                .map(|(pname, ptype)| format!("{}: {}", sanitize_identifier(pname), ptype.to_rust_type_str()))
+                .collect();
+
+            let params_str = if params.is_empty() {
+                "&self".to_string()
+            } else {
+                format!("&self, {}", params.join(", "))
+            };
+
+            // Check if this class has an override for this method
+            let has_override = children.iter().any(|c| {
+                matches!(&c.kind, ClangNodeKind::CXXMethodDecl { name, is_definition: true, .. }
+                    if name == &method.name)
+            });
+
+            if return_type == "()" {
+                self.writeln(&format!("fn {}({}) {{", method_name, params_str));
+            } else {
+                self.writeln(&format!("fn {}({}) -> {} {{", method_name, params_str, return_type));
+            }
+            self.indent += 1;
+
+            if has_override || class_name == trait_class {
+                // Call the actual method on self
+                let args: Vec<String> = method.params.iter()
+                    .map(|(pname, _)| sanitize_identifier(pname))
+                    .collect();
+                if args.is_empty() {
+                    self.writeln(&format!("self.{}()", method_name));
+                } else {
+                    self.writeln(&format!("self.{}({})", method_name, args.join(", ")));
+                }
+            } else {
+                // Delegate to base class
+                let args: Vec<String> = method.params.iter()
+                    .map(|(pname, _)| sanitize_identifier(pname))
+                    .collect();
+                if args.is_empty() {
+                    self.writeln(&format!("self.__base.{}()", method_name));
+                } else {
+                    self.writeln(&format!("self.__base.{}({})", method_name, args.join(", ")));
+                }
+            }
+
+            self.indent -= 1;
+            self.writeln("}");
+        }
+
+        self.indent -= 1;
+        self.writeln("}");
+    }
+
+    /// Convert a type to Rust, using trait objects for polymorphic pointers.
+    fn convert_type_for_polymorphism(&self, ty: &CppType) -> String {
+        match ty {
+            CppType::Pointer { pointee, is_const } => {
+                // Check if pointee is a polymorphic class
+                if let CppType::Named(class_name) = pointee.as_ref() {
+                    if self.polymorphic_classes.contains(class_name) {
+                        // Convert to trait object reference
+                        let trait_name = format!("{}Trait", class_name);
+                        return if *is_const {
+                            format!("&dyn {}", trait_name)
+                        } else {
+                            format!("&mut dyn {}", trait_name)
+                        };
+                    }
+                }
+                // Not polymorphic, use regular pointer type
+                ty.to_rust_type_str()
+            }
+            _ => ty.to_rust_type_str(),
+        }
     }
 
     /// Check if a method modifies self (has assignments to member fields).
@@ -1285,6 +1511,19 @@ impl AstCodeGen {
                         UnaryOp::LNot => format!("!{}", operand),
                         UnaryOp::Not => format!("!{}", operand),
                         UnaryOp::AddrOf => {
+                            // Check if this is a pointer to a polymorphic class
+                            if let CppType::Pointer { pointee, is_const } = ty {
+                                if let CppType::Named(class_name) = pointee.as_ref() {
+                                    if self.polymorphic_classes.contains(class_name) {
+                                        // For polymorphic types, just return reference
+                                        return if *is_const {
+                                            format!("&{}", operand)
+                                        } else {
+                                            format!("&mut {}", operand)
+                                        };
+                                    }
+                                }
+                            }
                             let rust_ty = ty.to_rust_type_str();
                             if rust_ty.starts_with("*mut ") {
                                 format!("&mut {} as {}", operand, rust_ty)
@@ -1508,7 +1747,20 @@ impl AstCodeGen {
                         UnaryOp::LNot => format!("!{}", operand),
                         UnaryOp::Not => format!("!{}", operand),  // bitwise not ~ in C++
                         UnaryOp::AddrOf => {
-                            // For C++ pointers, cast reference to raw pointer
+                            // Check if this is a pointer to a polymorphic class
+                            if let CppType::Pointer { pointee, is_const } = ty {
+                                if let CppType::Named(class_name) = pointee.as_ref() {
+                                    if self.polymorphic_classes.contains(class_name) {
+                                        // For polymorphic types, just return reference (no cast needed)
+                                        return if *is_const {
+                                            format!("&{}", operand)
+                                        } else {
+                                            format!("&mut {}", operand)
+                                        };
+                                    }
+                                }
+                            }
+                            // For regular C++ pointers, cast reference to raw pointer
                             let rust_ty = ty.to_rust_type_str();
                             if rust_ty.starts_with("*mut ") {
                                 format!("&mut {} as {}", operand, rust_ty)
@@ -1649,7 +1901,26 @@ impl AstCodeGen {
 
                     let member = sanitize_identifier(member_name);
                     if *is_arrow {
-                        if needs_base_access {
+                        // Check if this is a trait object (polymorphic pointer)
+                        // Trait objects are already references, so no dereference needed
+                        let is_trait_object = if let Some(ref ty) = base_type {
+                            if let CppType::Pointer { pointee, .. } = ty {
+                                if let CppType::Named(class_name) = pointee.as_ref() {
+                                    self.polymorphic_classes.contains(class_name)
+                                } else {
+                                    false
+                                }
+                            } else {
+                                false
+                            }
+                        } else {
+                            false
+                        };
+
+                        if is_trait_object {
+                            // For trait objects, no dereference - call method directly
+                            format!("{}.{}", base, member)
+                        } else if needs_base_access {
                             format!("(*{}).__base.{}", base, member)
                         } else {
                             format!("(*{}).{}", base, member)

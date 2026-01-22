@@ -14,7 +14,7 @@ We just convert the fully-resolved AST to equivalent Rust code.
 ## Current Status
 
 **Grammar Tests**: 20/20 passing
-**E2E Tests**: 29/29 passing
+**E2E Tests**: 30/30 passing
 
 **Working**:
 - Simple functions with control flow (if/else, while, for, do-while, recursion)
@@ -39,6 +39,7 @@ We just convert the fully-resolved AST to equivalent Rust code.
 - Inherited field access via `__base`
 - Base class constructor delegation in derived constructors
 - Operator overloading (binary operators like +, ==, etc.)
+- Dynamic dispatch (polymorphism through base pointers via trait objects)
 - STL smart pointer type mappings (unique_ptr→Box, shared_ptr→Arc, weak_ptr→Weak)
 
 **CLI**:
@@ -77,7 +78,7 @@ crates/
 - [x] **3.3.1** Parse virtual methods in classes
 - [x] **3.3.2** Generate vtable struct for each class with virtuals
 - [x] **3.3.3** Add vtable pointer field to class struct
-- [ ] **3.3.4** Dynamic dispatch via vtable lookup (requires trait objects for polymorphism)
+- [x] **3.3.4** Dynamic dispatch via trait objects for polymorphism
 - [x] **3.1** Single inheritance (embed base as first field, member access through `__base`)
 - [x] **3.2** Virtual method override resolution (static dispatch, inherited field access via `__base`)
 - [x] **3.3** Destructor → `Drop` trait
@@ -159,12 +160,10 @@ See `docs/transpiler-status.md` for detailed feature matrix.
 
 ### Partial Support
 - Rvalue references (parsed, codegen incomplete)
-- Virtual methods (static dispatch works, dynamic dispatch via trait objects not implemented)
 - Inheritance (single inheritance works, no multiple inheritance)
 
 ### Not Yet Supported
 - Multiple inheritance
-- Dynamic dispatch (polymorphism through base pointers)
 
 ---
 

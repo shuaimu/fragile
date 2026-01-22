@@ -894,3 +894,44 @@ fn test_e2e_operator_overloading() {
 
     assert_eq!(exit_code, 0, "Operator overloading should work correctly");
 }
+
+/// Test dynamic dispatch (virtual method polymorphism).
+#[test]
+fn test_e2e_dynamic_dispatch() {
+    let source = r#"
+        class Animal {
+        public:
+            virtual int speak() { return 1; }
+        };
+
+        class Dog : public Animal {
+        public:
+            int speak() override { return 2; }
+        };
+
+        class Cat : public Animal {
+        public:
+            int speak() override { return 3; }
+        };
+
+        int callSpeak(Animal* a) {
+            return a->speak();
+        }
+
+        int main() {
+            Dog d;
+            Cat c;
+            // Dynamic dispatch: should call Dog::speak() and Cat::speak()
+            int result = callSpeak(&d) + callSpeak(&c);
+            if (result == 5) {
+                return 0;
+            }
+            return 1;
+        }
+    "#;
+
+    let (exit_code, _stdout, _stderr) = transpile_compile_run(source, "e2e_dynamic_dispatch.cpp")
+        .expect("E2E test failed");
+
+    assert_eq!(exit_code, 0, "Dynamic dispatch should correctly call derived class methods");
+}
