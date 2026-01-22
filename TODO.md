@@ -14,7 +14,7 @@ We just convert the fully-resolved AST to equivalent Rust code.
 ## Current Status
 
 **Grammar Tests**: 20/20 passing
-**E2E Tests**: 55/55 passing
+**E2E Tests**: 56/56 passing
 
 **Working**:
 - Simple functions with control flow (if/else, while, for, do-while, switch, recursion)
@@ -63,6 +63,9 @@ We just convert the fully-resolved AST to equivalent Rust code.
 - Dereference operator * (op_deref → returns &mut, pointer-to-bool via .is_null())
 - Arrow operator -> (op_arrow method → pointer dereference with unsafe block)
 - sizeof/alignof (evaluated at compile time by Clang)
+- String literals (const char* → b"...\0".as_ptr() as *const i8)
+- Character literals ('a' → 65i8 with proper type)
+- Implicit type casts (char→int, int→long, etc. via `as` casts)
 
 **CLI**:
 ```bash

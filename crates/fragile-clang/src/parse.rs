@@ -1011,6 +1011,23 @@ impl ClangParser {
                     ClangNodeKind::IntegerLiteral { value, cpp_type }
                 }
 
+                clang_sys::CXCursor_CharacterLiteral => {
+                    // Character literals like 'a' - evaluate to get the ASCII value
+                    let eval = clang_sys::clang_Cursor_Evaluate(cursor);
+                    let value = if eval.is_null() {
+                        0i128
+                    } else {
+                        let result = clang_sys::clang_EvalResult_getAsLongLong(eval) as i128;
+                        clang_sys::clang_EvalResult_dispose(eval);
+                        result
+                    };
+
+                    // In C++, character literals have type 'char' (i8 in Rust)
+                    let cpp_type = Some(CppType::Char { signed: true });
+
+                    ClangNodeKind::IntegerLiteral { value, cpp_type }
+                }
+
                 clang_sys::CXCursor_FloatingLiteral => {
                     let eval = clang_sys::clang_Cursor_Evaluate(cursor);
                     let value = if !eval.is_null() {
@@ -1257,6 +1274,9 @@ impl ClangParser {
                     } else if let Some(eval_kind) = self.try_evaluate_expr(cursor) {
                         // Try to evaluate the expression (for default arguments, etc.)
                         eval_kind
+                    } else if let Some(implicit_cast) = self.try_parse_implicit_cast(cursor) {
+                        // Try to detect implicit casts
+                        implicit_cast
                     } else {
                         // Fall back to Unknown for non-coroutine unexposed expressions
                         let kind_spelling = clang_sys::clang_getCursorKindSpelling(kind);
@@ -1887,6 +1907,104 @@ impl ClangParser {
 
             clang_sys::clang_EvalResult_dispose(eval_result);
             result
+        }
+    }
+
+    /// Try to detect an implicit cast from an UnexposedExpr.
+    /// libclang often exposes implicit casts as UnexposedExpr.
+    /// We detect them by comparing the expression type with its child's type.
+    fn try_parse_implicit_cast(&self, cursor: clang_sys::CXCursor) -> Option<ClangNodeKind> {
+        unsafe {
+            // Get the type of this expression
+            let expr_ty = clang_sys::clang_getCursorType(cursor);
+            let expr_type = self.convert_type(expr_ty);
+
+            // Check if this cursor has exactly one child (typical for implicit casts)
+            struct ChildInfo {
+                count: usize,
+                child_ty: Option<CppType>,
+                parser: *const ClangParser,
+            }
+
+            extern "C" fn count_children(
+                child: clang_sys::CXCursor,
+                _parent: clang_sys::CXCursor,
+                data: clang_sys::CXClientData,
+            ) -> clang_sys::CXChildVisitResult {
+                unsafe {
+                    let info = &mut *(data as *mut ChildInfo);
+                    info.count += 1;
+                    if info.count == 1 {
+                        // Get the type of the first child
+                        let child_ty = clang_sys::clang_getCursorType(child);
+                        let parser = &*info.parser;
+                        info.child_ty = Some(parser.convert_type(child_ty));
+                    }
+                    clang_sys::CXChildVisit_Continue
+                }
+            }
+
+            let mut info = ChildInfo {
+                count: 0,
+                child_ty: None,
+                parser: self as *const ClangParser,
+            };
+
+            clang_sys::clang_visitChildren(
+                cursor,
+                count_children,
+                &mut info as *mut ChildInfo as clang_sys::CXClientData,
+            );
+
+            // Only treat as implicit cast if there's exactly one child with a different type
+            if info.count == 1 {
+                if let Some(child_type) = info.child_ty {
+                    // Check if the types differ and need a cast
+                    let needs_cast = match (&expr_type, &child_type) {
+                        // Integral to integral (char to int, short to long, etc.)
+                        (CppType::Int { .. }, CppType::Char { .. }) |
+                        (CppType::Int { .. }, CppType::Short { .. }) |
+                        (CppType::Long { .. }, CppType::Int { .. }) |
+                        (CppType::Long { .. }, CppType::Short { .. }) |
+                        (CppType::Long { .. }, CppType::Char { .. }) |
+                        (CppType::LongLong { .. }, CppType::Int { .. }) |
+                        (CppType::LongLong { .. }, CppType::Long { .. }) => {
+                            Some(CastKind::IntegralCast)
+                        }
+                        // Floating to floating
+                        (CppType::Double, CppType::Float) |
+                        (CppType::Float, CppType::Double) => {
+                            Some(CastKind::FloatingCast)
+                        }
+                        // Integral to floating
+                        (CppType::Float, CppType::Int { .. }) |
+                        (CppType::Float, CppType::Long { .. }) |
+                        (CppType::Float, CppType::Char { .. }) |
+                        (CppType::Double, CppType::Int { .. }) |
+                        (CppType::Double, CppType::Long { .. }) |
+                        (CppType::Double, CppType::Char { .. }) => {
+                            Some(CastKind::IntegralToFloating)
+                        }
+                        // Floating to integral
+                        (CppType::Int { .. }, CppType::Float) |
+                        (CppType::Int { .. }, CppType::Double) |
+                        (CppType::Long { .. }, CppType::Float) |
+                        (CppType::Long { .. }, CppType::Double) => {
+                            Some(CastKind::FloatingToIntegral)
+                        }
+                        _ => None,
+                    };
+
+                    if let Some(cast_kind) = needs_cast {
+                        return Some(ClangNodeKind::ImplicitCastExpr {
+                            cast_kind,
+                            ty: expr_type,
+                        });
+                    }
+                }
+            }
+
+            None
         }
     }
 

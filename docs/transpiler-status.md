@@ -128,7 +128,7 @@ C++ Source → Clang (libclang) → Clang AST → Rust Source → rustc → Bina
 | Integer literals | ✅ | With type suffix |
 | Float literals | ✅ | With type suffix |
 | Bool literals | ✅ | |
-| String literals | ⚠️ | Basic support |
+| String literals | ✅ | `b"...\0".as_ptr() as *const i8` |
 | Char literals | ✅ | |
 | Binary operators (+, -, *, /, %) | ✅ | |
 | Comparison operators | ✅ | |
@@ -142,6 +142,7 @@ C++ Source → Clang (libclang) → Clang AST → Rust Source → rustc → Bina
 | `sizeof` | ✅ | Evaluated by Clang at compile time |
 | `alignof` | ✅ | Evaluated by Clang at compile time |
 | Type casts | ✅ | `static_cast`, `reinterpret_cast`, `const_cast` |
+| Implicit casts | ✅ | Detected and generated as `as` casts |
 | Pointer arithmetic | ✅ | `.add()`, `.sub()` methods |
 
 ## Statements
@@ -272,7 +273,7 @@ C++ Source → Clang (libclang) → Clang AST → Rust Source → rustc → Bina
 | Feature | Status | Notes |
 |---------|--------|-------|
 | Grammar tests | ✅ | 20/20 passing |
-| E2E tests | ✅ | 55/55 passing |
+| E2E tests | ✅ | 56/56 passing |
 | Compile generated code | ✅ | Automatically verified |
 | Run generated code | ✅ | Exit codes verified |
 
@@ -288,7 +289,7 @@ C++ Source → Clang (libclang) → Clang AST → Rust Source → rustc → Bina
 - Pointers, references, arrays
 - Ternary operator, nested structs
 
-### E2E Tests (55/55)
+### E2E Tests (56/56)
 - Simple functions, factorial, arrays
 - Pointers, references
 - Constructors, destructors (Drop trait)
@@ -309,6 +310,8 @@ C++ Source → Clang (libclang) → Clang AST → Rust Source → rustc → Bina
 - Pointer arithmetic
 - Type aliases
 - sizeof/alignof operators
+- String literals and char literals
+- Implicit type casts (char→int, etc.)
 
 ---
 

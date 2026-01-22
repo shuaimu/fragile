@@ -1766,3 +1766,34 @@ fn test_e2e_sizeof_alignof() {
 
     assert_eq!(exit_code, 0, "sizeof and alignof should be evaluated at compile time");
 }
+
+/// Test string literals and implicit char-to-int casts.
+#[test]
+fn test_e2e_string_literals_and_char_casts() {
+    let source = r#"
+        int main() {
+            // String literals assigned to const char*
+            const char* s1 = "hello";
+            const char* s2 = "world";
+
+            // Access characters through pointer
+            if (s1[0] != 'h') return 1;
+            if (s2[0] != 'w') return 2;
+
+            // Character literals and implicit casts
+            char c = 'A';
+            int i = c;  // implicit char to int cast
+            if (i != 65) return 3;
+
+            // Direct character comparisons
+            if (c != 'A') return 4;
+
+            return 0;
+        }
+    "#;
+
+    let (exit_code, _stdout, _stderr) = transpile_compile_run(source, "e2e_string_char.cpp")
+        .expect("E2E test failed");
+
+    assert_eq!(exit_code, 0, "String literals and char casts should work correctly");
+}

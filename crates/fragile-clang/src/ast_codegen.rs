@@ -2740,10 +2740,26 @@ impl AstCodeGen {
                     "/* unary op error */".to_string()
                 }
             }
-            ClangNodeKind::ImplicitCastExpr { .. } => {
-                // Pass through casts
+            ClangNodeKind::ImplicitCastExpr { cast_kind, ty } => {
+                // Handle implicit casts - some need explicit conversion in Rust
                 if !node.children.is_empty() {
-                    self.expr_to_string_raw(&node.children[0])
+                    let inner = self.expr_to_string_raw(&node.children[0]);
+                    match cast_kind {
+                        CastKind::IntegralCast => {
+                            // Need explicit cast for integral conversions
+                            let rust_type = ty.to_rust_type_str();
+                            format!("{} as {}", inner, rust_type)
+                        }
+                        CastKind::FloatingCast | CastKind::IntegralToFloating | CastKind::FloatingToIntegral => {
+                            // Need explicit cast for floating conversions
+                            let rust_type = ty.to_rust_type_str();
+                            format!("{} as {}", inner, rust_type)
+                        }
+                        _ => {
+                            // Most casts pass through (LValueToRValue, ArrayToPointerDecay, etc.)
+                            inner
+                        }
+                    }
                 } else {
                     "/* cast error */".to_string()
                 }
@@ -2787,6 +2803,10 @@ impl AstCodeGen {
             }
             ClangNodeKind::IntegerLiteral { value, cpp_type } => {
                 let suffix = match cpp_type {
+                    Some(CppType::Char { signed: true }) => "i8",
+                    Some(CppType::Char { signed: false }) => "u8",
+                    Some(CppType::Short { signed: true }) => "i16",
+                    Some(CppType::Short { signed: false }) => "u16",
                     Some(CppType::Int { signed: true }) => "i32",
                     Some(CppType::Int { signed: false }) => "u32",
                     Some(CppType::Long { signed: true }) => "i64",
@@ -3027,7 +3047,11 @@ impl AstCodeGen {
                     "/* delete error */".to_string()
                 }
             }
-            ClangNodeKind::StringLiteral(s) => format!("\"{}\"", s.escape_default()),
+            ClangNodeKind::StringLiteral(s) => {
+                // Convert C++ string literal to Rust *const i8 using byte string
+                // "hello" -> b"hello\0".as_ptr() as *const i8
+                format!("b\"{}\\0\".as_ptr() as *const i8", s.escape_default())
+            }
             ClangNodeKind::DeclRefExpr { name, namespace_path, ty, .. } => {
                 if name == "this" {
                     if self.use_ctor_self { "__self".to_string() } else { "self".to_string() }
@@ -3579,10 +3603,26 @@ impl AstCodeGen {
                     "()".to_string()
                 }
             }
-            ClangNodeKind::ImplicitCastExpr { .. } => {
-                // Pass through implicit casts
+            ClangNodeKind::ImplicitCastExpr { cast_kind, ty } => {
+                // Handle implicit casts - some need explicit conversion in Rust
                 if !node.children.is_empty() {
-                    self.expr_to_string(&node.children[0])
+                    let inner = self.expr_to_string(&node.children[0]);
+                    match cast_kind {
+                        CastKind::IntegralCast => {
+                            // Need explicit cast for integral conversions
+                            let rust_type = ty.to_rust_type_str();
+                            format!("{} as {}", inner, rust_type)
+                        }
+                        CastKind::FloatingCast | CastKind::IntegralToFloating | CastKind::FloatingToIntegral => {
+                            // Need explicit cast for floating conversions
+                            let rust_type = ty.to_rust_type_str();
+                            format!("{} as {}", inner, rust_type)
+                        }
+                        _ => {
+                            // Most casts pass through (LValueToRValue, ArrayToPointerDecay, etc.)
+                            inner
+                        }
+                    }
                 } else {
                     "()".to_string()
                 }
