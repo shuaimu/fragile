@@ -507,6 +507,46 @@ impl AstCodeGen {
         }
     }
 
+    /// Extract constructor arguments from a CallExpr or CXXConstructExpr node.
+    fn extract_constructor_args(&self, node: &ClangNode) -> Vec<String> {
+        let mut args = Vec::new();
+        match &node.kind {
+            ClangNodeKind::CallExpr { .. } => {
+                // Arguments are children of the call expression
+                for child in &node.children {
+                    // Skip type references and function references
+                    match &child.kind {
+                        ClangNodeKind::Unknown(s) if s == "TypeRef" => continue,
+                        ClangNodeKind::DeclRefExpr { .. } |
+                        ClangNodeKind::IntegerLiteral { .. } |
+                        ClangNodeKind::FloatingLiteral { .. } |
+                        ClangNodeKind::BoolLiteral(_) |
+                        ClangNodeKind::ImplicitCastExpr { .. } |
+                        ClangNodeKind::BinaryOperator { .. } |
+                        ClangNodeKind::UnaryOperator { .. } => {
+                            args.push(self.expr_to_string(child));
+                        }
+                        _ => {
+                            // Try to convert other expression types
+                            let expr = self.expr_to_string(child);
+                            if !expr.contains("unsupported") && !expr.is_empty() {
+                                args.push(expr);
+                            }
+                        }
+                    }
+                }
+            }
+            // Handle implicit casts wrapping the construct expression
+            ClangNodeKind::ImplicitCastExpr { .. } => {
+                if !node.children.is_empty() {
+                    return self.extract_constructor_args(&node.children[0]);
+                }
+            }
+            _ => {}
+        }
+        args
+    }
+
     /// Check if a node is a pointer dereference (possibly wrapped in casts).
     fn is_pointer_deref(node: &ClangNode) -> bool {
         match &node.kind {
@@ -736,10 +776,12 @@ impl AstCodeGen {
                 self.writeln(&format!("pub fn {}({}) -> Self {{", fn_name, params_str));
                 self.indent += 1;
 
-                // Extract member initializers from constructor children
+                // Extract member initializers and base class initializers from constructor children
                 // Pattern 1: MemberRef { name } followed by initialization expression (member initializer list)
-                // Pattern 2: CompoundStmt with assignments to member fields (body assignments)
+                // Pattern 2: TypeRef:ClassName followed by CallExpr (base class initialization)
+                // Pattern 3: CompoundStmt with assignments to member fields (body assignments)
                 let mut initializers: Vec<(String, String)> = Vec::new();
+                let mut base_init: Option<String> = None;
                 let mut i = 0;
                 while i < node.children.len() {
                     if let ClangNodeKind::MemberRef { name } = &node.children[i].kind {
@@ -751,6 +793,21 @@ impl AstCodeGen {
                             "Default::default()".to_string()
                         };
                         initializers.push((name.clone(), init_val));
+                    } else if let ClangNodeKind::Unknown(s) = &node.children[i].kind {
+                        // Check for TypeRef:ClassName pattern indicating base class initializer
+                        if let Some(base_class) = s.strip_prefix("TypeRef:") {
+                            // Next sibling should be constructor call
+                            if i + 1 < node.children.len() {
+                                i += 1;
+                                // Check if next is a CallExpr
+                                if matches!(&node.children[i].kind, ClangNodeKind::CallExpr { .. }) {
+                                    // Extract constructor arguments
+                                    let args = self.extract_constructor_args(&node.children[i]);
+                                    let ctor_name = format!("{}::new_{}", base_class, args.len());
+                                    base_init = Some(format!("{}({})", ctor_name, args.join(", ")));
+                                }
+                            }
+                        }
                     } else if let ClangNodeKind::CompoundStmt = &node.children[i].kind {
                         // Look for assignments in constructor body
                         Self::extract_member_assignments(&node.children[i], &mut initializers, self);
@@ -760,7 +817,13 @@ impl AstCodeGen {
 
                 self.writeln("Self {");
                 self.indent += 1;
-                if initializers.is_empty() {
+
+                // First, initialize base class if present
+                if let Some(ref base_call) = base_init {
+                    self.writeln(&format!("__base: {},", base_call));
+                }
+
+                if initializers.is_empty() && base_init.is_none() {
                     // Default constructor - use Default
                     self.writeln("..Default::default()");
                 } else {

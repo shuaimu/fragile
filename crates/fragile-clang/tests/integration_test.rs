@@ -824,3 +824,37 @@ fn test_e2e_virtual_override() {
 
     assert_eq!(exit_code, 0, "Virtual method override should work correctly");
 }
+
+/// Test base class constructor delegation.
+#[test]
+fn test_e2e_base_constructor() {
+    let source = r#"
+        class Base {
+        protected:
+            int x;
+            int y;
+        public:
+            Base(int a, int b) : x(a), y(b) {}
+        };
+
+        class Derived : public Base {
+            int z;
+        public:
+            Derived(int a, int b, int c) : Base(a, b), z(c) {}
+            int sum() { return x + y + z; }
+        };
+
+        int main() {
+            Derived d(10, 20, 30);
+            if (d.sum() == 60) {
+                return 0;
+            }
+            return 1;
+        }
+    "#;
+
+    let (exit_code, _stdout, _stderr) = transpile_compile_run(source, "e2e_base_constructor.cpp")
+        .expect("E2E test failed");
+
+    assert_eq!(exit_code, 0, "Base class constructor delegation should work");
+}

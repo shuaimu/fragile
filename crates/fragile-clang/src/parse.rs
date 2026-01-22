@@ -819,6 +819,19 @@ impl ClangParser {
                     ClangNodeKind::MemberRef { name }
                 }
 
+                clang_sys::CXCursor_TypeRef => {
+                    // TypeRef might be a base class initializer reference
+                    // We'll mark it as such, but only use it as base init in constructor context
+                    let type_name = cursor_spelling(cursor);
+                    // Strip "class " or "struct " prefix if present
+                    let type_name = type_name
+                        .strip_prefix("class ")
+                        .or_else(|| type_name.strip_prefix("struct "))
+                        .unwrap_or(&type_name)
+                        .to_string();
+                    ClangNodeKind::Unknown(format!("TypeRef:{}", type_name))
+                }
+
                 clang_sys::CXCursor_FriendDecl => {
                     // Friend declaration - examine children to determine type
                     let (friend_class, friend_function) = self.get_friend_info(cursor);
