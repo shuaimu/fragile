@@ -2148,6 +2148,12 @@ impl AstCodeGen {
             ClangNodeKind::BinaryOperator { op, .. } => {
                 // Inside unsafe block, don't wrap sub-expressions in additional unsafe
                 if node.children.len() >= 2 {
+                    // Handle comma operator specially: (a, b) => { a; b }
+                    if matches!(op, BinaryOp::Comma) {
+                        let left = self.expr_to_string_raw(&node.children[0]);
+                        let right = self.expr_to_string_raw(&node.children[1]);
+                        return format!("{{ {}; {} }}", left, right);
+                    }
                     let op_str = binop_to_string(op);
                     let left = self.expr_to_string_raw(&node.children[0]);
                     let right = self.expr_to_string_raw(&node.children[1]);
@@ -2348,6 +2354,13 @@ impl AstCodeGen {
             ClangNodeKind::CXXThisExpr { .. } => "self".to_string(),
             ClangNodeKind::BinaryOperator { op, .. } => {
                 if node.children.len() >= 2 {
+                    // Handle comma operator specially: (a, b) => { a; b }
+                    if matches!(op, BinaryOp::Comma) {
+                        let left = self.expr_to_string(&node.children[0]);
+                        let right = self.expr_to_string(&node.children[1]);
+                        return format!("{{ {}; {} }}", left, right);
+                    }
+
                     let op_str = binop_to_string(op);
 
                     // Check if left side is a pointer dereference, pointer subscript, or static member

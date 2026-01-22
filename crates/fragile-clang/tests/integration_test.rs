@@ -1292,3 +1292,24 @@ fn test_e2e_switch() {
 
     assert_eq!(exit_code, 0, "Switch statements with fallthrough should work correctly");
 }
+
+/// Test E2E: Comma operator
+#[test]
+fn test_e2e_comma_operator() {
+    let source = r#"
+        int main() {
+            int a = 0;
+            int b = (a = 5, a + 10);  // Sets a to 5, then b = 5 + 10 = 15
+
+            if (a == 5 && b == 15) {
+                return 0;
+            }
+            return 1;
+        }
+    "#;
+
+    let (exit_code, _stdout, _stderr) = transpile_compile_run(source, "e2e_comma_operator.cpp")
+        .expect("E2E test failed");
+
+    assert_eq!(exit_code, 0, "Comma operator should evaluate both expressions and return the last");
+}
