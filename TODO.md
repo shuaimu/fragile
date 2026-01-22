@@ -14,7 +14,7 @@ We just convert the fully-resolved AST to equivalent Rust code.
 ## Current Status
 
 **Grammar Tests**: 20/20 passing
-**E2E Tests**: 25/25 passing
+**E2E Tests**: 27/27 passing
 
 **Working**:
 - Simple functions with control flow (if/else, while, for, do-while, recursion)
@@ -34,6 +34,10 @@ We just convert the fully-resolved AST to equivalent Rust code.
 - new/delete → Box::into_raw/Box::from_raw
 - new[]/delete[] → Vec allocation with raw pointer
 - Single inheritance (base class embedded as `__base` field)
+- C++ namespaces → Rust modules
+- Virtual method override (static dispatch)
+- Inherited field access via `__base`
+- STL smart pointer type mappings (unique_ptr→Box, shared_ptr→Arc, weak_ptr→Weak)
 
 **CLI**:
 ```bash
@@ -62,25 +66,25 @@ crates/
 - [x] **1.3** Add integration test that runs full pipeline (13 E2E tests)
 
 ### 2. Improve Transpiler Quality
-- [ ] **2.1** Reduce temporary variables in generated code
+- [x] **2.1** Reduce temporary variables in generated code (removed redundant type suffixes)
 - [x] **2.2** Handle `nullptr` → `std::ptr::null_mut()`
 - [x] **2.3** Handle C++ casts (`static_cast`, `reinterpret_cast`, `const_cast`)
-- [ ] **2.4** Map C++ namespaces to Rust modules
+- [x] **2.4** Map C++ namespaces to Rust modules
 
 ### 3. OOP Features
 - [x] **3.3.1** Parse virtual methods in classes
 - [x] **3.3.2** Generate vtable struct for each class with virtuals
 - [x] **3.3.3** Add vtable pointer field to class struct
-- [ ] **3.3.4** Dynamic dispatch via vtable lookup (partial - VirtualCall terminator added)
+- [ ] **3.3.4** Dynamic dispatch via vtable lookup (requires trait objects for polymorphism)
 - [x] **3.1** Single inheritance (embed base as first field, member access through `__base`)
-- [ ] **3.2** Virtual method override resolution
+- [x] **3.2** Virtual method override resolution (static dispatch, inherited field access via `__base`)
 - [x] **3.3** Destructor → `Drop` trait
 - [x] **3.4** Copy constructor → `Clone` trait (move constructors work via Rust's natural move semantics)
 
 ### 4. Memory Management
 - [x] **4.1** `new`/`delete` → `Box::into_raw(Box::new())` / `Box::from_raw()` + drop
 - [x] **4.2** `new[]`/`delete[]` → Vec allocation with raw pointer (note: delete[] leaks due to size tracking)
-- [ ] **4.3** Smart pointers (`unique_ptr` → `Box`, `shared_ptr` → `Arc`)
+- [x] **4.3** Smart pointers (`unique_ptr` → `Box`, `shared_ptr` → `Arc`, `weak_ptr` → `Weak`) - type mapping done
 
 ### 5. STL Type Mappings (Type names converted, constructor/operator semantics need work)
 - [x] **5.1** `std::string` → `String` (type mapping done)
@@ -153,16 +157,14 @@ See `docs/transpiler-status.md` for detailed feature matrix.
 
 ### Partial Support
 - Rvalue references (parsed, codegen incomplete)
-- Virtual methods (parsed, vtable not generated)
-- Namespaces (parsed, not mapped to modules)
+- Virtual methods (static dispatch works, dynamic dispatch via trait objects not implemented)
 - Inheritance (single inheritance works, no multiple inheritance)
 
 ### Not Yet Supported
 - Multiple inheritance
 - Operator overloading
-- Exceptions
-- STL types
-- Smart pointers (`unique_ptr`, `shared_ptr`)
+- Dynamic dispatch (polymorphism through base pointers)
+- Base class constructor delegation in derived constructors
 
 ---
 
