@@ -29,6 +29,8 @@ pub struct AstCodeGen {
     ptr_vars: HashSet<String>,
     /// Track variable names that are declared as array types
     arr_vars: HashSet<String>,
+    /// When true, skip type suffixes for numeric literals (e.g., 5 instead of 5i32)
+    skip_literal_suffix: bool,
 }
 
 impl AstCodeGen {
@@ -39,6 +41,7 @@ impl AstCodeGen {
             ref_vars: HashSet::new(),
             ptr_vars: HashSet::new(),
             arr_vars: HashSet::new(),
+            skip_literal_suffix: false,
         }
     }
 
@@ -824,7 +827,10 @@ impl AstCodeGen {
 
                         let init = if has_real_init {
                             let init_node = initializer.unwrap();
+                            // Skip type suffixes for literals when we have explicit type annotation
+                            self.skip_literal_suffix = true;
                             let expr = self.expr_to_string(init_node);
+                            self.skip_literal_suffix = false;
                             // If expression is unsupported, fall back to default
                             if expr.contains("unsupported") {
                                 format!(" = {}", default_value_for_type(ty))
@@ -1225,27 +1231,41 @@ impl AstCodeGen {
     fn expr_to_string(&self, node: &ClangNode) -> String {
         match &node.kind {
             ClangNodeKind::IntegerLiteral { value, cpp_type } => {
-                let suffix = match cpp_type {
-                    Some(CppType::Int { signed: true }) => "i32",
-                    Some(CppType::Int { signed: false }) => "u32",
-                    Some(CppType::Long { signed: true }) => "i64",
-                    Some(CppType::Long { signed: false }) => "u64",
-                    Some(CppType::LongLong { signed: true }) => "i64",
-                    Some(CppType::LongLong { signed: false }) => "u64",
-                    Some(CppType::Short { signed: true }) => "i16",
-                    Some(CppType::Short { signed: false }) => "u16",
-                    Some(CppType::Char { signed: true }) => "i8",
-                    Some(CppType::Char { signed: false }) => "u8",
-                    _ => "i32",
-                };
-                format!("{}{}", value, suffix)
+                if self.skip_literal_suffix {
+                    value.to_string()
+                } else {
+                    let suffix = match cpp_type {
+                        Some(CppType::Int { signed: true }) => "i32",
+                        Some(CppType::Int { signed: false }) => "u32",
+                        Some(CppType::Long { signed: true }) => "i64",
+                        Some(CppType::Long { signed: false }) => "u64",
+                        Some(CppType::LongLong { signed: true }) => "i64",
+                        Some(CppType::LongLong { signed: false }) => "u64",
+                        Some(CppType::Short { signed: true }) => "i16",
+                        Some(CppType::Short { signed: false }) => "u16",
+                        Some(CppType::Char { signed: true }) => "i8",
+                        Some(CppType::Char { signed: false }) => "u8",
+                        _ => "i32",
+                    };
+                    format!("{}{}", value, suffix)
+                }
             }
             ClangNodeKind::FloatingLiteral { value, cpp_type } => {
-                let suffix = match cpp_type {
-                    Some(CppType::Float) => "f32",
-                    _ => "f64",
-                };
-                format!("{}{}", value, suffix)
+                if self.skip_literal_suffix {
+                    // For floats, we need to ensure there's a decimal point
+                    let s = value.to_string();
+                    if s.contains('.') || s.contains('e') || s.contains('E') {
+                        s
+                    } else {
+                        format!("{}.0", s)
+                    }
+                } else {
+                    let suffix = match cpp_type {
+                        Some(CppType::Float) => "f32",
+                        _ => "f64",
+                    };
+                    format!("{}{}", value, suffix)
+                }
             }
             ClangNodeKind::BoolLiteral(b) => b.to_string(),
             ClangNodeKind::NullPtrLiteral => "std::ptr::null_mut()".to_string(),
