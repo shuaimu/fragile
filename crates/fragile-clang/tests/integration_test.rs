@@ -1391,3 +1391,54 @@ fn test_e2e_global_array() {
 
     assert_eq!(exit_code, 0, "Global arrays should work with unsafe access and proper initialization");
 }
+
+/// Test virtual diamond inheritance - ensures virtual base class is shared.
+#[test]
+fn test_e2e_virtual_diamond() {
+    let source = r#"
+        class A {
+        public:
+            int a;
+            A(int v) : a(v) {}
+            int getA() { return a; }
+        };
+
+        class B : virtual public A {
+        public:
+            int b;
+            B(int v) : A(v), b(v + 1) {}
+            int getAFromB() { return a; }
+        };
+
+        class C : virtual public A {
+        public:
+            int c;
+            C(int v) : A(v), c(v + 2) {}
+            int getAFromC() { return a; }
+        };
+
+        class D : public B, public C {
+        public:
+            int d;
+            D(int v) : A(v), B(v), C(v), d(v + 3) {}
+            int sum() { return a + b + c + d; }
+        };
+
+        int main() {
+            D obj(10);
+            // a=10, b=11, c=12, d=13, sum=46
+            if (obj.sum() != 46) return 1;
+            // Access 'a' through B and C paths - should be same value
+            if (obj.getAFromB() != 10) return 2;
+            if (obj.getAFromC() != 10) return 3;
+            // Direct access to a
+            if (obj.getA() != 10) return 4;
+            return 0;
+        }
+    "#;
+
+    let (exit_code, _stdout, _stderr) = transpile_compile_run(source, "e2e_virtual_diamond.cpp")
+        .expect("E2E test failed");
+
+    assert_eq!(exit_code, 0, "Virtual diamond inheritance should share a single virtual base instance");
+}

@@ -388,13 +388,12 @@ impl AstCodeGen {
         }
 
         // Add virtual base pointers and storage if needed
-        if let Some(vbases) = self.virtual_bases.get(name) {
-            for vb in vbases {
-                let field = self.virtual_base_field_name(vb);
-                let storage = self.virtual_base_storage_field_name(vb);
-                self.writeln(&format!("pub {}: *mut {},", field, vb));
-                self.writeln(&format!("pub {}: Option<Box<{}>>,", storage, vb));
-            }
+        let vbases_to_add = self.virtual_bases.get(name).cloned().unwrap_or_default();
+        for vb in &vbases_to_add {
+            let field = self.virtual_base_field_name(vb);
+            let storage = self.virtual_base_storage_field_name(vb);
+            self.writeln(&format!("pub {}: *mut {},", field, vb));
+            self.writeln(&format!("pub {}: Option<Box<{}>>,", storage, vb));
         }
 
         // Then add derived class fields
@@ -603,14 +602,13 @@ impl AstCodeGen {
         }
 
         // Add virtual base pointers and storage if needed
-        if let Some(vbases) = self.virtual_bases.get(name) {
-            for vb in vbases {
-                let field = self.virtual_base_field_name(vb);
-                let storage = self.virtual_base_storage_field_name(vb);
-                self.writeln(&format!("/// Virtual base `{}`", vb));
-                self.writeln(&format!("pub {}: *mut {},", field, vb));
-                self.writeln(&format!("pub {}: Option<Box<{}>>,", storage, vb));
-            }
+        let vbases_to_add = self.virtual_bases.get(name).cloned().unwrap_or_default();
+        for vb in &vbases_to_add {
+            let field = self.virtual_base_field_name(vb);
+            let storage = self.virtual_base_storage_field_name(vb);
+            self.writeln(&format!("/// Virtual base `{}`", vb));
+            self.writeln(&format!("pub {}: *mut {},", field, vb));
+            self.writeln(&format!("pub {}: Option<Box<{}>>,", storage, vb));
         }
 
         // Then collect derived class fields (skip static fields - they become globals)
@@ -1530,6 +1528,59 @@ impl AstCodeGen {
         }
     }
 
+    /// Check if a MemberExpr (possibly wrapped) is a virtual base method call.
+    /// Returns Some((base_expr, vbase_field, method_name)) if it is.
+    fn get_virtual_base_method_call_info(&self, node: &ClangNode) -> Option<(String, String, String)> {
+        let member_node = match &node.kind {
+            ClangNodeKind::MemberExpr { .. } => node,
+            ClangNodeKind::ImplicitCastExpr { .. } | ClangNodeKind::Unknown(_) => {
+                if !node.children.is_empty() {
+                    return self.get_virtual_base_method_call_info(&node.children[0]);
+                }
+                return None;
+            }
+            _ => return None,
+        };
+
+        if let ClangNodeKind::MemberExpr { member_name, declaring_class, is_static, .. } = &member_node.kind {
+            // Only care about non-static members
+            if *is_static {
+                return None;
+            }
+
+            if !member_node.children.is_empty() {
+                let base_type = Self::get_expr_type(&member_node.children[0]);
+
+                if let Some(decl_class) = declaring_class {
+                    let base_class_name = Self::extract_class_name(&base_type);
+                    if let Some(name) = base_class_name {
+                        if name != *decl_class {
+                            // Check if declaring class is a virtual base
+                            let access = self.get_base_access_for_class(&name, decl_class);
+                            if let BaseAccess::VirtualPtr(field) = access {
+                                let base = self.expr_to_string(&member_node.children[0]);
+                                let method = sanitize_identifier(member_name);
+                                return Some((base, field, method));
+                            }
+                        }
+                    }
+                }
+            } else {
+                // Implicit this
+                if let (Some(current), Some(decl_class)) = (&self.current_class, declaring_class) {
+                    if current != decl_class {
+                        let access = self.get_base_access_for_class(current, decl_class);
+                        if let BaseAccess::VirtualPtr(field) = access {
+                            let method = sanitize_identifier(member_name);
+                            return Some(("self".to_string(), field, method));
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+
     /// Get a default value for a C++ type (for static member initialization).
     fn default_value_for_type(ty: &CppType) -> String {
         match ty {
@@ -1749,8 +1800,19 @@ impl AstCodeGen {
                                             base_inits.push((field_name, ctor_call));
                                         }
                                     } else {
-                                        // Fallback to __base
-                                        base_inits.push(("__base".to_string(), ctor_call));
+                                        // Check if this is a transitive virtual base (not a direct base)
+                                        let is_transitive_vbase = self.current_class.as_ref()
+                                            .and_then(|c| self.virtual_bases.get(c))
+                                            .map(|vbases| vbases.iter().any(|vb| vb == base_class))
+                                            .unwrap_or(false);
+
+                                        if is_transitive_vbase {
+                                            // This is a virtual base initializer (e.g., A(v) in D::D() : A(v), B(v), C(v))
+                                            virtual_base_inits.push((base_class.to_string(), ctor_call));
+                                        } else {
+                                            // Fallback to __base for direct non-virtual bases not found in class_bases
+                                            base_inits.push(("__base".to_string(), ctor_call));
+                                        }
                                     }
                                 }
                             }
@@ -1775,13 +1837,12 @@ impl AstCodeGen {
                     for (field_name, base_call) in &base_inits {
                         self.writeln(&format!("{}: {},", field_name, base_call));
                     }
-                    if let Some(vbases) = self.virtual_bases.get(struct_name) {
-                        for vb in vbases {
-                            let field = self.virtual_base_field_name(vb);
-                            let storage = self.virtual_base_storage_field_name(vb);
-                            self.writeln(&format!("{}: std::ptr::null_mut(),", field));
-                            self.writeln(&format!("{}: None,", storage));
-                        }
+                    let vbases_internal = self.virtual_bases.get(struct_name).cloned().unwrap_or_default();
+                    for vb in &vbases_internal {
+                        let field = self.virtual_base_field_name(vb);
+                        let storage = self.virtual_base_storage_field_name(vb);
+                        self.writeln(&format!("{}: std::ptr::null_mut(),", field));
+                        self.writeln(&format!("{}: None,", storage));
                     }
                     for (field, value) in &initializers {
                         self.writeln(&format!("{}: {},", sanitize_identifier(field), value));
@@ -1798,21 +1859,20 @@ impl AstCodeGen {
                     self.indent += 1;
                     self.writeln(&format!("let mut __self = Self::{}({});", internal_name, params_names));
 
-                    if let Some(vbases) = self.virtual_bases.get(struct_name) {
-                        for vb in vbases {
-                            let ctor = if let Some((_, call)) = virtual_base_inits.iter().find(|(name, _)| name == vb) {
-                                call.clone()
-                            } else {
-                                format!("{}::new_0()", vb)
-                            };
-                            let vb_field = self.virtual_base_field_name(vb);
-                            let vb_storage = self.virtual_base_storage_field_name(vb);
-                            let temp_name = format!("__vb_{}", vb_field.trim_start_matches("__vbase_"));
-                            self.writeln(&format!("let mut {} = Box::new({});", temp_name, ctor));
-                            self.writeln(&format!("let {}_ptr = {}.as_mut() as *mut {};", temp_name, temp_name, vb));
-                            self.writeln(&format!("__self.{} = {}_ptr;", vb_field, temp_name));
-                            self.writeln(&format!("__self.{} = Some({});", vb_storage, temp_name));
-                        }
+                    let vbases_public = self.virtual_bases.get(struct_name).cloned().unwrap_or_default();
+                    for vb in &vbases_public {
+                        let ctor = if let Some((_, call)) = virtual_base_inits.iter().find(|(name, _)| name == vb) {
+                            call.clone()
+                        } else {
+                            format!("{}::new_0()", vb)
+                        };
+                        let vb_field = self.virtual_base_field_name(vb);
+                        let vb_storage = self.virtual_base_storage_field_name(vb);
+                        let temp_name = format!("__vb_{}", vb_field.trim_start_matches("__vbase_"));
+                        self.writeln(&format!("let mut {} = Box::new({});", temp_name, ctor));
+                        self.writeln(&format!("let {}_ptr = {}.as_mut() as *mut {};", temp_name, temp_name, vb));
+                        self.writeln(&format!("__self.{} = {}_ptr;", vb_field, temp_name));
+                        self.writeln(&format!("__self.{} = Some({});", vb_storage, temp_name));
                     }
 
                     // Propagate virtual base pointers into embedded bases that need them
@@ -1821,11 +1881,10 @@ impl AstCodeGen {
                         if !base.is_virtual {
                             if self.class_has_virtual_bases(&base.name) {
                                 let base_field = if non_virtual_idx == 0 { "__base".to_string() } else { format!("__base{}", non_virtual_idx) };
-                                if let Some(vbases) = self.virtual_bases.get(&base.name) {
-                                    for vb in vbases {
-                                        let vb_field = self.virtual_base_field_name(vb);
-                                        self.writeln(&format!("__self.{}.{} = __self.{};", base_field, vb_field, vb_field));
-                                    }
+                                let base_vbases = self.virtual_bases.get(&base.name).cloned().unwrap_or_default();
+                                for vb in &base_vbases {
+                                    let vb_field = self.virtual_base_field_name(vb);
+                                    self.writeln(&format!("__self.{}.{} = __self.{};", base_field, vb_field, vb_field));
                                 }
                             }
                             non_virtual_idx += 1;
@@ -3007,6 +3066,14 @@ impl AstCodeGen {
                         format!("{}::new_{}({})", struct_name, num_args, args.join(", "))
                     }
                 } else if !node.children.is_empty() {
+                    // Check if this is a virtual base method call
+                    if let Some((base, vbase_field, method)) = self.get_virtual_base_method_call_info(&node.children[0]) {
+                        let args: Vec<String> = node.children[1..].iter()
+                            .map(|c| self.expr_to_string(c))
+                            .collect();
+                        return format!("unsafe {{ (*{}.{}).{}({}) }}", base, vbase_field, method, args.join(", "));
+                    }
+
                     // Regular function call: first child is the function reference, rest are arguments
                     let func = self.expr_to_string(&node.children[0]);
 

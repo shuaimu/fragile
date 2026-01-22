@@ -14,7 +14,7 @@ We just convert the fully-resolved AST to equivalent Rust code.
 ## Current Status
 
 **Grammar Tests**: 20/20 passing
-**E2E Tests**: 46/46 passing
+**E2E Tests**: 47/47 passing
 
 **Working**:
 - Simple functions with control flow (if/else, while, for, do-while, switch, recursion)
@@ -34,6 +34,8 @@ We just convert the fully-resolved AST to equivalent Rust code.
 - new/delete → Box::into_raw/Box::from_raw
 - new[]/delete[] → Vec allocation with raw pointer
 - Single inheritance (base class embedded as `__base` field)
+- Multiple inheritance (multiple `__base` fields)
+- Virtual/diamond inheritance (shared virtual base via pointers)
 - C++ namespaces → Rust modules
 - Virtual method override (static dispatch)
 - Inherited field access via `__base`
@@ -174,10 +176,9 @@ See `docs/transpiler-status.md` for detailed feature matrix.
 
 ### Partial Support
 - Rvalue references (parsed, basic return-by-value works)
-- Inheritance (single and multiple inheritance work, no diamond inheritance yet)
 
 ### Not Yet Supported
-- Diamond inheritance (virtual base classes)
+- (All major OOP features now supported!)
 
 ---
 
