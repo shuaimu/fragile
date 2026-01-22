@@ -50,6 +50,8 @@ pub struct AstCodeGen {
     virtual_methods: HashMap<String, Vec<VirtualMethodInfo>>,
     /// Map from (class_name, member_name) to global variable name for static members
     static_members: HashMap<(String, String), String>,
+    /// Track global variable names (require unsafe access)
+    global_vars: HashSet<String>,
 }
 
 impl AstCodeGen {
@@ -66,6 +68,7 @@ impl AstCodeGen {
             class_bases: HashMap::new(),
             virtual_methods: HashMap::new(),
             static_members: HashMap::new(),
+            global_vars: HashSet::new(),
         }
     }
 
@@ -329,6 +332,9 @@ impl AstCodeGen {
             }
             ClangNodeKind::TypeAliasDecl { name, underlying_type } => {
                 self.generate_type_alias(name, underlying_type);
+            }
+            ClangNodeKind::VarDecl { name, ty, has_init } => {
+                self.generate_global_var(name, ty, *has_init, &node.children);
             }
             ClangNodeKind::NamespaceDecl { name } => {
                 // Generate Rust module for namespace
@@ -632,6 +638,34 @@ impl AstCodeGen {
         let rust_type = underlying_type.to_rust_type_str();
         self.writeln(&format!("/// C++ typedef/using `{}`", name));
         self.writeln(&format!("pub type {} = {};", name, rust_type));
+        self.writeln("");
+    }
+
+    /// Generate a global variable declaration.
+    fn generate_global_var(&mut self, name: &str, ty: &CppType, has_init: bool, children: &[ClangNode]) {
+        // Track this as a global variable (needs unsafe access)
+        self.global_vars.insert(name.to_string());
+
+        let rust_type = ty.to_rust_type_str();
+        self.writeln(&format!("/// C++ global variable `{}`", name));
+
+        // Get initial value if present
+        let init_value = if has_init && !children.is_empty() {
+            self.expr_to_string(&children[0])
+        } else {
+            // Default value for the type
+            match ty {
+                CppType::Int { .. } | CppType::Short { .. } | CppType::Long { .. } | CppType::LongLong { .. }
+                | CppType::Char { .. } => "0".to_string(),
+                CppType::Float => "0.0f32".to_string(),
+                CppType::Double => "0.0f64".to_string(),
+                CppType::Bool => "false".to_string(),
+                CppType::Pointer { .. } => "std::ptr::null_mut()".to_string(),
+                _ => "Default::default()".to_string(),
+            }
+        };
+
+        self.writeln(&format!("static mut {}: {} = {};", name, rust_type, init_value));
         self.writeln("");
     }
 
@@ -1079,6 +1113,35 @@ impl AstCodeGen {
                 // Also check all children recursively for cases where the structure differs
                 node.children.iter().any(|c| self.is_ptr_var_expr(c))
             }
+        }
+    }
+
+    /// Check if an expression node refers to a global variable (needs unsafe access).
+    fn is_global_var_expr(&self, node: &ClangNode) -> bool {
+        match &node.kind {
+            ClangNodeKind::DeclRefExpr { name, .. } => {
+                self.global_vars.contains(name)
+            }
+            ClangNodeKind::ImplicitCastExpr { .. } | ClangNodeKind::Unknown(_) => {
+                // Look through casts and unknown wrappers
+                !node.children.is_empty() && self.is_global_var_expr(&node.children[0])
+            }
+            _ => false,
+        }
+    }
+
+    /// Get the raw variable name from a DeclRefExpr (unwrapping casts).
+    fn get_raw_var_name(&self, node: &ClangNode) -> Option<String> {
+        match &node.kind {
+            ClangNodeKind::DeclRefExpr { name, .. } => Some(sanitize_identifier(name)),
+            ClangNodeKind::ImplicitCastExpr { .. } | ClangNodeKind::Unknown(_) => {
+                if !node.children.is_empty() {
+                    self.get_raw_var_name(&node.children[0])
+                } else {
+                    None
+                }
+            }
+            _ => None,
         }
     }
 
@@ -2089,6 +2152,12 @@ impl AstCodeGen {
                             }
                         }
                     }
+
+                    // Check if this is a global variable (already in unsafe context, no wrapper needed)
+                    if self.global_vars.contains(name) {
+                        return ident;
+                    }
+
                     ident
                 }
             }
@@ -2349,6 +2418,11 @@ impl AstCodeGen {
                         }
                     }
 
+                    // Check if this is a global variable (needs unsafe access)
+                    if self.global_vars.contains(name) {
+                        return format!("unsafe {{ {} }}", ident);
+                    }
+
                     // Add namespace path if present
                     let full_path = if namespace_path.is_empty() {
                         ident.clone()
@@ -2406,6 +2480,9 @@ impl AstCodeGen {
             }
             ClangNodeKind::UnaryOperator { op, ty } => {
                 if !node.children.is_empty() {
+                    // Check if operand is a global variable (needs special handling for inc/dec)
+                    let is_global = self.is_global_var_expr(&node.children[0]);
+
                     let operand = self.expr_to_string(&node.children[0]);
                     match op {
                         UnaryOp::Minus => format!("-{}", operand),
@@ -2440,10 +2517,28 @@ impl AstCodeGen {
                             // Raw pointer dereference needs unsafe
                             format!("unsafe {{ *{} }}", operand)
                         }
-                        UnaryOp::PreInc => format!("{{ {} += 1; {} }}", operand, operand),
-                        UnaryOp::PreDec => format!("{{ {} -= 1; {} }}", operand, operand),
-                        UnaryOp::PostInc => format!("{{ let __v = {}; {} += 1; __v }}", operand, operand),
-                        UnaryOp::PostDec => format!("{{ let __v = {}; {} -= 1; __v }}", operand, operand),
+                        UnaryOp::PreInc | UnaryOp::PreDec => {
+                            // For global variables, wrap entire operation in unsafe
+                            if is_global {
+                                let raw_name = self.get_raw_var_name(&node.children[0]).unwrap_or(operand.clone());
+                                let op_str = if matches!(op, UnaryOp::PreInc) { "+=" } else { "-=" };
+                                format!("unsafe {{ {} {} 1; {} }}", raw_name, op_str, raw_name)
+                            } else {
+                                let op_str = if matches!(op, UnaryOp::PreInc) { "+=" } else { "-=" };
+                                format!("{{ {} {} 1; {} }}", operand, op_str, operand)
+                            }
+                        }
+                        UnaryOp::PostInc | UnaryOp::PostDec => {
+                            // For global variables, wrap entire operation in unsafe
+                            if is_global {
+                                let raw_name = self.get_raw_var_name(&node.children[0]).unwrap_or(operand.clone());
+                                let op_str = if matches!(op, UnaryOp::PostInc) { "+=" } else { "-=" };
+                                format!("unsafe {{ let __v = {}; {} {} 1; __v }}", raw_name, raw_name, op_str)
+                            } else {
+                                let op_str = if matches!(op, UnaryOp::PostInc) { "+=" } else { "-=" };
+                                format!("{{ let __v = {}; {} {} 1; __v }}", operand, operand, op_str)
+                            }
+                        }
                     }
                 } else {
                     "/* unary op error */".to_string()

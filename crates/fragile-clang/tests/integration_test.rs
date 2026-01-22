@@ -1336,3 +1336,30 @@ fn test_e2e_typedef() {
 
     assert_eq!(exit_code, 0, "Typedef type aliases should work correctly");
 }
+
+/// Test E2E: Global variables
+#[test]
+fn test_e2e_global_var() {
+    let source = r#"
+        int counter = 0;
+
+        void increment() {
+            counter++;
+        }
+
+        int main() {
+            increment();
+            increment();
+            increment();
+            if (counter == 3) {
+                return 0;
+            }
+            return 1;
+        }
+    "#;
+
+    let (exit_code, _stdout, _stderr) = transpile_compile_run(source, "e2e_global_var.cpp")
+        .expect("E2E test failed");
+
+    assert_eq!(exit_code, 0, "Global variables should work with unsafe access");
+}
