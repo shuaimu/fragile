@@ -1170,3 +1170,27 @@ fn test_e2e_range_for() {
 
     assert_eq!(exit_code, 0, "Range-based for loop should iterate over array");
 }
+
+/// Test E2E: Increment/decrement operators (prefix and postfix)
+#[test]
+fn test_e2e_increment_decrement() {
+    let source = r#"
+        int main() {
+            int x = 5;
+            int y = x++;  // post-increment: y=5, x=6
+            int z = ++x;  // pre-increment: z=7, x=7
+            int a = x--;  // post-decrement: a=7, x=6
+            int b = --x;  // pre-decrement: b=5, x=5
+
+            if (y == 5 && z == 7 && a == 7 && b == 5 && x == 5) {
+                return 0;
+            }
+            return 1;
+        }
+    "#;
+
+    let (exit_code, _stdout, _stderr) = transpile_compile_run(source, "e2e_increment_decrement.cpp")
+        .expect("E2E test failed");
+
+    assert_eq!(exit_code, 0, "Increment/decrement operators should work correctly");
+}

@@ -1490,38 +1490,47 @@ impl ClangParser {
 
             // Unary operators: prefix (++x, --x, -x, +x, !x, ~x, *x, &x)
             //                  postfix (x++, x--)
-            // We look at the first and last punctuation tokens
-            let mut first_punct: Option<String> = None;
-            let mut last_punct: Option<String> = None;
+            // Key insight: for prefix operators, the FIRST token is punctuation
+            //              for postfix operators, the FIRST token is NOT punctuation
+            let mut first_token_is_punct = false;
+            let mut operator_str: Option<String> = None;
 
             for i in 0..num_tokens {
                 let token = *tokens.add(i as usize);
                 let token_kind = clang_sys::clang_getTokenKind(token);
 
                 // CXToken_Punctuation = 0 (not 1!)
+                if i == 0 {
+                    first_token_is_punct = token_kind == 0;
+                }
+
                 if token_kind == 0 {
                     let token_spelling = clang_sys::clang_getTokenSpelling(tu, token);
                     let token_str = cx_string_to_string(token_spelling);
-
-                    if first_punct.is_none() {
-                        first_punct = Some(token_str.clone());
+                    // Store the operator (for ++/--, it's the same for first/last)
+                    if operator_str.is_none() || token_str == "++" || token_str == "--" {
+                        operator_str = Some(token_str);
                     }
-                    last_punct = Some(token_str);
                 }
             }
 
-            // For prefix operators, the operator is first
-            // For postfix operators (++, --), the operator is last
-            // We try to detect based on position
-            if let Some(ref op) = first_punct {
+            // Determine operator based on what we found
+            if let Some(ref op) = operator_str {
                 result = match op.as_str() {
                     "++" => {
-                        // Could be prefix or postfix, check if it's at the start
-                        // If first_punct == last_punct and there are other tokens,
-                        // it's likely prefix
-                        UnaryOp::PreInc
+                        if first_token_is_punct {
+                            UnaryOp::PreInc
+                        } else {
+                            UnaryOp::PostInc
+                        }
                     }
-                    "--" => UnaryOp::PreDec,
+                    "--" => {
+                        if first_token_is_punct {
+                            UnaryOp::PreDec
+                        } else {
+                            UnaryOp::PostDec
+                        }
+                    }
                     "-" => UnaryOp::Minus,
                     "+" => UnaryOp::Plus,
                     "!" => UnaryOp::LNot,
@@ -1530,18 +1539,6 @@ impl ClangParser {
                     "&" => UnaryOp::AddrOf,
                     _ => UnaryOp::Minus,
                 };
-            }
-
-            // Check for postfix operators
-            if let Some(ref op) = last_punct {
-                if first_punct.as_ref() != last_punct.as_ref() {
-                    // Different operators at start and end - last one might be postfix
-                    match op.as_str() {
-                        "++" => result = UnaryOp::PostInc,
-                        "--" => result = UnaryOp::PostDec,
-                        _ => {}
-                    }
-                }
             }
 
             if !tokens.is_null() {

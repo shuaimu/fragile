@@ -1898,8 +1898,8 @@ impl AstCodeGen {
                         }
                         UnaryOp::PreInc => format!("{{ {} += 1; {} }}", operand, operand),
                         UnaryOp::PreDec => format!("{{ {} -= 1; {} }}", operand, operand),
-                        UnaryOp::PostInc => format!("{{ let v = {}; {} += 1; v }}", operand, operand),
-                        UnaryOp::PostDec => format!("{{ let v = {}; {} -= 1; v }}", operand, operand),
+                        UnaryOp::PostInc => format!("{{ let __v = {}; {} += 1; __v }}", operand, operand),
+                        UnaryOp::PostDec => format!("{{ let __v = {}; {} -= 1; __v }}", operand, operand),
                     }
                 } else {
                     "/* unary op error */".to_string()
@@ -2223,10 +2223,10 @@ impl AstCodeGen {
                             // Raw pointer dereference needs unsafe
                             format!("unsafe {{ *{} }}", operand)
                         }
-                        UnaryOp::PreInc => format!("{{ let v = {}; {} += 1; v + 1 }}", operand, operand),
-                        UnaryOp::PreDec => format!("{{ let v = {}; {} -= 1; v - 1 }}", operand, operand),
-                        UnaryOp::PostInc => format!("{{ let v = {}; {} += 1; v }}", operand, operand),
-                        UnaryOp::PostDec => format!("{{ let v = {}; {} -= 1; v }}", operand, operand),
+                        UnaryOp::PreInc => format!("{{ {} += 1; {} }}", operand, operand),
+                        UnaryOp::PreDec => format!("{{ {} -= 1; {} }}", operand, operand),
+                        UnaryOp::PostInc => format!("{{ let __v = {}; {} += 1; __v }}", operand, operand),
+                        UnaryOp::PostDec => format!("{{ let __v = {}; {} -= 1; __v }}", operand, operand),
                     }
                 } else {
                     "/* unary op error */".to_string()
