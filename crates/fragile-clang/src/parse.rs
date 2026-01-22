@@ -1578,7 +1578,7 @@ impl ClangParser {
                 data: clang_sys::CXClientData,
             ) -> clang_sys::CXChildVisitResult {
                 unsafe {
-                    let (params, return_type, capture_default, captures, parser): &mut (
+                    let (params, return_type, _capture_default, captures, parser): &mut (
                         &mut Vec<(String, CppType)>,
                         &mut CppType,
                         &mut CaptureDefault,

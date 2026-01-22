@@ -25,6 +25,7 @@ struct VirtualMethodInfo {
     name: String,
     return_type: CppType,
     params: Vec<(String, CppType)>,
+    #[allow(dead_code)] // Reserved for future use (const vs mutable self)
     is_const: bool,
 }
 
