@@ -334,7 +334,14 @@ impl AstCodeGen {
                 self.generate_type_alias(name, underlying_type);
             }
             ClangNodeKind::VarDecl { name, ty, has_init } => {
-                self.generate_global_var(name, ty, *has_init, &node.children);
+                // Skip out-of-class static member definitions (TypeRef child indicates qualified name)
+                // These are already handled in the class generation
+                let is_static_member_def = node.children.iter().any(|c| {
+                    matches!(&c.kind, ClangNodeKind::Unknown(s) if s.starts_with("TypeRef:"))
+                });
+                if !is_static_member_def {
+                    self.generate_global_var(name, ty, *has_init, &node.children);
+                }
             }
             ClangNodeKind::NamespaceDecl { name } => {
                 // Generate Rust module for namespace
@@ -642,7 +649,7 @@ impl AstCodeGen {
     }
 
     /// Generate a global variable declaration.
-    fn generate_global_var(&mut self, name: &str, ty: &CppType, has_init: bool, children: &[ClangNode]) {
+    fn generate_global_var(&mut self, name: &str, ty: &CppType, _has_init: bool, children: &[ClangNode]) {
         // Track this as a global variable (needs unsafe access)
         self.global_vars.insert(name.to_string());
 
@@ -650,10 +657,40 @@ impl AstCodeGen {
         self.writeln(&format!("/// C++ global variable `{}`", name));
 
         // Get initial value if present
-        let init_value = if has_init && !children.is_empty() {
-            self.expr_to_string(&children[0])
+        // Handle different cases:
+        // - Arrays without initializers have IntegerLiteral (size) as first child
+        // - Arrays with initializers have InitListExpr as first child
+        // - Static member definitions have TypeRef as first child (skip it)
+        // - Regular variables have their initializer as first child
+        let init_value = if !children.is_empty() {
+            // Find the actual initializer, skipping TypeRef for qualified definitions
+            let init_idx = if matches!(&children[0].kind, ClangNodeKind::Unknown(s) if s.starts_with("TypeRef:")) {
+                // Skip TypeRef child for qualified definitions like "int Counter::count = 0"
+                if children.len() > 1 { Some(1) } else { None }
+            } else {
+                Some(0)
+            };
+
+            if let Some(idx) = init_idx {
+                let init_node = &children[idx];
+                // Check if this is an array type
+                if matches!(ty, CppType::Array { .. }) {
+                    // For arrays, only use children if the child is an InitListExpr
+                    if matches!(&init_node.kind, ClangNodeKind::InitListExpr { .. }) {
+                        self.expr_to_string(init_node)
+                    } else {
+                        // IntegerLiteral child is the array size, not initializer
+                        Self::default_value_for_static(ty)
+                    }
+                } else {
+                    // Non-array: the child is the initializer
+                    self.expr_to_string(init_node)
+                }
+            } else {
+                Self::default_value_for_static(ty)
+            }
         } else {
-            // Default value for the type (must be const for statics)
+            // No children: use default value
             Self::default_value_for_static(ty)
         };
 
@@ -2488,12 +2525,13 @@ impl AstCodeGen {
                     let op_str = binop_to_string(op);
 
                     // Check if left side is a pointer dereference, pointer subscript, static member,
-                    // or global array subscript (needs whole assignment in unsafe)
+                    // global array subscript, or global variable (needs whole assignment in unsafe)
                     let left_is_deref = Self::is_pointer_deref(&node.children[0]);
                     let left_is_ptr_subscript = self.is_pointer_subscript(&node.children[0]);
                     let left_is_static_member = self.is_static_member_access(&node.children[0]);
                     let left_is_global_subscript = self.is_global_array_subscript(&node.children[0]);
-                    let needs_unsafe = left_is_deref || left_is_ptr_subscript || left_is_static_member || left_is_global_subscript;
+                    let left_is_global_var = self.is_global_var_expr(&node.children[0]);
+                    let needs_unsafe = left_is_deref || left_is_ptr_subscript || left_is_static_member || left_is_global_subscript || left_is_global_var;
 
                     // Handle assignment specially
                     if matches!(op, BinaryOp::Assign | BinaryOp::AddAssign | BinaryOp::SubAssign |
