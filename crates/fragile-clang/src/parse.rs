@@ -1254,6 +1254,9 @@ impl ClangParser {
                 clang_sys::CXCursor_UnexposedExpr => {
                     if let Some(coroutine_kind) = self.try_parse_coroutine_expr(cursor) {
                         coroutine_kind
+                    } else if let Some(eval_kind) = self.try_evaluate_expr(cursor) {
+                        // Try to evaluate the expression (for default arguments, etc.)
+                        eval_kind
                     } else {
                         // Fall back to Unknown for non-coroutine unexposed expressions
                         let kind_spelling = clang_sys::clang_getCursorKindSpelling(kind);
@@ -1841,6 +1844,49 @@ impl ClangParser {
             );
 
             data.ty
+        }
+    }
+
+    /// Try to evaluate an expression to a constant value.
+    /// This is used for default arguments and other compile-time constants
+    /// that appear as UnexposedExpr without children.
+    fn try_evaluate_expr(&self, cursor: clang_sys::CXCursor) -> Option<ClangNodeKind> {
+        unsafe {
+            // Try to evaluate the expression
+            let eval_result = clang_sys::clang_Cursor_Evaluate(cursor);
+            if eval_result.is_null() {
+                return None;
+            }
+
+            let kind = clang_sys::clang_EvalResult_getKind(eval_result);
+            let cursor_ty = clang_sys::clang_getCursorType(cursor);
+            let ty = self.convert_type(cursor_ty);
+
+            // CXEval_Int = 1, CXEval_Float = 2
+            let result = match kind {
+                1 => {
+                    // Integer result
+                    let value = clang_sys::clang_EvalResult_getAsLongLong(eval_result);
+                    Some(ClangNodeKind::EvaluatedExpr {
+                        int_value: Some(value),
+                        float_value: None,
+                        ty,
+                    })
+                }
+                2 => {
+                    // Float result
+                    let value = clang_sys::clang_EvalResult_getAsDouble(eval_result);
+                    Some(ClangNodeKind::EvaluatedExpr {
+                        int_value: None,
+                        float_value: Some(value),
+                        ty,
+                    })
+                }
+                _ => None,
+            };
+
+            clang_sys::clang_EvalResult_dispose(eval_result);
+            result
         }
     }
 

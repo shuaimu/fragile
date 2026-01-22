@@ -1954,6 +1954,28 @@ impl AstCodeGen {
                 };
                 format!("{}{}", value, suffix)
             }
+            ClangNodeKind::EvaluatedExpr { int_value, float_value, ty } => {
+                // Evaluated constant expression (e.g., default argument)
+                if let Some(val) = int_value {
+                    let suffix = match ty {
+                        CppType::Int { signed: true } => "i32",
+                        CppType::Int { signed: false } => "u32",
+                        CppType::Long { signed: true } => "i64",
+                        CppType::Long { signed: false } => "u64",
+                        _ => "i32",
+                    };
+                    format!("{}{}", val, suffix)
+                } else if let Some(val) = float_value {
+                    let suffix = match ty {
+                        CppType::Float => "f32",
+                        CppType::Double => "f64",
+                        _ => "f64",
+                    };
+                    format!("{}{}", val, suffix)
+                } else {
+                    "0".to_string()
+                }
+            }
             ClangNodeKind::ArraySubscriptExpr { .. } => {
                 // For array subscript in raw context (inside unsafe block),
                 // generate pointer arithmetic without wrapping in unsafe
@@ -2053,6 +2075,40 @@ impl AstCodeGen {
                         _ => "f64",
                     };
                     format!("{}{}", value, suffix)
+                }
+            }
+            ClangNodeKind::EvaluatedExpr { int_value, float_value, ty } => {
+                // Evaluated constant expression (e.g., default argument)
+                if let Some(val) = int_value {
+                    if self.skip_literal_suffix {
+                        val.to_string()
+                    } else {
+                        let suffix = match ty {
+                            CppType::Int { signed: true } => "i32",
+                            CppType::Int { signed: false } => "u32",
+                            CppType::Long { signed: true } => "i64",
+                            CppType::Long { signed: false } => "u64",
+                            _ => "i32",
+                        };
+                        format!("{}{}", val, suffix)
+                    }
+                } else if let Some(val) = float_value {
+                    if self.skip_literal_suffix {
+                        let s = val.to_string();
+                        if s.contains('.') || s.contains('e') || s.contains('E') {
+                            s
+                        } else {
+                            format!("{}.0", s)
+                        }
+                    } else {
+                        let suffix = match ty {
+                            CppType::Float => "f32",
+                            _ => "f64",
+                        };
+                        format!("{}{}", val, suffix)
+                    }
+                } else {
+                    "0".to_string()
                 }
             }
             ClangNodeKind::BoolLiteral(b) => b.to_string(),

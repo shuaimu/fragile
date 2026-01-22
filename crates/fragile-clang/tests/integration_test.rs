@@ -1194,3 +1194,29 @@ fn test_e2e_increment_decrement() {
 
     assert_eq!(exit_code, 0, "Increment/decrement operators should work correctly");
 }
+
+/// Test E2E: Default function parameters
+#[test]
+fn test_e2e_default_params() {
+    let source = r#"
+        int add(int a, int b = 10, int c = 20) {
+            return a + b + c;
+        }
+
+        int main() {
+            int x = add(1);           // 1 + 10 + 20 = 31
+            int y = add(1, 2);        // 1 + 2 + 20 = 23
+            int z = add(1, 2, 3);     // 1 + 2 + 3 = 6
+
+            if (x == 31 && y == 23 && z == 6) {
+                return 0;
+            }
+            return 1;
+        }
+    "#;
+
+    let (exit_code, _stdout, _stderr) = transpile_compile_run(source, "e2e_default_params.cpp")
+        .expect("E2E test failed");
+
+    assert_eq!(exit_code, 0, "Default function parameters should be evaluated correctly");
+}

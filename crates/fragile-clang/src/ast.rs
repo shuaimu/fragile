@@ -326,6 +326,15 @@ pub enum ClangNodeKind {
     NullPtrLiteral,
     /// String literal
     StringLiteral(String),
+    /// Evaluated expression (for default arguments and compile-time constants)
+    EvaluatedExpr {
+        /// The evaluated integer value (if available)
+        int_value: Option<i64>,
+        /// The evaluated float value (if available)
+        float_value: Option<f64>,
+        /// The C++ type
+        ty: CppType,
+    },
     /// Reference to a declared entity
     DeclRefExpr {
         name: String,
