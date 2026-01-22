@@ -14,7 +14,7 @@ We just convert the fully-resolved AST to equivalent Rust code.
 ## Current Status
 
 **Grammar Tests**: 20/20 passing
-**E2E Tests**: 42/42 passing
+**E2E Tests**: 44/44 passing
 
 **Working**:
 - Simple functions with control flow (if/else, while, for, do-while, switch, recursion)
@@ -50,6 +50,8 @@ We just convert the fully-resolved AST to equivalent Rust code.
 - Increment/decrement operators (++x, x++, --x, x-- with correct pre/post semantics)
 - Default function parameters (evaluated at call site via clang_Cursor_Evaluate)
 - Const vs non-const methods (auto-detect &self vs &mut self based on modifications)
+- Comma operator (C++ (a, b) → Rust block expression { a; b })
+- Type aliases (typedef and using declarations → Rust pub type)
 
 **CLI**:
 ```bash

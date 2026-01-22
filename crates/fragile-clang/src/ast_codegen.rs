@@ -324,6 +324,12 @@ impl AstCodeGen {
             ClangNodeKind::EnumDecl { name, is_scoped, underlying_type } => {
                 self.generate_enum(name, *is_scoped, underlying_type, &node.children);
             }
+            ClangNodeKind::TypedefDecl { name, underlying_type } => {
+                self.generate_type_alias(name, underlying_type);
+            }
+            ClangNodeKind::TypeAliasDecl { name, underlying_type } => {
+                self.generate_type_alias(name, underlying_type);
+            }
             ClangNodeKind::NamespaceDecl { name } => {
                 // Generate Rust module for namespace
                 if let Some(ns_name) = name {
@@ -617,6 +623,15 @@ impl AstCodeGen {
 
         self.indent -= 1;
         self.writeln("}");
+        self.writeln("");
+    }
+
+    /// Generate a type alias for typedef or using declarations.
+    fn generate_type_alias(&mut self, name: &str, underlying_type: &CppType) {
+        // Convert the underlying C++ type to Rust
+        let rust_type = underlying_type.to_rust_type_str();
+        self.writeln(&format!("/// C++ typedef/using `{}`", name));
+        self.writeln(&format!("pub type {} = {};", name, rust_type));
         self.writeln("");
     }
 

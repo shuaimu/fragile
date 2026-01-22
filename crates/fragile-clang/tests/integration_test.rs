@@ -1313,3 +1313,26 @@ fn test_e2e_comma_operator() {
 
     assert_eq!(exit_code, 0, "Comma operator should evaluate both expressions and return the last");
 }
+
+/// Test E2E: Typedef type aliases
+#[test]
+fn test_e2e_typedef() {
+    let source = r#"
+        typedef int MyInt;
+        typedef MyInt* MyIntPtr;
+
+        int main() {
+            MyInt x = 42;
+            MyIntPtr p = &x;
+            if (*p == 42) {
+                return 0;
+            }
+            return 1;
+        }
+    "#;
+
+    let (exit_code, _stdout, _stderr) = transpile_compile_run(source, "e2e_typedef.cpp")
+        .expect("E2E test failed");
+
+    assert_eq!(exit_code, 0, "Typedef type aliases should work correctly");
+}
