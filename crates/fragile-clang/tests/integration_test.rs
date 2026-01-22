@@ -1582,3 +1582,56 @@ fn test_e2e_subscript_operator() {
 
     assert_eq!(exit_code, 0, "Subscript operator should work with reads and writes");
 }
+
+/// Test assignment operators (=, +=, -=) for custom types.
+#[test]
+fn test_e2e_assignment_operators() {
+    let source = r#"
+        class Counter {
+            int value;
+        public:
+            Counter(int v = 0) : value(v) {}
+
+            Counter& operator=(int v) {
+                value = v;
+                return *this;
+            }
+
+            Counter& operator+=(int v) {
+                value += v;
+                return *this;
+            }
+
+            Counter& operator-=(int v) {
+                value -= v;
+                return *this;
+            }
+
+            int get() const { return value; }
+        };
+
+        int main() {
+            Counter c;
+            c = 10;           // operator=
+            if (c.get() != 10) return 1;
+
+            c += 5;           // operator+=
+            if (c.get() != 15) return 2;
+
+            c -= 3;           // operator-=
+            if (c.get() != 12) return 3;
+
+            // Chained operations
+            Counter d;
+            (d = 100) += 50;
+            if (d.get() != 150) return 4;
+
+            return 0;
+        }
+    "#;
+
+    let (exit_code, _stdout, _stderr) = transpile_compile_run(source, "e2e_assign_ops.cpp")
+        .expect("E2E test failed");
+
+    assert_eq!(exit_code, 0, "Assignment operators should work correctly");
+}

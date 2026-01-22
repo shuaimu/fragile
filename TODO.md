@@ -14,7 +14,7 @@ We just convert the fully-resolved AST to equivalent Rust code.
 ## Current Status
 
 **Grammar Tests**: 20/20 passing
-**E2E Tests**: 51/51 passing
+**E2E Tests**: 52/52 passing
 
 **Working**:
 - Simple functions with control flow (if/else, while, for, do-while, switch, recursion)
@@ -59,6 +59,7 @@ We just convert the fully-resolved AST to equivalent Rust code.
 - Global arrays (const-safe initialization with [0; N])
 - Pointer arithmetic (++, --, +=, -= using .add()/.sub())
 - Subscript operator [] (returns &mut, correct argument passing, auto-dereference)
+- Assignment operators (=, +=, -=, *=, /=, etc. with correct *this return)
 
 **CLI**:
 ```bash
@@ -120,7 +121,7 @@ crates/
 
 ### 7. Advanced Operator Overloading (Priority: High)
 - [x] **7.1** Subscript operator [] (returns mutable reference, correct argument passing, auto-dereference) ✅ 2026-01-22
-- [ ] **7.2** Assignment operators (=, +=, -=, etc.) for custom types
+- [x] **7.2** Assignment operators (=, +=, -=, etc.) for custom types ✅ 2026-01-22
 - [ ] **7.3** Dereference operator * for smart pointer types
 - [ ] **7.4** Arrow operator -> for smart pointer types
 

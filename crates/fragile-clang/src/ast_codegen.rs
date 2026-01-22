@@ -2107,8 +2107,11 @@ impl AstCodeGen {
                     let expr = self.expr_to_string(&node.children[0]);
                     // Check if we need to add &mut for reference return types
                     let expr = if let Some(CppType::Reference { is_const, .. }) = &self.current_return_type {
-                        // If returning a reference, wrap expression with & or &mut
-                        if *is_const {
+                        // Don't add & or &mut if returning 'self' (from *this in C++)
+                        // because Rust's &mut self already provides the reference
+                        if expr == "self" || expr == "__self" {
+                            expr
+                        } else if *is_const {
                             format!("&{}", expr)
                         } else {
                             format!("&mut {}", expr)
@@ -3046,8 +3049,14 @@ impl AstCodeGen {
                             }
                         }
                         UnaryOp::Deref => {
-                            // Raw pointer dereference needs unsafe
-                            format!("unsafe {{ *{} }}", operand)
+                            // Check if we're dereferencing 'this' - in C++ *this gives the object,
+                            // in Rust 'self' is already the object (not a pointer)
+                            if matches!(&node.children[0].kind, ClangNodeKind::CXXThisExpr { .. }) {
+                                operand // Just return 'self' directly
+                            } else {
+                                // Raw pointer dereference needs unsafe
+                                format!("unsafe {{ *{} }}", operand)
+                            }
                         }
                         UnaryOp::PreInc | UnaryOp::PreDec => {
                             let is_pointer = matches!(ty, CppType::Pointer { .. });
@@ -3147,9 +3156,16 @@ impl AstCodeGen {
                             format!("*{}.{}()", left_operand, method_name)
                         }
                     } else if let Some(right_idx) = right_idx_opt {
-                        // Binary operator: left.op_X(&right)
+                        // Binary operator: left.op_X(right) or left.op_X(&right)
                         let right_operand = self.expr_to_string(&node.children[right_idx]);
-                        format!("{}.{}(&{})", left_operand, method_name, right_operand)
+                        let right_type = Self::get_expr_type(&node.children[right_idx]);
+                        // Pass class/struct types by reference, primitives by value
+                        let needs_ref = matches!(right_type, Some(CppType::Named(_)));
+                        if needs_ref {
+                            format!("{}.{}(&{})", left_operand, method_name, right_operand)
+                        } else {
+                            format!("{}.{}({})", left_operand, method_name, right_operand)
+                        }
                     } else {
                         // Unary operator: operand.op_X()
                         format!("{}.{}()", left_operand, method_name)
@@ -3674,13 +3690,39 @@ fn sanitize_identifier(name: &str) -> String {
             "operator==" => "op_eq".to_string(),
             "operator!=" => "op_ne".to_string(),
             "operator<" => "op_lt".to_string(),
+            "operator<=" => "op_le".to_string(),
             "operator>" => "op_gt".to_string(),
+            "operator>=" => "op_ge".to_string(),
             "operator+" => "op_add".to_string(),
             "operator-" => "op_sub".to_string(),
             "operator*" => "op_mul".to_string(),
             "operator/" => "op_div".to_string(),
+            "operator%" => "op_rem".to_string(),
+            "operator+=" => "op_add_assign".to_string(),
+            "operator-=" => "op_sub_assign".to_string(),
+            "operator*=" => "op_mul_assign".to_string(),
+            "operator/=" => "op_div_assign".to_string(),
+            "operator%=" => "op_rem_assign".to_string(),
+            "operator&=" => "op_and_assign".to_string(),
+            "operator|=" => "op_or_assign".to_string(),
+            "operator^=" => "op_xor_assign".to_string(),
+            "operator<<=" => "op_shl_assign".to_string(),
+            "operator>>=" => "op_shr_assign".to_string(),
             "operator[]" => "op_index".to_string(),
             "operator()" => "op_call".to_string(),
+            "operator&" => "op_bitand".to_string(),
+            "operator|" => "op_bitor".to_string(),
+            "operator^" => "op_bitxor".to_string(),
+            "operator~" => "op_bitnot".to_string(),
+            "operator<<" => "op_shl".to_string(),
+            "operator>>" => "op_shr".to_string(),
+            "operator!" => "op_not".to_string(),
+            "operator&&" => "op_and".to_string(),
+            "operator||" => "op_or".to_string(),
+            "operator++" => "op_inc".to_string(),
+            "operator--" => "op_dec".to_string(),
+            "operator->" => "op_arrow".to_string(),
+            "operator->*" => "op_arrow_star".to_string(),
             _ => name.replace("operator", "op_")
         }
     } else {
