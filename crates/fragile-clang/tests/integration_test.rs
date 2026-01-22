@@ -858,3 +858,39 @@ fn test_e2e_base_constructor() {
 
     assert_eq!(exit_code, 0, "Base class constructor delegation should work");
 }
+
+/// Test operator overloading.
+#[test]
+fn test_e2e_operator_overloading() {
+    let source = r#"
+        class Point {
+            int x;
+            int y;
+        public:
+            Point(int a, int b) : x(a), y(b) {}
+            Point operator+(const Point& other) const {
+                return Point(x + other.x, y + other.y);
+            }
+            bool operator==(const Point& other) const {
+                return x == other.x && y == other.y;
+            }
+            int getX() const { return x; }
+            int getY() const { return y; }
+        };
+
+        int main() {
+            Point a(1, 2);
+            Point b(3, 4);
+            Point c = a + b;
+            if (c.getX() == 4 && c.getY() == 6) {
+                return 0;
+            }
+            return 1;
+        }
+    "#;
+
+    let (exit_code, _stdout, _stderr) = transpile_compile_run(source, "e2e_operator_overloading.cpp")
+        .expect("E2E test failed");
+
+    assert_eq!(exit_code, 0, "Operator overloading should work correctly");
+}

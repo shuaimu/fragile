@@ -14,7 +14,7 @@ We just convert the fully-resolved AST to equivalent Rust code.
 ## Current Status
 
 **Grammar Tests**: 20/20 passing
-**E2E Tests**: 27/27 passing
+**E2E Tests**: 29/29 passing
 
 **Working**:
 - Simple functions with control flow (if/else, while, for, do-while, recursion)
@@ -37,6 +37,8 @@ We just convert the fully-resolved AST to equivalent Rust code.
 - C++ namespaces → Rust modules
 - Virtual method override (static dispatch)
 - Inherited field access via `__base`
+- Base class constructor delegation in derived constructors
+- Operator overloading (binary operators like +, ==, etc.)
 - STL smart pointer type mappings (unique_ptr→Box, shared_ptr→Arc, weak_ptr→Weak)
 
 **CLI**:
@@ -162,9 +164,7 @@ See `docs/transpiler-status.md` for detailed feature matrix.
 
 ### Not Yet Supported
 - Multiple inheritance
-- Operator overloading
 - Dynamic dispatch (polymorphism through base pointers)
-- Base class constructor delegation in derived constructors
 
 ---
 

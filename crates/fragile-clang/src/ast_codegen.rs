@@ -723,6 +723,61 @@ impl AstCodeGen {
         }
     }
 
+    /// Check if a CallExpr is an operator overload call.
+    /// Returns Some((operator_name, left_operand_index, right_operand_index)) for binary operators,
+    /// or Some((operator_name, operand_index, None)) for unary operators.
+    fn get_operator_call_info(node: &ClangNode) -> Option<(String, usize, Option<usize>)> {
+        // Operator calls have the pattern:
+        // CallExpr
+        //   UnexposedExpr -> left_operand
+        //   UnexposedExpr -> DeclRefExpr { name: "operator+" }
+        //   UnexposedExpr -> right_operand (for binary)
+        for (i, child) in node.children.iter().enumerate() {
+            if let Some(op_name) = Self::find_operator_name(child) {
+                if op_name.starts_with("operator") {
+                    // Found an operator - determine binary vs unary
+                    if node.children.len() == 3 {
+                        // Binary operator: left is before, right is after
+                        let left = if i > 0 { i - 1 } else { 0 };
+                        let right = if i + 1 < node.children.len() { i + 1 } else { i };
+                        return Some((op_name, left, Some(right)));
+                    } else if node.children.len() == 2 {
+                        // Unary operator
+                        let operand = if i == 0 { 1 } else { 0 };
+                        return Some((op_name, operand, None));
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Recursively find an operator name in a node tree.
+    fn find_operator_name(node: &ClangNode) -> Option<String> {
+        match &node.kind {
+            ClangNodeKind::DeclRefExpr { name, ty, .. } => {
+                // Check if this is an operator function reference
+                if name.starts_with("operator") {
+                    // Also verify it's a function type
+                    if matches!(ty, CppType::Function { .. }) {
+                        return Some(name.clone());
+                    }
+                }
+                None
+            }
+            ClangNodeKind::Unknown(_) | ClangNodeKind::ImplicitCastExpr { .. } => {
+                // Look through wrapper nodes
+                for child in &node.children {
+                    if let Some(op) = Self::find_operator_name(child) {
+                        return Some(op);
+                    }
+                }
+                None
+            }
+            _ => None,
+        }
+    }
+
     /// Generate a method or constructor.
     fn generate_method(&mut self, node: &ClangNode, struct_name: &str) {
         // Track current class for inherited member access
@@ -1477,11 +1532,33 @@ impl AstCodeGen {
                 }
             }
             ClangNodeKind::CallExpr { ty } => {
-                // Check if this is a constructor call (CallExpr with Named type)
-                if let CppType::Named(struct_name) = ty {
-                    // Constructor call: all children are arguments
+                // First, check if this is an operator overload call (e.g., a + b)
+                if let Some((op_name, left_idx, right_idx_opt)) = Self::get_operator_call_info(node) {
+                    // Convert operator name to method name (operator+ -> op_add)
+                    let method_name = sanitize_identifier(&op_name);
+                    let left_operand = self.expr_to_string(&node.children[left_idx]);
+
+                    if let Some(right_idx) = right_idx_opt {
+                        // Binary operator: left.op_X(&right)
+                        let right_operand = self.expr_to_string(&node.children[right_idx]);
+                        format!("{}.{}(&{})", left_operand, method_name, right_operand)
+                    } else {
+                        // Unary operator: operand.op_X()
+                        format!("{}.{}()", left_operand, method_name)
+                    }
+                } else if let CppType::Named(struct_name) = ty {
+                    // Constructor call: all children are arguments (but skip TypeRef nodes)
                     // For copy constructors (1 argument of same type), pass by reference
                     let args: Vec<String> = node.children.iter()
+                        .filter(|c| {
+                            // Skip TypeRef nodes (they're type references, not arguments)
+                            if let ClangNodeKind::Unknown(s) = &c.kind {
+                                if s.starts_with("TypeRef:") || s == "TypeRef" {
+                                    return false;
+                                }
+                            }
+                            true
+                        })
                         .map(|c| {
                             let arg_str = self.expr_to_string(c);
                             // Check if this is a copy constructor call (arg type matches struct)
