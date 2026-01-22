@@ -139,8 +139,8 @@ C++ Source → Clang (libclang) → Clang AST → Rust Source → rustc → Bina
 | Increment/decrement (++, --) | ✅ | Pre/post semantics correct |
 | Ternary operator (?:) | ✅ | `if cond { a } else { b }` |
 | Comma operator | ✅ | `{ a; b }` block expression |
-| `sizeof` | ⚠️ | Should use `std::mem::size_of` |
-| `alignof` | ⚠️ | Should use `std::mem::align_of` |
+| `sizeof` | ✅ | Evaluated by Clang at compile time |
+| `alignof` | ✅ | Evaluated by Clang at compile time |
 | Type casts | ✅ | `static_cast`, `reinterpret_cast`, `const_cast` |
 | Pointer arithmetic | ✅ | `.add()`, `.sub()` methods |
 
@@ -272,7 +272,7 @@ C++ Source → Clang (libclang) → Clang AST → Rust Source → rustc → Bina
 | Feature | Status | Notes |
 |---------|--------|-------|
 | Grammar tests | ✅ | 20/20 passing |
-| E2E tests | ✅ | 54/54 passing |
+| E2E tests | ✅ | 55/55 passing |
 | Compile generated code | ✅ | Automatically verified |
 | Run generated code | ✅ | Exit codes verified |
 
@@ -288,7 +288,7 @@ C++ Source → Clang (libclang) → Clang AST → Rust Source → rustc → Bina
 - Pointers, references, arrays
 - Ternary operator, nested structs
 
-### E2E Tests (54/54)
+### E2E Tests (55/55)
 - Simple functions, factorial, arrays
 - Pointers, references
 - Constructors, destructors (Drop trait)
@@ -308,6 +308,7 @@ C++ Source → Clang (libclang) → Clang AST → Rust Source → rustc → Bina
 - Increment/decrement operators
 - Pointer arithmetic
 - Type aliases
+- sizeof/alignof operators
 
 ---
 

@@ -1721,3 +1721,48 @@ fn test_e2e_arrow_operator() {
 
     assert_eq!(exit_code, 0, "Arrow operator should work for member access and method calls");
 }
+
+/// Test sizeof and alignof operators.
+#[test]
+fn test_e2e_sizeof_alignof() {
+    let source = r#"
+        class Point {
+        public:
+            int x, y;
+        };
+
+        int main() {
+            int a;
+            Point p;
+
+            // sizeof with type
+            int size1 = sizeof(int);
+            int size2 = sizeof(Point);
+
+            // sizeof with expression
+            int size3 = sizeof(a);
+            int size4 = sizeof(p);
+            int size5 = sizeof(p.x);
+
+            // alignof with type
+            int align1 = alignof(int);
+            int align2 = alignof(Point);
+
+            // Check expected values
+            if (size1 != 4) return 1;
+            if (size2 != 8) return 2;
+            if (size3 != 4) return 3;
+            if (size4 != 8) return 4;
+            if (size5 != 4) return 5;
+            if (align1 != 4) return 6;
+            if (align2 != 4) return 7;
+
+            return 0;
+        }
+    "#;
+
+    let (exit_code, _stdout, _stderr) = transpile_compile_run(source, "e2e_sizeof_alignof.cpp")
+        .expect("E2E test failed");
+
+    assert_eq!(exit_code, 0, "sizeof and alignof should be evaluated at compile time");
+}

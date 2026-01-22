@@ -14,7 +14,7 @@ We just convert the fully-resolved AST to equivalent Rust code.
 ## Current Status
 
 **Grammar Tests**: 20/20 passing
-**E2E Tests**: 54/54 passing
+**E2E Tests**: 55/55 passing
 
 **Working**:
 - Simple functions with control flow (if/else, while, for, do-while, switch, recursion)
@@ -62,6 +62,7 @@ We just convert the fully-resolved AST to equivalent Rust code.
 - Assignment operators (=, +=, -=, *=, /=, etc. with correct *this return)
 - Dereference operator * (op_deref → returns &mut, pointer-to-bool via .is_null())
 - Arrow operator -> (op_arrow method → pointer dereference with unsafe block)
+- sizeof/alignof (evaluated at compile time by Clang)
 
 **CLI**:
 ```bash
