@@ -44,8 +44,8 @@ pub struct AstCodeGen {
     current_class: Option<String>,
     /// Classes that have virtual methods (need trait generation)
     polymorphic_classes: HashSet<String>,
-    /// Map from class name to its base class name (for single inheritance)
-    class_bases: HashMap<String, String>,
+    /// Map from class name to its base class names (supports multiple inheritance)
+    class_bases: HashMap<String, Vec<String>>,
     /// Map from class name to its virtual methods
     virtual_methods: HashMap<String, Vec<VirtualMethodInfo>>,
 }
@@ -110,7 +110,7 @@ impl AstCodeGen {
     /// Analyze a class for virtual methods and inheritance.
     fn analyze_class(&mut self, class_name: &str, children: &[ClangNode]) {
         let mut virtual_methods = Vec::new();
-        let mut base_class: Option<String> = None;
+        let mut base_classes: Vec<String> = Vec::new();
 
         for child in children {
             match &child.kind {
@@ -127,9 +127,9 @@ impl AstCodeGen {
                     }
                 }
                 ClangNodeKind::CXXBaseSpecifier { base_type, .. } => {
-                    // Extract base class name
+                    // Extract base class name - collect ALL bases for MI
                     if let CppType::Named(base_name) = base_type {
-                        base_class = Some(base_name.clone());
+                        base_classes.push(base_name.clone());
                     }
                 }
                 _ => {}
@@ -142,13 +142,16 @@ impl AstCodeGen {
             self.virtual_methods.insert(class_name.to_string(), virtual_methods);
         }
 
-        // Record inheritance relationship
-        if let Some(base) = base_class {
-            self.class_bases.insert(class_name.to_string(), base.clone());
-            // If base class is polymorphic, this class is too
-            if self.polymorphic_classes.contains(&base) {
-                self.polymorphic_classes.insert(class_name.to_string());
+        // Record inheritance relationships (supports multiple bases)
+        if !base_classes.is_empty() {
+            // If any base class is polymorphic, this class is too
+            for base in &base_classes {
+                if self.polymorphic_classes.contains(base) {
+                    self.polymorphic_classes.insert(class_name.to_string());
+                    break;
+                }
             }
+            self.class_bases.insert(class_name.to_string(), base_classes);
         }
     }
 
@@ -243,12 +246,16 @@ impl AstCodeGen {
         self.writeln(&format!("pub struct {} {{", name));
         self.indent += 1;
 
-        // First, embed base classes as fields
+        // First, embed base classes as fields (supports multiple inheritance)
+        let mut base_idx = 0;
         for child in children {
             if let ClangNodeKind::CXXBaseSpecifier { base_type, access, .. } = &child.kind {
                 if !matches!(access, crate::ast::AccessSpecifier::Private) {
                     let base_name = base_type.to_rust_type_str();
-                    self.writeln(&format!("pub __base: {},", base_name));
+                    // Use __base for single inheritance, __base0/__base1/etc for MI
+                    let field_name = if base_idx == 0 { "__base".to_string() } else { format!("__base{}", base_idx) };
+                    self.writeln(&format!("pub {}: {},", field_name, base_name));
+                    base_idx += 1;
                 }
             }
         }
@@ -392,15 +399,19 @@ impl AstCodeGen {
         self.writeln(&format!("pub struct {} {{", name));
         self.indent += 1;
 
-        // First, embed base classes as fields (for single inheritance)
+        // First, embed base classes as fields (supports multiple inheritance)
         // Base classes must come first to maintain C++ memory layout
+        let mut base_idx = 0;
         for child in children {
             if let ClangNodeKind::CXXBaseSpecifier { base_type, access, .. } = &child.kind {
                 // Only include public/protected bases (private inheritance is more complex)
                 if !matches!(access, crate::ast::AccessSpecifier::Private) {
                     let base_name = base_type.to_rust_type_str();
+                    // Use __base for first base (backward compatible), __base1/__base2/etc for MI
+                    let field_name = if base_idx == 0 { "__base".to_string() } else { format!("__base{}", base_idx) };
                     self.writeln(&format!("/// Inherited from `{}`", base_name));
-                    self.writeln(&format!("pub __base: {},", base_name));
+                    self.writeln(&format!("pub {}: {},", field_name, base_name));
+                    base_idx += 1;
                 }
             }
         }
@@ -501,15 +512,19 @@ impl AstCodeGen {
         if is_base_class && self.polymorphic_classes.contains(name) {
             if let Some(methods) = self.virtual_methods.get(name).cloned() {
                 self.generate_trait_for_class(name, &methods);
-                self.generate_trait_impl(name, name, &methods, children);
+                self.generate_trait_impl(name, name, &methods, children, None);
             }
         }
 
-        // If this class derives from a polymorphic base, implement the base's trait
-        if let Some(base_name) = self.class_bases.get(name).cloned() {
-            if self.polymorphic_classes.contains(&base_name) {
-                if let Some(methods) = self.virtual_methods.get(&base_name).cloned() {
-                    self.generate_trait_impl(name, &base_name, &methods, children);
+        // If this class derives from polymorphic bases, implement each base's trait
+        if let Some(base_names) = self.class_bases.get(name).cloned() {
+            for (base_idx, base_name) in base_names.iter().enumerate() {
+                if self.polymorphic_classes.contains(base_name) {
+                    if let Some(methods) = self.virtual_methods.get(base_name).cloned() {
+                        // Use __base for first base, __base1/__base2/etc for MI
+                        let base_field = if base_idx == 0 { "__base".to_string() } else { format!("__base{}", base_idx) };
+                        self.generate_trait_impl(name, base_name, &methods, children, Some(base_field));
+                    }
                 }
             }
         }
@@ -551,7 +566,8 @@ impl AstCodeGen {
     }
 
     /// Generate trait implementation for a class.
-    fn generate_trait_impl(&mut self, class_name: &str, trait_class: &str, methods: &[VirtualMethodInfo], children: &[ClangNode]) {
+    /// base_field is the field name to delegate to (e.g., "__base", "__base1") if this is a derived class.
+    fn generate_trait_impl(&mut self, class_name: &str, trait_class: &str, methods: &[VirtualMethodInfo], children: &[ClangNode], base_field: Option<String>) {
         self.writeln("");
         self.writeln(&format!("impl {}Trait for {} {{", trait_class, class_name));
         self.indent += 1;
@@ -594,8 +610,18 @@ impl AstCodeGen {
                 } else {
                     self.writeln(&format!("self.{}({})", method_name, args.join(", ")));
                 }
+            } else if let Some(ref bf) = base_field {
+                // Delegate to the correct base class field
+                let args: Vec<String> = method.params.iter()
+                    .map(|(pname, _)| sanitize_identifier(pname))
+                    .collect();
+                if args.is_empty() {
+                    self.writeln(&format!("self.{}.{}()", bf, method_name));
+                } else {
+                    self.writeln(&format!("self.{}.{}({})", bf, method_name, args.join(", ")));
+                }
             } else {
-                // Delegate to base class
+                // Fallback to __base (shouldn't happen with proper calls)
                 let args: Vec<String> = method.params.iter()
                     .map(|(pname, _)| sanitize_identifier(pname))
                     .collect();
@@ -919,6 +945,35 @@ impl AstCodeGen {
         }
     }
 
+    /// Get the base field name for accessing a member declared in a specific base class.
+    /// For single inheritance returns "__base", for MI returns "__base", "__base1", "__base2", etc.
+    fn get_base_field_for_class(&self, current_class: &str, declaring_class: &str) -> String {
+        if let Some(base_classes) = self.class_bases.get(current_class) {
+            if let Some(idx) = base_classes.iter().position(|b| b == declaring_class) {
+                if idx == 0 {
+                    "__base".to_string()
+                } else {
+                    format!("__base{}", idx)
+                }
+            } else {
+                // Declaring class not found in immediate bases - could be transitive
+                // For now, check if any base has this class in their chain
+                for (base_idx, base_name) in base_classes.iter().enumerate() {
+                    if let Some(base_bases) = self.class_bases.get(base_name) {
+                        if base_bases.contains(&declaring_class.to_string()) {
+                            // Declaring class is in the chain of this base
+                            let first_base = if base_idx == 0 { "__base".to_string() } else { format!("__base{}", base_idx) };
+                            return format!("{}.__base", first_base);
+                        }
+                    }
+                }
+                "__base".to_string() // fallback
+            }
+        } else {
+            "__base".to_string() // fallback
+        }
+    }
+
     /// Get function parameter types from a function reference node.
     fn get_function_param_types(node: &ClangNode) -> Option<Vec<CppType>> {
         match &node.kind {
@@ -1076,7 +1131,15 @@ impl AstCodeGen {
                 // Pattern 2: TypeRef:ClassName followed by CallExpr (base class initialization)
                 // Pattern 3: CompoundStmt with assignments to member fields (body assignments)
                 let mut initializers: Vec<(String, String)> = Vec::new();
-                let mut base_init: Option<String> = None;
+                // base_inits: Vec<(field_name, constructor_call)> - supports multiple inheritance
+                let mut base_inits: Vec<(String, String)> = Vec::new();
+
+                // Get base classes for current class to determine field names
+                let base_classes = self.current_class.as_ref()
+                    .and_then(|c| self.class_bases.get(c))
+                    .cloned()
+                    .unwrap_or_default();
+
                 let mut i = 0;
                 while i < node.children.len() {
                     if let ClangNodeKind::MemberRef { name } = &node.children[i].kind {
@@ -1099,7 +1162,16 @@ impl AstCodeGen {
                                     // Extract constructor arguments
                                     let args = self.extract_constructor_args(&node.children[i]);
                                     let ctor_name = format!("{}::new_{}", base_class, args.len());
-                                    base_init = Some(format!("{}({})", ctor_name, args.join(", ")));
+                                    let ctor_call = format!("{}({})", ctor_name, args.join(", "));
+
+                                    // Find the index of this base class to determine field name
+                                    let field_name = if let Some(base_idx) = base_classes.iter().position(|b| b == base_class) {
+                                        if base_idx == 0 { "__base".to_string() } else { format!("__base{}", base_idx) }
+                                    } else {
+                                        "__base".to_string() // fallback
+                                    };
+
+                                    base_inits.push((field_name, ctor_call));
                                 }
                             }
                         }
@@ -1113,12 +1185,12 @@ impl AstCodeGen {
                 self.writeln("Self {");
                 self.indent += 1;
 
-                // First, initialize base class if present
-                if let Some(ref base_call) = base_init {
-                    self.writeln(&format!("__base: {},", base_call));
+                // First, initialize base classes if present (supports multiple inheritance)
+                for (field_name, base_call) in &base_inits {
+                    self.writeln(&format!("{}: {},", field_name, base_call));
                 }
 
-                if initializers.is_empty() && base_init.is_none() {
+                if initializers.is_empty() && base_inits.is_empty() {
                     // Default constructor - use Default
                     self.writeln("..Default::default()");
                 } else {
@@ -1914,18 +1986,23 @@ impl AstCodeGen {
                     let base = self.expr_to_string(&node.children[0]);
                     // Check if this is accessing an inherited member
                     let base_type = Self::get_expr_type(&node.children[0]);
-                    let needs_base_access = if let Some(decl_class) = declaring_class {
-                        // Extract the actual class name from the base type, handling const, references, pointers
+
+                    // Determine if we need base access and get the correct base field name
+                    let (needs_base_access, base_field) = if let Some(decl_class) = declaring_class {
                         let base_class_name = Self::extract_class_name(&base_type);
                         if let Some(name) = base_class_name {
-                            // If the declaring class differs from the base expression's type,
-                            // we need to access through __base
-                            name != *decl_class
+                            if name != *decl_class {
+                                // Need base access - get correct field for MI support
+                                let field = self.get_base_field_for_class(&name, decl_class);
+                                (true, field)
+                            } else {
+                                (false, String::new())
+                            }
                         } else {
-                            false
+                            (false, String::new())
                         }
                     } else {
-                        false
+                        (false, String::new())
                     };
 
                     let member = sanitize_identifier(member_name);
@@ -1950,13 +2027,13 @@ impl AstCodeGen {
                             // For trait objects, no dereference - call method directly
                             format!("{}.{}", base, member)
                         } else if needs_base_access {
-                            format!("(*{}).__base.{}", base, member)
+                            format!("(*{}).{}.{}", base, base_field, member)
                         } else {
                             format!("(*{}).{}", base, member)
                         }
                     } else {
                         if needs_base_access {
-                            format!("{}.__base.{}", base, member)
+                            format!("{}.{}.{}", base, base_field, member)
                         } else {
                             format!("{}.{}", base, member)
                         }
@@ -1964,13 +2041,18 @@ impl AstCodeGen {
                 } else {
                     // Implicit this - check if member is inherited
                     let member = sanitize_identifier(member_name);
-                    let needs_base_access = if let (Some(current), Some(decl_class)) = (&self.current_class, declaring_class) {
-                        current != decl_class
+                    let (needs_base_access, base_field) = if let (Some(current), Some(decl_class)) = (&self.current_class, declaring_class) {
+                        if current != decl_class {
+                            let field = self.get_base_field_for_class(current, decl_class);
+                            (true, field)
+                        } else {
+                            (false, String::new())
+                        }
                     } else {
-                        false
+                        (false, String::new())
                     };
                     if needs_base_access {
-                        format!("self.__base.{}", member)
+                        format!("self.{}.{}", base_field, member)
                     } else {
                         format!("self.{}", member)
                     }

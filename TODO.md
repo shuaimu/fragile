@@ -14,7 +14,7 @@ We just convert the fully-resolved AST to equivalent Rust code.
 ## Current Status
 
 **Grammar Tests**: 20/20 passing
-**E2E Tests**: 31/31 passing
+**E2E Tests**: 32/32 passing
 
 **Working**:
 - Simple functions with control flow (if/else, while, for, do-while, recursion)
@@ -160,10 +160,10 @@ See `docs/transpiler-status.md` for detailed feature matrix.
 
 ### Partial Support
 - Rvalue references (parsed, basic return-by-value works)
-- Inheritance (single inheritance works, no multiple inheritance)
+- Inheritance (single and multiple inheritance work, no diamond inheritance yet)
 
 ### Not Yet Supported
-- Multiple inheritance
+- Diamond inheritance (virtual base classes)
 
 ---
 

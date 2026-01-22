@@ -965,3 +965,47 @@ fn test_e2e_function_returning_struct() {
 
     assert_eq!(exit_code, 0, "Function returning struct should work correctly");
 }
+
+/// Test multiple inheritance.
+#[test]
+fn test_e2e_multiple_inheritance() {
+    let source = r#"
+        class Flyable {
+        public:
+            int altitude;
+            Flyable() : altitude(0) {}
+            void setAltitude(int a) { altitude = a; }
+            int getAltitude() const { return altitude; }
+        };
+
+        class Swimmable {
+        public:
+            int depth;
+            Swimmable() : depth(0) {}
+            void setDepth(int d) { depth = d; }
+            int getDepth() const { return depth; }
+        };
+
+        class Duck : public Flyable, public Swimmable {
+        public:
+            int age;
+            Duck() : age(1) {}
+        };
+
+        int main() {
+            Duck d;
+            d.setAltitude(100);
+            d.setDepth(5);
+
+            if (d.getAltitude() == 100 && d.getDepth() == 5 && d.age == 1) {
+                return 0;
+            }
+            return 1;
+        }
+    "#;
+
+    let (exit_code, _stdout, _stderr) = transpile_compile_run(source, "e2e_multiple_inheritance.cpp")
+        .expect("E2E test failed");
+
+    assert_eq!(exit_code, 0, "Multiple inheritance should work correctly with access to both base classes");
+}
