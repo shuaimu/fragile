@@ -2533,8 +2533,17 @@ impl AstCodeGen {
                     let left_is_global_var = self.is_global_var_expr(&node.children[0]);
                     let needs_unsafe = left_is_deref || left_is_ptr_subscript || left_is_static_member || left_is_global_subscript || left_is_global_var;
 
-                    // Handle assignment specially
-                    if matches!(op, BinaryOp::Assign | BinaryOp::AddAssign | BinaryOp::SubAssign |
+                    // Check if left side is a pointer type for += / -= (need .add() / .sub())
+                    let left_type = Self::get_expr_type(&node.children[0]);
+                    let left_is_pointer = matches!(left_type, Some(CppType::Pointer { .. }));
+
+                    // Handle pointer arithmetic specially
+                    if left_is_pointer && matches!(op, BinaryOp::AddAssign | BinaryOp::SubAssign) {
+                        let left = self.expr_to_string(&node.children[0]);
+                        let right = self.expr_to_string(&node.children[1]);
+                        let method = if matches!(op, BinaryOp::AddAssign) { "add" } else { "sub" };
+                        format!("{} = {}.{}({} as usize)", left, left, method, right)
+                    } else if matches!(op, BinaryOp::Assign | BinaryOp::AddAssign | BinaryOp::SubAssign |
                                    BinaryOp::MulAssign | BinaryOp::DivAssign |
                                    BinaryOp::RemAssign | BinaryOp::AndAssign |
                                    BinaryOp::OrAssign | BinaryOp::XorAssign |
@@ -2592,22 +2601,40 @@ impl AstCodeGen {
                             format!("unsafe {{ *{} }}", operand)
                         }
                         UnaryOp::PreInc | UnaryOp::PreDec => {
+                            let is_pointer = matches!(ty, CppType::Pointer { .. });
                             // For global variables, wrap entire operation in unsafe
                             if is_global {
                                 let raw_name = self.get_raw_var_name(&node.children[0]).unwrap_or(operand.clone());
-                                let op_str = if matches!(op, UnaryOp::PreInc) { "+=" } else { "-=" };
-                                format!("unsafe {{ {} {} 1; {} }}", raw_name, op_str, raw_name)
+                                if is_pointer {
+                                    let method = if matches!(op, UnaryOp::PreInc) { "add" } else { "sub" };
+                                    format!("unsafe {{ {} = {}.{}(1); {} }}", raw_name, raw_name, method, raw_name)
+                                } else {
+                                    let op_str = if matches!(op, UnaryOp::PreInc) { "+=" } else { "-=" };
+                                    format!("unsafe {{ {} {} 1; {} }}", raw_name, op_str, raw_name)
+                                }
+                            } else if is_pointer {
+                                let method = if matches!(op, UnaryOp::PreInc) { "add" } else { "sub" };
+                                format!("{{ {} = {}.{}(1); {} }}", operand, operand, method, operand)
                             } else {
                                 let op_str = if matches!(op, UnaryOp::PreInc) { "+=" } else { "-=" };
                                 format!("{{ {} {} 1; {} }}", operand, op_str, operand)
                             }
                         }
                         UnaryOp::PostInc | UnaryOp::PostDec => {
+                            let is_pointer = matches!(ty, CppType::Pointer { .. });
                             // For global variables, wrap entire operation in unsafe
                             if is_global {
                                 let raw_name = self.get_raw_var_name(&node.children[0]).unwrap_or(operand.clone());
-                                let op_str = if matches!(op, UnaryOp::PostInc) { "+=" } else { "-=" };
-                                format!("unsafe {{ let __v = {}; {} {} 1; __v }}", raw_name, raw_name, op_str)
+                                if is_pointer {
+                                    let method = if matches!(op, UnaryOp::PostInc) { "add" } else { "sub" };
+                                    format!("unsafe {{ let __v = {}; {} = {}.{}(1); __v }}", raw_name, raw_name, raw_name, method)
+                                } else {
+                                    let op_str = if matches!(op, UnaryOp::PostInc) { "+=" } else { "-=" };
+                                    format!("unsafe {{ let __v = {}; {} {} 1; __v }}", raw_name, raw_name, op_str)
+                                }
+                            } else if is_pointer {
+                                let method = if matches!(op, UnaryOp::PostInc) { "add" } else { "sub" };
+                                format!("{{ let __v = {}; {} = {}.{}(1); __v }}", operand, operand, operand, method)
                             } else {
                                 let op_str = if matches!(op, UnaryOp::PostInc) { "+=" } else { "-=" };
                                 format!("{{ let __v = {}; {} {} 1; __v }}", operand, operand, op_str)
