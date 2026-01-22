@@ -1254,3 +1254,41 @@ fn test_e2e_const_methods() {
 
     assert_eq!(exit_code, 0, "Const methods should use &self, non-const should use &mut self");
 }
+
+/// Test E2E: Switch statements (including fallthrough)
+#[test]
+fn test_e2e_switch() {
+    let source = r#"
+        int getValue(int x) {
+            switch (x) {
+                case 1:
+                    return 10;
+                case 2:
+                    return 20;
+                case 3:
+                case 4:
+                    return 30;
+                default:
+                    return 0;
+            }
+        }
+
+        int main() {
+            int a = getValue(1);
+            int b = getValue(2);
+            int c = getValue(3);
+            int d = getValue(4);
+            int e = getValue(5);
+
+            if (a == 10 && b == 20 && c == 30 && d == 30 && e == 0) {
+                return 0;
+            }
+            return 1;
+        }
+    "#;
+
+    let (exit_code, _stdout, _stderr) = transpile_compile_run(source, "e2e_switch.cpp")
+        .expect("E2E test failed");
+
+    assert_eq!(exit_code, 0, "Switch statements with fallthrough should work correctly");
+}

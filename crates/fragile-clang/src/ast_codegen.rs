@@ -1543,6 +1543,9 @@ impl AstCodeGen {
             ClangNodeKind::DoStmt => {
                 self.generate_do_stmt(node);
             }
+            ClangNodeKind::SwitchStmt => {
+                self.generate_switch_stmt(node);
+            }
             ClangNodeKind::CompoundStmt => {
                 self.writeln("{");
                 self.indent += 1;
@@ -1684,6 +1687,123 @@ impl AstCodeGen {
             self.indent -= 1;
             self.writeln("}");
         }
+    }
+
+    /// Generate a switch statement as Rust match.
+    fn generate_switch_stmt(&mut self, node: &ClangNode) {
+        // Switch structure: condition expr, then CompoundStmt with CaseStmt/DefaultStmt
+        if node.children.len() < 2 {
+            return;
+        }
+
+        let cond = self.expr_to_string(&node.children[0]);
+        self.writeln(&format!("match {} {{", cond));
+        self.indent += 1;
+
+        // Find the body (CompoundStmt with cases)
+        let body = &node.children[1];
+        if let ClangNodeKind::CompoundStmt = &body.kind {
+            // Process each case/default in the body
+            let mut current_values: Vec<i128> = Vec::new();
+            let mut case_body: Vec<&ClangNode> = Vec::new();
+
+            for child in &body.children {
+                match &child.kind {
+                    ClangNodeKind::CaseStmt { value } => {
+                        // If we have accumulated body statements, emit the previous case
+                        if !case_body.is_empty() && !current_values.is_empty() {
+                            self.emit_match_arm(&current_values, &case_body);
+                            current_values.clear();
+                            case_body.clear();
+                        }
+
+                        current_values.push(*value);
+
+                        // Case children: the value literal, then the body statements
+                        // Body can be inside the CaseStmt as children after the literal
+                        for (i, case_child) in child.children.iter().enumerate() {
+                            if i == 0 && matches!(&case_child.kind, ClangNodeKind::IntegerLiteral { .. }) {
+                                continue; // Skip the case value literal
+                            }
+                            // Check for nested CaseStmt (fallthrough)
+                            if let ClangNodeKind::CaseStmt { value: nested_val } = &case_child.kind {
+                                current_values.push(*nested_val);
+                                // Process nested case's children
+                                for (j, nested_child) in case_child.children.iter().enumerate() {
+                                    if j == 0 && matches!(&nested_child.kind, ClangNodeKind::IntegerLiteral { .. }) {
+                                        continue;
+                                    }
+                                    case_body.push(nested_child);
+                                }
+                            } else {
+                                case_body.push(case_child);
+                            }
+                        }
+                    }
+                    ClangNodeKind::DefaultStmt => {
+                        // Emit previous case if any
+                        if !current_values.is_empty() {
+                            self.emit_match_arm(&current_values, &case_body);
+                            current_values.clear();
+                            case_body.clear();
+                        }
+
+                        // Collect default body
+                        let default_body: Vec<&ClangNode> = child.children.iter().collect();
+                        self.emit_default_arm(&default_body);
+                    }
+                    _ => {}
+                }
+            }
+
+            // Emit final case if any
+            if !current_values.is_empty() {
+                self.emit_match_arm(&current_values, &case_body);
+            }
+        }
+
+        // Add default arm if not present (Rust requires exhaustive match)
+        // Note: We add _ => {} only if no DefaultStmt was found
+        let has_default = node.children.get(1).map_or(false, |c| {
+            if let ClangNodeKind::CompoundStmt = &c.kind {
+                c.children.iter().any(|ch| matches!(&ch.kind, ClangNodeKind::DefaultStmt))
+            } else {
+                false
+            }
+        });
+        if !has_default {
+            self.writeln("_ => {}");
+        }
+
+        self.indent -= 1;
+        self.writeln("}");
+    }
+
+    /// Emit a match arm for one or more case values.
+    fn emit_match_arm(&mut self, values: &[i128], body: &[&ClangNode]) {
+        let pattern = values.iter()
+            .map(|v| v.to_string())
+            .collect::<Vec<_>>()
+            .join(" | ");
+
+        self.writeln(&format!("{} => {{", pattern));
+        self.indent += 1;
+        for stmt in body {
+            self.generate_stmt(stmt, false);
+        }
+        self.indent -= 1;
+        self.writeln("}");
+    }
+
+    /// Emit the default arm of a match.
+    fn emit_default_arm(&mut self, body: &[&ClangNode]) {
+        self.writeln("_ => {");
+        self.indent += 1;
+        for stmt in body {
+            self.generate_stmt(stmt, false);
+        }
+        self.indent -= 1;
+        self.writeln("}");
     }
 
     /// Generate a for statement.

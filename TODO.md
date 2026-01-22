@@ -14,10 +14,10 @@ We just convert the fully-resolved AST to equivalent Rust code.
 ## Current Status
 
 **Grammar Tests**: 20/20 passing
-**E2E Tests**: 41/41 passing
+**E2E Tests**: 42/42 passing
 
 **Working**:
-- Simple functions with control flow (if/else, while, for, do-while, recursion)
+- Simple functions with control flow (if/else, while, for, do-while, switch, recursion)
 - Structs with fields and methods
 - Constructors (default, parameterized, copy)
 - Copy constructor → Clone trait
