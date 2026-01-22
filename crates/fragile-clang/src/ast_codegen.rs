@@ -68,6 +68,8 @@ pub struct AstCodeGen {
     global_vars: HashSet<String>,
     /// Current namespace path during code generation (for relative path computation)
     current_namespace: Vec<String>,
+    /// When true, use __self instead of self for this expressions
+    use_ctor_self: bool,
 }
 
 impl AstCodeGen {
@@ -87,6 +89,7 @@ impl AstCodeGen {
             static_members: HashMap::new(),
             global_vars: HashSet::new(),
             current_namespace: Vec::new(),
+            use_ctor_self: false,
         }
     }
 
@@ -1205,6 +1208,26 @@ impl AstCodeGen {
         }
     }
 
+    /// Check if a constructor compound statement has non-member statements
+    fn has_non_member_ctor_stmts(compound_stmt: &ClangNode) -> bool {
+        for child in &compound_stmt.children {
+            // Skip member field assignments
+            if Self::is_member_assignment(child) {
+                continue;
+            }
+            // Any other statement means we have non-member statements
+            match &child.kind {
+                ClangNodeKind::CompoundStmt => {
+                    if Self::has_non_member_ctor_stmts(child) {
+                        return true;
+                    }
+                }
+                _ => return true,
+            }
+        }
+        false
+    }
+
     /// Generate non-member statements from constructor body (like static member modifications)
     fn generate_non_member_ctor_stmts(&mut self, compound_stmt: &ClangNode) {
         for child in &compound_stmt.children {
@@ -1782,6 +1805,8 @@ impl AstCodeGen {
                 // base_inits: Vec<(field_name, constructor_call)> - supports multiple inheritance
                 let mut base_inits: Vec<(String, String)> = Vec::new();
                 let mut virtual_base_inits: Vec<(String, String)> = Vec::new();
+                // Track constructor compound statement for non-member statements
+                let mut ctor_compound_stmt: Option<usize> = None;
 
                 // Get base classes for current class to determine field names
                 let base_classes = self.current_class.as_ref()
@@ -1860,8 +1885,8 @@ impl AstCodeGen {
                     } else if let ClangNodeKind::CompoundStmt = &node.children[i].kind {
                         // Look for assignments in constructor body
                         Self::extract_member_assignments(&node.children[i], &mut initializers, self);
-                        // Also generate non-member statements (like static member modifications)
-                        self.generate_non_member_ctor_stmts(&node.children[i]);
+                        // Store compound stmt for later - non-member statements will be generated after Self {} literal
+                        ctor_compound_stmt = Some(i);
                     }
                     i += 1;
                 }
@@ -1936,9 +1961,20 @@ impl AstCodeGen {
                     self.writeln("}");
                     self.writeln("");
                 } else {
+                    // Check if there are non-member statements that need to run after struct creation
+                    let has_non_member_stmts = ctor_compound_stmt
+                        .map(|idx| Self::has_non_member_ctor_stmts(&node.children[idx]))
+                        .unwrap_or(false);
+
                     self.writeln(&format!("pub fn {}({}) -> Self {{", fn_name, params_str));
                     self.indent += 1;
-                    self.writeln("Self {");
+
+                    if has_non_member_stmts {
+                        // Need to run statements after construction, so use let + return pattern
+                        self.writeln("let mut __self = Self {");
+                    } else {
+                        self.writeln("Self {");
+                    }
                     self.indent += 1;
                     for (field_name, base_call) in &base_inits {
                         self.writeln(&format!("{}: {},", field_name, base_call));
@@ -1952,7 +1988,19 @@ impl AstCodeGen {
                         self.writeln("..Default::default()");
                     }
                     self.indent -= 1;
-                    self.writeln("}");
+
+                    if has_non_member_stmts {
+                        self.writeln("};");
+                        // Generate non-member statements with __self context
+                        self.use_ctor_self = true;
+                        if let Some(idx) = ctor_compound_stmt {
+                            self.generate_non_member_ctor_stmts(&node.children[idx]);
+                        }
+                        self.use_ctor_self = false;
+                        self.writeln("__self");
+                    } else {
+                        self.writeln("}");
+                    }
                     self.indent -= 1;
                     self.writeln("}");
                     self.writeln("");
@@ -2836,7 +2884,7 @@ impl AstCodeGen {
             ClangNodeKind::StringLiteral(s) => format!("\"{}\"", s.escape_default()),
             ClangNodeKind::DeclRefExpr { name, namespace_path, ty, .. } => {
                 if name == "this" {
-                    "self".to_string()
+                    if self.use_ctor_self { "__self".to_string() } else { "self".to_string() }
                 } else {
                     let ident = sanitize_identifier(name);
                     // Check if this is a static member access (class name in namespace path)
@@ -2891,7 +2939,9 @@ impl AstCodeGen {
                     }
                 }
             }
-            ClangNodeKind::CXXThisExpr { .. } => "self".to_string(),
+            ClangNodeKind::CXXThisExpr { .. } => {
+                if self.use_ctor_self { "__self".to_string() } else { "self".to_string() }
+            }
             ClangNodeKind::BinaryOperator { op, .. } => {
                 if node.children.len() >= 2 {
                     // Handle comma operator specially: (a, b) => { a; b }
