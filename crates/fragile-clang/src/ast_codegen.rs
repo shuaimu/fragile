@@ -70,6 +70,8 @@ pub struct AstCodeGen {
     current_namespace: Vec<String>,
     /// When true, use __self instead of self for this expressions
     use_ctor_self: bool,
+    /// Current method return type (for reference return handling)
+    current_return_type: Option<CppType>,
 }
 
 impl AstCodeGen {
@@ -90,6 +92,7 @@ impl AstCodeGen {
             global_vars: HashSet::new(),
             current_namespace: Vec::new(),
             use_ctor_self: false,
+            current_return_type: None,
         }
     }
 
@@ -1753,9 +1756,10 @@ impl AstCodeGen {
                 let self_param = if *is_static {
                     "".to_string()
                 } else {
-                    // Check if method modifies self
+                    // Check if method modifies self or returns a mutable reference
                     let modifies_self = Self::method_modifies_self(node);
-                    if modifies_self { "&mut self, ".to_string() } else { "&self, ".to_string() }
+                    let returns_mut_ref = matches!(return_type, CppType::Reference { is_const: false, .. });
+                    if modifies_self || returns_mut_ref { "&mut self, ".to_string() } else { "&self, ".to_string() }
                 };
                 let params_str = params.iter()
                     .map(|(n, t)| format!("{}: {}", sanitize_identifier(n), t.to_rust_type_str()))
@@ -1772,6 +1776,10 @@ impl AstCodeGen {
                     sanitize_identifier(name), self_param, params_str, ret_str));
                 self.indent += 1;
 
+                // Track return type for reference return handling
+                let old_return_type = self.current_return_type.take();
+                self.current_return_type = Some(return_type.clone());
+
                 // Find body
                 for child in &node.children {
                     if let ClangNodeKind::CompoundStmt = &child.kind {
@@ -1779,6 +1787,7 @@ impl AstCodeGen {
                     }
                 }
 
+                self.current_return_type = old_return_type;
                 self.indent -= 1;
                 self.writeln("}");
                 self.writeln("");
@@ -2096,6 +2105,17 @@ impl AstCodeGen {
                     self.writeln("return;");
                 } else {
                     let expr = self.expr_to_string(&node.children[0]);
+                    // Check if we need to add &mut for reference return types
+                    let expr = if let Some(CppType::Reference { is_const, .. }) = &self.current_return_type {
+                        // If returning a reference, wrap expression with & or &mut
+                        if *is_const {
+                            format!("&{}", expr)
+                        } else {
+                            format!("&mut {}", expr)
+                        }
+                    } else {
+                        expr
+                    };
                     self.writeln(&format!("return {};", expr));
                 }
             }
@@ -3116,6 +3136,16 @@ impl AstCodeGen {
                             .map(|(_, c)| self.expr_to_string(c))
                             .collect();
                         format!("{}.{}({})", left_operand, method_name, args.join(", "))
+                    } else if op_name == "operator[]" {
+                        // Subscript operator: *array.op_index(idx) - dereference for C++ semantics
+                        // In C++, arr[i] returns a reference that auto-dereferences.
+                        // We dereference here to make reads work; assignments need special handling.
+                        if let Some(right_idx) = right_idx_opt {
+                            let right_operand = self.expr_to_string(&node.children[right_idx]);
+                            format!("*{}.{}({})", left_operand, method_name, right_operand)
+                        } else {
+                            format!("*{}.{}()", left_operand, method_name)
+                        }
                     } else if let Some(right_idx) = right_idx_opt {
                         // Binary operator: left.op_X(&right)
                         let right_operand = self.expr_to_string(&node.children[right_idx]);

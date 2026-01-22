@@ -1538,3 +1538,47 @@ fn test_e2e_ctor_body_stmts() {
 
     assert_eq!(exit_code, 0, "Constructor body statements should execute correctly");
 }
+
+/// Test subscript operator [] (returns mutable reference, correct argument passing).
+#[test]
+fn test_e2e_subscript_operator() {
+    let source = r#"
+        class Array {
+            int data[10];
+        public:
+            Array() {
+                for (int i = 0; i < 10; i++) {
+                    data[i] = i;
+                }
+            }
+            int& operator[](int idx) {
+                return data[idx];
+            }
+        };
+
+        int main() {
+            Array arr;
+            // Read through subscript
+            if (arr[5] != 5) return 1;
+
+            // Write through subscript
+            arr[3] = 100;
+            if (arr[3] != 100) return 2;
+
+            // Compound operations with subscript
+            arr[4] += 10;
+            if (arr[4] != 14) return 3;
+
+            // Subscript in expression
+            int sum = arr[0] + arr[1] + arr[2];
+            if (sum != 3) return 4;
+
+            return 0;
+        }
+    "#;
+
+    let (exit_code, _stdout, _stderr) = transpile_compile_run(source, "e2e_subscript.cpp")
+        .expect("E2E test failed");
+
+    assert_eq!(exit_code, 0, "Subscript operator should work with reads and writes");
+}
