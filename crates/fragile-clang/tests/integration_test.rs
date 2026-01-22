@@ -786,3 +786,41 @@ fn test_e2e_namespaces() {
 
     assert_eq!(exit_code, 0, "Namespace functions should compile and run");
 }
+
+/// Test virtual method override resolution (static dispatch).
+#[test]
+fn test_e2e_virtual_override() {
+    let source = r#"
+        class Animal {
+        public:
+            virtual int speak() {
+                return 1;
+            }
+            int eat() {
+                return 10;
+            }
+        };
+
+        class Dog : public Animal {
+        public:
+            int speak() override {
+                return 2;
+            }
+        };
+
+        int main() {
+            Dog d;
+            int a = d.speak();      // 2 (overridden)
+            int b = d.eat();        // 10 (inherited)
+            if (a == 2 && b == 10) {
+                return 0;
+            }
+            return 1;
+        }
+    "#;
+
+    let (exit_code, _stdout, _stderr) = transpile_compile_run(source, "e2e_virtual_override.cpp")
+        .expect("E2E test failed");
+
+    assert_eq!(exit_code, 0, "Virtual method override should work correctly");
+}

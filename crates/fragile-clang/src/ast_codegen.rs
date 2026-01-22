@@ -31,6 +31,8 @@ pub struct AstCodeGen {
     arr_vars: HashSet<String>,
     /// When true, skip type suffixes for numeric literals (e.g., 5 instead of 5i32)
     skip_literal_suffix: bool,
+    /// Current class being generated (for inherited member access)
+    current_class: Option<String>,
 }
 
 impl AstCodeGen {
@@ -42,6 +44,7 @@ impl AstCodeGen {
             ptr_vars: HashSet::new(),
             arr_vars: HashSet::new(),
             skip_literal_suffix: false,
+            current_class: None,
         }
     }
 
@@ -681,7 +684,11 @@ impl AstCodeGen {
     }
 
     /// Generate a method or constructor.
-    fn generate_method(&mut self, node: &ClangNode, _struct_name: &str) {
+    fn generate_method(&mut self, node: &ClangNode, struct_name: &str) {
+        // Track current class for inherited member access
+        let old_class = self.current_class.take();
+        self.current_class = Some(struct_name.to_string());
+
         match &node.kind {
             ClangNodeKind::CXXMethodDecl { name, return_type, params, is_static, .. } => {
                 let self_param = if *is_static {
@@ -772,6 +779,9 @@ impl AstCodeGen {
             }
             _ => {}
         }
+
+        // Restore previous class context
+        self.current_class = old_class;
     }
 
     /// Generate the contents of a block (compound statement).
@@ -1512,8 +1522,18 @@ impl AstCodeGen {
                         }
                     }
                 } else {
-                    // Implicit this
-                    format!("self.{}", sanitize_identifier(member_name))
+                    // Implicit this - check if member is inherited
+                    let member = sanitize_identifier(member_name);
+                    let needs_base_access = if let (Some(current), Some(decl_class)) = (&self.current_class, declaring_class) {
+                        current != decl_class
+                    } else {
+                        false
+                    };
+                    if needs_base_access {
+                        format!("self.__base.{}", member)
+                    } else {
+                        format!("self.{}", member)
+                    }
                 }
             }
             ClangNodeKind::ArraySubscriptExpr { .. } => {
