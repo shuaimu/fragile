@@ -1478,3 +1478,30 @@ fn test_e2e_namespace_path_resolution() {
 
     assert_eq!(exit_code, 0, "Namespace function calls should use correct relative paths");
 }
+
+/// Test function call operator (functor/callable object).
+#[test]
+fn test_e2e_functor() {
+    let source = r#"
+        class Adder {
+            int base;
+        public:
+            Adder(int b) : base(b) {}
+            int operator()(int x, int y) {
+                return base + x + y;
+            }
+        };
+
+        int main() {
+            Adder add5(5);
+            // Multiple arguments
+            if (add5(10, 20) != 35) return 1;  // 5 + 10 + 20 = 35
+            return 0;
+        }
+    "#;
+
+    let (exit_code, _stdout, _stderr) = transpile_compile_run(source, "e2e_functor.cpp")
+        .expect("E2E test failed");
+
+    assert_eq!(exit_code, 0, "Function call operator should work with arguments");
+}

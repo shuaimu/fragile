@@ -3055,7 +3055,18 @@ impl AstCodeGen {
                     let method_name = sanitize_identifier(&op_name);
                     let left_operand = self.expr_to_string(&node.children[left_idx]);
 
-                    if let Some(right_idx) = right_idx_opt {
+                    if op_name == "operator()" {
+                        // Function call operator: callee.op_call(args...)
+                        // Collect all children except the callee and the operator() reference
+                        let args: Vec<String> = node.children.iter()
+                            .enumerate()
+                            .filter(|(i, c)| {
+                                *i != left_idx && !Self::is_function_reference(c)
+                            })
+                            .map(|(_, c)| self.expr_to_string(c))
+                            .collect();
+                        format!("{}.{}({})", left_operand, method_name, args.join(", "))
+                    } else if let Some(right_idx) = right_idx_opt {
                         // Binary operator: left.op_X(&right)
                         let right_operand = self.expr_to_string(&node.children[right_idx]);
                         format!("{}.{}(&{})", left_operand, method_name, right_operand)

@@ -14,7 +14,7 @@ We just convert the fully-resolved AST to equivalent Rust code.
 ## Current Status
 
 **Grammar Tests**: 20/20 passing
-**E2E Tests**: 48/48 passing
+**E2E Tests**: 49/49 passing
 
 **Working**:
 - Simple functions with control flow (if/else, while, for, do-while, switch, recursion)
@@ -41,6 +41,7 @@ We just convert the fully-resolved AST to equivalent Rust code.
 - Inherited field access via `__base`
 - Base class constructor delegation in derived constructors
 - Operator overloading (binary operators like +, ==, etc.)
+- Function call operator (operator() → op_call method with arguments)
 - Dynamic dispatch (polymorphism through base pointers via trait objects)
 - STL smart pointer type mappings (unique_ptr→Box, shared_ptr→Arc, weak_ptr→Weak)
 - Enum class (scoped enums) → Rust enums with #[repr]
