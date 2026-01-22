@@ -277,6 +277,13 @@ pub enum ClangNodeKind {
     WhileStmt,
     /// For statement
     ForStmt,
+    /// Range-based for statement (for (x : collection))
+    CXXForRangeStmt {
+        /// Loop variable name
+        var_name: String,
+        /// Loop variable type
+        var_type: CppType,
+    },
     /// Do-while statement
     DoStmt,
     /// Declaration statement

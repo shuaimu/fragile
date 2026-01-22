@@ -909,6 +909,13 @@ impl ClangParser {
                 clang_sys::CXCursor_IfStmt => ClangNodeKind::IfStmt,
                 clang_sys::CXCursor_WhileStmt => ClangNodeKind::WhileStmt,
                 clang_sys::CXCursor_ForStmt => ClangNodeKind::ForStmt,
+                // CXCursor_CXXForRangeStmt = 225
+                225 => {
+                    // Range-based for: for (T x : container)
+                    // Children: loop variable decl, range expression, body
+                    let (var_name, var_type) = self.extract_range_for_var(cursor);
+                    ClangNodeKind::CXXForRangeStmt { var_name, var_type }
+                }
                 clang_sys::CXCursor_DoStmt => ClangNodeKind::DoStmt,
                 clang_sys::CXCursor_DeclStmt => ClangNodeKind::DeclStmt,
                 clang_sys::CXCursor_BreakStmt => ClangNodeKind::BreakStmt,
@@ -1094,6 +1101,13 @@ impl ClangParser {
                 clang_sys::CXCursor_BinaryOperator => {
                     let ty = self.convert_type(clang_sys::clang_getCursorType(cursor));
                     // Get the operator from tokens
+                    let op = self.get_binary_op(cursor);
+                    ClangNodeKind::BinaryOperator { op, ty }
+                }
+
+                // CXCursor_CompoundAssignOperator = 115 (+=, -=, *=, etc.)
+                115 => {
+                    let ty = self.convert_type(clang_sys::clang_getCursorType(cursor));
                     let op = self.get_binary_op(cursor);
                     ClangNodeKind::BinaryOperator { op, ty }
                 }
@@ -1659,6 +1673,49 @@ impl ClangParser {
             }
 
             (params, return_type, capture_default, captures)
+        }
+    }
+
+    /// Extract loop variable name and type from a range-based for statement.
+    fn extract_range_for_var(&self, cursor: clang_sys::CXCursor) -> (String, CppType) {
+        unsafe {
+            let mut var_name = String::new();
+            let mut var_type = CppType::Int { signed: true };
+
+            // Visit the first VarDecl child to get the loop variable
+            extern "C" fn visitor(
+                child: clang_sys::CXCursor,
+                _parent: clang_sys::CXCursor,
+                data: clang_sys::CXClientData,
+            ) -> clang_sys::CXChildVisitResult {
+                unsafe {
+                    let (var_name, var_type, parser): &mut (&mut String, &mut CppType, &ClangParser) =
+                        &mut *(data as *mut _);
+
+                    let kind = clang_sys::clang_getCursorKind(child);
+
+                    // The loop variable is in a VarDecl
+                    if kind == clang_sys::CXCursor_VarDecl {
+                        let name = cursor_spelling(child);
+                        // Skip internal variables like __range1, __begin1, __end1
+                        if !name.starts_with("__") {
+                            **var_name = name;
+                            **var_type = (*parser).convert_type(clang_sys::clang_getCursorType(child));
+                            return clang_sys::CXChildVisit_Break;
+                        }
+                    }
+                    clang_sys::CXChildVisit_Continue
+                }
+            }
+
+            let mut visit_data = (&mut var_name, &mut var_type, self);
+            clang_sys::clang_visitChildren(
+                cursor,
+                visitor,
+                &mut visit_data as *mut _ as clang_sys::CXClientData,
+            );
+
+            (var_name, var_type)
         }
     }
 

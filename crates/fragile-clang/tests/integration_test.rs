@@ -1145,3 +1145,28 @@ fn test_e2e_generic_lambda() {
 
     assert_eq!(exit_code, 0, "Generic lambdas with single type usage should work");
 }
+
+/// Test E2E: Range-based for loops
+#[test]
+fn test_e2e_range_for() {
+    let source = r#"
+        int main() {
+            int arr[] = {1, 2, 3, 4, 5};
+            int sum = 0;
+
+            for (int x : arr) {
+                sum += x;
+            }
+
+            if (sum == 15) {
+                return 0;
+            }
+            return 1;
+        }
+    "#;
+
+    let (exit_code, _stdout, _stderr) = transpile_compile_run(source, "e2e_range_for.cpp")
+        .expect("E2E test failed");
+
+    assert_eq!(exit_code, 0, "Range-based for loop should iterate over array");
+}

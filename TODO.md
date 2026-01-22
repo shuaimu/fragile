@@ -14,7 +14,7 @@ We just convert the fully-resolved AST to equivalent Rust code.
 ## Current Status
 
 **Grammar Tests**: 20/20 passing
-**E2E Tests**: 37/37 passing
+**E2E Tests**: 38/38 passing
 
 **Working**:
 - Simple functions with control flow (if/else, while, for, do-while, recursion)
@@ -46,6 +46,7 @@ We just convert the fully-resolved AST to equivalent Rust code.
 - Basic lambda expressions → Rust closures with type inference
 - Lambda captures ([=] → move, [&] → borrow)
 - Generic lambdas (auto params → _ type inference, single-type only)
+- Range-based for loops (for x : container → for x in container.iter())
 
 **CLI**:
 ```bash

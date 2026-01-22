@@ -1524,6 +1524,9 @@ impl AstCodeGen {
             ClangNodeKind::ForStmt => {
                 self.generate_for_stmt(node);
             }
+            ClangNodeKind::CXXForRangeStmt { var_name, var_type } => {
+                self.generate_range_for_stmt(node, var_name, var_type);
+            }
             ClangNodeKind::DoStmt => {
                 self.generate_do_stmt(node);
             }
@@ -1715,6 +1718,65 @@ impl AstCodeGen {
 
         self.indent -= 1;
         self.writeln("}");
+    }
+
+    /// Generate a range-based for statement.
+    /// C++: for (T x : container) { body }
+    /// Rust: for x in container.iter() { body } or for x in &container { body }
+    fn generate_range_for_stmt(&mut self, node: &ClangNode, var_name: &str, var_type: &CppType) {
+        // Children of CXXForRangeStmt:
+        // - Various internal VarDecls (__range1, __begin1, __end1, etc.)
+        // - The loop variable VarDecl
+        // - DeclRefExpr for the range (container)
+        // - CompoundStmt (body)
+
+        // Find the range expression and body
+        let mut range_expr = None;
+        let mut body = None;
+
+        for child in &node.children {
+            match &child.kind {
+                ClangNodeKind::DeclRefExpr { name, ty, .. } => {
+                    // Skip internal variables, use the actual container
+                    if !name.starts_with("__") {
+                        range_expr = Some((name.clone(), ty.clone()));
+                    }
+                }
+                ClangNodeKind::CompoundStmt => {
+                    body = Some(child);
+                }
+                _ => {}
+            }
+        }
+
+        // Generate: for var_name in range_expr { body }
+        if let Some((range_name, range_type)) = range_expr {
+            // Determine iterator method based on type
+            let iter_suffix = if matches!(range_type, CppType::Array { .. }) {
+                ".iter()"
+            } else {
+                "" // References work directly in Rust for loop
+            };
+
+            // Note: Rust for loops don't support type annotations, so we omit var_type
+            let _ = var_type; // Silence unused warning
+            self.writeln(&format!("for {} in {}{} {{",
+                sanitize_identifier(var_name),
+                sanitize_identifier(&range_name),
+                iter_suffix));
+            self.indent += 1;
+
+            // Generate body
+            if let Some(body_node) = body {
+                self.generate_block_contents(&body_node.children, &CppType::Void);
+            }
+
+            self.indent -= 1;
+            self.writeln("}");
+        } else {
+            // Fallback: try to find range in children of VarDecl
+            self.writeln("/* range-based for: could not extract range */");
+        }
     }
 
     /// Generate for loop body with special continue handling.
