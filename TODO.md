@@ -394,10 +394,10 @@ The current approach in `crates/fragile-clang/src/types.rs:183-580` has special-
   - [x] **22.8.4** `__builtin_memmove` → `std::ptr::copy`
   - [x] **22.8.5** Other builtins: clz/ctz/popcount, bswap, expect, unreachable, trap, abort, strlen, memcmp
 
-- [ ] **22.9** Fix duplicate struct definitions from template specializations
-  - [ ] **22.9.1** Generate unique names for each template instantiation
-  - [ ] **22.9.2** Use mangled names or type parameters in struct names
-  - [ ] **22.9.3** Deduplicate identical instantiations
+- [x] **22.9** Fix duplicate struct definitions from template specializations ✅ [26:01:23, 13:45]
+  - [x] **22.9.1** Generate unique names for each template instantiation - Using type spelling from Clang for template instantiations
+  - [x] **22.9.2** Use mangled names or type parameters in struct names - e.g., MyPair<int> → MyPair_int
+  - [x] **22.9.3** Deduplicate identical instantiations - Added generated_structs HashSet tracking
 
 - [x] **22.10** Fix invalid type names in generated code ✅ [26:01:23, 12:20]
   - [x] **22.10.1** Convert `long` → `i64`, `unsigned_long_long` → `u64`, etc. (already handled)

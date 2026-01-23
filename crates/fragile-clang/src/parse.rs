@@ -908,8 +908,26 @@ impl ClangParser {
                 }
 
                 clang_sys::CXCursor_StructDecl | clang_sys::CXCursor_ClassDecl => {
-                    let name = cursor_spelling(cursor);
+                    let spelling = cursor_spelling(cursor);
                     let is_class = kind == clang_sys::CXCursor_ClassDecl;
+
+                    // For template specializations, the cursor spelling is just "MyPair"
+                    // but the type spelling gives us "MyPair<int>" which is what we need
+                    let cursor_type = clang_sys::clang_getCursorType(cursor);
+                    let type_spelling = clang_sys::clang_getTypeSpelling(cursor_type);
+                    let type_name = cx_string_to_string(type_spelling);
+
+                    // Use type spelling if it contains template args (e.g., "MyPair<int>")
+                    // Otherwise fall back to cursor spelling
+                    let name = if type_name.contains('<') && type_name.contains('>') {
+                        // Strip "struct " or "class " prefix if present
+                        type_name.strip_prefix("struct ").unwrap_or(&type_name)
+                            .strip_prefix("class ").unwrap_or(&type_name)
+                            .to_string()
+                    } else {
+                        spelling
+                    };
+
                     // For anonymous structs/classes, generate a synthetic name using location
                     let final_name = if name.is_empty() {
                         let loc = clang_sys::clang_getCursorLocation(cursor);

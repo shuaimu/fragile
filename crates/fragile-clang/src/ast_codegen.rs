@@ -79,6 +79,8 @@ pub struct AstCodeGen {
     variant_types: HashMap<String, Vec<String>>,
     /// Counter for generating unique anonymous namespace names
     anon_namespace_counter: usize,
+    /// Track already generated struct names to avoid duplicates from template instantiation
+    generated_structs: HashSet<String>,
 }
 
 impl AstCodeGen {
@@ -103,6 +105,7 @@ impl AstCodeGen {
             class_fields: HashMap::new(),
             variant_types: HashMap::new(),
             anon_namespace_counter: 0,
+            generated_structs: HashSet::new(),
         }
     }
 
@@ -1136,10 +1139,19 @@ impl AstCodeGen {
 
     /// Generate a struct stub (fields only).
     fn generate_struct_stub(&mut self, name: &str, is_class: bool, children: &[ClangNode]) {
+        // Convert C++ struct name to valid Rust identifier (handles template types)
+        let rust_name = CppType::Named(name.to_string()).to_rust_type_str();
+
+        // Skip if already generated (handles duplicate template instantiations)
+        if self.generated_structs.contains(&rust_name) {
+            return;
+        }
+        self.generated_structs.insert(rust_name.clone());
+
         let kind = if is_class { "class" } else { "struct" };
         self.writeln(&format!("/// C++ {} `{}`", kind, name));
         self.writeln("#[repr(C)]");
-        self.writeln(&format!("pub struct {} {{", name));
+        self.writeln(&format!("pub struct {} {{", rust_name));
         self.indent += 1;
 
         // First, embed non-virtual base classes as fields (supports multiple inheritance)
@@ -1427,11 +1439,20 @@ impl AstCodeGen {
 
     /// Generate struct definition.
     fn generate_struct(&mut self, name: &str, is_class: bool, children: &[ClangNode]) {
+        // Convert C++ struct name to valid Rust identifier (handles template types)
+        let rust_name = CppType::Named(name.to_string()).to_rust_type_str();
+
+        // Skip if already generated (handles duplicate template instantiations)
+        if self.generated_structs.contains(&rust_name) {
+            return;
+        }
+        self.generated_structs.insert(rust_name.clone());
+
         let kind = if is_class { "class" } else { "struct" };
         self.writeln(&format!("/// C++ {} `{}`", kind, name));
         self.writeln("#[repr(C)]");
         self.writeln("#[derive(Default)]");
-        self.writeln(&format!("pub struct {} {{", name));
+        self.writeln(&format!("pub struct {} {{", rust_name));
         self.indent += 1;
 
         // First, embed non-virtual base classes as fields (supports multiple inheritance)
@@ -1521,7 +1542,7 @@ impl AstCodeGen {
         // Always generate impl block if we need new_0 or have other methods
         if !methods.is_empty() || !has_default_ctor {
             self.writeln("");
-            self.writeln(&format!("impl {} {{", name));
+            self.writeln(&format!("impl {} {{", rust_name));
             self.indent += 1;
 
             // Generate default new_0() if no explicit default constructor
@@ -1546,7 +1567,7 @@ impl AstCodeGen {
         for child in children {
             if let ClangNodeKind::DestructorDecl { is_definition: true, .. } = &child.kind {
                 self.writeln("");
-                self.writeln(&format!("impl Drop for {} {{", name));
+                self.writeln(&format!("impl Drop for {} {{", rust_name));
                 self.indent += 1;
                 self.writeln("fn drop(&mut self) {");
                 self.indent += 1;
@@ -1568,7 +1589,7 @@ impl AstCodeGen {
         for child in children {
             if let ClangNodeKind::ConstructorDecl { ctor_kind: ConstructorKind::Copy, is_definition: true, .. } = &child.kind {
                 self.writeln("");
-                self.writeln(&format!("impl Clone for {} {{", name));
+                self.writeln(&format!("impl Clone for {} {{", rust_name));
                 self.indent += 1;
                 self.writeln("fn clone(&self) -> Self {");
                 self.indent += 1;
