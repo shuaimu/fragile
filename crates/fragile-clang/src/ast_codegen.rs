@@ -2311,6 +2311,142 @@ impl AstCodeGen {
         }
     }
 
+    /// Check if an expression is an I/O stream (stdout, stderr, or stdin).
+    /// Returns the stream type if it is.
+    fn get_io_stream_type(node: &ClangNode) -> Option<&'static str> {
+        match &node.kind {
+            ClangNodeKind::DeclRefExpr { name, namespace_path, .. } => {
+                let is_std = namespace_path.len() == 1 && namespace_path[0] == "std";
+                if is_std || namespace_path.is_empty() {
+                    match name.as_str() {
+                        "cout" => Some("stdout"),
+                        "cerr" | "clog" => Some("stderr"),
+                        "cin" => Some("stdin"),
+                        _ => None,
+                    }
+                } else {
+                    None
+                }
+            }
+            ClangNodeKind::Unknown(_) | ClangNodeKind::ImplicitCastExpr { .. } => {
+                // Look through wrapper nodes
+                for child in &node.children {
+                    if let Some(stream) = Self::get_io_stream_type(child) {
+                        return Some(stream);
+                    }
+                }
+                None
+            }
+            ClangNodeKind::CallExpr { .. } => {
+                // A chained operator<< also returns an ostream - check if this is one
+                if let Some((op_name, left_idx, _)) = Self::get_operator_call_info(node) {
+                    if op_name == "operator<<" || op_name == "operator>>" {
+                        if !node.children.is_empty() && left_idx < node.children.len() {
+                            return Self::get_io_stream_type(&node.children[left_idx]);
+                        }
+                    }
+                }
+                None
+            }
+            _ => None,
+        }
+    }
+
+    /// Check if an expression is std::endl or std::flush.
+    fn is_stream_manipulator(node: &ClangNode) -> Option<&'static str> {
+        match &node.kind {
+            ClangNodeKind::DeclRefExpr { name, namespace_path, .. } => {
+                let is_std = namespace_path.len() == 1 && namespace_path[0] == "std";
+                if is_std || namespace_path.is_empty() {
+                    match name.as_str() {
+                        "endl" => Some("newline"),
+                        "flush" => Some("flush"),
+                        _ => None,
+                    }
+                } else {
+                    None
+                }
+            }
+            ClangNodeKind::Unknown(_) | ClangNodeKind::ImplicitCastExpr { .. } => {
+                for child in &node.children {
+                    if let Some(manip) = Self::is_stream_manipulator(child) {
+                        return Some(manip);
+                    }
+                }
+                None
+            }
+            _ => None,
+        }
+    }
+
+    /// Collect all output arguments from a chained operator<< expression.
+    /// Returns (stream_type, args_in_order) where args_in_order is left-to-right.
+    fn collect_stream_output_args<'a>(
+        &self,
+        node: &'a ClangNode,
+    ) -> Option<(&'static str, Vec<&'a ClangNode>)> {
+        // This recursively collects arguments from chained << operators
+        // cout << a << b << endl  is  ((cout << a) << b) << endl
+        if let Some((op_name, left_idx, right_idx_opt)) = Self::get_operator_call_info(node) {
+            if op_name == "operator<<" {
+                if let Some(right_idx) = right_idx_opt {
+                    if left_idx < node.children.len() && right_idx < node.children.len() {
+                        // First check if left operand is directly a stream
+                        if let Some(stream_type) = Self::get_io_stream_type(&node.children[left_idx]) {
+                            // Base case: stream << arg
+                            return Some((stream_type, vec![&node.children[right_idx]]));
+                        }
+                        // Recursive case: (stream << ...) << arg
+                        // Check if left operand is another operator<< on a stream
+                        if let Some((stream_type, mut args)) = self.collect_stream_output_args(&node.children[left_idx]) {
+                            args.push(&node.children[right_idx]);
+                            return Some((stream_type, args));
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Generate a write!() or writeln!() macro call from stream output arguments.
+    fn generate_stream_write(&self, stream_type: &str, args: &[&ClangNode]) -> String {
+        let stream_expr = match stream_type {
+            "stdout" => "std::io::stdout()",
+            "stderr" => "std::io::stderr()",
+            _ => "std::io::stdout()", // fallback
+        };
+
+        // Check if the last argument is std::endl
+        let has_newline = args.last().map_or(false, |arg| {
+            Self::is_stream_manipulator(arg) == Some("newline")
+        });
+
+        // Filter out endl/flush manipulators, collect format args
+        let format_args: Vec<String> = args.iter()
+            .filter(|arg| Self::is_stream_manipulator(arg).is_none())
+            .map(|arg| self.expr_to_string(arg))
+            .collect();
+
+        if format_args.is_empty() {
+            // Just endl or flush with no content
+            if has_newline {
+                format!("writeln!({}).unwrap()", stream_expr)
+            } else {
+                format!("{{ let _ = {}.flush(); {} }}", stream_expr, stream_expr)
+            }
+        } else {
+            // Build format string with {} placeholders
+            let format_str = vec!["{}"; format_args.len()].join("");
+            let args_str = format_args.join(", ");
+            if has_newline {
+                format!("writeln!({}, \"{}\", {}).unwrap()", stream_expr, format_str, args_str)
+            } else {
+                format!("write!({}, \"{}\", {}).unwrap()", stream_expr, format_str, args_str)
+            }
+        }
+    }
+
     /// Generate a method or constructor.
     fn generate_method(&mut self, node: &ClangNode, struct_name: &str) {
         // Track current class for inherited member access
@@ -3884,6 +4020,11 @@ impl AstCodeGen {
                 // Check if this is a std::visit call on variant(s)
                 if let Some((visitor_node, variants)) = Self::is_std_visit_call(node) {
                     return self.generate_visit_match(visitor_node, &variants, ty);
+                }
+
+                // Check if this is an I/O stream output operation (cout << x << y)
+                if let Some((stream_type, args)) = self.collect_stream_output_args(node) {
+                    return self.generate_stream_write(stream_type, &args);
                 }
 
                 // Check if this is a lambda/closure call (operator() on a lambda type)
