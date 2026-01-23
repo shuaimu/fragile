@@ -141,7 +141,7 @@ crates/
 - [x] **8.2** `std::span<T>` → `&[T]` slice type mapping ✅ [26:01:22, 17:30]
 - [ ] **8.3** `std::variant<T...>` → Rust enum with variants
   - [x] **8.3.1** Type mapping: Parse `std::variant<T1, T2, ...>` and extract template args (~100 LOC) ✅ [26:01:22, 21:46] [docs/dev/plan_8_3_1_variant_type_mapping.md]
-  - [ ] **8.3.2** Enum generation: Generate Rust enum definitions for variant types with synthetic names (~150 LOC)
+  - [x] **8.3.2** Enum generation: Generate Rust enum definitions for variant types with synthetic names (~150 LOC) ✅ [26:01:22, 21:51] [docs/dev/plan_8_3_2_variant_enum_generation.md]
   - [ ] **8.3.3** Construction/assignment: Handle variant initialization and reassignment (~100 LOC)
   - [ ] **8.3.4** std::visit: Map to Rust match statements (complex, may defer) (~200+ LOC)
   - [ ] **8.3.5** std::get<T>/std::get<I>: Map to pattern matching or unwrap (~100 LOC)

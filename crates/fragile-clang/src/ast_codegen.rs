@@ -5,7 +5,7 @@
 //! This produces cleaner, more idiomatic Rust code.
 
 use crate::ast::{ClangNode, ClangNodeKind, BinaryOp, UnaryOp, CastKind, ConstructorKind};
-use crate::types::CppType;
+use crate::types::{CppType, parse_template_args};
 use std::collections::{HashSet, HashMap};
 
 /// Rust reserved keywords that need raw identifier syntax.
@@ -75,6 +75,8 @@ pub struct AstCodeGen {
     current_return_type: Option<CppType>,
     /// Map from class name to its field names (for constructor generation)
     class_fields: HashMap<String, Vec<(String, CppType)>>,
+    /// Collected std::variant types: maps enum name (e.g., "Variant_i32_f64") to its Rust type arguments (e.g., ["i32", "f64"])
+    variant_types: HashMap<String, Vec<String>>,
 }
 
 impl AstCodeGen {
@@ -97,6 +99,7 @@ impl AstCodeGen {
             use_ctor_self: false,
             current_return_type: None,
             class_fields: HashMap::new(),
+            variant_types: HashMap::new(),
         }
     }
 
@@ -108,6 +111,11 @@ impl AstCodeGen {
         }
         self.compute_virtual_bases();
 
+        // Collect std::variant types used in the code
+        if let ClangNodeKind::TranslationUnit = &ast.kind {
+            self.collect_variant_types(&ast.children);
+        }
+
         // File header
         self.writeln("#![allow(dead_code)]");
         self.writeln("#![allow(unused_variables)]");
@@ -116,6 +124,9 @@ impl AstCodeGen {
         self.writeln("#![allow(non_snake_case)]");
         self.writeln("");
         self.write_array_helpers();
+
+        // Generate synthetic enum definitions for std::variant types
+        self.generate_variant_enums();
 
         // Second pass: generate code
         if let ClangNodeKind::TranslationUnit = &ast.kind {
@@ -237,6 +248,122 @@ impl AstCodeGen {
 
     fn class_has_virtual_bases(&self, class_name: &str) -> bool {
         self.virtual_bases.get(class_name).map_or(false, |v| !v.is_empty())
+    }
+
+    /// Collect all std::variant types used in the code.
+    fn collect_variant_types(&mut self, children: &[ClangNode]) {
+        for child in children {
+            match &child.kind {
+                ClangNodeKind::VarDecl { ty, .. } => {
+                    self.collect_variant_from_type(ty);
+                }
+                ClangNodeKind::FieldDecl { ty, .. } => {
+                    self.collect_variant_from_type(ty);
+                }
+                ClangNodeKind::FunctionDecl { return_type, params, .. } => {
+                    self.collect_variant_from_type(return_type);
+                    for (_, param_ty) in params {
+                        self.collect_variant_from_type(param_ty);
+                    }
+                    // Recurse into function body
+                    self.collect_variant_types(&child.children);
+                }
+                ClangNodeKind::CXXMethodDecl { return_type, params, .. } => {
+                    self.collect_variant_from_type(return_type);
+                    for (_, param_ty) in params {
+                        self.collect_variant_from_type(param_ty);
+                    }
+                    // Recurse into method body
+                    self.collect_variant_types(&child.children);
+                }
+                ClangNodeKind::RecordDecl { .. } |
+                ClangNodeKind::NamespaceDecl { .. } => {
+                    self.collect_variant_types(&child.children);
+                }
+                ClangNodeKind::CompoundStmt => {
+                    self.collect_variant_types(&child.children);
+                }
+                _ => {
+                    // Recurse into other nodes that might contain declarations
+                    self.collect_variant_types(&child.children);
+                }
+            }
+        }
+    }
+
+    /// Check if a type is std::variant and if so, record it.
+    fn collect_variant_from_type(&mut self, ty: &CppType) {
+        if let CppType::Named(name) = ty {
+            if let Some(rest) = name.strip_prefix("std::variant<") {
+                if let Some(inner) = rest.strip_suffix(">") {
+                    // Parse the template arguments
+                    let args = parse_template_args(inner);
+                    if !args.is_empty() {
+                        // Convert each C++ type to its Rust equivalent
+                        let rust_types: Vec<String> = args.iter()
+                            .map(|a| CppType::Named(a.clone()).to_rust_type_str())
+                            .collect();
+
+                        // Generate the enum name (same logic as in types.rs)
+                        let sanitized_types: Vec<String> = rust_types.iter()
+                            .map(|t| {
+                                t.replace('<', "_")
+                                    .replace('>', "")
+                                    .replace(", ", "_")
+                                    .replace(" ", "_")
+                                    .replace("::", "_")
+                                    .replace("*", "Ptr")
+                                    .replace("&", "Ref")
+                                    .replace("[", "Arr")
+                                    .replace("]", "")
+                                    .replace(";", "x")
+                            })
+                            .collect();
+                        let enum_name = format!("Variant_{}", sanitized_types.join("_"));
+
+                        // Store if not already recorded
+                        if !self.variant_types.contains_key(&enum_name) {
+                            self.variant_types.insert(enum_name, rust_types);
+                        }
+                    }
+                }
+            }
+        }
+        // Also check inside pointer/reference/array types
+        match ty {
+            CppType::Pointer { pointee, .. } => self.collect_variant_from_type(pointee),
+            CppType::Reference { referent, .. } => self.collect_variant_from_type(referent),
+            CppType::Array { element, .. } => self.collect_variant_from_type(element),
+            _ => {}
+        }
+    }
+
+    /// Generate Rust enum definitions for all collected std::variant types.
+    fn generate_variant_enums(&mut self) {
+        if self.variant_types.is_empty() {
+            return;
+        }
+
+        // Clone and sort by enum name for deterministic output
+        let mut variants: Vec<_> = self.variant_types.iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        variants.sort_by_key(|(name, _)| name.clone());
+
+        for (enum_name, rust_types) in variants {
+            self.writeln(&format!("/// Generated Rust enum for std::variant type"));
+            self.writeln("#[derive(Clone, Debug)]");
+            self.writeln(&format!("pub enum {} {{", enum_name));
+            self.indent += 1;
+
+            for (idx, rust_type) in rust_types.iter().enumerate() {
+                self.writeln(&format!("V{}({}),", idx, rust_type));
+            }
+
+            self.indent -= 1;
+            self.writeln("}");
+            self.writeln("");
+        }
     }
 
     /// Compute the relative Rust path from current namespace to target namespace.

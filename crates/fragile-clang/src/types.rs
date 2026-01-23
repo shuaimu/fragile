@@ -8,7 +8,7 @@
 /// let args = parse_template_args("int, std::vector<int>, double");
 /// assert_eq!(args, vec!["int", "std::vector<int>", "double"]);
 /// ```
-fn parse_template_args(args: &str) -> Vec<String> {
+pub fn parse_template_args(args: &str) -> Vec<String> {
     let mut result = Vec::new();
     let mut current = String::new();
     let mut depth = 0;
