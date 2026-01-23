@@ -399,10 +399,10 @@ The current approach in `crates/fragile-clang/src/types.rs:183-580` has special-
   - [ ] **22.9.2** Use mangled names or type parameters in struct names
   - [ ] **22.9.3** Deduplicate identical instantiations
 
-- [ ] **22.10** Fix invalid type names in generated code
-  - [ ] **22.10.1** Convert `long` → `i64`, `unsigned_long_long` → `u64`, etc.
-  - [ ] **22.10.2** Convert `float`/`double` in generic contexts to valid Rust
-  - [ ] **22.10.3** Handle `__int128` and other extended types
+- [x] **22.10** Fix invalid type names in generated code ✅ [26:01:23, 12:20]
+  - [x] **22.10.1** Convert `long` → `i64`, `unsigned_long_long` → `u64`, etc. (already handled)
+  - [x] **22.10.2** Convert `float`/`double` in generic contexts to valid Rust (already handled - f32/f64)
+  - [x] **22.10.3** Handle `__int128` and other extended types → i128/u128
 
 - [ ] **22.11** Fix template syntax in generated Rust
   - [ ] **22.11.1** Convert `std_vector<int>` to monomorphized name `std_vector_int`

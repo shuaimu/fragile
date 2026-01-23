@@ -251,6 +251,9 @@ impl CppType {
                     "ssize_t" | "ptrdiff_t" => "isize".to_string(),
                     "intptr_t" => "isize".to_string(),
                     "uintptr_t" => "usize".to_string(),
+                    // 128-bit integer types
+                    "__int128" | "__int128_t" => "i128".to_string(),
+                    "unsigned __int128" | "__uint128_t" => "u128".to_string(),
                     // NOTE: STL string type mappings removed - types pass through as-is
                     // See Section 22 in TODO.md for rationale
                     _ => {
