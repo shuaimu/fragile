@@ -319,8 +319,13 @@ impl CppType {
                             cleaned
                         };
 
-                        // Replace :: with _ for namespaced types, remove other invalid chars
+                        // Replace :: with _ for namespaced types
+                        // Convert template syntax to valid Rust identifiers:
+                        // e.g., std::vector<int> -> std_vector_int
                         cleaned.replace("::", "_")
+                            .replace("<", "_")  // Convert template open bracket
+                            .replace(">", "")   // Remove template close bracket
+                            .replace(",", "_")  // Handle multiple template params
                             .replace(" *", "")  // Remove trailing pointer indicators
                             .replace("*", "")
                             .replace(" ", "_")
@@ -912,51 +917,52 @@ mod tests {
     fn test_smart_pointer_type_mappings() {
         // NOTE: Smart pointer mappings removed - types pass through as-is
         // See Section 22 in TODO.md for rationale
+        // Template syntax converted to valid Rust identifiers
 
         // std::unique_ptr<T> passes through (no longer mapped to Box<T>)
         assert_eq!(
             CppType::Named("std::unique_ptr<int>".to_string()).to_rust_type_str(),
-            "std_unique_ptr<int>"
+            "std_unique_ptr_int"
         );
         assert_eq!(
             CppType::Named("std::unique_ptr<int, std::default_delete<int>>".to_string()).to_rust_type_str(),
-            "std_unique_ptr<int,_std_default_delete<int>>"
+            "std_unique_ptr_int__std_default_delete_int"
         );
         assert_eq!(
             CppType::Named("std::unique_ptr<MyClass>".to_string()).to_rust_type_str(),
-            "std_unique_ptr<MyClass>"
+            "std_unique_ptr_MyClass"
         );
 
         // __detail::__unique_ptr_t<T> passes through
         assert_eq!(
             CppType::Named("__detail::__unique_ptr_t<int>".to_string()).to_rust_type_str(),
-            "__detail___unique_ptr_t<int>"
+            "__detail___unique_ptr_t_int"
         );
 
         // std::shared_ptr<T> passes through (no longer mapped to Arc<T>)
         assert_eq!(
             CppType::Named("std::shared_ptr<int>".to_string()).to_rust_type_str(),
-            "std_shared_ptr<int>"
+            "std_shared_ptr_int"
         );
         assert_eq!(
             CppType::Named("std::shared_ptr<MyClass>".to_string()).to_rust_type_str(),
-            "std_shared_ptr<MyClass>"
+            "std_shared_ptr_MyClass"
         );
 
         // shared_ptr<_NonArray<T>> passes through
         assert_eq!(
             CppType::Named("shared_ptr<_NonArray<int>>".to_string()).to_rust_type_str(),
-            "shared_ptr<_NonArray<int>>"
+            "shared_ptr__NonArray_int"
         );
 
         // std::weak_ptr<T> passes through (no longer mapped to Weak<T>)
         assert_eq!(
             CppType::Named("std::weak_ptr<int>".to_string()).to_rust_type_str(),
-            "std_weak_ptr<int>"
+            "std_weak_ptr_int"
         );
         assert_eq!(
             CppType::Named("std::weak_ptr<MyClass>".to_string()).to_rust_type_str(),
-            "std_weak_ptr<MyClass>"
+            "std_weak_ptr_MyClass"
         );
     }
 
@@ -966,19 +972,20 @@ mod tests {
         // See Section 22 in TODO.md for rationale
 
         // std::array passes through (no longer mapped to [T; N])
+        // Template syntax converted to valid Rust identifiers
         assert_eq!(
             CppType::Named("std::array<int, 5>".to_string()).to_rust_type_str(),
-            "std_array<int,_5>"
+            "std_array_int__5"
         );
         assert_eq!(
             CppType::Named("std::array<double, 10>".to_string()).to_rust_type_str(),
-            "std_array<double,_10>"
+            "std_array_double__10"
         );
 
         // Nested template types also pass through
         assert_eq!(
             CppType::Named("std::array<std::vector<int>, 2>".to_string()).to_rust_type_str(),
-            "std_array<std_vector<int>,_2>"
+            "std_array_std_vector_int__2"
         );
     }
 
@@ -986,19 +993,20 @@ mod tests {
     fn test_std_span_type_mapping() {
         // NOTE: STL mappings removed - all types pass through as-is
         // See Section 22 in TODO.md for rationale
+        // Template syntax converted to valid Rust identifiers
 
         // std::span passes through (no longer mapped to &[T])
         assert_eq!(
             CppType::Named("std::span<int>".to_string()).to_rust_type_str(),
-            "std_span<int>"
+            "std_span_int"
         );
         assert_eq!(
             CppType::Named("std::span<const int>".to_string()).to_rust_type_str(),
-            "std_span<const_int>"
+            "std_span_const_int"
         );
         assert_eq!(
             CppType::Named("std::span<int, 10>".to_string()).to_rust_type_str(),
-            "std_span<int,_10>"
+            "std_span_int__10"
         );
     }
 
@@ -1006,19 +1014,20 @@ mod tests {
     fn test_std_variant_type_mapping() {
         // NOTE: STL mappings removed - all types pass through as-is
         // See Section 22 in TODO.md for rationale
+        // Template syntax converted to valid Rust identifiers
 
         // std::variant passes through (no longer mapped to Variant_...)
         assert_eq!(
             CppType::Named("std::variant<int, double>".to_string()).to_rust_type_str(),
-            "std_variant<int,_double>"
+            "std_variant_int__double"
         );
         assert_eq!(
             CppType::Named("std::variant<int, std::string>".to_string()).to_rust_type_str(),
-            "std_variant<int,_std_string>"
+            "std_variant_int__std_string"
         );
         assert_eq!(
             CppType::Named("std::variant<MyClass, OtherClass>".to_string()).to_rust_type_str(),
-            "std_variant<MyClass,_OtherClass>"
+            "std_variant_MyClass__OtherClass"
         );
     }
 
@@ -1063,10 +1072,10 @@ mod tests {
         // libc++ uses inline namespaces like std::__1:: for ABI versioning
         // These should be stripped to produce cleaner type names
 
-        // std::__1::vector<int> -> std_vector<int>
+        // std::__1::vector<int> -> std_vector_int
         assert_eq!(
             CppType::Named("std::__1::vector<int>".to_string()).to_rust_type_str(),
-            "std_vector<int>"
+            "std_vector_int"
         );
 
         // std::__1::string -> std_string
@@ -1075,10 +1084,10 @@ mod tests {
             "std_string"
         );
 
-        // std::__1::basic_string<char> -> std_basic_string<char>
+        // std::__1::basic_string<char> -> std_basic_string_char
         assert_eq!(
             CppType::Named("std::__1::basic_string<char>".to_string()).to_rust_type_str(),
-            "std_basic_string<char>"
+            "std_basic_string_char"
         );
 
         // Nested inline namespaces: std::__1::__detail::__helper -> std___detail___helper
@@ -1090,13 +1099,13 @@ mod tests {
         // std::__2:: (alternative version) should also be stripped
         assert_eq!(
             CppType::Named("std::__2::vector<int>".to_string()).to_rust_type_str(),
-            "std_vector<int>"
+            "std_vector_int"
         );
 
         // Android NDK uses __ndk1
         assert_eq!(
             CppType::Named("std::__ndk1::vector<int>".to_string()).to_rust_type_str(),
-            "std_vector<int>"
+            "std_vector_int"
         );
     }
 

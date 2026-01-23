@@ -4573,7 +4573,10 @@ impl AstCodeGen {
                         // Other unary operators: operand.op_X()
                         format!("{}.{}()", left_operand, method_name)
                     }
-                } else if let CppType::Named(struct_name) = ty {
+                } else if let CppType::Named(cpp_struct_name) = ty {
+                    // Convert C++ type name to valid Rust identifier
+                    let struct_name = CppType::Named(cpp_struct_name.clone()).to_rust_type_str();
+
                     // Check if this is a function call (not a constructor)
                     // A function call has a DeclRefExpr child with Function type
                     let is_function_call = node.children.iter().any(|c| {
@@ -4609,7 +4612,8 @@ impl AstCodeGen {
                                 let arg_type = Self::get_expr_type(c);
                                 let arg_class = Self::extract_class_name(&arg_type);
                                 if let Some(name) = arg_class {
-                                    if name == *struct_name {
+                                    // Compare using C++ name for copy constructor detection
+                                    if name == *cpp_struct_name {
                                         // Pass by reference for copy constructor
                                         return format!("&{}", arg_str);
                                     }

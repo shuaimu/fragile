@@ -404,10 +404,10 @@ The current approach in `crates/fragile-clang/src/types.rs:183-580` has special-
   - [x] **22.10.2** Convert `float`/`double` in generic contexts to valid Rust (already handled - f32/f64)
   - [x] **22.10.3** Handle `__int128` and other extended types → i128/u128
 
-- [ ] **22.11** Fix template syntax in generated Rust
-  - [ ] **22.11.1** Convert `std_vector<int>` to monomorphized name `std_vector_int`
-  - [ ] **22.11.2** Or convert to Rust generics `std_vector::<i32>` where appropriate
-  - [ ] **22.11.3** Handle nested templates correctly
+- [x] **22.11** Fix template syntax in generated Rust ✅ [26:01:23, 12:50]
+  - [x] **22.11.1** Convert `std_vector<int>` to monomorphized name `std_vector_int` - Done via to_rust_type_str()
+  - [x] **22.11.2** Or convert to Rust generics - Using monomorphized names for compatibility
+  - [x] **22.11.3** Handle nested templates correctly - e.g., `std_array_std_vector_int__2`
 
 - [x] **22.12** Template instantiation (no special handling - Clang does the work) ✅ 2026-01-23
   - [x] **22.12.1** Clang instantiates templates when used; we transpile the result ✅
