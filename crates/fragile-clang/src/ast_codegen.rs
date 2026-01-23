@@ -338,6 +338,93 @@ impl AstCodeGen {
         }
     }
 
+    /// Check if a type is std::variant and return its C++ template arguments if so.
+    fn get_variant_args(ty: &CppType) -> Option<Vec<String>> {
+        if let CppType::Named(name) = ty {
+            if let Some(rest) = name.strip_prefix("std::variant<") {
+                if let Some(inner) = rest.strip_suffix(">") {
+                    return Some(parse_template_args(inner));
+                }
+            }
+        }
+        None
+    }
+
+    /// Get the generated Rust enum name for a variant type.
+    fn get_variant_enum_name(ty: &CppType) -> Option<String> {
+        if let CppType::Named(name) = ty {
+            if name.starts_with("std::variant<") {
+                return Some(ty.to_rust_type_str());
+            }
+        }
+        None
+    }
+
+    /// Find the variant index for a given C++ type in the variant's template arguments.
+    /// Returns the index (0-based) if found.
+    fn find_variant_index(variant_args: &[String], init_type: &CppType) -> Option<usize> {
+        let init_rust_type = init_type.to_rust_type_str();
+        for (idx, arg) in variant_args.iter().enumerate() {
+            let arg_rust_type = CppType::Named(arg.clone()).to_rust_type_str();
+            if arg_rust_type == init_rust_type {
+                return Some(idx);
+            }
+        }
+        None
+    }
+
+    /// For variant initialization, find the innermost actual value expression.
+    /// This navigates through Unknown("UnexposedExpr") and CallExpr wrappers
+    /// to find the actual value being passed to the variant constructor.
+    fn find_variant_init_value(node: &ClangNode) -> Option<&ClangNode> {
+        match &node.kind {
+            // If this is an EvaluatedExpr, it contains the value directly
+            ClangNodeKind::EvaluatedExpr { .. } => Some(node),
+            // If this is an IntegerLiteral, FloatingLiteral, etc., use it
+            ClangNodeKind::IntegerLiteral { .. } |
+            ClangNodeKind::FloatingLiteral { .. } |
+            ClangNodeKind::StringLiteral(_) |
+            ClangNodeKind::BoolLiteral(_) => Some(node),
+            // If this is a DeclRefExpr (variable reference), use it
+            ClangNodeKind::DeclRefExpr { .. } => Some(node),
+            // For CallExpr to variant constructor, look for the argument
+            ClangNodeKind::CallExpr { ty } => {
+                if let CppType::Named(name) = ty {
+                    if name.starts_with("std::variant<") {
+                        // This is a call to variant constructor, look for the argument
+                        for child in &node.children {
+                            if let Some(val) = Self::find_variant_init_value(child) {
+                                return Some(val);
+                            }
+                        }
+                    }
+                }
+                // For non-variant CallExpr, just return it
+                Some(node)
+            }
+            // For Unknown wrappers, recurse into children
+            ClangNodeKind::Unknown(_) => {
+                for child in &node.children {
+                    if let Some(val) = Self::find_variant_init_value(child) {
+                        return Some(val);
+                    }
+                }
+                None
+            }
+            // For ImplicitCastExpr, look through to child
+            ClangNodeKind::ImplicitCastExpr { .. } => {
+                for child in &node.children {
+                    if let Some(val) = Self::find_variant_init_value(child) {
+                        return Some(val);
+                    }
+                }
+                None
+            }
+            // Default: return the node itself
+            _ => Some(node),
+        }
+    }
+
     /// Generate Rust enum definitions for all collected std::variant types.
     fn generate_variant_enums(&mut self) {
         if self.variant_types.is_empty() {
@@ -1645,6 +1732,12 @@ impl AstCodeGen {
             ClangNodeKind::CastExpr { ty, .. } => Some(ty.clone()),
             ClangNodeKind::ArraySubscriptExpr { ty } => Some(ty.clone()),
             ClangNodeKind::ParmVarDecl { ty, .. } => Some(ty.clone()),
+            // Literal types
+            ClangNodeKind::EvaluatedExpr { ty, .. } => Some(ty.clone()),
+            ClangNodeKind::IntegerLiteral { cpp_type, .. } => cpp_type.clone(),
+            ClangNodeKind::FloatingLiteral { cpp_type, .. } => cpp_type.clone(),
+            ClangNodeKind::BoolLiteral(_) => Some(CppType::Bool),
+            ClangNodeKind::StringLiteral(_) => Some(CppType::Named("const char*".to_string())),
             // For unknown or wrapper nodes, look through to children
             ClangNodeKind::Unknown(_) | ClangNodeKind::ParenExpr { .. } => {
                 if !node.children.is_empty() {
@@ -2312,11 +2405,13 @@ impl AstCodeGen {
                             self.ptr_vars.insert(name.clone());
                         }
 
-                        // Find the actual initializer, skipping TypeRef, Unknown("TypeRef"), and ParmVarDecl nodes
+                        // Find the actual initializer, skipping reference nodes and type nodes
                         // ParmVarDecl nodes appear in function pointer VarDecls to describe parameter types
                         let initializer = child.children.iter().find(|c| {
                             !matches!(&c.kind, ClangNodeKind::Unknown(s) if s == "TypeRef")
                                 && !matches!(&c.kind, ClangNodeKind::Unknown(s) if s.contains("Type"))
+                                && !matches!(&c.kind, ClangNodeKind::Unknown(s) if s == "NamespaceRef")
+                                && !matches!(&c.kind, ClangNodeKind::Unknown(s) if s == "TemplateRef")
                                 && !matches!(&c.kind, ClangNodeKind::ParmVarDecl { .. })
                         });
 
@@ -2349,6 +2444,25 @@ impl AstCodeGen {
                                     // Reference initialization: add &mut or & prefix
                                     let prefix = if is_const_ref { "&" } else { "&mut " };
                                     format!(" = {}{}", prefix, expr)
+                                } else if let Some(variant_args) = Self::get_variant_args(ty) {
+                                    // std::variant initialization: wrap in enum variant constructor
+                                    let enum_name = Self::get_variant_enum_name(ty).unwrap();
+                                    // Find the actual value being passed to the variant constructor
+                                    // (navigate through Unknown/CallExpr wrappers)
+                                    let value_node = Self::find_variant_init_value(init_node).unwrap_or(init_node);
+                                    let value_expr = self.expr_to_string(value_node);
+                                    // Try to determine the initializer type
+                                    if let Some(init_type) = Self::get_expr_type(value_node) {
+                                        if let Some(idx) = Self::find_variant_index(&variant_args, &init_type) {
+                                            format!(" = {}::V{}({})", enum_name, idx, value_expr)
+                                        } else {
+                                            // Couldn't match type to variant, use V0 as fallback
+                                            format!(" = {}::V0({})", enum_name, value_expr)
+                                        }
+                                    } else {
+                                        // Couldn't determine init type, use V0 as fallback
+                                        format!(" = {}::V0({})", enum_name, value_expr)
+                                    }
                                 } else {
                                     format!(" = {}", expr)
                                 }
