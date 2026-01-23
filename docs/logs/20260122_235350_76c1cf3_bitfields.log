@@ -1,0 +1,176 @@
+   Compiling fragile-clang v0.1.0 (/home/shuai/workspace/fragile/crates/fragile-clang)
+warning: unused import: `ClangNodeKind`
+ --> crates/fragile-clang/examples/debug_specialization.rs:1:45
+  |
+1 | use fragile_clang::{ClangParser, ClangNode, ClangNodeKind};
+  |                                             ^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` on by default
+
+warning: unused import: `ClangNodeKind`
+ --> crates/fragile-clang/examples/debug_virtual_call.rs:3:34
+  |
+3 | use fragile_clang::{ClangParser, ClangNodeKind};
+  |                                  ^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` on by default
+
+warning: fields `name`, `transpile_ok`, and `run_ok` are never read
+  --> crates/fragile-clang/tests/grammar_tests.rs:16:5
+   |
+15 | struct TestResult {
+   |        ---------- fields in this struct
+16 |     name: String,
+   |     ^^^^
+17 |     transpile_ok: bool,
+   |     ^^^^^^^^^^^^
+18 |     compile_ok: bool,
+19 |     run_ok: bool,
+   |     ^^^^^^
+   |
+   = note: `TestResult` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+   = note: `#[warn(dead_code)]` on by default
+
+warning: `fragile-clang` (example "debug_specialization") generated 1 warning (run `cargo fix --example "debug_specialization"` to apply 1 suggestion)
+warning: `fragile-clang` (example "debug_virtual_call") generated 1 warning (run `cargo fix --example "debug_virtual_call"` to apply 1 suggestion)
+warning: `fragile-clang` (test "grammar_tests") generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.03s
+     Running unittests src/lib.rs (target/debug/deps/fragile_clang-ac98dc9369a613e7)
+
+running 32 tests
+test ast_codegen::tests::test_if_statement ... ok
+test ast_codegen::tests::test_simple_function ... ok
+test types::tests::test_bit_width_no_fixed_width ... ok
+test types::tests::test_bit_width_primitive_types ... ok
+test types::tests::test_bit_width_pointer_and_reference ... ok
+test types::tests::test_is_signed_integer_types ... ok
+test types::tests::test_parse_template_args ... ok
+test types::tests::test_smart_pointer_type_mappings ... ok
+test parse::tests::test_parse_simple_function ... ok
+test types::tests::test_std_span_type_mapping ... ok
+test parse::tests::test_parse_rvalue_reference_parameter ... ok
+test types::tests::test_std_array_type_mapping ... ok
+test parse::tests::test_parse_lvalue_reference_parameter ... ok
+test parse::tests::test_float_literal_type_float ... ok
+test types::tests::test_std_variant_type_mapping ... ok
+test parse::tests::test_integer_literal_type_unsigned ... ok
+test types::tests::test_stream_type_mappings ... ok
+test parse::tests::test_integer_literal_type_int ... ok
+test parse::tests::test_parse_anonymous_namespace ... ok
+test parse::tests::test_parse_using_namespace ... ok
+test parse::tests::test_bool_literal_true ... ok
+test parse::tests::test_float_literal_type_double ... ok
+test parse::tests::test_mangled_name_for_simple_function ... ok
+test parse::tests::test_parse_using_nested_namespace ... ok
+test parse::tests::test_parse_namespace ... ok
+test parse::tests::test_parse_constructor_with_initializer_list ... ok
+test parse::tests::test_parse_const_lvalue_reference_parameter ... ok
+test parse::tests::test_string_literal ... ok
+test parse::tests::test_bool_literal_false ... ok
+test parse::tests::test_integer_literal_type_long ... ok
+test parse::tests::test_integer_literal_type_unsigned_long ... ok
+test parse::tests::test_string_literal_empty ... ok
+
+test result: ok. 32 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running tests/grammar_tests.rs (target/debug/deps/grammar_tests-a2a97a2a40fae303)
+
+running 20 tests
+test test_09_break_continue ... ok
+test test_02_comparisons ... ok
+test test_10_functions ... ok
+test test_13_struct_methods ... ok
+test test_06_while_loop ... ok
+test test_12_struct_basic ... ok
+test test_05_if_else ... ok
+test test_20_nested_struct ... ok
+test test_04_bitwise ... ok
+test test_19_do_while ... ok
+test test_17_arrays ... ok
+test test_07_for_loop ... ok
+test test_15_pointers ... ok
+test test_16_references ... ok
+test test_11_recursion ... ok
+test test_01_arithmetic ... ok
+test test_14_struct_constructor ... ok
+test test_03_logical ... ok
+test test_08_nested_loops ... ok
+test test_18_ternary ... ok
+
+test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.49s
+
+     Running tests/integration_test.rs (target/debug/deps/integration_test-c02105dffa43cc9f)
+
+running 60 tests
+test test_e2e_std_get ... ignored
+test test_e2e_std_visit ... ignored
+test test_control_flow ... ok
+test test_generate_rust_code ... ok
+test test_end_to_end ... ok
+test test_generate_stubs ... ok
+test test_namespace_function ... ok
+test test_parse_add_function ... ok
+test test_while_loop ... ok
+test test_e2e_ctor_body_stmts ... ok
+test test_e2e_default_params ... ok
+test test_e2e_for_loop ... ok
+test test_e2e_nullptr ... ok
+test test_e2e_global_array ... ok
+test test_e2e_exception_handling ... ok
+test test_e2e_designated_initializers ... ok
+test test_e2e_subscript_operator ... ok
+test test_e2e_while_loop ... ok
+test test_e2e_casts ... ok
+test test_e2e_function_pointers ... ok
+test test_e2e_destructor ... ok
+test test_e2e_lambda_captures ... ok
+test test_e2e_string_literals_and_char_casts ... ok
+test test_e2e_namespace_path_resolution ... ok
+test test_e2e_base_constructor ... ok
+test test_e2e_generic_lambda ... ok
+test test_e2e_assignment_operators ... ok
+test test_e2e_arrays ... ok
+test test_e2e_const_methods ... ok
+test test_e2e_comma_operator ... ok
+test test_e2e_static_members ... ok
+test test_e2e_lambda_basic ... ok
+test test_e2e_functor ... ok
+test test_e2e_arrow_operator ... ok
+test test_e2e_global_var ... ok
+test test_e2e_typedef ... ok
+test test_e2e_constructor ... ok
+test test_e2e_deref_operator ... ok
+test test_e2e_nested_control ... ok
+test test_e2e_range_for ... ok
+test test_e2e_virtual_diamond ... ok
+test test_e2e_increment_decrement ... ok
+test test_e2e_inheritance ... ok
+test test_e2e_sizeof_alignof ... ok
+test test_e2e_function_returning_struct ... ok
+test test_e2e_factorial ... ok
+test test_e2e_operator_overloading ... ok
+test test_e2e_pointers ... ok
+test test_e2e_simple_add ... ok
+test test_e2e_switch ... ok
+test test_e2e_struct_methods ... ok
+test test_e2e_multiple_inheritance ... ok
+test test_e2e_copy_constructor ... ok
+test test_e2e_references ... ok
+test test_e2e_new_delete ... ok
+test test_e2e_array_new_delete ... ok
+test test_e2e_virtual_override ... ok
+test test_e2e_dynamic_dispatch ... ok
+test test_e2e_enum_class ... ok
+test test_e2e_namespaces ... ok
+
+test result: ok. 58 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.05s
+
+   Doc-tests fragile_clang
+
+running 3 tests
+test crates/fragile-clang/src/lib.rs - transpile_cpp_to_rust (line 34) ... ignored
+test crates/fragile-clang/src/types.rs - types::CppType::substitute (line 627) ... ignored
+test crates/fragile-clang/src/types.rs - types::parse_template_args (line 7) ... ignored
+
+test result: ok. 0 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

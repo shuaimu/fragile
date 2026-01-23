@@ -161,6 +161,8 @@ pub enum ClangNodeKind {
         ty: CppType,
         access: AccessSpecifier,
         is_static: bool,
+        /// Bit field width if this is a bit field (e.g., `int x : 3` has width 3)
+        bit_field_width: Option<u32>,
     },
     /// Enum declaration (enum class or plain enum)
     EnumDecl {

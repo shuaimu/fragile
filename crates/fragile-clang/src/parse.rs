@@ -717,9 +717,9 @@ impl ClangParser {
                         || parent_kind == clang_sys::CXCursor_StructDecl;
 
                     if is_class_member && is_static {
-                        // Static data member - treat as a static field
+                        // Static data member - treat as a static field (never a bit field)
                         let access = self.get_access_specifier(cursor);
-                        ClangNodeKind::FieldDecl { name, ty, access, is_static: true }
+                        ClangNodeKind::FieldDecl { name, ty, access, is_static: true, bit_field_width: None }
                     } else {
                         // Regular variable declaration
                         let has_init = false; // Will be determined by children
@@ -758,8 +758,14 @@ impl ClangParser {
                     let name = cursor_spelling(cursor);
                     let ty = self.convert_type(clang_sys::clang_getCursorType(cursor));
                     let access = self.get_access_specifier(cursor);
+                    // Check if this is a bit field and get its width
+                    let bit_field_width = if clang_sys::clang_Cursor_isBitField(cursor) != 0 {
+                        Some(clang_sys::clang_getFieldDeclBitWidth(cursor) as u32)
+                    } else {
+                        None
+                    };
                     // Regular field declarations are never static
-                    ClangNodeKind::FieldDecl { name, ty, access, is_static: false }
+                    ClangNodeKind::FieldDecl { name, ty, access, is_static: false, bit_field_width }
                 }
 
                 clang_sys::CXCursor_EnumDecl => {

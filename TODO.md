@@ -219,7 +219,7 @@ crates/
 
 ### 14. Bit Fields (Priority: Low)
 - [ ] **14.1** Bit field parsing
-  - [ ] **14.1.1** Parse bit field width from FieldDecl (`field : width`) (~50 LOC)
+  - [x] **14.1.1** Parse bit field width from FieldDecl (`field : width`) (~50 LOC) ✅ 2026-01-22
   - [ ] **14.1.2** Track bit field offset and packing within struct (~80 LOC)
 - [ ] **14.2** Bit field code generation
   - [ ] **14.2.1** Generate getter/setter methods for bit field access (~100 LOC)
