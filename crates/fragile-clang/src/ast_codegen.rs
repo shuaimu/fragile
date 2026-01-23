@@ -341,6 +341,167 @@ impl AstCodeGen {
         }
     }
 
+    /// Map C++ compiler builtin functions to Rust equivalents.
+    /// Returns Some((rust_code, needs_unsafe)) if the function is a builtin,
+    /// where rust_code is the generated Rust code and needs_unsafe indicates if
+    /// it should be wrapped in `unsafe {}`.
+    fn map_builtin_function(func_name: &str, args: &[String]) -> Option<(String, bool)> {
+        match func_name {
+            // __builtin_is_constant_evaluated() is always false at runtime
+            // (Clang evaluates constexpr at compile time, so runtime code sees false)
+            "__builtin_is_constant_evaluated" => Some(("false".to_string(), false)),
+
+            // Memory operations - map to std::ptr functions
+            "__builtin_memcpy" => {
+                // __builtin_memcpy(dst, src, n) -> std::ptr::copy_nonoverlapping(src, dst, n)
+                if args.len() >= 3 {
+                    // Note: memcpy copies n bytes, copy_nonoverlapping copies n elements
+                    // We cast to u8 pointers to copy bytes
+                    Some((format!(
+                        "std::ptr::copy_nonoverlapping({} as *const u8, {} as *mut u8, {})",
+                        args[1], args[0], args[2]
+                    ), true))
+                } else {
+                    None
+                }
+            }
+            "__builtin_memmove" => {
+                // __builtin_memmove(dst, src, n) -> std::ptr::copy(src, dst, n)
+                if args.len() >= 3 {
+                    Some((format!(
+                        "std::ptr::copy({} as *const u8, {} as *mut u8, {})",
+                        args[1], args[0], args[2]
+                    ), true))
+                } else {
+                    None
+                }
+            }
+            "__builtin_memset" => {
+                // __builtin_memset(dst, val, n) -> std::ptr::write_bytes(dst, val, n)
+                if args.len() >= 3 {
+                    Some((format!(
+                        "std::ptr::write_bytes({} as *mut u8, {} as u8, {})",
+                        args[0], args[1], args[2]
+                    ), true))
+                } else {
+                    None
+                }
+            }
+            "__builtin_memcmp" => {
+                // __builtin_memcmp(s1, s2, n) -> compare n bytes
+                // Rust doesn't have a direct equivalent, use libc or slice comparison
+                if args.len() >= 3 {
+                    Some((format!(
+                        "{{ let s1 = std::slice::from_raw_parts({} as *const u8, {}); \
+                         let s2 = std::slice::from_raw_parts({} as *const u8, {}); \
+                         s1.cmp(s2) as i32 }}",
+                        args[0], args[2], args[1], args[2]
+                    ), true))
+                } else {
+                    None
+                }
+            }
+            "__builtin_strlen" => {
+                // __builtin_strlen(s) -> strlen equivalent
+                if args.len() >= 1 {
+                    Some((format!(
+                        "{{ let mut __len = 0usize; let mut __p = {} as *const u8; \
+                         while *__p != 0 {{ __len += 1; __p = __p.add(1); }} __len }}",
+                        args[0]
+                    ), true))
+                } else {
+                    None
+                }
+            }
+            "__builtin_expect" => {
+                // __builtin_expect(exp, c) -> exp (hint for branch prediction, just return exp)
+                if args.len() >= 1 {
+                    Some((args[0].clone(), false))
+                } else {
+                    None
+                }
+            }
+            "__builtin_unreachable" => {
+                // __builtin_unreachable() -> std::hint::unreachable_unchecked()
+                Some(("std::hint::unreachable_unchecked()".to_string(), true))
+            }
+            "__builtin_trap" => {
+                // __builtin_trap() -> std::intrinsics::abort() or panic
+                Some(("std::process::abort()".to_string(), false))
+            }
+            "__builtin_abort" => {
+                Some(("std::process::abort()".to_string(), false))
+            }
+            "__builtin_clz" | "__builtin_clzl" | "__builtin_clzll" => {
+                // Count leading zeros
+                if args.len() >= 1 {
+                    Some((format!("({}).leading_zeros() as i32", args[0]), false))
+                } else {
+                    None
+                }
+            }
+            "__builtin_ctz" | "__builtin_ctzl" | "__builtin_ctzll" => {
+                // Count trailing zeros
+                if args.len() >= 1 {
+                    Some((format!("({}).trailing_zeros() as i32", args[0]), false))
+                } else {
+                    None
+                }
+            }
+            "__builtin_popcount" | "__builtin_popcountl" | "__builtin_popcountll" => {
+                // Population count (number of 1 bits)
+                if args.len() >= 1 {
+                    Some((format!("({}).count_ones() as i32", args[0]), false))
+                } else {
+                    None
+                }
+            }
+            "__builtin_bswap16" => {
+                if args.len() >= 1 {
+                    Some((format!("({}).swap_bytes()", args[0]), false))
+                } else {
+                    None
+                }
+            }
+            "__builtin_bswap32" => {
+                if args.len() >= 1 {
+                    Some((format!("({}).swap_bytes()", args[0]), false))
+                } else {
+                    None
+                }
+            }
+            "__builtin_bswap64" => {
+                if args.len() >= 1 {
+                    Some((format!("({}).swap_bytes()", args[0]), false))
+                } else {
+                    None
+                }
+            }
+            // Atomic builtins - common patterns
+            "__atomic_load_n" => {
+                if args.len() >= 2 {
+                    Some((format!(
+                        "std::sync::atomic::AtomicPtr::new({} as *mut _).load(std::sync::atomic::Ordering::SeqCst)",
+                        args[0]
+                    ), false))
+                } else {
+                    None
+                }
+            }
+            "__atomic_store_n" => {
+                if args.len() >= 3 {
+                    Some((format!(
+                        "std::sync::atomic::AtomicPtr::new({} as *mut _).store({}, std::sync::atomic::Ordering::SeqCst)",
+                        args[0], args[1]
+                    ), false))
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
     /// Check if a type is std::variant (or variant without std:: prefix) and return its C++ template arguments if so.
     fn get_variant_args(ty: &CppType) -> Option<Vec<String>> {
         if let CppType::Named(name) = ty {
@@ -4522,6 +4683,16 @@ impl AstCodeGen {
                             self.expr_to_string(c)
                         })
                         .collect();
+
+                    // Check if this is a compiler builtin function call
+                    if let Some((rust_code, needs_unsafe)) = Self::map_builtin_function(&func, &args) {
+                        return if needs_unsafe {
+                            format!("unsafe {{ {} }}", rust_code)
+                        } else {
+                            rust_code
+                        };
+                    }
+
                     // Check if the function expression is wrapped in unsafe (from arrow member access)
                     // If so, put the function call inside the unsafe block
                     if func.starts_with("unsafe { ") && func.ends_with(" }") {

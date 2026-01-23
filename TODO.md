@@ -387,12 +387,12 @@ The current approach in `crates/fragile-clang/src/types.rs:183-580` has special-
   - [ ] **22.7.2** Add handlers for common Unknown-producing nodes: variable initializers with complex expressions
   - [ ] **22.7.3** Handle static initialization of function objects (e.g., `static mut swap: __swap___fn = ...`)
 
-- [ ] **22.8** Implement compiler builtin functions
-  - [ ] **22.8.1** `__builtin_is_constant_evaluated()` → `false` (runtime always)
-  - [ ] **22.8.2** `__builtin_memset` → `std::ptr::write_bytes`
-  - [ ] **22.8.3** `__builtin_memcpy` → `std::ptr::copy_nonoverlapping`
-  - [ ] **22.8.4** `__builtin_memmove` → `std::ptr::copy`
-  - [ ] **22.8.5** Other builtins as encountered
+- [x] **22.8** Implement compiler builtin functions ✅ [26:01:23, 12:05]
+  - [x] **22.8.1** `__builtin_is_constant_evaluated()` → `false` (runtime always)
+  - [x] **22.8.2** `__builtin_memset` → `std::ptr::write_bytes`
+  - [x] **22.8.3** `__builtin_memcpy` → `std::ptr::copy_nonoverlapping`
+  - [x] **22.8.4** `__builtin_memmove` → `std::ptr::copy`
+  - [x] **22.8.5** Other builtins: clz/ctz/popcount, bswap, expect, unreachable, trap, abort, strlen, memcmp
 
 - [ ] **22.9** Fix duplicate struct definitions from template specializations
   - [ ] **22.9.1** Generate unique names for each template instantiation
