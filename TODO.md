@@ -184,10 +184,10 @@ crates/
   - [x] **11.3.1** `std::stringstream` → `std::io::Cursor<Vec<u8>>` type mapping ✅ 2026-01-22
   - [x] **11.3.2** `std::ostringstream` → `String` type mapping ✅ 2026-01-22
   - [x] **11.3.3** `std::istringstream` → `std::io::Cursor<String>` type mapping ✅ 2026-01-22
-- [ ] **11.4** File streams
-  - [ ] **11.4.1** `std::ofstream` → `std::fs::File` with Write (~80 LOC)
-  - [ ] **11.4.2** `std::ifstream` → `std::fs::File` with Read (~80 LOC)
-  - [ ] **11.4.3** `std::fstream` → `std::fs::File` with Read+Write (~80 LOC)
+- [x] **11.4** File streams ✅ 2026-01-22
+  - [x] **11.4.1** `std::ofstream` → `std::fs::File` type mapping ✅ 2026-01-22
+  - [x] **11.4.2** `std::ifstream` → `std::fs::File` type mapping ✅ 2026-01-22
+  - [x] **11.4.3** `std::fstream` → `std::fs::File` type mapping ✅ 2026-01-22
 
 ### 12. C++20 Coroutines (Priority: Medium)
 - [ ] **12.1** Coroutine detection and parsing

@@ -441,6 +441,30 @@ impl CppType {
                            check_name.starts_with("basic_istringstream<char") {
                             return "std::io::Cursor<String>".to_string();
                         }
+                        // Handle std::ofstream -> std::fs::File
+                        // ofstream is output-only file stream
+                        if check_name.starts_with("std::ofstream") ||
+                           check_name.starts_with("ofstream") ||
+                           check_name.starts_with("std::basic_ofstream<char") ||
+                           check_name.starts_with("basic_ofstream<char") {
+                            return "std::fs::File".to_string();
+                        }
+                        // Handle std::ifstream -> std::fs::File
+                        // ifstream is input-only file stream
+                        if check_name.starts_with("std::ifstream") ||
+                           check_name.starts_with("ifstream") ||
+                           check_name.starts_with("std::basic_ifstream<char") ||
+                           check_name.starts_with("basic_ifstream<char") {
+                            return "std::fs::File".to_string();
+                        }
+                        // Handle std::fstream -> std::fs::File
+                        // fstream is read+write file stream
+                        if check_name.starts_with("std::fstream") ||
+                           check_name.starts_with("fstream") ||
+                           check_name.starts_with("std::basic_fstream<char") ||
+                           check_name.starts_with("basic_fstream<char") {
+                            return "std::fs::File".to_string();
+                        }
                         // Handle std::variant<T1, T2, ...> -> Variant_T1_T2_...
                         // This generates a synthetic enum name that will be defined separately
                         // Handle both "std::variant<...>" and "variant<...>" (libclang sometimes omits std::)
@@ -1354,6 +1378,36 @@ mod tests {
         assert_eq!(
             CppType::Named("istringstream".to_string()).to_rust_type_str(),
             "std::io::Cursor<String>"
+        );
+
+        // std::ofstream -> std::fs::File
+        assert_eq!(
+            CppType::Named("std::ofstream".to_string()).to_rust_type_str(),
+            "std::fs::File"
+        );
+        assert_eq!(
+            CppType::Named("ofstream".to_string()).to_rust_type_str(),
+            "std::fs::File"
+        );
+
+        // std::ifstream -> std::fs::File
+        assert_eq!(
+            CppType::Named("std::ifstream".to_string()).to_rust_type_str(),
+            "std::fs::File"
+        );
+        assert_eq!(
+            CppType::Named("ifstream".to_string()).to_rust_type_str(),
+            "std::fs::File"
+        );
+
+        // std::fstream -> std::fs::File
+        assert_eq!(
+            CppType::Named("std::fstream".to_string()).to_rust_type_str(),
+            "std::fs::File"
+        );
+        assert_eq!(
+            CppType::Named("fstream".to_string()).to_rust_type_str(),
+            "std::fs::File"
         );
     }
 
