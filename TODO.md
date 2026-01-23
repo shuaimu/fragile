@@ -363,9 +363,9 @@ The current approach in `crates/fragile-clang/src/types.rs:183-580` has special-
   - [ ] **22.5.2** Handle allocator rebinding and traits
   - [ ] **22.5.3** Handle type traits and SFINAE patterns
 
-- [ ] **22.6** Template instantiation (no special handling - Clang does the work)
-  - [ ] **22.6.1** Clang instantiates templates when used; we transpile the result
-  - [ ] **22.6.2** Verify explicit instantiations work correctly
+- [x] **22.6** Template instantiation (no special handling - Clang does the work) ✅ 2026-01-23
+  - [x] **22.6.1** Clang instantiates templates when used; we transpile the result ✅
+  - [x] **22.6.2** Verify explicit instantiations work correctly ✅
 
 #### Phase 4: Update Tests
 - [x] **22.7** Update existing tests ✅ 2026-01-23
