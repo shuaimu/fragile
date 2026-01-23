@@ -1514,6 +1514,43 @@ impl ClangParser {
                     }
                 }
 
+                // CXCursor_TemplateRef = 45 - Reference to a template
+                // These are just references and don't need special handling
+                45 => {
+                    let name = cursor_spelling(cursor);
+                    ClangNodeKind::Unknown(format!("TemplateRef:{}", name))
+                }
+
+                // CXCursor_NamespaceRef = 46 - Reference to a namespace
+                46 => {
+                    let name = cursor_spelling(cursor);
+                    ClangNodeKind::Unknown(format!("NamespaceRef:{}", name))
+                }
+
+                // CXCursor_OverloadedDeclRef = 49 - Reference to an overloaded declaration
+                49 => {
+                    let name = cursor_spelling(cursor);
+                    ClangNodeKind::Unknown(format!("OverloadedDeclRef:{}", name))
+                }
+
+                // CXCursor_NonTypeTemplateParameter = 28 - Non-type template parameter
+                28 => {
+                    let name = cursor_spelling(cursor);
+                    ClangNodeKind::Unknown(format!("NonTypeTemplateParameter:{}", name))
+                }
+
+                // CXCursor_MacroExpansion = 502 - Macro expansion
+                502 => {
+                    let name = cursor_spelling(cursor);
+                    ClangNodeKind::Unknown(format!("macro_expansion:{}", name))
+                }
+
+                // CXCursor_InclusionDirective = 503 - #include directive
+                503 => {
+                    let name = cursor_spelling(cursor);
+                    ClangNodeKind::Unknown(format!("inclusion:{}", name))
+                }
+
                 _ => {
                     let kind_spelling = clang_sys::clang_getCursorKindSpelling(kind);
                     ClangNodeKind::Unknown(cx_string_to_string(kind_spelling))

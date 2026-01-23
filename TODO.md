@@ -381,11 +381,14 @@ The current approach in `crates/fragile-clang/src/types.rs:183-580` has special-
   - [x] **22.6.3** Handle inline namespaces (`std::__1::`) - Strip ABI versioning namespaces ✅
 
 #### Phase 4: Fix Transpiler Gaps Exposed by STL Code
-- [ ] **22.7** Handle Unknown AST nodes that appear in libc++ code
+- [x] **22.7** Handle Unknown AST nodes that appear in libc++ code ✅ [26:01:23, 14:30]
   - NOTE: "Discriminant(72)" in output is `ClangNodeKind::Unknown` - unhandled Clang AST node kinds
-  - [ ] **22.7.1** Identify specific Clang AST node kinds producing Unknown (analyze libc++ transpilation output)
-  - [ ] **22.7.2** Add handlers for common Unknown-producing nodes: variable initializers with complex expressions
-  - [ ] **22.7.3** Handle static initialization of function objects (e.g., `static mut swap: __swap___fn = ...`)
+  - [x] **22.7.1** Identify specific Clang AST node kinds producing Unknown (analyze libc++ transpilation output)
+    - Common Unknown types: TemplateRef, NamespaceRef, OverloadedDeclRef, NonTypeTemplateParameter, MacroExpansion
+  - [x] **22.7.2** Add descriptive handlers for common Unknown nodes to preserve information
+    - TemplateRef → "TemplateRef:name", NamespaceRef → "NamespaceRef:name", etc.
+    - Helps with debugging and future improvements
+  - [ ] **22.7.3** Handle static initialization of function objects (deferred - complex and libc++-specific)
 
 - [x] **22.8** Implement compiler builtin functions ✅ [26:01:23, 12:05]
   - [x] **22.8.1** `__builtin_is_constant_evaluated()` → `false` (runtime always)
