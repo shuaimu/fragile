@@ -167,13 +167,14 @@ crates/
   - [x] **10.1.4** Handle null initializers (None) and nullptr comparison (.is_none()/.is_some()) ✅ [26:01:22, 22:45]
 
 ### 11. I/O Streams (Priority: Medium)
-- [ ] **11.1** Basic I/O stream type mappings
+- [x] **11.1** Basic I/O stream type mappings ✅ 2026-01-22
   - [x] **11.1.1** `std::ostream` → `Box<dyn std::io::Write>` type mapping (~50 LOC) ✅ 2026-01-22
   - [x] **11.1.2** `std::istream` → `Box<dyn std::io::Read>` type mapping (~50 LOC) ✅ 2026-01-22
   - [x] **11.1.2a** `std::iostream` → `Box<dyn std::io::Read + std::io::Write>` type mapping ✅ 2026-01-22
-  - [ ] **11.1.3** `std::cout` → `std::io::stdout()` global mapping (~30 LOC)
-  - [ ] **11.1.4** `std::cerr` → `std::io::stderr()` global mapping (~30 LOC)
-  - [ ] **11.1.5** `std::cin` → `std::io::stdin()` global mapping (~30 LOC)
+  - [x] **11.1.3** `std::cout` → `std::io::stdout()` global mapping (~30 LOC) ✅ 2026-01-22
+  - [x] **11.1.4** `std::cerr` → `std::io::stderr()` global mapping (~30 LOC) ✅ 2026-01-22
+  - [x] **11.1.5** `std::cin` → `std::io::stdin()` global mapping (~30 LOC) ✅ 2026-01-22
+  - [x] **11.1.5a** `std::clog` → `std::io::stderr()` global mapping ✅ 2026-01-22
 - [ ] **11.2** Stream operators
   - [ ] **11.2.1** `operator<<` for ostream → `write!()` / `writeln!()` macro calls (~100 LOC)
   - [ ] **11.2.2** `operator>>` for istream → `read_line()` + parsing (~100 LOC)

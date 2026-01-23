@@ -3338,6 +3338,18 @@ impl AstCodeGen {
                 if name == "this" {
                     "self".to_string()
                 } else {
+                    // Check for standard I/O streams (std::cout, std::cerr, std::cin)
+                    // These should be mapped to Rust's std::io functions
+                    let is_std_namespace = namespace_path.len() == 1 && namespace_path[0] == "std";
+                    if is_std_namespace || namespace_path.is_empty() {
+                        match name.as_str() {
+                            "cout" => return "std::io::stdout()".to_string(),
+                            "cerr" | "clog" => return "std::io::stderr()".to_string(),
+                            "cin" => return "std::io::stdin()".to_string(),
+                            _ => {}
+                        }
+                    }
+
                     let ident = sanitize_identifier(name);
                     // For static member access (class name in namespace path, non-function type),
                     // convert to global variable name (no unsafe wrapper since we're already in unsafe)
@@ -3626,6 +3638,18 @@ impl AstCodeGen {
                 if name == "this" {
                     if self.use_ctor_self { "__self".to_string() } else { "self".to_string() }
                 } else {
+                    // Check for standard I/O streams (std::cout, std::cerr, std::cin)
+                    // These should be mapped to Rust's std::io functions
+                    let is_std_namespace = namespace_path.len() == 1 && namespace_path[0] == "std";
+                    if is_std_namespace || namespace_path.is_empty() {
+                        match name.as_str() {
+                            "cout" => return "std::io::stdout()".to_string(),
+                            "cerr" | "clog" => return "std::io::stderr()".to_string(),
+                            "cin" => return "std::io::stdin()".to_string(),
+                            _ => {}
+                        }
+                    }
+
                     let ident = sanitize_identifier(name);
                     // Check if this is a static member access (class name in namespace path)
                     // For static member variables (not functions), convert to global with unsafe
