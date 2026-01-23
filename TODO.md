@@ -352,10 +352,10 @@ The current approach in `crates/fragile-clang/src/types.rs:183-580` has special-
   - [x] **22.3.2** Document libc++ installation requirements in CLAUDE.md ✅
   - [x] **22.3.3** Handle libc++ include paths (`/usr/include/c++/v1/` etc.) ✅
 
-- [ ] **22.4** Handle libc++ implementation patterns
-  - [ ] **22.4.1** Handle `_LIBCPP_*` macros and conditionals
-  - [ ] **22.4.2** Handle `__` prefixed internal identifiers
-  - [ ] **22.4.3** Handle inline namespaces (`std::__1::`)
+- [x] **22.4** Handle libc++ implementation patterns ✅ 2026-01-23
+  - [x] **22.4.1** Handle `_LIBCPP_*` macros and conditionals - Handled by Clang preprocessing ✅
+  - [x] **22.4.2** Handle `__` prefixed internal identifiers - Preserved as valid Rust identifiers ✅
+  - [x] **22.4.3** Handle inline namespaces (`std::__1::`) - Strip ABI versioning namespaces ✅
 
 #### Phase 3: Fix Transpiler Gaps Exposed by libc++ Headers
 - [ ] **22.5** Handle STL implementation patterns (same fixes benefit all C++ code)

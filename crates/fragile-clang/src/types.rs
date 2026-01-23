@@ -288,22 +288,29 @@ impl CppType {
                             .trim_start_matches("enum ")
                             .trim_end();  // Remove trailing whitespace
 
+                        // Strip inline namespace versioning used by libc++ (e.g., std::__1:: -> std::)
+                        // libc++ uses __1, __2, etc. as ABI versioning namespaces
+                        let cleaned = cleaned
+                            .replace("::__1::", "::")
+                            .replace("::__2::", "::")
+                            .replace("::__ndk1::", "::"); // Android NDK uses __ndk1
+
                         // Handle remaining "unsigned TYPE" patterns
-                        let cleaned = if cleaned.starts_with("unsigned ") {
+                        let cleaned: String = if cleaned.starts_with("unsigned ") {
                             match cleaned.trim_start_matches("unsigned ") {
-                                "int" => "u32",
-                                "long" => "u64",
-                                "short" => "u16",
-                                "char" => "u8",
-                                _ => cleaned
+                                "int" => "u32".to_string(),
+                                "long" => "u64".to_string(),
+                                "short" => "u16".to_string(),
+                                "char" => "u8".to_string(),
+                                _ => cleaned.clone()
                             }
                         } else if cleaned.starts_with("signed ") {
                             match cleaned.trim_start_matches("signed ") {
-                                "int" => "i32",
-                                "long" => "i64",
-                                "short" => "i16",
-                                "char" => "i8",
-                                _ => cleaned
+                                "int" => "i32".to_string(),
+                                "long" => "i64".to_string(),
+                                "short" => "i16".to_string(),
+                                "char" => "i8".to_string(),
+                                _ => cleaned.clone()
                             }
                         } else {
                             cleaned
@@ -1045,6 +1052,48 @@ mod tests {
         assert_eq!(
             CppType::Named("std::fstream".to_string()).to_rust_type_str(),
             "std_fstream"
+        );
+    }
+
+    #[test]
+    fn test_inline_namespace_stripping() {
+        // libc++ uses inline namespaces like std::__1:: for ABI versioning
+        // These should be stripped to produce cleaner type names
+
+        // std::__1::vector<int> -> std_vector<int>
+        assert_eq!(
+            CppType::Named("std::__1::vector<int>".to_string()).to_rust_type_str(),
+            "std_vector<int>"
+        );
+
+        // std::__1::string -> std_string
+        assert_eq!(
+            CppType::Named("std::__1::string".to_string()).to_rust_type_str(),
+            "std_string"
+        );
+
+        // std::__1::basic_string<char> -> std_basic_string<char>
+        assert_eq!(
+            CppType::Named("std::__1::basic_string<char>".to_string()).to_rust_type_str(),
+            "std_basic_string<char>"
+        );
+
+        // Nested inline namespaces: std::__1::__detail::__helper -> std___detail___helper
+        assert_eq!(
+            CppType::Named("std::__1::__detail::__helper".to_string()).to_rust_type_str(),
+            "std___detail___helper"
+        );
+
+        // std::__2:: (alternative version) should also be stripped
+        assert_eq!(
+            CppType::Named("std::__2::vector<int>".to_string()).to_rust_type_str(),
+            "std_vector<int>"
+        );
+
+        // Android NDK uses __ndk1
+        assert_eq!(
+            CppType::Named("std::__ndk1::vector<int>".to_string()).to_rust_type_str(),
+            "std_vector<int>"
         );
     }
 
