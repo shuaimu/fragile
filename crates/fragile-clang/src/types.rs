@@ -257,6 +257,11 @@ impl CppType {
                     // C variadic function support
                     "va_list" | "__builtin_va_list" | "__va_list_tag" | "struct __va_list_tag" =>
                         "std::ffi::VaList".to_string(),
+                    // C standard I/O
+                    "FILE" | "struct _IO_FILE" => "std::ffi::c_void".to_string(),  // Opaque file handle
+                    // nullptr_t type
+                    "std::nullptr_t" | "nullptr_t" | "decltype(nullptr)" =>
+                        "*mut std::ffi::c_void".to_string(),
                     // NOTE: STL string type mappings removed - types pass through as-is
                     // See Section 22 in TODO.md for rationale
                     _ => {
