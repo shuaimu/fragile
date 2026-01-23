@@ -393,6 +393,30 @@ impl CppType {
                                 return format!("Weak<{}>", element_type.to_rust_type_str());
                             }
                         }
+                        // Handle std::ostream -> Box<dyn std::io::Write>
+                        // Also handle basic_ostream<char> which is the underlying type
+                        if check_name.starts_with("std::ostream") ||
+                           check_name.starts_with("ostream") ||
+                           check_name.starts_with("std::basic_ostream<char") ||
+                           check_name.starts_with("basic_ostream<char") {
+                            return "Box<dyn std::io::Write>".to_string();
+                        }
+                        // Handle std::istream -> Box<dyn std::io::Read>
+                        // Also handle basic_istream<char> which is the underlying type
+                        if check_name.starts_with("std::istream") ||
+                           check_name.starts_with("istream") ||
+                           check_name.starts_with("std::basic_istream<char") ||
+                           check_name.starts_with("basic_istream<char") {
+                            return "Box<dyn std::io::Read>".to_string();
+                        }
+                        // Handle std::iostream -> Box<dyn std::io::Read + std::io::Write>
+                        // Also handle basic_iostream<char> which is the underlying type
+                        if check_name.starts_with("std::iostream") ||
+                           check_name.starts_with("iostream") ||
+                           check_name.starts_with("std::basic_iostream<char") ||
+                           check_name.starts_with("basic_iostream<char") {
+                            return "Box<dyn std::io::Read + std::io::Write>".to_string();
+                        }
                         // Handle std::variant<T1, T2, ...> -> Variant_T1_T2_...
                         // This generates a synthetic enum name that will be defined separately
                         // Handle both "std::variant<...>" and "variant<...>" (libclang sometimes omits std::)
@@ -1219,6 +1243,63 @@ mod tests {
         assert_eq!(
             CppType::Named("std::variant<MyClass, OtherClass>".to_string()).to_rust_type_str(),
             "Variant_MyClass_OtherClass"
+        );
+    }
+
+    #[test]
+    fn test_stream_type_mappings() {
+        // std::ostream -> Box<dyn std::io::Write>
+        assert_eq!(
+            CppType::Named("std::ostream".to_string()).to_rust_type_str(),
+            "Box<dyn std::io::Write>"
+        );
+        assert_eq!(
+            CppType::Named("ostream".to_string()).to_rust_type_str(),
+            "Box<dyn std::io::Write>"
+        );
+        assert_eq!(
+            CppType::Named("std::basic_ostream<char>".to_string()).to_rust_type_str(),
+            "Box<dyn std::io::Write>"
+        );
+        assert_eq!(
+            CppType::Named("basic_ostream<char>".to_string()).to_rust_type_str(),
+            "Box<dyn std::io::Write>"
+        );
+
+        // std::istream -> Box<dyn std::io::Read>
+        assert_eq!(
+            CppType::Named("std::istream".to_string()).to_rust_type_str(),
+            "Box<dyn std::io::Read>"
+        );
+        assert_eq!(
+            CppType::Named("istream".to_string()).to_rust_type_str(),
+            "Box<dyn std::io::Read>"
+        );
+        assert_eq!(
+            CppType::Named("std::basic_istream<char>".to_string()).to_rust_type_str(),
+            "Box<dyn std::io::Read>"
+        );
+        assert_eq!(
+            CppType::Named("basic_istream<char>".to_string()).to_rust_type_str(),
+            "Box<dyn std::io::Read>"
+        );
+
+        // std::iostream -> Box<dyn std::io::Read + std::io::Write>
+        assert_eq!(
+            CppType::Named("std::iostream".to_string()).to_rust_type_str(),
+            "Box<dyn std::io::Read + std::io::Write>"
+        );
+        assert_eq!(
+            CppType::Named("iostream".to_string()).to_rust_type_str(),
+            "Box<dyn std::io::Read + std::io::Write>"
+        );
+        assert_eq!(
+            CppType::Named("std::basic_iostream<char>".to_string()).to_rust_type_str(),
+            "Box<dyn std::io::Read + std::io::Write>"
+        );
+        assert_eq!(
+            CppType::Named("basic_iostream<char>".to_string()).to_rust_type_str(),
+            "Box<dyn std::io::Read + std::io::Write>"
         );
     }
 

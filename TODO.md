@@ -166,6 +166,143 @@ crates/
   - [x] **10.1.3** Handle function pointer calls (use .unwrap()()) ✅ [26:01:22, 21:50]
   - [x] **10.1.4** Handle null initializers (None) and nullptr comparison (.is_none()/.is_some()) ✅ [26:01:22, 22:45]
 
+### 11. I/O Streams (Priority: Medium)
+- [ ] **11.1** Basic I/O stream type mappings
+  - [x] **11.1.1** `std::ostream` → `Box<dyn std::io::Write>` type mapping (~50 LOC) ✅ 2026-01-22
+  - [x] **11.1.2** `std::istream` → `Box<dyn std::io::Read>` type mapping (~50 LOC) ✅ 2026-01-22
+  - [x] **11.1.2a** `std::iostream` → `Box<dyn std::io::Read + std::io::Write>` type mapping ✅ 2026-01-22
+  - [ ] **11.1.3** `std::cout` → `std::io::stdout()` global mapping (~30 LOC)
+  - [ ] **11.1.4** `std::cerr` → `std::io::stderr()` global mapping (~30 LOC)
+  - [ ] **11.1.5** `std::cin` → `std::io::stdin()` global mapping (~30 LOC)
+- [ ] **11.2** Stream operators
+  - [ ] **11.2.1** `operator<<` for ostream → `write!()` / `writeln!()` macro calls (~100 LOC)
+  - [ ] **11.2.2** `operator>>` for istream → `read_line()` + parsing (~100 LOC)
+  - [ ] **11.2.3** Handle chained `<<`/`>>` operators (~50 LOC)
+- [ ] **11.3** String streams
+  - [ ] **11.3.1** `std::stringstream` → `String` with cursor (~80 LOC)
+  - [ ] **11.3.2** `std::ostringstream` → `String` builder (~60 LOC)
+  - [ ] **11.3.3** `std::istringstream` → `&str` cursor (~60 LOC)
+- [ ] **11.4** File streams
+  - [ ] **11.4.1** `std::ofstream` → `std::fs::File` with Write (~80 LOC)
+  - [ ] **11.4.2** `std::ifstream` → `std::fs::File` with Read (~80 LOC)
+  - [ ] **11.4.3** `std::fstream` → `std::fs::File` with Read+Write (~80 LOC)
+
+### 12. C++20 Coroutines (Priority: Medium)
+- [ ] **12.1** Coroutine detection and parsing
+  - [ ] **12.1.1** Detect `co_await`, `co_yield`, `co_return` keywords in function bodies (~60 LOC)
+  - [ ] **12.1.2** Parse coroutine promise types from return type (~80 LOC)
+  - [ ] **12.1.3** Identify coroutine frame state variables (~60 LOC)
+- [ ] **12.2** Generator coroutines (co_yield)
+  - [ ] **12.2.1** Map generator functions to Rust `Iterator` trait implementation (~150 LOC)
+  - [ ] **12.2.2** `co_yield value` → `yield value` in generator context (~50 LOC)
+  - [ ] **12.2.3** Generate state machine struct for generator (~200 LOC)
+- [ ] **12.3** Async coroutines (co_await)
+  - [ ] **12.3.1** Mark coroutine functions as `async fn` (~40 LOC)
+  - [ ] **12.3.2** `co_await expr` → `expr.await` (~50 LOC)
+  - [ ] **12.3.3** `co_return value` → `return value` in async context (~30 LOC)
+  - [ ] **12.3.4** Handle awaitable types (map to Future trait) (~100 LOC)
+- [ ] **12.4** Task/Promise types
+  - [ ] **12.4.1** Map `std::coroutine_handle<>` to internal state pointer (~60 LOC)
+  - [ ] **12.4.2** Map common task types (cppcoro::task, etc.) to async blocks (~100 LOC)
+
+### 13. Anonymous Structs and Unions (Priority: Low)
+- [ ] **13.1** Anonymous struct support
+  - [ ] **13.1.1** Detect anonymous struct declarations in AST (~40 LOC)
+  - [ ] **13.1.2** Generate synthetic name for anonymous struct (e.g., `__anon_struct_N`) (~30 LOC)
+  - [ ] **13.1.3** Flatten anonymous struct fields into parent when used inline (~80 LOC)
+- [ ] **13.2** Anonymous union support
+  - [ ] **13.2.1** Detect anonymous union declarations in AST (~40 LOC)
+  - [ ] **13.2.2** Generate `#[repr(C)] union` with synthetic name (~50 LOC)
+  - [ ] **13.2.3** Handle anonymous union field access (direct member access) (~60 LOC)
+
+### 14. Bit Fields (Priority: Low)
+- [ ] **14.1** Bit field parsing
+  - [ ] **14.1.1** Parse bit field width from FieldDecl (`field : width`) (~50 LOC)
+  - [ ] **14.1.2** Track bit field offset and packing within struct (~80 LOC)
+- [ ] **14.2** Bit field code generation
+  - [ ] **14.2.1** Generate getter/setter methods for bit field access (~100 LOC)
+  - [ ] **14.2.2** Pack adjacent bit fields into appropriate integer type (~120 LOC)
+  - [ ] **14.2.3** Handle bit field assignment and initialization (~80 LOC)
+- [ ] **14.3** Alternative: Use `bitflags` crate
+  - [ ] **14.3.1** Detect bit field patterns that map to flags (~60 LOC)
+  - [ ] **14.3.2** Generate `bitflags!` macro invocations (~80 LOC)
+
+### 15. Variadic Functions (Priority: Low)
+- [ ] **15.1** C-style variadic functions
+  - [ ] **15.1.1** Detect variadic function declarations (`...` parameter) (~30 LOC)
+  - [ ] **15.1.2** Map `va_list` to Rust's `std::ffi::VaList` (~50 LOC)
+  - [ ] **15.1.3** Map `va_start`/`va_arg`/`va_end` to VaList methods (~80 LOC)
+  - [ ] **15.1.4** Generate `extern "C"` with `...` for variadic functions (~40 LOC)
+- [ ] **15.2** Variadic templates (already handled by Clang instantiation)
+  - Note: Clang instantiates variadic templates, so we transpile the result
+
+### 16. RTTI (Runtime Type Information) (Priority: Low)
+- [ ] **16.1** typeid operator
+  - [ ] **16.1.1** Detect `typeid(expr)` and `typeid(Type)` expressions (~50 LOC)
+  - [ ] **16.1.2** Generate `std::any::TypeId::of::<T>()` for type queries (~60 LOC)
+  - [ ] **16.1.3** Handle `typeid` comparison (`==`, `!=`) (~40 LOC)
+- [ ] **16.2** type_info class
+  - [ ] **16.2.1** Map `std::type_info` to wrapper struct with TypeId (~80 LOC)
+  - [ ] **16.2.2** Implement `name()` method via `std::any::type_name` (~40 LOC)
+  - [ ] **16.2.3** Implement `hash_code()` via TypeId hash (~30 LOC)
+- [ ] **16.3** dynamic_cast improvements
+  - [ ] **16.3.1** Improve trait object-based dynamic_cast for deep hierarchies (~100 LOC)
+  - [ ] **16.3.2** Handle `dynamic_cast` to reference types (~60 LOC)
+
+### 17. Placement New (Priority: Low)
+- [ ] **17.1** Basic placement new
+  - [ ] **17.1.1** Detect placement new syntax `new (ptr) Type(args)` (~50 LOC)
+  - [ ] **17.1.2** Generate `std::ptr::write(ptr, T::new(...))` (~60 LOC)
+  - [ ] **17.1.3** Handle alignment requirements with `std::alloc::Layout` (~80 LOC)
+- [ ] **17.2** Placement new with allocators
+  - [ ] **17.2.1** Map placement new with custom allocator (~100 LOC)
+  - [ ] **17.2.2** Handle array placement new (~80 LOC)
+
+### 18. C++20 Modules (Priority: Low - Long-term)
+- [ ] **18.1** Module detection
+  - [ ] **18.1.1** Parse `module` and `export module` declarations (~60 LOC)
+  - [ ] **18.1.2** Parse `import` declarations (~50 LOC)
+  - [ ] **18.1.3** Track module partitions (~80 LOC)
+- [ ] **18.2** Module mapping
+  - [ ] **18.2.1** Map C++ modules to Rust modules/crates (~100 LOC)
+  - [ ] **18.2.2** Handle `export` visibility → `pub` (~50 LOC)
+  - [ ] **18.2.3** Map module partitions to submodules (~80 LOC)
+- [ ] **18.3** Module interface units
+  - [ ] **18.3.1** Generate Rust module files from module interface units (~100 LOC)
+  - [ ] **18.3.2** Handle re-exports from module interface (~60 LOC)
+
+### 19. C++20 Ranges (Priority: Low)
+- [ ] **19.1** Range adaptors
+  - [ ] **19.1.1** Map `std::views::filter` → `.filter()` (~50 LOC)
+  - [ ] **19.1.2** Map `std::views::transform` → `.map()` (~50 LOC)
+  - [ ] **19.1.3** Map `std::views::take` → `.take()` (~40 LOC)
+  - [ ] **19.1.4** Map `std::views::drop` → `.skip()` (~40 LOC)
+  - [ ] **19.1.5** Map `std::views::reverse` → `.rev()` (~40 LOC)
+- [ ] **19.2** Range algorithms
+  - [ ] **19.2.1** Map `std::ranges::for_each` → `.for_each()` (~50 LOC)
+  - [ ] **19.2.2** Map `std::ranges::find` → `.find()` (~50 LOC)
+  - [ ] **19.2.3** Map `std::ranges::sort` → `.sort()` / `.sort_by()` (~60 LOC)
+  - [ ] **19.2.4** Map `std::ranges::copy` → `.collect()` / iterator consumption (~60 LOC)
+- [ ] **19.3** Range concepts
+  - [ ] **19.3.1** Map range concepts to Rust Iterator trait bounds (~80 LOC)
+
+### 20. Anonymous Namespaces (Priority: Low)
+- [ ] **20.1** Anonymous namespace handling
+  - [ ] **20.1.1** Detect anonymous namespace declarations (~30 LOC)
+  - [ ] **20.1.2** Generate private module with synthetic name (~40 LOC)
+  - [ ] **20.1.3** Auto-use contents in parent scope (~50 LOC)
+  - [ ] **20.1.4** Mark all items as `pub(super)` for parent access only (~40 LOC)
+
+### 21. Code Quality Improvements (Priority: Low)
+- [ ] **21.1** Dead code elimination
+  - [ ] **21.1.1** Track unused functions during transpilation (~80 LOC)
+  - [ ] **21.1.2** Track unused types during transpilation (~80 LOC)
+  - [ ] **21.1.3** Optionally omit unreachable code from output (~60 LOC)
+- [ ] **21.2** Private field enforcement
+  - [ ] **21.2.1** Parse access specifiers (public/private/protected) (~50 LOC)
+  - [ ] **21.2.2** Generate `pub(crate)` for protected, no `pub` for private (~60 LOC)
+  - [ ] **21.2.3** Generate accessor methods for private fields when needed (~100 LOC)
+
 ---
 
 ## Grammar Tests (20/20 Passing)
@@ -228,7 +365,15 @@ See `docs/transpiler-status.md` for detailed feature matrix.
 - Rvalue references (parsed, basic return-by-value works)
 
 ### Not Yet Supported
-- (All major OOP features now supported!)
+- I/O streams (`std::cout`, `std::cin`, file streams)
+- C++20 coroutines (`co_await`, `co_yield`, `co_return`)
+- Anonymous structs/unions
+- Bit fields
+- C-style variadic functions (`...`)
+- RTTI (`typeid`, `type_info`)
+- Placement new
+- C++20 modules
+- C++20 ranges library
 
 ---
 
