@@ -144,7 +144,11 @@ crates/
 - [ ] **9.2** Three-way comparison operator (`<=>` spaceship operator)
 
 ### 10. Function Pointers (Priority: Medium)
-- [ ] **10.1** Complete function pointer codegen (`fn(Args) -> Ret` syntax)
+- [ ] **10.1** Fix function pointer type generation (use `Option<extern "C" fn(...)>` instead of `*mut fn`)
+  - [x] **10.1.1** Update CppType::Pointer handling for function pointees in to_rust_type_str() ✅ [26:01:22, 18:30]
+  - [ ] **10.1.2** Handle function-to-pointer decay in assignments (wrap in Some())
+  - [ ] **10.1.3** Handle function pointer calls (use .unwrap()())
+  - [ ] **10.1.4** Handle null initializers (use None instead of null_mut())
 
 ---
 

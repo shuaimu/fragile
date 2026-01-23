@@ -155,8 +155,21 @@ impl CppType {
             CppType::Float => "f32".to_string(),
             CppType::Double => "f64".to_string(),
             CppType::Pointer { pointee, is_const } => {
-                let ptr_type = if *is_const { "*const" } else { "*mut" };
-                format!("{} {}", ptr_type, pointee.to_rust_type_str())
+                // Special case: function pointers use Option<fn(...)> syntax in Rust
+                if let CppType::Function { return_type, params, is_variadic } = pointee.as_ref() {
+                    let params_str: Vec<_> = params.iter().map(|p| p.to_rust_type_str()).collect();
+                    let params_joined = if *is_variadic {
+                        format!("{}, ...", params_str.join(", "))
+                    } else {
+                        params_str.join(", ")
+                    };
+                    // Use Option to handle nullable function pointers
+                    format!("Option<extern \"C\" fn({}) -> {}>", params_joined, return_type.to_rust_type_str())
+                } else {
+                    // Regular pointer - respect const
+                    let ptr_type = if *is_const { "*const" } else { "*mut" };
+                    format!("{} {}", ptr_type, pointee.to_rust_type_str())
+                }
             }
             CppType::Reference { referent, is_const, is_rvalue: _ } => {
                 // C++ references map to Rust references for transpilation
