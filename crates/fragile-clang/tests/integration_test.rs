@@ -1836,3 +1836,56 @@ fn test_e2e_designated_initializers() {
 
     assert_eq!(exit_code, 0, "Designated initializers should work correctly");
 }
+
+/// E2E test: Function pointers
+#[test]
+fn test_e2e_function_pointers() {
+    let source = r#"
+        int add(int a, int b) {
+            return a + b;
+        }
+
+        int multiply(int a, int b) {
+            return a * b;
+        }
+
+        int subtract(int a, int b) {
+            return a - b;
+        }
+
+        // Function that takes a function pointer as parameter
+        int apply(int (*fn)(int, int), int x, int y) {
+            return fn(x, y);
+        }
+
+        int main() {
+            // Basic function pointer declaration and assignment
+            int (*ptr)(int, int) = add;
+            int result1 = ptr(3, 4);  // 7
+            if (result1 != 7) return 1;
+
+            // Reassigning function pointer
+            ptr = multiply;
+            int result2 = ptr(3, 4);  // 12
+            if (result2 != 12) return 2;
+
+            // Passing function pointer as argument
+            int result3 = apply(add, 5, 6);  // 11
+            if (result3 != 11) return 3;
+
+            int result4 = apply(subtract, 10, 3);  // 7
+            if (result4 != 7) return 4;
+
+            // Chained function pointer calls
+            int result5 = apply(multiply, apply(add, 2, 3), 4);  // (2+3)*4 = 20
+            if (result5 != 20) return 5;
+
+            return 0;
+        }
+    "#;
+
+    let (exit_code, _stdout, _stderr) = transpile_compile_run(source, "e2e_function_pointers.cpp")
+        .expect("E2E test failed");
+
+    assert_eq!(exit_code, 0, "Function pointers should work correctly");
+}

@@ -1992,6 +1992,11 @@ impl ClangParser {
                         (CppType::Long { .. }, CppType::Double) => {
                             Some(CastKind::FloatingToIntegral)
                         }
+                        // Function to pointer (function pointer initialization/assignment)
+                        (CppType::Pointer { pointee, .. }, CppType::Function { .. })
+                            if matches!(pointee.as_ref(), CppType::Function { .. }) => {
+                            Some(CastKind::FunctionToPointerDecay)
+                        }
                         _ => None,
                     };
 

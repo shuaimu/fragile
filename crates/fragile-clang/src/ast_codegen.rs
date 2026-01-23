@@ -1752,6 +1752,32 @@ impl AstCodeGen {
         }
     }
 
+    /// Strip `Some(...)` wrapper from a string if present.
+    /// Used for function call callees where FunctionToPointerDecay shouldn't wrap.
+    fn strip_some_wrapper(s: &str) -> String {
+        if s.starts_with("Some(") && s.ends_with(")") {
+            // Extract inner part
+            s[5..s.len()-1].to_string()
+        } else {
+            s.to_string()
+        }
+    }
+
+    /// Check if a node is a function pointer variable (not a direct function reference).
+    /// Returns true if the node has type Pointer { pointee: Function { .. } }
+    fn is_function_pointer_variable(node: &ClangNode) -> bool {
+        match &node.kind {
+            ClangNodeKind::DeclRefExpr { ty, .. } => {
+                matches!(ty, CppType::Pointer { pointee, .. } if matches!(pointee.as_ref(), CppType::Function { .. }))
+            }
+            ClangNodeKind::Unknown(_) | ClangNodeKind::ImplicitCastExpr { .. } => {
+                // Look through wrapper nodes (but not FunctionToPointerDecay)
+                node.children.iter().any(|c| Self::is_function_pointer_variable(c))
+            }
+            _ => false,
+        }
+    }
+
     /// Recursively find an operator name in a node tree.
     fn find_operator_name(node: &ClangNode) -> Option<String> {
         match &node.kind {
@@ -2142,10 +2168,12 @@ impl AstCodeGen {
                             self.ptr_vars.insert(name.clone());
                         }
 
-                        // Find the actual initializer, skipping TypeRef and Unknown("TypeRef") nodes
+                        // Find the actual initializer, skipping TypeRef, Unknown("TypeRef"), and ParmVarDecl nodes
+                        // ParmVarDecl nodes appear in function pointer VarDecls to describe parameter types
                         let initializer = child.children.iter().find(|c| {
                             !matches!(&c.kind, ClangNodeKind::Unknown(s) if s == "TypeRef")
                                 && !matches!(&c.kind, ClangNodeKind::Unknown(s) if s.contains("Type"))
+                                && !matches!(&c.kind, ClangNodeKind::ParmVarDecl { .. })
                         });
 
                         // Check if we have a real initializer
@@ -2755,6 +2783,10 @@ impl AstCodeGen {
                             let rust_type = ty.to_rust_type_str();
                             format!("{} as {}", inner, rust_type)
                         }
+                        CastKind::FunctionToPointerDecay => {
+                            // Function to pointer decay - wrap in Some() for Option<fn(...)> type
+                            format!("Some({})", inner)
+                        }
                         _ => {
                             // Most casts pass through (LValueToRValue, ArrayToPointerDecay, etc.)
                             inner
@@ -3336,6 +3368,9 @@ impl AstCodeGen {
                     if is_function_call && !node.children.is_empty() {
                         // Regular function call that returns a struct
                         let func = self.expr_to_string(&node.children[0]);
+                        // Strip Some() wrapper if present - callee shouldn't be wrapped
+                        // (FunctionToPointerDecay on callee is just a C++ technicality)
+                        let func = Self::strip_some_wrapper(&func);
                         let args: Vec<String> = node.children[1..].iter()
                             .map(|c| self.expr_to_string(c))
                             .collect();
@@ -3382,6 +3417,13 @@ impl AstCodeGen {
 
                     // Regular function call: first child is the function reference, rest are arguments
                     let func = self.expr_to_string(&node.children[0]);
+                    // Strip Some() wrapper if present - callee shouldn't be wrapped
+                    // (FunctionToPointerDecay on callee is just a C++ technicality)
+                    let func = Self::strip_some_wrapper(&func);
+
+                    // Check if this is a call through a function pointer variable
+                    // Function pointers are represented as Option<fn(...)>, so we need .unwrap()
+                    let is_fn_ptr_call = Self::is_function_pointer_variable(&node.children[0]);
 
                     // Try to get function parameter types to handle reference parameters
                     let param_types = Self::get_function_param_types(&node.children[0]);
@@ -3431,6 +3473,9 @@ impl AstCodeGen {
                     if func.starts_with("unsafe { ") && func.ends_with(" }") {
                         let inner = &func[9..func.len()-2]; // Extract "(*...).method" from "unsafe { (*...).method }"
                         format!("unsafe {{ {}({}) }}", inner, args.join(", "))
+                    } else if is_fn_ptr_call {
+                        // Function pointer call: need to unwrap the Option<fn(...)>
+                        format!("{}.unwrap()({})", func, args.join(", "))
                     } else {
                         format!("{}({})", func, args.join(", "))
                     }
@@ -3617,6 +3662,10 @@ impl AstCodeGen {
                             // Need explicit cast for floating conversions
                             let rust_type = ty.to_rust_type_str();
                             format!("{} as {}", inner, rust_type)
+                        }
+                        CastKind::FunctionToPointerDecay => {
+                            // Function to pointer decay - wrap in Some() for Option<fn(...)> type
+                            format!("Some({})", inner)
                         }
                         _ => {
                             // Most casts pass through (LValueToRValue, ArrayToPointerDecay, etc.)

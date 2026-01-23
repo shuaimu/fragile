@@ -164,7 +164,8 @@ impl CppType {
                         params_str.join(", ")
                     };
                     // Use Option to handle nullable function pointers
-                    format!("Option<extern \"C\" fn({}) -> {}>", params_joined, return_type.to_rust_type_str())
+                    // Note: We don't use extern "C" since transpiled functions use Rust calling convention
+                    format!("Option<fn({}) -> {}>", params_joined, return_type.to_rust_type_str())
                 } else {
                     // Regular pointer - respect const
                     let ptr_type = if *is_const { "*const" } else { "*mut" };
