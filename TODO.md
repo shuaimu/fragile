@@ -274,12 +274,12 @@ crates/
   - [ ] **18.3.2** Handle re-exports from module interface (~60 LOC)
 
 ### 19. C++20 Ranges (Priority: Low)
-- [ ] **19.1** Range adaptors
-  - [ ] **19.1.1** Map `std::views::filter` → `.filter()` (~50 LOC)
-  - [ ] **19.1.2** Map `std::views::transform` → `.map()` (~50 LOC)
-  - [ ] **19.1.3** Map `std::views::take` → `.take()` (~40 LOC)
-  - [ ] **19.1.4** Map `std::views::drop` → `.skip()` (~40 LOC)
-  - [ ] **19.1.5** Map `std::views::reverse` → `.rev()` (~40 LOC)
+- [x] **19.1** Range adaptors ✅ 2026-01-23
+  - [x] **19.1.1** Map `std::views::filter` → `.filter()` (~50 LOC) ✅ 2026-01-23
+  - [x] **19.1.2** Map `std::views::transform` → `.map()` (~50 LOC) ✅ 2026-01-23
+  - [x] **19.1.3** Map `std::views::take` → `.take()` (~40 LOC) ✅ 2026-01-23
+  - [x] **19.1.4** Map `std::views::drop` → `.skip()` (~40 LOC) ✅ 2026-01-23
+  - [x] **19.1.5** Map `std::views::reverse` → `.rev()` (~40 LOC) ✅ 2026-01-23
 - [ ] **19.2** Range algorithms
   - [ ] **19.2.1** Map `std::ranges::for_each` → `.for_each()` (~50 LOC)
   - [ ] **19.2.2** Map `std::ranges::find` → `.find()` (~50 LOC)

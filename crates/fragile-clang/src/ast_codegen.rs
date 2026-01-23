@@ -548,6 +548,46 @@ impl AstCodeGen {
         None
     }
 
+    /// Check if this is a std::views range adaptor call.
+    /// Returns (adaptor_name, range_node, optional_arg_node) if it is.
+    /// adaptor_name is one of: "filter", "transform", "take", "drop", "reverse"
+    fn is_std_views_adaptor_call<'a>(node: &'a ClangNode) -> Option<(&'static str, &'a ClangNode, Option<&'a ClangNode>)> {
+        if let ClangNodeKind::CallExpr { .. } = &node.kind {
+            // Look for the callee - it may be directly a DeclRefExpr or wrapped in ImplicitCastExpr
+            let callee = node.children.first()?;
+            let decl_ref = match &callee.kind {
+                ClangNodeKind::DeclRefExpr { .. } => callee,
+                ClangNodeKind::ImplicitCastExpr { .. } => callee.children.first()?,
+                _ => return None,
+            };
+
+            if let ClangNodeKind::DeclRefExpr { name, .. } = &decl_ref.kind {
+                // Map std::views adaptor names to Rust iterator methods
+                let adaptor_name = match name.as_str() {
+                    "filter" => Some("filter"),
+                    "transform" => Some("map"),
+                    "take" => Some("take"),
+                    "drop" => Some("skip"),
+                    "reverse" => Some("rev"),
+                    "take_while" => Some("take_while"),
+                    "drop_while" => Some("skip_while"),
+                    _ => None,
+                };
+
+                if let Some(adaptor) = adaptor_name {
+                    // Get the range argument (first arg after callee)
+                    let range_node = node.children.get(1)?;
+
+                    // Get the optional second argument (predicate/count for filter/take/drop, etc.)
+                    let arg_node = node.children.get(2);
+
+                    return Some((adaptor, range_node, arg_node));
+                }
+            }
+        }
+        None
+    }
+
     /// Get the variant index by matching the return type to variant template arguments.
     /// The return type from std::get is T& where T is one of the variant types.
     /// For std::get<I>, the return type may be variant_alternative_t<I, variant<...>>.
@@ -4130,6 +4170,32 @@ impl AstCodeGen {
                 // Check if this is an I/O stream input operation (cin >> x >> y)
                 if let Some((_stream_type, args)) = self.collect_stream_input_args(node) {
                     return self.generate_stream_read(&args);
+                }
+
+                // Check if this is a std::views range adaptor call (filter, transform, take, drop, reverse)
+                if let Some((adaptor, range_node, arg_node)) = Self::is_std_views_adaptor_call(node) {
+                    let range_expr = self.expr_to_string(range_node);
+                    match adaptor {
+                        "rev" => {
+                            // reverse doesn't take an argument
+                            return format!("{}.iter().rev()", range_expr);
+                        }
+                        "take" | "skip" => {
+                            // take/drop take a count argument
+                            if let Some(arg) = arg_node {
+                                let count_expr = self.expr_to_string(arg);
+                                return format!("{}.iter().{}({})", range_expr, adaptor, count_expr);
+                            }
+                        }
+                        "filter" | "map" | "take_while" | "skip_while" => {
+                            // filter/transform take a predicate/function argument
+                            if let Some(arg) = arg_node {
+                                let pred_expr = self.expr_to_string(arg);
+                                return format!("{}.iter().{}({})", range_expr, adaptor, pred_expr);
+                            }
+                        }
+                        _ => {}
+                    }
                 }
 
                 // Check if this is a lambda/closure call (operator() on a lambda type)
