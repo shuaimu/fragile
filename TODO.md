@@ -191,17 +191,17 @@ crates/
 
 ### 12. C++20 Coroutines (Priority: Medium)
 - [ ] **12.1** Coroutine detection and parsing
-  - [ ] **12.1.1** Detect `co_await`, `co_yield`, `co_return` keywords in function bodies (~60 LOC)
+  - [x] **12.1.1** Detect `co_await`, `co_yield`, `co_return` keywords in function bodies ✅ 2026-01-22 (parsing done in parse.rs)
   - [ ] **12.1.2** Parse coroutine promise types from return type (~80 LOC)
   - [ ] **12.1.3** Identify coroutine frame state variables (~60 LOC)
 - [ ] **12.2** Generator coroutines (co_yield)
   - [ ] **12.2.1** Map generator functions to Rust `Iterator` trait implementation (~150 LOC)
-  - [ ] **12.2.2** `co_yield value` → `yield value` in generator context (~50 LOC)
+  - [x] **12.2.2** `co_yield value` → `yield value` in generator context (~50 LOC) ✅ 2026-01-22
   - [ ] **12.2.3** Generate state machine struct for generator (~200 LOC)
 - [ ] **12.3** Async coroutines (co_await)
   - [ ] **12.3.1** Mark coroutine functions as `async fn` (~40 LOC)
-  - [ ] **12.3.2** `co_await expr` → `expr.await` (~50 LOC)
-  - [ ] **12.3.3** `co_return value` → `return value` in async context (~30 LOC)
+  - [x] **12.3.2** `co_await expr` → `expr.await` (~50 LOC) ✅ 2026-01-22
+  - [x] **12.3.3** `co_return value` → `return value` in async context (~30 LOC) ✅ 2026-01-22
   - [ ] **12.3.4** Handle awaitable types (map to Future trait) (~100 LOC)
 - [ ] **12.4** Task/Promise types
   - [ ] **12.4.1** Map `std::coroutine_handle<>` to internal state pointer (~60 LOC)

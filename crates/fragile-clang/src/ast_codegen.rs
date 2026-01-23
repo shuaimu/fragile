@@ -4695,6 +4695,37 @@ impl AstCodeGen {
                     "panic!(\"Rethrow\")".to_string()
                 }
             }
+            // C++20 Coroutine expressions
+            ClangNodeKind::CoawaitExpr { .. } => {
+                // co_await expr → expr.await
+                // In Rust async context, .await suspends until the future is ready
+                if !node.children.is_empty() {
+                    let operand = self.expr_to_string(&node.children[0]);
+                    format!("{}.await", operand)
+                } else {
+                    "/* co_await without operand */".to_string()
+                }
+            }
+            ClangNodeKind::CoyieldExpr { .. } => {
+                // co_yield value → yield value
+                // Note: Rust generators are unstable, this generates the syntax
+                // that would work with #![feature(generators)]
+                if !node.children.is_empty() {
+                    let value = self.expr_to_string(&node.children[0]);
+                    format!("yield {}", value)
+                } else {
+                    "yield".to_string()
+                }
+            }
+            ClangNodeKind::CoreturnStmt { value_ty } => {
+                // co_return [value] → return [value] (in async/generator context)
+                if value_ty.is_some() && !node.children.is_empty() {
+                    let value = self.expr_to_string(&node.children[0]);
+                    format!("return {}", value)
+                } else {
+                    "return".to_string()
+                }
+            }
             _ => {
                 // Fallback: try children
                 if !node.children.is_empty() {
