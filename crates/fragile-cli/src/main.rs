@@ -39,6 +39,12 @@ enum Commands {
         /// Requires: `apt install libc++-dev libc++abi-dev` on Debian/Ubuntu.
         #[arg(long)]
         use_libcxx: bool,
+
+        /// Use vendored libc++ from vendor/llvm-project/libcxx/include/.
+        /// This uses the libc++ source code bundled with fragile instead of
+        /// system-installed libc++. Useful for consistent builds across systems.
+        #[arg(long)]
+        use_vendored_libcxx: bool,
     },
 
     /// Parse C++ files and show AST information (deprecated, use 'transpile')
@@ -87,6 +93,7 @@ fn main() -> Result<()> {
             define,
             stubs_only,
             use_libcxx,
+            use_vendored_libcxx,
         } => {
             let include_paths: Vec<String> = include
                 .iter()
@@ -94,8 +101,17 @@ fn main() -> Result<()> {
                 .collect();
 
             // Create parser with optional libc++ support
-            let parser = if use_libcxx {
-                // Check if libc++ is available
+            let parser = if use_vendored_libcxx {
+                // Use vendored libc++ from vendor/llvm-project/libcxx/include/
+                if !fragile_clang::ClangParser::is_vendored_libcxx_available() {
+                    return Err(miette::miette!(
+                        "Vendored libc++ not found at vendor/llvm-project/libcxx/include/\n\
+                         Set FRAGILE_ROOT environment variable or run from the fragile project root."
+                    ));
+                }
+                fragile_clang::ClangParser::with_vendored_libcxx_and_paths(include_paths)
+            } else if use_libcxx {
+                // Check if system libc++ is available
                 if !fragile_clang::ClangParser::is_libcxx_available() {
                     return Err(miette::miette!(
                         "libc++ not found. Please install it:\n  Debian/Ubuntu: apt install libc++-dev libc++abi-dev"

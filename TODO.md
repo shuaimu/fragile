@@ -363,10 +363,10 @@ The current approach in `crates/fragile-clang/src/types.rs:183-580` has special-
   - [x] **22.3.3** Submodule tracks LLVM main branch (commit f091be6d5, Jan 2026)
   - [x] **22.3.4** Document license (Apache 2.0 with LLVM exception)
 
-- [ ] **22.4** Configure build to use vendored libc++
-  - [ ] **22.4.1** Point Clang to vendored `include/` directory
-  - [ ] **22.4.2** Transpile `src/*.cpp` files as part of STL support
-  - [ ] **22.4.3** Handle libc++ build configuration macros (`_LIBCPP_*`)
+- [x] **22.4** Configure build to use vendored libc++ ✅ [26:01:23, 11:35] [docs/dev/plan_22_4_vendored_libcxx_config.md]
+  - [x] **22.4.1** Point Clang to vendored `include/` directory - Added `--use-vendored-libcxx` CLI flag
+  - [ ] **22.4.2** Transpile `src/*.cpp` files as part of STL support (deferred - not needed until STL feature implementation)
+  - [x] **22.4.3** Handle libc++ build configuration macros (`_LIBCPP_*`) - Added `_LIBCPP_HAS_NO_PRAGMA_SYSTEM_HEADER`
 
 - [ ] **22.5** Categorize libc++ components by transpilation complexity
   - [ ] **22.5.1** Header-only (easy): `<vector>`, `<map>`, `<algorithm>`, `<memory>`, etc.

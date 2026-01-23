@@ -184,6 +184,94 @@ impl ClangParser {
             || std::path::Path::new("/usr/lib/llvm-18/include/c++/v1").exists()
     }
 
+    /// Detect vendored libc++ include path.
+    /// Looks for vendor/llvm-project/libcxx/include/ relative to:
+    /// 1. Environment variable FRAGILE_ROOT
+    /// 2. Current working directory
+    /// 3. Executable's parent directories (up to 5 levels)
+    pub fn detect_vendored_libcxx_path() -> Option<String> {
+        let vendored_subpath = "vendor/llvm-project/libcxx/include";
+
+        // Try FRAGILE_ROOT environment variable
+        if let Ok(root) = std::env::var("FRAGILE_ROOT") {
+            let path = Path::new(&root).join(vendored_subpath);
+            if path.exists() {
+                return Some(path.to_string_lossy().to_string());
+            }
+        }
+
+        // Try current working directory
+        if let Ok(cwd) = std::env::current_dir() {
+            let path = cwd.join(vendored_subpath);
+            if path.exists() {
+                return Some(path.to_string_lossy().to_string());
+            }
+        }
+
+        // Try executable's parent directories (up to 5 levels)
+        if let Ok(exe) = std::env::current_exe() {
+            let mut dir = exe.parent().map(|p| p.to_path_buf());
+            for _ in 0..5 {
+                if let Some(ref parent) = dir {
+                    let path = parent.join(vendored_subpath);
+                    if path.exists() {
+                        return Some(path.to_string_lossy().to_string());
+                    }
+                    dir = parent.parent().map(|p| p.to_path_buf());
+                } else {
+                    break;
+                }
+            }
+        }
+
+        None
+    }
+
+    /// Check if vendored libc++ is available.
+    pub fn is_vendored_libcxx_available() -> bool {
+        Self::detect_vendored_libcxx_path().is_some()
+    }
+
+    /// Create a Clang parser configured to use vendored libc++ from
+    /// `vendor/llvm-project/libcxx/include/`. This uses the libc++ source
+    /// code bundled with the fragile project instead of system-installed libc++.
+    ///
+    /// The vendored path is detected by looking for the directory relative to:
+    /// 1. FRAGILE_ROOT environment variable
+    /// 2. Current working directory
+    /// 3. Executable's parent directories
+    pub fn with_vendored_libcxx() -> Result<Self> {
+        let vendored_path = Self::detect_vendored_libcxx_path()
+            .ok_or_else(|| miette!(
+                "Vendored libc++ not found. Expected at vendor/llvm-project/libcxx/include/\n\
+                 Set FRAGILE_ROOT environment variable or run from the fragile project root."
+            ))?;
+
+        let system_paths = vec![vendored_path];
+        // Add defines for libc++ compatibility
+        let defines = vec![
+            "_LIBCPP_HAS_NO_PRAGMA_SYSTEM_HEADER".to_string(),
+        ];
+
+        Self::with_full_options(Vec::new(), system_paths, defines, Vec::new(), true)
+    }
+
+    /// Create a Clang parser with vendored libc++ and custom include paths.
+    pub fn with_vendored_libcxx_and_paths(include_paths: Vec<String>) -> Result<Self> {
+        let vendored_path = Self::detect_vendored_libcxx_path()
+            .ok_or_else(|| miette!(
+                "Vendored libc++ not found. Expected at vendor/llvm-project/libcxx/include/\n\
+                 Set FRAGILE_ROOT environment variable or run from the fragile project root."
+            ))?;
+
+        let system_paths = vec![vendored_path];
+        let defines = vec![
+            "_LIBCPP_HAS_NO_PRAGMA_SYSTEM_HEADER".to_string(),
+        ];
+
+        Self::with_full_options(include_paths, system_paths, defines, Vec::new(), true)
+    }
+
     /// Build compiler arguments including include paths.
     fn build_compiler_args(&self) -> Vec<CString> {
         let mut args = vec![
