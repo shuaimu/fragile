@@ -1084,6 +1084,9 @@ impl AstCodeGen {
             ClangNodeKind::EnumDecl { name, is_scoped, underlying_type } => {
                 self.generate_enum_stub(name, *is_scoped, underlying_type, &node.children);
             }
+            ClangNodeKind::UnionDecl { name, .. } => {
+                self.generate_union_stub(name, &node.children);
+            }
             ClangNodeKind::NamespaceDecl { name } => {
                 // Generate Rust module for namespace stubs
                 if let Some(ns_name) = name {
@@ -1209,6 +1212,22 @@ impl AstCodeGen {
                         }
                     }
                 }
+            } else if let ClangNodeKind::UnionDecl { name: anon_name, .. } = &child.kind {
+                // Flatten anonymous union fields into parent
+                // In C++, anonymous unions allow direct access to their members from the parent
+                if anon_name.starts_with("(anonymous") || anon_name.starts_with("__anon_union_") {
+                    for anon_child in &child.children {
+                        if let ClangNodeKind::FieldDecl { name: field_name, ty, .. } = &anon_child.kind {
+                            let sanitized_name = if field_name.is_empty() {
+                                "_field".to_string()
+                            } else {
+                                sanitize_identifier(field_name)
+                            };
+                            self.writeln(&format!("pub {}: {},", sanitized_name, ty.to_rust_type_str()));
+                            fields.push((sanitized_name, ty.clone()));
+                        }
+                    }
+                }
             }
         }
         // Store field info for constructor generation (including base fields)
@@ -1248,6 +1267,38 @@ impl AstCodeGen {
         self.writeln("");
     }
 
+    /// Generate a union stub (fields only).
+    fn generate_union_stub(&mut self, name: &str, children: &[ClangNode]) {
+        // Convert C++ union name to valid Rust identifier
+        let rust_name = CppType::Named(name.to_string()).to_rust_type_str();
+
+        // Skip if already generated
+        if self.generated_structs.contains(&rust_name) {
+            return;
+        }
+        self.generated_structs.insert(rust_name.clone());
+
+        self.writeln(&format!("/// C++ union `{}`", name));
+        self.writeln("#[repr(C)]");
+        self.writeln(&format!("pub union {} {{", rust_name));
+        self.indent += 1;
+
+        for child in children {
+            if let ClangNodeKind::FieldDecl { name: field_name, ty, .. } = &child.kind {
+                let sanitized_name = if field_name.is_empty() {
+                    "_field".to_string()
+                } else {
+                    sanitize_identifier(field_name)
+                };
+                self.writeln(&format!("pub {}: {},", sanitized_name, ty.to_rust_type_str()));
+            }
+        }
+
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("");
+    }
+
     /// Generate a top-level declaration.
     fn generate_top_level(&mut self, node: &ClangNode) {
         match &node.kind {
@@ -1261,6 +1312,9 @@ impl AstCodeGen {
             }
             ClangNodeKind::EnumDecl { name, is_scoped, underlying_type } => {
                 self.generate_enum(name, *is_scoped, underlying_type, &node.children);
+            }
+            ClangNodeKind::UnionDecl { name, .. } => {
+                self.generate_union(name, &node.children);
             }
             ClangNodeKind::TypedefDecl { name, underlying_type } => {
                 self.generate_type_alias(name, underlying_type);
@@ -1535,6 +1589,25 @@ impl AstCodeGen {
                         }
                     }
                 }
+            } else if let ClangNodeKind::UnionDecl { name: anon_name, .. } = &child.kind {
+                // Flatten anonymous union fields into parent
+                // In C++, anonymous unions allow direct access to their members from the parent
+                if anon_name.starts_with("(anonymous") || anon_name.starts_with("__anon_union_") {
+                    for anon_child in &child.children {
+                        if let ClangNodeKind::FieldDecl { name: field_name, ty, is_static, .. } = &anon_child.kind {
+                            if *is_static {
+                                continue;
+                            }
+                            let sanitized_name = if field_name.is_empty() {
+                                "_field".to_string()
+                            } else {
+                                sanitize_identifier(field_name)
+                            };
+                            self.writeln(&format!("pub {}: {},", sanitized_name, ty.to_rust_type_str()));
+                            fields.push((sanitized_name, ty.clone()));
+                        }
+                    }
+                }
             }
         }
 
@@ -1699,6 +1772,56 @@ impl AstCodeGen {
             }
         }
 
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("");
+    }
+
+    /// Generate a Rust union from a C++ union declaration.
+    fn generate_union(&mut self, name: &str, children: &[ClangNode]) {
+        // Convert C++ union name to valid Rust identifier
+        let rust_name = CppType::Named(name.to_string()).to_rust_type_str();
+
+        // Skip if already generated
+        if self.generated_structs.contains(&rust_name) {
+            return;
+        }
+        self.generated_structs.insert(rust_name.clone());
+
+        self.writeln(&format!("/// C++ union `{}`", name));
+        self.writeln("#[repr(C)]");
+        self.writeln("#[derive(Copy, Clone)]");
+        self.writeln(&format!("pub union {} {{", rust_name));
+        self.indent += 1;
+
+        let mut fields = Vec::new();
+        for child in children {
+            if let ClangNodeKind::FieldDecl { name: field_name, ty, is_static, .. } = &child.kind {
+                if *is_static {
+                    continue;
+                }
+                let sanitized_name = if field_name.is_empty() {
+                    "_field".to_string()
+                } else {
+                    sanitize_identifier(field_name)
+                };
+                self.writeln(&format!("pub {}: {},", sanitized_name, ty.to_rust_type_str()));
+                fields.push((sanitized_name, ty.clone()));
+            }
+        }
+
+        self.indent -= 1;
+        self.writeln("}");
+
+        // Generate a Default impl that zeros the union
+        self.writeln("");
+        self.writeln(&format!("impl Default for {} {{", rust_name));
+        self.indent += 1;
+        self.writeln("fn default() -> Self {");
+        self.indent += 1;
+        self.writeln("unsafe { std::mem::zeroed() }");
+        self.indent -= 1;
+        self.writeln("}");
         self.indent -= 1;
         self.writeln("}");
         self.writeln("");

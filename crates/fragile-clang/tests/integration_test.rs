@@ -2049,3 +2049,41 @@ fn test_e2e_anonymous_struct() {
 
     assert_eq!(exit_code, 30, "Anonymous struct fields should be flattened and accessible");
 }
+
+#[test]
+fn test_e2e_anonymous_union() {
+    let source = r#"
+        struct Data {
+            int type;
+
+            // Anonymous union - fields should be accessible directly
+            union {
+                int int_val;
+                float float_val;
+                double double_val;
+            };
+
+            int flags;
+        };
+
+        int main() {
+            Data d;
+            d.type = 1;
+            d.int_val = 42;  // Direct access to anonymous union member
+            d.flags = 3;
+
+            // Verify all fields are accessible
+            if (d.type != 1) return 1;
+            if (d.int_val != 42) return 2;
+            if (d.flags != 3) return 3;
+
+            // Return the union value
+            return d.int_val;  // Should return 42
+        }
+    "#;
+
+    let (exit_code, _stdout, _stderr) = transpile_compile_run(source, "e2e_anon_union.cpp")
+        .expect("E2E test failed");
+
+    assert_eq!(exit_code, 42, "Anonymous union fields should be flattened and accessible");
+}

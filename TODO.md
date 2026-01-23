@@ -206,10 +206,10 @@ crates/
   - [x] **13.1.1** Detect anonymous struct declarations in AST (~40 LOC) ✅ 2026-01-22
   - [x] **13.1.2** Generate synthetic name for anonymous struct (e.g., `__anon_LineCol`) (~30 LOC) ✅ 2026-01-22
   - [x] **13.1.3** Flatten anonymous struct fields into parent when used inline (~80 LOC) ✅ [26:01:23, 15:30] [docs/dev/plan_13_1_3_flatten_anonymous_struct.md]
-- [ ] **13.2** Anonymous union support
-  - [ ] **13.2.1** Detect anonymous union declarations in AST (~40 LOC)
-  - [ ] **13.2.2** Generate `#[repr(C)] union` with synthetic name (~50 LOC)
-  - [ ] **13.2.3** Handle anonymous union field access (direct member access) (~60 LOC)
+- [x] **13.2** Anonymous union support ✅ [26:01:23, 16:30]
+  - [x] **13.2.1** Detect anonymous union declarations in AST (~40 LOC) ✅ 2026-01-23
+  - [x] **13.2.2** Generate `#[repr(C)] union` with synthetic name (~50 LOC) ✅ 2026-01-23
+  - [x] **13.2.3** Handle anonymous union field access (direct member access) (~60 LOC) ✅ 2026-01-23
 
 ### 14. Bit Fields (Priority: Low)
 - [ ] **14.1** Bit field parsing

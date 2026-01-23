@@ -184,6 +184,11 @@ pub enum ClangNodeKind {
         is_class: bool,
         fields: Vec<(String, CppType)>,
     },
+    /// Union declaration
+    UnionDecl {
+        name: String,
+        fields: Vec<(String, CppType)>,
+    },
     /// Field declaration
     FieldDecl {
         name: String,

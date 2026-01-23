@@ -952,6 +952,33 @@ impl ClangParser {
                     }
                 }
 
+                // CXCursor_UnionDecl = 3
+                clang_sys::CXCursor_UnionDecl => {
+                    let spelling = cursor_spelling(cursor);
+
+                    // For anonymous unions, generate a synthetic name using location
+                    let name = if spelling.is_empty() {
+                        let loc = clang_sys::clang_getCursorLocation(cursor);
+                        let mut line: u32 = 0;
+                        let mut column: u32 = 0;
+                        clang_sys::clang_getSpellingLocation(
+                            loc,
+                            std::ptr::null_mut(),
+                            &mut line,
+                            &mut column,
+                            std::ptr::null_mut(),
+                        );
+                        format!("__anon_union_{}{}", line, column)
+                    } else {
+                        spelling
+                    };
+                    // Fields will be collected from children
+                    ClangNodeKind::UnionDecl {
+                        name,
+                        fields: Vec::new(),
+                    }
+                }
+
                 clang_sys::CXCursor_FieldDecl => {
                     let name = cursor_spelling(cursor);
                     let ty = self.convert_type(clang_sys::clang_getCursorType(cursor));
