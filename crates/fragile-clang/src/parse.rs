@@ -730,9 +730,25 @@ impl ClangParser {
                 clang_sys::CXCursor_StructDecl | clang_sys::CXCursor_ClassDecl => {
                     let name = cursor_spelling(cursor);
                     let is_class = kind == clang_sys::CXCursor_ClassDecl;
+                    // For anonymous structs/classes, generate a synthetic name using location
+                    let final_name = if name.is_empty() {
+                        let loc = clang_sys::clang_getCursorLocation(cursor);
+                        let mut line: u32 = 0;
+                        let mut column: u32 = 0;
+                        clang_sys::clang_getSpellingLocation(
+                            loc,
+                            std::ptr::null_mut(),
+                            &mut line,
+                            &mut column,
+                            std::ptr::null_mut(),
+                        );
+                        format!("__anon_{}{}", line, column)
+                    } else {
+                        name
+                    };
                     // Fields will be collected from children
                     ClangNodeKind::RecordDecl {
-                        name,
+                        name: final_name,
                         is_class,
                         fields: Vec::new(),
                     }

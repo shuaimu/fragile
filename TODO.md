@@ -209,8 +209,8 @@ crates/
 
 ### 13. Anonymous Structs and Unions (Priority: Low)
 - [ ] **13.1** Anonymous struct support
-  - [ ] **13.1.1** Detect anonymous struct declarations in AST (~40 LOC)
-  - [ ] **13.1.2** Generate synthetic name for anonymous struct (e.g., `__anon_struct_N`) (~30 LOC)
+  - [x] **13.1.1** Detect anonymous struct declarations in AST (~40 LOC) ✅ 2026-01-22
+  - [x] **13.1.2** Generate synthetic name for anonymous struct (e.g., `__anon_LineCol`) (~30 LOC) ✅ 2026-01-22
   - [ ] **13.1.3** Flatten anonymous struct fields into parent when used inline (~80 LOC)
 - [ ] **13.2** Anonymous union support
   - [ ] **13.2.1** Detect anonymous union declarations in AST (~40 LOC)
