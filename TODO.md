@@ -70,6 +70,7 @@ We just convert the fully-resolved AST to equivalent Rust code.
 - std::span<T> → &mut [T] / &[T] slice type mapping
 - C++20 designated initializers ({ .x = 10, .y = 20 })
 - Function pointers (Option<fn(...)> type, Some() wrapping, .unwrap()() calls)
+- Three-way comparison operator (<=> → a.cmp(&b) as i8)
 
 **CLI**:
 ```bash
@@ -142,7 +143,8 @@ crates/
 
 ### 9. C++20 Features (Priority: Medium)
 - [x] **9.1** Designated initializers (`.field = value` syntax) ✅ [26:01:22, 18:15]
-- [ ] **9.2** Three-way comparison operator (`<=>` spaceship operator)
+- [x] **9.2** Three-way comparison operator (`<=>` spaceship operator) - basic parsing and code gen ✅ [26:01:22, 22:30]
+  - Note: Comparing std::strong_ordering result to 0 requires additional std lib support
 
 ### 10. Function Pointers (Priority: Medium)
 - [x] **10.1** Function pointer support ✅ [26:01:22, 21:50]

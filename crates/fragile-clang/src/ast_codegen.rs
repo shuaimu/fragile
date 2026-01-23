@@ -3153,6 +3153,15 @@ impl AstCodeGen {
                         return format!("{{ {}; {} }}", left, right);
                     }
 
+                    // Handle three-way comparison (spaceship) operator: a <=> b
+                    // Returns an i8 that can be compared to 0 (like C++ std::strong_ordering)
+                    if matches!(op, BinaryOp::Spaceship) {
+                        let left = self.expr_to_string(&node.children[0]);
+                        let right = self.expr_to_string(&node.children[1]);
+                        // Use Ord::cmp and cast to i8 (-1, 0, 1) to match C++ semantics
+                        return format!("({}.cmp(&{}) as i8)", left, right);
+                    }
+
                     let op_str = binop_to_string(op);
 
                     // Check if left side is a pointer dereference, pointer subscript, static member,
@@ -4063,6 +4072,7 @@ fn binop_to_string(op: &BinaryOp) -> &'static str {
         BinaryOp::OrAssign => "|=",
         BinaryOp::XorAssign => "^=",
         BinaryOp::Comma => ",",
+        BinaryOp::Spaceship => "cmp",  // Handled specially - placeholder
     }
 }
 

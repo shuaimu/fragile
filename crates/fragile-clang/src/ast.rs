@@ -613,6 +613,8 @@ pub enum BinaryOp {
     Le,
     Gt,
     Ge,
+    /// Three-way comparison (C++20 spaceship operator <=>)
+    Spaceship,
     // Logical
     LAnd,
     LOr,

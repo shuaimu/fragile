@@ -3782,6 +3782,7 @@ fn str_to_binary_op(s: &str) -> Option<BinaryOp> {
         "<=" => Some(BinaryOp::Le),
         ">" => Some(BinaryOp::Gt),
         ">=" => Some(BinaryOp::Ge),
+        "<=>" => Some(BinaryOp::Spaceship),
         "&&" => Some(BinaryOp::LAnd),
         "||" => Some(BinaryOp::LOr),
         "=" => Some(BinaryOp::Assign),
