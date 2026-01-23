@@ -251,252 +251,17 @@ impl CppType {
                     "ssize_t" | "ptrdiff_t" => "isize".to_string(),
                     "intptr_t" => "isize".to_string(),
                     "uintptr_t" => "usize".to_string(),
-                    // STL type mappings
-                    "std::string" | "const std::string" |
-                    "std::__cxx11::basic_string<char>" | "const std::__cxx11::basic_string<char>" |
-                    "basic_string<char>" | "const basic_string<char>" |
-                    "basic_string<char, char_traits<char>, allocator<char>>" |
-                    "std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char>>" => "String".to_string(),
+                    // NOTE: STL string type mappings removed - types pass through as-is
+                    // See Section 22 in TODO.md for rationale
                     _ => {
-                        // Handle STL string types with patterns (including const variants)
-                        let check_name = name.strip_prefix("const ").unwrap_or(name);
-                        if check_name.contains("basic_string<char") || check_name == "std::string" {
-                            return "String".to_string();
-                        }
-                        // Handle std::vector<T> -> Vec<T>
-                        if let Some(rest) = name.strip_prefix("std::vector<") {
-                            if let Some(inner) = rest.strip_suffix(">") {
-                                // Handle allocator suffix: "int, std::allocator<int>" -> "int"
-                                let element = if let Some(idx) = inner.find(", std::allocator<") {
-                                    &inner[..idx]
-                                } else if let Some(idx) = inner.find(", allocator<") {
-                                    &inner[..idx]
-                                } else {
-                                    inner
-                                };
-                                let element_type = CppType::Named(element.trim().to_string());
-                                return format!("Vec<{}>", element_type.to_rust_type_str());
-                            }
-                        }
-                        // Handle std::optional<T> -> Option<T>
-                        if let Some(rest) = name.strip_prefix("std::optional<") {
-                            if let Some(inner) = rest.strip_suffix(">") {
-                                let element_type = CppType::Named(inner.trim().to_string());
-                                return format!("Option<{}>", element_type.to_rust_type_str());
-                            }
-                        }
-                        // Handle std::array<T, N> -> [T; N]
-                        if let Some(rest) = name.strip_prefix("std::array<") {
-                            if let Some(inner) = rest.strip_suffix(">") {
-                                // Find the last comma separating element type from size
-                                // Use rfind to handle nested template types like std::array<std::vector<int>, 5>
-                                if let Some(comma_idx) = inner.rfind(", ") {
-                                    let element_str = &inner[..comma_idx];
-                                    let size_str = inner[comma_idx + 2..].trim();
-                                    let element_type = CppType::Named(element_str.trim().to_string());
-                                    return format!("[{}; {}]", element_type.to_rust_type_str(), size_str);
-                                }
-                            }
-                        }
-                        // Handle std::span<T> -> &[T] / &mut [T]
-                        if let Some(rest) = name.strip_prefix("std::span<") {
-                            if let Some(inner) = rest.strip_suffix(">") {
-                                // Handle dynamic vs static extent: "int" or "int, 5" (ignore extent)
-                                let element_str = if let Some(comma_idx) = inner.rfind(", ") {
-                                    let after_comma = inner[comma_idx + 2..].trim();
-                                    // Check if the part after comma is a number (extent) - ignore it
-                                    if after_comma.chars().all(|c| c.is_ascii_digit() || c == '_') {
-                                        &inner[..comma_idx]
-                                    } else {
-                                        inner
-                                    }
-                                } else {
-                                    inner
-                                };
-
-                                let element_str = element_str.trim();
-
-                                // Check for const element type
-                                let (is_const, element_type_str) = if let Some(rest) = element_str.strip_prefix("const ") {
-                                    (true, rest.trim())
-                                } else if element_str.ends_with(" const") {
-                                    (true, element_str.strip_suffix(" const").unwrap().trim())
-                                } else {
-                                    (false, element_str)
-                                };
-
-                                let element_type = CppType::Named(element_type_str.to_string());
-                                if is_const {
-                                    return format!("&[{}]", element_type.to_rust_type_str());
-                                } else {
-                                    return format!("&mut [{}]", element_type.to_rust_type_str());
-                                }
-                            }
-                        }
-                        // Handle std::map<K,V> -> BTreeMap<K,V>
-                        if let Some(rest) = name.strip_prefix("std::map<") {
-                            // For now, map key-value pairs directly
-                            if let Some(inner) = rest.strip_suffix(">") {
-                                // Try to split at first comma for key, value
-                                let trimmed = inner.trim();
-                                // This is simplified - complex nested types may need better parsing
-                                return format!("BTreeMap<{}>", trimmed);
-                            }
-                        }
-                        // Handle std::unordered_map<K,V> -> HashMap<K,V>
-                        if let Some(rest) = name.strip_prefix("std::unordered_map<") {
-                            if let Some(inner) = rest.strip_suffix(">") {
-                                let trimmed = inner.trim();
-                                return format!("HashMap<{}>", trimmed);
-                            }
-                        }
-                        // Handle std::unique_ptr<T> -> Box<T>
-                        if let Some(rest) = name.strip_prefix("std::unique_ptr<") {
-                            if let Some(inner) = rest.strip_suffix(">") {
-                                // Handle default deleter: "int, std::default_delete<int>" -> "int"
-                                let element = if let Some(idx) = inner.find(", std::default_delete<") {
-                                    &inner[..idx]
-                                } else if let Some(idx) = inner.find(", default_delete<") {
-                                    &inner[..idx]
-                                } else {
-                                    inner
-                                };
-                                let element_type = CppType::Named(element.trim().to_string());
-                                return format!("Box<{}>", element_type.to_rust_type_str());
-                            }
-                        }
-                        // Handle __detail::__unique_ptr_t<T> -> Box<T> (libstdc++ internal)
-                        if let Some(rest) = name.strip_prefix("__detail::__unique_ptr_t<") {
-                            if let Some(inner) = rest.strip_suffix(">") {
-                                let element_type = CppType::Named(inner.trim().to_string());
-                                return format!("Box<{}>", element_type.to_rust_type_str());
-                            }
-                        }
-                        // Handle std::shared_ptr<T> -> Arc<T>
-                        if let Some(rest) = name.strip_prefix("std::shared_ptr<") {
-                            if let Some(inner) = rest.strip_suffix(">") {
-                                let element_type = CppType::Named(inner.trim().to_string());
-                                return format!("Arc<{}>", element_type.to_rust_type_str());
-                            }
-                        }
-                        // Handle shared_ptr<_NonArray<T>> (libstdc++ internal) -> Arc<T>
-                        if let Some(rest) = name.strip_prefix("shared_ptr<_NonArray<") {
-                            if let Some(inner) = rest.strip_suffix(">>") {
-                                let element_type = CppType::Named(inner.trim().to_string());
-                                return format!("Arc<{}>", element_type.to_rust_type_str());
-                            }
-                        }
-                        // Handle std::weak_ptr<T> -> Weak<T>
-                        if let Some(rest) = name.strip_prefix("std::weak_ptr<") {
-                            if let Some(inner) = rest.strip_suffix(">") {
-                                let element_type = CppType::Named(inner.trim().to_string());
-                                return format!("Weak<{}>", element_type.to_rust_type_str());
-                            }
-                        }
-                        // Handle std::ostream -> Box<dyn std::io::Write>
-                        // Also handle basic_ostream<char> which is the underlying type
-                        if check_name.starts_with("std::ostream") ||
-                           check_name.starts_with("ostream") ||
-                           check_name.starts_with("std::basic_ostream<char") ||
-                           check_name.starts_with("basic_ostream<char") {
-                            return "Box<dyn std::io::Write>".to_string();
-                        }
-                        // Handle std::istream -> Box<dyn std::io::Read>
-                        // Also handle basic_istream<char> which is the underlying type
-                        if check_name.starts_with("std::istream") ||
-                           check_name.starts_with("istream") ||
-                           check_name.starts_with("std::basic_istream<char") ||
-                           check_name.starts_with("basic_istream<char") {
-                            return "Box<dyn std::io::Read>".to_string();
-                        }
-                        // Handle std::iostream -> Box<dyn std::io::Read + std::io::Write>
-                        // Also handle basic_iostream<char> which is the underlying type
-                        if check_name.starts_with("std::iostream") ||
-                           check_name.starts_with("iostream") ||
-                           check_name.starts_with("std::basic_iostream<char") ||
-                           check_name.starts_with("basic_iostream<char") {
-                            return "Box<dyn std::io::Read + std::io::Write>".to_string();
-                        }
-                        // Handle std::stringstream -> std::io::Cursor<Vec<u8>>
-                        // stringstream is both input and output on an in-memory buffer
-                        if check_name.starts_with("std::stringstream") ||
-                           check_name.starts_with("stringstream") ||
-                           check_name.starts_with("std::basic_stringstream<char") ||
-                           check_name.starts_with("basic_stringstream<char") {
-                            return "std::io::Cursor<Vec<u8>>".to_string();
-                        }
-                        // Handle std::ostringstream -> String
-                        // ostringstream is output-only to a string buffer
-                        if check_name.starts_with("std::ostringstream") ||
-                           check_name.starts_with("ostringstream") ||
-                           check_name.starts_with("std::basic_ostringstream<char") ||
-                           check_name.starts_with("basic_ostringstream<char") {
-                            return "String".to_string();
-                        }
-                        // Handle std::istringstream -> std::io::Cursor<&str>
-                        // istringstream is input-only from a string
-                        if check_name.starts_with("std::istringstream") ||
-                           check_name.starts_with("istringstream") ||
-                           check_name.starts_with("std::basic_istringstream<char") ||
-                           check_name.starts_with("basic_istringstream<char") {
-                            return "std::io::Cursor<String>".to_string();
-                        }
-                        // Handle std::ofstream -> std::fs::File
-                        // ofstream is output-only file stream
-                        if check_name.starts_with("std::ofstream") ||
-                           check_name.starts_with("ofstream") ||
-                           check_name.starts_with("std::basic_ofstream<char") ||
-                           check_name.starts_with("basic_ofstream<char") {
-                            return "std::fs::File".to_string();
-                        }
-                        // Handle std::ifstream -> std::fs::File
-                        // ifstream is input-only file stream
-                        if check_name.starts_with("std::ifstream") ||
-                           check_name.starts_with("ifstream") ||
-                           check_name.starts_with("std::basic_ifstream<char") ||
-                           check_name.starts_with("basic_ifstream<char") {
-                            return "std::fs::File".to_string();
-                        }
-                        // Handle std::fstream -> std::fs::File
-                        // fstream is read+write file stream
-                        if check_name.starts_with("std::fstream") ||
-                           check_name.starts_with("fstream") ||
-                           check_name.starts_with("std::basic_fstream<char") ||
-                           check_name.starts_with("basic_fstream<char") {
-                            return "std::fs::File".to_string();
-                        }
-                        // Handle std::variant<T1, T2, ...> -> Variant_T1_T2_...
-                        // This generates a synthetic enum name that will be defined separately
-                        // Handle both "std::variant<...>" and "variant<...>" (libclang sometimes omits std::)
-                        let variant_rest = name.strip_prefix("std::variant<")
-                            .or_else(|| name.strip_prefix("variant<"));
-                        if let Some(rest) = variant_rest {
-                            if let Some(inner) = rest.strip_suffix(">") {
-                                let args = parse_template_args(inner);
-                                if !args.is_empty() {
-                                    // Convert each type argument to its Rust equivalent
-                                    let rust_types: Vec<String> = args.iter()
-                                        .map(|a| {
-                                            let rust_type = CppType::Named(a.clone()).to_rust_type_str();
-                                            // Sanitize for use in identifier: replace special chars
-                                            rust_type
-                                                .replace('<', "_")
-                                                .replace('>', "")
-                                                .replace(", ", "_")
-                                                .replace(" ", "_")
-                                                .replace("::", "_")
-                                                .replace("*", "Ptr")
-                                                .replace("&", "Ref")
-                                                .replace("[", "Arr")
-                                                .replace("]", "")
-                                                .replace(";", "x")
-                                        })
-                                        .collect();
-                                    // Generate unique enum name from types
-                                    return format!("Variant_{}", rust_types.join("_"));
-                                }
-                            }
-                        }
+                        // NOTE: STL type mappings removed - types pass through as-is
+                        // std::vector, std::string, std::optional, std::array, std::span
+                        // See Section 22 in TODO.md for rationale
+                        // NOTE: std::map and std::unordered_map mappings removed - types pass through as-is
+                        // See Section 22 in TODO.md for rationale
+                        // NOTE: All remaining STL mappings removed - types pass through as-is
+                        // smart pointers, I/O streams, std::variant
+                        // See Section 22 in TODO.md for rationale
                         // Handle decltype expressions - replace with unit type placeholder
                         if name.starts_with("decltype(") {
                             return "()".to_string();
@@ -1135,279 +900,151 @@ mod tests {
 
     #[test]
     fn test_smart_pointer_type_mappings() {
-        // std::unique_ptr<T> -> Box<T>
+        // NOTE: Smart pointer mappings removed - types pass through as-is
+        // See Section 22 in TODO.md for rationale
+
+        // std::unique_ptr<T> passes through (no longer mapped to Box<T>)
         assert_eq!(
             CppType::Named("std::unique_ptr<int>".to_string()).to_rust_type_str(),
-            "Box<i32>"
+            "std_unique_ptr<int>"
         );
         assert_eq!(
             CppType::Named("std::unique_ptr<int, std::default_delete<int>>".to_string()).to_rust_type_str(),
-            "Box<i32>"
+            "std_unique_ptr<int,_std_default_delete<int>>"
         );
         assert_eq!(
             CppType::Named("std::unique_ptr<MyClass>".to_string()).to_rust_type_str(),
-            "Box<MyClass>"
+            "std_unique_ptr<MyClass>"
         );
 
-        // __detail::__unique_ptr_t<T> -> Box<T> (libstdc++ internal)
+        // __detail::__unique_ptr_t<T> passes through
         assert_eq!(
             CppType::Named("__detail::__unique_ptr_t<int>".to_string()).to_rust_type_str(),
-            "Box<i32>"
+            "__detail___unique_ptr_t<int>"
         );
 
-        // std::shared_ptr<T> -> Arc<T>
+        // std::shared_ptr<T> passes through (no longer mapped to Arc<T>)
         assert_eq!(
             CppType::Named("std::shared_ptr<int>".to_string()).to_rust_type_str(),
-            "Arc<i32>"
+            "std_shared_ptr<int>"
         );
         assert_eq!(
             CppType::Named("std::shared_ptr<MyClass>".to_string()).to_rust_type_str(),
-            "Arc<MyClass>"
+            "std_shared_ptr<MyClass>"
         );
 
-        // shared_ptr<_NonArray<T>> -> Arc<T> (libstdc++ internal)
+        // shared_ptr<_NonArray<T>> passes through
         assert_eq!(
             CppType::Named("shared_ptr<_NonArray<int>>".to_string()).to_rust_type_str(),
-            "Arc<i32>"
+            "shared_ptr<_NonArray<int>>"
         );
 
-        // std::weak_ptr<T> -> Weak<T>
+        // std::weak_ptr<T> passes through (no longer mapped to Weak<T>)
         assert_eq!(
             CppType::Named("std::weak_ptr<int>".to_string()).to_rust_type_str(),
-            "Weak<i32>"
+            "std_weak_ptr<int>"
         );
         assert_eq!(
             CppType::Named("std::weak_ptr<MyClass>".to_string()).to_rust_type_str(),
-            "Weak<MyClass>"
+            "std_weak_ptr<MyClass>"
         );
     }
 
     #[test]
     fn test_std_array_type_mapping() {
-        // Basic std::array<T, N> -> [T; N]
+        // NOTE: STL mappings removed - all types pass through as-is
+        // See Section 22 in TODO.md for rationale
+
+        // std::array passes through (no longer mapped to [T; N])
         assert_eq!(
             CppType::Named("std::array<int, 5>".to_string()).to_rust_type_str(),
-            "[i32; 5]"
+            "std_array<int,_5>"
         );
         assert_eq!(
             CppType::Named("std::array<double, 10>".to_string()).to_rust_type_str(),
-            "[f64; 10]"
-        );
-        assert_eq!(
-            CppType::Named("std::array<char, 256>".to_string()).to_rust_type_str(),
-            "[i8; 256]"
+            "std_array<double,_10>"
         );
 
-        // With custom types
-        assert_eq!(
-            CppType::Named("std::array<MyClass, 3>".to_string()).to_rust_type_str(),
-            "[MyClass; 3]"
-        );
-
-        // Nested template types
+        // Nested template types also pass through
         assert_eq!(
             CppType::Named("std::array<std::vector<int>, 2>".to_string()).to_rust_type_str(),
-            "[Vec<i32>; 2]"
+            "std_array<std_vector<int>,_2>"
         );
     }
 
     #[test]
     fn test_std_span_type_mapping() {
-        // Dynamic extent, mutable element type -> &mut [T]
+        // NOTE: STL mappings removed - all types pass through as-is
+        // See Section 22 in TODO.md for rationale
+
+        // std::span passes through (no longer mapped to &[T])
         assert_eq!(
             CppType::Named("std::span<int>".to_string()).to_rust_type_str(),
-            "&mut [i32]"
+            "std_span<int>"
         );
-        assert_eq!(
-            CppType::Named("std::span<double>".to_string()).to_rust_type_str(),
-            "&mut [f64]"
-        );
-
-        // Const element type -> &[T]
         assert_eq!(
             CppType::Named("std::span<const int>".to_string()).to_rust_type_str(),
-            "&[i32]"
+            "std_span<const_int>"
         );
-        assert_eq!(
-            CppType::Named("std::span<const char>".to_string()).to_rust_type_str(),
-            "&[i8]"
-        );
-
-        // With static extent (ignored, just extracts element type)
         assert_eq!(
             CppType::Named("std::span<int, 10>".to_string()).to_rust_type_str(),
-            "&mut [i32]"
-        );
-        assert_eq!(
-            CppType::Named("std::span<const double, 5>".to_string()).to_rust_type_str(),
-            "&[f64]"
-        );
-
-        // Custom types
-        assert_eq!(
-            CppType::Named("std::span<MyClass>".to_string()).to_rust_type_str(),
-            "&mut [MyClass]"
+            "std_span<int,_10>"
         );
     }
 
     #[test]
     fn test_std_variant_type_mapping() {
-        // Basic variant with two primitive types
+        // NOTE: STL mappings removed - all types pass through as-is
+        // See Section 22 in TODO.md for rationale
+
+        // std::variant passes through (no longer mapped to Variant_...)
         assert_eq!(
             CppType::Named("std::variant<int, double>".to_string()).to_rust_type_str(),
-            "Variant_i32_f64"
+            "std_variant<int,_double>"
         );
-
-        // Variant with three types
-        assert_eq!(
-            CppType::Named("std::variant<int, double, bool>".to_string()).to_rust_type_str(),
-            "Variant_i32_f64_bool"
-        );
-
-        // Variant with string types
         assert_eq!(
             CppType::Named("std::variant<int, std::string>".to_string()).to_rust_type_str(),
-            "Variant_i32_String"
+            "std_variant<int,_std_string>"
         );
-
-        // Variant with nested template types (vector)
-        assert_eq!(
-            CppType::Named("std::variant<std::vector<int>, double>".to_string()).to_rust_type_str(),
-            "Variant_Vec_i32_f64"
-        );
-
-        // Variant with optional type
-        assert_eq!(
-            CppType::Named("std::variant<std::optional<int>, bool>".to_string()).to_rust_type_str(),
-            "Variant_Option_i32_bool"
-        );
-
-        // Note: Pointer types within variant spellings don't go through proper type conversion
-        // because Named("int *") doesn't match the exact string "int" in the match arm.
-        // In practice, Clang provides the full spelling and this behavior is acceptable.
-        // The key thing is that the parsing and separation works correctly.
-
-        // Variant with custom class types
         assert_eq!(
             CppType::Named("std::variant<MyClass, OtherClass>".to_string()).to_rust_type_str(),
-            "Variant_MyClass_OtherClass"
+            "std_variant<MyClass,_OtherClass>"
         );
     }
 
     #[test]
     fn test_stream_type_mappings() {
-        // std::ostream -> Box<dyn std::io::Write>
+        // NOTE: STL mappings removed - all types pass through as-is
+        // See Section 22 in TODO.md for rationale
+
+        // Stream types pass through (no longer mapped to Rust I/O types)
         assert_eq!(
             CppType::Named("std::ostream".to_string()).to_rust_type_str(),
-            "Box<dyn std::io::Write>"
+            "std_ostream"
         );
-        assert_eq!(
-            CppType::Named("ostream".to_string()).to_rust_type_str(),
-            "Box<dyn std::io::Write>"
-        );
-        assert_eq!(
-            CppType::Named("std::basic_ostream<char>".to_string()).to_rust_type_str(),
-            "Box<dyn std::io::Write>"
-        );
-        assert_eq!(
-            CppType::Named("basic_ostream<char>".to_string()).to_rust_type_str(),
-            "Box<dyn std::io::Write>"
-        );
-
-        // std::istream -> Box<dyn std::io::Read>
         assert_eq!(
             CppType::Named("std::istream".to_string()).to_rust_type_str(),
-            "Box<dyn std::io::Read>"
+            "std_istream"
         );
-        assert_eq!(
-            CppType::Named("istream".to_string()).to_rust_type_str(),
-            "Box<dyn std::io::Read>"
-        );
-        assert_eq!(
-            CppType::Named("std::basic_istream<char>".to_string()).to_rust_type_str(),
-            "Box<dyn std::io::Read>"
-        );
-        assert_eq!(
-            CppType::Named("basic_istream<char>".to_string()).to_rust_type_str(),
-            "Box<dyn std::io::Read>"
-        );
-
-        // std::iostream -> Box<dyn std::io::Read + std::io::Write>
         assert_eq!(
             CppType::Named("std::iostream".to_string()).to_rust_type_str(),
-            "Box<dyn std::io::Read + std::io::Write>"
+            "std_iostream"
         );
-        assert_eq!(
-            CppType::Named("iostream".to_string()).to_rust_type_str(),
-            "Box<dyn std::io::Read + std::io::Write>"
-        );
-        assert_eq!(
-            CppType::Named("std::basic_iostream<char>".to_string()).to_rust_type_str(),
-            "Box<dyn std::io::Read + std::io::Write>"
-        );
-        assert_eq!(
-            CppType::Named("basic_iostream<char>".to_string()).to_rust_type_str(),
-            "Box<dyn std::io::Read + std::io::Write>"
-        );
-
-        // std::stringstream -> std::io::Cursor<Vec<u8>>
         assert_eq!(
             CppType::Named("std::stringstream".to_string()).to_rust_type_str(),
-            "std::io::Cursor<Vec<u8>>"
+            "std_stringstream"
         );
-        assert_eq!(
-            CppType::Named("stringstream".to_string()).to_rust_type_str(),
-            "std::io::Cursor<Vec<u8>>"
-        );
-
-        // std::ostringstream -> String
-        assert_eq!(
-            CppType::Named("std::ostringstream".to_string()).to_rust_type_str(),
-            "String"
-        );
-        assert_eq!(
-            CppType::Named("ostringstream".to_string()).to_rust_type_str(),
-            "String"
-        );
-
-        // std::istringstream -> std::io::Cursor<String>
-        assert_eq!(
-            CppType::Named("std::istringstream".to_string()).to_rust_type_str(),
-            "std::io::Cursor<String>"
-        );
-        assert_eq!(
-            CppType::Named("istringstream".to_string()).to_rust_type_str(),
-            "std::io::Cursor<String>"
-        );
-
-        // std::ofstream -> std::fs::File
         assert_eq!(
             CppType::Named("std::ofstream".to_string()).to_rust_type_str(),
-            "std::fs::File"
+            "std_ofstream"
         );
-        assert_eq!(
-            CppType::Named("ofstream".to_string()).to_rust_type_str(),
-            "std::fs::File"
-        );
-
-        // std::ifstream -> std::fs::File
         assert_eq!(
             CppType::Named("std::ifstream".to_string()).to_rust_type_str(),
-            "std::fs::File"
+            "std_ifstream"
         );
-        assert_eq!(
-            CppType::Named("ifstream".to_string()).to_rust_type_str(),
-            "std::fs::File"
-        );
-
-        // std::fstream -> std::fs::File
         assert_eq!(
             CppType::Named("std::fstream".to_string()).to_rust_type_str(),
-            "std::fs::File"
-        );
-        assert_eq!(
-            CppType::Named("fstream".to_string()).to_rust_type_str(),
-            "std::fs::File"
+            "std_fstream"
         );
     }
 

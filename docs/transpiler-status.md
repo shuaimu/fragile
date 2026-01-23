@@ -241,35 +241,44 @@ C++ Source → Clang (libclang) → Clang AST → Rust Source → rustc → Bina
 
 ## Standard Library Support
 
-### Current Approach (Type Mappings - Deprecated)
+### Current Approach (Type Mappings - To Be Removed)
 
-The current approach maps C++ STL types to Rust equivalents. This is being replaced by full STL transpilation.
+The current approach maps C++ STL types to Rust equivalents. These mappings will be removed.
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| `std::string` | ⚠️ | Currently maps to `String` (to be transpiled) |
-| `std::vector<T>` | ⚠️ | Currently maps to `Vec<T>` (to be transpiled) |
-| `std::map<K,V>` | ⚠️ | Currently maps to `BTreeMap<K,V>` (to be transpiled) |
-| `std::unordered_map<K,V>` | ⚠️ | Currently maps to `HashMap<K,V>` (to be transpiled) |
-| `std::unique_ptr<T>` | ⚠️ | Currently maps to `Box<T>` (to be transpiled) |
-| `std::shared_ptr<T>` | ⚠️ | Currently maps to `Arc<T>` (to be transpiled) |
-| `std::weak_ptr<T>` | ⚠️ | Currently maps to `Weak<T>` (to be transpiled) |
-| `std::optional<T>` | ⚠️ | Currently maps to `Option<T>` (to be transpiled) |
-| `std::array<T, N>` | ⚠️ | Currently maps to `[T; N]` (to be transpiled) |
-| `std::span<T>` | ⚠️ | Currently maps to `&[T]` (to be transpiled) |
-| `std::variant` | ⚠️ | Currently maps to Rust enum (to be transpiled) |
+| `std::string` | ⚠️ | Currently maps to `String` (mapping to be removed) |
+| `std::vector<T>` | ⚠️ | Currently maps to `Vec<T>` (mapping to be removed) |
+| `std::map<K,V>` | ⚠️ | Currently maps to `BTreeMap<K,V>` (mapping to be removed) |
+| `std::unordered_map<K,V>` | ⚠️ | Currently maps to `HashMap<K,V>` (mapping to be removed) |
+| `std::unique_ptr<T>` | ⚠️ | Currently maps to `Box<T>` (mapping to be removed) |
+| `std::shared_ptr<T>` | ⚠️ | Currently maps to `Arc<T>` (mapping to be removed) |
+| `std::weak_ptr<T>` | ⚠️ | Currently maps to `Weak<T>` (mapping to be removed) |
+| `std::optional<T>` | ⚠️ | Currently maps to `Option<T>` (mapping to be removed) |
+| `std::array<T, N>` | ⚠️ | Currently maps to `[T; N]` (mapping to be removed) |
+| `std::span<T>` | ⚠️ | Currently maps to `&[T]` (mapping to be removed) |
+| `std::variant` | ⚠️ | Currently maps to Rust enum (mapping to be removed) |
 | I/O streams | ❌ | Not yet implemented |
 
-### Future Approach (Full STL Transpilation)
+### Future Approach (No Special Treatment)
 
-Instead of mapping to Rust std types, we will transpile the entire C++ standard library from source (libstdc++ or libc++) to unsafe Rust. This preserves exact C++ semantics including:
+STL types will be transpiled exactly like any other C++ code. When user code `#include`s `<vector>`, Clang parses the **libc++ (LLVM)** headers, and we transpile whatever Clang produces.
 
+**Key principle**: The C++ standard library is just C++ code - no special handling needed.
+
+**Why libc++**: We use libc++ (LLVM's standard library) instead of libstdc++ (GNU) because:
+- Designed to work with Clang (which we use for parsing)
+- Cleaner codebase with better readability
+- Fewer GCC-specific compiler intrinsics
+- Better header-only support
+
+This preserves exact C++ semantics:
 - Iterator invalidation behavior
 - Exception safety guarantees
 - Allocator model
 - All STL methods (not just common ones)
 
-See `TODO.md` Section 22 for the full implementation plan.
+See `TODO.md` Section 22 for the implementation plan.
 
 ---
 
