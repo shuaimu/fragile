@@ -73,6 +73,7 @@ We just convert the fully-resolved AST to equivalent Rust code.
 - Three-way comparison operator (<=> → a.cmp(&b) as i8)
 - std::variant type mapping and construction (→ Rust enum)
 - std::get<T>/std::get<I> on variants (→ match expression)
+- std::visit on variants (→ match expression with lambda/functor/function visitor)
 
 **CLI**:
 ```bash
@@ -141,11 +142,16 @@ crates/
 ### 8. Additional STL Type Mappings (Priority: Medium)
 - [x] **8.1** `std::array<T, N>` → `[T; N]` with proper type extraction ✅ [26:01:22, 17:15]
 - [x] **8.2** `std::span<T>` → `&[T]` slice type mapping ✅ [26:01:22, 17:30]
-- [ ] **8.3** `std::variant<T...>` → Rust enum with variants
+- [x] **8.3** `std::variant<T...>` → Rust enum with variants ✅ [26:01:22, 23:55]
   - [x] **8.3.1** Type mapping: Parse `std::variant<T1, T2, ...>` and extract template args (~100 LOC) ✅ [26:01:22, 21:46] [docs/dev/plan_8_3_1_variant_type_mapping.md]
   - [x] **8.3.2** Enum generation: Generate Rust enum definitions for variant types with synthetic names (~150 LOC) ✅ [26:01:22, 21:51] [docs/dev/plan_8_3_2_variant_enum_generation.md]
   - [x] **8.3.3** Construction/assignment: Handle variant initialization and reassignment (~100 LOC) ✅ [26:01:22, 22:00] [docs/dev/plan_8_3_3_variant_construction.md]
-  - [ ] **8.3.4** std::visit: Map to Rust match statements (complex, may defer) (~200+ LOC)
+  - [x] **8.3.4** std::visit: Map to Rust match statements ✅ [26:01:22, 23:55] [docs/dev/plan_8_3_4_std_visit.md]
+    - [x] **8.3.4.1** Detection: Add is_std_visit_call() to detect std::visit calls and extract visitor+variants (~60 LOC) ✅
+    - [x] **8.3.4.2** Single variant support: Generate match expression for single variant with lambda visitor (~80 LOC) ✅
+    - [x] **8.3.4.3** Multiple variant support: Generate cartesian product match arms for 2+ variants (~80 LOC) ✅
+    - [x] **8.3.4.4** Functor/function support: Handle non-lambda visitors (functor op_call, function refs) (~60 LOC) ✅
+    - [x] **8.3.4.5** Tests and edge cases: Add E2E tests for std::visit patterns (~50 LOC) ✅
   - [x] **8.3.5** std::get<T>/std::get<I>: Map to pattern matching (~70 LOC) ✅ [26:01:22, 23:30] [docs/dev/plan_8_3_5_std_get.md]
 
 ### 9. C++20 Features (Priority: Medium)

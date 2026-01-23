@@ -468,6 +468,83 @@ impl AstCodeGen {
         None
     }
 
+    /// Check if this is a std::visit call on variant(s).
+    /// Returns (visitor_node, variant_nodes_with_types) if it is.
+    /// visitor_node is the first argument (the callable).
+    /// variant_nodes_with_types is a vec of (node, variant_type) for each variant argument.
+    fn is_std_visit_call<'a>(node: &'a ClangNode) -> Option<(&'a ClangNode, Vec<(&'a ClangNode, CppType)>)> {
+        if let ClangNodeKind::CallExpr { .. } = &node.kind {
+            // Look for the callee - it may be directly a DeclRefExpr or wrapped in ImplicitCastExpr
+            let callee = node.children.first()?;
+            let decl_ref = match &callee.kind {
+                ClangNodeKind::DeclRefExpr { .. } => callee,
+                ClangNodeKind::ImplicitCastExpr { .. } => {
+                    // Look inside ImplicitCastExpr for DeclRefExpr
+                    callee.children.first()?
+                }
+                _ => return None,
+            };
+
+            if let ClangNodeKind::DeclRefExpr { name, ty: func_ty, .. } = &decl_ref.kind {
+                if name == "visit" {
+                    // std::visit signature: visit(Visitor&& vis, Variants&&... vars)
+                    // So we expect at least 2 children: callee + visitor + at least one variant
+                    if node.children.len() < 3 {
+                        return None;
+                    }
+
+                    // Check if function type params contain variant references
+                    if let CppType::Function { params, .. } = func_ty {
+                        // First param is the visitor, remaining are variants
+                        if params.len() < 2 {
+                            return None;
+                        }
+
+                        // Check that at least one param (after visitor) is a variant
+                        let mut has_variant = false;
+                        for param in params.iter().skip(1) {
+                            let param_type = match param {
+                                CppType::Reference { referent, .. } => referent.as_ref(),
+                                _ => param,
+                            };
+                            if Self::get_variant_args(param_type).is_some() {
+                                has_variant = true;
+                                break;
+                            }
+                        }
+
+                        if !has_variant {
+                            return None;
+                        }
+
+                        // Get the visitor node (first argument after callee)
+                        let visitor_node = node.children.get(1)?;
+
+                        // Collect variant nodes and their types
+                        let mut variant_nodes = Vec::new();
+                        for arg in node.children.iter().skip(2) {
+                            if let Some(var_type) = Self::get_expr_type(arg) {
+                                // Unwrap reference types to get the actual variant type
+                                let inner_type = match &var_type {
+                                    CppType::Reference { referent, .. } => referent.as_ref().clone(),
+                                    _ => var_type.clone(),
+                                };
+                                if Self::get_variant_args(&inner_type).is_some() {
+                                    variant_nodes.push((arg, inner_type));
+                                }
+                            }
+                        }
+
+                        if !variant_nodes.is_empty() {
+                            return Some((visitor_node, variant_nodes));
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+
     /// Get the variant index by matching the return type to variant template arguments.
     /// The return type from std::get is T& where T is one of the variant types.
     /// For std::get<I>, the return type may be variant_alternative_t<I, variant<...>>.
@@ -498,6 +575,124 @@ impl AstCodeGen {
 
         // Otherwise, find matching index using Rust type string comparison
         Self::find_variant_index(&variant_args, target_type)
+    }
+
+    /// Determine how to call the visitor in std::visit.
+    /// Returns a format string where {} is the args placeholder.
+    /// - For lambdas: "(visitor)({})"
+    /// - For functors: "visitor.op_call({})"
+    /// - For function pointers: "(visitor)({})" or "visitor.unwrap()({})"
+    fn get_visitor_call_format(&self, visitor_node: &ClangNode, visitor_expr: &str) -> String {
+        // Check if visitor is a lambda (type contains "lambda at")
+        if let Some(visitor_type) = Self::get_expr_type(visitor_node) {
+            if let CppType::Named(name) = &visitor_type {
+                if name.contains("lambda at ") {
+                    // Lambda - callable directly
+                    return format!("({})({{}})", visitor_expr);
+                }
+            }
+            // Check if it's a function pointer (Option<fn(...)>)
+            if let CppType::Pointer { pointee, .. } = &visitor_type {
+                if matches!(pointee.as_ref(), CppType::Function { .. }) {
+                    // Function pointer wrapped in Option - use unwrap
+                    return format!("{}.unwrap()({{}})", visitor_expr);
+                }
+            }
+            if matches!(visitor_type, CppType::Function { .. }) {
+                // Direct function reference - callable directly
+                return format!("({})({{}})", visitor_expr);
+            }
+            // For struct/class types (functors), use op_call
+            if let CppType::Named(_) = &visitor_type {
+                // Functor - use op_call method
+                return format!("{}.op_call({{}})", visitor_expr);
+            }
+        }
+        // Default to direct call for lambdas and other callables
+        format!("({})({{}})", visitor_expr)
+    }
+
+    /// Generate a match expression for std::visit on one or more variants.
+    /// visitor_node is the visitor (lambda, functor, or function).
+    /// variants is a list of (node, type) pairs for each variant argument.
+    fn generate_visit_match(&self, visitor_node: &ClangNode, variants: &[(&ClangNode, CppType)], _return_type: &CppType) -> String {
+        if variants.is_empty() {
+            return "/* std::visit error: no variants */".to_string();
+        }
+
+        // Generate the visitor expression
+        let visitor_expr = self.expr_to_string(visitor_node);
+
+        // Determine how to call the visitor (lambda, functor, or function)
+        let call_format = self.get_visitor_call_format(visitor_node, &visitor_expr);
+
+        // For single variant, generate a simple match
+        if variants.len() == 1 {
+            let (var_node, var_type) = &variants[0];
+            let var_expr = self.expr_to_string(var_node);
+            if let Some(enum_name) = Self::get_variant_enum_name(var_type) {
+                if let Some(args) = Self::get_variant_args(var_type) {
+                    let arms: Vec<String> = (0..args.len())
+                        .map(|i| format!("{}::V{}(__v) => {}", enum_name, i, call_format.replace("{}", "__v")))
+                        .collect();
+                    return format!("match &{} {{ {} }}", var_expr, arms.join(", "));
+                }
+            }
+            return format!("/* std::visit error: cannot process variant type {:?} */", var_type);
+        }
+
+        // For multiple variants, generate cartesian product of match arms
+        // Collect variant info
+        let mut var_info: Vec<(String, String, usize)> = Vec::new(); // (expr, enum_name, num_variants)
+        for (var_node, var_type) in variants {
+            let var_expr = self.expr_to_string(var_node);
+            if let Some(enum_name) = Self::get_variant_enum_name(var_type) {
+                if let Some(args) = Self::get_variant_args(var_type) {
+                    var_info.push((var_expr, enum_name, args.len()));
+                }
+            }
+        }
+
+        if var_info.is_empty() {
+            return "/* std::visit error: no valid variants */".to_string();
+        }
+
+        // Generate match expression on tuple of variants
+        let tuple_expr: Vec<String> = var_info.iter().map(|(e, _, _)| format!("&{}", e)).collect();
+
+        // Generate all combinations (cartesian product)
+        let mut arms: Vec<String> = Vec::new();
+        let mut indices: Vec<usize> = vec![0; var_info.len()];
+        loop {
+            // Build pattern for this combination: (Enum1::V0(__v0), Enum2::V1(__v1), ...)
+            let patterns: Vec<String> = var_info.iter()
+                .enumerate()
+                .map(|(i, (_, enum_name, _))| format!("{}::V{}(__v{})", enum_name, indices[i], i))
+                .collect();
+            // Build visitor call with appropriate call format
+            let args: Vec<String> = (0..var_info.len()).map(|i| format!("__v{}", i)).collect();
+            let args_str = args.join(", ");
+            arms.push(format!("({}) => {}", patterns.join(", "), call_format.replace("{}", &args_str)));
+
+            // Increment indices (like counting in mixed-radix)
+            let mut carry = true;
+            for i in (0..var_info.len()).rev() {
+                if carry {
+                    indices[i] += 1;
+                    if indices[i] >= var_info[i].2 {
+                        indices[i] = 0;
+                        carry = true;
+                    } else {
+                        carry = false;
+                    }
+                }
+            }
+            if carry {
+                break; // All combinations exhausted
+            }
+        }
+
+        format!("match ({}) {{ {} }}", tuple_expr.join(", "), arms.join(", "))
     }
 
     /// Generate Rust enum definitions for all collected std::variant types.
@@ -3660,6 +3855,11 @@ impl AstCodeGen {
                             );
                         }
                     }
+                }
+
+                // Check if this is a std::visit call on variant(s)
+                if let Some((visitor_node, variants)) = Self::is_std_visit_call(node) {
+                    return self.generate_visit_match(visitor_node, &variants, ty);
                 }
 
                 // Check if this is a lambda/closure call (operator() on a lambda type)
