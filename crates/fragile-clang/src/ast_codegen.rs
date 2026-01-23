@@ -2447,6 +2447,84 @@ impl AstCodeGen {
         }
     }
 
+    /// Collect all input arguments from a chained operator>> expression.
+    /// Returns (stream_type, args_in_order) where args_in_order is left-to-right.
+    fn collect_stream_input_args<'a>(
+        &self,
+        node: &'a ClangNode,
+    ) -> Option<(&'static str, Vec<&'a ClangNode>)> {
+        // This recursively collects arguments from chained >> operators
+        // cin >> a >> b  is  ((cin >> a) >> b)
+        if let Some((op_name, left_idx, right_idx_opt)) = Self::get_operator_call_info(node) {
+            if op_name == "operator>>" {
+                if let Some(right_idx) = right_idx_opt {
+                    if left_idx < node.children.len() && right_idx < node.children.len() {
+                        // First check if left operand is directly a stream
+                        if let Some(stream_type) = Self::get_io_stream_type(&node.children[left_idx]) {
+                            if stream_type == "stdin" {
+                                // Base case: stream >> arg
+                                return Some((stream_type, vec![&node.children[right_idx]]));
+                            }
+                        }
+                        // Recursive case: (stream >> ...) >> arg
+                        if let Some((stream_type, mut args)) = self.collect_stream_input_args(&node.children[left_idx]) {
+                            args.push(&node.children[right_idx]);
+                            return Some((stream_type, args));
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Generate Rust code for reading from stdin and parsing into variables.
+    fn generate_stream_read(&self, args: &[&ClangNode]) -> String {
+        // Generate code that reads a line from stdin and parses it into the variables
+        // For chained reads like cin >> x >> y, we read one line and split by whitespace
+        let var_reads: Vec<String> = args.iter().map(|arg| {
+            let var_name = self.expr_to_string(arg);
+            let var_type = Self::get_expr_type(arg);
+
+            // Generate appropriate parse call based on type
+            let parse_expr = match var_type {
+                Some(CppType::Int { signed: true }) => "__parts.next().unwrap().parse::<i32>().unwrap()".to_string(),
+                Some(CppType::Int { signed: false }) => "__parts.next().unwrap().parse::<u32>().unwrap()".to_string(),
+                Some(CppType::Long { signed: true }) | Some(CppType::LongLong { signed: true }) => {
+                    "__parts.next().unwrap().parse::<i64>().unwrap()".to_string()
+                }
+                Some(CppType::Long { signed: false }) | Some(CppType::LongLong { signed: false }) => {
+                    "__parts.next().unwrap().parse::<u64>().unwrap()".to_string()
+                }
+                Some(CppType::Short { signed: true }) => "__parts.next().unwrap().parse::<i16>().unwrap()".to_string(),
+                Some(CppType::Short { signed: false }) => "__parts.next().unwrap().parse::<u16>().unwrap()".to_string(),
+                Some(CppType::Float) => "__parts.next().unwrap().parse::<f32>().unwrap()".to_string(),
+                Some(CppType::Double) => "__parts.next().unwrap().parse::<f64>().unwrap()".to_string(),
+                Some(CppType::Char { signed: true }) => "__parts.next().unwrap().chars().next().unwrap() as i8".to_string(),
+                Some(CppType::Char { signed: false }) => "__parts.next().unwrap().chars().next().unwrap() as u8".to_string(),
+                Some(CppType::Bool) => "__parts.next().unwrap().parse::<bool>().unwrap()".to_string(),
+                Some(CppType::Named(ref name)) if name == "std::string" || name == "string" => {
+                    "__parts.next().unwrap().to_string()".to_string()
+                }
+                _ => "__parts.next().unwrap().to_string()".to_string(),
+            };
+
+            format!("{} = {}", var_name, parse_expr)
+        }).collect();
+
+        // Generate the block that reads, splits, and parses
+        format!(
+            "{{ \
+                let mut __line = String::new(); \
+                std::io::stdin().read_line(&mut __line).unwrap(); \
+                let mut __parts = __line.trim().split_whitespace(); \
+                {}; \
+                std::io::stdin() \
+            }}",
+            var_reads.join("; ")
+        )
+    }
+
     /// Generate a method or constructor.
     fn generate_method(&mut self, node: &ClangNode, struct_name: &str) {
         // Track current class for inherited member access
@@ -4025,6 +4103,11 @@ impl AstCodeGen {
                 // Check if this is an I/O stream output operation (cout << x << y)
                 if let Some((stream_type, args)) = self.collect_stream_output_args(node) {
                     return self.generate_stream_write(stream_type, &args);
+                }
+
+                // Check if this is an I/O stream input operation (cin >> x >> y)
+                if let Some((_stream_type, args)) = self.collect_stream_input_args(node) {
+                    return self.generate_stream_read(&args);
                 }
 
                 // Check if this is a lambda/closure call (operator() on a lambda type)

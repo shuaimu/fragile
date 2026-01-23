@@ -175,9 +175,9 @@ crates/
   - [x] **11.1.4** `std::cerr` → `std::io::stderr()` global mapping (~30 LOC) ✅ 2026-01-22
   - [x] **11.1.5** `std::cin` → `std::io::stdin()` global mapping (~30 LOC) ✅ 2026-01-22
   - [x] **11.1.5a** `std::clog` → `std::io::stderr()` global mapping ✅ 2026-01-22
-- [ ] **11.2** Stream operators
+- [x] **11.2** Stream operators ✅ 2026-01-22
   - [x] **11.2.1** `operator<<` for ostream → `write!()` / `writeln!()` macro calls (~100 LOC) ✅ 2026-01-22
-  - [ ] **11.2.2** `operator>>` for istream → `read_line()` + parsing (~100 LOC)
+  - [x] **11.2.2** `operator>>` for istream → `read_line()` + parsing (~100 LOC) ✅ 2026-01-22
   - [x] **11.2.3** Handle chained `<<`/`>>` operators (~50 LOC) ✅ 2026-01-22
   - [x] **11.2.3a** Handle `std::endl` → newline in writeln!() ✅ 2026-01-22
 - [ ] **11.3** String streams
