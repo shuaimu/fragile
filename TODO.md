@@ -14,7 +14,7 @@ We just convert the fully-resolved AST to equivalent Rust code.
 ## Current Status
 
 **Grammar Tests**: 20/20 passing
-**E2E Tests**: 57/57 passing
+**E2E Tests**: 58/58 passing
 
 **Working**:
 - Simple functions with control flow (if/else, while, for, do-while, switch, recursion)
@@ -69,6 +69,7 @@ We just convert the fully-resolved AST to equivalent Rust code.
 - std::array<T, N> → [T; N] type mapping
 - std::span<T> → &mut [T] / &[T] slice type mapping
 - C++20 designated initializers ({ .x = 10, .y = 20 })
+- Function pointers (Option<fn(...)> type, Some() wrapping, .unwrap()() calls)
 
 **CLI**:
 ```bash
@@ -144,11 +145,11 @@ crates/
 - [ ] **9.2** Three-way comparison operator (`<=>` spaceship operator)
 
 ### 10. Function Pointers (Priority: Medium)
-- [ ] **10.1** Fix function pointer type generation (use `Option<extern "C" fn(...)>` instead of `*mut fn`)
+- [x] **10.1** Function pointer support ✅ [26:01:22, 21:50]
   - [x] **10.1.1** Update CppType::Pointer handling for function pointees in to_rust_type_str() ✅ [26:01:22, 18:30]
-  - [ ] **10.1.2** Handle function-to-pointer decay in assignments (wrap in Some())
-  - [ ] **10.1.3** Handle function pointer calls (use .unwrap()())
-  - [ ] **10.1.4** Handle null initializers (use None instead of null_mut())
+  - [x] **10.1.2** Handle function-to-pointer decay in assignments (wrap in Some()) ✅ [26:01:22, 21:50]
+  - [x] **10.1.3** Handle function pointer calls (use .unwrap()()) ✅ [26:01:22, 21:50]
+  - [ ] **10.1.4** Handle null initializers (use None instead of null_mut()) - not yet tested
 
 ---
 
