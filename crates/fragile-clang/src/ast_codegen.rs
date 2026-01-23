@@ -338,14 +338,14 @@ impl AstCodeGen {
         }
     }
 
-    /// Check if a type is std::variant and return its C++ template arguments if so.
+    /// Check if a type is std::variant (or variant without std:: prefix) and return its C++ template arguments if so.
     fn get_variant_args(ty: &CppType) -> Option<Vec<String>> {
         if let CppType::Named(name) = ty {
-            if let Some(rest) = name.strip_prefix("std::variant<") {
-                if let Some(inner) = rest.strip_suffix(">") {
-                    return Some(parse_template_args(inner));
-                }
-            }
+            // Handle both "std::variant<...>" and "variant<...>" (libclang sometimes omits std::)
+            let rest = name.strip_prefix("std::variant<")
+                .or_else(|| name.strip_prefix("variant<"))?;
+            let inner = rest.strip_suffix(">")?;
+            return Some(parse_template_args(inner));
         }
         None
     }
@@ -353,7 +353,8 @@ impl AstCodeGen {
     /// Get the generated Rust enum name for a variant type.
     fn get_variant_enum_name(ty: &CppType) -> Option<String> {
         if let CppType::Named(name) = ty {
-            if name.starts_with("std::variant<") {
+            // Handle both "std::variant<...>" and "variant<...>"
+            if name.starts_with("std::variant<") || name.starts_with("variant<") {
                 return Some(ty.to_rust_type_str());
             }
         }
@@ -423,6 +424,80 @@ impl AstCodeGen {
             // Default: return the node itself
             _ => Some(node),
         }
+    }
+
+    /// Check if this is a std::get call on a variant.
+    /// Returns (variant_arg_node, variant_type, return_type) if it is.
+    fn is_std_get_call<'a>(node: &'a ClangNode) -> Option<(&'a ClangNode, CppType, &'a CppType)> {
+        if let ClangNodeKind::CallExpr { ty } = &node.kind {
+            // Look for the callee - it may be directly a DeclRefExpr or wrapped in ImplicitCastExpr
+            let callee = node.children.first()?;
+            let decl_ref = match &callee.kind {
+                ClangNodeKind::DeclRefExpr { .. } => callee,
+                ClangNodeKind::ImplicitCastExpr { .. } => {
+                    // Look inside ImplicitCastExpr for DeclRefExpr
+                    callee.children.first()?
+                }
+                _ => return None,
+            };
+
+            if let ClangNodeKind::DeclRefExpr { name, ty: func_ty, .. } = &decl_ref.kind {
+                if name == "get" {
+                    // Check if first parameter is a reference to variant type
+                    if let CppType::Function { params, .. } = func_ty {
+                        if let Some(first_param) = params.first() {
+                            // Parameter is Reference { referent: Named("variant<...>"), ... }
+                            let param_type = match first_param {
+                                CppType::Reference { referent, .. } => referent.as_ref(),
+                                _ => first_param,
+                            };
+                            if Self::get_variant_args(param_type).is_some() {
+                                // Find the variant argument in children
+                                // It's typically the second child (after callee or ImplicitCastExpr)
+                                let variant_arg = node.children.get(1)?;
+                                let variant_type = Self::get_expr_type(variant_arg)?;
+                                if Self::get_variant_args(&variant_type).is_some() {
+                                    return Some((variant_arg, variant_type, ty));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Get the variant index by matching the return type to variant template arguments.
+    /// The return type from std::get is T& where T is one of the variant types.
+    /// For std::get<I>, the return type may be variant_alternative_t<I, variant<...>>.
+    fn get_variant_index_from_return_type(variant_type: &CppType, return_type: &CppType) -> Option<usize> {
+        let variant_args = Self::get_variant_args(variant_type)?;
+
+        // Extract the referent type if return_type is a reference (std::get returns T&)
+        let target_type = match return_type {
+            CppType::Reference { referent, .. } => referent.as_ref(),
+            _ => return_type,
+        };
+
+        // Check if the return type is variant_alternative_t<Index, variant<...>>
+        // This happens with std::get<I>(v) where I is an index
+        if let CppType::Named(name) = target_type {
+            if let Some(rest) = name.strip_prefix("variant_alternative_t<") {
+                // Parse "0UL, variant<int, double, bool>>" to extract the index
+                if let Some(comma_pos) = rest.find(',') {
+                    let idx_str = rest[..comma_pos].trim();
+                    // Remove suffix like "UL" or "u" from the index
+                    let idx_num: String = idx_str.chars().take_while(|c| c.is_ascii_digit()).collect();
+                    if let Ok(idx) = idx_num.parse::<usize>() {
+                        return Some(idx);
+                    }
+                }
+            }
+        }
+
+        // Otherwise, find matching index using Rust type string comparison
+        Self::find_variant_index(&variant_args, target_type)
     }
 
     /// Generate Rust enum definitions for all collected std::variant types.
@@ -3572,6 +3647,21 @@ impl AstCodeGen {
                 }
             }
             ClangNodeKind::CallExpr { ty } => {
+                // Check if this is a std::get call on a variant
+                if let Some((variant_arg, variant_type, return_type)) = Self::is_std_get_call(node) {
+                    if let Some(idx) = Self::get_variant_index_from_return_type(&variant_type, return_type) {
+                        if let Some(enum_name) = Self::get_variant_enum_name(&variant_type) {
+                            let variant_expr = self.expr_to_string(variant_arg);
+                            // Generate match expression to extract the variant value
+                            // Using clone() to copy the value out since we're borrowing
+                            return format!(
+                                "match &{} {{ {}::V{}(val) => val.clone(), _ => panic!(\"bad variant access\") }}",
+                                variant_expr, enum_name, idx
+                            );
+                        }
+                    }
+                }
+
                 // Check if this is a lambda/closure call (operator() on a lambda type)
                 // Lambda types look like "(lambda at /path/file.cpp:line:col)"
                 if let Some((op_name, left_idx, _)) = Self::get_operator_call_info(node) {

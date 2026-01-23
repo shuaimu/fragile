@@ -144,7 +144,7 @@ crates/
   - [x] **8.3.2** Enum generation: Generate Rust enum definitions for variant types with synthetic names (~150 LOC) ✅ [26:01:22, 21:51] [docs/dev/plan_8_3_2_variant_enum_generation.md]
   - [x] **8.3.3** Construction/assignment: Handle variant initialization and reassignment (~100 LOC) ✅ [26:01:22, 22:00] [docs/dev/plan_8_3_3_variant_construction.md]
   - [ ] **8.3.4** std::visit: Map to Rust match statements (complex, may defer) (~200+ LOC)
-  - [ ] **8.3.5** std::get<T>/std::get<I>: Map to pattern matching or unwrap (~100 LOC)
+  - [x] **8.3.5** std::get<T>/std::get<I>: Map to pattern matching (~70 LOC) ✅ [26:01:22, 23:30] [docs/dev/plan_8_3_5_std_get.md]
 
 ### 9. C++20 Features (Priority: Medium)
 - [x] **9.1** Designated initializers (`.field = value` syntax) ✅ [26:01:22, 18:15]

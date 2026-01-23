@@ -395,7 +395,10 @@ impl CppType {
                         }
                         // Handle std::variant<T1, T2, ...> -> Variant_T1_T2_...
                         // This generates a synthetic enum name that will be defined separately
-                        if let Some(rest) = name.strip_prefix("std::variant<") {
+                        // Handle both "std::variant<...>" and "variant<...>" (libclang sometimes omits std::)
+                        let variant_rest = name.strip_prefix("std::variant<")
+                            .or_else(|| name.strip_prefix("variant<"));
+                        if let Some(rest) = variant_rest {
                             if let Some(inner) = rest.strip_suffix(">") {
                                 let args = parse_template_args(inner);
                                 if !args.is_empty() {
