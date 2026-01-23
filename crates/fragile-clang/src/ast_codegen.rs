@@ -1778,6 +1778,23 @@ impl AstCodeGen {
         }
     }
 
+    /// Check if a node is a nullptr literal (possibly wrapped in Unknown nodes).
+    fn is_nullptr_literal(node: &ClangNode) -> bool {
+        match &node.kind {
+            ClangNodeKind::NullPtrLiteral => true,
+            ClangNodeKind::Unknown(_) | ClangNodeKind::ImplicitCastExpr { .. } => {
+                // Look through wrapper nodes
+                node.children.iter().any(|c| Self::is_nullptr_literal(c))
+            }
+            _ => false,
+        }
+    }
+
+    /// Check if a type is a function pointer type.
+    fn is_function_pointer_type(ty: &CppType) -> bool {
+        matches!(ty, CppType::Pointer { pointee, .. } if matches!(pointee.as_ref(), CppType::Function { .. }))
+    }
+
     /// Recursively find an operator name in a node tree.
     fn find_operator_name(node: &ClangNode) -> Option<String> {
         match &node.kind {
@@ -2190,22 +2207,32 @@ impl AstCodeGen {
 
                         let init = if has_real_init {
                             let init_node = initializer.unwrap();
-                            // Skip type suffixes for literals when we have explicit type annotation
-                            self.skip_literal_suffix = true;
-                            let expr = self.expr_to_string(init_node);
-                            self.skip_literal_suffix = false;
-                            // If expression is unsupported, fall back to default
-                            if expr.contains("unsupported") {
-                                format!(" = {}", default_value_for_type(ty))
-                            } else if is_ref {
-                                // Reference initialization: add &mut or & prefix
-                                let prefix = if is_const_ref { "&" } else { "&mut " };
-                                format!(" = {}{}", prefix, expr)
+                            // Special case: function pointer initialized with nullptr → None
+                            if Self::is_function_pointer_type(ty) && Self::is_nullptr_literal(init_node) {
+                                " = None".to_string()
                             } else {
-                                format!(" = {}", expr)
+                                // Skip type suffixes for literals when we have explicit type annotation
+                                self.skip_literal_suffix = true;
+                                let expr = self.expr_to_string(init_node);
+                                self.skip_literal_suffix = false;
+                                // If expression is unsupported, fall back to default
+                                if expr.contains("unsupported") {
+                                    format!(" = {}", default_value_for_type(ty))
+                                } else if is_ref {
+                                    // Reference initialization: add &mut or & prefix
+                                    let prefix = if is_const_ref { "&" } else { "&mut " };
+                                    format!(" = {}{}", prefix, expr)
+                                } else {
+                                    format!(" = {}", expr)
+                                }
                             }
                         } else {
-                            format!(" = {}", default_value_for_type(ty))
+                            // Default value for function pointers is None
+                            if Self::is_function_pointer_type(ty) {
+                                " = None".to_string()
+                            } else {
+                                format!(" = {}", default_value_for_type(ty))
+                            }
                         };
 
                         // References don't need mut keyword
@@ -3177,6 +3204,17 @@ impl AstCodeGen {
                     // Check if left side is a pointer type for += / -= (need .add() / .sub())
                     let left_type = Self::get_expr_type(&node.children[0]);
                     let left_is_pointer = matches!(left_type, Some(CppType::Pointer { .. }));
+
+                    // Handle function pointer comparison with nullptr: use .is_none() / .is_some()
+                    let left_is_fn_ptr = left_type.as_ref().map_or(false, |t| Self::is_function_pointer_type(t));
+                    if left_is_fn_ptr && matches!(op, BinaryOp::Eq | BinaryOp::Ne) && Self::is_nullptr_literal(&node.children[1]) {
+                        let left = self.expr_to_string(&node.children[0]);
+                        return if matches!(op, BinaryOp::Eq) {
+                            format!("{}.is_none()", left)
+                        } else {
+                            format!("{}.is_some()", left)
+                        };
+                    }
 
                     // Handle pointer arithmetic specially
                     if left_is_pointer && matches!(op, BinaryOp::AddAssign | BinaryOp::SubAssign) {

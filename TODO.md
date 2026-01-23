@@ -151,7 +151,7 @@ crates/
   - [x] **10.1.1** Update CppType::Pointer handling for function pointees in to_rust_type_str() ✅ [26:01:22, 18:30]
   - [x] **10.1.2** Handle function-to-pointer decay in assignments (wrap in Some()) ✅ [26:01:22, 21:50]
   - [x] **10.1.3** Handle function pointer calls (use .unwrap()()) ✅ [26:01:22, 21:50]
-  - [ ] **10.1.4** Handle null initializers (use None instead of null_mut()) - not yet tested
+  - [x] **10.1.4** Handle null initializers (None) and nullptr comparison (.is_none()/.is_some()) ✅ [26:01:22, 22:45]
 
 ---
 

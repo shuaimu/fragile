@@ -1880,6 +1880,18 @@ fn test_e2e_function_pointers() {
             int result5 = apply(multiply, apply(add, 2, 3), 4);  // (2+3)*4 = 20
             if (result5 != 20) return 5;
 
+            // Null function pointer initialization
+            int (*null_ptr)(int, int) = nullptr;
+            if (null_ptr != nullptr) return 6;  // Should be null
+
+            // Assign and check not null
+            null_ptr = add;
+            if (null_ptr == nullptr) return 7;  // Should not be null
+
+            // Call through previously-null pointer
+            int result6 = null_ptr(1, 2);  // 3
+            if (result6 != 3) return 8;
+
             return 0;
         }
     "#;
