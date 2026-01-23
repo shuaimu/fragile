@@ -347,10 +347,10 @@ The current approach in `crates/fragile-clang/src/types.rs:183-580` has special-
   - [x] **22.2.3** All STL types pass through - full transpilation depends on Phase 2-4
 
 #### Phase 2: Configure libc++ as Default STL
-- [ ] **22.3** Set up libc++ for transpilation
-  - [ ] **22.3.1** Add `-stdlib=libc++` flag to Clang invocation
-  - [ ] **22.3.2** Document libc++ installation requirements (e.g., `apt install libc++-dev`)
-  - [ ] **22.3.3** Handle libc++ include paths (`/usr/include/c++/v1/` or similar)
+- [x] **22.3** Set up libc++ for transpilation ✅ 2026-01-23
+  - [x] **22.3.1** Add `-stdlib=libc++` flag to Clang invocation ✅
+  - [x] **22.3.2** Document libc++ installation requirements in CLAUDE.md ✅
+  - [x] **22.3.3** Handle libc++ include paths (`/usr/include/c++/v1/` etc.) ✅
 
 - [ ] **22.4** Handle libc++ implementation patterns
   - [ ] **22.4.1** Handle `_LIBCPP_*` macros and conditionals

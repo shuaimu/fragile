@@ -93,7 +93,30 @@ fragile transpile file.cpp -o output.rs
 
 # Transpile with include paths
 fragile transpile file.cpp -I /path/to/headers -o output.rs
+
+# Transpile with libc++ (recommended for STL code)
+fragile transpile file.cpp --use-libcxx -o output.rs
 ```
+
+### Using libc++ (Optional)
+
+For transpiling code that uses STL containers (`std::vector`, `std::string`, etc.),
+we recommend using LLVM's libc++ instead of GCC's libstdc++ because libc++ has
+cleaner, more transpiler-friendly code.
+
+```bash
+# Install libc++ (Ubuntu/Debian)
+sudo apt install libc++-dev libc++abi-dev
+
+# Use libc++ for transpilation
+fragile transpile file.cpp --use-libcxx -o output.rs
+```
+
+**Why libc++?**
+- Designed for Clang (better compatibility)
+- Clean, modern code structure
+- Minimal compiler intrinsics
+- Simpler header organization
 
 ---
 

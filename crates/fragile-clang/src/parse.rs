@@ -21,6 +21,8 @@ pub struct ClangParser {
     defines: Vec<String>,
     /// Error patterns to ignore (substring matches)
     ignored_error_patterns: Vec<String>,
+    /// Use libc++ (LLVM's C++ standard library) instead of libstdc++
+    use_libcxx: bool,
 }
 
 impl ClangParser {
@@ -59,6 +61,20 @@ impl ClangParser {
         defines: Vec<String>,
         ignored_error_patterns: Vec<String>,
     ) -> Result<Self> {
+        Self::with_full_options(include_paths, system_include_paths, defines, ignored_error_patterns, false)
+    }
+
+    /// Create a new Clang parser with all options including libc++ support.
+    /// When `use_libcxx` is true, the parser will use LLVM's libc++ standard library
+    /// instead of GCC's libstdc++. This requires libc++ to be installed
+    /// (e.g., `apt install libc++-dev libc++abi-dev` on Debian/Ubuntu).
+    pub fn with_full_options(
+        include_paths: Vec<String>,
+        system_include_paths: Vec<String>,
+        defines: Vec<String>,
+        ignored_error_patterns: Vec<String>,
+        use_libcxx: bool,
+    ) -> Result<Self> {
         unsafe {
             let index = clang_sys::clang_createIndex(0, 0);
             if index.is_null() {
@@ -70,6 +86,7 @@ impl ClangParser {
                 system_include_paths,
                 defines,
                 ignored_error_patterns,
+                use_libcxx,
             })
         }
     }
@@ -82,9 +99,27 @@ impl ClangParser {
         Self::with_include_paths(system_paths)
     }
 
-    /// Detect system C++ include paths by querying clang.
+    /// Create a Clang parser configured to use libc++ (LLVM's C++ standard library).
+    /// This is recommended for transpiling STL code as libc++ has cleaner, more
+    /// transpiler-friendly code than libstdc++.
+    ///
+    /// Requires libc++ to be installed:
+    /// - Debian/Ubuntu: `apt install libc++-dev libc++abi-dev`
+    /// - Other systems: Install LLVM's C++ standard library package
+    pub fn with_libcxx() -> Result<Self> {
+        let system_paths = Self::detect_libcxx_include_paths();
+        Self::with_full_options(Vec::new(), system_paths, Vec::new(), Vec::new(), true)
+    }
+
+    /// Create a Clang parser with libc++ and custom include paths.
+    pub fn with_libcxx_and_paths(include_paths: Vec<String>) -> Result<Self> {
+        let system_paths = Self::detect_libcxx_include_paths();
+        Self::with_full_options(include_paths, system_paths, Vec::new(), Vec::new(), true)
+    }
+
+    /// Detect system C++ include paths by querying clang (libstdc++ paths).
     fn detect_system_include_paths() -> Vec<String> {
-        // Common paths for libstdc++ (GCC) and libc++ (LLVM)
+        // Common paths for libstdc++ (GCC)
         let possible_paths = vec![
             // GCC libstdc++ paths (common on Linux)
             "/usr/include/c++/14".to_string(),
@@ -112,6 +147,43 @@ impl ClangParser {
             .collect()
     }
 
+    /// Detect libc++ (LLVM's C++ standard library) include paths.
+    /// Returns paths where libc++ headers are installed.
+    /// Requires: `apt install libc++-dev libc++abi-dev` on Debian/Ubuntu.
+    pub fn detect_libcxx_include_paths() -> Vec<String> {
+        let possible_paths = vec![
+            // Standard libc++ location
+            "/usr/include/c++/v1".to_string(),
+            // Versioned LLVM installations
+            "/usr/lib/llvm-19/include/c++/v1".to_string(),
+            "/usr/lib/llvm-18/include/c++/v1".to_string(),
+            "/usr/lib/llvm-17/include/c++/v1".to_string(),
+            // Alternative locations
+            "/usr/local/include/c++/v1".to_string(),
+            // Platform-specific
+            "/usr/include/x86_64-linux-gnu".to_string(),
+            // Standard includes
+            "/usr/include".to_string(),
+            "/usr/local/include".to_string(),
+            // LLVM/Clang builtin includes (needed for some intrinsics)
+            "/usr/lib/llvm-19/lib/clang/19/include".to_string(),
+            "/usr/lib/llvm-18/lib/clang/18/include".to_string(),
+        ];
+
+        // Filter to only existing paths
+        possible_paths
+            .into_iter()
+            .filter(|p| std::path::Path::new(p).exists())
+            .collect()
+    }
+
+    /// Check if libc++ headers are available on this system.
+    pub fn is_libcxx_available() -> bool {
+        std::path::Path::new("/usr/include/c++/v1").exists()
+            || std::path::Path::new("/usr/lib/llvm-19/include/c++/v1").exists()
+            || std::path::Path::new("/usr/lib/llvm-18/include/c++/v1").exists()
+    }
+
     /// Build compiler arguments including include paths.
     fn build_compiler_args(&self) -> Vec<CString> {
         let mut args = vec![
@@ -125,6 +197,12 @@ impl ClangParser {
             // Disable builtin limits on stack depth for templates
             CString::new("-ftemplate-depth=1024").unwrap(),
         ];
+
+        // Use libc++ if requested (LLVM's C++ standard library)
+        // This enables cleaner transpilation of STL code compared to libstdc++
+        if self.use_libcxx {
+            args.push(CString::new("-stdlib=libc++").unwrap());
+        }
 
         // If we have system include paths configured, disable the default C++ includes
         // so our stubs are used instead of system headers

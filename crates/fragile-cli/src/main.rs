@@ -33,6 +33,12 @@ enum Commands {
         /// Generate stubs only (function signatures, no bodies)
         #[arg(long)]
         stubs_only: bool,
+
+        /// Use libc++ (LLVM's C++ standard library) instead of libstdc++.
+        /// Recommended for transpiling STL code as libc++ has cleaner code.
+        /// Requires: `apt install libc++-dev libc++abi-dev` on Debian/Ubuntu.
+        #[arg(long)]
+        use_libcxx: bool,
     },
 
     /// Parse C++ files and show AST information (deprecated, use 'transpile')
@@ -80,17 +86,36 @@ fn main() -> Result<()> {
             include,
             define,
             stubs_only,
+            use_libcxx,
         } => {
             let include_paths: Vec<String> = include
                 .iter()
                 .map(|p| p.to_string_lossy().to_string())
                 .collect();
 
-            let parser = fragile_clang::ClangParser::with_paths_and_defines(
-                include_paths,
-                Vec::new(),
-                define.clone(),
-            )
+            // Create parser with optional libc++ support
+            let parser = if use_libcxx {
+                // Check if libc++ is available
+                if !fragile_clang::ClangParser::is_libcxx_available() {
+                    return Err(miette::miette!(
+                        "libc++ not found. Please install it:\n  Debian/Ubuntu: apt install libc++-dev libc++abi-dev"
+                    ));
+                }
+                let system_paths = fragile_clang::ClangParser::detect_libcxx_include_paths();
+                fragile_clang::ClangParser::with_full_options(
+                    include_paths,
+                    system_paths,
+                    define.clone(),
+                    Vec::new(),
+                    true,
+                )
+            } else {
+                fragile_clang::ClangParser::with_paths_and_defines(
+                    include_paths,
+                    Vec::new(),
+                    define.clone(),
+                )
+            }
             .map_err(|e| miette::miette!("Failed to create parser: {}", e))?;
 
             let mut all_output = String::new();
