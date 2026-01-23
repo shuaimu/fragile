@@ -280,11 +280,11 @@ crates/
   - [x] **19.1.3** Map `std::views::take` → `.take()` (~40 LOC) ✅ 2026-01-23
   - [x] **19.1.4** Map `std::views::drop` → `.skip()` (~40 LOC) ✅ 2026-01-23
   - [x] **19.1.5** Map `std::views::reverse` → `.rev()` (~40 LOC) ✅ 2026-01-23
-- [ ] **19.2** Range algorithms
-  - [ ] **19.2.1** Map `std::ranges::for_each` → `.for_each()` (~50 LOC)
-  - [ ] **19.2.2** Map `std::ranges::find` → `.find()` (~50 LOC)
-  - [ ] **19.2.3** Map `std::ranges::sort` → `.sort()` / `.sort_by()` (~60 LOC)
-  - [ ] **19.2.4** Map `std::ranges::copy` → `.collect()` / iterator consumption (~60 LOC)
+- [x] **19.2** Range algorithms ✅ 2026-01-23
+  - [x] **19.2.1** Map `std::ranges::for_each` → `.for_each()` (~50 LOC) ✅ 2026-01-23
+  - [x] **19.2.2** Map `std::ranges::find` → `.find()` (~50 LOC) ✅ 2026-01-23
+  - [x] **19.2.3** Map `std::ranges::sort` → `.sort()` / `.sort_by()` (~60 LOC) ✅ 2026-01-23
+  - [x] **19.2.4** Map `std::ranges::copy` → `.collect()` / iterator consumption (~60 LOC) ✅ 2026-01-23
 - [ ] **19.3** Range concepts
   - [ ] **19.3.1** Map range concepts to Rust Iterator trait bounds (~80 LOC)
 

@@ -588,6 +588,43 @@ impl AstCodeGen {
         None
     }
 
+    /// Check if this is a std::ranges algorithm call.
+    /// Returns (algorithm_name, range_node, optional_arg_node) if it is.
+    fn is_std_ranges_algorithm_call<'a>(node: &'a ClangNode) -> Option<(&'static str, &'a ClangNode, Option<&'a ClangNode>)> {
+        if let ClangNodeKind::CallExpr { .. } = &node.kind {
+            let callee = node.children.first()?;
+            let decl_ref = match &callee.kind {
+                ClangNodeKind::DeclRefExpr { .. } => callee,
+                ClangNodeKind::ImplicitCastExpr { .. } => callee.children.first()?,
+                _ => return None,
+            };
+
+            if let ClangNodeKind::DeclRefExpr { name, .. } = &decl_ref.kind {
+                // Map std::ranges algorithm names to Rust iterator methods
+                let algo_name = match name.as_str() {
+                    "for_each" => Some("for_each"),
+                    "find" => Some("find"),
+                    "find_if" => Some("find"),
+                    "sort" => Some("sort"),
+                    "copy" => Some("collect"),
+                    "any_of" => Some("any"),
+                    "all_of" => Some("all"),
+                    "none_of" => Some("all"), // Handled specially: none_of(f) => !all(f)
+                    "count" => Some("count"),
+                    "count_if" => Some("count"),
+                    _ => None,
+                };
+
+                if let Some(algo) = algo_name {
+                    let range_node = node.children.get(1)?;
+                    let arg_node = node.children.get(2);
+                    return Some((algo, range_node, arg_node));
+                }
+            }
+        }
+        None
+    }
+
     /// Get the variant index by matching the return type to variant template arguments.
     /// The return type from std::get is T& where T is one of the variant types.
     /// For std::get<I>, the return type may be variant_alternative_t<I, variant<...>>.
@@ -4192,6 +4229,59 @@ impl AstCodeGen {
                             if let Some(arg) = arg_node {
                                 let pred_expr = self.expr_to_string(arg);
                                 return format!("{}.iter().{}({})", range_expr, adaptor, pred_expr);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+
+                // Check if this is a std::ranges algorithm call (for_each, find, sort, copy)
+                if let Some((algo, range_node, arg_node)) = Self::is_std_ranges_algorithm_call(node) {
+                    let range_expr = self.expr_to_string(range_node);
+                    match algo {
+                        "for_each" => {
+                            if let Some(arg) = arg_node {
+                                let func_expr = self.expr_to_string(arg);
+                                return format!("{}.iter().for_each({})", range_expr, func_expr);
+                            }
+                        }
+                        "find" => {
+                            if let Some(arg) = arg_node {
+                                let pred_expr = self.expr_to_string(arg);
+                                return format!("{}.iter().find({})", range_expr, pred_expr);
+                            }
+                        }
+                        "sort" => {
+                            // sort takes the range and optionally a comparator
+                            if let Some(arg) = arg_node {
+                                let cmp_expr = self.expr_to_string(arg);
+                                return format!("{}.sort_by({})", range_expr, cmp_expr);
+                            } else {
+                                return format!("{}.sort()", range_expr);
+                            }
+                        }
+                        "collect" => {
+                            // copy → collect into a new container
+                            return format!("{}.iter().cloned().collect::<Vec<_>>()", range_expr);
+                        }
+                        "any" => {
+                            if let Some(arg) = arg_node {
+                                let pred_expr = self.expr_to_string(arg);
+                                return format!("{}.iter().any({})", range_expr, pred_expr);
+                            }
+                        }
+                        "all" => {
+                            if let Some(arg) = arg_node {
+                                let pred_expr = self.expr_to_string(arg);
+                                return format!("{}.iter().all({})", range_expr, pred_expr);
+                            }
+                        }
+                        "count" => {
+                            if let Some(arg) = arg_node {
+                                let pred_expr = self.expr_to_string(arg);
+                                return format!("{}.iter().filter({}).count()", range_expr, pred_expr);
+                            } else {
+                                return format!("{}.iter().count()", range_expr);
                             }
                         }
                         _ => {}
