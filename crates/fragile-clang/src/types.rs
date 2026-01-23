@@ -254,6 +254,9 @@ impl CppType {
                     // 128-bit integer types
                     "__int128" | "__int128_t" => "i128".to_string(),
                     "unsigned __int128" | "__uint128_t" => "u128".to_string(),
+                    // C variadic function support
+                    "va_list" | "__builtin_va_list" | "__va_list_tag" | "struct __va_list_tag" =>
+                        "std::ffi::VaList".to_string(),
                     // NOTE: STL string type mappings removed - types pass through as-is
                     // See Section 22 in TODO.md for rationale
                     _ => {
