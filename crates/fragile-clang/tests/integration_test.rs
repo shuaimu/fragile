@@ -1982,3 +1982,31 @@ fn test_e2e_std_visit() {
 
     assert_eq!(exit_code, 0, "std::visit on variant should work correctly");
 }
+
+/// Test anonymous namespace generates private module with synthetic name.
+#[test]
+fn test_e2e_anonymous_namespace() {
+    let source = r#"
+        namespace {
+            int secret_value = 42;
+
+            int get_secret() {
+                return secret_value;
+            }
+        }
+
+        int main() {
+            // Access items from anonymous namespace (should be auto-imported)
+            int val = get_secret();
+            if (val == 42) {
+                return 0;
+            }
+            return 1;
+        }
+    "#;
+
+    let (exit_code, _stdout, _stderr) = transpile_compile_run(source, "e2e_anon_namespace.cpp")
+        .expect("E2E test failed");
+
+    assert_eq!(exit_code, 0, "Anonymous namespace items should be accessible");
+}

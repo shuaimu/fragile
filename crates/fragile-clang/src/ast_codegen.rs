@@ -77,6 +77,8 @@ pub struct AstCodeGen {
     class_fields: HashMap<String, Vec<(String, CppType)>>,
     /// Collected std::variant types: maps enum name (e.g., "Variant_i32_f64") to its Rust type arguments (e.g., ["i32", "f64"])
     variant_types: HashMap<String, Vec<String>>,
+    /// Counter for generating unique anonymous namespace names
+    anon_namespace_counter: usize,
 }
 
 impl AstCodeGen {
@@ -100,6 +102,7 @@ impl AstCodeGen {
             current_return_type: None,
             class_fields: HashMap::new(),
             variant_types: HashMap::new(),
+            anon_namespace_counter: 0,
         }
     }
 
@@ -1034,10 +1037,28 @@ impl AstCodeGen {
                         self.writeln("");
                     }
                 } else {
-                    // Anonymous namespace - process children at current level
+                    // Anonymous namespace - generate private module with synthetic name
+                    // This mirrors C++ semantics where anonymous namespaces have internal linkage
+                    let anon_name = format!("__anon_{}", self.anon_namespace_counter);
+                    self.anon_namespace_counter += 1;
+
+                    self.writeln(&format!("/// Anonymous namespace (internal linkage)"));
+                    self.writeln(&format!("mod {} {{", anon_name));
+                    self.indent += 1;
+
+                    // Track the synthetic namespace name for path resolution
+                    self.current_namespace.push(anon_name.clone());
                     for child in &node.children {
                         self.generate_top_level(child);
                     }
+                    self.current_namespace.pop();
+
+                    self.indent -= 1;
+                    self.writeln("}");
+
+                    // Auto-use the contents so they're accessible in parent scope
+                    self.writeln(&format!("use {}::*;", anon_name));
+                    self.writeln("");
                 }
             }
             _ => {}

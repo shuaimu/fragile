@@ -289,10 +289,10 @@ crates/
   - [ ] **19.3.1** Map range concepts to Rust Iterator trait bounds (~80 LOC)
 
 ### 20. Anonymous Namespaces (Priority: Low)
-- [ ] **20.1** Anonymous namespace handling
+- [x] **20.1** Anonymous namespace handling ✅ 2026-01-22
   - [x] **20.1.1** Detect anonymous namespace declarations (~30 LOC) ✅ (already implemented)
-  - [ ] **20.1.2** Generate private module with synthetic name (~40 LOC)
-  - [ ] **20.1.3** Auto-use contents in parent scope (~50 LOC)
+  - [x] **20.1.2** Generate private module with synthetic name (~40 LOC) ✅ 2026-01-22
+  - [x] **20.1.3** Auto-use contents in parent scope (~50 LOC) ✅ 2026-01-22 (combined with 20.1.2)
   - [ ] **20.1.4** Mark all items as `pub(super)` for parent access only (~40 LOC)
 
 ### 21. Code Quality Improvements (Priority: Low)
@@ -301,7 +301,7 @@ crates/
   - [ ] **21.1.2** Track unused types during transpilation (~80 LOC)
   - [ ] **21.1.3** Optionally omit unreachable code from output (~60 LOC)
 - [ ] **21.2** Private field enforcement
-  - [ ] **21.2.1** Parse access specifiers (public/private/protected) (~50 LOC)
+  - [x] **21.2.1** Parse access specifiers (public/private/protected) (~50 LOC) ✅ (already implemented)
   - [ ] **21.2.2** Generate `pub(crate)` for protected, no `pub` for private (~60 LOC)
   - [ ] **21.2.3** Generate accessor methods for private fields when needed (~100 LOC)
 
