@@ -2010,3 +2010,42 @@ fn test_e2e_anonymous_namespace() {
 
     assert_eq!(exit_code, 0, "Anonymous namespace items should be accessible");
 }
+
+#[test]
+fn test_e2e_anonymous_struct() {
+    let source = r#"
+        struct Container {
+            int before;
+
+            // Anonymous struct - fields should be accessible directly
+            struct {
+                int x;
+                int y;
+            };
+
+            int after;
+        };
+
+        int main() {
+            Container c;
+            c.before = 1;
+            c.x = 10;     // Direct access to anonymous struct field
+            c.y = 20;     // Direct access to anonymous struct field
+            c.after = 2;
+
+            // Verify all fields are accessible and have correct values
+            if (c.before != 1) return 1;
+            if (c.x != 10) return 2;
+            if (c.y != 20) return 3;
+            if (c.after != 2) return 4;
+
+            // Return sum of anonymous struct fields
+            return c.x + c.y;  // Should return 30
+        }
+    "#;
+
+    let (exit_code, _stdout, _stderr) = transpile_compile_run(source, "e2e_anon_struct.cpp")
+        .expect("E2E test failed");
+
+    assert_eq!(exit_code, 30, "Anonymous struct fields should be flattened and accessible");
+}

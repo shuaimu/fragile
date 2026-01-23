@@ -202,10 +202,10 @@ crates/
   - [x] **12.4.2** Map common task types (cppcoro::task, etc.) - Types pass through; will be transpiled from their headers
 
 ### 13. Anonymous Structs and Unions (Priority: Low)
-- [ ] **13.1** Anonymous struct support
+- [x] **13.1** Anonymous struct support ✅ [26:01:23, 15:30]
   - [x] **13.1.1** Detect anonymous struct declarations in AST (~40 LOC) ✅ 2026-01-22
   - [x] **13.1.2** Generate synthetic name for anonymous struct (e.g., `__anon_LineCol`) (~30 LOC) ✅ 2026-01-22
-  - [ ] **13.1.3** Flatten anonymous struct fields into parent when used inline (~80 LOC)
+  - [x] **13.1.3** Flatten anonymous struct fields into parent when used inline (~80 LOC) ✅ [26:01:23, 15:30] [docs/dev/plan_13_1_3_flatten_anonymous_struct.md]
 - [ ] **13.2** Anonymous union support
   - [ ] **13.2.1** Detect anonymous union declarations in AST (~40 LOC)
   - [ ] **13.2.2** Generate `#[repr(C)] union` with synthetic name (~50 LOC)

@@ -1183,7 +1183,7 @@ impl AstCodeGen {
             self.writeln(&format!("pub {}: Option<Box<{}>>,", storage, vb));
         }
 
-        // Then add derived class fields
+        // Then add derived class fields (including flattened anonymous struct fields)
         let mut fields = Vec::new();
         for child in children {
             if let ClangNodeKind::FieldDecl { name: field_name, ty, .. } = &child.kind {
@@ -1194,6 +1194,21 @@ impl AstCodeGen {
                 };
                 self.writeln(&format!("pub {}: {},", sanitized_name, ty.to_rust_type_str()));
                 fields.push((sanitized_name, ty.clone()));
+            } else if let ClangNodeKind::RecordDecl { name: anon_name, .. } = &child.kind {
+                // Flatten anonymous struct fields into parent
+                if anon_name.starts_with("(anonymous") || anon_name.starts_with("__anon_") {
+                    for anon_child in &child.children {
+                        if let ClangNodeKind::FieldDecl { name: field_name, ty, .. } = &anon_child.kind {
+                            let sanitized_name = if field_name.is_empty() {
+                                "_field".to_string()
+                            } else {
+                                sanitize_identifier(field_name)
+                            };
+                            self.writeln(&format!("pub {}: {},", sanitized_name, ty.to_rust_type_str()));
+                            fields.push((sanitized_name, ty.clone()));
+                        }
+                    }
+                }
             }
         }
         // Store field info for constructor generation (including base fields)
@@ -1488,6 +1503,7 @@ impl AstCodeGen {
         }
 
         // Then collect derived class fields (skip static fields - they become globals)
+        // Also flatten anonymous struct fields into parent
         let mut fields = Vec::new();
         for child in children {
             if let ClangNodeKind::FieldDecl { name: field_name, ty, is_static, .. } = &child.kind {
@@ -1501,6 +1517,24 @@ impl AstCodeGen {
                 };
                 self.writeln(&format!("pub {}: {},", sanitized_name, ty.to_rust_type_str()));
                 fields.push((sanitized_name, ty.clone()));
+            } else if let ClangNodeKind::RecordDecl { name: anon_name, .. } = &child.kind {
+                // Flatten anonymous struct fields into parent
+                if anon_name.starts_with("(anonymous") || anon_name.starts_with("__anon_") {
+                    for anon_child in &child.children {
+                        if let ClangNodeKind::FieldDecl { name: field_name, ty, is_static, .. } = &anon_child.kind {
+                            if *is_static {
+                                continue;
+                            }
+                            let sanitized_name = if field_name.is_empty() {
+                                "_field".to_string()
+                            } else {
+                                sanitize_identifier(field_name)
+                            };
+                            self.writeln(&format!("pub {}: {},", sanitized_name, ty.to_rust_type_str()));
+                            fields.push((sanitized_name, ty.clone()));
+                        }
+                    }
+                }
             }
         }
 
@@ -4755,18 +4789,24 @@ impl AstCodeGen {
                     let base_type = Self::get_expr_type(&node.children[0]);
 
                     // Determine if we need base access and get the correct base field name
+                    // Skip base access for anonymous struct members (they are flattened into parent)
                     let (needs_base_access, base_access) = if let Some(decl_class) = declaring_class {
-                        let base_class_name = Self::extract_class_name(&base_type);
-                        if let Some(name) = base_class_name {
-                            if name != *decl_class {
-                                // Need base access - get correct field for MI support
-                                let access = self.get_base_access_for_class(&name, decl_class);
-                                (true, access)
+                        // Anonymous struct members are flattened - access directly
+                        if decl_class.starts_with("(anonymous") || decl_class.starts_with("__anon_") {
+                            (false, BaseAccess::DirectField(String::new()))
+                        } else {
+                            let base_class_name = Self::extract_class_name(&base_type);
+                            if let Some(name) = base_class_name {
+                                if name != *decl_class {
+                                    // Need base access - get correct field for MI support
+                                    let access = self.get_base_access_for_class(&name, decl_class);
+                                    (true, access)
+                                } else {
+                                    (false, BaseAccess::DirectField(String::new()))
+                                }
                             } else {
                                 (false, BaseAccess::DirectField(String::new()))
                             }
-                        } else {
-                            (false, BaseAccess::DirectField(String::new()))
                         }
                     } else {
                         (false, BaseAccess::DirectField(String::new()))
@@ -4826,7 +4866,10 @@ impl AstCodeGen {
                     let member = sanitize_identifier(member_name);
                     let self_name = if self.use_ctor_self { "__self" } else { "self" };
                     let (needs_base_access, base_access) = if let (Some(current), Some(decl_class)) = (&self.current_class, declaring_class) {
-                        if current != decl_class {
+                        // Anonymous struct members are flattened - access directly
+                        if decl_class.starts_with("(anonymous") || decl_class.starts_with("__anon_") {
+                            (false, BaseAccess::DirectField(String::new()))
+                        } else if current != decl_class {
                             let access = self.get_base_access_for_class(current, decl_class);
                             (true, access)
                         } else {
