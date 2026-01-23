@@ -1797,3 +1797,42 @@ fn test_e2e_string_literals_and_char_casts() {
 
     assert_eq!(exit_code, 0, "String literals and char casts should work correctly");
 }
+
+/// E2E test: Designated initializers (C++20)
+#[test]
+fn test_e2e_designated_initializers() {
+    let source = r#"
+        struct Point {
+            int x;
+            int y;
+            int z;
+        };
+
+        struct Config {
+            int width;
+            int height;
+            bool enabled;
+        };
+
+        int main() {
+            // Basic designated initializer
+            Point p = { .x = 10, .y = 20, .z = 30 };
+            if (p.x != 10 || p.y != 20 || p.z != 30) return 1;
+
+            // Different order (still works because Clang sorts them)
+            Config cfg = { .height = 480, .width = 640, .enabled = true };
+            if (cfg.width != 640 || cfg.height != 480 || !cfg.enabled) return 2;
+
+            // Non-designated initializer (positional)
+            Point q = { 5, 15, 25 };
+            if (q.x != 5 || q.y != 15 || q.z != 25) return 3;
+
+            return 0;
+        }
+    "#;
+
+    let (exit_code, _stdout, _stderr) = transpile_compile_run(source, "e2e_designated_init.cpp")
+        .expect("E2E test failed");
+
+    assert_eq!(exit_code, 0, "Designated initializers should work correctly");
+}

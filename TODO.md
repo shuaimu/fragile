@@ -14,7 +14,7 @@ We just convert the fully-resolved AST to equivalent Rust code.
 ## Current Status
 
 **Grammar Tests**: 20/20 passing
-**E2E Tests**: 56/56 passing
+**E2E Tests**: 57/57 passing
 
 **Working**:
 - Simple functions with control flow (if/else, while, for, do-while, switch, recursion)
@@ -68,6 +68,7 @@ We just convert the fully-resolved AST to equivalent Rust code.
 - Implicit type casts (char→int, int→long, etc. via `as` casts)
 - std::array<T, N> → [T; N] type mapping
 - std::span<T> → &mut [T] / &[T] slice type mapping
+- C++20 designated initializers ({ .x = 10, .y = 20 })
 
 **CLI**:
 ```bash
@@ -136,10 +137,10 @@ crates/
 ### 8. Additional STL Type Mappings (Priority: Medium)
 - [x] **8.1** `std::array<T, N>` → `[T; N]` with proper type extraction ✅ [26:01:22, 17:15]
 - [x] **8.2** `std::span<T>` → `&[T]` slice type mapping ✅ [26:01:22, 17:30]
-- [ ] **8.3** `std::variant<T...>` → Rust enum with variants
+- [ ] **8.3** `std::variant<T...>` → Rust enum with variants (complex: requires synthetic enum generation, variant naming, and visit pattern handling - may need AST-level changes)
 
 ### 9. C++20 Features (Priority: Medium)
-- [ ] **9.1** Designated initializers (`.field = value` syntax)
+- [x] **9.1** Designated initializers (`.field = value` syntax) ✅ [26:01:22, 18:15]
 - [ ] **9.2** Three-way comparison operator (`<=>` spaceship operator)
 
 ### 10. Function Pointers (Priority: Medium)

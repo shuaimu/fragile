@@ -237,7 +237,7 @@ C++ Source → Clang (libclang) → Clang AST → Rust Source → rustc → Bina
 | `constexpr` | ✅ | Evaluated by Clang |
 | `consteval` | ✅ | Evaluated by Clang |
 | Three-way comparison (`<=>`) | ❌ | |
-| Designated initializers | ❌ | |
+| Designated initializers | ✅ | `{ .x = 10 }` syntax |
 
 ## Standard Library Type Mappings
 
@@ -273,7 +273,7 @@ C++ Source → Clang (libclang) → Clang AST → Rust Source → rustc → Bina
 | Feature | Status | Notes |
 |---------|--------|-------|
 | Grammar tests | ✅ | 20/20 passing |
-| E2E tests | ✅ | 56/56 passing |
+| E2E tests | ✅ | 57/57 passing |
 | Compile generated code | ✅ | Automatically verified |
 | Run generated code | ✅ | Exit codes verified |
 
@@ -289,7 +289,7 @@ C++ Source → Clang (libclang) → Clang AST → Rust Source → rustc → Bina
 - Pointers, references, arrays
 - Ternary operator, nested structs
 
-### E2E Tests (56/56)
+### E2E Tests (57/57)
 - Simple functions, factorial, arrays
 - Pointers, references
 - Constructors, destructors (Drop trait)
@@ -312,6 +312,7 @@ C++ Source → Clang (libclang) → Clang AST → Rust Source → rustc → Bina
 - sizeof/alignof operators
 - String literals and char literals
 - Implicit type casts (char→int, etc.)
+- Designated initializers (C++20)
 
 ---
 

@@ -3686,10 +3686,57 @@ impl AstCodeGen {
             ClangNodeKind::InitListExpr { ty } => {
                 // Aggregate initialization
                 if let CppType::Named(name) = ty {
-                    let fields: Vec<String> = node.children.iter()
-                        .map(|c| self.expr_to_string(c))
-                        .collect();
-                    format!("{} {{ {} }}", name, fields.join(", "))
+                    // Check if this is designated initialization (children have MemberRef)
+                    // Designated: { .x = 10, .y = 20 } produces UnexposedExpr(MemberRef, value)
+                    // Non-designated: { 10, 20 } produces IntegerLiteral directly
+                    let mut field_values: Vec<(String, String)> = Vec::new();
+                    let mut has_designators = false;
+
+                    for child in &node.children {
+                        // Check if child is UnexposedExpr wrapper with MemberRef designator
+                        if matches!(&child.kind, ClangNodeKind::Unknown(s) if s == "UnexposedExpr") {
+                            if child.children.len() >= 2 {
+                                if let ClangNodeKind::MemberRef { name: field_name } = &child.children[0].kind {
+                                    // This is a designated initializer
+                                    has_designators = true;
+                                    // The value is the second child (or beyond)
+                                    let value = self.expr_to_string(&child.children[1]);
+                                    field_values.push((field_name.clone(), value));
+                                    continue;
+                                }
+                            }
+                        }
+                        // Non-designated: just get the value
+                        let value = self.expr_to_string(child);
+                        field_values.push((String::new(), value));
+                    }
+
+                    if has_designators {
+                        // All values have field names from designators
+                        let inits: Vec<String> = field_values.iter()
+                            .map(|(f, v)| format!("{}: {}", f, v))
+                            .collect();
+                        format!("{} {{ {} }}", name, inits.join(", "))
+                    } else {
+                        // Try to get field names for this struct (positional)
+                        if let Some(struct_fields) = self.class_fields.get(name) {
+                            let inits: Vec<String> = field_values.iter()
+                                .enumerate()
+                                .map(|(i, (_, v))| {
+                                    if i < struct_fields.len() {
+                                        format!("{}: {}", struct_fields[i].0, v)
+                                    } else {
+                                        v.clone()
+                                    }
+                                })
+                                .collect();
+                            format!("{} {{ {} }}", name, inits.join(", "))
+                        } else {
+                            // Fallback: can't determine field names
+                            let values: Vec<String> = field_values.into_iter().map(|(_, v)| v).collect();
+                            format!("{} {{ {} }}", name, values.join(", "))
+                        }
+                    }
                 } else {
                     let elems: Vec<String> = node.children.iter()
                         .map(|c| self.expr_to_string(c))
