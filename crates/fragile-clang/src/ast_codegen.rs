@@ -4,9 +4,21 @@
 //! without going through an intermediate MIR representation.
 //! This produces cleaner, more idiomatic Rust code.
 
-use crate::ast::{ClangNode, ClangNodeKind, BinaryOp, UnaryOp, CastKind, ConstructorKind, CoroutineInfo, CoroutineKind};
+use crate::ast::{ClangNode, ClangNodeKind, BinaryOp, UnaryOp, CastKind, ConstructorKind, CoroutineInfo, CoroutineKind, AccessSpecifier};
 use crate::types::{CppType, parse_template_args};
 use std::collections::{HashSet, HashMap};
+
+/// Convert C++ access specifier to Rust visibility prefix.
+/// - Public → "pub "
+/// - Protected → "pub(crate) " (accessible within crate, roughly matches protected semantics)
+/// - Private → "" (no visibility prefix, private by default in Rust)
+fn access_to_visibility(access: AccessSpecifier) -> &'static str {
+    match access {
+        AccessSpecifier::Public => "pub ",
+        AccessSpecifier::Protected => "pub(crate) ",
+        AccessSpecifier::Private => "",
+    }
+}
 
 /// Rust reserved keywords that need raw identifier syntax.
 const RUST_KEYWORDS: &[&str] = &[
@@ -1189,25 +1201,27 @@ impl AstCodeGen {
         // Then add derived class fields (including flattened anonymous struct fields)
         let mut fields = Vec::new();
         for child in children {
-            if let ClangNodeKind::FieldDecl { name: field_name, ty, .. } = &child.kind {
+            if let ClangNodeKind::FieldDecl { name: field_name, ty, access, .. } = &child.kind {
                 let sanitized_name = if field_name.is_empty() {
                     "_field".to_string()
                 } else {
                     sanitize_identifier(field_name)
                 };
-                self.writeln(&format!("pub {}: {},", sanitized_name, ty.to_rust_type_str()));
+                let vis = access_to_visibility(*access);
+                self.writeln(&format!("{}{}: {},", vis, sanitized_name, ty.to_rust_type_str()));
                 fields.push((sanitized_name, ty.clone()));
             } else if let ClangNodeKind::RecordDecl { name: anon_name, .. } = &child.kind {
                 // Flatten anonymous struct fields into parent
                 if anon_name.starts_with("(anonymous") || anon_name.starts_with("__anon_") {
                     for anon_child in &child.children {
-                        if let ClangNodeKind::FieldDecl { name: field_name, ty, .. } = &anon_child.kind {
+                        if let ClangNodeKind::FieldDecl { name: field_name, ty, access, .. } = &anon_child.kind {
                             let sanitized_name = if field_name.is_empty() {
                                 "_field".to_string()
                             } else {
                                 sanitize_identifier(field_name)
                             };
-                            self.writeln(&format!("pub {}: {},", sanitized_name, ty.to_rust_type_str()));
+                            let vis = access_to_visibility(*access);
+                            self.writeln(&format!("{}{}: {},", vis, sanitized_name, ty.to_rust_type_str()));
                             fields.push((sanitized_name, ty.clone()));
                         }
                     }
@@ -1217,13 +1231,14 @@ impl AstCodeGen {
                 // In C++, anonymous unions allow direct access to their members from the parent
                 if anon_name.starts_with("(anonymous") || anon_name.starts_with("__anon_union_") {
                     for anon_child in &child.children {
-                        if let ClangNodeKind::FieldDecl { name: field_name, ty, .. } = &anon_child.kind {
+                        if let ClangNodeKind::FieldDecl { name: field_name, ty, access, .. } = &anon_child.kind {
                             let sanitized_name = if field_name.is_empty() {
                                 "_field".to_string()
                             } else {
                                 sanitize_identifier(field_name)
                             };
-                            self.writeln(&format!("pub {}: {},", sanitized_name, ty.to_rust_type_str()));
+                            let vis = access_to_visibility(*access);
+                            self.writeln(&format!("{}{}: {},", vis, sanitized_name, ty.to_rust_type_str()));
                             fields.push((sanitized_name, ty.clone()));
                         }
                     }
@@ -1284,13 +1299,14 @@ impl AstCodeGen {
         self.indent += 1;
 
         for child in children {
-            if let ClangNodeKind::FieldDecl { name: field_name, ty, .. } = &child.kind {
+            if let ClangNodeKind::FieldDecl { name: field_name, ty, access, .. } = &child.kind {
                 let sanitized_name = if field_name.is_empty() {
                     "_field".to_string()
                 } else {
                     sanitize_identifier(field_name)
                 };
-                self.writeln(&format!("pub {}: {},", sanitized_name, ty.to_rust_type_str()));
+                let vis = access_to_visibility(*access);
+                self.writeln(&format!("{}{}: {},", vis, sanitized_name, ty.to_rust_type_str()));
             }
         }
 
@@ -1560,7 +1576,7 @@ impl AstCodeGen {
         // Also flatten anonymous struct fields into parent
         let mut fields = Vec::new();
         for child in children {
-            if let ClangNodeKind::FieldDecl { name: field_name, ty, is_static, .. } = &child.kind {
+            if let ClangNodeKind::FieldDecl { name: field_name, ty, is_static, access, .. } = &child.kind {
                 if *is_static {
                     continue; // Static fields handled separately
                 }
@@ -1569,13 +1585,14 @@ impl AstCodeGen {
                 } else {
                     sanitize_identifier(field_name)
                 };
-                self.writeln(&format!("pub {}: {},", sanitized_name, ty.to_rust_type_str()));
+                let vis = access_to_visibility(*access);
+                self.writeln(&format!("{}{}: {},", vis, sanitized_name, ty.to_rust_type_str()));
                 fields.push((sanitized_name, ty.clone()));
             } else if let ClangNodeKind::RecordDecl { name: anon_name, .. } = &child.kind {
                 // Flatten anonymous struct fields into parent
                 if anon_name.starts_with("(anonymous") || anon_name.starts_with("__anon_") {
                     for anon_child in &child.children {
-                        if let ClangNodeKind::FieldDecl { name: field_name, ty, is_static, .. } = &anon_child.kind {
+                        if let ClangNodeKind::FieldDecl { name: field_name, ty, is_static, access, .. } = &anon_child.kind {
                             if *is_static {
                                 continue;
                             }
@@ -1584,7 +1601,8 @@ impl AstCodeGen {
                             } else {
                                 sanitize_identifier(field_name)
                             };
-                            self.writeln(&format!("pub {}: {},", sanitized_name, ty.to_rust_type_str()));
+                            let vis = access_to_visibility(*access);
+                            self.writeln(&format!("{}{}: {},", vis, sanitized_name, ty.to_rust_type_str()));
                             fields.push((sanitized_name, ty.clone()));
                         }
                     }
@@ -1594,7 +1612,7 @@ impl AstCodeGen {
                 // In C++, anonymous unions allow direct access to their members from the parent
                 if anon_name.starts_with("(anonymous") || anon_name.starts_with("__anon_union_") {
                     for anon_child in &child.children {
-                        if let ClangNodeKind::FieldDecl { name: field_name, ty, is_static, .. } = &anon_child.kind {
+                        if let ClangNodeKind::FieldDecl { name: field_name, ty, is_static, access, .. } = &anon_child.kind {
                             if *is_static {
                                 continue;
                             }
@@ -1603,7 +1621,8 @@ impl AstCodeGen {
                             } else {
                                 sanitize_identifier(field_name)
                             };
-                            self.writeln(&format!("pub {}: {},", sanitized_name, ty.to_rust_type_str()));
+                            let vis = access_to_visibility(*access);
+                            self.writeln(&format!("{}{}: {},", vis, sanitized_name, ty.to_rust_type_str()));
                             fields.push((sanitized_name, ty.clone()));
                         }
                     }
@@ -1796,7 +1815,7 @@ impl AstCodeGen {
 
         let mut fields = Vec::new();
         for child in children {
-            if let ClangNodeKind::FieldDecl { name: field_name, ty, is_static, .. } = &child.kind {
+            if let ClangNodeKind::FieldDecl { name: field_name, ty, is_static, access, .. } = &child.kind {
                 if *is_static {
                     continue;
                 }
@@ -1805,7 +1824,8 @@ impl AstCodeGen {
                 } else {
                     sanitize_identifier(field_name)
                 };
-                self.writeln(&format!("pub {}: {},", sanitized_name, ty.to_rust_type_str()));
+                let vis = access_to_visibility(*access);
+                self.writeln(&format!("{}{}: {},", vis, sanitized_name, ty.to_rust_type_str()));
                 fields.push((sanitized_name, ty.clone()));
             }
         }

@@ -2087,3 +2087,45 @@ fn test_e2e_anonymous_union() {
 
     assert_eq!(exit_code, 42, "Anonymous union fields should be flattened and accessible");
 }
+
+#[test]
+fn test_e2e_access_specifiers() {
+    // Test that C++ access specifiers generate appropriate Rust visibility
+    // Public fields should be pub, private should have no visibility, protected should be pub(crate)
+    let source = r#"
+        class Data {
+        public:
+            int pub_field;
+
+        protected:
+            int prot_field;
+
+        private:
+            int priv_field;
+
+        public:
+            Data() : pub_field(10), prot_field(20), priv_field(30) {}
+
+            // Public method to access private field for testing
+            int get_priv() { return priv_field; }
+            int get_prot() { return prot_field; }
+        };
+
+        int main() {
+            Data d;
+            // Can access public field directly
+            int result = d.pub_field;
+
+            // Access protected and private via public methods
+            result += d.get_prot() + d.get_priv();
+
+            // Should be 10 + 20 + 30 = 60
+            return result;
+        }
+    "#;
+
+    let (exit_code, _stdout, _stderr) = transpile_compile_run(source, "e2e_access_specifiers.cpp")
+        .expect("E2E test failed");
+
+    assert_eq!(exit_code, 60, "Access specifiers should generate appropriate visibility");
+}
