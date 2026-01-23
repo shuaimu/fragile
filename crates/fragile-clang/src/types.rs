@@ -173,7 +173,9 @@ impl CppType {
             CppType::Named(name) => {
                 // Handle special C++ types that don't map directly to Rust
                 match name.as_str() {
-                    "long double" => "f64".to_string(),  // Rust doesn't have long double
+                    "float" => "f32".to_string(),
+                    "double" | "long double" => "f64".to_string(),  // Rust doesn't have long double
+                    "bool" => "bool".to_string(),
                     "long long" | "long long int" => "i64".to_string(),
                     "unsigned long long" | "unsigned long long int" => "u64".to_string(),
                     "long" | "long int" => "i64".to_string(),
@@ -225,6 +227,19 @@ impl CppType {
                             if let Some(inner) = rest.strip_suffix(">") {
                                 let element_type = CppType::Named(inner.trim().to_string());
                                 return format!("Option<{}>", element_type.to_rust_type_str());
+                            }
+                        }
+                        // Handle std::array<T, N> -> [T; N]
+                        if let Some(rest) = name.strip_prefix("std::array<") {
+                            if let Some(inner) = rest.strip_suffix(">") {
+                                // Find the last comma separating element type from size
+                                // Use rfind to handle nested template types like std::array<std::vector<int>, 5>
+                                if let Some(comma_idx) = inner.rfind(", ") {
+                                    let element_str = &inner[..comma_idx];
+                                    let size_str = inner[comma_idx + 2..].trim();
+                                    let element_type = CppType::Named(element_str.trim().to_string());
+                                    return format!("[{}; {}]", element_type.to_rust_type_str(), size_str);
+                                }
                             }
                         }
                         // Handle std::map<K,V> -> BTreeMap<K,V>
@@ -969,6 +984,35 @@ mod tests {
         assert_eq!(
             CppType::Named("std::weak_ptr<MyClass>".to_string()).to_rust_type_str(),
             "Weak<MyClass>"
+        );
+    }
+
+    #[test]
+    fn test_std_array_type_mapping() {
+        // Basic std::array<T, N> -> [T; N]
+        assert_eq!(
+            CppType::Named("std::array<int, 5>".to_string()).to_rust_type_str(),
+            "[i32; 5]"
+        );
+        assert_eq!(
+            CppType::Named("std::array<double, 10>".to_string()).to_rust_type_str(),
+            "[f64; 10]"
+        );
+        assert_eq!(
+            CppType::Named("std::array<char, 256>".to_string()).to_rust_type_str(),
+            "[i8; 256]"
+        );
+
+        // With custom types
+        assert_eq!(
+            CppType::Named("std::array<MyClass, 3>".to_string()).to_rust_type_str(),
+            "[MyClass; 3]"
+        );
+
+        // Nested template types
+        assert_eq!(
+            CppType::Named("std::array<std::vector<int>, 2>".to_string()).to_rust_type_str(),
+            "[Vec<i32>; 2]"
         );
     }
 }

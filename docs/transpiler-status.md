@@ -251,8 +251,8 @@ C++ Source → Clang (libclang) → Clang AST → Rust Source → rustc → Bina
 | `std::shared_ptr<T>` | ✅ | Maps to `Arc<T>` |
 | `std::weak_ptr<T>` | ✅ | Maps to `Weak<T>` |
 | `std::optional<T>` | ✅ | Maps to `Option<T>` |
+| `std::array<T, N>` | ✅ | Maps to `[T; N]` |
 | `std::variant` | ❌ | Should map to enum |
-| `std::array` | ❌ | Should map to `[T; N]` |
 | `std::span` | ❌ | Should map to `&[T]` |
 | I/O streams | ❌ | Should map to `std::io` |
 
