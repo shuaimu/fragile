@@ -86,6 +86,8 @@ pub enum ClangNodeKind {
         is_definition: bool,
         /// Whether the function is declared noexcept
         is_noexcept: bool,
+        /// Whether the function is a C++20 coroutine (contains co_await, co_yield, or co_return)
+        is_coroutine: bool,
     },
     /// Function template declaration
     FunctionTemplateDecl {

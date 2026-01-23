@@ -986,9 +986,9 @@ impl AstCodeGen {
     /// Generate a top-level declaration.
     fn generate_top_level(&mut self, node: &ClangNode) {
         match &node.kind {
-            ClangNodeKind::FunctionDecl { name, mangled_name, return_type, params, is_definition, .. } => {
+            ClangNodeKind::FunctionDecl { name, mangled_name, return_type, params, is_definition, is_coroutine, .. } => {
                 if *is_definition {
-                    self.generate_function(name, mangled_name, return_type, params, &node.children);
+                    self.generate_function(name, mangled_name, return_type, params, *is_coroutine, &node.children);
                 }
             }
             ClangNodeKind::RecordDecl { name, is_class, .. } => {
@@ -1067,7 +1067,7 @@ impl AstCodeGen {
 
     /// Generate a function definition.
     fn generate_function(&mut self, name: &str, mangled_name: &str, return_type: &CppType,
-                         params: &[(String, CppType)], children: &[ClangNode]) {
+                         params: &[(String, CppType)], is_coroutine: bool, children: &[ClangNode]) {
         // Special handling for C++ main function
         let is_main = name == "main" && params.is_empty();
         let func_name = if is_main { "cpp_main" } else { name };
@@ -1111,7 +1111,8 @@ impl AstCodeGen {
             format!(" -> {}", return_type.to_rust_type_str())
         };
 
-        self.writeln(&format!("pub fn {}({}){} {{", sanitize_identifier(func_name), params_str, ret_str));
+        let async_keyword = if is_coroutine { "async " } else { "" };
+        self.writeln(&format!("pub {}fn {}({}){} {{", async_keyword, sanitize_identifier(func_name), params_str, ret_str));
         self.indent += 1;
 
         // Find the compound statement (function body)
@@ -4997,6 +4998,7 @@ mod tests {
                     ],
                     is_definition: true,
                     is_noexcept: false,
+                    is_coroutine: false,
                 },
                 vec![make_node(
                     ClangNodeKind::CompoundStmt,
@@ -5045,6 +5047,7 @@ mod tests {
                     ],
                     is_definition: true,
                     is_noexcept: false,
+                    is_coroutine: false,
                 },
                 vec![make_node(
                     ClangNodeKind::CompoundStmt,

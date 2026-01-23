@@ -590,6 +590,11 @@ impl ClangParser {
 
                     let is_definition = clang_sys::clang_isCursorDefinition(cursor) != 0;
                     let is_noexcept = self.is_function_noexcept(cursor);
+                    let is_coroutine = if is_definition {
+                        self.contains_coroutine_expressions(cursor)
+                    } else {
+                        false
+                    };
 
                     ClangNodeKind::FunctionDecl {
                         name,
@@ -598,6 +603,7 @@ impl ClangParser {
                         params,
                         is_definition,
                         is_noexcept,
+                        is_coroutine,
                     }
                 }
 
@@ -2116,6 +2122,34 @@ impl ClangParser {
             );
 
             data.ty
+        }
+    }
+
+    /// Check if a function body contains coroutine expressions (co_await, co_yield, co_return).
+    fn contains_coroutine_expressions(&self, cursor: clang_sys::CXCursor) -> bool {
+        unsafe {
+            let mut found = false;
+            let found_ptr: *mut bool = &mut found;
+
+            extern "C" fn visitor(
+                child: clang_sys::CXCursor,
+                _parent: clang_sys::CXCursor,
+                client_data: clang_sys::CXClientData,
+            ) -> clang_sys::CXChildVisitResult {
+                let found_ptr = client_data as *mut bool;
+                let kind = unsafe { clang_sys::clang_getCursorKind(child) };
+
+                // Check for coroutine expressions
+                // CXCursor_CoawaitExpr = 281, CXCursor_CoyieldExpr = 282, CXCursor_CoreturnStmt = 279
+                if kind == 281 || kind == 282 || kind == 279 {
+                    unsafe { *found_ptr = true };
+                    return clang_sys::CXChildVisit_Break;
+                }
+                clang_sys::CXChildVisit_Recurse
+            }
+
+            clang_sys::clang_visitChildren(cursor, visitor, found_ptr as clang_sys::CXClientData);
+            found
         }
     }
 
