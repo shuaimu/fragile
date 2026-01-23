@@ -67,6 +67,7 @@ We just convert the fully-resolved AST to equivalent Rust code.
 - Character literals ('a' → 65i8 with proper type)
 - Implicit type casts (char→int, int→long, etc. via `as` casts)
 - std::array<T, N> → [T; N] type mapping
+- std::span<T> → &mut [T] / &[T] slice type mapping
 
 **CLI**:
 ```bash
@@ -134,7 +135,7 @@ crates/
 
 ### 8. Additional STL Type Mappings (Priority: Medium)
 - [x] **8.1** `std::array<T, N>` → `[T; N]` with proper type extraction ✅ [26:01:22, 17:15]
-- [ ] **8.2** `std::span<T>` → `&[T]` slice type mapping
+- [x] **8.2** `std::span<T>` → `&[T]` slice type mapping ✅ [26:01:22, 17:30]
 - [ ] **8.3** `std::variant<T...>` → Rust enum with variants
 
 ### 9. C++20 Features (Priority: Medium)

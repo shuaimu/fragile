@@ -242,6 +242,41 @@ impl CppType {
                                 }
                             }
                         }
+                        // Handle std::span<T> -> &[T] / &mut [T]
+                        if let Some(rest) = name.strip_prefix("std::span<") {
+                            if let Some(inner) = rest.strip_suffix(">") {
+                                // Handle dynamic vs static extent: "int" or "int, 5" (ignore extent)
+                                let element_str = if let Some(comma_idx) = inner.rfind(", ") {
+                                    let after_comma = inner[comma_idx + 2..].trim();
+                                    // Check if the part after comma is a number (extent) - ignore it
+                                    if after_comma.chars().all(|c| c.is_ascii_digit() || c == '_') {
+                                        &inner[..comma_idx]
+                                    } else {
+                                        inner
+                                    }
+                                } else {
+                                    inner
+                                };
+
+                                let element_str = element_str.trim();
+
+                                // Check for const element type
+                                let (is_const, element_type_str) = if let Some(rest) = element_str.strip_prefix("const ") {
+                                    (true, rest.trim())
+                                } else if element_str.ends_with(" const") {
+                                    (true, element_str.strip_suffix(" const").unwrap().trim())
+                                } else {
+                                    (false, element_str)
+                                };
+
+                                let element_type = CppType::Named(element_type_str.to_string());
+                                if is_const {
+                                    return format!("&[{}]", element_type.to_rust_type_str());
+                                } else {
+                                    return format!("&mut [{}]", element_type.to_rust_type_str());
+                                }
+                            }
+                        }
                         // Handle std::map<K,V> -> BTreeMap<K,V>
                         if let Some(rest) = name.strip_prefix("std::map<") {
                             // For now, map key-value pairs directly
@@ -1013,6 +1048,45 @@ mod tests {
         assert_eq!(
             CppType::Named("std::array<std::vector<int>, 2>".to_string()).to_rust_type_str(),
             "[Vec<i32>; 2]"
+        );
+    }
+
+    #[test]
+    fn test_std_span_type_mapping() {
+        // Dynamic extent, mutable element type -> &mut [T]
+        assert_eq!(
+            CppType::Named("std::span<int>".to_string()).to_rust_type_str(),
+            "&mut [i32]"
+        );
+        assert_eq!(
+            CppType::Named("std::span<double>".to_string()).to_rust_type_str(),
+            "&mut [f64]"
+        );
+
+        // Const element type -> &[T]
+        assert_eq!(
+            CppType::Named("std::span<const int>".to_string()).to_rust_type_str(),
+            "&[i32]"
+        );
+        assert_eq!(
+            CppType::Named("std::span<const char>".to_string()).to_rust_type_str(),
+            "&[i8]"
+        );
+
+        // With static extent (ignored, just extracts element type)
+        assert_eq!(
+            CppType::Named("std::span<int, 10>".to_string()).to_rust_type_str(),
+            "&mut [i32]"
+        );
+        assert_eq!(
+            CppType::Named("std::span<const double, 5>".to_string()).to_rust_type_str(),
+            "&[f64]"
+        );
+
+        // Custom types
+        assert_eq!(
+            CppType::Named("std::span<MyClass>".to_string()).to_rust_type_str(),
+            "&mut [MyClass]"
         );
     }
 }
