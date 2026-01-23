@@ -180,10 +180,10 @@ crates/
   - [x] **11.2.2** `operator>>` for istream → `read_line()` + parsing (~100 LOC) ✅ 2026-01-22
   - [x] **11.2.3** Handle chained `<<`/`>>` operators (~50 LOC) ✅ 2026-01-22
   - [x] **11.2.3a** Handle `std::endl` → newline in writeln!() ✅ 2026-01-22
-- [ ] **11.3** String streams
-  - [ ] **11.3.1** `std::stringstream` → `String` with cursor (~80 LOC)
-  - [ ] **11.3.2** `std::ostringstream` → `String` builder (~60 LOC)
-  - [ ] **11.3.3** `std::istringstream` → `&str` cursor (~60 LOC)
+- [x] **11.3** String streams ✅ 2026-01-22
+  - [x] **11.3.1** `std::stringstream` → `std::io::Cursor<Vec<u8>>` type mapping ✅ 2026-01-22
+  - [x] **11.3.2** `std::ostringstream` → `String` type mapping ✅ 2026-01-22
+  - [x] **11.3.3** `std::istringstream` → `std::io::Cursor<String>` type mapping ✅ 2026-01-22
 - [ ] **11.4** File streams
   - [ ] **11.4.1** `std::ofstream` → `std::fs::File` with Write (~80 LOC)
   - [ ] **11.4.2** `std::ifstream` → `std::fs::File` with Read (~80 LOC)

@@ -417,6 +417,30 @@ impl CppType {
                            check_name.starts_with("basic_iostream<char") {
                             return "Box<dyn std::io::Read + std::io::Write>".to_string();
                         }
+                        // Handle std::stringstream -> std::io::Cursor<Vec<u8>>
+                        // stringstream is both input and output on an in-memory buffer
+                        if check_name.starts_with("std::stringstream") ||
+                           check_name.starts_with("stringstream") ||
+                           check_name.starts_with("std::basic_stringstream<char") ||
+                           check_name.starts_with("basic_stringstream<char") {
+                            return "std::io::Cursor<Vec<u8>>".to_string();
+                        }
+                        // Handle std::ostringstream -> String
+                        // ostringstream is output-only to a string buffer
+                        if check_name.starts_with("std::ostringstream") ||
+                           check_name.starts_with("ostringstream") ||
+                           check_name.starts_with("std::basic_ostringstream<char") ||
+                           check_name.starts_with("basic_ostringstream<char") {
+                            return "String".to_string();
+                        }
+                        // Handle std::istringstream -> std::io::Cursor<&str>
+                        // istringstream is input-only from a string
+                        if check_name.starts_with("std::istringstream") ||
+                           check_name.starts_with("istringstream") ||
+                           check_name.starts_with("std::basic_istringstream<char") ||
+                           check_name.starts_with("basic_istringstream<char") {
+                            return "std::io::Cursor<String>".to_string();
+                        }
                         // Handle std::variant<T1, T2, ...> -> Variant_T1_T2_...
                         // This generates a synthetic enum name that will be defined separately
                         // Handle both "std::variant<...>" and "variant<...>" (libclang sometimes omits std::)
@@ -1300,6 +1324,36 @@ mod tests {
         assert_eq!(
             CppType::Named("basic_iostream<char>".to_string()).to_rust_type_str(),
             "Box<dyn std::io::Read + std::io::Write>"
+        );
+
+        // std::stringstream -> std::io::Cursor<Vec<u8>>
+        assert_eq!(
+            CppType::Named("std::stringstream".to_string()).to_rust_type_str(),
+            "std::io::Cursor<Vec<u8>>"
+        );
+        assert_eq!(
+            CppType::Named("stringstream".to_string()).to_rust_type_str(),
+            "std::io::Cursor<Vec<u8>>"
+        );
+
+        // std::ostringstream -> String
+        assert_eq!(
+            CppType::Named("std::ostringstream".to_string()).to_rust_type_str(),
+            "String"
+        );
+        assert_eq!(
+            CppType::Named("ostringstream".to_string()).to_rust_type_str(),
+            "String"
+        );
+
+        // std::istringstream -> std::io::Cursor<String>
+        assert_eq!(
+            CppType::Named("std::istringstream".to_string()).to_rust_type_str(),
+            "std::io::Cursor<String>"
+        );
+        assert_eq!(
+            CppType::Named("istringstream".to_string()).to_rust_type_str(),
+            "std::io::Cursor<String>"
         );
     }
 
