@@ -305,14 +305,24 @@ crates/
 
 **Goal**: Remove special-case STL type mappings. The C++ standard library should be transpiled exactly like any other C++ code - no special treatment.
 
-**Key Principle**: When user code `#include`s `<vector>`, Clang parses the libc++ headers, and we transpile whatever Clang gives us. STL is just C++ code.
+**Key Principle**: We require **all C++ source code** to transpile - we cannot link against system libraries. The STL must be vendored and transpiled along with user code.
 
-**STL Implementation**: We use **libc++ (LLVM)** as the standard library source because:
+**STL Implementation**: We vendor **libc++ (LLVM)** source code because:
 - Designed to work with Clang (which we use for parsing)
 - Cleaner, more readable codebase than libstdc++
 - Fewer GCC-specific compiler intrinsics
-- Better header-only support
+- Fully open source (Apache 2.0 with LLVM exception)
 - Modern C++ standards adopted quickly and cleanly
+
+**Why we need full source (not just headers)**:
+- We transpile to Rust source, not object code - cannot link against `libc++.so`
+- Header-only parts (most containers, algorithms) work directly
+- Non-header parts (`iostream`, `locale`, some `string` functions) need `src/` transpilation
+- OS interface code (I/O, threading) needs Rust implementations
+
+**libc++ source**: https://github.com/llvm/llvm-project/tree/main/libcxx
+- `include/` - headers (templates, inline functions)
+- `src/` - compiled library source (must also be transpiled)
 
 ### Current State (to be removed)
 The current approach in `crates/fragile-clang/src/types.rs:183-580` has special-case mappings:
@@ -346,40 +356,83 @@ The current approach in `crates/fragile-clang/src/types.rs:183-580` has special-
   - [x] **22.2.2** `std::string` stays as `std_string` (awaiting libc++ transpilation)
   - [x] **22.2.3** All STL types pass through - full transpilation depends on Phase 2-4
 
-#### Phase 2: Configure libc++ as Default STL
-- [x] **22.3** Set up libc++ for transpilation ✅ 2026-01-23
-  - [x] **22.3.1** Add `-stdlib=libc++` flag to Clang invocation ✅
-  - [x] **22.3.2** Document libc++ installation requirements in CLAUDE.md ✅
-  - [x] **22.3.3** Handle libc++ include paths (`/usr/include/c++/v1/` etc.) ✅
+#### Phase 2: Vendor libc++ Source Code
+- [x] **22.3** Vendor libc++ from LLVM project ✅ [26:01:23, 11:15] [docs/dev/plan_22_3_libc++_setup.md]
+  - [x] **22.3.1** Add libc++ as git submodule at `vendor/llvm-project/libcxx` (sparse checkout)
+  - [x] **22.3.2** Include both `include/` (headers) and `src/` (library source)
+  - [x] **22.3.3** Submodule tracks LLVM main branch (commit f091be6d5, Jan 2026)
+  - [x] **22.3.4** Document license (Apache 2.0 with LLVM exception)
 
-- [x] **22.4** Handle libc++ implementation patterns ✅ 2026-01-23
-  - [x] **22.4.1** Handle `_LIBCPP_*` macros and conditionals - Handled by Clang preprocessing ✅
-  - [x] **22.4.2** Handle `__` prefixed internal identifiers - Preserved as valid Rust identifiers ✅
-  - [x] **22.4.3** Handle inline namespaces (`std::__1::`) - Strip ABI versioning namespaces ✅
+- [ ] **22.4** Configure build to use vendored libc++
+  - [ ] **22.4.1** Point Clang to vendored `include/` directory
+  - [ ] **22.4.2** Transpile `src/*.cpp` files as part of STL support
+  - [ ] **22.4.3** Handle libc++ build configuration macros (`_LIBCPP_*`)
 
-#### Phase 3: Fix Transpiler Gaps Exposed by libc++ Headers
-- [ ] **22.5** Handle STL implementation patterns (same fixes benefit all C++ code)
-  - [ ] **22.5.1** Handle complex template metaprogramming patterns
-  - [ ] **22.5.2** Handle allocator rebinding and traits
-  - [ ] **22.5.3** Handle type traits and SFINAE patterns
+- [ ] **22.5** Categorize libc++ components by transpilation complexity
+  - [ ] **22.5.1** Header-only (easy): `<vector>`, `<map>`, `<algorithm>`, `<memory>`, etc.
+  - [ ] **22.5.2** Partial src (medium): `<string>`, `<locale>`, `<regex>`
+  - [ ] **22.5.3** OS interface (hard): `<iostream>`, `<fstream>`, `<thread>`, `<mutex>`
+  - [ ] **22.5.4** Create priority list based on common usage
 
-- [x] **22.6** Template instantiation (no special handling - Clang does the work) ✅ 2026-01-23
-  - [x] **22.6.1** Clang instantiates templates when used; we transpile the result ✅
-  - [x] **22.6.2** Verify explicit instantiations work correctly ✅
+#### Phase 3: Handle libc++ Implementation Patterns
+- [x] **22.6** Handle libc++ code patterns ✅ 2026-01-23
+  - [x] **22.6.1** Handle `_LIBCPP_*` macros and conditionals - Handled by Clang preprocessing ✅
+  - [x] **22.6.2** Handle `__` prefixed internal identifiers - Preserved as valid Rust identifiers ✅
+  - [x] **22.6.3** Handle inline namespaces (`std::__1::`) - Strip ABI versioning namespaces ✅
 
-#### Phase 4: Update Tests
-- [x] **22.7** Update existing tests ✅ 2026-01-23
-  - [x] **22.7.1** Update tests expecting `Vec<T>` to expect pass-through type ✅
-  - [x] **22.7.2** Update tests expecting `String` to expect pass-through type ✅
-  - [x] **22.7.3** Update tests expecting `HashMap`/`BTreeMap` to expect pass-through types ✅
-  - [x] **22.7.4** Update tests expecting `Box`/`Arc`/`Weak` to expect pass-through types ✅
+#### Phase 4: Fix Transpiler Gaps Exposed by STL Code
+- [ ] **22.7** Handle `Discriminant` expressions (constexpr/template constants)
+  - [ ] **22.7.1** Parse Clang `Discriminant` nodes for constant values
+  - [ ] **22.7.2** Generate valid Rust constant expressions for static initializers
+  - [ ] **22.7.3** Handle template-dependent constant expressions
 
-- [ ] **22.8** Add new E2E tests for STL usage
-  - [ ] **22.8.1** Test `std::vector` operations (push_back, iterator, etc.)
-  - [ ] **22.8.2** Test `std::string` operations
-  - [ ] **22.8.3** Test `std::map`/`std::unordered_map` operations
-  - [ ] **22.8.4** Test smart pointer usage
-  - [ ] **22.8.5** Test STL algorithms (std::sort, std::find, etc.)
+- [ ] **22.8** Implement compiler builtin functions
+  - [ ] **22.8.1** `__builtin_is_constant_evaluated()` → `false` (runtime always)
+  - [ ] **22.8.2** `__builtin_memset` → `std::ptr::write_bytes`
+  - [ ] **22.8.3** `__builtin_memcpy` → `std::ptr::copy_nonoverlapping`
+  - [ ] **22.8.4** `__builtin_memmove` → `std::ptr::copy`
+  - [ ] **22.8.5** Other builtins as encountered
+
+- [ ] **22.9** Fix duplicate struct definitions from template specializations
+  - [ ] **22.9.1** Generate unique names for each template instantiation
+  - [ ] **22.9.2** Use mangled names or type parameters in struct names
+  - [ ] **22.9.3** Deduplicate identical instantiations
+
+- [ ] **22.10** Fix invalid type names in generated code
+  - [ ] **22.10.1** Convert `long` → `i64`, `unsigned_long_long` → `u64`, etc.
+  - [ ] **22.10.2** Convert `float`/`double` in generic contexts to valid Rust
+  - [ ] **22.10.3** Handle `__int128` and other extended types
+
+- [ ] **22.11** Fix template syntax in generated Rust
+  - [ ] **22.11.1** Convert `std_vector<int>` to monomorphized name `std_vector_int`
+  - [ ] **22.11.2** Or convert to Rust generics `std_vector::<i32>` where appropriate
+  - [ ] **22.11.3** Handle nested templates correctly
+
+- [x] **22.12** Template instantiation (no special handling - Clang does the work) ✅ 2026-01-23
+  - [x] **22.12.1** Clang instantiates templates when used; we transpile the result ✅
+  - [x] **22.12.2** Verify explicit instantiations work correctly ✅
+
+#### Phase 5: OS Interface Layer (for I/O, threading)
+- [ ] **22.13** Implement Rust backends for OS-dependent STL components
+  - [ ] **22.13.1** File I/O: map libc++ `<fstream>` to Rust `std::fs`
+  - [ ] **22.13.2** Console I/O: map `std::cout`/`std::cin` to Rust `std::io`
+  - [ ] **22.13.3** Threading: map `<thread>` to Rust `std::thread`
+  - [ ] **22.13.4** Mutexes: map `<mutex>` to Rust `std::sync`
+  - [ ] **22.13.5** Atomics: map `<atomic>` to Rust `std::sync::atomic`
+
+#### Phase 6: Update Tests
+- [x] **22.14** Update existing tests ✅ 2026-01-23
+  - [x] **22.14.1** Update tests expecting `Vec<T>` to expect pass-through type ✅
+  - [x] **22.14.2** Update tests expecting `String` to expect pass-through type ✅
+  - [x] **22.14.3** Update tests expecting `HashMap`/`BTreeMap` to expect pass-through types ✅
+  - [x] **22.14.4** Update tests expecting `Box`/`Arc`/`Weak` to expect pass-through types ✅
+
+- [ ] **22.15** Add new E2E tests for STL usage
+  - [ ] **22.15.1** Test `std::vector` operations (push_back, iterator, etc.)
+  - [ ] **22.15.2** Test `std::string` operations
+  - [ ] **22.15.3** Test `std::map`/`std::unordered_map` operations
+  - [ ] **22.15.4** Test smart pointer usage
+  - [ ] **22.15.5** Test STL algorithms (std::sort, std::find, etc.)
 
 ### Why libc++ Over libstdc++
 

@@ -1,72 +1,63 @@
-# Plan: Task 22.3 - Set up libc++ for transpilation
+# Plan: Task 22.3 - Vendor libc++ Source Code
 
 ## Objective
-Add support for using libc++ (LLVM's C++ standard library) instead of libstdc++ for transpilation.
 
-## Tasks
+Vendor libc++ (LLVM's C++ standard library) for transpilation. The goal is to transpile
+libc++ source code to Rust, rather than using special-case STL type mappings.
 
-### 22.3.1 Add `-stdlib=libc++` flag to Clang invocation (~40 LOC)
+## Status: Complete ✅
 
-1. Add `use_libcxx: bool` field to `ClangParser` struct
-2. Update `build_compiler_args()` to add `-stdlib=libc++` when enabled
-3. Add constructor variant `with_libcxx()` or similar
+All subtasks have been completed:
 
-### 22.3.2 Document libc++ installation requirements (~30 LOC)
+- **22.3.1** ✅ libc++ added via llvm-project git submodule at `vendor/llvm-project/libcxx`
+- **22.3.2** ✅ Both `include/` (headers) and `src/` (library source) included via sparse checkout
+- **22.3.3** ✅ Submodule tracks LLVM main branch (commit f091be6d5, Jan 2026)
+- **22.3.4** ✅ License documented below
 
-1. Update README or CLAUDE.md with installation instructions
-2. For Ubuntu/Debian: `sudo apt install libc++-dev libc++abi-dev`
+## Vendored libc++ Structure
 
-### 22.3.3 Handle libc++ include paths (~50 LOC)
-
-1. Add `detect_libcxx_include_paths()` function
-2. Search for libc++ headers at common locations:
-   - `/usr/include/c++/v1/` (standard location)
-   - `/usr/lib/llvm-{18,19}/include/c++/v1/` (versioned)
-3. Use `-isystem` to include libc++ paths
-
-## Implementation Details
-
-### Changes to parse.rs
-
-```rust
-// Add field to ClangParser
-pub struct ClangParser {
-    // ... existing fields ...
-    use_libcxx: bool,
-}
-
-// Add libc++ path detection
-fn detect_libcxx_include_paths() -> Vec<String> {
-    let candidates = [
-        "/usr/include/c++/v1",
-        "/usr/lib/llvm-19/include/c++/v1",
-        "/usr/lib/llvm-18/include/c++/v1",
-    ];
-    candidates.iter()
-        .filter(|p| Path::new(p).exists())
-        .map(|s| s.to_string())
-        .collect()
-}
-
-// Update build_compiler_args
-fn build_compiler_args(&self) -> Vec<CString> {
-    let mut args = vec![/* ... existing ... */];
-
-    if self.use_libcxx {
-        args.push("-stdlib=libc++");
-    }
-    // ...
-}
+```
+vendor/llvm-project/
+├── libcxx/
+│   ├── include/    # Header files (templates, inline functions)
+│   ├── src/        # Source files (compiled library components)
+│   └── LICENSE.TXT # Apache 2.0 with LLVM Exception
+└── LICENSE.TXT     # Apache 2.0 with LLVM Exception
 ```
 
-### Changes to CLI
+The submodule uses sparse checkout to only fetch the `libcxx` directory.
 
-Add `--use-libcxx` flag to enable libc++ mode.
+## License
 
-## Testing
+**libc++ is licensed under the Apache License v2.0 with LLVM Exceptions.**
 
-1. Test that libc++ headers are found when installed
-2. Test transpilation with libc++ for simple STL usage
-3. Verify error handling when libc++ is not installed
+This is a permissive license that allows:
+- Commercial use
+- Modification
+- Distribution
+- Patent use
+- Private use
 
-## Estimated LOC: ~100-120
+The LLVM Exception allows linking against compiled LLVM code without the
+requirement to release source code under certain conditions.
+
+Full license text: `vendor/llvm-project/libcxx/LICENSE.TXT`
+
+## System libc++ Support (Separate Feature)
+
+In addition to the vendored source, the transpiler also supports using system-installed
+libc++ via the `--use-libcxx` CLI flag. This:
+
+- Adds `-stdlib=libc++` to Clang invocation
+- Auto-detects libc++ include paths
+- Requires `apt install libc++-dev libc++abi-dev` on Debian/Ubuntu
+
+This feature is useful for parsing C++ code that uses STL, but the long-term goal
+is to transpile libc++ itself so no system dependencies are needed.
+
+## Next Steps
+
+The vendored libc++ source will be used in Phase 4 (Task 22.7+) to:
+1. Transpile libc++ implementation to Rust
+2. Replace special-case STL mappings with actual transpiled code
+3. Achieve full STL compatibility through transpilation
