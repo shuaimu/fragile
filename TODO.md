@@ -368,11 +368,11 @@ The current approach in `crates/fragile-clang/src/types.rs:183-580` has special-
   - [ ] **22.4.2** Transpile `src/*.cpp` files as part of STL support (deferred - not needed until STL feature implementation)
   - [x] **22.4.3** Handle libc++ build configuration macros (`_LIBCPP_*`) - Added `_LIBCPP_HAS_NO_PRAGMA_SYSTEM_HEADER`
 
-- [ ] **22.5** Categorize libc++ components by transpilation complexity
-  - [ ] **22.5.1** Header-only (easy): `<vector>`, `<map>`, `<algorithm>`, `<memory>`, etc.
-  - [ ] **22.5.2** Partial src (medium): `<string>`, `<locale>`, `<regex>`
-  - [ ] **22.5.3** OS interface (hard): `<iostream>`, `<fstream>`, `<thread>`, `<mutex>`
-  - [ ] **22.5.4** Create priority list based on common usage
+- [x] **22.5** Categorize libc++ components by transpilation complexity ✅ [26:01:23, 11:45] [docs/dev/plan_22_5_libcxx_categorization.md]
+  - [x] **22.5.1** Header-only (easy): `<vector>`, `<map>`, `<algorithm>`, `<memory>`, etc. - ~40 headers categorized
+  - [x] **22.5.2** Partial src (medium): `<string>`, `<locale>`, `<regex>` - ~20 components with src files
+  - [x] **22.5.3** OS interface (hard): `<iostream>`, `<fstream>`, `<thread>`, `<mutex>` - ~15 OS-dependent components
+  - [x] **22.5.4** Create priority list based on common usage - 4-tier priority list created
 
 #### Phase 3: Handle libc++ Implementation Patterns
 - [x] **22.6** Handle libc++ code patterns ✅ 2026-01-23
