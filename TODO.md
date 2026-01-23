@@ -231,7 +231,7 @@ crates/
 
 ### 15. Variadic Functions (Priority: Low)
 - [ ] **15.1** C-style variadic functions
-  - [ ] **15.1.1** Detect variadic function declarations (`...` parameter) (~30 LOC)
+  - [x] **15.1.1** Detect variadic function declarations (`...` parameter) (~30 LOC) ✅ (already implemented)
   - [ ] **15.1.2** Map `va_list` to Rust's `std::ffi::VaList` (~50 LOC)
   - [ ] **15.1.3** Map `va_start`/`va_arg`/`va_end` to VaList methods (~80 LOC)
   - [ ] **15.1.4** Generate `extern "C"` with `...` for variadic functions (~40 LOC)
@@ -290,7 +290,7 @@ crates/
 
 ### 20. Anonymous Namespaces (Priority: Low)
 - [ ] **20.1** Anonymous namespace handling
-  - [ ] **20.1.1** Detect anonymous namespace declarations (~30 LOC)
+  - [x] **20.1.1** Detect anonymous namespace declarations (~30 LOC) ✅ (already implemented)
   - [ ] **20.1.2** Generate private module with synthetic name (~40 LOC)
   - [ ] **20.1.3** Auto-use contents in parent scope (~50 LOC)
   - [ ] **20.1.4** Mark all items as `pub(super)` for parent access only (~40 LOC)
