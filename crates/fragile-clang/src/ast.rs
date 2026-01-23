@@ -69,6 +69,31 @@ pub enum CaptureDefault {
     ByRef,
 }
 
+/// Kind of C++20 coroutine based on its return type and usage.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CoroutineKind {
+    /// Async coroutine (uses co_await) → maps to async fn
+    Async,
+    /// Generator coroutine (uses co_yield) → maps to Iterator
+    Generator,
+    /// Task coroutine (uses co_return only) → basic async task
+    Task,
+    /// Unknown or custom coroutine type
+    #[default]
+    Custom,
+}
+
+/// Information about a C++20 coroutine extracted from its return type.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CoroutineInfo {
+    /// The kind of coroutine based on return type analysis
+    pub kind: CoroutineKind,
+    /// The value type for the coroutine (T in Task<T> or Generator<T>)
+    pub value_type: Option<CppType>,
+    /// The original return type spelling (for debugging)
+    pub return_type_spelling: String,
+}
+
 /// Kinds of Clang AST nodes we care about.
 #[derive(Debug)]
 pub enum ClangNodeKind {
@@ -88,6 +113,8 @@ pub enum ClangNodeKind {
         is_noexcept: bool,
         /// Whether the function is a C++20 coroutine (contains co_await, co_yield, or co_return)
         is_coroutine: bool,
+        /// Coroutine-specific information extracted from return type (if is_coroutine is true)
+        coroutine_info: Option<CoroutineInfo>,
     },
     /// Function template declaration
     FunctionTemplateDecl {

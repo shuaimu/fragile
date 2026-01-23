@@ -2,7 +2,7 @@
 
 use crate::ast::{
     AccessSpecifier, BinaryOp, CaptureDefault, CastKind, ClangAst, ClangNode, ClangNodeKind,
-    ConstructorKind, Requirement, SourceLocation, UnaryOp,
+    ConstructorKind, CoroutineInfo, CoroutineKind, Requirement, SourceLocation, UnaryOp,
 };
 use crate::types::CppType;
 use miette::{miette, Result};
@@ -596,6 +596,13 @@ impl ClangParser {
                         false
                     };
 
+                    // Extract coroutine info from return type if this is a coroutine
+                    let coroutine_info = if is_coroutine {
+                        self.extract_coroutine_info(&return_type, cursor)
+                    } else {
+                        None
+                    };
+
                     ClangNodeKind::FunctionDecl {
                         name,
                         mangled_name,
@@ -604,6 +611,7 @@ impl ClangParser {
                         is_definition,
                         is_noexcept,
                         is_coroutine,
+                        coroutine_info,
                     }
                 }
 
@@ -1892,6 +1900,256 @@ impl ClangParser {
             );
 
             data.ty
+        }
+    }
+
+    /// Extract coroutine information from the function's return type.
+    /// This analyzes the return type to determine the coroutine kind (Async, Generator, Task)
+    /// and extract the value type (T in Task<T> or Generator<T>).
+    fn extract_coroutine_info(
+        &self,
+        return_type: &CppType,
+        cursor: clang_sys::CXCursor,
+    ) -> Option<CoroutineInfo> {
+        // Get the return type spelling for pattern matching
+        let type_spelling = match return_type {
+            CppType::Named(name) => name.clone(),
+            _ => {
+                // For non-named types, fall back to checking what coroutine expressions are used
+                return Some(self.infer_coroutine_kind_from_body(cursor));
+            }
+        };
+
+        // Check for common coroutine return type patterns
+        // Task-like types (async coroutines)
+        let async_patterns = [
+            "Task",
+            "task",
+            "std::task",
+            "cppcoro::task",
+            "folly::coro::Task",
+            "boost::asio::awaitable",
+        ];
+
+        // Generator-like types
+        let generator_patterns = [
+            "Generator",
+            "generator",
+            "std::generator",
+            "cppcoro::generator",
+        ];
+
+        // Check async patterns first
+        for pattern in &async_patterns {
+            if let Some(value_type) = self.extract_template_value_type(&type_spelling, pattern) {
+                return Some(CoroutineInfo {
+                    kind: CoroutineKind::Async,
+                    value_type: Some(value_type),
+                    return_type_spelling: type_spelling,
+                });
+            }
+        }
+
+        // Check generator patterns
+        for pattern in &generator_patterns {
+            if let Some(value_type) = self.extract_template_value_type(&type_spelling, pattern) {
+                return Some(CoroutineInfo {
+                    kind: CoroutineKind::Generator,
+                    value_type: Some(value_type),
+                    return_type_spelling: type_spelling,
+                });
+            }
+        }
+
+        // If no pattern matched, infer from the coroutine body
+        Some(self.infer_coroutine_kind_from_body(cursor))
+    }
+
+    /// Extract template value type from a type name like "Task<int>" or "Generator<std::string>".
+    /// Returns Some(CppType) if the pattern matches and type can be extracted.
+    fn extract_template_value_type(&self, type_name: &str, pattern: &str) -> Option<CppType> {
+        // Check if type name starts with the pattern
+        if !type_name.starts_with(pattern) {
+            return None;
+        }
+
+        // Find the template argument
+        let rest = &type_name[pattern.len()..];
+        if !rest.starts_with('<') {
+            return None;
+        }
+
+        // Extract content between < and > respecting nested templates
+        let mut depth = 0;
+        let mut start_idx = None;
+        let mut end_idx = None;
+
+        for (i, ch) in rest.chars().enumerate() {
+            match ch {
+                '<' => {
+                    if depth == 0 {
+                        start_idx = Some(i + 1);
+                    }
+                    depth += 1;
+                }
+                '>' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end_idx = Some(i);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        if let (Some(start), Some(end)) = (start_idx, end_idx) {
+            let arg = rest[start..end].trim();
+            if arg.is_empty() {
+                return None;
+            }
+            return Some(self.parse_type_from_string(arg));
+        }
+
+        None
+    }
+
+    /// Parse a type from its string representation.
+    /// Used for extracting template arguments from type spellings.
+    fn parse_type_from_string(&self, type_str: &str) -> CppType {
+        let type_str = type_str.trim();
+
+        // Check for pointer types
+        if type_str.ends_with('*') {
+            let pointee = self.parse_type_from_string(&type_str[..type_str.len() - 1]);
+            return CppType::Pointer {
+                pointee: Box::new(pointee),
+                is_const: type_str.contains("const "),
+            };
+        }
+
+        // Check for reference types
+        if type_str.ends_with('&') {
+            let without_ref = type_str[..type_str.len() - 1].trim();
+            let is_rvalue = without_ref.ends_with('&');
+            let referent_str = if is_rvalue {
+                &without_ref[..without_ref.len() - 1]
+            } else {
+                without_ref
+            };
+            let referent = self.parse_type_from_string(referent_str);
+            return CppType::Reference {
+                referent: Box::new(referent),
+                is_const: type_str.contains("const "),
+                is_rvalue,
+            };
+        }
+
+        // Check for common primitives
+        match type_str {
+            "void" => CppType::Void,
+            "bool" => CppType::Bool,
+            "char" => CppType::Char { signed: true },
+            "signed char" => CppType::Char { signed: true },
+            "unsigned char" => CppType::Char { signed: false },
+            "short" | "short int" => CppType::Short { signed: true },
+            "unsigned short" | "unsigned short int" => CppType::Short { signed: false },
+            "int" => CppType::Int { signed: true },
+            "unsigned int" | "unsigned" => CppType::Int { signed: false },
+            "long" | "long int" => CppType::Long { signed: true },
+            "unsigned long" | "unsigned long int" => CppType::Long { signed: false },
+            "long long" | "long long int" => CppType::LongLong { signed: true },
+            "unsigned long long" | "unsigned long long int" => CppType::LongLong { signed: false },
+            "float" => CppType::Float,
+            "double" => CppType::Double,
+            _ => {
+                // Named type (struct, class, typedef, etc.)
+                CppType::Named(type_str.to_string())
+            }
+        }
+    }
+
+    /// Infer coroutine kind by examining the function body for co_await, co_yield, co_return.
+    fn infer_coroutine_kind_from_body(&self, cursor: clang_sys::CXCursor) -> CoroutineInfo {
+        unsafe {
+            struct CoroutineExprData {
+                has_co_await: bool,
+                has_co_yield: bool,
+                has_co_return: bool,
+                parser: *const ClangParser,
+            }
+
+            extern "C" fn find_coroutine_exprs(
+                child: clang_sys::CXCursor,
+                _parent: clang_sys::CXCursor,
+                data: clang_sys::CXClientData,
+            ) -> clang_sys::CXChildVisitResult {
+                unsafe {
+                    let data = &mut *(data as *mut CoroutineExprData);
+                    let parser = &*data.parser;
+
+                    // Check if this is an UnexposedExpr or UnexposedStmt that might be a coroutine construct
+                    let cursor_kind = clang_sys::clang_getCursorKind(child);
+
+                    // CXCursor_UnexposedExpr = 100
+                    if cursor_kind == 100 {
+                        if let Some(kind) = parser.try_parse_coroutine_expr(child) {
+                            match kind {
+                                ClangNodeKind::CoawaitExpr { .. } => data.has_co_await = true,
+                                ClangNodeKind::CoyieldExpr { .. } => data.has_co_yield = true,
+                                _ => {}
+                            }
+                        }
+                    }
+
+                    // CXCursor_UnexposedStmt = 200
+                    if cursor_kind == 200 {
+                        if let Some(kind) = parser.try_parse_coroutine_stmt(child) {
+                            if matches!(kind, ClangNodeKind::CoreturnStmt { .. }) {
+                                data.has_co_return = true;
+                            }
+                        }
+                    }
+
+                    clang_sys::CXChildVisit_Recurse
+                }
+            }
+
+            let mut data = CoroutineExprData {
+                has_co_await: false,
+                has_co_yield: false,
+                has_co_return: false,
+                parser: self as *const ClangParser,
+            };
+
+            clang_sys::clang_visitChildren(
+                cursor,
+                find_coroutine_exprs,
+                &mut data as *mut CoroutineExprData as clang_sys::CXClientData,
+            );
+
+            // Determine coroutine kind based on what expressions are used
+            let kind = if data.has_co_yield {
+                CoroutineKind::Generator
+            } else if data.has_co_await {
+                CoroutineKind::Async
+            } else if data.has_co_return {
+                CoroutineKind::Task
+            } else {
+                CoroutineKind::Custom
+            };
+
+            // Get return type spelling from cursor
+            let cursor_type = clang_sys::clang_getCursorType(cursor);
+            let result_type = clang_sys::clang_getResultType(cursor_type);
+            let type_spelling = clang_sys::clang_getTypeSpelling(result_type);
+            let return_type_spelling = cx_string_to_string(type_spelling);
+
+            CoroutineInfo {
+                kind,
+                value_type: None, // Can't determine without return type pattern matching
+                return_type_spelling,
+            }
         }
     }
 

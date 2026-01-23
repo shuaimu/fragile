@@ -239,22 +239,37 @@ C++ Source → Clang (libclang) → Clang AST → Rust Source → rustc → Bina
 | Three-way comparison (`<=>`) | ❌ | |
 | Designated initializers | ✅ | `{ .x = 10 }` syntax |
 
-## Standard Library Type Mappings
+## Standard Library Support
+
+### Current Approach (Type Mappings - Deprecated)
+
+The current approach maps C++ STL types to Rust equivalents. This is being replaced by full STL transpilation.
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| `std::string` | ✅ | Maps to `String` |
-| `std::vector<T>` | ✅ | Maps to `Vec<T>` |
-| `std::map<K,V>` | ✅ | Maps to `BTreeMap<K,V>` |
-| `std::unordered_map<K,V>` | ✅ | Maps to `HashMap<K,V>` |
-| `std::unique_ptr<T>` | ✅ | Maps to `Box<T>` |
-| `std::shared_ptr<T>` | ✅ | Maps to `Arc<T>` |
-| `std::weak_ptr<T>` | ✅ | Maps to `Weak<T>` |
-| `std::optional<T>` | ✅ | Maps to `Option<T>` |
-| `std::array<T, N>` | ✅ | Maps to `[T; N]` |
-| `std::span<T>` | ✅ | Maps to `&mut [T]` or `&[T]` for const |
-| `std::variant` | ❌ | Should map to enum |
-| I/O streams | ❌ | Should map to `std::io` |
+| `std::string` | ⚠️ | Currently maps to `String` (to be transpiled) |
+| `std::vector<T>` | ⚠️ | Currently maps to `Vec<T>` (to be transpiled) |
+| `std::map<K,V>` | ⚠️ | Currently maps to `BTreeMap<K,V>` (to be transpiled) |
+| `std::unordered_map<K,V>` | ⚠️ | Currently maps to `HashMap<K,V>` (to be transpiled) |
+| `std::unique_ptr<T>` | ⚠️ | Currently maps to `Box<T>` (to be transpiled) |
+| `std::shared_ptr<T>` | ⚠️ | Currently maps to `Arc<T>` (to be transpiled) |
+| `std::weak_ptr<T>` | ⚠️ | Currently maps to `Weak<T>` (to be transpiled) |
+| `std::optional<T>` | ⚠️ | Currently maps to `Option<T>` (to be transpiled) |
+| `std::array<T, N>` | ⚠️ | Currently maps to `[T; N]` (to be transpiled) |
+| `std::span<T>` | ⚠️ | Currently maps to `&[T]` (to be transpiled) |
+| `std::variant` | ⚠️ | Currently maps to Rust enum (to be transpiled) |
+| I/O streams | ❌ | Not yet implemented |
+
+### Future Approach (Full STL Transpilation)
+
+Instead of mapping to Rust std types, we will transpile the entire C++ standard library from source (libstdc++ or libc++) to unsafe Rust. This preserves exact C++ semantics including:
+
+- Iterator invalidation behavior
+- Exception safety guarantees
+- Allocator model
+- All STL methods (not just common ones)
+
+See `TODO.md` Section 22 for the full implementation plan.
 
 ---
 

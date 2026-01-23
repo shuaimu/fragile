@@ -192,7 +192,7 @@ crates/
 ### 12. C++20 Coroutines (Priority: Medium)
 - [ ] **12.1** Coroutine detection and parsing
   - [x] **12.1.1** Detect `co_await`, `co_yield`, `co_return` keywords in function bodies ✅ 2026-01-22 (parsing done in parse.rs)
-  - [ ] **12.1.2** Parse coroutine promise types from return type (~80 LOC)
+  - [x] **12.1.2** Parse coroutine promise types from return type ✅ [26:01:23, 01:45] [docs/dev/plan_12_1_2_coroutine_promise_types.md]
   - [ ] **12.1.3** Identify coroutine frame state variables (~60 LOC)
 - [ ] **12.2** Generator coroutines (co_yield)
   - [ ] **12.2.1** Map generator functions to Rust `Iterator` trait implementation (~150 LOC)
@@ -304,6 +304,206 @@ crates/
   - [x] **21.2.1** Parse access specifiers (public/private/protected) (~50 LOC) ✅ (already implemented)
   - [ ] **21.2.2** Generate `pub(crate)` for protected, no `pub` for private (~60 LOC)
   - [ ] **21.2.3** Generate accessor methods for private fields when needed (~100 LOC)
+
+---
+
+## C++ Standard Library Transpilation (Major Initiative)
+
+**Goal**: Instead of mapping C++ STL types to Rust std types (e.g., `std::unordered_map` → `HashMap`), we transpile the entire C++ standard library from its source to Rust `unsafe` code. This provides:
+
+1. **Semantic correctness**: Exact C++ behavior preserved (iterator invalidation, exception guarantees, etc.)
+2. **Full API compatibility**: All STL methods available, not just common ones
+3. **No behavioral surprises**: C++ code using STL works identically after transpilation
+4. **Debuggability**: Step through actual STL implementation logic
+
+### Current State (to be deprecated)
+The current approach in `crates/fragile-clang/src/types.rs:183-580` maps STL types to Rust equivalents:
+- `std::vector<T>` → `Vec<T>`
+- `std::unordered_map<K,V>` → `HashMap<K,V>`
+- `std::string` → `String`
+- etc.
+
+**Problems with this approach**:
+- Semantic differences (Rust HashMap vs C++ unordered_map have different guarantees)
+- Missing methods (not all STL methods have Rust equivalents)
+- Iterator model differences (C++ iterators vs Rust iterators)
+- Exception/error handling differences
+- Allocator model differences
+
+### 22. C++ Standard Library Transpilation Infrastructure (Priority: Critical)
+
+#### Phase 1: Foundation (~2-3 weeks)
+- [ ] **22.1** Create `libstdcpp-rs` crate structure
+  - [ ] **22.1.1** Create new crate `crates/libstdcpp-rs` with proper Cargo.toml
+  - [ ] **22.1.2** Define module structure mirroring `<bits/>` internal headers
+  - [ ] **22.1.3** Set up feature flags for different libstdc++ versions (gcc 11, 12, 13, 14)
+  - [ ] **22.1.4** Create `fragile-runtime` integration for memory allocators
+
+- [ ] **22.2** Build STL header processing pipeline
+  - [ ] **22.2.1** Create script to extract libstdc++ headers from system/toolchain
+  - [ ] **22.2.2** Handle `#include` resolution for internal headers (`<bits/stl_vector.h>`, etc.)
+  - [ ] **22.2.3** Process header dependency graph (topological sort)
+  - [ ] **22.2.4** Handle platform-specific conditionals (`#ifdef __linux__`, etc.)
+
+- [ ] **22.3** Template instantiation strategy
+  - [ ] **22.3.1** Identify common template instantiations needed (vector<int>, string, etc.)
+  - [ ] **22.3.2** Generate explicit instantiation requests for Clang
+  - [ ] **22.3.3** Handle SFINAE and concept-constrained templates
+  - [ ] **22.3.4** Support user-defined type instantiations on demand
+
+#### Phase 2: Core Containers (~3-4 weeks)
+- [ ] **22.4** Memory and allocator foundation
+  - [ ] **22.4.1** Transpile `<memory>` - `std::allocator`, `std::allocator_traits`
+  - [ ] **22.4.2** Transpile `std::unique_ptr` implementation (not just type mapping)
+  - [ ] **22.4.3** Transpile `std::shared_ptr`/`std::weak_ptr` with ref counting
+  - [ ] **22.4.4** Handle `std::make_unique`, `std::make_shared`
+
+- [ ] **22.5** String implementation
+  - [ ] **22.5.1** Transpile `<bits/basic_string.h>` - SSO (Small String Optimization)
+  - [ ] **22.5.2** Handle `std::char_traits` and character type operations
+  - [ ] **22.5.3** Support `std::string`, `std::wstring`, `std::u16string`, `std::u32string`
+  - [ ] **22.5.4** Transpile string operations (find, substr, replace, etc.)
+
+- [ ] **22.6** Vector implementation
+  - [ ] **22.6.1** Transpile `<bits/stl_vector.h>` - dynamic array with capacity
+  - [ ] **22.6.2** Handle reallocation strategy and iterator invalidation
+  - [ ] **22.6.3** Support `push_back`, `emplace_back`, `reserve`, `resize`
+  - [ ] **22.6.4** Handle `std::vector<bool>` specialization (bit-packed)
+
+- [ ] **22.7** Array and span
+  - [ ] **22.7.1** Transpile `<array>` - `std::array<T, N>` implementation
+  - [ ] **22.7.2** Transpile `<span>` - `std::span<T>` (C++20) implementation
+  - [ ] **22.7.3** Handle fixed-extent vs dynamic-extent spans
+
+#### Phase 3: Associative Containers (~3-4 weeks)
+- [ ] **22.8** Tree-based containers
+  - [ ] **22.8.1** Transpile `<bits/stl_tree.h>` - Red-black tree implementation
+  - [ ] **22.8.2** Transpile `<map>` - `std::map`, `std::multimap`
+  - [ ] **22.8.3** Transpile `<set>` - `std::set`, `std::multiset`
+  - [ ] **22.8.4** Handle node-based allocator rebinding
+
+- [ ] **22.9** Hash-based containers
+  - [ ] **22.9.1** Transpile `<bits/hashtable.h>` - hash table implementation
+  - [ ] **22.9.2** Transpile `<unordered_map>` - `std::unordered_map`, `std::unordered_multimap`
+  - [ ] **22.9.3** Transpile `<unordered_set>` - `std::unordered_set`, `std::unordered_multiset`
+  - [ ] **22.9.4** Handle `std::hash` specializations and bucket interface
+
+#### Phase 4: Sequence Containers & Adaptors (~2-3 weeks)
+- [ ] **22.10** Other sequence containers
+  - [ ] **22.10.1** Transpile `<deque>` - `std::deque` double-ended queue
+  - [ ] **22.10.2** Transpile `<list>` - `std::list` doubly-linked list
+  - [ ] **22.10.3** Transpile `<forward_list>` - `std::forward_list` singly-linked list
+
+- [ ] **22.11** Container adaptors
+  - [ ] **22.11.1** Transpile `<stack>` - `std::stack` adaptor
+  - [ ] **22.11.2** Transpile `<queue>` - `std::queue`, `std::priority_queue` adaptors
+
+#### Phase 5: Utilities (~2-3 weeks)
+- [ ] **22.12** Utility types
+  - [ ] **22.12.1** Transpile `<utility>` - `std::pair`, `std::move`, `std::forward`
+  - [ ] **22.12.2** Transpile `<tuple>` - `std::tuple` implementation
+  - [ ] **22.12.3** Transpile `<optional>` - `std::optional<T>` implementation
+  - [ ] **22.12.4** Transpile `<variant>` - `std::variant<Ts...>` implementation
+  - [ ] **22.12.5** Transpile `<any>` - `std::any` type-erased container
+
+- [ ] **22.13** Functional utilities
+  - [ ] **22.13.1** Transpile `<functional>` - `std::function`, `std::bind`
+  - [ ] **22.13.2** Handle `std::invoke` and callable concepts
+  - [ ] **22.13.3** Transpile `std::reference_wrapper`
+
+#### Phase 6: Iterators & Algorithms (~3-4 weeks)
+- [ ] **22.14** Iterator infrastructure
+  - [ ] **22.14.1** Transpile `<bits/stl_iterator_base_types.h>` - iterator categories
+  - [ ] **22.14.2** Transpile `<bits/stl_iterator.h>` - iterator adaptors
+  - [ ] **22.14.3** Handle `std::advance`, `std::distance`, `std::next`, `std::prev`
+  - [ ] **22.14.4** Transpile reverse iterators, move iterators, insert iterators
+
+- [ ] **22.15** Algorithms
+  - [ ] **22.15.1** Transpile `<bits/stl_algo.h>` - non-modifying algorithms (find, count, etc.)
+  - [ ] **22.15.2** Transpile modifying algorithms (copy, move, transform, etc.)
+  - [ ] **22.15.3** Transpile sorting algorithms (sort, stable_sort, partial_sort, etc.)
+  - [ ] **22.15.4** Transpile numeric algorithms (accumulate, inner_product, etc.)
+
+#### Phase 7: I/O Streams (~3-4 weeks)
+- [ ] **22.16** Stream infrastructure
+  - [ ] **22.16.1** Transpile `<ios>` - stream state, formatting flags
+  - [ ] **22.16.2** Transpile `<streambuf>` - `std::streambuf` base class
+  - [ ] **22.16.3** Transpile `<ostream>` - `std::ostream`, `operator<<`
+  - [ ] **22.16.4** Transpile `<istream>` - `std::istream`, `operator>>`
+
+- [ ] **22.17** String and file streams
+  - [ ] **22.17.1** Transpile `<sstream>` - `std::stringstream`, `std::ostringstream`, `std::istringstream`
+  - [ ] **22.17.2** Transpile `<fstream>` - `std::fstream`, `std::ofstream`, `std::ifstream`
+  - [ ] **22.17.3** Handle file modes and buffering
+
+- [ ] **22.18** Stream manipulators
+  - [ ] **22.18.1** Transpile `<iomanip>` - `std::setw`, `std::setprecision`, etc.
+  - [ ] **22.18.2** Handle `std::endl`, `std::flush`, `std::ws`
+
+#### Phase 8: Concurrency (~2-3 weeks)
+- [ ] **22.19** Threading primitives
+  - [ ] **22.19.1** Transpile `<thread>` - `std::thread`, `std::this_thread`
+  - [ ] **22.19.2** Transpile `<mutex>` - `std::mutex`, `std::lock_guard`, `std::unique_lock`
+  - [ ] **22.19.3** Transpile `<condition_variable>` - `std::condition_variable`
+  - [ ] **22.19.4** Transpile `<atomic>` - `std::atomic<T>` types
+
+- [ ] **22.20** Async and futures
+  - [ ] **22.20.1** Transpile `<future>` - `std::future`, `std::promise`, `std::async`
+  - [ ] **22.20.2** Transpile `<shared_mutex>` - reader-writer locks (C++17)
+
+#### Phase 9: Integration & Migration (~2 weeks)
+- [ ] **22.21** Deprecate type mappings
+  - [ ] **22.21.1** Add feature flag `use-native-stl` to switch between approaches
+  - [ ] **22.21.2** Update `to_rust_type_str()` to use transpiled types when flag enabled
+  - [ ] **22.21.3** Generate `use libstdcpp::*` imports in transpiled code
+  - [ ] **22.21.4** Migrate existing tests to use transpiled STL
+
+- [ ] **22.22** Documentation and tooling
+  - [ ] **22.22.1** Document libstdcpp-rs API and usage
+  - [ ] **22.22.2** Create CLI option to specify STL version/vendor
+  - [ ] **22.22.3** Support libc++ (LLVM) as alternative to libstdc++
+  - [ ] **22.22.4** Performance benchmarks comparing mapped vs transpiled
+
+### Technical Challenges
+
+**Template Handling**:
+- C++ STL is heavily templated; we need Clang to instantiate all used templates
+- Must handle SFINAE, concepts, and constexpr-if branches
+- Consider pre-instantiating common types and on-demand instantiation for others
+
+**Memory Model**:
+- C++ STL uses allocators; Rust uses `Global` allocator by default
+- Need to transpile allocator-aware containers properly
+- Handle placement new, custom deleters, etc.
+
+**Exception Safety**:
+- STL provides strong/basic/no-throw guarantees
+- Map to Rust's panic model (catch_unwind where needed)
+- Handle exception-safe transaction patterns
+
+**Iterator Model**:
+- C++ iterators are pointers/pointer-like; Rust iterators are objects
+- Need to preserve C++ iterator semantics in unsafe Rust
+- Handle iterator invalidation rules
+
+**ABI Compatibility**:
+- If mixing C++ and Rust code, may need compatible memory layouts
+- Consider `#[repr(C)]` for interop scenarios
+
+### Estimated Total Effort
+- **Phase 1-2 (Foundation + Core)**: ~6 weeks
+- **Phase 3-4 (Containers)**: ~5 weeks
+- **Phase 5-6 (Utilities + Algorithms)**: ~5 weeks
+- **Phase 7-8 (I/O + Concurrency)**: ~5 weeks
+- **Phase 9 (Integration)**: ~2 weeks
+- **Total**: ~23 weeks for full STL coverage
+
+### Incremental Milestones
+1. **M1**: `std::vector<T>`, `std::string` working (enables most code)
+2. **M2**: All sequence containers working
+3. **M3**: All associative containers working
+4. **M4**: I/O streams working
+5. **M5**: Full STL coverage
 
 ---
 

@@ -4,7 +4,7 @@
 //! without going through an intermediate MIR representation.
 //! This produces cleaner, more idiomatic Rust code.
 
-use crate::ast::{ClangNode, ClangNodeKind, BinaryOp, UnaryOp, CastKind, ConstructorKind};
+use crate::ast::{ClangNode, ClangNodeKind, BinaryOp, UnaryOp, CastKind, ConstructorKind, CoroutineInfo, CoroutineKind};
 use crate::types::{CppType, parse_template_args};
 use std::collections::{HashSet, HashMap};
 
@@ -1063,9 +1063,9 @@ impl AstCodeGen {
     /// Generate a top-level declaration.
     fn generate_top_level(&mut self, node: &ClangNode) {
         match &node.kind {
-            ClangNodeKind::FunctionDecl { name, mangled_name, return_type, params, is_definition, is_coroutine, .. } => {
+            ClangNodeKind::FunctionDecl { name, mangled_name, return_type, params, is_definition, is_coroutine, coroutine_info, .. } => {
                 if *is_definition {
-                    self.generate_function(name, mangled_name, return_type, params, *is_coroutine, &node.children);
+                    self.generate_function(name, mangled_name, return_type, params, *is_coroutine, coroutine_info, &node.children);
                 }
             }
             ClangNodeKind::RecordDecl { name, is_class, .. } => {
@@ -1142,9 +1142,45 @@ impl AstCodeGen {
         }
     }
 
+    /// Get the appropriate return type string for a function, considering coroutine info.
+    /// For async coroutines with value type, uses the extracted type.
+    /// For generators, could use impl Iterator<Item=T> (future enhancement).
+    fn get_coroutine_return_type(&self, return_type: &CppType, coroutine_info: &Option<CoroutineInfo>) -> String {
+        if let Some(info) = coroutine_info {
+            // If we extracted a value type from the coroutine return type, use it
+            if let Some(ref value_type) = info.value_type {
+                match info.kind {
+                    CoroutineKind::Async | CoroutineKind::Task => {
+                        // async fn returns the inner type directly
+                        if *value_type == CppType::Void {
+                            return String::new();
+                        }
+                        return format!(" -> {}", value_type.to_rust_type_str());
+                    }
+                    CoroutineKind::Generator => {
+                        // Generators should return impl Iterator<Item=T>
+                        // Note: Rust generators are unstable, so this is forward-looking
+                        return format!(" -> impl Iterator<Item={}>", value_type.to_rust_type_str());
+                    }
+                    CoroutineKind::Custom => {
+                        // Fall through to default handling
+                    }
+                }
+            }
+        }
+
+        // Default: use the original return type
+        if *return_type == CppType::Void {
+            String::new()
+        } else {
+            format!(" -> {}", return_type.to_rust_type_str())
+        }
+    }
+
     /// Generate a function definition.
     fn generate_function(&mut self, name: &str, mangled_name: &str, return_type: &CppType,
-                         params: &[(String, CppType)], is_coroutine: bool, children: &[ClangNode]) {
+                         params: &[(String, CppType)], is_coroutine: bool,
+                         coroutine_info: &Option<CoroutineInfo>, children: &[ClangNode]) {
         // Special handling for C++ main function
         let is_main = name == "main" && params.is_empty();
         let func_name = if is_main { "cpp_main" } else { name };
@@ -1152,6 +1188,17 @@ impl AstCodeGen {
         // Doc comment
         self.writeln(&format!("/// C++ function `{}`", name));
         self.writeln(&format!("/// Mangled: `{}`", mangled_name));
+
+        // Add coroutine info comment if present
+        if let Some(info) = coroutine_info {
+            let kind_str = match info.kind {
+                CoroutineKind::Async => "async",
+                CoroutineKind::Generator => "generator",
+                CoroutineKind::Task => "task",
+                CoroutineKind::Custom => "custom",
+            };
+            self.writeln(&format!("/// Coroutine: {} ({})", kind_str, info.return_type_spelling));
+        }
 
         // Track reference, pointer, and array parameters - clear any from previous function
         self.ref_vars.clear();
@@ -1182,13 +1229,16 @@ impl AstCodeGen {
             .collect::<Vec<_>>()
             .join(", ");
 
-        let ret_str = if *return_type == CppType::Void {
-            String::new()
-        } else {
-            format!(" -> {}", return_type.to_rust_type_str())
-        };
+        // Determine return type based on coroutine info
+        let ret_str = self.get_coroutine_return_type(return_type, coroutine_info);
 
-        let async_keyword = if is_coroutine { "async " } else { "" };
+        // Determine if this should be an async function
+        let is_async = is_coroutine && matches!(
+            coroutine_info.as_ref().map(|i| i.kind),
+            Some(CoroutineKind::Async) | Some(CoroutineKind::Task) | None
+        );
+
+        let async_keyword = if is_async { "async " } else { "" };
         self.writeln(&format!("pub {}fn {}({}){} {{", async_keyword, sanitize_identifier(func_name), params_str, ret_str));
         self.indent += 1;
 
@@ -5155,6 +5205,7 @@ mod tests {
                     is_definition: true,
                     is_noexcept: false,
                     is_coroutine: false,
+                    coroutine_info: None,
                 },
                 vec![make_node(
                     ClangNodeKind::CompoundStmt,
@@ -5204,6 +5255,7 @@ mod tests {
                     is_definition: true,
                     is_noexcept: false,
                     is_coroutine: false,
+                    coroutine_info: None,
                 },
                 vec![make_node(
                     ClangNodeKind::CompoundStmt,
@@ -5253,5 +5305,169 @@ mod tests {
         assert!(code.contains("return a"));
         assert!(code.contains("} else {"));
         assert!(code.contains("return b"));
+    }
+
+    #[test]
+    fn test_async_coroutine_with_task_return() {
+        use crate::ast::CoroutineInfo;
+        // Test that a coroutine with Task<int> return type generates async fn -> i32
+        let coroutine_info = CoroutineInfo {
+            kind: CoroutineKind::Async,
+            value_type: Some(CppType::Int { signed: true }),
+            return_type_spelling: "Task<int>".to_string(),
+        };
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![make_node(
+                ClangNodeKind::FunctionDecl {
+                    name: "compute".to_string(),
+                    mangled_name: "_Z7computev".to_string(),
+                    return_type: CppType::Named("Task<int>".to_string()),
+                    params: vec![],
+                    is_definition: true,
+                    is_noexcept: false,
+                    is_coroutine: true,
+                    coroutine_info: Some(coroutine_info),
+                },
+                vec![make_node(
+                    ClangNodeKind::CompoundStmt,
+                    vec![make_node(
+                        ClangNodeKind::CoreturnStmt { value_ty: Some(CppType::Int { signed: true }) },
+                        vec![make_node(
+                            ClangNodeKind::IntegerLiteral { value: 42, cpp_type: Some(CppType::Int { signed: true }) },
+                            vec![],
+                        )],
+                    )],
+                )],
+            )],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        // Should generate async fn with i32 return type (not Task<int>)
+        assert!(code.contains("pub async fn compute() -> i32"), "Expected 'pub async fn compute() -> i32', got:\n{}", code);
+        // Should have coroutine comment
+        assert!(code.contains("/// Coroutine: async (Task<int>)"), "Expected coroutine comment, got:\n{}", code);
+    }
+
+    #[test]
+    fn test_generator_coroutine_with_value_type() {
+        use crate::ast::CoroutineInfo;
+        // Test that a generator with Generator<int> return type generates impl Iterator<Item=i32>
+        let coroutine_info = CoroutineInfo {
+            kind: CoroutineKind::Generator,
+            value_type: Some(CppType::Int { signed: true }),
+            return_type_spelling: "Generator<int>".to_string(),
+        };
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![make_node(
+                ClangNodeKind::FunctionDecl {
+                    name: "range".to_string(),
+                    mangled_name: "_Z5rangev".to_string(),
+                    return_type: CppType::Named("Generator<int>".to_string()),
+                    params: vec![],
+                    is_definition: true,
+                    is_noexcept: false,
+                    is_coroutine: true,
+                    coroutine_info: Some(coroutine_info),
+                },
+                vec![make_node(
+                    ClangNodeKind::CompoundStmt,
+                    vec![make_node(
+                        ClangNodeKind::CoyieldExpr {
+                            value_ty: CppType::Int { signed: true },
+                            result_ty: CppType::Void,
+                        },
+                        vec![make_node(
+                            ClangNodeKind::IntegerLiteral { value: 1, cpp_type: Some(CppType::Int { signed: true }) },
+                            vec![],
+                        )],
+                    )],
+                )],
+            )],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        // Generators should NOT be async
+        assert!(!code.contains("async fn range"), "Generator should not be async, got:\n{}", code);
+        // Should return impl Iterator<Item=i32>
+        assert!(code.contains("impl Iterator<Item=i32>"), "Expected 'impl Iterator<Item=i32>', got:\n{}", code);
+        // Should have coroutine comment
+        assert!(code.contains("/// Coroutine: generator (Generator<int>)"), "Expected coroutine comment, got:\n{}", code);
+    }
+
+    #[test]
+    fn test_coroutine_without_value_type() {
+        use crate::ast::CoroutineInfo;
+        // Test a coroutine where we couldn't extract the value type
+        let coroutine_info = CoroutineInfo {
+            kind: CoroutineKind::Custom,
+            value_type: None,
+            return_type_spelling: "CustomCoroutine".to_string(),
+        };
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![make_node(
+                ClangNodeKind::FunctionDecl {
+                    name: "custom".to_string(),
+                    mangled_name: "_Z6customv".to_string(),
+                    return_type: CppType::Named("CustomCoroutine".to_string()),
+                    params: vec![],
+                    is_definition: true,
+                    is_noexcept: false,
+                    is_coroutine: true,
+                    coroutine_info: Some(coroutine_info),
+                },
+                vec![make_node(
+                    ClangNodeKind::CompoundStmt,
+                    vec![],
+                )],
+            )],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        // Should fallback to using the original return type
+        assert!(code.contains("CustomCoroutine"), "Expected 'CustomCoroutine' in return type, got:\n{}", code);
+        // Should have coroutine comment
+        assert!(code.contains("/// Coroutine: custom"), "Expected coroutine comment, got:\n{}", code);
+    }
+
+    #[test]
+    fn test_non_coroutine_function() {
+        // Test that a regular function (not a coroutine) doesn't get async
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![make_node(
+                ClangNodeKind::FunctionDecl {
+                    name: "regular".to_string(),
+                    mangled_name: "_Z7regularv".to_string(),
+                    return_type: CppType::Int { signed: true },
+                    params: vec![],
+                    is_definition: true,
+                    is_noexcept: false,
+                    is_coroutine: false,
+                    coroutine_info: None,
+                },
+                vec![make_node(
+                    ClangNodeKind::CompoundStmt,
+                    vec![make_node(
+                        ClangNodeKind::ReturnStmt,
+                        vec![make_node(
+                            ClangNodeKind::IntegerLiteral { value: 0, cpp_type: Some(CppType::Int { signed: true }) },
+                            vec![],
+                        )],
+                    )],
+                )],
+            )],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        // Should NOT be async
+        assert!(!code.contains("async fn regular"), "Regular function should not be async, got:\n{}", code);
+        // Should be just a regular pub fn
+        assert!(code.contains("pub fn regular() -> i32"), "Expected 'pub fn regular() -> i32', got:\n{}", code);
     }
 }
