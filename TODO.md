@@ -14,7 +14,7 @@ We just convert the fully-resolved AST to equivalent Rust code.
 ## Current Status
 
 **Grammar Tests**: 20/20 passing
-**E2E Tests**: 58/58 passing
+**E2E Tests**: 58/59 passing (1 ignored due to STL header limitations)
 
 **Working**:
 - Simple functions with control flow (if/else, while, for, do-while, switch, recursion)
@@ -71,6 +71,8 @@ We just convert the fully-resolved AST to equivalent Rust code.
 - C++20 designated initializers ({ .x = 10, .y = 20 })
 - Function pointers (Option<fn(...)> type, Some() wrapping, .unwrap()() calls)
 - Three-way comparison operator (<=> → a.cmp(&b) as i8)
+- std::variant type mapping and construction (→ Rust enum)
+- std::get<T>/std::get<I> on variants (→ match expression)
 
 **CLI**:
 ```bash
