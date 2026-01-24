@@ -626,7 +626,7 @@ Get `std::vector<int>` working end-to-end.
     }
     ```
   - [ ] **23.8.2** Compile transpiled code with rustc + fragile-runtime - IN PROGRESS
-    - **Progress**: Errors reduced from 131 → ~2097 (regressed during identifier fixes, but syntax is now valid)
+    - **Progress**: Errors reduced 2091 → 116 (94% reduction) ✅ 2026-01-24
     - Fixed: super:: path computation now accounts for flattened namespaces (std, __)
     - Fixed: Method overloading deduplication within struct impl blocks (23.8.3)
     - Fixed: Constructor overloading with same param count but different types
@@ -638,10 +638,16 @@ Get `std::vector<int>` working end-to-end.
     - Fixed: Two-pass namespace merging to handle C++ namespace reopening (23.8.8) ✅ 2026-01-24
     - Fixed: Template instantiation struct generation (23.8.9) ✅ 2026-01-24
     - Fixed: Identifier sanitization for dashes, dots, plus, parens, refs, arrays ✅ 2026-01-24
-    - Remaining issues:
-      - File paths in anonymous union names (system header paths leak into types)
-      - Duplicate parameter names in generated methods
-      - Complex expression statements in loop conditions
+    - Fixed: Duplicate parameter names in all 6 code generation paths (23.8.10) ✅ 2026-01-24
+    - Fixed: STL member type aliases (size_type → usize, etc.) (23.8.11) ✅ 2026-01-24
+    - Fixed: Template parameter placeholders (type-parameter-0-0 → c_void) ✅ 2026-01-24
+    - Fixed: Single colon in file:line:col references ✅ 2026-01-24
+    - Remaining 116 errors (deeper semantic issues):
+      - Complex conditional types (__conditional_t_..., _If__..., etc.)
+      - Missing builtin functions (__builtin_strcmp, __is_type_name_unique)
+      - Missing trait definitions (logic_errorTrait, runtime_errorTrait)
+      - Lifetime specifiers in reference struct fields
+      - Complex while loop conditions with embedded assignments
   - [ ] **23.8.3** Execute and verify exit code - BLOCKED on 23.8.2
   - [ ] **23.8.4** Add iteration test: `for (int x : v) { ... }` - BLOCKED
   - [ ] **23.8.5** Add resize/reserve/capacity tests - BLOCKED
