@@ -4755,8 +4755,41 @@ impl AstCodeGen {
             ClangNodeKind::BoolLiteral(b) => b.to_string(),
             ClangNodeKind::NullPtrLiteral => "std::ptr::null_mut()".to_string(),
             ClangNodeKind::CXXNewExpr { ty, is_array, is_placement } => {
-                if *is_placement {
-                    // Placement new: new (ptr) T(args) → std::ptr::write(ptr, T::new(args))
+                if *is_placement && *is_array {
+                    // Array placement new: new (ptr) T[n] → construct n elements at ptr
+                    // Children typically: [placement_ptr, size_expr, CXXConstructExpr or InitListExpr]
+                    let element_type = ty.pointee().unwrap_or(ty);
+                    let type_str = element_type.to_rust_type_str();
+                    let default_val = default_value_for_type(element_type);
+
+                    // Extract placement pointer (first child)
+                    let ptr_str = if !node.children.is_empty() {
+                        let ptr_node = &node.children[0];
+                        let ptr_type = Self::get_expr_type(ptr_node);
+                        let ptr_expr = self.expr_to_string(ptr_node);
+                        if matches!(ptr_type, Some(CppType::Array { .. })) {
+                            format!("{}.as_mut_ptr()", ptr_expr)
+                        } else {
+                            ptr_expr
+                        }
+                    } else {
+                        "/* missing placement ptr */".to_string()
+                    };
+
+                    // Extract size expression (typically second child)
+                    let size_str = if node.children.len() >= 2 {
+                        self.expr_to_string(&node.children[1])
+                    } else {
+                        "0".to_string()
+                    };
+
+                    // Generate array placement new: write each element at ptr + offset
+                    format!(
+                        "{{ let __ptr = {} as *mut {}; let __n = {} as usize; debug_assert!((__ptr as usize) % std::mem::align_of::<{}>() == 0, \"array placement new: pointer not aligned for {}\"); unsafe {{ for __i in 0..__n {{ std::ptr::write(__ptr.add(__i), {}) }} }}; __ptr }}",
+                        ptr_str, type_str, size_str, type_str, type_str, default_val
+                    )
+                } else if *is_placement {
+                    // Single-object placement new: new (ptr) T(args) → std::ptr::write(ptr, T::new(args))
                     // AST children order: [CXXConstructExpr, ImplicitCastExpr(placement_arg)]
                     // The placement argument (ptr) is the last child
                     // The constructor/initializer is in the first child

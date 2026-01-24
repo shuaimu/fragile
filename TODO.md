@@ -255,9 +255,9 @@ crates/
   - [x] **17.1.1** Detect placement new syntax `new (ptr) Type(args)` (~50 LOC) ✅ 2026-01-24
   - [x] **17.1.2** Generate `std::ptr::write(ptr, T::new(...))` (~60 LOC) ✅ 2026-01-24
   - [x] **17.1.3** Handle alignment requirements via debug_assert (~80 LOC) ✅ 2026-01-24
-- [ ] **17.2** Placement new with allocators
-  - [ ] **17.2.1** Map placement new with custom allocator (~100 LOC)
-  - [ ] **17.2.2** Handle array placement new (~80 LOC)
+- [x] **17.2** Placement new with allocators ✅ 2026-01-24
+  - [ ] **17.2.1** Map placement new with custom allocator (~100 LOC) - deferred, niche use case
+  - [x] **17.2.2** Handle array placement new (~80 LOC) ✅ 2026-01-24 [docs/dev/plan_17_2_array_placement_new.md]
 
 ### 18. C++20 Modules (Priority: Low - Long-term)
 - [ ] **18.1** Module detection
