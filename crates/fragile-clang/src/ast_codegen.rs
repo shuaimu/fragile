@@ -140,6 +140,8 @@ pub struct AstCodeGen {
     generated_functions: HashMap<String, usize>,
     /// Track actual Rust module nesting depth (excludes flattened namespaces like std, __)
     module_depth: usize,
+    /// Track method names within current struct impl to handle overloads: name -> count
+    current_struct_methods: HashMap<String, usize>,
 }
 
 impl AstCodeGen {
@@ -169,6 +171,7 @@ impl AstCodeGen {
             bit_field_groups: HashMap::new(),
             generated_functions: HashMap::new(),
             module_depth: 0,
+            current_struct_methods: HashMap::new(),
         }
     }
 
@@ -2210,8 +2213,13 @@ impl AstCodeGen {
             self.writeln(&format!("impl {} {{", rust_name));
             self.indent += 1;
 
+            // Clear method counter for this struct's impl block
+            self.current_struct_methods.clear();
+
             // Generate default new_0() if no explicit default constructor
             if !has_default_ctor {
+                // Track new_0 so overloaded constructors don't collide
+                self.current_struct_methods.insert("new_0".to_string(), 1);
                 self.writeln("pub fn new_0() -> Self {");
                 self.indent += 1;
                 self.writeln("Default::default()");
@@ -3274,6 +3282,7 @@ impl AstCodeGen {
     }
 
     /// Get a default value for a C++ type (for static member initialization).
+    /// Uses const-compatible initialization for use in static variables.
     fn default_value_for_type(ty: &CppType) -> String {
         match ty {
             CppType::Int { .. } | CppType::Long { .. } | CppType::Short { .. } |
@@ -3290,7 +3299,10 @@ impl AstCodeGen {
                     "[]".to_string()
                 }
             }
-            _ => "Default::default()".to_string(),
+            // For named types (structs) and references, use zeroed memory which is const-compatible
+            CppType::Named(_) | CppType::Reference { .. } =>
+                "unsafe { std::mem::zeroed() }".to_string(),
+            _ => "unsafe { std::mem::zeroed() }".to_string(),
         }
     }
 
@@ -3759,7 +3771,7 @@ impl AstCodeGen {
                     return;
                 }
 
-                let method_name = if name == "operator*" && params.is_empty() {
+                let base_method_name = if name == "operator*" && params.is_empty() {
                     // Unary dereference operator (mutable version only)
                     "op_deref".to_string()
                 } else if name == "operator->" {
@@ -3767,6 +3779,16 @@ impl AstCodeGen {
                     "op_arrow".to_string()
                 } else {
                     sanitize_identifier(name)
+                };
+
+                // Handle method overloading by appending suffix for duplicates
+                let count = self.current_struct_methods.entry(base_method_name.clone()).or_insert(0);
+                let method_name = if *count == 0 {
+                    *count += 1;
+                    base_method_name
+                } else {
+                    *count += 1;
+                    format!("{}_{}", base_method_name, *count - 1)
                 };
 
                 self.writeln(&format!("pub fn {}({}{}){} {{",
@@ -3790,8 +3812,18 @@ impl AstCodeGen {
                 self.writeln("");
             }
             ClangNodeKind::ConstructorDecl { params, .. } => {
-                // Always use new_N format (new_0, new_1, new_2) for consistency
-                let fn_name = format!("new_{}", params.len());
+                // Base name uses new_N format where N is param count
+                let base_fn_name = format!("new_{}", params.len());
+
+                // Handle constructor overloading (same param count, different types)
+                let count = self.current_struct_methods.entry(base_fn_name.clone()).or_insert(0);
+                let fn_name = if *count == 0 {
+                    *count += 1;
+                    base_fn_name.clone()
+                } else {
+                    *count += 1;
+                    format!("{}_{}", base_fn_name, *count - 1)
+                };
                 let internal_name = format!("__new_without_vbases_{}", params.len());
 
                 let params_str = params.iter()
