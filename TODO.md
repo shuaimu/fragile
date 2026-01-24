@@ -240,7 +240,7 @@ crates/
   - [x] **16.1.2** Generate `std::any::TypeId::of::<T>()` for type queries ✅ 2026-01-23
   - [x] **16.1.3** Handle `typeid` comparison (`==`, `!=`) ✅ 2026-01-23
 - [ ] **16.2** type_info class
-  - [ ] **16.2.1** Map `std::type_info` to wrapper struct with TypeId (~80 LOC)
+  - [x] **16.2.1** Map `std::type_info` to wrapper struct with TypeId ✅ 2026-01-24
   - [ ] **16.2.2** Implement `name()` method via `std::any::type_name` (~40 LOC)
   - [ ] **16.2.3** Implement `hash_code()` via TypeId hash (~30 LOC)
 - [ ] **16.3** dynamic_cast improvements
