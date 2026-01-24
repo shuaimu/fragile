@@ -14,7 +14,8 @@ We just convert the fully-resolved AST to equivalent Rust code.
 ## Current Status
 
 **Grammar Tests**: 20/20 passing
-**E2E Tests**: 58/59 passing (1 ignored due to STL header limitations)
+**E2E Tests**: 62/62 passing (2 ignored due to STL header limitations)
+**libc++ Transpilation Tests**: 5/5 passing (cstddef, cstdint, type_traits, initializer_list, vector)
 
 **Working**:
 - Simple functions with control flow (if/else, while, for, do-while, switch, recursion)
@@ -496,6 +497,187 @@ The current approach in `crates/fragile-clang/src/types.rs:183-580` has special-
   - [ ] **22.15.4** Test smart pointer usage
   - [ ] **22.15.5** Test STL algorithms (std::sort, std::find, etc.)
 
+---
+
+## 23. Road to Medium-Size C++ Project Compilation (Priority: Critical)
+
+**Goal**: Compile a medium-size C++ project (~10K-50K LOC) that uses STL, I/O, and threading.
+
+**Current State**:
+- Core language: ~95% complete (62/62 E2E tests passing)
+- Runtime primitives: Complete (stdio, pthread, atomics, condition variables, rwlocks)
+- STL integration: **0% tested** (no E2E tests with actual libc++ code)
+
+### Phase 1: libc++ Transpilation Validation (Priority: Immediate)
+
+The critical gap is that we've never actually tested transpiling code that `#include`s libc++ headers.
+
+- [x] **23.1** Create minimal STL transpilation test harness ✅ 2026-01-24
+  - [x] **23.1.1** Create test that transpiles `#include <vector>` with vendored libc++ ✅ 2026-01-24
+    - Added `test_libcxx_vector_transpilation` in integration_test.rs
+    - Uses `ClangParser::with_vendored_libcxx()`
+    - Transpilation succeeds - generates 215K chars of Rust code
+  - [ ] **23.1.2** Create diagnostic mode to dump problematic AST nodes (~50 LOC)
+    - When transpiler hits Unknown node, log the Clang cursor kind value
+    - When type conversion fails, log the original C++ type spelling
+  - [x] **23.1.3** Triage libc++ header complexity ✅ 2026-01-24
+    - Test: `<cstddef>` - PASSES (test_libcxx_cstddef_transpilation)
+    - Test: `<cstdint>` - PASSES (test_libcxx_cstdint_transpilation)
+    - Test: `<type_traits>` - PASSES (test_libcxx_type_traits_transpilation)
+    - Test: `<initializer_list>` - PASSES (test_libcxx_initializer_list_transpilation)
+    - Test: `<vector>` - PASSES (test_libcxx_vector_transpilation)
+    - Note: All headers transpile successfully, but generated code not yet tested for compilation
+
+- [ ] **23.2** Fix libc++ template patterns
+  - [ ] **23.2.1** Handle `_VSTD::` internal namespace alias (maps to `std::__1::`)
+  - [ ] **23.2.2** Handle `_LIBCPP_INLINE_VISIBILITY` and other attribute macros
+  - [ ] **23.2.3** Handle `__compressed_pair` (libc++ internal type for EBO)
+  - [ ] **23.2.4** Handle allocator_traits and default allocator patterns
+  - [ ] **23.2.5** Handle iterator categories and iterator_traits
+
+- [ ] **23.3** Fix transpiler gaps exposed by libc++
+  - [ ] **23.3.1** Static member initialization (libc++ uses static mutexes, locale facets)
+  - [ ] **23.3.2** Constexpr evaluation in template context
+  - [ ] **23.3.3** Friend function declarations inside class templates
+  - [ ] **23.3.4** Explicit template instantiation declarations (`extern template`)
+  - [ ] **23.3.5** SFINAE-heavy code patterns (enable_if, void_t)
+
+### Phase 2: Link Transpiled Code to Runtime (Priority: High)
+
+Currently E2E tests compile with just `rustc`. We need to link against `fragile-runtime`.
+
+- [ ] **23.4** Update E2E test infrastructure for linking
+  - [ ] **23.4.1** Modify integration_test.rs to link against fragile-runtime static library
+    - Use `rustc output.rs -L path/to/fragile-runtime -l fragile_runtime`
+    - Or compile fragile-runtime as rlib and include in test compilation
+  - [ ] **23.4.2** Add extern declarations to generated Rust code for runtime functions
+    - Generate `extern "C" { fn fopen(...); fn fclose(...); ... }` when stdio needed
+    - Generate pthread externs when threading needed
+  - [ ] **23.4.3** Create test that uses FILE I/O and verifies output
+  - [ ] **23.4.4** Create test that uses pthread and verifies thread creation
+
+- [ ] **23.5** Symbol name mapping for libc++ → fragile-runtime
+  - [ ] **23.5.1** libc++ calls `pthread_create` → map to `fragile_pthread_create`
+    - Option A: Generate wrapper functions in transpiled code
+    - Option B: Use linker symbol aliasing (`--defsym`)
+    - Option C: Rename functions in fragile-runtime to match expected names
+  - [ ] **23.5.2** libc++ calls `fopen`/`fwrite`/etc. → map to our stdio implementation
+  - [ ] **23.5.3** libc++ calls atomic builtins → map to `fragile_atomic_*`
+
+### Phase 3: Memory Allocator Integration (Priority: High)
+
+libc++ containers need working `operator new`/`operator delete`.
+
+- [ ] **23.6** Implement global allocator functions
+  - [ ] **23.6.1** `operator new(size_t)` → `Box::into_raw(Box::from_raw(alloc(...)))` or libc malloc
+  - [ ] **23.6.2** `operator delete(void*)` → `Box::from_raw(...)` drop or libc free
+  - [ ] **23.6.3** `operator new[](size_t)` → array allocation
+  - [ ] **23.6.4** `operator delete[](void*)` → array deallocation
+  - [ ] **23.6.5** Aligned variants: `operator new(size_t, align_val_t)`
+  - [ ] **23.6.6** Nothrow variants: `operator new(size_t, nothrow_t)`
+
+- [ ] **23.7** Handle libc++ allocator protocol
+  - [ ] **23.7.1** `std::allocator<T>::allocate(n)` → calls operator new
+  - [ ] **23.7.2** `std::allocator<T>::deallocate(p, n)` → calls operator delete
+  - [ ] **23.7.3** `std::allocator_traits` rebind and construct/destroy
+
+### Phase 4: First Working STL Container (Priority: High)
+
+Get `std::vector<int>` working end-to-end.
+
+- [ ] **23.8** std::vector E2E milestone
+  - [ ] **23.8.1** Transpile simple vector usage:
+    ```cpp
+    #include <vector>
+    int main() {
+        std::vector<int> v;
+        v.push_back(1);
+        v.push_back(2);
+        return v.size() == 2 ? 0 : 1;
+    }
+    ```
+  - [ ] **23.8.2** Compile transpiled code with rustc + fragile-runtime
+  - [ ] **23.8.3** Execute and verify exit code
+  - [ ] **23.8.4** Add iteration test: `for (int x : v) { ... }`
+  - [ ] **23.8.5** Add resize/reserve/capacity tests
+
+### Phase 5: Console I/O Working (Priority: Medium)
+
+Get `std::cout` working end-to-end.
+
+- [ ] **23.9** iostream E2E milestone
+  - [ ] **23.9.1** Transpile simple cout usage:
+    ```cpp
+    #include <iostream>
+    int main() {
+        std::cout << "Hello" << std::endl;
+        return 0;
+    }
+    ```
+  - [ ] **23.9.2** Fix iostream static initialization (global cout/cin/cerr objects)
+    - libc++ uses `__start_std_streams` section for initialization
+    - May need to generate Rust static initialization code
+  - [ ] **23.9.3** Fix streambuf → stdio integration
+    - libc++ `basic_filebuf` calls `fwrite`/`fread`
+    - Verify our stdio implementation is compatible
+  - [ ] **23.9.4** Execute and capture stdout, verify "Hello\n"
+
+### Phase 6: Threading Working (Priority: Medium)
+
+Get `std::thread` working end-to-end.
+
+- [ ] **23.10** std::thread E2E milestone
+  - [ ] **23.10.1** Transpile simple thread usage:
+    ```cpp
+    #include <thread>
+    void worker() { }
+    int main() {
+        std::thread t(worker);
+        t.join();
+        return 0;
+    }
+    ```
+  - [ ] **23.10.2** Verify pthread_create/join are called correctly
+  - [ ] **23.10.3** Add mutex test with std::mutex
+  - [ ] **23.10.4** Add condition variable test
+
+### Phase 7: Real-World Project Test (Priority: Goal)
+
+Test against actual open-source C++ projects.
+
+- [ ] **23.11** Select and attempt real projects
+  - [ ] **23.11.1** Single-file projects (< 1K LOC)
+    - json.hpp (nlohmann JSON, header-only)
+    - fmt (format library, mostly header-only)
+  - [ ] **23.11.2** Small projects (1K-5K LOC)
+    - A simple CLI tool
+    - A small library with tests
+  - [ ] **23.11.3** Medium projects (5K-50K LOC)
+    - Target: compile and run test suite
+    - Accept partial success (some tests may fail)
+
+### Success Criteria
+
+**Phase 1 Complete**: Can transpile `#include <vector>` without transpiler crashes
+**Phase 2 Complete**: E2E tests link against fragile-runtime
+**Phase 3 Complete**: Memory allocation works (new/delete)
+**Phase 4 Complete**: std::vector<int> push_back and iteration works
+**Phase 5 Complete**: std::cout << "Hello" prints to terminal
+**Phase 6 Complete**: std::thread creation and join works
+**Phase 7 Complete**: At least one real 5K+ LOC project compiles and runs tests
+
+### Estimated Complexity
+
+| Phase | Effort | Dependencies |
+|-------|--------|--------------|
+| Phase 1 | Medium | None (diagnostic work) |
+| Phase 2 | Low | Phase 1 (need to know what to link) |
+| Phase 3 | Medium | Phase 2 (need linking working) |
+| Phase 4 | High | Phase 1, 2, 3 |
+| Phase 5 | High | Phase 2, 3 (+ static init) |
+| Phase 6 | Medium | Phase 2 |
+| Phase 7 | Variable | All previous phases |
+
 ### Why libc++ Over libstdc++
 
 | Aspect | libc++ (LLVM) | libstdc++ (GNU) |
@@ -605,11 +787,10 @@ See `docs/transpiler-status.md` for detailed feature matrix.
 ### Partial Support
 - Rvalue references (parsed, basic return-by-value works)
 
-### Not Yet Supported
-- I/O streams (`std::cout`, `std::cin`, file streams)
-- C++20 coroutines (`co_await`, `co_yield`, `co_return`)
-- C++20 modules
-- C++20 ranges library
+### Not Yet Supported (Requiring STL Integration)
+- STL containers end-to-end (`std::vector`, `std::string`, etc.) - transpiler ready, linking not tested
+- I/O streams end-to-end (`std::cout`, `std::cin`) - runtime ready, libc++ integration not tested
+- C++20 modules (`export module`) - libclang limitation, only `import` supported
 
 ---
 

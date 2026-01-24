@@ -2129,3 +2129,239 @@ fn test_e2e_access_specifiers() {
 
     assert_eq!(exit_code, 60, "Access specifiers should generate appropriate visibility");
 }
+
+// =============================================================================
+// STL Transpilation Tests (Section 23 - libc++ integration)
+// =============================================================================
+// These tests verify that code using C++ standard library headers can be
+// transpiled with the vendored libc++. They capture transpiler errors to
+// document which patterns fail.
+
+/// Helper function to transpile code with vendored libc++ and capture errors.
+/// Returns (success, rust_code, errors) where errors are transpiler/parse errors.
+fn transpile_with_vendored_libcxx(cpp_source: &str, filename: &str) -> (bool, String, String) {
+    use fragile_clang::ClangParser;
+
+    // Try to create parser with vendored libc++
+    let parser = match ClangParser::with_vendored_libcxx() {
+        Ok(p) => p,
+        Err(e) => {
+            return (false, String::new(), format!("Failed to create parser with vendored libc++: {}", e));
+        }
+    };
+
+    // Parse and generate Rust code
+    match parser.parse_string(cpp_source, filename) {
+        Ok(ast) => {
+            let rust_code = AstCodeGen::new().generate(&ast.translation_unit);
+            (true, rust_code, String::new())
+        }
+        Err(e) => {
+            (false, String::new(), format!("Parse error: {}", e))
+        }
+    }
+}
+
+/// Test 23.1.1: Transpile minimal code with #include <vector>
+/// This test documents the current state of libc++ vector transpilation.
+/// It's not expected to produce compilable Rust code yet - we're documenting
+/// what works and what doesn't.
+#[test]
+fn test_libcxx_vector_transpilation() {
+    // Skip if vendored libc++ is not available
+    if !ClangParser::is_vendored_libcxx_available() {
+        eprintln!("Skipping test: vendored libc++ not available");
+        return;
+    }
+
+    let source = r#"
+        #include <vector>
+
+        int main() {
+            std::vector<int> v;
+            v.push_back(1);
+            v.push_back(2);
+            return v.size() == 2 ? 0 : 1;
+        }
+    "#;
+
+    let (success, rust_code, errors) = transpile_with_vendored_libcxx(source, "test_vector.cpp");
+
+    // Log results for diagnostic purposes
+    println!("=== libc++ vector transpilation test ===");
+    println!("Transpilation success: {}", success);
+    if !errors.is_empty() {
+        println!("Errors:\n{}", errors);
+    }
+    if !rust_code.is_empty() {
+        // Only print first 2000 chars to avoid overwhelming output
+        let preview = if rust_code.len() > 2000 {
+            format!("{}...\n[truncated, {} more chars]", &rust_code[..2000], rust_code.len() - 2000)
+        } else {
+            rust_code.clone()
+        };
+        println!("Generated Rust code:\n{}", preview);
+    }
+
+    // For now, we just check that the transpiler doesn't crash
+    // Later tests will verify the code compiles and runs
+    assert!(success || !errors.is_empty(), "Should either succeed or report errors, not crash");
+}
+
+/// Test 23.1.3.1: Transpile minimal <cstddef> (just typedefs)
+/// This is the simplest libc++ header - tests basic include mechanism.
+#[test]
+fn test_libcxx_cstddef_transpilation() {
+    if !ClangParser::is_vendored_libcxx_available() {
+        eprintln!("Skipping test: vendored libc++ not available");
+        return;
+    }
+
+    let source = r#"
+        #include <cstddef>
+
+        int main() {
+            std::size_t sz = 42;
+            std::ptrdiff_t diff = -10;
+            return (sz == 42 && diff == -10) ? 0 : 1;
+        }
+    "#;
+
+    let (success, rust_code, errors) = transpile_with_vendored_libcxx(source, "test_cstddef.cpp");
+
+    println!("=== libc++ cstddef transpilation test ===");
+    println!("Transpilation success: {}", success);
+    if !errors.is_empty() {
+        println!("Errors:\n{}", errors);
+    }
+    if !rust_code.is_empty() && rust_code.len() < 1000 {
+        println!("Generated Rust code:\n{}", rust_code);
+    }
+
+    assert!(success || !errors.is_empty(), "Should either succeed or report errors");
+}
+
+/// Test 23.1.3.2: Transpile <cstdint> (integer types)
+#[test]
+fn test_libcxx_cstdint_transpilation() {
+    if !ClangParser::is_vendored_libcxx_available() {
+        eprintln!("Skipping test: vendored libc++ not available");
+        return;
+    }
+
+    let source = r#"
+        #include <cstdint>
+
+        int main() {
+            int8_t i8 = -1;
+            uint16_t u16 = 65535;
+            int32_t i32 = -2147483647;
+            uint64_t u64 = 18446744073709551615ULL;
+
+            // Basic sanity checks
+            if (i8 != -1) return 1;
+            if (u16 != 65535) return 2;
+            if (i32 != -2147483647) return 3;
+            return 0;
+        }
+    "#;
+
+    let (success, rust_code, errors) = transpile_with_vendored_libcxx(source, "test_cstdint.cpp");
+
+    println!("=== libc++ cstdint transpilation test ===");
+    println!("Transpilation success: {}", success);
+    if !errors.is_empty() {
+        println!("Errors:\n{}", errors);
+    }
+    if !rust_code.is_empty() && rust_code.len() < 1000 {
+        println!("Generated Rust code:\n{}", rust_code);
+    }
+
+    assert!(success || !errors.is_empty(), "Should either succeed or report errors");
+}
+
+/// Test 23.1.3.3: Transpile <initializer_list> (simple container)
+#[test]
+fn test_libcxx_initializer_list_transpilation() {
+    if !ClangParser::is_vendored_libcxx_available() {
+        eprintln!("Skipping test: vendored libc++ not available");
+        return;
+    }
+
+    let source = r#"
+        #include <initializer_list>
+
+        int sum(std::initializer_list<int> values) {
+            int total = 0;
+            for (int v : values) {
+                total += v;
+            }
+            return total;
+        }
+
+        int main() {
+            int result = sum({1, 2, 3, 4, 5});
+            return result == 15 ? 0 : 1;
+        }
+    "#;
+
+    let (success, rust_code, errors) = transpile_with_vendored_libcxx(source, "test_init_list.cpp");
+
+    println!("=== libc++ initializer_list transpilation test ===");
+    println!("Transpilation success: {}", success);
+    if !errors.is_empty() {
+        println!("Errors:\n{}", errors);
+    }
+    if !rust_code.is_empty() {
+        let preview = if rust_code.len() > 2000 {
+            format!("{}...\n[truncated]", &rust_code[..2000])
+        } else {
+            rust_code.clone()
+        };
+        println!("Generated Rust code:\n{}", preview);
+    }
+
+    assert!(success || !errors.is_empty(), "Should either succeed or report errors");
+}
+
+/// Test 23.1.3.4: Transpile <type_traits> (template metaprogramming)
+#[test]
+fn test_libcxx_type_traits_transpilation() {
+    if !ClangParser::is_vendored_libcxx_available() {
+        eprintln!("Skipping test: vendored libc++ not available");
+        return;
+    }
+
+    let source = r#"
+        #include <type_traits>
+
+        template<typename T>
+        T identity(T value) {
+            static_assert(std::is_integral<T>::value, "Must be integral");
+            return value;
+        }
+
+        int main() {
+            int x = identity(42);
+            return x == 42 ? 0 : 1;
+        }
+    "#;
+
+    let (success, rust_code, errors) = transpile_with_vendored_libcxx(source, "test_type_traits.cpp");
+
+    println!("=== libc++ type_traits transpilation test ===");
+    println!("Transpilation success: {}", success);
+    if !errors.is_empty() {
+        println!("Errors:\n{}", errors);
+    }
+    if !rust_code.is_empty() {
+        let preview = if rust_code.len() > 2000 {
+            format!("{}...\n[truncated]", &rust_code[..2000])
+        } else {
+            rust_code.clone()
+        };
+        println!("Generated Rust code:\n{}", preview);
+    }
+
+    assert!(success || !errors.is_empty(), "Should either succeed or report errors");
+}

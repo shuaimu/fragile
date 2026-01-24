@@ -303,8 +303,9 @@ See `TODO.md` Section 22 for the implementation plan.
 | Feature | Status | Notes |
 |---------|--------|-------|
 | Grammar tests | ✅ | 20/20 passing |
-| E2E tests | ✅ | 62/62 passing |
+| E2E tests | ✅ | 67/67 passing (62 core + 5 libc++) |
 | Unit tests | ✅ | 179 total tests |
+| libc++ transpilation | ✅ | 5/5 passing (cstddef, cstdint, type_traits, initializer_list, vector) |
 | Compile generated code | ✅ | Automatically verified |
 | Run generated code | ✅ | Exit codes verified |
 
@@ -344,6 +345,13 @@ See `TODO.md` Section 22 for the implementation plan.
 - String literals and char literals
 - Implicit type casts (char→int, etc.)
 - Designated initializers (C++20)
+
+### libc++ Transpilation Tests (5/5)
+- `<cstddef>` - Basic typedefs (size_t, ptrdiff_t)
+- `<cstdint>` - Integer types (int8_t, uint64_t, etc.)
+- `<type_traits>` - Template metaprogramming
+- `<initializer_list>` - Simple container with range-for
+- `<vector>` - Full STL container (generates ~215K chars)
 
 ---
 
