@@ -688,9 +688,17 @@ impl AstCodeGen {
                         param_strs.push("&mut self".to_string());
                     }
 
+                    // Deduplicate parameter names (C++ allows unnamed params, Rust doesn't)
+                    let mut param_name_counts: HashMap<String, usize> = HashMap::new();
                     for (param_name, param_ty) in params {
                         let rust_ty = self.substitute_template_type(param_ty, subst_map);
-                        param_strs.push(format!("{}: {}", sanitize_identifier(param_name), rust_ty));
+                        let mut name = sanitize_identifier(param_name);
+                        let count = param_name_counts.entry(name.clone()).or_insert(0);
+                        if *count > 0 {
+                            name = format!("{}_{}", name, *count);
+                        }
+                        *param_name_counts.get_mut(&sanitize_identifier(param_name)).unwrap() += 1;
+                        param_strs.push(format!("{}: {}", name, rust_ty));
                     }
 
                     let ret_str = if ret_type == "()" || ret_type.is_empty() {
@@ -1614,8 +1622,18 @@ impl AstCodeGen {
         self.writeln(&format!("/// @fragile_cpp_mangled: {}", mangled_name));
         self.writeln(&format!("#[export_name = \"{}\"]", mangled_name));
 
+        // Deduplicate parameter names (C++ allows unnamed params, Rust doesn't)
+        let mut param_name_counts: HashMap<String, usize> = HashMap::new();
         let params_str = params.iter()
-            .map(|(n, t)| format!("{}: {}", sanitize_identifier(n), t.to_rust_type_str()))
+            .map(|(n, t)| {
+                let mut param_name = sanitize_identifier(n);
+                let count = param_name_counts.entry(param_name.clone()).or_insert(0);
+                if *count > 0 {
+                    param_name = format!("{}_{}", param_name, *count);
+                }
+                *param_name_counts.get_mut(&sanitize_identifier(n)).unwrap() += 1;
+                format!("{}: {}", param_name, t.to_rust_type_str())
+            })
             .collect::<Vec<_>>()
             .join(", ");
 
@@ -2142,10 +2160,19 @@ impl AstCodeGen {
         }
 
         // Function signature - convert polymorphic pointers to trait objects
+        // Deduplicate parameter names (C++ allows unnamed params, Rust doesn't)
+        let mut param_name_counts: HashMap<String, usize> = HashMap::new();
         let params_str = params.iter()
             .map(|(n, t)| {
                 let type_str = self.convert_type_for_polymorphism(t);
-                format!("{}: {}", sanitize_identifier(n), type_str)
+                let mut param_name = sanitize_identifier(n);
+                // If this parameter name has been seen before, add a suffix
+                let count = param_name_counts.entry(param_name.clone()).or_insert(0);
+                if *count > 0 {
+                    param_name = format!("{}_{}", param_name, *count);
+                }
+                *param_name_counts.get_mut(&sanitize_identifier(n)).unwrap() += 1;
+                format!("{}: {}", param_name, type_str)
             })
             .collect::<Vec<_>>()
             .join(", ");
@@ -4143,8 +4170,19 @@ impl AstCodeGen {
                 } else {
                     if is_mutable_method { "&mut self, ".to_string() } else { "&self, ".to_string() }
                 };
+                // Deduplicate parameter names (C++ allows unnamed params, Rust doesn't)
+                let mut param_name_counts: HashMap<String, usize> = HashMap::new();
                 let params_str = params.iter()
-                    .map(|(n, t)| format!("{}: {}", sanitize_identifier(n), t.to_rust_type_str()))
+                    .map(|(n, t)| {
+                        let mut param_name = sanitize_identifier(n);
+                        // If this parameter name has been seen before, add a suffix
+                        let count = param_name_counts.entry(param_name.clone()).or_insert(0);
+                        if *count > 0 {
+                            param_name = format!("{}_{}", param_name, *count);
+                        }
+                        *param_name_counts.get_mut(&sanitize_identifier(n)).unwrap() += 1;
+                        format!("{}: {}", param_name, t.to_rust_type_str())
+                    })
                     .collect::<Vec<_>>()
                     .join(", ");
 
@@ -4219,14 +4257,23 @@ impl AstCodeGen {
                 };
                 let internal_name = format!("__new_without_vbases_{}", params.len());
 
+                // Deduplicate parameter names (C++ allows unnamed params, Rust doesn't)
+                let mut param_name_counts: HashMap<String, usize> = HashMap::new();
+                let mut deduped_params: Vec<String> = Vec::new();
                 let params_str = params.iter()
-                    .map(|(n, t)| format!("{}: {}", sanitize_identifier(n), t.to_rust_type_str()))
+                    .map(|(n, t)| {
+                        let mut param_name = sanitize_identifier(n);
+                        let count = param_name_counts.entry(param_name.clone()).or_insert(0);
+                        if *count > 0 {
+                            param_name = format!("{}_{}", param_name, *count);
+                        }
+                        *param_name_counts.get_mut(&sanitize_identifier(n)).unwrap() += 1;
+                        deduped_params.push(param_name.clone());
+                        format!("{}: {}", param_name, t.to_rust_type_str())
+                    })
                     .collect::<Vec<_>>()
                     .join(", ");
-                let params_names = params.iter()
-                    .map(|(n, _)| sanitize_identifier(n))
-                    .collect::<Vec<_>>()
-                    .join(", ");
+                let params_names = deduped_params.join(", ");
 
                 // Extract member initializers and base class initializers from constructor children
                 // Pattern 1: MemberRef { name } followed by initialization expression (member initializer list)
@@ -6472,9 +6519,18 @@ impl AstCodeGen {
                 let needs_move = *capture_default == CaptureDefault::ByCopy ||
                     captures.iter().any(|(_, by_ref)| !*by_ref);
 
-                // Generate parameter list
+                // Generate parameter list with deduplication
+                let mut param_name_counts: HashMap<String, usize> = HashMap::new();
                 let params_str = params.iter()
-                    .map(|(name, ty)| format!("{}: {}", sanitize_identifier(name), ty.to_rust_type_str()))
+                    .map(|(name, ty)| {
+                        let mut param_name = sanitize_identifier(name);
+                        let count = param_name_counts.entry(param_name.clone()).or_insert(0);
+                        if *count > 0 {
+                            param_name = format!("{}_{}", param_name, *count);
+                        }
+                        *param_name_counts.get_mut(&sanitize_identifier(name)).unwrap() += 1;
+                        format!("{}: {}", param_name, ty.to_rust_type_str())
+                    })
                     .collect::<Vec<_>>()
                     .join(", ");
 
