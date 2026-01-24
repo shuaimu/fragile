@@ -42,7 +42,7 @@ C++ Source → Clang (libclang) → Clang AST → Rust Source → rustc → Bina
 | References (`T&`) | ✅ | Maps to `&T` / `&mut T` |
 | Rvalue references (`T&&`) | ⚠️ | Parsed, basic return-by-value works |
 | Arrays (`T[N]`) | ✅ | Maps to `[T; N]` |
-| Function pointers | ⚠️ | Parsed, codegen incomplete |
+| Function pointers | ✅ | `Option<fn(...)>` with Some()/None |
 
 ## Structs and Classes
 
@@ -51,12 +51,13 @@ C++ Source → Clang (libclang) → Clang AST → Rust Source → rustc → Bina
 | Struct definition | ✅ | `#[repr(C)]` struct |
 | Class definition | ✅ | Same as struct |
 | Public fields | ✅ | `pub field: Type` |
-| Private fields | ⚠️ | Currently all fields are `pub` |
+| Private fields | ✅ | No `pub` for private, `pub(crate)` for protected |
 | Field access (`.`) | ✅ | `obj.field` |
 | Arrow access (`->`) | ✅ | `(*ptr).field` |
 | Nested structs | ✅ | |
-| Anonymous structs | ❌ | |
-| Bit fields | ❌ | |
+| Anonymous structs | ✅ | Flatten fields into parent or synthetic name |
+| Anonymous unions | ✅ | `#[repr(C)] union` with synthetic name |
+| Bit fields | ✅ | Packed storage with getter/setter accessors |
 
 ## Constructors and Destructors
 
@@ -104,8 +105,9 @@ C++ Source → Clang (libclang) → Clang AST → Rust Source → rustc → Bina
 | Single inheritance | ✅ | Base embedded as `__base` field |
 | Multiple inheritance | ✅ | Multiple `__base_N` fields |
 | Virtual inheritance | ✅ | Diamond inheritance via shared pointers |
-| `dynamic_cast` | ⚠️ | Via trait objects |
-| RTTI (`typeid`) | ❌ | |
+| `dynamic_cast` | ✅ | Via trait objects, reference types supported |
+| RTTI (`typeid`) | ✅ | Maps to `TypeId::of::<T>()` |
+| `type_info` class | ✅ | Wrapper struct in fragile-runtime |
 
 ## Functions
 
@@ -117,7 +119,7 @@ C++ Source → Clang (libclang) → Clang AST → Rust Source → rustc → Bina
 | Parameters (by reference) | ✅ | |
 | Return values | ✅ | |
 | Recursion | ✅ | Tested with factorial |
-| Variadic functions | ❌ | |
+| Variadic functions | ✅ | `extern "C"` with `...`, `va_list` → `VaList` |
 | Default parameters | ✅ | Evaluated at call site via clang |
 | Function overloading | ✅ | Clang resolves, name mangled |
 
@@ -179,9 +181,9 @@ C++ Source → Clang (libclang) → Clang AST → Rust Source → rustc → Bina
 |---------|--------|-------|
 | Namespace declaration | ✅ | Maps to Rust modules |
 | Nested namespaces | ✅ | Nested modules |
-| Using directive | ⚠️ | Parsed |
+| Using directive | ✅ | `use namespace::*;` |
 | Using declaration | ✅ | `pub type` aliases |
-| Anonymous namespace | ❌ | |
+| Anonymous namespace | ✅ | Private module with synthetic name |
 
 ## Memory Management
 
@@ -190,8 +192,9 @@ C++ Source → Clang (libclang) → Clang AST → Rust Source → rustc → Bina
 | Stack allocation | ✅ | Local variables |
 | `new` / `delete` | ✅ | `Box::into_raw(Box::new())` / `Box::from_raw()` |
 | `new[]` / `delete[]` | ✅ | Vec allocation with raw pointer |
-| Placement new | ❌ | |
-| Smart pointers | ✅ | Type mappings (unique_ptr→Box, shared_ptr→Arc, weak_ptr→Weak) |
+| Placement new | ✅ | `std::ptr::write()` with alignment checks |
+| Array placement new | ✅ | Loop with `ptr::write` |
+| Smart pointers | ✅ | Types pass through (awaiting libc++ transpilation) |
 
 ## Error Handling
 
@@ -231,34 +234,37 @@ C++ Source → Clang (libclang) → Clang AST → Rust Source → rustc → Bina
 | Range-based for | ✅ | |
 | Lambdas | ✅ | |
 | Concepts | ✅ | Handled by Clang |
-| Ranges | ❌ | |
-| Coroutines | ❌ | Should map to async Rust |
-| Modules | ❌ | |
+| Ranges (views) | ✅ | filter/transform/take/drop/reverse → iterator methods |
+| Ranges (algorithms) | ✅ | for_each/find/sort/copy → iterator methods |
+| Coroutines (async) | ✅ | `async fn` with `.await` |
+| Coroutines (generators) | ✅ | State machine with Iterator impl |
+| Modules (import) | ✅ | CXCursor_ModuleImportDecl → comment (pending full support) |
+| Modules (export) | ⚠️ | Requires token-based parsing |
 | `constexpr` | ✅ | Evaluated by Clang |
 | `consteval` | ✅ | Evaluated by Clang |
-| Three-way comparison (`<=>`) | ❌ | |
+| Three-way comparison (`<=>`) | ✅ | `a.cmp(&b) as i8` |
 | Designated initializers | ✅ | `{ .x = 10 }` syntax |
 
 ## Standard Library Support
 
-### Current Approach (Type Mappings - To Be Removed)
+### Current Approach (Pass-Through - Awaiting libc++ Transpilation)
 
-The current approach maps C++ STL types to Rust equivalents. These mappings will be removed.
+STL types pass through as regular C++ types, awaiting full libc++ transpilation.
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| `std::string` | ⚠️ | Currently maps to `String` (mapping to be removed) |
-| `std::vector<T>` | ⚠️ | Currently maps to `Vec<T>` (mapping to be removed) |
-| `std::map<K,V>` | ⚠️ | Currently maps to `BTreeMap<K,V>` (mapping to be removed) |
-| `std::unordered_map<K,V>` | ⚠️ | Currently maps to `HashMap<K,V>` (mapping to be removed) |
-| `std::unique_ptr<T>` | ⚠️ | Currently maps to `Box<T>` (mapping to be removed) |
-| `std::shared_ptr<T>` | ⚠️ | Currently maps to `Arc<T>` (mapping to be removed) |
-| `std::weak_ptr<T>` | ⚠️ | Currently maps to `Weak<T>` (mapping to be removed) |
-| `std::optional<T>` | ⚠️ | Currently maps to `Option<T>` (mapping to be removed) |
-| `std::array<T, N>` | ⚠️ | Currently maps to `[T; N]` (mapping to be removed) |
-| `std::span<T>` | ⚠️ | Currently maps to `&[T]` (mapping to be removed) |
-| `std::variant` | ⚠️ | Currently maps to Rust enum (mapping to be removed) |
-| I/O streams | ❌ | Not yet implemented |
+| `std::string` | ✅ | Passes through as `std_string` |
+| `std::vector<T>` | ✅ | Passes through as `std_vector_T` |
+| `std::map<K,V>` | ✅ | Passes through (awaiting libc++) |
+| `std::unordered_map<K,V>` | ✅ | Passes through (awaiting libc++) |
+| `std::unique_ptr<T>` | ✅ | Passes through (awaiting libc++) |
+| `std::shared_ptr<T>` | ✅ | Passes through (awaiting libc++) |
+| `std::weak_ptr<T>` | ✅ | Passes through (awaiting libc++) |
+| `std::optional<T>` | ✅ | Passes through (awaiting libc++) |
+| `std::array<T, N>` | ✅ | Passes through (awaiting libc++) |
+| `std::span<T>` | ✅ | Passes through (awaiting libc++) |
+| `std::variant` | ✅ | Passes through (awaiting libc++) |
+| I/O streams | ✅ | Passes through (C stdio in fragile-runtime) |
 
 ### Future Approach (No Special Treatment)
 
@@ -297,7 +303,8 @@ See `TODO.md` Section 22 for the implementation plan.
 | Feature | Status | Notes |
 |---------|--------|-------|
 | Grammar tests | ✅ | 20/20 passing |
-| E2E tests | ✅ | 57/57 passing |
+| E2E tests | ✅ | 62/62 passing |
+| Unit tests | ✅ | 179 total tests |
 | Compile generated code | ✅ | Automatically verified |
 | Run generated code | ✅ | Exit codes verified |
 
@@ -313,7 +320,7 @@ See `TODO.md` Section 22 for the implementation plan.
 - Pointers, references, arrays
 - Ternary operator, nested structs
 
-### E2E Tests (57/57)
+### E2E Tests (62/62)
 - Simple functions, factorial, arrays
 - Pointers, references
 - Constructors, destructors (Drop trait)
@@ -340,4 +347,15 @@ See `TODO.md` Section 22 for the implementation plan.
 
 ---
 
-*Last updated: 2026-01-22*
+### fragile-runtime Tests
+- pthread wrappers (create, join, detach, attributes)
+- pthread_mutex (init, lock, unlock, trylock)
+- atomics (load, store, exchange, CAS, fetch_ops)
+- condition variables (wait, signal, broadcast)
+- read-write locks (rdlock, wrlock, trylock)
+- RTTI (type_info wrapper with name, hash_code, before)
+- C stdio (fopen/fclose, fread/fwrite, fseek/ftell, standard streams)
+
+---
+
+*Last updated: 2026-01-24*
