@@ -3718,6 +3718,7 @@ fn cursor_mangled_name(cursor: clang_sys::CXCursor) -> String {
 }
 
 #[cfg(test)]
+#[allow(clippy::approx_constant)] // Test values that happen to be close to PI aren't using PI
 mod tests {
     use super::*;
 

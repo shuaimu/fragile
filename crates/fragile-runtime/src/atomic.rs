@@ -25,7 +25,7 @@ fn to_ordering(memory_order: i32) -> Ordering {
         2 => Ordering::Acquire,
         3 => Ordering::Release,
         4 => Ordering::AcqRel,
-        5 | _ => Ordering::SeqCst, // default to strongest ordering
+        _ => Ordering::SeqCst, // 5 and unknown values default to strongest ordering
     }
 }
 
@@ -36,7 +36,7 @@ fn to_failure_ordering(memory_order: i32) -> Ordering {
         1 | 2 => Ordering::Acquire,
         3 => Ordering::Relaxed, // Release becomes Relaxed for failure
         4 => Ordering::Acquire, // AcqRel becomes Acquire for failure
-        5 | _ => Ordering::SeqCst,
+        _ => Ordering::SeqCst,  // 5 and unknown values default to SeqCst
     }
 }
 

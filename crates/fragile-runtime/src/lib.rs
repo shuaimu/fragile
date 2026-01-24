@@ -1,3 +1,7 @@
+// FFI functions take raw pointers that are dereferenced - this is intentional for C compatibility.
+// The caller (transpiled C++ code) is responsible for passing valid pointers.
+#![allow(clippy::not_unsafe_ptr_arg_deref)]
+
 //! Runtime library for C++ feature support in Fragile compiler.
 //!
 //! This library provides runtime support for C++ features that cannot be
