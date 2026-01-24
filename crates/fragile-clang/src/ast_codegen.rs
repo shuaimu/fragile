@@ -2938,6 +2938,17 @@ impl AstCodeGen {
         }
     }
 
+    /// Check if a node contains a TypeidExpr (possibly wrapped in Unknown/ImplicitCast).
+    fn contains_typeid_expr(node: &ClangNode) -> bool {
+        match &node.kind {
+            ClangNodeKind::TypeidExpr { .. } => true,
+            ClangNodeKind::Unknown(_) | ClangNodeKind::ImplicitCastExpr { .. } => {
+                node.children.iter().any(|c| Self::contains_typeid_expr(c))
+            }
+            _ => false,
+        }
+    }
+
     /// Collect all output arguments from a chained operator<< expression.
     /// Returns (stream_type, args_in_order) where args_in_order is left-to-right.
     fn collect_stream_output_args<'a>(
@@ -4810,6 +4821,19 @@ impl AstCodeGen {
                     } else if let Some(right_idx) = right_idx_opt {
                         // Binary operator: left.op_X(right) or left.op_X(&right)
                         let right_operand = self.expr_to_string(&node.children[right_idx]);
+
+                        // Special case: type_info comparison (typeid == typeid)
+                        // Use native Rust == / != since std::any::TypeId supports it directly
+                        let left_is_typeid = matches!(&node.children[left_idx].kind, ClangNodeKind::TypeidExpr { .. })
+                            || Self::contains_typeid_expr(&node.children[left_idx]);
+                        let right_is_typeid = matches!(&node.children[right_idx].kind, ClangNodeKind::TypeidExpr { .. })
+                            || Self::contains_typeid_expr(&node.children[right_idx]);
+
+                        if left_is_typeid && right_is_typeid && (op_name == "operator==" || op_name == "operator!=") {
+                            let rust_op = if op_name == "operator==" { "==" } else { "!=" };
+                            return format!("{} {} {}", left_operand, rust_op, right_operand);
+                        }
+
                         let right_type = Self::get_expr_type(&node.children[right_idx]);
                         // Pass class/struct types by reference, primitives by value
                         let needs_ref = matches!(right_type, Some(CppType::Named(_)));

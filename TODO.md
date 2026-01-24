@@ -235,10 +235,10 @@ crates/
   - Note: Clang instantiates variadic templates, so we transpile the result
 
 ### 16. RTTI (Runtime Type Information) (Priority: Low)
-- [ ] **16.1** typeid operator
+- [x] **16.1** typeid operator ✅ 2026-01-23
   - [x] **16.1.1** Detect `typeid(expr)` and `typeid(Type)` expressions ✅ 2026-01-23
   - [x] **16.1.2** Generate `std::any::TypeId::of::<T>()` for type queries ✅ 2026-01-23
-  - [ ] **16.1.3** Handle `typeid` comparison (`==`, `!=`) (~40 LOC)
+  - [x] **16.1.3** Handle `typeid` comparison (`==`, `!=`) ✅ 2026-01-23
 - [ ] **16.2** type_info class
   - [ ] **16.2.1** Map `std::type_info` to wrapper struct with TypeId (~80 LOC)
   - [ ] **16.2.2** Implement `name()` method via `std::any::type_name` (~40 LOC)
