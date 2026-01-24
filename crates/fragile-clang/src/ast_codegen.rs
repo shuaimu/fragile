@@ -5356,6 +5356,33 @@ impl AstCodeGen {
                     "panic!(\"Rethrow\")".to_string()
                 }
             }
+            // C++ RTTI expressions
+            ClangNodeKind::TypeidExpr { is_type_operand, operand_ty, .. } => {
+                // typeid(expr) or typeid(Type) → std::any::TypeId::of::<T>()
+                if *is_type_operand {
+                    // typeid(Type) → TypeId::of::<RustType>()
+                    format!("std::any::TypeId::of::<{}>()", operand_ty.to_rust_type_str())
+                } else if !node.children.is_empty() {
+                    // typeid(expr) → for polymorphic types, we'd need runtime RTTI
+                    // For now, use the static type from the operand
+                    let expr = self.expr_to_string(&node.children[0]);
+                    format!("/* typeid({}) */ std::any::TypeId::of::<{}>()", expr, operand_ty.to_rust_type_str())
+                } else {
+                    format!("std::any::TypeId::of::<{}>()", operand_ty.to_rust_type_str())
+                }
+            }
+            ClangNodeKind::DynamicCastExpr { target_ty } => {
+                // dynamic_cast<T*>(expr) → expr as *mut T (with runtime check)
+                // For trait objects, we use downcast
+                if !node.children.is_empty() {
+                    let expr = self.expr_to_string(&node.children[0]);
+                    let target_str = target_ty.to_rust_type_str();
+                    // For pointers, generate an unsafe cast that would need runtime checking
+                    format!("/* dynamic_cast */ {} as {}", expr, target_str)
+                } else {
+                    format!("/* dynamic_cast to {} without operand */", target_ty.to_rust_type_str())
+                }
+            }
             // C++20 Coroutine expressions
             ClangNodeKind::CoawaitExpr { .. } => {
                 // co_await expr → expr.await

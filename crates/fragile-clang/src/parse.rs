@@ -1224,7 +1224,50 @@ impl ClangParser {
                 // C++ RTTI
                 clang_sys::CXCursor_CXXTypeidExpr => {
                     let result_ty = self.convert_type(clang_sys::clang_getCursorType(cursor));
-                    ClangNodeKind::TypeidExpr { result_ty }
+
+                    // Check if this is a type operand by looking at the first child
+                    // For typeid(Type), there are no children or a TypeRef child
+                    // For typeid(expr), there's an expression child
+                    let mut is_type_operand = true;
+                    let mut operand_ty = CppType::Void;
+
+                    // Visit children to determine operand type
+                    let mut first_child_kind: i32 = 0;
+                    let mut first_child_cursor = clang_sys::clang_getNullCursor();
+                    extern "C" fn find_first_child(
+                        c: clang_sys::CXCursor,
+                        _parent: clang_sys::CXCursor,
+                        data: clang_sys::CXClientData,
+                    ) -> clang_sys::CXChildVisitResult {
+                        let (kind_ptr, cursor_ptr) = unsafe {
+                            &mut *(data as *mut (i32, clang_sys::CXCursor))
+                        };
+                        *kind_ptr = unsafe { clang_sys::clang_getCursorKind(c) };
+                        *cursor_ptr = c;
+                        clang_sys::CXChildVisit_Break
+                    }
+                    let mut child_data = (first_child_kind, first_child_cursor);
+                    clang_sys::clang_visitChildren(
+                        cursor,
+                        find_first_child,
+                        &mut child_data as *mut (i32, clang_sys::CXCursor) as clang_sys::CXClientData,
+                    );
+                    first_child_kind = child_data.0;
+                    first_child_cursor = child_data.1;
+
+                    if first_child_kind != 0 {
+                        // If there's a child that's not a TypeRef, it's an expression operand
+                        if first_child_kind != clang_sys::CXCursor_TypeRef {
+                            is_type_operand = false;
+                            // Get the type of the expression being evaluated
+                            operand_ty = self.convert_type(clang_sys::clang_getCursorType(first_child_cursor));
+                        } else {
+                            // TypeRef child - get the referenced type
+                            operand_ty = self.convert_type(clang_sys::clang_getCursorType(first_child_cursor));
+                        }
+                    }
+
+                    ClangNodeKind::TypeidExpr { result_ty, is_type_operand, operand_ty }
                 }
 
                 clang_sys::CXCursor_CXXDynamicCastExpr => {

@@ -542,6 +542,10 @@ pub enum ClangNodeKind {
     TypeidExpr {
         /// Type of the result (std::type_info const&)
         result_ty: CppType,
+        /// If true, operand is a type; if false, operand is an expression (in children)
+        is_type_operand: bool,
+        /// The type being queried (for both type operand and expression operand)
+        operand_ty: CppType,
     },
 
     /// dynamic_cast expression

@@ -231,13 +231,13 @@ crates/
     - Note: `va_arg` is exposed as UnexposedExpr in libclang, type info not available
     - Full `va_arg` support requires extending libclang or using token-based parsing
   - [x] **15.1.4** Generate `extern "C"` with `...` for variadic functions ✅ 2026-01-23
-- [ ] **15.2** Variadic templates (already handled by Clang instantiation)
+- [x] **15.2** Variadic templates ✅ (Clang handles instantiation)
   - Note: Clang instantiates variadic templates, so we transpile the result
 
 ### 16. RTTI (Runtime Type Information) (Priority: Low)
 - [ ] **16.1** typeid operator
-  - [ ] **16.1.1** Detect `typeid(expr)` and `typeid(Type)` expressions (~50 LOC)
-  - [ ] **16.1.2** Generate `std::any::TypeId::of::<T>()` for type queries (~60 LOC)
+  - [x] **16.1.1** Detect `typeid(expr)` and `typeid(Type)` expressions ✅ 2026-01-23
+  - [x] **16.1.2** Generate `std::any::TypeId::of::<T>()` for type queries ✅ 2026-01-23
   - [ ] **16.1.3** Handle `typeid` comparison (`==`, `!=`) (~40 LOC)
 - [ ] **16.2** type_info class
   - [ ] **16.2.1** Map `std::type_info` to wrapper struct with TypeId (~80 LOC)
