@@ -222,7 +222,9 @@ crates/
   - [x] **14.2.1** Generate getter/setter methods for bit field access (~100 LOC) ✅ 2026-01-24 [docs/dev/plan_14_2_1_bit_field_accessors.md]
   - [x] **14.2.2** Pack adjacent bit fields into appropriate integer type (~120 LOC) ✅ 2026-01-24 (done as part of 14.1.2)
   - [x] **14.2.3** Handle bit field assignment and initialization (~80 LOC) ✅ 2026-01-24 (done via set_* methods)
-- [ ] **14.3** Alternative: Use `bitflags` crate
+- [ ] **14.3** Alternative: Use `bitflags` crate - DEFERRED (current getter/setter approach is more general)
+  - Note: bitflags only suits 1-bit boolean flag patterns; current packed storage with getter/setter
+    methods handles arbitrary-width bit fields correctly (e.g., 3-bit, 5-bit fields)
   - [ ] **14.3.1** Detect bit field patterns that map to flags (~60 LOC)
   - [ ] **14.3.2** Generate `bitflags!` macro invocations (~80 LOC)
 
