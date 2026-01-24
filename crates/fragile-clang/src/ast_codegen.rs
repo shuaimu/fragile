@@ -132,6 +132,8 @@ pub struct AstCodeGen {
     anon_namespace_counter: usize,
     /// Track already generated struct names to avoid duplicates from template instantiation
     generated_structs: HashSet<String>,
+    /// Track already generated type aliases to avoid duplicates
+    generated_aliases: HashSet<String>,
     /// Track already generated module names to avoid duplicates (e.g., inline namespaces)
     generated_modules: HashSet<String>,
     /// Map from class/struct name to its bit field groups
@@ -177,6 +179,7 @@ impl AstCodeGen {
             variant_types: HashMap::new(),
             anon_namespace_counter: 0,
             generated_structs: HashSet::new(),
+            generated_aliases: HashSet::new(),
             generated_modules: HashSet::new(),
             bit_field_groups: HashMap::new(),
             generated_functions: HashMap::new(),
@@ -221,6 +224,9 @@ impl AstCodeGen {
         self.writeln("#![allow(non_snake_case)]");
         self.writeln("");
         self.write_array_helpers();
+
+        // Generate comparison category stubs for libstdc++/libc++
+        self.generate_comparison_category_stubs();
 
         // Generate synthetic enum definitions for std::variant types
         self.generate_variant_enums();
@@ -917,6 +923,43 @@ impl AstCodeGen {
                     None
                 }
             }
+            // libc++ RTTI helper functions
+            "__type_name_to_string" | "__string_to_type_name" => {
+                // These convert between type_info and string representations
+                // Return a placeholder (empty string or dummy pointer)
+                if args.len() >= 1 {
+                    Some((format!("b\"\\0\".as_ptr() as *const i8"), false))
+                } else {
+                    Some(("b\"\\0\".as_ptr() as *const i8".to_string(), false))
+                }
+            }
+            "__is_type_name_unique" => {
+                // Returns true if the type name is unique (no duplicates in the program)
+                // For simplicity, always return true
+                Some(("true".to_string(), false))
+            }
+            "__libcpp_is_constant_evaluated" => {
+                // Like __builtin_is_constant_evaluated but libc++ specific
+                Some(("false".to_string(), false))
+            }
+            // Hash and comparison functions for libc++ internals
+            "__hash" => {
+                // Generic hash function - return a placeholder hash
+                if args.len() >= 1 {
+                    Some((format!("({} as usize).wrapping_mul(0x9e3779b9)", args[0]), false))
+                } else {
+                    Some(("0usize".to_string(), false))
+                }
+            }
+            "__eq" | "__lt" => {
+                // Comparison functions for type_info
+                if args.len() >= 2 {
+                    let op = if func_name == "__eq" { "==" } else { "<" };
+                    Some((format!("({}) {} ({})", args[0], op, args[1]), false))
+                } else {
+                    Some(("false".to_string(), false))
+                }
+            }
             _ => None,
         }
     }
@@ -1442,6 +1485,28 @@ impl AstCodeGen {
         format!("match ({}) {{ {} }}", tuple_expr.join(", "), arms.join(", "))
     }
 
+    /// Generate stub struct definitions for C++ comparison category types.
+    /// These are internal types from libstdc++/libc++ that may be referenced
+    /// but not fully defined in the transpiled code.
+    fn generate_comparison_category_stubs(&mut self) {
+        self.writeln("// Comparison category stubs for libstdc++/libc++");
+        // Type aliases for comparison category internals
+        self.writeln("pub type __cmp_cat_type = i8;");
+        self.writeln("pub type __cmp_cat__Ord = i8;");
+        self.writeln("pub type __cmp_cat__Ncmp = i8;");
+        self.writeln("");
+        // __cmp_cat___unspec - used in comparison expressions
+        self.writeln("#[repr(C)]");
+        self.writeln("#[derive(Default, Copy, Clone)]");
+        self.writeln("pub struct __cmp_cat___unspec { pub value: i8 }");
+        self.writeln("impl __cmp_cat___unspec {");
+        self.indent += 1;
+        self.writeln("pub fn new_1(v: i32) -> Self { Self { value: v as i8 } }");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("");
+    }
+
     /// Generate Rust enum definitions for all collected std::variant types.
     fn generate_variant_enums(&mut self) {
         if self.variant_types.is_empty() {
@@ -1816,8 +1881,9 @@ impl AstCodeGen {
 
     /// Generate a union stub (fields only).
     fn generate_union_stub(&mut self, name: &str, children: &[ClangNode]) {
-        // Convert C++ union name to valid Rust identifier
-        let rust_name = CppType::Named(name.to_string()).to_rust_type_str();
+        // For union DEFINITIONS, use sanitize_identifier() instead of to_rust_type_str()
+        // sanitize_identifier properly escapes Rust keywords with r#
+        let rust_name = sanitize_identifier(name);
 
         // Skip if already generated
         if self.generated_structs.contains(&rust_name) {
@@ -2422,8 +2488,10 @@ impl AstCodeGen {
 
     /// Generate struct definition.
     fn generate_struct(&mut self, name: &str, is_class: bool, children: &[ClangNode]) {
-        // Convert C++ struct name to valid Rust identifier (handles template types)
-        let rust_name = CppType::Named(name.to_string()).to_rust_type_str();
+        // For struct DEFINITIONS, use sanitize_identifier() instead of to_rust_type_str()
+        // to_rust_type_str() maps some types to primitives (e.g., exception -> c_void)
+        // which is wrong for struct definitions - we want the actual struct name
+        let rust_name = sanitize_identifier(name);
 
         // Skip if already generated (handles duplicate template instantiations)
         if self.generated_structs.contains(&rust_name) {
@@ -2813,8 +2881,11 @@ impl AstCodeGen {
 
     /// Generate a Rust union from a C++ union declaration.
     fn generate_union(&mut self, name: &str, children: &[ClangNode]) {
-        // Convert C++ union name to valid Rust identifier
-        let rust_name = CppType::Named(name.to_string()).to_rust_type_str();
+        // For union DEFINITIONS, use sanitize_identifier() instead of to_rust_type_str()
+        // to_rust_type_str() maps some types to primitives (e.g., type -> void)
+        // which is wrong for union definitions - we want the actual union name
+        // sanitize_identifier also properly escapes Rust keywords with r#
+        let rust_name = sanitize_identifier(name);
 
         // Skip if already generated
         if self.generated_structs.contains(&rust_name) {
@@ -2866,6 +2937,13 @@ impl AstCodeGen {
     fn generate_type_alias(&mut self, name: &str, underlying_type: &CppType) {
         // Sanitize the name to handle Rust keywords (e.g., "type" -> "r#type")
         let safe_name = sanitize_identifier(name);
+
+        // Skip if this alias was already generated (common in template metaprogramming)
+        if self.generated_aliases.contains(&safe_name) {
+            return;
+        }
+        self.generated_aliases.insert(safe_name.clone());
+
         // Convert the underlying C++ type to Rust
         let rust_type = underlying_type.to_rust_type_str();
         self.writeln(&format!("/// C++ typedef/using `{}`", name));
@@ -6855,7 +6933,9 @@ fn sanitize_identifier(name: &str) -> String {
         .replace('*', "_").replace('/', "_")
         .replace('+', "_").replace('-', "_")
         .replace('[', "_").replace(']', "_")
-        .replace('(', "_").replace(')', "_");
+        .replace('(', "_").replace(')', "_")
+        .replace(',', "_").replace(';', "_")
+        .replace('.', "_").replace(':', "_");
 
     // Handle keywords
     if RUST_KEYWORDS.contains(&result.as_str()) {

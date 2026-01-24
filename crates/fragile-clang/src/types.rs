@@ -257,6 +257,15 @@ impl CppType {
                     "ssize_t" | "ptrdiff_t" | "std::ptrdiff_t" => "isize".to_string(),
                     "intptr_t" | "std::intptr_t" => "isize".to_string(),
                     "uintptr_t" | "std::uintptr_t" => "usize".to_string(),
+                    // Fixed-width integer types from <cstdint>
+                    "int8_t" | "std::int8_t" => "i8".to_string(),
+                    "int16_t" | "std::int16_t" => "i16".to_string(),
+                    "int32_t" | "std::int32_t" => "i32".to_string(),
+                    "int64_t" | "std::int64_t" => "i64".to_string(),
+                    "uint8_t" | "std::uint8_t" => "u8".to_string(),
+                    "uint16_t" | "std::uint16_t" => "u16".to_string(),
+                    "uint32_t" | "std::uint32_t" => "u32".to_string(),
+                    "uint64_t" | "std::uint64_t" => "u64".to_string(),
                     // 128-bit integer types
                     "__int128" | "__int128_t" => "i128".to_string(),
                     "unsigned __int128" | "__uint128_t" => "u128".to_string(),
@@ -284,7 +293,26 @@ impl CppType {
                     // Common template parameter names that appear unresolved
                     "_Tp" | "_CharT" | "_Traits" | "_Allocator" | "_Alloc" => "std::ffi::c_void".to_string(),
                     "_Pointer" | "_Iter" | "_Iterator" | "_Size" | "_Ep" => "std::ffi::c_void".to_string(),
-                    "_Rp" | "_Ip" | "_Container" | "_BaseT" => "std::ffi::c_void".to_string(),
+                    "_Rp" | "_Ip" | "_Container" | "_BaseT" | "_It" => "std::ffi::c_void".to_string(),
+                    "_Gen" | "_Func" | "_Rollback" | "_StorageAlloc" => "std::ffi::c_void".to_string(),
+                    "_ControlBlockAlloc" | "_ControlBlockAllocator" => "std::ffi::c_void".to_string(),
+                    "_Sp" | "_Dp" | "_Up" | "_Yp" => "std::ffi::c_void".to_string(),  // Smart pointer params
+                    // libstdc++ bit vector internal types
+                    "_Bit_type" => "u64".to_string(),  // Typically unsigned long
+                    "_Tp_alloc_type" => "std::ffi::c_void".to_string(),  // Allocator type alias
+                    // libstdc++ comparison category types
+                    "__cmp_cat_type" | "__cmp_cat__Ord" | "__cmp_cat__Ncmp" => "i8".to_string(),
+                    "__cmp_cat___unspec" => "i8".to_string(),
+                    // libc++ internal proxy and impl types
+                    "__proxy" | "__value_type" => "std::ffi::c_void".to_string(),
+                    "std___libcpp_refstring" => "std::ffi::c_void".to_string(),
+                    // Stream types
+                    "__stream_type" | "ostream_type" | "istream_type" => "std::ffi::c_void".to_string(),
+                    "fmtflags" => "u32".to_string(),  // ios_base::fmtflags is an integer type
+                    // Optional type
+                    "nullopt_t" => "()".to_string(),
+                    // Time value types
+                    "timeval" => "i64".to_string(),
                     // libc++ internal string representation types
                     "__long" | "__rep" | "rep" => "std::ffi::c_void".to_string(),
                     // Duration types
@@ -300,10 +328,12 @@ impl CppType {
                     // Boolean type traits used for tag dispatching
                     "true_type" | "std::true_type" => "bool".to_string(),
                     "false_type" | "std::false_type" => "bool".to_string(),
-                    // C++ exception types - use valid placeholder struct names
-                    // Note: Cannot use "()" as these may be used as struct names
-                    "logic_error" | "std::logic_error" => "StdLogicError".to_string(),
-                    "runtime_error" | "std::runtime_error" => "StdRuntimeError".to_string(),
+                    // C++ exception types - these are rarely instantiated directly
+                    // Map to c_void to avoid generating complex inheritance hierarchies
+                    "logic_error" | "std::logic_error" => "std::ffi::c_void".to_string(),
+                    "runtime_error" | "std::runtime_error" => "std::ffi::c_void".to_string(),
+                    "bad_alloc" | "std::bad_alloc" => "std::ffi::c_void".to_string(),
+                    "exception" | "std::exception" => "std::ffi::c_void".to_string(),
                     // Time and stream types
                     "timespec" => "i64".to_string(),  // Simplify to i64 timestamp
                     "streambuf_type" | "char_type" => "std::ffi::c_void".to_string(),
@@ -311,7 +341,6 @@ impl CppType {
                     // More template parameter placeholders
                     "_ValueType" | "_Sent" | "_Hp" => "std::ffi::c_void".to_string(),
                     "__storage_type" => "usize".to_string(),
-                    "std___libcpp_refstring" => "std::ffi::c_void".to_string(),
                     // NOTE: STL string type mappings removed - types pass through as-is
                     // See Section 22 in TODO.md for rationale
                     _ => {
@@ -342,24 +371,36 @@ impl CppType {
                         }
                         // Handle Clang template parameter placeholders like type-parameter-0-0
                         // These are unresolved template parameters from template definitions
-                        if name.starts_with("type-parameter-") || name.starts_with("type_parameter_") {
+                        // Note: Use normalized_name to handle const-qualified types
+                        if normalized_name.starts_with("type-parameter-") || normalized_name.starts_with("type_parameter_") {
                             return "std::ffi::c_void".to_string();
                         }
                         // Handle complex conditional types from libc++ template metaprogramming
                         // These are SFINAE/conditional type expressions that can't be represented
-                        if name.starts_with("__conditional_t") || name.starts_with("_If__") {
+                        // Check both the template form (_If<...>) and sanitized form (_If_...)
+                        if normalized_name.starts_with("__conditional_t")
+                            || normalized_name.starts_with("_If<")  // Original template form
+                            || normalized_name.starts_with("_If_")  // Sanitized form
+                            || normalized_name.contains("__conditional_t")  // Also catch it in middle
+                        {
                             return "std::ffi::c_void".to_string();
                         }
                         // Handle typename-prefixed dependent types
-                        if name.starts_with("typename") || name.starts_with("typename_") {
+                        if normalized_name.starts_with("typename") || normalized_name.starts_with("typename_") {
                             return "std::ffi::c_void".to_string();
                         }
                         // Handle libc++ variant implementation detail types
-                        if name.starts_with("__variant_detail") {
+                        if normalized_name.starts_with("__variant_detail") {
                             return "std::ffi::c_void".to_string();
                         }
                         // Handle iterator traits types
-                        if name.starts_with("iter_") {
+                        if normalized_name.starts_with("iter_") {
+                            return "std::ffi::c_void".to_string();
+                        }
+                        // Handle type trait result types (add_pointer_t, make_unsigned_t, etc.)
+                        if normalized_name.starts_with("add_pointer_t") || normalized_name.starts_with("make_unsigned_t")
+                            || normalized_name.starts_with("sentinel_t") || normalized_name.starts_with("iterator_t")
+                            || normalized_name.starts_with("__insert_iterator") || normalized_name.starts_with("__impl_") {
                             return "std::ffi::c_void".to_string();
                         }
                         // Strip C++ qualifiers that aren't valid in Rust type names
