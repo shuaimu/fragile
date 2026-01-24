@@ -302,7 +302,7 @@ crates/
 - [x] **21.2** Private field enforcement ✅ 2026-01-23
   - [x] **21.2.1** Parse access specifiers (public/private/protected) (~50 LOC) ✅ (already implemented)
   - [x] **21.2.2** Generate `pub(crate)` for protected, no `pub` for private (~60 LOC) ✅ 2026-01-23
-  - [ ] **21.2.3** Generate accessor methods for private fields when needed (~100 LOC)
+  - [ ] **21.2.3** Generate accessor methods for private fields when needed (~100 LOC) - Complex: requires tracking private member access patterns and friend declarations
 
 ---
 
