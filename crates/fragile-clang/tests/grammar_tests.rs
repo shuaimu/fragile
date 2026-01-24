@@ -10,7 +10,9 @@ use fragile_clang::{AstCodeGen, ClangParser};
 use std::io::Write;
 use std::process::Command;
 
-/// Test result for a grammar test
+/// Test result for a grammar test.
+/// Some fields are used for Debug output only.
+#[allow(dead_code)]
 #[derive(Debug)]
 struct TestResult {
     name: String,

@@ -1,3 +1,13 @@
+//! Diagnostic reporting infrastructure for the Fragile transpiler.
+//!
+//! This module provides error and warning reporting using the miette crate.
+//! Currently prepared for future integration; the Diagnostic struct fields
+//! are consumed by miette derive macros when displayed.
+
+// Suppress warnings: fields are assigned in constructors but appear "unused" to the linter
+// because they're consumed by miette derive macros for diagnostic display, not direct reads.
+#![allow(dead_code, unused)]
+
 use crate::span::Span;
 use miette::{Diagnostic as MietteDiagnostic, SourceSpan};
 use thiserror::Error;
