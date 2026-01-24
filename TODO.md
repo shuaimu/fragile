@@ -527,6 +527,12 @@ The critical gap is that we've never actually tested transpiling code that `#inc
     - Test: `<initializer_list>` - PASSES (test_libcxx_initializer_list_transpilation)
     - Test: `<vector>` - PASSES (test_libcxx_vector_transpilation)
     - Note: All headers transpile successfully, but generated code not yet tested for compilation
+  - [x] **23.1.4** Namespace and enum deduplication for libc++ ✅ 2026-01-24
+    - Fixed duplicate `pub mod` declarations (C++ reopens namespaces, Rust can't)
+    - Fixed duplicate enum definitions
+    - Handle empty enums as struct wrappers (Rust doesn't support #[repr] on empty enums)
+    - Reduced <cstddef> compilation errors from 27 to 8
+    - Remaining issues: type alias resolution, Discriminant(74) for template expressions
 
 - [ ] **23.2** Fix libc++ template patterns
   - [ ] **23.2.1** Handle `_VSTD::` internal namespace alias (maps to `std::__1::`)
