@@ -15,7 +15,8 @@ We just convert the fully-resolved AST to equivalent Rust code.
 
 **Grammar Tests**: 20/20 passing
 **E2E Tests**: 62/62 passing (2 ignored due to STL header limitations)
-**libc++ Transpilation Tests**: 5/5 passing (cstddef, cstdint, type_traits, initializer_list, vector)
+**libc++ Transpilation Tests**: 6/6 passing (cstddef, cstdint, type_traits, initializer_list, vector, cstddef_compilation)
+**Total Tests**: 185 passing
 
 **Working**:
 - Simple functions with control flow (if/else, while, for, do-while, switch, recursion)
@@ -532,7 +533,10 @@ The critical gap is that we've never actually tested transpiling code that `#inc
     - Fixed duplicate enum definitions
     - Handle empty enums as struct wrappers (Rust doesn't support #[repr] on empty enums)
     - Reduced <cstddef> compilation errors from 27 to 8
-    - Remaining issues: type alias resolution, Discriminant(74) for template expressions
+  - [x] **23.1.5** Fix std:: prefixed type mappings ✅ 2026-01-24
+    - std::size_t → usize, std::ptrdiff_t → isize, etc.
+    - Handle unsupported expressions with 0 fallback
+    - Remaining: std::byte operators (libc++ internal, not user code)
 
 - [ ] **23.2** Fix libc++ template patterns
   - [ ] **23.2.1** Handle `_VSTD::` internal namespace alias (maps to `std::__1::`)
