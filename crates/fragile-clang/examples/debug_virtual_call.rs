@@ -1,6 +1,6 @@
 //! Debug example to understand virtual method call AST structure.
 
-use fragile_clang::{ClangParser, ClangNodeKind};
+use fragile_clang::ClangParser;
 
 fn print_ast(node: &fragile_clang::ClangNode, indent: usize) {
     let prefix = "  ".repeat(indent);

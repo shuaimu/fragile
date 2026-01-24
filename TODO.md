@@ -284,8 +284,8 @@ crates/
   - [x] **19.2.2** Map `std::ranges::find` → `.find()` (~50 LOC) ✅ 2026-01-23
   - [x] **19.2.3** Map `std::ranges::sort` → `.sort()` / `.sort_by()` (~60 LOC) ✅ 2026-01-23
   - [x] **19.2.4** Map `std::ranges::copy` → `.collect()` / iterator consumption (~60 LOC) ✅ 2026-01-23
-- [ ] **19.3** Range concepts
-  - [ ] **19.3.1** Map range concepts to Rust Iterator trait bounds (~80 LOC)
+- [ ] **19.3** Range concepts (Complex - requires C++20 concept code generation support)
+  - [ ] **19.3.1** Map range concepts to Rust Iterator trait bounds (~80 LOC) - Requires ConceptDecl/ConceptSpecializationExpr handling
 
 ### 20. Anonymous Namespaces (Priority: Low)
 - [x] **20.1** Anonymous namespace handling ✅ 2026-01-22

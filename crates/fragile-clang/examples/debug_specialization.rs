@@ -1,4 +1,4 @@
-use fragile_clang::{ClangParser, ClangNode, ClangNodeKind};
+use fragile_clang::{ClangParser, ClangNode};
 
 fn main() {
     let parser = ClangParser::new().expect("Failed to create parser");
