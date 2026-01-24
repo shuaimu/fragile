@@ -40,10 +40,12 @@ extern crate alloc;
 
 mod exceptions;
 mod memory;
+mod stdio;
 mod vtable;
 
 pub use exceptions::*;
 pub use memory::*;
+pub use stdio::*;
 pub use vtable::*;
 
 /// Runtime version for compatibility checking.

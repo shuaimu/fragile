@@ -418,7 +418,13 @@ The current approach in `crates/fragile-clang/src/types.rs:183-580` has special-
 
 #### Phase 5: OS Interface Layer (for I/O, threading)
 - [ ] **22.13** Implement Rust backends for OS-dependent STL components
-  - [ ] **22.13.1** File I/O: map libc++ `<fstream>` to Rust `std::fs`
+  - [x] **22.13.1** File I/O: Implement C stdio functions for transpiled libc++ fstream ✅ [26:01:23, 18:00]
+    - [x] **22.13.1.1** Create FILE struct and C stdio function declarations in fragile-runtime (~80 LOC) ✅
+    - [x] **22.13.1.2** Implement FILE struct using Rust std::fs::File (~60 LOC) ✅
+    - [x] **22.13.1.3** Implement fopen/fclose functions (~80 LOC) ✅
+    - [x] **22.13.1.4** Implement fread/fwrite functions (~100 LOC) ✅
+    - [x] **22.13.1.5** Implement fseek/ftell variants (~80 LOC) ✅
+    - [x] **22.13.1.6** Add tests for file I/O functions (~100 LOC) ✅
   - [ ] **22.13.2** Console I/O: map `std::cout`/`std::cin` to Rust `std::io`
   - [ ] **22.13.3** Threading: map `<thread>` to Rust `std::thread`
   - [ ] **22.13.4** Mutexes: map `<mutex>` to Rust `std::sync`
