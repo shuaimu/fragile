@@ -554,12 +554,14 @@ pub enum ClangNodeKind {
         target_ty: CppType,
     },
 
-    /// C++ new expression (e.g., new int(42), new Foo())
+    /// C++ new expression (e.g., new int(42), new Foo(), new (ptr) T())
     CXXNewExpr {
         /// Type being allocated
         ty: CppType,
         /// Whether this is an array new (new T[n])
         is_array: bool,
+        /// Whether this is placement new (new (ptr) T())
+        is_placement: bool,
     },
 
     /// C++ delete expression (e.g., delete p, delete[] arr)

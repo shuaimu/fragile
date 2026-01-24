@@ -1363,7 +1363,9 @@ impl ClangParser {
                     let ty = self.convert_type(clang_sys::clang_getCursorType(cursor));
                     // Check if this is array new by tokenizing the source
                     let is_array = self.check_new_is_array(cursor);
-                    ClangNodeKind::CXXNewExpr { ty, is_array }
+                    // Check if this is placement new by tokenizing the source
+                    let is_placement = self.check_new_is_placement(cursor);
+                    ClangNodeKind::CXXNewExpr { ty, is_array, is_placement }
                 }
 
                 clang_sys::CXCursor_CXXDeleteExpr => {
@@ -2761,6 +2763,55 @@ impl ClangParser {
 
             clang_sys::clang_disposeTokens(tu, tokens, num_tokens);
             found_bracket
+        }
+    }
+
+    /// Check if a CXXNewExpr is placement new (new (ptr) T()).
+    /// Placement new has the pattern: new (placement_args) Type(constructor_args)
+    /// We detect this by looking for '(' immediately after 'new' keyword.
+    fn check_new_is_placement(&self, cursor: clang_sys::CXCursor) -> bool {
+        unsafe {
+            // Get the translation unit from the cursor
+            let tu = clang_sys::clang_Cursor_getTranslationUnit(cursor);
+            // Get the source range and check tokens for placement syntax
+            let range = clang_sys::clang_getCursorExtent(cursor);
+            let mut tokens: *mut clang_sys::CXToken = std::ptr::null_mut();
+            let mut num_tokens: u32 = 0;
+
+            clang_sys::clang_tokenize(tu, range, &mut tokens, &mut num_tokens);
+
+            // Placement new pattern: "new" followed by "(" before any identifier (the type)
+            let mut saw_new = false;
+            let mut is_placement = false;
+
+            for i in 0..num_tokens {
+                let token = *tokens.add(i as usize);
+                let spelling = clang_sys::clang_getTokenSpelling(tu, token);
+                let s = std::ffi::CStr::from_ptr(clang_sys::clang_getCString(spelling))
+                    .to_string_lossy()
+                    .to_string();
+                clang_sys::clang_disposeString(spelling);
+
+                if s == "new" {
+                    saw_new = true;
+                } else if saw_new {
+                    // After 'new', if we see '(' immediately, it's placement new
+                    // If we see an identifier (type) first, it's regular new
+                    if s == "(" {
+                        is_placement = true;
+                        break;
+                    } else if s == "[" {
+                        // Array new: new T[n] - skip, not placement
+                        break;
+                    } else {
+                        // Type name or other token - not placement new
+                        break;
+                    }
+                }
+            }
+
+            clang_sys::clang_disposeTokens(tu, tokens, num_tokens);
+            is_placement
         }
     }
 
