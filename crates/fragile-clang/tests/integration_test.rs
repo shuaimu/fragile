@@ -2826,3 +2826,58 @@ fn test_runtime_function_name_mapping() {
     println!("pthread mapping: {}", if rust_code.contains("fragile_runtime::fragile_pthread_create") { "OK" } else { "Not triggered (header not parsed)" });
     println!("stdio mapping: {}", if rust_code2.contains("fragile_runtime::fopen") { "OK" } else { "Not triggered (header not parsed)" });
 }
+
+/// Test 23.7: Verify operator new/delete are correctly mapped to fragile-runtime.
+/// operator new(size) should generate fragile_runtime::fragile_malloc(size)
+/// operator delete(ptr) should generate fragile_runtime::fragile_free(ptr)
+#[test]
+fn test_operator_new_delete_mapping() {
+    let parser = ClangParser::new().expect("Failed to create parser");
+
+    let source = r#"
+        #include <cstddef>
+        #include <new>
+
+        void* my_alloc(std::size_t n) {
+            return ::operator new(n);
+        }
+
+        void my_free(void* p) {
+            ::operator delete(p);
+        }
+
+        int main() {
+            void* p = my_alloc(100);
+            my_free(p);
+            return 0;
+        }
+    "#;
+
+    let ast = parser.parse_string(source, "opnew_test.cpp").expect("Failed to parse");
+    let rust_code = AstCodeGen::new().generate(&ast.translation_unit);
+
+    // Check that operator new is mapped to fragile_malloc
+    assert!(
+        rust_code.contains("fragile_runtime::fragile_malloc"),
+        "operator new should be mapped to fragile_runtime::fragile_malloc\nGenerated code:\n{}",
+        &rust_code[..rust_code.len().min(3000)]
+    );
+
+    // Check that operator delete is mapped to fragile_free
+    assert!(
+        rust_code.contains("fragile_runtime::fragile_free"),
+        "operator delete should be mapped to fragile_runtime::fragile_free\nGenerated code:\n{}",
+        &rust_code[..rust_code.len().min(3000)]
+    );
+
+    // Verify the argument is passed correctly (n for new, p for delete)
+    assert!(
+        rust_code.contains("fragile_malloc(n)"),
+        "fragile_malloc should receive the size argument 'n'\nGenerated code:\n{}",
+        &rust_code[..rust_code.len().min(3000)]
+    );
+
+    println!("=== Operator new/delete mapping test ===");
+    println!("operator new -> fragile_malloc: OK");
+    println!("operator delete -> fragile_free: OK");
+}

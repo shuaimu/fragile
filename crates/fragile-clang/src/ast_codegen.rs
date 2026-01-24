@@ -5406,6 +5406,30 @@ impl AstCodeGen {
 
                 // Check if this is an operator overload call (e.g., a + b)
                 if let Some((op_name, left_idx, right_idx_opt)) = Self::get_operator_call_info(node) {
+                    // Special handling for global operator new/delete
+                    // These are not method calls but global allocation functions
+                    // For operator new/delete, find the actual argument (not the operator reference)
+                    if op_name == "operator new" || op_name == "operator new[]" {
+                        // ::operator new(size) -> fragile_runtime::fragile_malloc(size)
+                        // Find the size argument - it's the child that's not the function reference
+                        let size_arg = node.children.iter()
+                            .filter(|c| !Self::is_function_reference(c))
+                            .next()
+                            .map(|c| self.expr_to_string(c))
+                            .unwrap_or_else(|| "0".to_string());
+                        return format!("unsafe {{ fragile_runtime::fragile_malloc({}) }}", size_arg);
+                    }
+                    if op_name == "operator delete" || op_name == "operator delete[]" {
+                        // ::operator delete(ptr) -> fragile_runtime::fragile_free(ptr)
+                        // Find the pointer argument - it's the child that's not the function reference
+                        let ptr_arg = node.children.iter()
+                            .filter(|c| !Self::is_function_reference(c))
+                            .next()
+                            .map(|c| self.expr_to_string(c))
+                            .unwrap_or_else(|| "std::ptr::null_mut()".to_string());
+                        return format!("unsafe {{ fragile_runtime::fragile_free({} as *mut std::ffi::c_void) }}", ptr_arg);
+                    }
+
                     // Convert operator name to method name (operator+ -> op_add)
                     let method_name = sanitize_identifier(&op_name);
                     let left_operand = self.expr_to_string(&node.children[left_idx]);

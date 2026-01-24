@@ -18,7 +18,7 @@ We just convert the fully-resolved AST to equivalent Rust code.
 **libc++ Transpilation Tests**: 6/6 passing (cstddef, cstdint, type_traits, initializer_list, vector, cstddef_compilation)
 **Runtime Linking Tests**: 2/2 passing (FILE I/O, pthread)
 **Runtime Function Mapping Tests**: 1/1 passing
-**Total Tests**: 193 passing
+**Total Tests**: 194 passing
 
 **Working**:
 - Simple functions with control flow (if/else, while, for, do-while, switch, recursion)
@@ -599,10 +599,16 @@ libc++ containers need working `operator new`/`operator delete`.
   - [ ] **23.6.6** Aligned variants: `operator new(size_t, align_val_t)` (DEFERRED - not commonly used)
   - [ ] **23.6.7** Nothrow variants: `operator new(size_t, nothrow_t)` (DEFERRED - not commonly used)
 
-- [ ] **23.7** Handle libc++ allocator protocol
-  - [ ] **23.7.1** `std::allocator<T>::allocate(n)` → calls operator new
-  - [ ] **23.7.2** `std::allocator<T>::deallocate(p, n)` → calls operator delete
-  - [ ] **23.7.3** `std::allocator_traits` rebind and construct/destroy
+- [x] **23.7** Handle libc++ allocator protocol ✅ 2026-01-24
+  - [x] **23.7.1** `std::allocator<T>::allocate(n)` → calls operator new ✅
+    - Added special handling in ast_codegen.rs for `operator new` and `operator new[]`
+    - Maps to `fragile_runtime::fragile_malloc(size)` with proper argument extraction
+    - Fixed issue where operator was being treated as method call instead of global function
+  - [x] **23.7.2** `std::allocator<T>::deallocate(p, n)` → calls operator delete ✅
+    - Added special handling for `operator delete` and `operator delete[]`
+    - Maps to `fragile_runtime::fragile_free(ptr)`
+  - [x] **23.7.3** Added test_operator_new_delete_mapping integration test ✅
+  - [ ] **23.7.4** `std::allocator_traits` rebind and construct/destroy (DEFERRED - handled by regular transpilation)
 
 ### Phase 4: First Working STL Container (Priority: High)
 
