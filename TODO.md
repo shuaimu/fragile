@@ -17,7 +17,8 @@ We just convert the fully-resolved AST to equivalent Rust code.
 **E2E Tests**: 62/62 passing (2 ignored due to STL header limitations)
 **libc++ Transpilation Tests**: 6/6 passing (cstddef, cstdint, type_traits, initializer_list, vector, cstddef_compilation)
 **Runtime Linking Tests**: 2/2 passing (FILE I/O, pthread)
-**Total Tests**: 187 passing
+**Runtime Function Mapping Tests**: 1/1 passing
+**Total Tests**: 188 passing
 
 **Working**:
 - Simple functions with control flow (if/else, while, for, do-while, switch, recursion)
@@ -570,13 +571,18 @@ Currently E2E tests compile with just `rustc`. We need to link against `fragile-
   - [x] **23.4.4** Create test that uses pthread and verifies thread creation ✅
     - `test_e2e_runtime_pthread` - tests pthread_create, pthread_join, pthread_self
 
-- [ ] **23.5** Symbol name mapping for libc++ → fragile-runtime
-  - [ ] **23.5.1** libc++ calls `pthread_create` → map to `fragile_pthread_create`
-    - Option A: Generate wrapper functions in transpiled code
-    - Option B: Use linker symbol aliasing (`--defsym`)
-    - Option C: Rename functions in fragile-runtime to match expected names
-  - [ ] **23.5.2** libc++ calls `fopen`/`fwrite`/etc. → map to our stdio implementation
-  - [ ] **23.5.3** libc++ calls atomic builtins → map to `fragile_atomic_*`
+- [x] **23.5** Symbol name mapping for libc++ → fragile-runtime ✅ 2026-01-24
+  - [x] **23.5.1** libc++ calls `pthread_create` → map to `fragile_pthread_create` ✅
+    - Implemented via `map_runtime_function_name()` in ast_codegen.rs
+    - Detects calls to pthread_* functions and rewrites to `fragile_runtime::fragile_pthread_*`
+    - Covers: pthread_create/join/self/equal/detach/exit, attr_*, mutex_*, cond_*, rwlock_*
+  - [x] **23.5.2** libc++ calls `fopen`/`fwrite`/etc. → map to our stdio implementation ✅
+    - Detects calls to fopen/fclose/fread/fwrite/fseek/ftell/fflush/feof/ferror, etc.
+    - Rewrites to `fragile_runtime::fopen` etc.
+  - [ ] **23.5.3** libc++ calls atomic builtins → map to `fragile_atomic_*` (DEFERRED)
+    - Note: __atomic_* builtins are already handled in map_builtin_function
+    - They map directly to Rust std::sync::atomic which is simpler and better optimized
+    - Can add custom mapping if needed in future
 
 ### Phase 3: Memory Allocator Integration (Priority: High)
 

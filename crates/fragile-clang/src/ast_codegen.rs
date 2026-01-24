@@ -584,6 +584,87 @@ impl AstCodeGen {
         }
     }
 
+    /// Map C library function names to their fragile-runtime equivalents.
+    /// Returns the renamed function name if the function should be remapped.
+    ///
+    /// When transpiling libc++ code, it calls standard C library functions
+    /// (pthread_create, fopen, etc.). We redirect these to our fragile-runtime
+    /// implementations which are prefixed with `fragile_`.
+    fn map_runtime_function_name(func_name: &str) -> Option<&'static str> {
+        match func_name {
+            // pthread functions
+            "pthread_create" => Some("fragile_runtime::fragile_pthread_create"),
+            "pthread_join" => Some("fragile_runtime::fragile_pthread_join"),
+            "pthread_self" => Some("fragile_runtime::fragile_pthread_self"),
+            "pthread_equal" => Some("fragile_runtime::fragile_pthread_equal"),
+            "pthread_detach" => Some("fragile_runtime::fragile_pthread_detach"),
+            "pthread_exit" => Some("fragile_runtime::fragile_pthread_exit"),
+            "pthread_attr_init" => Some("fragile_runtime::fragile_pthread_attr_init"),
+            "pthread_attr_destroy" => Some("fragile_runtime::fragile_pthread_attr_destroy"),
+            "pthread_attr_setdetachstate" => Some("fragile_runtime::fragile_pthread_attr_setdetachstate"),
+            "pthread_attr_getdetachstate" => Some("fragile_runtime::fragile_pthread_attr_getdetachstate"),
+
+            // pthread mutex functions
+            "pthread_mutex_init" => Some("fragile_runtime::fragile_pthread_mutex_init"),
+            "pthread_mutex_destroy" => Some("fragile_runtime::fragile_pthread_mutex_destroy"),
+            "pthread_mutex_lock" => Some("fragile_runtime::fragile_pthread_mutex_lock"),
+            "pthread_mutex_trylock" => Some("fragile_runtime::fragile_pthread_mutex_trylock"),
+            "pthread_mutex_unlock" => Some("fragile_runtime::fragile_pthread_mutex_unlock"),
+            "pthread_mutexattr_init" => Some("fragile_runtime::fragile_pthread_mutexattr_init"),
+            "pthread_mutexattr_destroy" => Some("fragile_runtime::fragile_pthread_mutexattr_destroy"),
+            "pthread_mutexattr_settype" => Some("fragile_runtime::fragile_pthread_mutexattr_settype"),
+            "pthread_mutexattr_gettype" => Some("fragile_runtime::fragile_pthread_mutexattr_gettype"),
+
+            // pthread condition variable functions
+            "pthread_cond_init" => Some("fragile_runtime::fragile_pthread_cond_init"),
+            "pthread_cond_destroy" => Some("fragile_runtime::fragile_pthread_cond_destroy"),
+            "pthread_cond_wait" => Some("fragile_runtime::fragile_pthread_cond_wait"),
+            "pthread_cond_timedwait" => Some("fragile_runtime::fragile_pthread_cond_timedwait"),
+            "pthread_cond_signal" => Some("fragile_runtime::fragile_pthread_cond_signal"),
+            "pthread_cond_broadcast" => Some("fragile_runtime::fragile_pthread_cond_broadcast"),
+            "pthread_condattr_init" => Some("fragile_runtime::fragile_pthread_condattr_init"),
+            "pthread_condattr_destroy" => Some("fragile_runtime::fragile_pthread_condattr_destroy"),
+
+            // pthread rwlock functions
+            "pthread_rwlock_init" => Some("fragile_runtime::fragile_pthread_rwlock_init"),
+            "pthread_rwlock_destroy" => Some("fragile_runtime::fragile_pthread_rwlock_destroy"),
+            "pthread_rwlock_rdlock" => Some("fragile_runtime::fragile_pthread_rwlock_rdlock"),
+            "pthread_rwlock_tryrdlock" => Some("fragile_runtime::fragile_pthread_rwlock_tryrdlock"),
+            "pthread_rwlock_wrlock" => Some("fragile_runtime::fragile_pthread_rwlock_wrlock"),
+            "pthread_rwlock_trywrlock" => Some("fragile_runtime::fragile_pthread_rwlock_trywrlock"),
+            "pthread_rwlock_unlock" => Some("fragile_runtime::fragile_pthread_rwlock_unlock"),
+            "pthread_rwlockattr_init" => Some("fragile_runtime::fragile_pthread_rwlockattr_init"),
+            "pthread_rwlockattr_destroy" => Some("fragile_runtime::fragile_pthread_rwlockattr_destroy"),
+
+            // stdio functions
+            "fopen" => Some("fragile_runtime::fopen"),
+            "fclose" => Some("fragile_runtime::fclose"),
+            "fread" => Some("fragile_runtime::fread"),
+            "fwrite" => Some("fragile_runtime::fwrite"),
+            "fseek" => Some("fragile_runtime::fseek"),
+            "fseeko" => Some("fragile_runtime::fseeko"),
+            "ftell" => Some("fragile_runtime::ftell"),
+            "ftello" => Some("fragile_runtime::ftello"),
+            "fflush" => Some("fragile_runtime::fflush"),
+            "feof" => Some("fragile_runtime::feof"),
+            "ferror" => Some("fragile_runtime::ferror"),
+            "clearerr" => Some("fragile_runtime::clearerr"),
+            "fileno" => Some("fragile_runtime::fileno"),
+            "fgetc" => Some("fragile_runtime::fgetc"),
+            "getc" => Some("fragile_runtime::getc"),
+            "getchar" => Some("fragile_runtime::getchar"),
+            "fputc" => Some("fragile_runtime::fputc"),
+            "putc" => Some("fragile_runtime::putc"),
+            "putchar" => Some("fragile_runtime::putchar"),
+            "ungetc" => Some("fragile_runtime::ungetc"),
+            "fputs" => Some("fragile_runtime::fputs"),
+            "puts" => Some("fragile_runtime::puts"),
+            "fgets" => Some("fragile_runtime::fgets"),
+
+            _ => None,
+        }
+    }
+
     /// Check if a type is std::variant (or variant without std:: prefix) and return its C++ template arguments if so.
     fn get_variant_args(ty: &CppType) -> Option<Vec<String>> {
         if let CppType::Named(name) = ty {
@@ -5503,6 +5584,13 @@ impl AstCodeGen {
                             rust_code
                         };
                     }
+
+                    // Check if this is a C library function that should be mapped to fragile-runtime
+                    let func = if let Some(runtime_func) = Self::map_runtime_function_name(&func) {
+                        runtime_func.to_string()
+                    } else {
+                        func
+                    };
 
                     // Check if the function expression is wrapped in unsafe (from arrow member access)
                     // If so, put the function call inside the unsafe block
