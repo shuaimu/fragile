@@ -471,6 +471,14 @@ The current approach in `crates/fragile-clang/src/types.rs:183-580` has special-
       - Implemented: fragile_pthread_cond_signal/broadcast
       - Implemented: fragile_pthread_condattr_init/destroy
     - [ ] **22.13.6.2** Transpiled `std::condition_variable` uses libc++ → calls our pthread_cond
+  - [x] **22.13.7** Read-write locks: Implement via pthread_rwlock ✅ 2026-01-24
+    - [x] **22.13.7.1** Implement pthread_rwlock_init/rdlock/wrlock/unlock ✅ 2026-01-24
+      - Note: Functions prefixed with `fragile_pthread_rwlock_` to avoid symbol conflicts
+      - Implemented using atomic counter (positive=readers, -1=writer, 0=unlocked)
+      - Implemented: fragile_pthread_rwlock_init/destroy/rdlock/tryrdlock
+      - Implemented: fragile_pthread_rwlock_wrlock/trywrlock/unlock
+      - Implemented: fragile_pthread_rwlockattr_init/destroy
+    - [ ] **22.13.7.2** Transpiled `std::shared_mutex` uses libc++ → calls our pthread_rwlock
 
 #### Phase 6: Update Tests
 - [x] **22.14** Update existing tests ✅ 2026-01-23
