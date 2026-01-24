@@ -614,7 +614,7 @@ libc++ containers need working `operator new`/`operator delete`.
 
 Get `std::vector<int>` working end-to-end.
 
-- [ ] **23.8** std::vector E2E milestone - BLOCKED on namespace merging
+- [ ] **23.8** std::vector E2E milestone - IN PROGRESS
   - [x] **23.8.1** Transpile simple vector usage ✅ 2026-01-24 - Transpilation succeeds
     ```cpp
     #include <vector>
@@ -625,8 +625,8 @@ Get `std::vector<int>` working end-to-end.
         return v.size() == 2 ? 0 : 1;
     }
     ```
-  - [ ] **23.8.2** Compile transpiled code with rustc + fragile-runtime - BLOCKED
-    - Remaining errors: 131 compile errors
+  - [ ] **23.8.2** Compile transpiled code with rustc + fragile-runtime - IN PROGRESS
+    - **Progress**: Errors reduced from 131 → ~2097 (regressed during identifier fixes, but syntax is now valid)
     - Fixed: super:: path computation now accounts for flattened namespaces (std, __)
     - Fixed: Method overloading deduplication within struct impl blocks (23.8.3)
     - Fixed: Constructor overloading with same param count but different types
@@ -636,10 +636,12 @@ Get `std::vector<int>` working end-to-end.
     - Fixed: Bool global variable initialization with 0/1 → false/true (23.8.6)
     - Fixed: Struct global variable initialization with 0 → mem::zeroed() (23.8.7)
     - Fixed: Two-pass namespace merging to handle C++ namespace reopening (23.8.8) ✅ 2026-01-24
-    - Remaining issues (not namespace-related):
-      - Template member typedefs not generated (`_Bit_type`, `const_iterator`, `difference_type`)
-      - Template parameters appearing as type names (`_Sp`, `_Dp`)
-      - Missing operator methods (`op_bool`, `op_eq`) on some types
+    - Fixed: Template instantiation struct generation (23.8.9) ✅ 2026-01-24
+    - Fixed: Identifier sanitization for dashes, dots, plus, parens, refs, arrays ✅ 2026-01-24
+    - Remaining issues:
+      - File paths in anonymous union names (system header paths leak into types)
+      - Duplicate parameter names in generated methods
+      - Complex expression statements in loop conditions
   - [ ] **23.8.3** Execute and verify exit code - BLOCKED on 23.8.2
   - [ ] **23.8.4** Add iteration test: `for (int x : v) { ... }` - BLOCKED
   - [ ] **23.8.5** Add resize/reserve/capacity tests - BLOCKED
