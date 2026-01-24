@@ -2365,3 +2365,63 @@ fn test_libcxx_type_traits_transpilation() {
 
     assert!(success || !errors.is_empty(), "Should either succeed or report errors");
 }
+
+/// Test 23.4: Attempt to compile transpiled libc++ code with rustc.
+/// This test verifies what compilation errors we get when trying to compile
+/// the generated Rust code from libc++ headers.
+#[test]
+fn test_libcxx_cstddef_compilation() {
+    if !ClangParser::is_vendored_libcxx_available() {
+        eprintln!("Skipping test: vendored libc++ not available");
+        return;
+    }
+
+    let source = r#"
+        #include <cstddef>
+
+        int main() {
+            std::size_t sz = 42;
+            return sz == 42 ? 0 : 1;
+        }
+    "#;
+
+    let (success, rust_code, errors) = transpile_with_vendored_libcxx(source, "compile_cstddef.cpp");
+
+    if !success {
+        println!("Transpilation failed: {}", errors);
+        return;
+    }
+
+    // Try to compile the generated Rust code
+    let temp_dir = std::env::temp_dir().join("fragile_libcxx_compile_tests");
+    fs::create_dir_all(&temp_dir).expect("Failed to create temp dir");
+
+    let rs_path = temp_dir.join("cstddef_test.rs");
+    fs::write(&rs_path, &rust_code).expect("Failed to write Rust source");
+
+    let compile_output = Command::new("rustc")
+        .arg(&rs_path)
+        .arg("-o")
+        .arg(temp_dir.join("cstddef_test"))
+        .arg("--edition=2021")
+        .output()
+        .expect("Failed to run rustc");
+
+    println!("=== libc++ cstddef compilation test ===");
+    println!("Compilation success: {}", compile_output.status.success());
+
+    if !compile_output.status.success() {
+        let stderr = String::from_utf8_lossy(&compile_output.stderr);
+        // Count and summarize errors
+        let error_count = stderr.matches("error[").count();
+        let warning_count = stderr.matches("warning:").count();
+        println!("Errors: {}, Warnings: {}", error_count, warning_count);
+
+        // Show first few errors
+        let lines: Vec<&str> = stderr.lines().collect();
+        let preview = lines.iter().take(50).cloned().collect::<Vec<_>>().join("\n");
+        println!("First 50 lines of compiler output:\n{}", preview);
+    }
+
+    // Don't assert success yet - we're documenting what fails
+}

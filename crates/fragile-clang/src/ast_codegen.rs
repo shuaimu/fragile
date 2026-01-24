@@ -132,6 +132,8 @@ pub struct AstCodeGen {
     anon_namespace_counter: usize,
     /// Track already generated struct names to avoid duplicates from template instantiation
     generated_structs: HashSet<String>,
+    /// Track already generated module names to avoid duplicates (e.g., inline namespaces)
+    generated_modules: HashSet<String>,
     /// Map from class/struct name to its bit field groups
     bit_field_groups: HashMap<String, Vec<BitFieldGroup>>,
 }
@@ -159,6 +161,7 @@ impl AstCodeGen {
             variant_types: HashMap::new(),
             anon_namespace_counter: 0,
             generated_structs: HashSet::new(),
+            generated_modules: HashSet::new(),
             bit_field_groups: HashMap::new(),
         }
     }
@@ -1451,18 +1454,40 @@ impl AstCodeGen {
                             self.generate_top_level(child);
                         }
                     } else {
-                        // Create a module for the namespace
-                        self.writeln(&format!("pub mod {} {{", sanitize_identifier(ns_name)));
-                        self.indent += 1;
+                        // Build full module key for deduplication
+                        let module_key = if self.current_namespace.is_empty() {
+                            ns_name.clone()
+                        } else {
+                            format!("{}::{}", self.current_namespace.join("::"), ns_name)
+                        };
+
+                        // Check if this is the first occurrence of this module
+                        let is_first = !self.generated_modules.contains(&module_key);
+                        if is_first {
+                            self.generated_modules.insert(module_key);
+                        }
+
+                        // For duplicate namespaces, skip the module declaration entirely
+                        // (C++ allows reopening namespaces, Rust does not)
+                        // Items from subsequent namespace occurrences will be placed at top level
+                        // TODO: Consider collecting all namespace contents in first pass
+                        if is_first {
+                            self.writeln(&format!("pub mod {} {{", sanitize_identifier(ns_name)));
+                            self.indent += 1;
+                        }
+
                         // Track current namespace for relative path computation
                         self.current_namespace.push(ns_name.clone());
                         for child in &node.children {
                             self.generate_top_level(child);
                         }
                         self.current_namespace.pop();
-                        self.indent -= 1;
-                        self.writeln("}");
-                        self.writeln("");
+
+                        if is_first {
+                            self.indent -= 1;
+                            self.writeln("}");
+                            self.writeln("");
+                        }
                     }
                 } else {
                     // Anonymous namespace - generate private module with synthetic name
@@ -2150,34 +2175,51 @@ impl AstCodeGen {
 
     /// Generate an enum definition.
     fn generate_enum(&mut self, name: &str, is_scoped: bool, underlying_type: &CppType, children: &[ClangNode]) {
+        // Skip if already generated (handles duplicate definitions from template instantiation or reopened namespaces)
+        if self.generated_structs.contains(name) {
+            return;
+        }
+        self.generated_structs.insert(name.to_string());
+
         let kind = if is_scoped { "enum class" } else { "enum" };
         self.writeln(&format!("/// C++ {} `{}`", kind, name));
 
         // Generate as Rust enum
         let repr_type = underlying_type.to_rust_type_str();
-        self.writeln(&format!("#[repr({})]", repr_type));
-        self.writeln("#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]");
-        self.writeln(&format!("pub enum {} {{", name));
-        self.indent += 1;
 
-        let mut first = true;
-        for child in children {
-            if let ClangNodeKind::EnumConstantDecl { name: const_name, value } = &child.kind {
-                if first {
-                    // First variant is the default
-                    self.writeln("#[default]");
-                    first = false;
-                }
-                if let Some(v) = value {
-                    self.writeln(&format!("{} = {},", const_name, v));
-                } else {
-                    self.writeln(&format!("{},", const_name));
+        // Check if this is an empty enum (no variants)
+        let has_variants = children.iter().any(|c| matches!(&c.kind, ClangNodeKind::EnumConstantDecl { .. }));
+
+        if has_variants {
+            self.writeln(&format!("#[repr({})]", repr_type));
+            self.writeln("#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]");
+            self.writeln(&format!("pub enum {} {{", name));
+            self.indent += 1;
+
+            let mut first = true;
+            for child in children {
+                if let ClangNodeKind::EnumConstantDecl { name: const_name, value } = &child.kind {
+                    if first {
+                        // First variant is the default
+                        self.writeln("#[default]");
+                        first = false;
+                    }
+                    if let Some(v) = value {
+                        self.writeln(&format!("{} = {},", const_name, v));
+                    } else {
+                        self.writeln(&format!("{},", const_name));
+                    }
                 }
             }
-        }
 
-        self.indent -= 1;
-        self.writeln("}");
+            self.indent -= 1;
+            self.writeln("}");
+        } else {
+            // Empty enum - generate as a zero-sized struct instead (Rust doesn't support repr on empty enums)
+            self.writeln(&format!("#[repr(transparent)]"));
+            self.writeln("#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]");
+            self.writeln(&format!("pub struct {}({});", name, repr_type));
+        }
         self.writeln("");
     }
 
