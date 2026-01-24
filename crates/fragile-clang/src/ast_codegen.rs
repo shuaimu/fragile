@@ -138,6 +138,8 @@ pub struct AstCodeGen {
     bit_field_groups: HashMap<String, Vec<BitFieldGroup>>,
     /// Track generated function signatures to handle overloads: name -> count
     generated_functions: HashMap<String, usize>,
+    /// Track actual Rust module nesting depth (excludes flattened namespaces like std, __)
+    module_depth: usize,
 }
 
 impl AstCodeGen {
@@ -166,6 +168,7 @@ impl AstCodeGen {
             generated_modules: HashSet::new(),
             bit_field_groups: HashMap::new(),
             generated_functions: HashMap::new(),
+            module_depth: 0,
         }
     }
 
@@ -1144,14 +1147,26 @@ impl AstCodeGen {
             return ident.to_string();
         }
 
+        // Count how many namespaces in target_ns are "real" (generate modules)
+        // vs "flattened" (std, __ prefixed namespaces that don't generate modules)
+        let is_real_namespace = |ns: &str| -> bool {
+            !ns.starts_with("__") && ns != "std"
+        };
+
         // Find the common prefix length
         let common_len = target_ns.iter()
             .zip(self.current_namespace.iter())
             .take_while(|(a, b)| a == b)
             .count();
 
-        // Calculate how many levels to go up
-        let levels_up = self.current_namespace.len() - common_len;
+        // Calculate how many real module levels to go up
+        // We can only go up as many levels as we have actual Rust modules
+        let levels_up = self.module_depth.min(
+            self.current_namespace.iter()
+                .skip(common_len)
+                .filter(|ns| is_real_namespace(ns))
+                .count()
+        );
 
         // Build the path: super:: for going up, then the remaining target path
         let mut parts: Vec<String> = Vec::new();
@@ -1160,8 +1175,11 @@ impl AstCodeGen {
         }
 
         // Add the remaining path segments from target_ns (after common prefix)
+        // Only add segments that correspond to real modules
         for ns in target_ns.iter().skip(common_len) {
-            parts.push(sanitize_identifier(ns));
+            if is_real_namespace(ns) {
+                parts.push(sanitize_identifier(ns));
+            }
         }
 
         // Add the identifier at the end
@@ -1576,6 +1594,7 @@ impl AstCodeGen {
 
                         self.writeln(&format!("pub mod {} {{", sanitize_identifier(ns_name)));
                         self.indent += 1;
+                        self.module_depth += 1; // Track actual Rust module depth
 
                         // Track current namespace for relative path computation
                         self.current_namespace.push(ns_name.clone());
@@ -1584,6 +1603,7 @@ impl AstCodeGen {
                         }
                         self.current_namespace.pop();
 
+                        self.module_depth -= 1;
                         self.indent -= 1;
                         self.writeln("}");
                         self.writeln("");
@@ -1597,6 +1617,7 @@ impl AstCodeGen {
                     self.writeln(&format!("/// Anonymous namespace (internal linkage)"));
                     self.writeln(&format!("mod {} {{", anon_name));
                     self.indent += 1;
+                    self.module_depth += 1;
 
                     // Track the synthetic namespace name for path resolution
                     self.current_namespace.push(anon_name.clone());
@@ -1605,6 +1626,7 @@ impl AstCodeGen {
                     }
                     self.current_namespace.pop();
 
+                    self.module_depth -= 1;
                     self.indent -= 1;
                     self.writeln("}");
 
