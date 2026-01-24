@@ -142,6 +142,11 @@ pub struct AstCodeGen {
     module_depth: usize,
     /// Track method names within current struct impl to handle overloads: name -> count
     current_struct_methods: HashMap<String, usize>,
+    /// Merged namespace contents: path -> list of child node indices from all occurrences
+    /// Used for two-pass namespace merging (C++ can reopen namespaces, Rust cannot)
+    merged_namespace_children: HashMap<String, Vec<usize>>,
+    /// Reference to the original AST nodes (stored as indices into a collected vec)
+    collected_nodes: Vec<ClangNode>,
 }
 
 impl AstCodeGen {
@@ -172,6 +177,8 @@ impl AstCodeGen {
             generated_functions: HashMap::new(),
             module_depth: 0,
             current_struct_methods: HashMap::new(),
+            merged_namespace_children: HashMap::new(),
+            collected_nodes: Vec::new(),
         }
     }
 
@@ -186,6 +193,12 @@ impl AstCodeGen {
         // Collect std::variant types used in the code
         if let ClangNodeKind::TranslationUnit = &ast.kind {
             self.collect_variant_types(&ast.children);
+        }
+
+        // Collect all namespace contents (for two-pass namespace merging)
+        // C++ allows reopening namespaces; Rust does not. We merge all occurrences.
+        if let ClangNodeKind::TranslationUnit = &ast.kind {
+            self.collect_namespace_contents(&ast.children, Vec::new());
         }
 
         // File header
@@ -407,6 +420,50 @@ impl AstCodeGen {
             CppType::Reference { referent, .. } => self.collect_variant_from_type(referent),
             CppType::Array { element, .. } => self.collect_variant_from_type(element),
             _ => {}
+        }
+    }
+
+    /// Collect all namespace contents for two-pass namespace merging.
+    /// C++ allows reopening namespaces (adding items to the same namespace multiple times).
+    /// Rust modules cannot be reopened. This pass collects all children from all occurrences
+    /// of each namespace so we can generate a single merged module.
+    fn collect_namespace_contents(&mut self, children: &[ClangNode], current_path: Vec<String>) {
+        for child in children {
+            if let ClangNodeKind::NamespaceDecl { name } = &child.kind {
+                if let Some(ns_name) = name {
+                    // Skip flattened namespaces (std, __-prefixed) but still recurse into them
+                    let is_flattened = ns_name.starts_with("__") || ns_name == "std";
+
+                    if is_flattened {
+                        // Don't create module for flattened namespaces, just recurse
+                        self.collect_namespace_contents(&child.children, current_path.clone());
+                    } else {
+                        // Build full path for this namespace
+                        let mut full_path = current_path.clone();
+                        full_path.push(ns_name.clone());
+                        let path_key = full_path.join("::");
+
+                        // Store each child node's index for later retrieval
+                        for grandchild in &child.children {
+                            let idx = self.collected_nodes.len();
+                            self.collected_nodes.push(grandchild.clone());
+                            self.merged_namespace_children
+                                .entry(path_key.clone())
+                                .or_insert_with(Vec::new)
+                                .push(idx);
+                        }
+
+                        // Recurse into nested namespaces
+                        self.collect_namespace_contents(&child.children, full_path);
+                    }
+                } else {
+                    // Anonymous namespace - just recurse with same path
+                    self.collect_namespace_contents(&child.children, current_path.clone());
+                }
+            } else {
+                // Non-namespace nodes at top level - recurse to find nested namespaces
+                self.collect_namespace_contents(&child.children, current_path.clone());
+            }
         }
     }
 
@@ -1582,16 +1639,11 @@ impl AstCodeGen {
                         // Check if this is the first occurrence of this module
                         let is_first = !self.generated_modules.contains(&module_key);
                         if is_first {
-                            self.generated_modules.insert(module_key);
+                            self.generated_modules.insert(module_key.clone());
                         }
 
-                        // For duplicate namespaces, skip entirely - we can't reopen modules in Rust
-                        // (C++ allows reopening namespaces, Rust does not)
-                        // Items from subsequent namespace occurrences would go to wrong scope, so skip them
-                        // NOTE: This means some items may be missing if C++ spreads a namespace across files
-                        // TODO: Implement two-pass approach to merge all namespace contents first
+                        // For duplicate namespaces, skip - we generate merged contents on first occurrence
                         if !is_first {
-                            // Skip duplicate namespace entirely
                             return;
                         }
 
@@ -1601,9 +1653,22 @@ impl AstCodeGen {
 
                         // Track current namespace for relative path computation
                         self.current_namespace.push(ns_name.clone());
-                        for child in &node.children {
-                            self.generate_top_level(child);
+
+                        // Use merged namespace contents from all occurrences
+                        // This handles C++ namespace reopening (same namespace declared multiple times)
+                        if let Some(merged_indices) = self.merged_namespace_children.get(&module_key).cloned() {
+                            for idx in merged_indices {
+                                if let Some(child) = self.collected_nodes.get(idx).cloned() {
+                                    self.generate_top_level(&child);
+                                }
+                            }
+                        } else {
+                            // Fallback: use direct children if not in merged map
+                            for child in &node.children {
+                                self.generate_top_level(child);
+                            }
                         }
+
                         self.current_namespace.pop();
 
                         self.module_depth -= 1;

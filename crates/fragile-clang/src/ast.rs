@@ -13,7 +13,7 @@ pub struct ClangAst {
 }
 
 /// A node in the Clang AST.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ClangNode {
     /// Kind of this node
     pub kind: ClangNodeKind,
@@ -95,7 +95,7 @@ pub struct CoroutineInfo {
 }
 
 /// Kinds of Clang AST nodes we care about.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum ClangNodeKind {
     /// Translation unit (root)
     TranslationUnit,

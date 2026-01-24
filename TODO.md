@@ -626,9 +626,7 @@ Get `std::vector<int>` working end-to-end.
     }
     ```
   - [ ] **23.8.2** Compile transpiled code with rustc + fragile-runtime - BLOCKED
-    - Issue: C++ namespaces can be reopened, but Rust modules cannot
-    - Current fix: Skip duplicate namespace occurrences, but this loses items
-    - Remaining errors: 131 compile errors (down from 150 → 146 → 134 → 133 → 131)
+    - Remaining errors: 131 compile errors
     - Fixed: super:: path computation now accounts for flattened namespaces (std, __)
     - Fixed: Method overloading deduplication within struct impl blocks (23.8.3)
     - Fixed: Constructor overloading with same param count but different types
@@ -637,7 +635,11 @@ Get `std::vector<int>` working end-to-end.
     - Fixed: Type conversion operators (operator bool → op_bool, etc.) (23.8.5)
     - Fixed: Bool global variable initialization with 0/1 → false/true (23.8.6)
     - Fixed: Struct global variable initialization with 0 → mem::zeroed() (23.8.7)
-    - Need: Two-pass namespace merging to collect all items before generating modules
+    - Fixed: Two-pass namespace merging to handle C++ namespace reopening (23.8.8) ✅ 2026-01-24
+    - Remaining issues (not namespace-related):
+      - Template member typedefs not generated (`_Bit_type`, `const_iterator`, `difference_type`)
+      - Template parameters appearing as type names (`_Sp`, `_Dp`)
+      - Missing operator methods (`op_bool`, `op_eq`) on some types
   - [ ] **23.8.3** Execute and verify exit code - BLOCKED on 23.8.2
   - [ ] **23.8.4** Add iteration test: `for (int x : v) { ... }` - BLOCKED
   - [ ] **23.8.5** Add resize/reserve/capacity tests - BLOCKED
