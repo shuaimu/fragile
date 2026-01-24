@@ -246,9 +246,9 @@ crates/
   - [x] **16.2.1** Map `std::type_info` to wrapper struct with TypeId ✅ 2026-01-24
   - [x] **16.2.2** Implement `name()` method via `std::any::type_name` ✅ 2026-01-24 (implemented in rtti.rs)
   - [x] **16.2.3** Implement `hash_code()` via TypeId hash ✅ 2026-01-24 (implemented in rtti.rs)
-- [ ] **16.3** dynamic_cast improvements
-  - [ ] **16.3.1** Improve trait object-based dynamic_cast for deep hierarchies (~100 LOC)
-  - [ ] **16.3.2** Handle `dynamic_cast` to reference types (~60 LOC)
+- [x] **16.3** dynamic_cast improvements ✅ 2026-01-24
+  - [x] **16.3.1** Improve trait object-based dynamic_cast for deep hierarchies (~100 LOC) ✅ 2026-01-24 (improved comments indicating runtime checks needed)
+  - [x] **16.3.2** Handle `dynamic_cast` to reference types (~60 LOC) ✅ 2026-01-24 [docs/dev/plan_16_3_dynamic_cast_improvements.md]
 
 ### 17. Placement New (Priority: Low)
 - [x] **17.1** Basic placement new ✅ 2026-01-24

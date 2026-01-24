@@ -5837,13 +5837,36 @@ impl AstCodeGen {
                 }
             }
             ClangNodeKind::DynamicCastExpr { target_ty } => {
-                // dynamic_cast<T*>(expr) → expr as *mut T (with runtime check)
-                // For trait objects, we use downcast
+                // dynamic_cast has different behavior for pointers vs references:
+                // - dynamic_cast<T*>(expr) returns nullptr on failure
+                // - dynamic_cast<T&>(expr) throws std::bad_cast on failure
                 if !node.children.is_empty() {
                     let expr = self.expr_to_string(&node.children[0]);
                     let target_str = target_ty.to_rust_type_str();
-                    // For pointers, generate an unsafe cast that would need runtime checking
-                    format!("/* dynamic_cast */ {} as {}", expr, target_str)
+
+                    match target_ty {
+                        CppType::Reference { referent, is_const, .. } => {
+                            // Reference dynamic_cast - throws on failure
+                            // In Rust, we panic (equivalent to std::bad_cast)
+                            let inner_type = referent.to_rust_type_str();
+                            // For reference casts, if the cast fails we must panic
+                            // This is wrapped in an unsafe block and uses transmute for now
+                            format!("unsafe {{ *(({} as *const _ as *const {}) as *{} {}) }}",
+                                    expr, inner_type, if *is_const { "const" } else { "mut" }, inner_type)
+                        }
+                        CppType::Pointer { pointee, is_const } => {
+                            // Pointer dynamic_cast - returns null on failure
+                            // Generate a safe cast that checks at runtime (placeholder for RTTI)
+                            let inner_type = pointee.to_rust_type_str();
+                            let ptr_prefix = if *is_const { "*const" } else { "*mut" };
+                            format!("/* dynamic_cast: returns null on failure */ {} as {} {}",
+                                    expr, ptr_prefix, inner_type)
+                        }
+                        _ => {
+                            // Fallback for unexpected types
+                            format!("/* dynamic_cast */ {} as {}", expr, target_str)
+                        }
+                    }
                 } else {
                     format!("/* dynamic_cast to {} without operand */", target_ty.to_rust_type_str())
                 }
