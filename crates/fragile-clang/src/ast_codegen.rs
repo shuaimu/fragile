@@ -6389,7 +6389,20 @@ fn sanitize_identifier(name: &str) -> String {
             "operator--" => "op_dec".to_string(),
             "operator->" => "op_arrow".to_string(),
             "operator->*" => "op_arrow_star".to_string(),
-            _ => name.replace("operator", "op_")
+            "operator bool" => "op_bool".to_string(),
+            "operator int" => "op_int".to_string(),
+            "operator long" => "op_long".to_string(),
+            "operator double" => "op_double".to_string(),
+            "operator float" => "op_float".to_string(),
+            _ => {
+                // Handle other conversion operators like "operator SomeType"
+                if name.starts_with("operator ") {
+                    let type_part = &name[9..]; // Skip "operator "
+                    format!("op_{}", sanitize_identifier(type_part))
+                } else {
+                    name.replace("operator", "op_")
+                }
+            }
         }
     } else {
         name.to_string()
