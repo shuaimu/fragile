@@ -299,7 +299,11 @@ impl CppType {
                     "_Sp" | "_Dp" | "_Up" | "_Yp" => "std::ffi::c_void".to_string(),  // Smart pointer params
                     // libstdc++ bit vector internal types
                     "_Bit_type" => "u64".to_string(),  // Typically unsigned long
-                    "_Tp_alloc_type" => "std::ffi::c_void".to_string(),  // Allocator type alias
+                    "_Tp_alloc_type" | "_Bit_alloc_type" => "std::ffi::c_void".to_string(),  // Allocator type alias
+                    // Smart pointer internal types
+                    "_Sp___rep" => "std::ffi::c_void".to_string(),  // shared_ptr refcount
+                    // Dependent types from templates
+                    "_dependent_type" => "std::ffi::c_void".to_string(),
                     // libstdc++ comparison category types
                     "__cmp_cat_type" | "__cmp_cat__Ord" | "__cmp_cat__Ncmp" => "i8".to_string(),
                     "__cmp_cat___unspec" => "i8".to_string(),

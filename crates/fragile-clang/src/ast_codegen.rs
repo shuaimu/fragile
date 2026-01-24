@@ -682,6 +682,9 @@ impl AstCodeGen {
         self.writeln(&format!("impl {} {{", rust_name));
         self.indent += 1;
 
+        // Track method names within this impl block to handle overloads
+        let mut method_counts: HashMap<String, usize> = HashMap::new();
+
         for child in children {
             if let ClangNodeKind::CXXMethodDecl { name, return_type, params, is_definition, is_static, .. } = &child.kind {
                 if *is_definition {
@@ -698,13 +701,13 @@ impl AstCodeGen {
                     let mut param_name_counts: HashMap<String, usize> = HashMap::new();
                     for (param_name, param_ty) in params {
                         let rust_ty = self.substitute_template_type(param_ty, subst_map);
-                        let mut name = sanitize_identifier(param_name);
-                        let count = param_name_counts.entry(name.clone()).or_insert(0);
+                        let mut pname = sanitize_identifier(param_name);
+                        let count = param_name_counts.entry(pname.clone()).or_insert(0);
                         if *count > 0 {
-                            name = format!("{}_{}", name, *count);
+                            pname = format!("{}_{}", pname, *count);
                         }
                         *param_name_counts.get_mut(&sanitize_identifier(param_name)).unwrap() += 1;
-                        param_strs.push(format!("{}: {}", name, rust_ty));
+                        param_strs.push(format!("{}: {}", pname, rust_ty));
                     }
 
                     let ret_str = if ret_type == "()" || ret_type.is_empty() {
@@ -713,7 +716,18 @@ impl AstCodeGen {
                         format!(" -> {}", ret_type)
                     };
 
-                    self.writeln(&format!("pub fn {}({}){} {{", sanitize_identifier(name), param_strs.join(", "), ret_str));
+                    // Handle method overloading by appending suffix for duplicates
+                    let base_method_name = sanitize_identifier(name);
+                    let count = method_counts.entry(base_method_name.clone()).or_insert(0);
+                    let method_name = if *count == 0 {
+                        *count += 1;
+                        base_method_name
+                    } else {
+                        *count += 1;
+                        format!("{}_{}", base_method_name, *count - 1)
+                    };
+
+                    self.writeln(&format!("pub fn {}({}){} {{", method_name, param_strs.join(", "), ret_str));
                     self.indent += 1;
                     self.writeln("todo!(\"Template method body\")");
                     self.indent -= 1;
