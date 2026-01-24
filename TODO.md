@@ -227,7 +227,9 @@ crates/
 - [ ] **15.1** C-style variadic functions
   - [x] **15.1.1** Detect variadic function declarations (`...` parameter) (~30 LOC) ✅ (already implemented)
   - [x] **15.1.2** Map `va_list` to Rust's `std::ffi::VaList` (~50 LOC) ✅ 2026-01-23
-  - [ ] **15.1.3** Map `va_start`/`va_arg`/`va_end` to VaList methods (~80 LOC)
+  - [x] **15.1.3** Map `va_start`/`va_end`/`va_copy` builtins ✅ 2026-01-23
+    - Note: `va_arg` is exposed as UnexposedExpr in libclang, type info not available
+    - Full `va_arg` support requires extending libclang or using token-based parsing
   - [ ] **15.1.4** Generate `extern "C"` with `...` for variadic functions (~40 LOC)
 - [ ] **15.2** Variadic templates (already handled by Clang instantiation)
   - Note: Clang instantiates variadic templates, so we transpile the result

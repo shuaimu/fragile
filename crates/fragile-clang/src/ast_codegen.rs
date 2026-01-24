@@ -513,6 +513,28 @@ impl AstCodeGen {
                     None
                 }
             }
+            // Variadic function builtins
+            // Note: These are simplified implementations. Rust's VaList is unstable,
+            // so we generate inline code that works with the transpiled va_list type.
+            "__builtin_va_start" => {
+                // va_start(ap, param) - Initialize va_list
+                // In Rust, we treat this as a no-op since VaList comes pre-initialized
+                // when passed as a function parameter
+                Some(("{ /* va_start: va_list already initialized */ }".to_string(), false))
+            }
+            "__builtin_va_end" => {
+                // va_end(ap) - Clean up va_list
+                // In Rust, this is typically a no-op (cleanup happens automatically)
+                Some(("{ /* va_end: no cleanup needed */ }".to_string(), false))
+            }
+            "__builtin_va_copy" => {
+                // va_copy(dest, src) - Copy va_list
+                if args.len() >= 2 {
+                    Some((format!("{} = {}.clone()", args[0], args[1]), false))
+                } else {
+                    None
+                }
+            }
             _ => None,
         }
     }
