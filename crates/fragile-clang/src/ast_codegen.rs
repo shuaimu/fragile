@@ -2133,8 +2133,9 @@ impl AstCodeGen {
         for child in children {
             if let ClangNodeKind::FieldDecl { name: field_name, ty, is_static: true, .. } = &child.kind {
                 let sanitized_field = sanitize_identifier(field_name);
+                let sanitized_struct = sanitize_identifier(name);
                 let rust_ty = ty.to_rust_type_str();
-                let global_name = format!("{}_{}", name.to_uppercase(), sanitized_field.to_uppercase());
+                let global_name = format!("{}_{}", sanitized_struct.to_uppercase(), sanitized_field.to_uppercase());
                 self.writeln("");
                 self.writeln(&format!("/// Static member `{}::{}`", name, field_name));
                 self.writeln(&format!("static mut {}: {} = {};",
@@ -2262,6 +2263,27 @@ impl AstCodeGen {
 
     /// Generate an enum definition.
     fn generate_enum(&mut self, name: &str, is_scoped: bool, underlying_type: &CppType, children: &[ClangNode]) {
+        // Skip unnamed enums that have problematic names (e.g., "(unnamed enum at ...)")
+        // These are typically internal implementation details in C++ headers
+        if name.starts_with("(unnamed") || name.contains(" at ") {
+            // For unnamed enums with constants, generate the constants as standalone constants
+            for child in children {
+                if let ClangNodeKind::EnumConstantDecl { name: const_name, value } = &child.kind {
+                    let repr_type = underlying_type.to_rust_type_str();
+                    if let Some(v) = value {
+                        self.writeln(&format!("pub const {}: {} = {};", sanitize_identifier(const_name), repr_type, v));
+                    }
+                }
+            }
+            if children.iter().any(|c| matches!(&c.kind, ClangNodeKind::EnumConstantDecl { .. })) {
+                self.writeln("");
+            }
+            return;
+        }
+
+        // Sanitize the name to handle Rust keywords and special characters
+        let safe_name = sanitize_identifier(name);
+
         // Skip if already generated (handles duplicate definitions from template instantiation or reopened namespaces)
         if self.generated_structs.contains(name) {
             return;
@@ -2280,21 +2302,23 @@ impl AstCodeGen {
         if has_variants {
             self.writeln(&format!("#[repr({})]", repr_type));
             self.writeln("#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]");
-            self.writeln(&format!("pub enum {} {{", name));
+            self.writeln(&format!("pub enum {} {{", safe_name));
             self.indent += 1;
 
             let mut first = true;
             for child in children {
                 if let ClangNodeKind::EnumConstantDecl { name: const_name, value } = &child.kind {
+                    // Sanitize enum constant names (e.g., "unsized" is a Rust reserved keyword)
+                    let safe_const_name = sanitize_identifier(const_name);
                     if first {
                         // First variant is the default
                         self.writeln("#[default]");
                         first = false;
                     }
                     if let Some(v) = value {
-                        self.writeln(&format!("{} = {},", const_name, v));
+                        self.writeln(&format!("{} = {},", safe_const_name, v));
                     } else {
-                        self.writeln(&format!("{},", const_name));
+                        self.writeln(&format!("{},", safe_const_name));
                     }
                 }
             }
@@ -2305,7 +2329,7 @@ impl AstCodeGen {
             // Empty enum - generate as a zero-sized struct instead (Rust doesn't support repr on empty enums)
             self.writeln(&format!("#[repr(transparent)]"));
             self.writeln("#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]");
-            self.writeln(&format!("pub struct {}({});", name, repr_type));
+            self.writeln(&format!("pub struct {}({});", safe_name, repr_type));
         }
         self.writeln("");
     }
@@ -2363,10 +2387,12 @@ impl AstCodeGen {
 
     /// Generate a type alias for typedef or using declarations.
     fn generate_type_alias(&mut self, name: &str, underlying_type: &CppType) {
+        // Sanitize the name to handle Rust keywords (e.g., "type" -> "r#type")
+        let safe_name = sanitize_identifier(name);
         // Convert the underlying C++ type to Rust
         let rust_type = underlying_type.to_rust_type_str();
         self.writeln(&format!("/// C++ typedef/using `{}`", name));
-        self.writeln(&format!("pub type {} = {};", name, rust_type));
+        self.writeln(&format!("pub type {} = {};", safe_name, rust_type));
         self.writeln("");
     }
 
@@ -2375,6 +2401,8 @@ impl AstCodeGen {
         // Track this as a global variable (needs unsafe access)
         self.global_vars.insert(name.to_string());
 
+        // Sanitize the name to handle special characters and keywords
+        let safe_name = sanitize_identifier(name);
         let rust_type = ty.to_rust_type_str();
         self.writeln(&format!("/// C++ global variable `{}`", name));
 
@@ -2416,7 +2444,7 @@ impl AstCodeGen {
             Self::default_value_for_static(ty)
         };
 
-        self.writeln(&format!("static mut {}: {} = {};", name, rust_type, init_value));
+        self.writeln(&format!("static mut {}: {} = {};", safe_name, rust_type, init_value));
         self.writeln("");
     }
 
