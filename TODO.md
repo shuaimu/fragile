@@ -628,8 +628,11 @@ Get `std::vector<int>` working end-to-end.
   - [ ] **23.8.2** Compile transpiled code with rustc + fragile-runtime - BLOCKED
     - Issue: C++ namespaces can be reopened, but Rust modules cannot
     - Current fix: Skip duplicate namespace occurrences, but this loses items
-    - Remaining errors: 152 compile errors (down from 157 after super:: fix)
+    - Remaining errors: 134 compile errors (down from 150 → 146 → 134)
     - Fixed: super:: path computation now accounts for flattened namespaces (std, __)
+    - Fixed: Method overloading deduplication within struct impl blocks (23.8.3)
+    - Fixed: Constructor overloading with same param count but different types
+    - Fixed: Static variable initialization uses std::mem::zeroed() for const-compatibility
     - Need: Two-pass namespace merging to collect all items before generating modules
   - [ ] **23.8.3** Execute and verify exit code - BLOCKED on 23.8.2
   - [ ] **23.8.4** Add iteration test: `for (int x : v) { ... }` - BLOCKED
