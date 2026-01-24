@@ -2357,6 +2357,24 @@ impl AstCodeGen {
         let has_variants = children.iter().any(|c| matches!(&c.kind, ClangNodeKind::EnumConstantDecl { .. }));
 
         if has_variants {
+            // First pass: collect all variants and detect duplicates
+            let mut seen_values: HashMap<i64, String> = HashMap::new();
+            let mut duplicates: Vec<(String, i64, String)> = Vec::new(); // (alias_name, value, original_name)
+
+            for child in children {
+                if let ClangNodeKind::EnumConstantDecl { name: const_name, value } = &child.kind {
+                    let safe_const_name = sanitize_identifier(const_name);
+                    if let Some(v) = value {
+                        if let Some(original) = seen_values.get(v) {
+                            // Duplicate value - save for const alias generation
+                            duplicates.push((safe_const_name, *v, original.clone()));
+                        } else {
+                            seen_values.insert(*v, safe_const_name);
+                        }
+                    }
+                }
+            }
+
             self.writeln(&format!("#[repr({})]", repr_type));
             self.writeln("#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]");
             self.writeln(&format!("pub enum {} {{", safe_name));
@@ -2367,6 +2385,12 @@ impl AstCodeGen {
                 if let ClangNodeKind::EnumConstantDecl { name: const_name, value } = &child.kind {
                     // Sanitize enum constant names (e.g., "unsized" is a Rust reserved keyword)
                     let safe_const_name = sanitize_identifier(const_name);
+
+                    // Skip if this is a duplicate value alias
+                    if duplicates.iter().any(|(alias, _, _)| alias == &safe_const_name) {
+                        continue;
+                    }
+
                     if first {
                         // First variant is the default
                         self.writeln("#[default]");
@@ -2382,6 +2406,12 @@ impl AstCodeGen {
 
             self.indent -= 1;
             self.writeln("}");
+
+            // Generate const aliases for duplicate values
+            for (alias_name, _value, original_name) in &duplicates {
+                self.writeln(&format!("pub const {}: {} = {}::{};",
+                    alias_name.to_uppercase(), safe_name, safe_name, original_name));
+            }
         } else {
             // Empty enum - generate as a zero-sized struct instead (Rust doesn't support repr on empty enums)
             self.writeln(&format!("#[repr(transparent)]"));
