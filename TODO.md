@@ -614,8 +614,8 @@ libc++ containers need working `operator new`/`operator delete`.
 
 Get `std::vector<int>` working end-to-end.
 
-- [ ] **23.8** std::vector E2E milestone
-  - [ ] **23.8.1** Transpile simple vector usage:
+- [ ] **23.8** std::vector E2E milestone - BLOCKED on namespace merging
+  - [x] **23.8.1** Transpile simple vector usage ✅ 2026-01-24 - Transpilation succeeds
     ```cpp
     #include <vector>
     int main() {
@@ -625,10 +625,22 @@ Get `std::vector<int>` working end-to-end.
         return v.size() == 2 ? 0 : 1;
     }
     ```
-  - [ ] **23.8.2** Compile transpiled code with rustc + fragile-runtime
-  - [ ] **23.8.3** Execute and verify exit code
-  - [ ] **23.8.4** Add iteration test: `for (int x : v) { ... }`
-  - [ ] **23.8.5** Add resize/reserve/capacity tests
+  - [ ] **23.8.2** Compile transpiled code with rustc + fragile-runtime - BLOCKED
+    - Issue: C++ namespaces can be reopened, but Rust modules cannot
+    - Current fix: Skip duplicate namespace occurrences, but this loses items
+    - Remaining errors: 157 compile errors (mostly missing types from skipped namespaces)
+    - Need: Two-pass namespace merging to collect all items before generating modules
+  - [ ] **23.8.3** Execute and verify exit code - BLOCKED on 23.8.2
+  - [ ] **23.8.4** Add iteration test: `for (int x : v) { ... }` - BLOCKED
+  - [ ] **23.8.5** Add resize/reserve/capacity tests - BLOCKED
+
+  **Identifier sanitization fixes completed**: ✅ 2026-01-24
+  - Fixed keyword escaping in type aliases (e.g., "type" -> "r#type")
+  - Fixed unnamed enum handling (generate standalone constants)
+  - Fixed duplicate global variable deduplication
+  - Fixed function overload suffixing
+  - Fixed enum repr type validation
+  - Fixed const-qualified type matching (e.g., "const unsigned long long" -> u64)
 
 ### Phase 5: Console I/O Working (Priority: Medium)
 
