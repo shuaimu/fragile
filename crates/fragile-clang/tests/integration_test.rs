@@ -179,6 +179,31 @@ fn test_while_loop() {
 
 use std::fs;
 use std::process::Command;
+use std::path::PathBuf;
+
+/// Helper to find the fragile-runtime library path.
+/// Looks in the target directory for the compiled rlib.
+fn find_fragile_runtime_path() -> Option<PathBuf> {
+    // Try to find the workspace root by looking for Cargo.toml
+    let mut current = std::env::current_dir().ok()?;
+
+    // Walk up to find workspace root
+    for _ in 0..10 {
+        let cargo_toml = current.join("Cargo.toml");
+        if cargo_toml.exists() {
+            let content = fs::read_to_string(&cargo_toml).ok()?;
+            if content.contains("[workspace]") {
+                // Found workspace root, look for runtime library
+                let debug_path = current.join("target/debug");
+                if debug_path.exists() {
+                    return Some(debug_path);
+                }
+            }
+        }
+        current = current.parent()?.to_path_buf();
+    }
+    None
+}
 
 /// Helper function to transpile C++ source, compile with rustc, and run.
 /// Returns (exit_code, stdout, stderr).
@@ -203,6 +228,65 @@ fn transpile_compile_run(cpp_source: &str, filename: &str) -> Result<(i32, Strin
         .arg(&rs_path)
         .arg("-o")
         .arg(&binary_path)
+        .output()
+        .map_err(|e| format!("Failed to run rustc: {}", e))?;
+
+    if !compile_output.status.success() {
+        return Err(format!(
+            "rustc compilation failed:\nstdout: {}\nstderr: {}\n\nGenerated code:\n{}",
+            String::from_utf8_lossy(&compile_output.stdout),
+            String::from_utf8_lossy(&compile_output.stderr),
+            rust_code
+        ));
+    }
+
+    // Run the binary
+    let run_output = Command::new(&binary_path)
+        .output()
+        .map_err(|e| format!("Failed to run binary: {}", e))?;
+
+    Ok((
+        run_output.status.code().unwrap_or(-1),
+        String::from_utf8_lossy(&run_output.stdout).to_string(),
+        String::from_utf8_lossy(&run_output.stderr).to_string(),
+    ))
+}
+
+/// Helper function to transpile C++ source, compile with rustc + fragile-runtime, and run.
+/// This version links against fragile-runtime for tests that need runtime support.
+/// Returns (exit_code, stdout, stderr).
+fn transpile_compile_run_with_runtime(cpp_source: &str, filename: &str) -> Result<(i32, String, String), String> {
+    let parser = ClangParser::new().map_err(|e| format!("Failed to create parser: {}", e))?;
+
+    // Parse and generate Rust code
+    let ast = parser.parse_string(cpp_source, filename).map_err(|e| format!("Failed to parse: {}", e))?;
+    let rust_code = AstCodeGen::new().generate(&ast.translation_unit);
+
+    // Create temp directory
+    let temp_dir = std::env::temp_dir().join("fragile_e2e_runtime_tests");
+    fs::create_dir_all(&temp_dir).map_err(|e| format!("Failed to create temp dir: {}", e))?;
+
+    // Write Rust source
+    let rs_path = temp_dir.join(format!("{}.rs", filename.replace(".cpp", "")));
+    fs::write(&rs_path, &rust_code).map_err(|e| format!("Failed to write Rust source: {}", e))?;
+
+    // Find fragile-runtime library path
+    let runtime_path = find_fragile_runtime_path()
+        .ok_or_else(|| "Could not find fragile-runtime library path".to_string())?;
+
+    // Compile with rustc, linking against fragile-runtime
+    let binary_path = temp_dir.join(filename.replace(".cpp", ""));
+    let compile_output = Command::new("rustc")
+        .arg(&rs_path)
+        .arg("-o")
+        .arg(&binary_path)
+        .arg("--edition=2021")
+        .arg("-L")
+        .arg(&runtime_path)
+        .arg("-L")
+        .arg(runtime_path.join("deps"))
+        .arg("--extern")
+        .arg(format!("fragile_runtime={}/libfragile_runtime.rlib", runtime_path.display()))
         .output()
         .map_err(|e| format!("Failed to run rustc: {}", e))?;
 
@@ -2424,4 +2508,254 @@ fn test_libcxx_cstddef_compilation() {
     }
 
     // Don't assert success yet - we're documenting what fails
+}
+
+/// Test 23.4.3: FILE I/O test using fragile-runtime.
+/// This test verifies that transpiled code can use the fragile-runtime stdio functions.
+#[test]
+fn test_e2e_runtime_file_io() {
+    // For this test, we manually create Rust code that uses fragile-runtime
+    // to verify the linking infrastructure works.
+    let rust_code = r#"
+extern crate fragile_runtime;
+
+use std::ffi::CString;
+use std::ptr;
+
+fn main() {
+    unsafe {
+        // Test fopen/fwrite/fclose
+        let path = CString::new("/tmp/fragile_e2e_stdio_test.txt").unwrap();
+        let mode = CString::new("w").unwrap();
+
+        let file = fragile_runtime::fopen(path.as_ptr(), mode.as_ptr());
+        if file.is_null() {
+            std::process::exit(1);
+        }
+
+        let data = b"Hello from fragile-runtime!";
+        let written = fragile_runtime::fwrite(
+            data.as_ptr() as *const std::ffi::c_void,
+            1,
+            data.len(),
+            file
+        );
+
+        if written != data.len() {
+            std::process::exit(2);
+        }
+
+        let close_result = fragile_runtime::fclose(file);
+        if close_result != 0 {
+            std::process::exit(3);
+        }
+
+        // Verify by reading it back
+        let mode_r = CString::new("r").unwrap();
+        let file_r = fragile_runtime::fopen(path.as_ptr(), mode_r.as_ptr());
+        if file_r.is_null() {
+            std::process::exit(4);
+        }
+
+        let mut buffer = [0u8; 64];
+        let read_count = fragile_runtime::fread(
+            buffer.as_mut_ptr() as *mut std::ffi::c_void,
+            1,
+            buffer.len(),
+            file_r
+        );
+
+        fragile_runtime::fclose(file_r);
+
+        if read_count != data.len() {
+            std::process::exit(5);
+        }
+
+        if &buffer[..data.len()] != data {
+            std::process::exit(6);
+        }
+
+        // Clean up
+        std::fs::remove_file("/tmp/fragile_e2e_stdio_test.txt").ok();
+
+        // Success
+        std::process::exit(0);
+    }
+}
+"#;
+
+    // Create temp directory
+    let temp_dir = std::env::temp_dir().join("fragile_e2e_runtime_tests");
+    fs::create_dir_all(&temp_dir).expect("Failed to create temp dir");
+
+    // Write Rust source
+    let rs_path = temp_dir.join("runtime_file_io.rs");
+    fs::write(&rs_path, rust_code).expect("Failed to write Rust source");
+
+    // Find fragile-runtime library path
+    let runtime_path = find_fragile_runtime_path()
+        .expect("Could not find fragile-runtime library path");
+
+    // Compile with rustc, linking against fragile-runtime
+    let binary_path = temp_dir.join("runtime_file_io");
+    let compile_output = Command::new("rustc")
+        .arg(&rs_path)
+        .arg("-o")
+        .arg(&binary_path)
+        .arg("--edition=2021")
+        .arg("-L")
+        .arg(&runtime_path)
+        .arg("-L")
+        .arg(runtime_path.join("deps"))
+        .arg("--extern")
+        .arg(format!("fragile_runtime={}/libfragile_runtime.rlib", runtime_path.display()))
+        .output()
+        .expect("Failed to run rustc");
+
+    if !compile_output.status.success() {
+        panic!(
+            "rustc compilation failed:\nstdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&compile_output.stdout),
+            String::from_utf8_lossy(&compile_output.stderr)
+        );
+    }
+
+    // Run the binary
+    let run_output = Command::new(&binary_path)
+        .output()
+        .expect("Failed to run binary");
+
+    let exit_code = run_output.status.code().unwrap_or(-1);
+
+    if exit_code != 0 {
+        panic!(
+            "Runtime file I/O test failed with exit code {}\nstdout: {}\nstderr: {}",
+            exit_code,
+            String::from_utf8_lossy(&run_output.stdout),
+            String::from_utf8_lossy(&run_output.stderr)
+        );
+    }
+}
+
+/// Test 23.4.4: pthread test using fragile-runtime.
+/// This test verifies that transpiled code can use the fragile-runtime pthread functions.
+#[test]
+fn test_e2e_runtime_pthread() {
+    // Create Rust code that uses fragile-runtime pthread functions
+    let rust_code = r#"
+extern crate fragile_runtime;
+
+use std::ffi::c_void;
+use std::sync::atomic::{AtomicI32, Ordering};
+
+// Shared counter to verify thread executed
+static COUNTER: AtomicI32 = AtomicI32::new(0);
+
+extern "C" fn thread_func(arg: *mut c_void) -> *mut c_void {
+    // Increment counter to prove we ran
+    COUNTER.fetch_add(1, Ordering::SeqCst);
+
+    // Return the argument incremented by 100
+    let val = arg as i32;
+    (val + 100) as *mut c_void
+}
+
+fn main() {
+    unsafe {
+        // Create a thread
+        let mut thread = fragile_runtime::fragile_pthread_t::new();
+        let arg = 42 as *mut c_void;
+
+        let result = fragile_runtime::fragile_pthread_create(
+            &mut thread,
+            std::ptr::null(),
+            Some(thread_func),
+            arg,
+        );
+
+        if result != 0 {
+            std::process::exit(1);
+        }
+
+        // Join the thread and get return value
+        let mut retval: *mut c_void = std::ptr::null_mut();
+        let result = fragile_runtime::fragile_pthread_join(thread, &mut retval);
+
+        if result != 0 {
+            std::process::exit(2);
+        }
+
+        // Verify the return value is 42 + 100 = 142
+        if retval as i32 != 142 {
+            std::process::exit(3);
+        }
+
+        // Verify the counter was incremented
+        if COUNTER.load(Ordering::SeqCst) != 1 {
+            std::process::exit(4);
+        }
+
+        // Test pthread_self
+        let self_thread = fragile_runtime::fragile_pthread_self();
+        if self_thread.id == 0 {
+            std::process::exit(5);
+        }
+
+        // Success
+        std::process::exit(0);
+    }
+}
+"#;
+
+    // Create temp directory
+    let temp_dir = std::env::temp_dir().join("fragile_e2e_runtime_tests");
+    fs::create_dir_all(&temp_dir).expect("Failed to create temp dir");
+
+    // Write Rust source
+    let rs_path = temp_dir.join("runtime_pthread.rs");
+    fs::write(&rs_path, rust_code).expect("Failed to write Rust source");
+
+    // Find fragile-runtime library path
+    let runtime_path = find_fragile_runtime_path()
+        .expect("Could not find fragile-runtime library path");
+
+    // Compile with rustc, linking against fragile-runtime
+    let binary_path = temp_dir.join("runtime_pthread");
+    let compile_output = Command::new("rustc")
+        .arg(&rs_path)
+        .arg("-o")
+        .arg(&binary_path)
+        .arg("--edition=2021")
+        .arg("-L")
+        .arg(&runtime_path)
+        .arg("-L")
+        .arg(runtime_path.join("deps"))
+        .arg("--extern")
+        .arg(format!("fragile_runtime={}/libfragile_runtime.rlib", runtime_path.display()))
+        .output()
+        .expect("Failed to run rustc");
+
+    if !compile_output.status.success() {
+        panic!(
+            "rustc compilation failed:\nstdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&compile_output.stdout),
+            String::from_utf8_lossy(&compile_output.stderr)
+        );
+    }
+
+    // Run the binary
+    let run_output = Command::new(&binary_path)
+        .output()
+        .expect("Failed to run binary");
+
+    let exit_code = run_output.status.code().unwrap_or(-1);
+
+    if exit_code != 0 {
+        panic!(
+            "Runtime pthread test failed with exit code {}\nstdout: {}\nstderr: {}",
+            exit_code,
+            String::from_utf8_lossy(&run_output.stdout),
+            String::from_utf8_lossy(&run_output.stderr)
+        );
+    }
 }

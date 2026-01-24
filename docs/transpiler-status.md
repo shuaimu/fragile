@@ -303,9 +303,10 @@ See `TODO.md` Section 22 for the implementation plan.
 | Feature | Status | Notes |
 |---------|--------|-------|
 | Grammar tests | ✅ | 20/20 passing |
-| E2E tests | ✅ | 67/67 passing (62 core + 5 libc++) |
-| Unit tests | ✅ | 179 total tests |
-| libc++ transpilation | ✅ | 5/5 passing (cstddef, cstdint, type_traits, initializer_list, vector) |
+| E2E tests | ✅ | 70/70 passing (62 core + 6 libc++ + 2 runtime) |
+| Unit tests | ✅ | 187 total tests |
+| libc++ transpilation | ✅ | 6/6 passing (cstddef, cstdint, type_traits, initializer_list, vector, cstddef_compilation) |
+| Runtime linking | ✅ | 2/2 passing (FILE I/O, pthread) |
 | Compile generated code | ✅ | Automatically verified |
 | Run generated code | ✅ | Exit codes verified |
 
@@ -346,12 +347,17 @@ See `TODO.md` Section 22 for the implementation plan.
 - Implicit type casts (char→int, etc.)
 - Designated initializers (C++20)
 
-### libc++ Transpilation Tests (5/5)
+### libc++ Transpilation Tests (6/6)
 - `<cstddef>` - Basic typedefs (size_t, ptrdiff_t)
 - `<cstdint>` - Integer types (int8_t, uint64_t, etc.)
 - `<type_traits>` - Template metaprogramming
 - `<initializer_list>` - Simple container with range-for
 - `<vector>` - Full STL container (generates ~215K chars)
+- `<cstddef>` compilation test - Verify rustc can compile generated code
+
+### Runtime Linking Tests (2/2)
+- FILE I/O (fopen, fwrite, fread, fclose)
+- pthread (pthread_create, pthread_join, pthread_self)
 
 ---
 

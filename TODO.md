@@ -16,7 +16,8 @@ We just convert the fully-resolved AST to equivalent Rust code.
 **Grammar Tests**: 20/20 passing
 **E2E Tests**: 62/62 passing (2 ignored due to STL header limitations)
 **libc++ Transpilation Tests**: 6/6 passing (cstddef, cstdint, type_traits, initializer_list, vector, cstddef_compilation)
-**Total Tests**: 185 passing
+**Runtime Linking Tests**: 2/2 passing (FILE I/O, pthread)
+**Total Tests**: 187 passing
 
 **Working**:
 - Simple functions with control flow (if/else, while, for, do-while, switch, recursion)
@@ -556,15 +557,18 @@ The critical gap is that we've never actually tested transpiling code that `#inc
 
 Currently E2E tests compile with just `rustc`. We need to link against `fragile-runtime`.
 
-- [ ] **23.4** Update E2E test infrastructure for linking
-  - [ ] **23.4.1** Modify integration_test.rs to link against fragile-runtime static library
-    - Use `rustc output.rs -L path/to/fragile-runtime -l fragile_runtime`
-    - Or compile fragile-runtime as rlib and include in test compilation
-  - [ ] **23.4.2** Add extern declarations to generated Rust code for runtime functions
-    - Generate `extern "C" { fn fopen(...); fn fclose(...); ... }` when stdio needed
-    - Generate pthread externs when threading needed
-  - [ ] **23.4.3** Create test that uses FILE I/O and verifies output
-  - [ ] **23.4.4** Create test that uses pthread and verifies thread creation
+- [x] **23.4** Update E2E test infrastructure for linking ✅ 2026-01-24
+  - [x] **23.4.1** Modify integration_test.rs to link against fragile-runtime static library ✅
+    - Added `find_fragile_runtime_path()` to locate workspace target directory
+    - Added `transpile_compile_run_with_runtime()` helper for tests needing runtime
+    - Uses `rustc --extern fragile_runtime=path/to/libfragile_runtime.rlib`
+  - [x] **23.4.2** Add extern declarations to generated Rust code for runtime functions ✅
+    - Tests use `extern crate fragile_runtime;` to access runtime functions
+    - Runtime functions are accessed via module path (e.g., `fragile_runtime::fopen`)
+  - [x] **23.4.3** Create test that uses FILE I/O and verifies output ✅
+    - `test_e2e_runtime_file_io` - tests fopen, fwrite, fclose, fread
+  - [x] **23.4.4** Create test that uses pthread and verifies thread creation ✅
+    - `test_e2e_runtime_pthread` - tests pthread_create, pthread_join, pthread_self
 
 - [ ] **23.5** Symbol name mapping for libc++ → fragile-runtime
   - [ ] **23.5.1** libc++ calls `pthread_create` → map to `fragile_pthread_create`
