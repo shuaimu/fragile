@@ -68,6 +68,8 @@ We just convert the fully-resolved AST to equivalent Rust code.
 - C++20 designated initializers ({ .x = 10, .y = 20 })
 - Function pointers (Option<fn(...)> type, Some() wrapping, .unwrap()() calls)
 - Three-way comparison operator (<=> → a.cmp(&b) as i8)
+- Placement new (new (ptr) T(args) → std::ptr::write with alignment checks)
+- Explicit destructor calls (obj->~Class() → std::ptr::drop_in_place)
 
 **CLI**:
 ```bash
@@ -214,10 +216,10 @@ crates/
 ### 14. Bit Fields (Priority: Low)
 - [ ] **14.1** Bit field parsing
   - [x] **14.1.1** Parse bit field width from FieldDecl (`field : width`) (~50 LOC) ✅ 2026-01-22
-  - [ ] **14.1.2** Track bit field offset and packing within struct (~80 LOC)
+  - [x] **14.1.2** Track bit field offset and packing within struct (~80 LOC) ✅ 2026-01-24 [docs/dev/plan_14_1_2_bit_field_packing.md]
 - [ ] **14.2** Bit field code generation
   - [ ] **14.2.1** Generate getter/setter methods for bit field access (~100 LOC)
-  - [ ] **14.2.2** Pack adjacent bit fields into appropriate integer type (~120 LOC)
+  - [x] **14.2.2** Pack adjacent bit fields into appropriate integer type (~120 LOC) ✅ 2026-01-24 (done as part of 14.1.2)
   - [ ] **14.2.3** Handle bit field assignment and initialization (~80 LOC)
 - [ ] **14.3** Alternative: Use `bitflags` crate
   - [ ] **14.3.1** Detect bit field patterns that map to flags (~60 LOC)
@@ -239,19 +241,19 @@ crates/
   - [x] **16.1.1** Detect `typeid(expr)` and `typeid(Type)` expressions ✅ 2026-01-23
   - [x] **16.1.2** Generate `std::any::TypeId::of::<T>()` for type queries ✅ 2026-01-23
   - [x] **16.1.3** Handle `typeid` comparison (`==`, `!=`) ✅ 2026-01-23
-- [ ] **16.2** type_info class
+- [x] **16.2** type_info class ✅ 2026-01-24
   - [x] **16.2.1** Map `std::type_info` to wrapper struct with TypeId ✅ 2026-01-24
-  - [ ] **16.2.2** Implement `name()` method via `std::any::type_name` (~40 LOC)
-  - [ ] **16.2.3** Implement `hash_code()` via TypeId hash (~30 LOC)
+  - [x] **16.2.2** Implement `name()` method via `std::any::type_name` ✅ 2026-01-24 (implemented in rtti.rs)
+  - [x] **16.2.3** Implement `hash_code()` via TypeId hash ✅ 2026-01-24 (implemented in rtti.rs)
 - [ ] **16.3** dynamic_cast improvements
   - [ ] **16.3.1** Improve trait object-based dynamic_cast for deep hierarchies (~100 LOC)
   - [ ] **16.3.2** Handle `dynamic_cast` to reference types (~60 LOC)
 
 ### 17. Placement New (Priority: Low)
-- [ ] **17.1** Basic placement new
-  - [ ] **17.1.1** Detect placement new syntax `new (ptr) Type(args)` (~50 LOC)
-  - [ ] **17.1.2** Generate `std::ptr::write(ptr, T::new(...))` (~60 LOC)
-  - [ ] **17.1.3** Handle alignment requirements with `std::alloc::Layout` (~80 LOC)
+- [x] **17.1** Basic placement new ✅ 2026-01-24
+  - [x] **17.1.1** Detect placement new syntax `new (ptr) Type(args)` (~50 LOC) ✅ 2026-01-24
+  - [x] **17.1.2** Generate `std::ptr::write(ptr, T::new(...))` (~60 LOC) ✅ 2026-01-24
+  - [x] **17.1.3** Handle alignment requirements via debug_assert (~80 LOC) ✅ 2026-01-24
 - [ ] **17.2** Placement new with allocators
   - [ ] **17.2.1** Map placement new with custom allocator (~100 LOC)
   - [ ] **17.2.2** Handle array placement new (~80 LOC)
@@ -577,7 +579,6 @@ See `docs/transpiler-status.md` for detailed feature matrix.
 - Bit fields
 - C-style variadic functions (`...`)
 - RTTI (`typeid`, `type_info`)
-- Placement new
 - C++20 modules
 - C++20 ranges library
 

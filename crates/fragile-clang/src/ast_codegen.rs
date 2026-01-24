@@ -53,6 +53,45 @@ enum BaseAccess {
     VirtualPtr(String),
 }
 
+/// Information about a single bit field within a packed group.
+#[derive(Clone, Debug)]
+struct BitFieldInfo {
+    /// Name of the original field
+    field_name: String,
+    /// Original type (for return type in accessor)
+    original_type: CppType,
+    /// Width in bits
+    width: u32,
+    /// Offset within the storage unit (in bits)
+    offset: u32,
+    /// Access specifier
+    access: AccessSpecifier,
+}
+
+/// A group of consecutive bit fields packed into a single storage unit.
+#[derive(Clone, Debug)]
+struct BitFieldGroup {
+    /// Fields in this group
+    fields: Vec<BitFieldInfo>,
+    /// Total bits used
+    total_bits: u32,
+    /// Index of this group (for generating _bitfield_0, _bitfield_1, etc.)
+    group_index: usize,
+}
+
+impl BitFieldGroup {
+    /// Get the smallest Rust unsigned integer type that can hold all bits.
+    fn storage_type(&self) -> &'static str {
+        match self.total_bits {
+            0..=8 => "u8",
+            9..=16 => "u16",
+            17..=32 => "u32",
+            33..=64 => "u64",
+            _ => "u128",
+        }
+    }
+}
+
 /// Rust code generator that works directly with Clang AST.
 pub struct AstCodeGen {
     output: String,
@@ -93,6 +132,8 @@ pub struct AstCodeGen {
     anon_namespace_counter: usize,
     /// Track already generated struct names to avoid duplicates from template instantiation
     generated_structs: HashSet<String>,
+    /// Map from class/struct name to its bit field groups
+    bit_field_groups: HashMap<String, Vec<BitFieldGroup>>,
 }
 
 impl AstCodeGen {
@@ -118,6 +159,7 @@ impl AstCodeGen {
             variant_types: HashMap::new(),
             anon_namespace_counter: 0,
             generated_structs: HashSet::new(),
+            bit_field_groups: HashMap::new(),
         }
     }
 
@@ -1573,6 +1615,90 @@ impl AstCodeGen {
         }
     }
 
+    /// Collect and group bit fields from a list of field declarations.
+    /// Returns a tuple of (bit_field_groups, regular_field_indices).
+    /// regular_field_indices contains indices into the original children array for non-bit-field entries.
+    fn collect_bit_field_groups(&self, children: &[ClangNode]) -> (Vec<BitFieldGroup>, Vec<usize>) {
+        let mut groups: Vec<BitFieldGroup> = Vec::new();
+        let mut regular_indices: Vec<usize> = Vec::new();
+        let mut current_group: Option<BitFieldGroup> = None;
+        let mut group_index = 0;
+
+        for (idx, child) in children.iter().enumerate() {
+            if let ClangNodeKind::FieldDecl { name: field_name, ty, access, is_static, bit_field_width } = &child.kind {
+                if *is_static {
+                    continue; // Static fields handled separately
+                }
+
+                if let Some(width) = bit_field_width {
+                    // This is a bit field
+                    let bit_info = BitFieldInfo {
+                        field_name: field_name.clone(),
+                        original_type: ty.clone(),
+                        width: *width,
+                        offset: 0, // Will be set below
+                        access: *access,
+                    };
+
+                    if let Some(ref mut group) = current_group {
+                        // Check if we can add to current group (total bits <= 64 to fit in u64)
+                        // Note: C++ allows up to storage unit size, we use 64 bits max for simplicity
+                        if group.total_bits + width <= 64 {
+                            // Add to existing group
+                            let mut info = bit_info;
+                            info.offset = group.total_bits;
+                            group.total_bits += width;
+                            group.fields.push(info);
+                        } else {
+                            // Start new group, finalize current one
+                            groups.push(current_group.take().unwrap());
+                            group_index += 1;
+
+                            let mut info = bit_info;
+                            info.offset = 0;
+                            current_group = Some(BitFieldGroup {
+                                fields: vec![info],
+                                total_bits: *width,
+                                group_index,
+                            });
+                        }
+                    } else {
+                        // Start new group
+                        let mut info = bit_info;
+                        info.offset = 0;
+                        current_group = Some(BitFieldGroup {
+                            fields: vec![info],
+                            total_bits: *width,
+                            group_index,
+                        });
+                    }
+                } else {
+                    // Regular field - finalize any current bit field group first
+                    if let Some(group) = current_group.take() {
+                        groups.push(group);
+                        group_index += 1;
+                    }
+                    regular_indices.push(idx);
+                }
+            } else {
+                // Non-field node - finalize any current bit field group
+                if let Some(group) = current_group.take() {
+                    groups.push(group);
+                    group_index += 1;
+                }
+                // Pass through non-FieldDecl nodes (e.g., anonymous structs/unions)
+                regular_indices.push(idx);
+            }
+        }
+
+        // Finalize last group if any
+        if let Some(group) = current_group.take() {
+            groups.push(group);
+        }
+
+        (groups, regular_indices)
+    }
+
     /// Generate struct definition.
     fn generate_struct(&mut self, name: &str, is_class: bool, children: &[ClangNode]) {
         // Convert C++ struct name to valid Rust identifier (handles template types)
@@ -1623,18 +1749,35 @@ impl AstCodeGen {
             self.writeln(&format!("pub {}: Option<Box<{}>>,", storage, vb));
         }
 
+        // Collect and group bit fields, separating regular fields
+        let (bit_groups, regular_indices) = self.collect_bit_field_groups(children);
+
+        // Store bit field groups for this struct (for accessor generation)
+        if !bit_groups.is_empty() {
+            self.bit_field_groups.insert(name.to_string(), bit_groups.clone());
+        }
+
+        // Generate bit field storage fields first
+        for group in &bit_groups {
+            let storage_type = group.storage_type();
+            let field_name = format!("_bitfield_{}", group.group_index);
+            // Bit field storage is always public for now (accessors control visibility)
+            self.writeln(&format!("pub {}: {},", field_name, storage_type));
+        }
+
         // Then collect derived class fields (skip static fields - they become globals)
         // Also flatten anonymous struct fields into parent
         let mut fields = Vec::new();
-        for child in children {
-            if let ClangNodeKind::FieldDecl { name: field_name, ty, is_static, access, .. } = &child.kind {
-                if *is_static {
-                    continue; // Static fields handled separately
+        for &idx in &regular_indices {
+            let child = &children[idx];
+            if let ClangNodeKind::FieldDecl { name: fname, ty, is_static, access, bit_field_width } = &child.kind {
+                if *is_static || bit_field_width.is_some() {
+                    continue; // Static fields handled separately, bit fields handled above
                 }
-                let sanitized_name = if field_name.is_empty() {
+                let sanitized_name = if fname.is_empty() {
                     "_field".to_string()
                 } else {
-                    sanitize_identifier(field_name)
+                    sanitize_identifier(fname)
                 };
                 let vis = access_to_visibility(*access);
                 self.writeln(&format!("{}{}: {},", vis, sanitized_name, ty.to_rust_type_str()));
@@ -1643,14 +1786,14 @@ impl AstCodeGen {
                 // Flatten anonymous struct fields into parent
                 if anon_name.starts_with("(anonymous") || anon_name.starts_with("__anon_") {
                     for anon_child in &child.children {
-                        if let ClangNodeKind::FieldDecl { name: field_name, ty, is_static, access, .. } = &anon_child.kind {
-                            if *is_static {
+                        if let ClangNodeKind::FieldDecl { name: fname, ty, is_static, access, bit_field_width } = &anon_child.kind {
+                            if *is_static || bit_field_width.is_some() {
                                 continue;
                             }
-                            let sanitized_name = if field_name.is_empty() {
+                            let sanitized_name = if fname.is_empty() {
                                 "_field".to_string()
                             } else {
-                                sanitize_identifier(field_name)
+                                sanitize_identifier(fname)
                             };
                             let vis = access_to_visibility(*access);
                             self.writeln(&format!("{}{}: {},", vis, sanitized_name, ty.to_rust_type_str()));
@@ -1663,14 +1806,14 @@ impl AstCodeGen {
                 // In C++, anonymous unions allow direct access to their members from the parent
                 if anon_name.starts_with("(anonymous") || anon_name.starts_with("__anon_union_") {
                     for anon_child in &child.children {
-                        if let ClangNodeKind::FieldDecl { name: field_name, ty, is_static, access, .. } = &anon_child.kind {
-                            if *is_static {
+                        if let ClangNodeKind::FieldDecl { name: fname, ty, is_static, access, bit_field_width } = &anon_child.kind {
+                            if *is_static || bit_field_width.is_some() {
                                 continue;
                             }
-                            let sanitized_name = if field_name.is_empty() {
+                            let sanitized_name = if fname.is_empty() {
                                 "_field".to_string()
                             } else {
-                                sanitize_identifier(field_name)
+                                sanitize_identifier(fname)
                             };
                             let vis = access_to_visibility(*access);
                             self.writeln(&format!("{}{}: {},", vis, sanitized_name, ty.to_rust_type_str()));
@@ -1681,8 +1824,21 @@ impl AstCodeGen {
             }
         }
 
-        // Store field info for constructor generation (including base fields)
+        // Add bit field storage to class fields (for constructor generation)
+        // Use the storage type for the bitfield fields
         let mut all_fields = base_fields;
+        for group in &bit_groups {
+            let storage_type_str = group.storage_type();
+            let field_name = format!("_bitfield_{}", group.group_index);
+            // Create a CppType for the storage (unsigned integer)
+            let storage_type = match storage_type_str {
+                "u8" => CppType::Char { signed: false },
+                "u16" => CppType::Short { signed: false },
+                "u32" => CppType::Int { signed: false },
+                _ => CppType::LongLong { signed: false }, // u64 or larger
+            };
+            all_fields.push((field_name, storage_type));
+        }
         all_fields.extend(fields);
         self.class_fields.insert(name.to_string(), all_fields);
 
@@ -2783,6 +2939,87 @@ impl AstCodeGen {
                     }
                 }
             }
+        }
+        None
+    }
+
+    /// Check if a CallExpr is an explicit destructor call (obj->~ClassName() or obj.~ClassName()).
+    /// Returns Some(pointer_expression) if it is, where the pointer can be passed to drop_in_place.
+    fn get_explicit_destructor_call(&self, node: &ClangNode) -> Option<String> {
+        // Explicit destructor calls have a MemberExpr child with member_name starting with "~"
+        if !node.children.is_empty() {
+            // The first child should be the MemberExpr for the destructor
+            let child = &node.children[0];
+            if let ClangNodeKind::MemberExpr { member_name, is_arrow, .. } = &child.kind {
+                if member_name.starts_with('~') {
+                    // This is an explicit destructor call
+                    // Get the object/pointer expression from the MemberExpr's child
+                    if !child.children.is_empty() {
+                        if *is_arrow {
+                            // ptr->~ClassName() - ptr is already a pointer
+                            let obj_expr = self.expr_to_string(&child.children[0]);
+                            return Some(obj_expr);
+                        } else {
+                            // obj.~ClassName() - check if obj is actually a deref of a pointer (*ptr)
+                            // In that case, we can just use ptr directly
+                            if let Some(ptr_expr) = Self::get_deref_pointer(&child.children[0]) {
+                                return Some(self.expr_to_string(ptr_expr));
+                            }
+                            // Otherwise, need to take address
+                            let obj_expr = self.expr_to_string(&child.children[0]);
+                            return Some(format!("&mut {}", obj_expr));
+                        }
+                    }
+                }
+            }
+            // Also check through wrapper nodes (UnexposedExpr, ImplicitCastExpr)
+            if let ClangNodeKind::Unknown(_) | ClangNodeKind::ImplicitCastExpr { .. } = &child.kind {
+                if !child.children.is_empty() {
+                    return self.get_explicit_destructor_call_inner(&child.children[0]);
+                }
+            }
+        }
+        None
+    }
+
+    /// Helper for get_explicit_destructor_call that checks inner nodes.
+    fn get_explicit_destructor_call_inner(&self, node: &ClangNode) -> Option<String> {
+        if let ClangNodeKind::MemberExpr { member_name, is_arrow, .. } = &node.kind {
+            if member_name.starts_with('~') {
+                if !node.children.is_empty() {
+                    if *is_arrow {
+                        let obj_expr = self.expr_to_string(&node.children[0]);
+                        return Some(obj_expr);
+                    } else {
+                        if let Some(ptr_expr) = Self::get_deref_pointer(&node.children[0]) {
+                            return Some(self.expr_to_string(ptr_expr));
+                        }
+                        let obj_expr = self.expr_to_string(&node.children[0]);
+                        return Some(format!("&mut {}", obj_expr));
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Check if a node is a dereference of a pointer (like *ptr or (*ptr)).
+    /// Returns the pointer expression if so.
+    fn get_deref_pointer(node: &ClangNode) -> Option<&ClangNode> {
+        match &node.kind {
+            ClangNodeKind::UnaryOperator { op: UnaryOp::Deref, .. } => {
+                // *ptr - return the ptr
+                if !node.children.is_empty() {
+                    return Some(&node.children[0]);
+                }
+            }
+            ClangNodeKind::ParenExpr { .. } => {
+                // (...) - look inside
+                if !node.children.is_empty() {
+                    return Self::get_deref_pointer(&node.children[0]);
+                }
+            }
+            _ => {}
         }
         None
     }
@@ -4357,8 +4594,46 @@ impl AstCodeGen {
             }
             ClangNodeKind::BoolLiteral(b) => b.to_string(),
             ClangNodeKind::NullPtrLiteral => "std::ptr::null_mut()".to_string(),
-            ClangNodeKind::CXXNewExpr { ty, is_array } => {
-                if *is_array {
+            ClangNodeKind::CXXNewExpr { ty, is_array, is_placement } => {
+                if *is_placement {
+                    // Placement new: new (ptr) T(args) → std::ptr::write(ptr, T::new(args))
+                    // AST children order: [CXXConstructExpr, ImplicitCastExpr(placement_arg)]
+                    // The placement argument (ptr) is the last child
+                    // The constructor/initializer is in the first child
+                    let type_str = ty.pointee().unwrap_or(ty).to_rust_type_str();
+
+                    // Find placement argument and constructor
+                    // In libclang traversal, the order appears to be: [placement_ptr, CXXConstructExpr]
+                    // (opposite of the AST dump display order)
+                    let (ptr_str, init_str) = if node.children.len() >= 2 {
+                        // First child is the placement pointer (where to write)
+                        // Check if it's an array and needs .as_mut_ptr() conversion
+                        let ptr_node = &node.children[0];
+                        let ptr_type = Self::get_expr_type(ptr_node);
+                        let ptr_expr = self.expr_to_string(ptr_node);
+                        let ptr = if matches!(ptr_type, Some(CppType::Array { .. })) {
+                            // Array needs explicit pointer conversion
+                            format!("{}.as_mut_ptr()", ptr_expr)
+                        } else {
+                            ptr_expr
+                        };
+                        // Last child is the constructor expression (the value to write)
+                        let init = self.expr_to_string(&node.children[node.children.len() - 1]);
+                        (ptr, init)
+                    } else if node.children.len() == 1 {
+                        let init = self.expr_to_string(&node.children[0]);
+                        ("/* missing placement ptr */".to_string(), init)
+                    } else {
+                        ("/* missing placement ptr */".to_string(), default_value_for_type(ty))
+                    };
+
+                    // Generate: cast ptr to target type, verify alignment, write constructor value, return ptr
+                    // The debug_assert checks alignment requirements at runtime in debug builds
+                    format!(
+                        "{{ let __ptr = {} as *mut {}; debug_assert!((__ptr as usize) % std::mem::align_of::<{}>() == 0, \"placement new: pointer not aligned for {}\"); unsafe {{ std::ptr::write(__ptr, {}) }}; __ptr }}",
+                        ptr_str, type_str, type_str, type_str, init_str
+                    )
+                } else if *is_array {
                     // new T[n] → allocate n elements and return raw pointer
                     // ty is the result type (T*), we need the element type (T)
                     let element_type = ty.pointee().unwrap_or(ty);
@@ -4757,6 +5032,12 @@ impl AstCodeGen {
                         }
                         _ => {}
                     }
+                }
+
+                // Check if this is an explicit destructor call (obj->~ClassName())
+                // For placement new cleanup, we need to call drop_in_place instead of ~ClassName()
+                if let Some(destructor_ptr) = self.get_explicit_destructor_call(node) {
+                    return format!("unsafe {{ std::ptr::drop_in_place({}) }}", destructor_ptr);
                 }
 
                 // Check if this is a lambda/closure call (operator() on a lambda type)
@@ -5999,5 +6280,187 @@ mod tests {
         assert!(code.contains("..."), "Variadic function should have ... in signature, got:\n{}", code);
         assert!(code.contains("pub extern \"C\" fn my_printf(fmt: *const i8, ...)"),
             "Expected 'pub extern \"C\" fn my_printf(fmt: *const i8, ...)', got:\n{}", code);
+    }
+
+    #[test]
+    fn test_bit_field_packing() {
+        // Test that bit fields are packed into storage units
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![make_node(
+                ClangNodeKind::RecordDecl {
+                    name: "Flags".to_string(),
+                    is_class: false,
+                    fields: vec![],
+                },
+                vec![
+                    // unsigned a : 3;
+                    make_node(
+                        ClangNodeKind::FieldDecl {
+                            name: "a".to_string(),
+                            ty: CppType::Int { signed: false },
+                            access: crate::ast::AccessSpecifier::Public,
+                            is_static: false,
+                            bit_field_width: Some(3),
+                        },
+                        vec![],
+                    ),
+                    // unsigned b : 5;
+                    make_node(
+                        ClangNodeKind::FieldDecl {
+                            name: "b".to_string(),
+                            ty: CppType::Int { signed: false },
+                            access: crate::ast::AccessSpecifier::Public,
+                            is_static: false,
+                            bit_field_width: Some(5),
+                        },
+                        vec![],
+                    ),
+                    // unsigned c : 8;
+                    make_node(
+                        ClangNodeKind::FieldDecl {
+                            name: "c".to_string(),
+                            ty: CppType::Int { signed: false },
+                            access: crate::ast::AccessSpecifier::Public,
+                            is_static: false,
+                            bit_field_width: Some(8),
+                        },
+                        vec![],
+                    ),
+                ],
+            )],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        // Total bits = 3 + 5 + 8 = 16, should be packed into u16
+        assert!(code.contains("_bitfield_0: u16"), "Expected bit field storage '_bitfield_0: u16', got:\n{}", code);
+        // Should NOT have individual fields a, b, c
+        assert!(!code.contains("pub a:"), "Should not have individual 'a' field, got:\n{}", code);
+        assert!(!code.contains("pub b:"), "Should not have individual 'b' field, got:\n{}", code);
+        assert!(!code.contains("pub c:"), "Should not have individual 'c' field, got:\n{}", code);
+    }
+
+    #[test]
+    fn test_bit_field_mixed_with_regular() {
+        // Test that bit fields work alongside regular fields
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![make_node(
+                ClangNodeKind::RecordDecl {
+                    name: "Mixed".to_string(),
+                    is_class: false,
+                    fields: vec![],
+                },
+                vec![
+                    // int x;
+                    make_node(
+                        ClangNodeKind::FieldDecl {
+                            name: "x".to_string(),
+                            ty: CppType::Int { signed: true },
+                            access: crate::ast::AccessSpecifier::Public,
+                            is_static: false,
+                            bit_field_width: None,
+                        },
+                        vec![],
+                    ),
+                    // unsigned a : 4;
+                    make_node(
+                        ClangNodeKind::FieldDecl {
+                            name: "a".to_string(),
+                            ty: CppType::Int { signed: false },
+                            access: crate::ast::AccessSpecifier::Public,
+                            is_static: false,
+                            bit_field_width: Some(4),
+                        },
+                        vec![],
+                    ),
+                    // unsigned b : 4;
+                    make_node(
+                        ClangNodeKind::FieldDecl {
+                            name: "b".to_string(),
+                            ty: CppType::Int { signed: false },
+                            access: crate::ast::AccessSpecifier::Public,
+                            is_static: false,
+                            bit_field_width: Some(4),
+                        },
+                        vec![],
+                    ),
+                    // int y;
+                    make_node(
+                        ClangNodeKind::FieldDecl {
+                            name: "y".to_string(),
+                            ty: CppType::Int { signed: true },
+                            access: crate::ast::AccessSpecifier::Public,
+                            is_static: false,
+                            bit_field_width: None,
+                        },
+                        vec![],
+                    ),
+                ],
+            )],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        // Bit fields should be packed into u8 (4 + 4 = 8 bits)
+        assert!(code.contains("_bitfield_0: u8"), "Expected bit field storage '_bitfield_0: u8', got:\n{}", code);
+        // Regular fields should still exist
+        assert!(code.contains("pub x: i32"), "Expected regular field 'x: i32', got:\n{}", code);
+        assert!(code.contains("pub y: i32"), "Expected regular field 'y: i32', got:\n{}", code);
+    }
+
+    #[test]
+    fn test_bit_field_multiple_groups() {
+        // Test that non-adjacent bit fields create separate groups
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![make_node(
+                ClangNodeKind::RecordDecl {
+                    name: "MultiGroup".to_string(),
+                    is_class: false,
+                    fields: vec![],
+                },
+                vec![
+                    // unsigned a : 3;
+                    make_node(
+                        ClangNodeKind::FieldDecl {
+                            name: "a".to_string(),
+                            ty: CppType::Int { signed: false },
+                            access: crate::ast::AccessSpecifier::Public,
+                            is_static: false,
+                            bit_field_width: Some(3),
+                        },
+                        vec![],
+                    ),
+                    // int x; (regular field breaks the group)
+                    make_node(
+                        ClangNodeKind::FieldDecl {
+                            name: "x".to_string(),
+                            ty: CppType::Int { signed: true },
+                            access: crate::ast::AccessSpecifier::Public,
+                            is_static: false,
+                            bit_field_width: None,
+                        },
+                        vec![],
+                    ),
+                    // unsigned b : 5;
+                    make_node(
+                        ClangNodeKind::FieldDecl {
+                            name: "b".to_string(),
+                            ty: CppType::Int { signed: false },
+                            access: crate::ast::AccessSpecifier::Public,
+                            is_static: false,
+                            bit_field_width: Some(5),
+                        },
+                        vec![],
+                    ),
+                ],
+            )],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        // Should have two bit field groups
+        assert!(code.contains("_bitfield_0: u8"), "Expected first bit field storage '_bitfield_0: u8', got:\n{}", code);
+        assert!(code.contains("_bitfield_1: u8"), "Expected second bit field storage '_bitfield_1: u8', got:\n{}", code);
+        assert!(code.contains("pub x: i32"), "Expected regular field 'x: i32', got:\n{}", code);
     }
 }
