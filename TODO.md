@@ -454,8 +454,14 @@ The current approach in `crates/fragile-clang/src/types.rs:183-580` has special-
       - Implemented: fragile_pthread_mutex_init/destroy/lock/trylock/unlock
       - Implemented: fragile_pthread_mutexattr_init/destroy/settype/gettype
     - [ ] **22.13.4.2** Transpiled `std::mutex` uses libc++ → calls our pthread_mutex
-  - [ ] **22.13.5** Atomics: Implement via compiler intrinsics / inline assembly
-    - [ ] **22.13.5.1** Implement atomic load/store/exchange operations
+  - [x] **22.13.5** Atomics: Implement via Rust std::sync::atomic ✅ 2026-01-24
+    - [x] **22.13.5.1** Implement atomic load/store/exchange operations ✅ 2026-01-24
+      - Note: Functions prefixed with `fragile_atomic_` to avoid symbol conflicts
+      - Implemented for 8/16/32/64-bit integers, pointers, and booleans
+      - Implemented: load, store, exchange, compare_exchange_strong/weak
+      - Implemented: fetch_add, fetch_sub, fetch_and, fetch_or, fetch_xor
+      - Implemented: thread_fence, signal_fence (compiler fence)
+      - C++ memory_order mapped to Rust Ordering (relaxed/acquire/release/acqrel/seqcst)
     - [ ] **22.13.5.2** Transpiled `std::atomic` uses libc++ → calls our atomics
 
 #### Phase 6: Update Tests

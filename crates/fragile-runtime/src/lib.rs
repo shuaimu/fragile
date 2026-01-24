@@ -38,6 +38,7 @@
 #[cfg(not(feature = "std"))]
 extern crate alloc;
 
+mod atomic;
 mod exceptions;
 mod memory;
 mod pthread;
@@ -46,6 +47,7 @@ mod rtti;
 mod stdio;
 mod vtable;
 
+pub use atomic::*;
 pub use exceptions::*;
 pub use memory::*;
 pub use pthread::*;
