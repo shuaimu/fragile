@@ -463,6 +463,14 @@ The current approach in `crates/fragile-clang/src/types.rs:183-580` has special-
       - Implemented: thread_fence, signal_fence (compiler fence)
       - C++ memory_order mapped to Rust Ordering (relaxed/acquire/release/acqrel/seqcst)
     - [ ] **22.13.5.2** Transpiled `std::atomic` uses libc++ → calls our atomics
+  - [x] **22.13.6** Condition variables: Implement via pthread_cond ✅ 2026-01-24
+    - [x] **22.13.6.1** Implement pthread_cond_init/wait/signal/broadcast ✅ 2026-01-24
+      - Note: Functions prefixed with `fragile_pthread_cond_` to avoid symbol conflicts
+      - Implemented using Rust std::sync::Condvar
+      - Implemented: fragile_pthread_cond_init/destroy/wait/timedwait
+      - Implemented: fragile_pthread_cond_signal/broadcast
+      - Implemented: fragile_pthread_condattr_init/destroy
+    - [ ] **22.13.6.2** Transpiled `std::condition_variable` uses libc++ → calls our pthread_cond
 
 #### Phase 6: Update Tests
 - [x] **22.14** Update existing tests ✅ 2026-01-23
