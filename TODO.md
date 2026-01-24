@@ -447,8 +447,12 @@ The current approach in `crates/fragile-clang/src/types.rs:183-580` has special-
       - Implemented: fragile_pthread_attr_init/destroy/setdetachstate/getdetachstate
       - Implemented: fragile_pthread_detach, fragile_pthread_exit
     - [ ] **22.13.3.2** Transpiled `std::thread` uses libc++ → calls our pthreads
-  - [ ] **22.13.4** Mutexes: Implement via pthread_mutex or futex syscall
-    - [ ] **22.13.4.1** Implement pthread_mutex_init/lock/unlock
+  - [x] **22.13.4** Mutexes: Implement via pthread_mutex or futex syscall ✅ 2026-01-24
+    - [x] **22.13.4.1** Implement pthread_mutex_init/lock/unlock ✅ 2026-01-24
+      - Note: Functions prefixed with `fragile_` to avoid symbol conflicts
+      - Implemented using atomic spinlock for portability
+      - Implemented: fragile_pthread_mutex_init/destroy/lock/trylock/unlock
+      - Implemented: fragile_pthread_mutexattr_init/destroy/settype/gettype
     - [ ] **22.13.4.2** Transpiled `std::mutex` uses libc++ → calls our pthread_mutex
   - [ ] **22.13.5** Atomics: Implement via compiler intrinsics / inline assembly
     - [ ] **22.13.5.1** Implement atomic load/store/exchange operations
