@@ -1107,9 +1107,9 @@ impl AstCodeGen {
     /// Generate a top-level stub declaration (signatures only).
     fn generate_stub_top_level(&mut self, node: &ClangNode) {
         match &node.kind {
-            ClangNodeKind::FunctionDecl { name, mangled_name, return_type, params, is_definition, .. } => {
+            ClangNodeKind::FunctionDecl { name, mangled_name, return_type, params, is_definition, is_variadic, .. } => {
                 if *is_definition {
-                    self.generate_function_stub(name, mangled_name, return_type, params);
+                    self.generate_function_stub(name, mangled_name, return_type, params, *is_variadic);
                 }
             }
             ClangNodeKind::RecordDecl { name, is_class, .. } => {
@@ -1150,7 +1150,7 @@ impl AstCodeGen {
 
     /// Generate a function stub (signature with placeholder body).
     fn generate_function_stub(&mut self, name: &str, mangled_name: &str, return_type: &CppType,
-                              params: &[(String, CppType)]) {
+                              params: &[(String, CppType)], is_variadic: bool) {
         self.writeln(&format!("/// @fragile_cpp_mangled: {}", mangled_name));
         self.writeln(&format!("#[export_name = \"{}\"]", mangled_name));
 
@@ -1159,13 +1159,24 @@ impl AstCodeGen {
             .collect::<Vec<_>>()
             .join(", ");
 
+        // Add variadic indicator for C variadic functions
+        let params_with_variadic = if is_variadic {
+            if params_str.is_empty() {
+                "...".to_string()
+            } else {
+                format!("{}, ...", params_str)
+            }
+        } else {
+            params_str
+        };
+
         let ret_str = if *return_type == CppType::Void {
             String::new()
         } else {
             format!(" -> {}", return_type.to_rust_type_str())
         };
 
-        self.writeln(&format!("pub extern \"C\" fn {}({}){} {{", sanitize_identifier(name), params_str, ret_str));
+        self.writeln(&format!("pub extern \"C\" fn {}({}){} {{", sanitize_identifier(name), params_with_variadic, ret_str));
         self.indent += 1;
         self.writeln("// Stub body - replaced by MIR injection at compile time");
         self.writeln("unreachable!(\"Fragile: C++ MIR should be injected\")");
@@ -1340,9 +1351,9 @@ impl AstCodeGen {
     /// Generate a top-level declaration.
     fn generate_top_level(&mut self, node: &ClangNode) {
         match &node.kind {
-            ClangNodeKind::FunctionDecl { name, mangled_name, return_type, params, is_definition, is_coroutine, coroutine_info, .. } => {
+            ClangNodeKind::FunctionDecl { name, mangled_name, return_type, params, is_definition, is_variadic, is_coroutine, coroutine_info, .. } => {
                 if *is_definition {
-                    self.generate_function(name, mangled_name, return_type, params, *is_coroutine, coroutine_info, &node.children);
+                    self.generate_function(name, mangled_name, return_type, params, *is_variadic, *is_coroutine, coroutine_info, &node.children);
                 }
             }
             ClangNodeKind::RecordDecl { name, is_class, .. } => {
@@ -1459,7 +1470,7 @@ impl AstCodeGen {
 
     /// Generate a function definition.
     fn generate_function(&mut self, name: &str, mangled_name: &str, return_type: &CppType,
-                         params: &[(String, CppType)], is_coroutine: bool,
+                         params: &[(String, CppType)], is_variadic: bool, is_coroutine: bool,
                          coroutine_info: &Option<CoroutineInfo>, children: &[ClangNode]) {
         // Special handling for C++ main function
         let is_main = name == "main" && params.is_empty();
@@ -1518,8 +1529,26 @@ impl AstCodeGen {
             Some(CoroutineKind::Async) | Some(CoroutineKind::Task) | None
         );
 
-        let async_keyword = if is_async { "async " } else { "" };
-        self.writeln(&format!("pub {}fn {}({}){} {{", async_keyword, sanitize_identifier(func_name), params_str, ret_str));
+        // Add variadic indicator for C variadic functions
+        let params_with_variadic = if is_variadic {
+            if params_str.is_empty() {
+                "...".to_string()
+            } else {
+                format!("{}, ...", params_str)
+            }
+        } else {
+            params_str
+        };
+
+        // Variadic functions require extern "C" linkage
+        let (async_keyword, extern_c) = if is_variadic {
+            ("", "extern \"C\" ")
+        } else if is_async {
+            ("async ", "")
+        } else {
+            ("", "")
+        };
+        self.writeln(&format!("pub {}{}fn {}({}){} {{", async_keyword, extern_c, sanitize_identifier(func_name), params_with_variadic, ret_str));
         self.indent += 1;
 
         // Find the compound statement (function body)
@@ -5607,6 +5636,7 @@ mod tests {
                         ("b".to_string(), CppType::Int { signed: true }),
                     ],
                     is_definition: true,
+                    is_variadic: false,
                     is_noexcept: false,
                     is_coroutine: false,
                     coroutine_info: None,
@@ -5657,6 +5687,7 @@ mod tests {
                         ("b".to_string(), CppType::Int { signed: true }),
                     ],
                     is_definition: true,
+                    is_variadic: false,
                     is_noexcept: false,
                     is_coroutine: false,
                     coroutine_info: None,
@@ -5730,6 +5761,7 @@ mod tests {
                     return_type: CppType::Named("Task<int>".to_string()),
                     params: vec![],
                     is_definition: true,
+                    is_variadic: false,
                     is_noexcept: false,
                     is_coroutine: true,
                     coroutine_info: Some(coroutine_info),
@@ -5773,6 +5805,7 @@ mod tests {
                     return_type: CppType::Named("Generator<int>".to_string()),
                     params: vec![],
                     is_definition: true,
+                    is_variadic: false,
                     is_noexcept: false,
                     is_coroutine: true,
                     coroutine_info: Some(coroutine_info),
@@ -5821,6 +5854,7 @@ mod tests {
                     return_type: CppType::Named("CustomCoroutine".to_string()),
                     params: vec![],
                     is_definition: true,
+                    is_variadic: false,
                     is_noexcept: false,
                     is_coroutine: true,
                     coroutine_info: Some(coroutine_info),
@@ -5851,6 +5885,7 @@ mod tests {
                     return_type: CppType::Int { signed: true },
                     params: vec![],
                     is_definition: true,
+                    is_variadic: false,
                     is_noexcept: false,
                     is_coroutine: false,
                     coroutine_info: None,
@@ -5873,5 +5908,45 @@ mod tests {
         assert!(!code.contains("async fn regular"), "Regular function should not be async, got:\n{}", code);
         // Should be just a regular pub fn
         assert!(code.contains("pub fn regular() -> i32"), "Expected 'pub fn regular() -> i32', got:\n{}", code);
+    }
+
+    #[test]
+    fn test_variadic_function() {
+        // Test that a variadic function gets extern "C" and ... in signature
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![make_node(
+                ClangNodeKind::FunctionDecl {
+                    name: "my_printf".to_string(),
+                    mangled_name: "my_printf".to_string(),
+                    return_type: CppType::Int { signed: true },
+                    params: vec![
+                        ("fmt".to_string(), CppType::Pointer { pointee: Box::new(CppType::Char { signed: true }), is_const: true }),
+                    ],
+                    is_definition: true,
+                    is_variadic: true,
+                    is_noexcept: false,
+                    is_coroutine: false,
+                    coroutine_info: None,
+                },
+                vec![make_node(
+                    ClangNodeKind::CompoundStmt,
+                    vec![make_node(
+                        ClangNodeKind::ReturnStmt,
+                        vec![make_node(
+                            ClangNodeKind::IntegerLiteral { value: 0, cpp_type: Some(CppType::Int { signed: true }) },
+                            vec![],
+                        )],
+                    )],
+                )],
+            )],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        // Should have extern "C" and variadic signature
+        assert!(code.contains("extern \"C\""), "Variadic function should have extern \"C\", got:\n{}", code);
+        assert!(code.contains("..."), "Variadic function should have ... in signature, got:\n{}", code);
+        assert!(code.contains("pub extern \"C\" fn my_printf(fmt: *const i8, ...)"),
+            "Expected 'pub extern \"C\" fn my_printf(fmt: *const i8, ...)', got:\n{}", code);
     }
 }

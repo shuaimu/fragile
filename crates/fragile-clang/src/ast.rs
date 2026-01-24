@@ -109,6 +109,8 @@ pub enum ClangNodeKind {
         return_type: CppType,
         params: Vec<(String, CppType)>,
         is_definition: bool,
+        /// Whether the function is variadic (uses ... parameter)
+        is_variadic: bool,
         /// Whether the function is declared noexcept
         is_noexcept: bool,
         /// Whether the function is a C++20 coroutine (contains co_await, co_yield, or co_return)

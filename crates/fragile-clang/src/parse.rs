@@ -755,6 +755,7 @@ impl ClangParser {
                     }
 
                     let is_definition = clang_sys::clang_isCursorDefinition(cursor) != 0;
+                    let is_variadic = clang_sys::clang_isFunctionTypeVariadic(cursor_type) != 0;
                     let is_noexcept = self.is_function_noexcept(cursor);
                     let is_coroutine = if is_definition {
                         self.contains_coroutine_expressions(cursor)
@@ -775,6 +776,7 @@ impl ClangParser {
                         return_type,
                         params,
                         is_definition,
+                        is_variadic,
                         is_noexcept,
                         is_coroutine,
                         coroutine_info,
