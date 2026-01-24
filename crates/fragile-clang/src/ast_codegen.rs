@@ -1510,6 +1510,70 @@ impl AstCodeGen {
         }
     }
 
+    /// Collect co_yield expressions from a generator function body.
+    /// Returns a list of yield value strings.
+    fn collect_generator_yields(&mut self, children: &[ClangNode]) -> Vec<String> {
+        let mut yields = Vec::new();
+        self.collect_yields_recursive(children, &mut yields);
+        yields
+    }
+
+    fn collect_yields_recursive(&mut self, children: &[ClangNode], yields: &mut Vec<String>) {
+        for child in children {
+            if let ClangNodeKind::CoyieldExpr { .. } = &child.kind {
+                // Extract the yield value
+                if !child.children.is_empty() {
+                    let value = self.expr_to_string(&child.children[0]);
+                    yields.push(value);
+                } else {
+                    yields.push("()".to_string());
+                }
+            }
+            // Recursively search in children
+            self.collect_yields_recursive(&child.children, yields);
+        }
+    }
+
+    /// Generate a state machine struct and Iterator implementation for a generator.
+    fn generate_generator_struct(&mut self, func_name: &str, item_type: &str, yields: &[String]) {
+        let struct_name = format!("{}Generator", to_pascal_case(func_name));
+
+        // Generate the struct
+        self.writeln(&format!("/// State machine struct for generator `{}`", func_name));
+        self.writeln(&format!("pub struct {} {{", struct_name));
+        self.indent += 1;
+        self.writeln("__state: i32,");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("");
+
+        // Generate Iterator implementation
+        self.writeln(&format!("impl Iterator for {} {{", struct_name));
+        self.indent += 1;
+        self.writeln(&format!("type Item = {};", item_type));
+        self.writeln("");
+        self.writeln("fn next(&mut self) -> Option<Self::Item> {");
+        self.indent += 1;
+        self.writeln("match self.__state {");
+        self.indent += 1;
+
+        // Generate match arms for each yield
+        for (i, yield_val) in yields.iter().enumerate() {
+            self.writeln(&format!("{} => {{ self.__state = {}; Some({}) }}", i, i + 1, yield_val));
+        }
+
+        // Final state returns None
+        self.writeln("_ => None,");
+
+        self.indent -= 1;
+        self.writeln("}");
+        self.indent -= 1;
+        self.writeln("}");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("");
+    }
+
     /// Generate a function definition.
     fn generate_function(&mut self, name: &str, mangled_name: &str, return_type: &CppType,
                          params: &[(String, CppType)], is_variadic: bool, is_coroutine: bool,
@@ -1565,44 +1629,80 @@ impl AstCodeGen {
         // Determine return type based on coroutine info
         let ret_str = self.get_coroutine_return_type(return_type, coroutine_info);
 
+        // Check if this is a generator
+        let is_generator = is_coroutine && matches!(
+            coroutine_info.as_ref().map(|i| i.kind),
+            Some(CoroutineKind::Generator)
+        );
+
         // Determine if this should be an async function
         let is_async = is_coroutine && matches!(
             coroutine_info.as_ref().map(|i| i.kind),
             Some(CoroutineKind::Async) | Some(CoroutineKind::Task) | None
         );
 
-        // Add variadic indicator for C variadic functions
-        let params_with_variadic = if is_variadic {
-            if params_str.is_empty() {
-                "...".to_string()
+        // Handle generators with state machine
+        if is_generator {
+            // Collect all yield expressions
+            let yields = self.collect_generator_yields(children);
+
+            // Get the item type for the iterator
+            let item_type = if let Some(ref info) = coroutine_info {
+                if let Some(ref vt) = info.value_type {
+                    vt.to_rust_type_str()
+                } else {
+                    "()".to_string()
+                }
             } else {
-                format!("{}, ...", params_str)
-            }
-        } else {
-            params_str
-        };
+                "()".to_string()
+            };
 
-        // Variadic functions require extern "C" linkage
-        let (async_keyword, extern_c) = if is_variadic {
-            ("", "extern \"C\" ")
-        } else if is_async {
-            ("async ", "")
-        } else {
-            ("", "")
-        };
-        self.writeln(&format!("pub {}{}fn {}({}){} {{", async_keyword, extern_c, sanitize_identifier(func_name), params_with_variadic, ret_str));
-        self.indent += 1;
+            // Generate the state machine struct and Iterator implementation
+            self.generate_generator_struct(func_name, &item_type, &yields);
 
-        // Find the compound statement (function body)
-        for child in children {
-            if let ClangNodeKind::CompoundStmt = &child.kind {
-                self.generate_block_contents(&child.children, return_type);
+            // Generate the function that returns the generator
+            let struct_name = format!("{}Generator", to_pascal_case(func_name));
+            self.writeln(&format!("pub fn {}({}){} {{", sanitize_identifier(func_name), params_str, ret_str));
+            self.indent += 1;
+            self.writeln(&format!("{} {{ __state: 0 }}", struct_name));
+            self.indent -= 1;
+            self.writeln("}");
+            self.writeln("");
+        } else {
+            // Normal function handling
+            // Add variadic indicator for C variadic functions
+            let params_with_variadic = if is_variadic {
+                if params_str.is_empty() {
+                    "...".to_string()
+                } else {
+                    format!("{}, ...", params_str)
+                }
+            } else {
+                params_str
+            };
+
+            // Variadic functions require extern "C" linkage
+            let (async_keyword, extern_c) = if is_variadic {
+                ("", "extern \"C\" ")
+            } else if is_async {
+                ("async ", "")
+            } else {
+                ("", "")
+            };
+            self.writeln(&format!("pub {}{}fn {}({}){} {{", async_keyword, extern_c, sanitize_identifier(func_name), params_with_variadic, ret_str));
+            self.indent += 1;
+
+            // Find the compound statement (function body)
+            for child in children {
+                if let ClangNodeKind::CompoundStmt = &child.kind {
+                    self.generate_block_contents(&child.children, return_type);
+                }
             }
+
+            self.indent -= 1;
+            self.writeln("}");
+            self.writeln("");
         }
-
-        self.indent -= 1;
-        self.writeln("}");
-        self.writeln("");
 
         // Generate Rust main wrapper for C++ main
         if is_main {
@@ -5940,6 +6040,20 @@ fn sanitize_identifier(name: &str) -> String {
     result
 }
 
+/// Convert a snake_case or lowercase name to PascalCase.
+fn to_pascal_case(name: &str) -> String {
+    name.split('_')
+        .filter(|s| !s.is_empty())
+        .map(|word| {
+            let mut chars: Vec<char> = word.chars().collect();
+            if let Some(first) = chars.first_mut() {
+                *first = first.to_ascii_uppercase();
+            }
+            chars.into_iter().collect::<String>()
+        })
+        .collect()
+}
+
 /// Convert binary operator to Rust string.
 fn binop_to_string(op: &BinaryOp) -> &'static str {
     match op {
@@ -6181,7 +6295,7 @@ mod tests {
     #[test]
     fn test_generator_coroutine_with_value_type() {
         use crate::ast::CoroutineInfo;
-        // Test that a generator with Generator<int> return type generates impl Iterator<Item=i32>
+        // Test that a generator with Generator<int> return type generates a state machine
         let coroutine_info = CoroutineInfo {
             kind: CoroutineKind::Generator,
             value_type: Some(CppType::Int { signed: true }),
@@ -6204,16 +6318,28 @@ mod tests {
                 },
                 vec![make_node(
                     ClangNodeKind::CompoundStmt,
-                    vec![make_node(
-                        ClangNodeKind::CoyieldExpr {
-                            value_ty: CppType::Int { signed: true },
-                            result_ty: CppType::Void,
-                        },
-                        vec![make_node(
-                            ClangNodeKind::IntegerLiteral { value: 1, cpp_type: Some(CppType::Int { signed: true }) },
-                            vec![],
-                        )],
-                    )],
+                    vec![
+                        make_node(
+                            ClangNodeKind::CoyieldExpr {
+                                value_ty: CppType::Int { signed: true },
+                                result_ty: CppType::Void,
+                            },
+                            vec![make_node(
+                                ClangNodeKind::IntegerLiteral { value: 1, cpp_type: Some(CppType::Int { signed: true }) },
+                                vec![],
+                            )],
+                        ),
+                        make_node(
+                            ClangNodeKind::CoyieldExpr {
+                                value_ty: CppType::Int { signed: true },
+                                result_ty: CppType::Void,
+                            },
+                            vec![make_node(
+                                ClangNodeKind::IntegerLiteral { value: 2, cpp_type: Some(CppType::Int { signed: true }) },
+                                vec![],
+                            )],
+                        ),
+                    ],
                 )],
             )],
         );
@@ -6225,6 +6351,19 @@ mod tests {
         assert!(code.contains("impl Iterator<Item=i32>"), "Expected 'impl Iterator<Item=i32>', got:\n{}", code);
         // Should have coroutine comment
         assert!(code.contains("/// Coroutine: generator (Generator<int>)"), "Expected coroutine comment, got:\n{}", code);
+        // Should generate state machine struct
+        assert!(code.contains("pub struct RangeGenerator"), "Expected 'pub struct RangeGenerator', got:\n{}", code);
+        assert!(code.contains("__state: i32"), "Expected '__state: i32' field, got:\n{}", code);
+        // Should implement Iterator
+        assert!(code.contains("impl Iterator for RangeGenerator"), "Expected Iterator impl, got:\n{}", code);
+        assert!(code.contains("type Item = i32"), "Expected 'type Item = i32', got:\n{}", code);
+        assert!(code.contains("fn next(&mut self)"), "Expected 'fn next(&mut self)', got:\n{}", code);
+        // Should have state machine match arms
+        assert!(code.contains("match self.__state"), "Expected match on __state, got:\n{}", code);
+        assert!(code.contains("Some(1i32)"), "Expected 'Some(1i32)' for first yield, got:\n{}", code);
+        assert!(code.contains("Some(2i32)"), "Expected 'Some(2i32)' for second yield, got:\n{}", code);
+        // Function should return generator instance
+        assert!(code.contains("RangeGenerator { __state: 0 }"), "Expected generator instance creation, got:\n{}", code);
     }
 
     #[test]
