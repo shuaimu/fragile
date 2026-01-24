@@ -440,8 +440,12 @@ The current approach in `crates/fragile-clang/src/types.rs:183-580` has special-
     - [x] **22.13.2.4** Implement fputs/puts/fgets for string I/O ✅
     - [x] **22.13.2.5** Add tests for console I/O functions ✅
     - Note: Uses Rust std::io for portable implementation; libc++ iostream calls these C stdio functions
-  - [ ] **22.13.3** Threading: Implement via pthread or raw clone() syscall
-    - [ ] **22.13.3.1** Implement pthread_create/pthread_join wrappers
+  - [x] **22.13.3** Threading: Implement via pthread or raw clone() syscall ✅ 2026-01-24
+    - [x] **22.13.3.1** Implement pthread_create/pthread_join wrappers ✅ 2026-01-24
+      - Note: Functions prefixed with `fragile_` to avoid symbol conflicts with system pthread
+      - Implemented: fragile_pthread_create, fragile_pthread_join, fragile_pthread_self, fragile_pthread_equal
+      - Implemented: fragile_pthread_attr_init/destroy/setdetachstate/getdetachstate
+      - Implemented: fragile_pthread_detach, fragile_pthread_exit
     - [ ] **22.13.3.2** Transpiled `std::thread` uses libc++ → calls our pthreads
   - [ ] **22.13.4** Mutexes: Implement via pthread_mutex or futex syscall
     - [ ] **22.13.4.1** Implement pthread_mutex_init/lock/unlock

@@ -40,12 +40,14 @@ extern crate alloc;
 
 mod exceptions;
 mod memory;
+mod pthread;
 mod rtti;
 mod stdio;
 mod vtable;
 
 pub use exceptions::*;
 pub use memory::*;
+pub use pthread::*;
 pub use rtti::*;
 pub use stdio::*;
 pub use vtable::*;
