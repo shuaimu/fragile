@@ -268,6 +268,50 @@ impl CppType {
                     // nullptr_t type
                     "std::nullptr_t" | "nullptr_t" | "decltype(nullptr)" =>
                         "*mut std::ffi::c_void".to_string(),
+                    // Common STL member type aliases used across container types
+                    // These are typedefs like vector<T>::size_type that appear in template code
+                    "size_type" => "usize".to_string(),
+                    "difference_type" => "isize".to_string(),
+                    // STL value access types - use c_void as placeholder for generic element type
+                    "value_type" => "std::ffi::c_void".to_string(),
+                    "reference" | "const_reference" => "&std::ffi::c_void".to_string(),
+                    "pointer" | "const_pointer" => "*mut std::ffi::c_void".to_string(),
+                    // STL iterator types - use raw pointers as placeholder
+                    "iterator" | "const_iterator" => "*mut std::ffi::c_void".to_string(),
+                    "reverse_iterator" | "const_reverse_iterator" => "*mut std::ffi::c_void".to_string(),
+                    // Allocator types
+                    "allocator_type" => "std::ffi::c_void".to_string(),
+                    // Common template parameter names that appear unresolved
+                    "_Tp" | "_CharT" | "_Traits" | "_Allocator" | "_Alloc" => "std::ffi::c_void".to_string(),
+                    "_Pointer" | "_Iter" | "_Iterator" | "_Size" | "_Ep" => "std::ffi::c_void".to_string(),
+                    "_Rp" | "_Ip" | "_Container" | "_BaseT" => "std::ffi::c_void".to_string(),
+                    // libc++ internal string representation types
+                    "__long" | "__rep" | "rep" => "std::ffi::c_void".to_string(),
+                    // Duration types
+                    "duration" => "i64".to_string(),
+                    // libc++ internal string types
+                    "__self_view" | "string" | "std::string" => "std::ffi::c_void".to_string(),
+                    "__storage_pointer" => "*mut std::ffi::c_void".to_string(),
+                    // Allocator-related types that appear in container implementations
+                    "__alloc_traits_difference_type" => "isize".to_string(),
+                    // libc++ internal types
+                    "__syscall_slong_t" | "__syscall_ulong_t" => "i64".to_string(),
+                    "__type_name_t" => "*const i8".to_string(),  // RTTI type name pointer
+                    // Boolean type traits used for tag dispatching
+                    "true_type" | "std::true_type" => "bool".to_string(),
+                    "false_type" | "std::false_type" => "bool".to_string(),
+                    // C++ exception types - use valid placeholder struct names
+                    // Note: Cannot use "()" as these may be used as struct names
+                    "logic_error" | "std::logic_error" => "StdLogicError".to_string(),
+                    "runtime_error" | "std::runtime_error" => "StdRuntimeError".to_string(),
+                    // Time and stream types
+                    "timespec" => "i64".to_string(),  // Simplify to i64 timestamp
+                    "streambuf_type" | "char_type" => "std::ffi::c_void".to_string(),
+                    "memory_resource" => "std::ffi::c_void".to_string(),
+                    // More template parameter placeholders
+                    "_ValueType" | "_Sent" | "_Hp" => "std::ffi::c_void".to_string(),
+                    "__storage_type" => "usize".to_string(),
+                    "std___libcpp_refstring" => "std::ffi::c_void".to_string(),
                     // NOTE: STL string type mappings removed - types pass through as-is
                     // See Section 22 in TODO.md for rationale
                     _ => {
@@ -295,6 +339,11 @@ impl CppType {
                         // Handle auto type (C++11) - use Rust type inference
                         if name == "auto" {
                             return "_".to_string();
+                        }
+                        // Handle Clang template parameter placeholders like type-parameter-0-0
+                        // These are unresolved template parameters from template definitions
+                        if name.starts_with("type-parameter-") || name.starts_with("type_parameter_") {
+                            return "std::ffi::c_void".to_string();
                         }
                         // Strip C++ qualifiers that aren't valid in Rust type names
                         let cleaned = name
@@ -359,7 +408,9 @@ impl CppType {
                         // Convert template syntax to valid Rust identifiers:
                         // e.g., std::vector<int> -> std_vector_int
                         // e.g., type-parameter-0-0 -> type_parameter_0_0
+                        // Note: replace "::" first, then single ":" for line:col references
                         cleaned.replace("::", "_")
+                            .replace(":", "_")  // Single colon in file line:col references
                             .replace("<", "_")  // Convert template open bracket
                             .replace(">", "")   // Remove template close bracket
                             .replace(",", "_")  // Handle multiple template params
@@ -376,6 +427,7 @@ impl CppType {
                             .replace("+", "_")  // Template expressions (Index + 1)
                             .replace("(", "_")  // Expression grouping
                             .replace(")", "_")
+                            .replace("/", "_")  // File paths in anonymous union names from system headers
                     }
                 }
             }
