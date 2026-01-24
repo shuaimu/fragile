@@ -247,10 +247,11 @@ impl CppType {
                     "char8_t" => "u8".to_string(),
                     "char16_t" => "u16".to_string(),
                     "char32_t" => "u32".to_string(),
-                    "size_t" => "usize".to_string(),
-                    "ssize_t" | "ptrdiff_t" => "isize".to_string(),
-                    "intptr_t" => "isize".to_string(),
-                    "uintptr_t" => "usize".to_string(),
+                    // Standard library size types (handle both with and without std:: prefix)
+                    "size_t" | "std::size_t" => "usize".to_string(),
+                    "ssize_t" | "ptrdiff_t" | "std::ptrdiff_t" => "isize".to_string(),
+                    "intptr_t" | "std::intptr_t" => "isize".to_string(),
+                    "uintptr_t" | "std::uintptr_t" => "usize".to_string(),
                     // 128-bit integer types
                     "__int128" | "__int128_t" => "i128".to_string(),
                     "unsigned __int128" | "__uint128_t" => "u128".to_string(),
