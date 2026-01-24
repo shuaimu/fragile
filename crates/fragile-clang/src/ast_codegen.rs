@@ -3008,8 +3008,14 @@ impl AstCodeGen {
                 } else {
                     // Non-array: the child is the initializer
                     let init_str = self.expr_to_string(init_node);
-                    // Handle bool type with integer initializer (C++ allows 0/1 for bool)
-                    if matches!(ty, CppType::Bool) {
+
+                    // Check if the expression contains unresolved _unnamed references
+                    // This happens with unresolved template parameters in numeric_limits, etc.
+                    // Fall back to default value in these cases
+                    if init_str.contains("_unnamed") {
+                        Self::default_value_for_static(ty)
+                    } else if matches!(ty, CppType::Bool) {
+                        // Handle bool type with integer initializer (C++ allows 0/1 for bool)
                         match init_str.as_str() {
                             "0" | "0i32" => "false".to_string(),
                             "1" | "1i32" => "true".to_string(),
