@@ -1699,6 +1699,60 @@ impl AstCodeGen {
         (groups, regular_indices)
     }
 
+    /// Generate getter and setter methods for bit fields.
+    /// Must be called inside an impl block.
+    fn generate_bit_field_accessors(&mut self, struct_name: &str) {
+        let groups = match self.bit_field_groups.get(struct_name) {
+            Some(g) => g.clone(),
+            None => return,
+        };
+
+        for group in &groups {
+            let storage_type = group.storage_type();
+            let storage_field = format!("_bitfield_{}", group.group_index);
+
+            for field in &group.fields {
+                let vis = access_to_visibility(field.access);
+                let field_name = sanitize_identifier(&field.field_name);
+                let ret_type = field.original_type.to_rust_type_str();
+
+                // Calculate mask for this field's width
+                let mask = (1u64 << field.width) - 1;
+
+                // Getter: extract bits and cast to original type
+                self.writeln(&format!("/// Getter for bit field `{}`", field.field_name));
+                self.writeln(&format!("{}fn {}(&self) -> {} {{", vis, field_name, ret_type));
+                self.indent += 1;
+                if field.offset == 0 {
+                    self.writeln(&format!("(self.{} & 0x{:X}) as {}",
+                        storage_field, mask, ret_type));
+                } else {
+                    self.writeln(&format!("((self.{} >> {}) & 0x{:X}) as {}",
+                        storage_field, field.offset, mask, ret_type));
+                }
+                self.indent -= 1;
+                self.writeln("}");
+                self.writeln("");
+
+                // Setter: clear bits and set new value
+                self.writeln(&format!("/// Setter for bit field `{}`", field.field_name));
+                self.writeln(&format!("{}fn set_{}(&mut self, v: {}) {{", vis, field_name, ret_type));
+                self.indent += 1;
+                if field.offset == 0 {
+                    self.writeln(&format!("self.{} = (self.{} & !0x{:X}) | ((v as {}) & 0x{:X});",
+                        storage_field, storage_field, mask, storage_type, mask));
+                } else {
+                    let shifted_mask = mask << field.offset;
+                    self.writeln(&format!("self.{} = (self.{} & !0x{:X}) | (((v as {}) & 0x{:X}) << {});",
+                        storage_field, storage_field, shifted_mask, storage_type, mask, field.offset));
+                }
+                self.indent -= 1;
+                self.writeln("}");
+                self.writeln("");
+            }
+        }
+    }
+
     /// Generate struct definition.
     fn generate_struct(&mut self, name: &str, is_class: bool, children: &[ClangNode]) {
         // Convert C++ struct name to valid Rust identifier (handles template types)
@@ -1872,8 +1926,11 @@ impl AstCodeGen {
                               ClangNodeKind::ConstructorDecl { is_definition: true, .. })
         }).collect();
 
-        // Always generate impl block if we need new_0 or have other methods
-        if !methods.is_empty() || !has_default_ctor {
+        // Check if we have bit fields that need accessor methods
+        let has_bit_fields = self.bit_field_groups.contains_key(name);
+
+        // Always generate impl block if we need new_0, have other methods, or have bit fields
+        if !methods.is_empty() || !has_default_ctor || has_bit_fields {
             self.writeln("");
             self.writeln(&format!("impl {} {{", rust_name));
             self.indent += 1;
@@ -1891,6 +1948,9 @@ impl AstCodeGen {
             for method in methods {
                 self.generate_method(method, name);
             }
+
+            // Generate bit field accessor methods
+            self.generate_bit_field_accessors(name);
 
             self.indent -= 1;
             self.writeln("}");
@@ -6338,6 +6398,13 @@ mod tests {
         assert!(!code.contains("pub a:"), "Should not have individual 'a' field, got:\n{}", code);
         assert!(!code.contains("pub b:"), "Should not have individual 'b' field, got:\n{}", code);
         assert!(!code.contains("pub c:"), "Should not have individual 'c' field, got:\n{}", code);
+        // Should have getter/setter for each bit field
+        assert!(code.contains("pub fn a(&self)"), "Expected getter 'fn a(&self)', got:\n{}", code);
+        assert!(code.contains("pub fn set_a(&mut self"), "Expected setter 'fn set_a(&mut self)', got:\n{}", code);
+        assert!(code.contains("pub fn b(&self)"), "Expected getter 'fn b(&self)', got:\n{}", code);
+        assert!(code.contains("pub fn set_b(&mut self"), "Expected setter 'fn set_b(&mut self)', got:\n{}", code);
+        assert!(code.contains("pub fn c(&self)"), "Expected getter 'fn c(&self)', got:\n{}", code);
+        assert!(code.contains("pub fn set_c(&mut self"), "Expected setter 'fn set_c(&mut self)', got:\n{}", code);
     }
 
     #[test]

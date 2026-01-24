@@ -70,6 +70,7 @@ We just convert the fully-resolved AST to equivalent Rust code.
 - Three-way comparison operator (<=> → a.cmp(&b) as i8)
 - Placement new (new (ptr) T(args) → std::ptr::write with alignment checks)
 - Explicit destructor calls (obj->~Class() → std::ptr::drop_in_place)
+- Bit fields (packed storage with getter/setter accessors)
 
 **CLI**:
 ```bash
@@ -214,13 +215,13 @@ crates/
   - [x] **13.2.3** Handle anonymous union field access (direct member access) (~60 LOC) ✅ 2026-01-23
 
 ### 14. Bit Fields (Priority: Low)
-- [ ] **14.1** Bit field parsing
+- [x] **14.1** Bit field parsing ✅ 2026-01-24
   - [x] **14.1.1** Parse bit field width from FieldDecl (`field : width`) (~50 LOC) ✅ 2026-01-22
   - [x] **14.1.2** Track bit field offset and packing within struct (~80 LOC) ✅ 2026-01-24 [docs/dev/plan_14_1_2_bit_field_packing.md]
-- [ ] **14.2** Bit field code generation
-  - [ ] **14.2.1** Generate getter/setter methods for bit field access (~100 LOC)
+- [x] **14.2** Bit field code generation ✅ 2026-01-24
+  - [x] **14.2.1** Generate getter/setter methods for bit field access (~100 LOC) ✅ 2026-01-24 [docs/dev/plan_14_2_1_bit_field_accessors.md]
   - [x] **14.2.2** Pack adjacent bit fields into appropriate integer type (~120 LOC) ✅ 2026-01-24 (done as part of 14.1.2)
-  - [ ] **14.2.3** Handle bit field assignment and initialization (~80 LOC)
+  - [x] **14.2.3** Handle bit field assignment and initialization (~80 LOC) ✅ 2026-01-24 (done via set_* methods)
 - [ ] **14.3** Alternative: Use `bitflags` crate
   - [ ] **14.3.1** Detect bit field patterns that map to flags (~60 LOC)
   - [ ] **14.3.2** Generate `bitflags!` macro invocations (~80 LOC)
@@ -575,10 +576,6 @@ See `docs/transpiler-status.md` for detailed feature matrix.
 ### Not Yet Supported
 - I/O streams (`std::cout`, `std::cin`, file streams)
 - C++20 coroutines (`co_await`, `co_yield`, `co_return`)
-- Anonymous structs/unions
-- Bit fields
-- C-style variadic functions (`...`)
-- RTTI (`typeid`, `type_info`)
 - C++20 modules
 - C++20 ranges library
 
