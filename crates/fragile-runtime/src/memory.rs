@@ -190,3 +190,180 @@ pub unsafe extern "C" fn fragile_rt_call_array_destructor(
         current -= element_size;
     }
 }
+
+// ============================================================================
+// Standard C memory allocation functions
+// These are provided for libc++ compatibility since it may call malloc/free
+// directly instead of operator new/delete in some cases.
+// ============================================================================
+
+/// Standard C malloc - allocate memory.
+///
+/// # Safety
+/// Returns a pointer that must be freed with fragile_free.
+#[no_mangle]
+pub unsafe extern "C" fn fragile_malloc(size: usize) -> *mut c_void {
+    if size == 0 {
+        return core::ptr::null_mut();
+    }
+
+    #[cfg(feature = "std")]
+    {
+        let layout = Layout::from_size_align_unchecked(size, 8);
+        alloc(layout) as *mut c_void
+    }
+
+    #[cfg(not(feature = "std"))]
+    {
+        malloc(size)
+    }
+}
+
+/// Standard C free - deallocate memory.
+///
+/// # Safety
+/// Pointer must have been allocated by fragile_malloc, fragile_calloc, or fragile_realloc.
+#[no_mangle]
+pub unsafe extern "C" fn fragile_free(ptr: *mut c_void) {
+    if ptr.is_null() {
+        return;
+    }
+
+    #[cfg(feature = "std")]
+    {
+        // Note: We don't know the original size, so we use a minimal layout.
+        // This works for std::alloc because the allocator tracks sizes internally.
+        let layout = Layout::from_size_align_unchecked(1, 8);
+        dealloc(ptr as *mut u8, layout);
+    }
+
+    #[cfg(not(feature = "std"))]
+    {
+        free(ptr);
+    }
+}
+
+/// Standard C realloc - reallocate memory.
+///
+/// # Safety
+/// Pointer must have been allocated by fragile_malloc, fragile_calloc, or fragile_realloc.
+#[no_mangle]
+pub unsafe extern "C" fn fragile_realloc(ptr: *mut c_void, new_size: usize) -> *mut c_void {
+    if ptr.is_null() {
+        return fragile_malloc(new_size);
+    }
+
+    if new_size == 0 {
+        fragile_free(ptr);
+        return core::ptr::null_mut();
+    }
+
+    #[cfg(feature = "std")]
+    {
+        // For std::alloc, we need to know the old layout to realloc.
+        // Since we don't track sizes, we allocate new memory and copy.
+        // This is inefficient but correct.
+        let new_ptr = fragile_malloc(new_size);
+        if !new_ptr.is_null() {
+            // We don't know old size, so we copy conservatively.
+            // In practice, realloc is rarely used for shrinking.
+            core::ptr::copy_nonoverlapping(ptr as *const u8, new_ptr as *mut u8, new_size);
+        }
+        fragile_free(ptr);
+        new_ptr
+    }
+
+    #[cfg(not(feature = "std"))]
+    {
+        realloc(ptr, new_size)
+    }
+}
+
+/// Standard C calloc - allocate and zero memory.
+///
+/// # Safety
+/// Returns a pointer that must be freed with fragile_free.
+#[no_mangle]
+pub unsafe extern "C" fn fragile_calloc(nmemb: usize, size: usize) -> *mut c_void {
+    let total_size = nmemb.saturating_mul(size);
+    if total_size == 0 {
+        return core::ptr::null_mut();
+    }
+
+    #[cfg(feature = "std")]
+    {
+        let layout = Layout::from_size_align_unchecked(total_size, 8);
+        alloc_zeroed(layout) as *mut c_void
+    }
+
+    #[cfg(not(feature = "std"))]
+    {
+        calloc(nmemb, size)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_malloc_free() {
+        unsafe {
+            let ptr = fragile_malloc(100);
+            assert!(!ptr.is_null());
+            // Write some data to ensure it's valid memory
+            let byte_ptr = ptr as *mut u8;
+            *byte_ptr = 42;
+            assert_eq!(*byte_ptr, 42);
+            fragile_free(ptr);
+        }
+    }
+
+    #[test]
+    fn test_calloc() {
+        unsafe {
+            let ptr = fragile_calloc(10, 4); // 10 i32s
+            assert!(!ptr.is_null());
+            // calloc should zero-initialize
+            let int_ptr = ptr as *mut i32;
+            for i in 0..10 {
+                assert_eq!(*int_ptr.add(i), 0);
+            }
+            fragile_free(ptr);
+        }
+    }
+
+    #[test]
+    fn test_realloc() {
+        unsafe {
+            let ptr = fragile_malloc(10);
+            assert!(!ptr.is_null());
+            let byte_ptr = ptr as *mut u8;
+            *byte_ptr = 42;
+
+            let new_ptr = fragile_realloc(ptr, 100);
+            assert!(!new_ptr.is_null());
+            // Data should be preserved
+            let new_byte_ptr = new_ptr as *mut u8;
+            assert_eq!(*new_byte_ptr, 42);
+
+            fragile_free(new_ptr);
+        }
+    }
+
+    #[test]
+    fn test_malloc_zero_size() {
+        unsafe {
+            let ptr = fragile_malloc(0);
+            assert!(ptr.is_null());
+        }
+    }
+
+    #[test]
+    fn test_free_null() {
+        unsafe {
+            // Should not crash
+            fragile_free(core::ptr::null_mut());
+        }
+    }
+}

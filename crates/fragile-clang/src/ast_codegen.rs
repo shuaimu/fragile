@@ -661,6 +661,12 @@ impl AstCodeGen {
             "puts" => Some("fragile_runtime::puts"),
             "fgets" => Some("fragile_runtime::fgets"),
 
+            // C memory functions (used by libc++ allocator)
+            "malloc" => Some("fragile_runtime::fragile_malloc"),
+            "free" => Some("fragile_runtime::fragile_free"),
+            "realloc" => Some("fragile_runtime::fragile_realloc"),
+            "calloc" => Some("fragile_runtime::fragile_calloc"),
+
             _ => None,
         }
     }

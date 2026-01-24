@@ -18,7 +18,7 @@ We just convert the fully-resolved AST to equivalent Rust code.
 **libc++ Transpilation Tests**: 6/6 passing (cstddef, cstdint, type_traits, initializer_list, vector, cstddef_compilation)
 **Runtime Linking Tests**: 2/2 passing (FILE I/O, pthread)
 **Runtime Function Mapping Tests**: 1/1 passing
-**Total Tests**: 188 passing
+**Total Tests**: 193 passing
 
 **Working**:
 - Simple functions with control flow (if/else, while, for, do-while, switch, recursion)
@@ -588,13 +588,16 @@ Currently E2E tests compile with just `rustc`. We need to link against `fragile-
 
 libc++ containers need working `operator new`/`operator delete`.
 
-- [ ] **23.6** Implement global allocator functions
-  - [ ] **23.6.1** `operator new(size_t)` → `Box::into_raw(Box::from_raw(alloc(...)))` or libc malloc
-  - [ ] **23.6.2** `operator delete(void*)` → `Box::from_raw(...)` drop or libc free
-  - [ ] **23.6.3** `operator new[](size_t)` → array allocation
-  - [ ] **23.6.4** `operator delete[](void*)` → array deallocation
-  - [ ] **23.6.5** Aligned variants: `operator new(size_t, align_val_t)`
-  - [ ] **23.6.6** Nothrow variants: `operator new(size_t, nothrow_t)`
+- [x] **23.6** Implement global allocator functions ✅ 2026-01-24
+  - [x] **23.6.1** `operator new(size_t)` → already handled by fragile_rt_new in memory.rs ✅
+  - [x] **23.6.2** `operator delete(void*)` → already handled by fragile_rt_delete in memory.rs ✅
+  - [x] **23.6.3** `operator new[](size_t)` → fragile_rt_new_array in memory.rs ✅
+  - [x] **23.6.4** `operator delete[](void*)` → fragile_rt_delete_array in memory.rs ✅
+  - [x] **23.6.5** C malloc/free/realloc/calloc → fragile_malloc/fragile_free/etc. ✅
+    - Added function name mapping in ast_codegen.rs
+    - Added implementations in memory.rs with tests
+  - [ ] **23.6.6** Aligned variants: `operator new(size_t, align_val_t)` (DEFERRED - not commonly used)
+  - [ ] **23.6.7** Nothrow variants: `operator new(size_t, nothrow_t)` (DEFERRED - not commonly used)
 
 - [ ] **23.7** Handle libc++ allocator protocol
   - [ ] **23.7.1** `std::allocator<T>::allocate(n)` → calls operator new
