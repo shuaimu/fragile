@@ -2525,7 +2525,17 @@ impl AstCodeGen {
                     }
                 } else {
                     // Non-array: the child is the initializer
-                    self.expr_to_string(init_node)
+                    let init_str = self.expr_to_string(init_node);
+                    // Handle bool type with integer initializer (C++ allows 0/1 for bool)
+                    if matches!(ty, CppType::Bool) {
+                        match init_str.as_str() {
+                            "0" | "0i32" => "false".to_string(),
+                            "1" | "1i32" => "true".to_string(),
+                            _ => init_str,
+                        }
+                    } else {
+                        init_str
+                    }
                 }
             } else {
                 Self::default_value_for_static(ty)
