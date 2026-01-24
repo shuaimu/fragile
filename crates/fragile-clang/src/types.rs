@@ -333,16 +333,49 @@ impl CppType {
                             cleaned
                         };
 
+                        // Handle C++ array types that appear as Named types with bracket notation
+                        // e.g., _Tp[_Size] -> [_Tp; _Size] (Rust array syntax)
+                        // This happens with template parameters like std::array's __elems_ field
+                        // BUT skip if the result would be used as a struct name (no size specified)
+                        // e.g., type-parameter-0-0[] should become type_parameter_0_0_Arr not [type; ]
+                        if let Some(bracket_idx) = cleaned.find('[') {
+                            let element_type = &cleaned[..bracket_idx];
+                            let rest = &cleaned[bracket_idx + 1..];
+                            if let Some(close_bracket) = rest.find(']') {
+                                let size = &rest[..close_bracket].trim();
+                                // Only convert to array syntax if size is non-empty (looks like actual array)
+                                if !size.is_empty() && element_type.chars().all(|c| c.is_alphanumeric() || c == '_') {
+                                    // Recursively convert the element type and size
+                                    let elem_rust = CppType::Named(element_type.to_string()).to_rust_type_str();
+                                    let size_rust = size.replace("-", "_").replace(".", "_");
+                                    return format!("[{}; {}]", elem_rust, size_rust);
+                                }
+                                // Empty size like T[] - just convert to Arr suffix
+                                // This is used for unique_ptr<T[]> style types
+                            }
+                        }
+
                         // Replace :: with _ for namespaced types
                         // Convert template syntax to valid Rust identifiers:
                         // e.g., std::vector<int> -> std_vector_int
+                        // e.g., type-parameter-0-0 -> type_parameter_0_0
                         cleaned.replace("::", "_")
                             .replace("<", "_")  // Convert template open bracket
                             .replace(">", "")   // Remove template close bracket
                             .replace(",", "_")  // Handle multiple template params
                             .replace(" *", "")  // Remove trailing pointer indicators
                             .replace("*", "")
+                            .replace("&&", "_")  // C++ rvalue reference in type names
+                            .replace("&", "_")   // C++ reference in type names
+                            .replace("[]", "_Arr")  // Array type notation (e.g., T[] -> T_Arr)
+                            .replace("[", "_")  // Expression grouping
+                            .replace("]", "_")  // Expression grouping
                             .replace(" ", "_")
+                            .replace("-", "_")  // Clang uses dashes in template param names
+                            .replace(".", "_")  // Variadic pack expansion uses ...
+                            .replace("+", "_")  // Template expressions (Index + 1)
+                            .replace("(", "_")  // Expression grouping
+                            .replace(")", "_")
                     }
                 }
             }
