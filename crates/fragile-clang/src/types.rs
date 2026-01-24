@@ -345,6 +345,23 @@ impl CppType {
                         if name.starts_with("type-parameter-") || name.starts_with("type_parameter_") {
                             return "std::ffi::c_void".to_string();
                         }
+                        // Handle complex conditional types from libc++ template metaprogramming
+                        // These are SFINAE/conditional type expressions that can't be represented
+                        if name.starts_with("__conditional_t") || name.starts_with("_If__") {
+                            return "std::ffi::c_void".to_string();
+                        }
+                        // Handle typename-prefixed dependent types
+                        if name.starts_with("typename") || name.starts_with("typename_") {
+                            return "std::ffi::c_void".to_string();
+                        }
+                        // Handle libc++ variant implementation detail types
+                        if name.starts_with("__variant_detail") {
+                            return "std::ffi::c_void".to_string();
+                        }
+                        // Handle iterator traits types
+                        if name.starts_with("iter_") {
+                            return "std::ffi::c_void".to_string();
+                        }
                         // Strip C++ qualifiers that aren't valid in Rust type names
                         let cleaned = name
                             .trim_start_matches("const ")

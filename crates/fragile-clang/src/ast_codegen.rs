@@ -901,6 +901,22 @@ impl AstCodeGen {
                     None
                 }
             }
+            "__builtin_strcmp" => {
+                // __builtin_strcmp(s1, s2) -> compare C strings
+                // Returns negative if s1 < s2, positive if s1 > s2, 0 if equal
+                if args.len() >= 2 {
+                    Some((format!(
+                        "{{ let mut __p1 = {} as *const u8; let mut __p2 = {} as *const u8; \
+                         loop {{ let c1 = *__p1; let c2 = *__p2; \
+                         if c1 != c2 {{ break (c1 as i32) - (c2 as i32); }} \
+                         if c1 == 0 {{ break 0; }} \
+                         __p1 = __p1.add(1); __p2 = __p2.add(1); }} }}",
+                        args[0], args[1]
+                    ), true))
+                } else {
+                    None
+                }
+            }
             _ => None,
         }
     }
@@ -4305,7 +4321,9 @@ impl AstCodeGen {
                         initializers.push((name.clone(), init_val));
                     } else if let ClangNodeKind::Unknown(s) = &node.children[i].kind {
                         // Check for TypeRef:ClassName pattern indicating base class initializer
-                        if let Some(base_class) = s.strip_prefix("TypeRef:") {
+                        if let Some(base_class_cpp) = s.strip_prefix("TypeRef:") {
+                            // Convert C++ type name to Rust type name
+                            let base_class = CppType::Named(base_class_cpp.to_string()).to_rust_type_str();
                             // Next sibling should be constructor call
                             if i + 1 < node.children.len() {
                                 i += 1;
@@ -4346,7 +4364,7 @@ impl AstCodeGen {
                                         // Check if this is a transitive virtual base (not a direct base)
                                         let is_transitive_vbase = self.current_class.as_ref()
                                             .and_then(|c| self.virtual_bases.get(c))
-                                            .map(|vbases| vbases.iter().any(|vb| vb == base_class))
+                                            .map(|vbases| vbases.iter().any(|vb| *vb == base_class))
                                             .unwrap_or(false);
 
                                         if is_transitive_vbase {
@@ -6585,7 +6603,8 @@ impl AstCodeGen {
                     if let Some(m) = msg {
                         format!("panic!(\"{}\")", m)
                     } else if let Some(ty) = exception_ty {
-                        format!("panic!(\"Threw {:?}\")", ty)
+                        // Use to_rust_type_str() instead of Debug formatting to avoid quote issues
+                        format!("panic!(\"Threw {}\")", ty.to_rust_type_str())
                     } else {
                         "panic!(\"Exception thrown\")".to_string()
                     }
