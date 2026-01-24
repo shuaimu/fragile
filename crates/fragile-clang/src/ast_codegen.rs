@@ -147,6 +147,11 @@ pub struct AstCodeGen {
     merged_namespace_children: HashMap<String, Vec<usize>>,
     /// Reference to the original AST nodes (stored as indices into a collected vec)
     collected_nodes: Vec<ClangNode>,
+    /// Template definitions: template name -> (template params, children nodes)
+    /// Used to generate structs for template instantiations
+    template_definitions: HashMap<String, (Vec<String>, Vec<ClangNode>)>,
+    /// Template instantiations that need struct generation: full type name (e.g., "MyVec<int>")
+    pending_template_instantiations: HashSet<String>,
 }
 
 impl AstCodeGen {
@@ -179,6 +184,8 @@ impl AstCodeGen {
             current_struct_methods: HashMap::new(),
             merged_namespace_children: HashMap::new(),
             collected_nodes: Vec::new(),
+            template_definitions: HashMap::new(),
+            pending_template_instantiations: HashSet::new(),
         }
     }
 
@@ -201,6 +208,11 @@ impl AstCodeGen {
             self.collect_namespace_contents(&ast.children, Vec::new());
         }
 
+        // Collect template definitions and instantiations
+        if let ClangNodeKind::TranslationUnit = &ast.kind {
+            self.collect_template_info(&ast.children);
+        }
+
         // File header
         self.writeln("#![allow(dead_code)]");
         self.writeln("#![allow(unused_variables)]");
@@ -212,6 +224,9 @@ impl AstCodeGen {
 
         // Generate synthetic enum definitions for std::variant types
         self.generate_variant_enums();
+
+        // Generate struct definitions for template instantiations
+        self.generate_template_instantiations();
 
         // Second pass: generate code
         if let ClangNodeKind::TranslationUnit = &ast.kind {
@@ -465,6 +480,238 @@ impl AstCodeGen {
                 self.collect_namespace_contents(&child.children, current_path.clone());
             }
         }
+    }
+
+    /// Collect template definitions and find all template instantiation usages.
+    /// This enables generating structs for template types like MyVec<int>.
+    fn collect_template_info(&mut self, children: &[ClangNode]) {
+        for child in children {
+            match &child.kind {
+                ClangNodeKind::ClassTemplateDecl { name, template_params, .. } => {
+                    // Store template definition
+                    self.template_definitions.insert(name.clone(), (template_params.clone(), child.children.clone()));
+                    // Recurse into template to find usages
+                    self.collect_template_info(&child.children);
+                }
+                ClangNodeKind::VarDecl { ty, .. } |
+                ClangNodeKind::FieldDecl { ty, .. } => {
+                    self.collect_template_type(ty);
+                    self.collect_template_info(&child.children);
+                }
+                ClangNodeKind::FunctionDecl { return_type, params, .. } => {
+                    self.collect_template_type(return_type);
+                    for (_, param_ty) in params {
+                        self.collect_template_type(param_ty);
+                    }
+                    self.collect_template_info(&child.children);
+                }
+                ClangNodeKind::CXXMethodDecl { return_type, params, .. } => {
+                    self.collect_template_type(return_type);
+                    for (_, param_ty) in params {
+                        self.collect_template_type(param_ty);
+                    }
+                    self.collect_template_info(&child.children);
+                }
+                ClangNodeKind::RecordDecl { .. } |
+                ClangNodeKind::NamespaceDecl { .. } |
+                ClangNodeKind::CompoundStmt => {
+                    self.collect_template_info(&child.children);
+                }
+                _ => {
+                    self.collect_template_info(&child.children);
+                }
+            }
+        }
+    }
+
+    /// Check if a type is a template instantiation (e.g., MyVec<int>) and record it.
+    fn collect_template_type(&mut self, ty: &CppType) {
+        if let CppType::Named(name) = ty {
+            // Check if this is a template instantiation (contains <>)
+            if name.contains('<') && name.contains('>') {
+                // Extract template name (everything before <)
+                if let Some(idx) = name.find('<') {
+                    let template_name = &name[..idx];
+                    // Only add if we have a definition for this template
+                    if self.template_definitions.contains_key(template_name) {
+                        self.pending_template_instantiations.insert(name.clone());
+                    }
+                }
+            }
+        }
+        // Also check inside pointer/reference/array types
+        match ty {
+            CppType::Pointer { pointee, .. } => self.collect_template_type(pointee),
+            CppType::Reference { referent, .. } => self.collect_template_type(referent),
+            CppType::Array { element, .. } => self.collect_template_type(element),
+            _ => {}
+        }
+    }
+
+    /// Generate struct definitions for pending template instantiations.
+    fn generate_template_instantiations(&mut self) {
+        let instantiations: Vec<String> = self.pending_template_instantiations.iter().cloned().collect();
+        for inst_name in instantiations {
+            // Parse template arguments
+            if let Some(open_idx) = inst_name.find('<') {
+                let template_name = &inst_name[..open_idx];
+                let args_str = &inst_name[open_idx + 1..inst_name.len() - 1]; // Strip < and >
+                let type_args = parse_template_args(args_str);
+
+                if let Some((template_params, template_children)) = self.template_definitions.get(template_name).cloned() {
+                    // Generate struct with substituted types
+                    self.generate_template_struct(&inst_name, &template_params, &type_args, &template_children);
+                }
+            }
+        }
+    }
+
+    /// Generate a struct for a template instantiation.
+    fn generate_template_struct(&mut self, inst_name: &str, template_params: &[String], type_args: &[String], children: &[ClangNode]) {
+        // Convert instantiation name to valid Rust identifier
+        let rust_name = CppType::Named(inst_name.to_string()).to_rust_type_str();
+
+        // Skip if already generated
+        if self.generated_structs.contains(&rust_name) {
+            return;
+        }
+        self.generated_structs.insert(rust_name.clone());
+
+        // Build substitution map: T -> int, etc.
+        let mut subst_map = HashMap::new();
+        for (param, arg) in template_params.iter().zip(type_args.iter()) {
+            subst_map.insert(param.clone(), CppType::Named(arg.clone()).to_rust_type_str());
+        }
+
+        self.writeln(&format!("/// C++ template instantiation `{}`", inst_name));
+        self.writeln("#[repr(C)]");
+        self.writeln(&format!("pub struct {} {{", rust_name));
+        self.indent += 1;
+
+        // Generate fields with substituted types
+        let mut fields = Vec::new();
+        for child in children {
+            if let ClangNodeKind::FieldDecl { name, ty, access, is_static, .. } = &child.kind {
+                if *is_static {
+                    continue;
+                }
+                let sanitized_name = if name.is_empty() {
+                    "_field".to_string()
+                } else {
+                    sanitize_identifier(name)
+                };
+                // Substitute template parameters in type
+                let rust_type = self.substitute_template_type(ty, &subst_map);
+                let vis = access_to_visibility(*access);
+                self.writeln(&format!("{}{}: {},", vis, sanitized_name, rust_type));
+                fields.push((sanitized_name, ty.clone()));
+            }
+        }
+
+        // Store field info for constructor generation
+        self.class_fields.insert(inst_name.to_string(), fields);
+
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("");
+
+        // Generate impl block with methods
+        self.generate_template_impl(inst_name, &rust_name, children, &subst_map);
+    }
+
+    /// Substitute template parameters in a type.
+    fn substitute_template_type(&self, ty: &CppType, subst_map: &HashMap<String, String>) -> String {
+        match ty {
+            CppType::Named(name) => {
+                if let Some(replacement) = subst_map.get(name) {
+                    replacement.clone()
+                } else {
+                    ty.to_rust_type_str()
+                }
+            }
+            CppType::Pointer { pointee, is_const } => {
+                let inner = self.substitute_template_type(pointee, subst_map);
+                if *is_const {
+                    format!("*const {}", inner)
+                } else {
+                    format!("*mut {}", inner)
+                }
+            }
+            CppType::Reference { referent, is_const, is_rvalue } => {
+                let inner = self.substitute_template_type(referent, subst_map);
+                if *is_rvalue {
+                    // For rvalue refs, in Rust we typically pass by value or use mut ref
+                    format!("&mut {}", inner)
+                } else if *is_const {
+                    format!("&{}", inner)
+                } else {
+                    format!("&mut {}", inner)
+                }
+            }
+            CppType::Array { element, size } => {
+                let inner = self.substitute_template_type(element, subst_map);
+                match size {
+                    Some(n) => format!("[{}; {}]", inner, n),
+                    None => format!("*mut {}", inner),
+                }
+            }
+            _ => ty.to_rust_type_str(),
+        }
+    }
+
+    /// Generate impl block for a template instantiation.
+    fn generate_template_impl(&mut self, _inst_name: &str, rust_name: &str, children: &[ClangNode], subst_map: &HashMap<String, String>) {
+        let mut has_methods = false;
+        for child in children {
+            if matches!(&child.kind, ClangNodeKind::CXXMethodDecl { is_definition: true, .. }) {
+                has_methods = true;
+                break;
+            }
+        }
+
+        if !has_methods {
+            return;
+        }
+
+        self.writeln(&format!("impl {} {{", rust_name));
+        self.indent += 1;
+
+        for child in children {
+            if let ClangNodeKind::CXXMethodDecl { name, return_type, params, is_definition, is_static, .. } = &child.kind {
+                if *is_definition {
+                    // Generate method with substituted types
+                    let ret_type = self.substitute_template_type(return_type, subst_map);
+                    let mut param_strs = Vec::new();
+
+                    // Add self parameter for non-static methods
+                    if !*is_static {
+                        param_strs.push("&mut self".to_string());
+                    }
+
+                    for (param_name, param_ty) in params {
+                        let rust_ty = self.substitute_template_type(param_ty, subst_map);
+                        param_strs.push(format!("{}: {}", sanitize_identifier(param_name), rust_ty));
+                    }
+
+                    let ret_str = if ret_type == "()" || ret_type.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" -> {}", ret_type)
+                    };
+
+                    self.writeln(&format!("pub fn {}({}){} {{", sanitize_identifier(name), param_strs.join(", "), ret_str));
+                    self.indent += 1;
+                    self.writeln("todo!(\"Template method body\")");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("");
+                }
+            }
+        }
+
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("");
     }
 
     /// Map C++ compiler builtin functions to Rust equivalents.
@@ -1701,6 +1948,41 @@ impl AstCodeGen {
                     // Auto-use the contents so they're accessible in parent scope
                     self.writeln(&format!("use {}::*;", anon_name));
                     self.writeln("");
+                }
+            }
+            ClangNodeKind::ClassTemplateDecl { name: template_name, template_params, .. } => {
+                // Store template definition for later instantiation
+                // Children include TemplateTypeParmDecl (template params) and FieldDecl/CXXMethodDecl (members)
+                self.template_definitions.insert(template_name.clone(), (template_params.clone(), node.children.clone()));
+
+                // Process children of class template to find implicit instantiations
+                for child in &node.children {
+                    match &child.kind {
+                        // Template instantiations appear as RecordDecl children with
+                        // type names containing template arguments (e.g., "MyVec<int>")
+                        ClangNodeKind::RecordDecl { name: child_name, is_class, .. } => {
+                            // Only process instantiations (names with <...>)
+                            if child_name.contains('<') && child_name.contains('>') {
+                                self.generate_struct(child_name, *is_class, &child.children);
+                            }
+                        }
+                        _ => {
+                            // Recursively process other children (might contain nested instantiations)
+                            self.generate_top_level(child);
+                        }
+                    }
+                }
+            }
+            ClangNodeKind::ClassTemplatePartialSpecDecl { .. } => {
+                // Partial specializations are like regular structs with the specialized types
+                // The name will include the specialization pattern (e.g., "Pair<T, T>")
+                // For now, process children to find any instantiations
+                for child in &node.children {
+                    if let ClangNodeKind::RecordDecl { name: child_name, is_class, .. } = &child.kind {
+                        if child_name.contains('<') && child_name.contains('>') {
+                            self.generate_struct(child_name, *is_class, &child.children);
+                        }
+                    }
                 }
             }
             _ => {}
