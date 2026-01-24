@@ -1564,14 +1564,18 @@ impl AstCodeGen {
                             self.generated_modules.insert(module_key);
                         }
 
-                        // For duplicate namespaces, skip the module declaration entirely
+                        // For duplicate namespaces, skip entirely - we can't reopen modules in Rust
                         // (C++ allows reopening namespaces, Rust does not)
-                        // Items from subsequent namespace occurrences will be placed at top level
-                        // TODO: Consider collecting all namespace contents in first pass
-                        if is_first {
-                            self.writeln(&format!("pub mod {} {{", sanitize_identifier(ns_name)));
-                            self.indent += 1;
+                        // Items from subsequent namespace occurrences would go to wrong scope, so skip them
+                        // NOTE: This means some items may be missing if C++ spreads a namespace across files
+                        // TODO: Implement two-pass approach to merge all namespace contents first
+                        if !is_first {
+                            // Skip duplicate namespace entirely
+                            return;
                         }
+
+                        self.writeln(&format!("pub mod {} {{", sanitize_identifier(ns_name)));
+                        self.indent += 1;
 
                         // Track current namespace for relative path computation
                         self.current_namespace.push(ns_name.clone());
@@ -1580,11 +1584,9 @@ impl AstCodeGen {
                         }
                         self.current_namespace.pop();
 
-                        if is_first {
-                            self.indent -= 1;
-                            self.writeln("}");
-                            self.writeln("");
-                        }
+                        self.indent -= 1;
+                        self.writeln("}");
+                        self.writeln("");
                     }
                 } else {
                     // Anonymous namespace - generate private module with synthetic name
