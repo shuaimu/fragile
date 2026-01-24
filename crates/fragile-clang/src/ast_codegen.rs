@@ -136,6 +136,8 @@ pub struct AstCodeGen {
     generated_modules: HashSet<String>,
     /// Map from class/struct name to its bit field groups
     bit_field_groups: HashMap<String, Vec<BitFieldGroup>>,
+    /// Track generated function signatures to handle overloads: name -> count
+    generated_functions: HashMap<String, usize>,
 }
 
 impl AstCodeGen {
@@ -163,6 +165,7 @@ impl AstCodeGen {
             generated_structs: HashSet::new(),
             generated_modules: HashSet::new(),
             bit_field_groups: HashMap::new(),
+            generated_functions: HashMap::new(),
         }
     }
 
@@ -1426,7 +1429,12 @@ impl AstCodeGen {
         self.writeln(&format!("/// C++ {} `{}`", kind, name));
 
         // Generate as Rust enum
-        let repr_type = underlying_type.to_rust_type_str();
+        // Use a valid primitive type for repr - fall back to i32 if the type is not a standard primitive
+        let repr_type = match underlying_type.to_rust_type_str().as_str() {
+            "i8" | "i16" | "i32" | "i64" | "i128" | "isize" |
+            "u8" | "u16" | "u32" | "u64" | "u128" | "usize" => underlying_type.to_rust_type_str(),
+            _ => "i32".to_string(),
+        };
         self.writeln(&format!("#[repr({})]", repr_type));
         self.writeln("#[derive(Clone, Copy, PartialEq, Eq, Debug)]");
         self.writeln(&format!("pub enum {} {{", name));
@@ -1536,10 +1544,12 @@ impl AstCodeGen {
                 if let Some(ns_name) = name {
                     // Skip anonymous namespaces or standard library namespaces
                     if ns_name.starts_with("__") || ns_name == "std" {
-                        // Just process children without module wrapper for internal namespaces
+                        // Still track the namespace for deduplication, but don't create module
+                        self.current_namespace.push(ns_name.clone());
                         for child in &node.children {
                             self.generate_top_level(child);
                         }
+                        self.current_namespace.pop();
                     } else {
                         // Build full module key for deduplication
                         let module_key = if self.current_namespace.is_empty() {
@@ -1710,7 +1720,17 @@ impl AstCodeGen {
                          coroutine_info: &Option<CoroutineInfo>, children: &[ClangNode]) {
         // Special handling for C++ main function
         let is_main = name == "main" && params.is_empty();
-        let func_name = if is_main { "cpp_main" } else { name };
+        let base_func_name = if is_main { "cpp_main" } else { name };
+
+        // Handle function overloading by appending suffix for duplicates
+        let count = self.generated_functions.entry(base_func_name.to_string()).or_insert(0);
+        let func_name = if *count == 0 {
+            *count += 1;
+            base_func_name.to_string()
+        } else {
+            *count += 1;
+            format!("{}_{}", base_func_name, *count - 1)
+        };
 
         // Doc comment
         self.writeln(&format!("/// C++ function `{}`", name));
@@ -1788,11 +1808,11 @@ impl AstCodeGen {
             };
 
             // Generate the state machine struct and Iterator implementation
-            self.generate_generator_struct(func_name, &item_type, &yields);
+            self.generate_generator_struct(&func_name, &item_type, &yields);
 
             // Generate the function that returns the generator
-            let struct_name = format!("{}Generator", to_pascal_case(func_name));
-            self.writeln(&format!("pub fn {}({}){} {{", sanitize_identifier(func_name), params_str, ret_str));
+            let struct_name = format!("{}Generator", to_pascal_case(&func_name));
+            self.writeln(&format!("pub fn {}({}){} {{", sanitize_identifier(&func_name), params_str, ret_str));
             self.indent += 1;
             self.writeln(&format!("{} {{ __state: 0 }}", struct_name));
             self.indent -= 1;
@@ -1819,7 +1839,7 @@ impl AstCodeGen {
             } else {
                 ("", "")
             };
-            self.writeln(&format!("pub {}{}fn {}({}){} {{", async_keyword, extern_c, sanitize_identifier(func_name), params_with_variadic, ret_str));
+            self.writeln(&format!("pub {}{}fn {}({}){} {{", async_keyword, extern_c, sanitize_identifier(&func_name), params_with_variadic, ret_str));
             self.indent += 1;
 
             // Find the compound statement (function body)
@@ -2294,7 +2314,12 @@ impl AstCodeGen {
         self.writeln(&format!("/// C++ {} `{}`", kind, name));
 
         // Generate as Rust enum
-        let repr_type = underlying_type.to_rust_type_str();
+        // Use a valid primitive type for repr - fall back to i32 if the type is not a standard primitive
+        let repr_type = match underlying_type.to_rust_type_str().as_str() {
+            "i8" | "i16" | "i32" | "i64" | "i128" | "isize" |
+            "u8" | "u16" | "u32" | "u64" | "u128" | "usize" => underlying_type.to_rust_type_str(),
+            _ => "i32".to_string(), // Default to i32 for non-primitive underlying types
+        };
 
         // Check if this is an empty enum (no variants)
         let has_variants = children.iter().any(|c| matches!(&c.kind, ClangNodeKind::EnumConstantDecl { .. }));
@@ -2398,11 +2423,15 @@ impl AstCodeGen {
 
     /// Generate a global variable declaration.
     fn generate_global_var(&mut self, name: &str, ty: &CppType, _has_init: bool, children: &[ClangNode]) {
-        // Track this as a global variable (needs unsafe access)
-        self.global_vars.insert(name.to_string());
-
         // Sanitize the name to handle special characters and keywords
         let safe_name = sanitize_identifier(name);
+
+        // Skip if already generated (handles duplicates from template instantiation)
+        if self.global_vars.contains(&safe_name) {
+            return;
+        }
+        // Track this as a global variable (needs unsafe access and deduplication)
+        self.global_vars.insert(safe_name.clone());
         let rust_type = ty.to_rust_type_str();
         self.writeln(&format!("/// C++ global variable `{}`", name));
 
