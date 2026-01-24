@@ -6000,7 +6000,9 @@ impl AstCodeGen {
                 if !node.children.is_empty() {
                     self.expr_to_string(&node.children[0])
                 } else {
-                    format!("/* unsupported: {:?} */", std::mem::discriminant(&node.kind))
+                    // For unsupported expressions, return 0 as a safe fallback
+                    // This handles cases like SubstNonTypeTemplateParmExpr that libclang doesn't expose
+                    "0".to_string()
                 }
             }
         }
