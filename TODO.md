@@ -416,19 +416,34 @@ The current approach in `crates/fragile-clang/src/types.rs:183-580` has special-
   - [x] **22.12.1** Clang instantiates templates when used; we transpile the result ✅
   - [x] **22.12.2** Verify explicit instantiations work correctly ✅
 
-#### Phase 5: OS Interface Layer (for I/O, threading)
-- [ ] **22.13** Implement Rust backends for OS-dependent STL components
-  - [x] **22.13.1** File I/O: Implement C stdio functions for transpiled libc++ fstream ✅ [26:01:23, 18:00]
+#### Phase 5: OS Interface Layer (Low-Level System Calls)
+
+**Design Principle**: We do NOT map C++ std types to Rust std types (e.g., `std::cout` → `std::io::stdout()`). Instead, we transpile at the lowest level possible, implementing OS primitives that the transpiled libc++ code calls. The transpiled C++ code calls into raw system calls or thin Rust wrappers over them.
+
+- [ ] **22.13** Implement low-level OS interface for transpiled libc++
+  - [x] **22.13.1** File I/O: Implement C stdio functions (fopen, fread, fwrite, etc.) ✅ [26:01:23, 18:00]
     - [x] **22.13.1.1** Create FILE struct and C stdio function declarations in fragile-runtime (~80 LOC) ✅
-    - [x] **22.13.1.2** Implement FILE struct using Rust std::fs::File (~60 LOC) ✅
+    - [x] **22.13.1.2** Implement FILE struct wrapping raw file descriptors (~60 LOC) ✅
     - [x] **22.13.1.3** Implement fopen/fclose functions (~80 LOC) ✅
     - [x] **22.13.1.4** Implement fread/fwrite functions (~100 LOC) ✅
     - [x] **22.13.1.5** Implement fseek/ftell variants (~80 LOC) ✅
     - [x] **22.13.1.6** Add tests for file I/O functions (~100 LOC) ✅
-  - [ ] **22.13.2** Console I/O: map `std::cout`/`std::cin` to Rust `std::io`
-  - [ ] **22.13.3** Threading: map `<thread>` to Rust `std::thread`
-  - [ ] **22.13.4** Mutexes: map `<mutex>` to Rust `std::sync`
-  - [ ] **22.13.5** Atomics: map `<atomic>` to Rust `std::sync::atomic`
+  - [x] **22.13.2** Console I/O: Implement C stdio character functions for iostream ✅ [26:01:23, 19:30]
+    - [x] **22.13.2.1** Add standard streams (stdin/stdout/stderr) as global FILE* pointers ✅
+    - [x] **22.13.2.2** Implement character I/O: fgetc/getc/getchar, fputc/putc/putchar ✅
+    - [x] **22.13.2.3** Implement ungetc for character pushback (used by iostream) ✅
+    - [x] **22.13.2.4** Implement fputs/puts/fgets for string I/O ✅
+    - [x] **22.13.2.5** Add tests for console I/O functions ✅
+    - Note: Uses Rust std::io for portable implementation; libc++ iostream calls these C stdio functions
+  - [ ] **22.13.3** Threading: Implement via pthread or raw clone() syscall
+    - [ ] **22.13.3.1** Implement pthread_create/pthread_join wrappers
+    - [ ] **22.13.3.2** Transpiled `std::thread` uses libc++ → calls our pthreads
+  - [ ] **22.13.4** Mutexes: Implement via pthread_mutex or futex syscall
+    - [ ] **22.13.4.1** Implement pthread_mutex_init/lock/unlock
+    - [ ] **22.13.4.2** Transpiled `std::mutex` uses libc++ → calls our pthread_mutex
+  - [ ] **22.13.5** Atomics: Implement via compiler intrinsics / inline assembly
+    - [ ] **22.13.5.1** Implement atomic load/store/exchange operations
+    - [ ] **22.13.5.2** Transpiled `std::atomic` uses libc++ → calls our atomics
 
 #### Phase 6: Update Tests
 - [x] **22.14** Update existing tests ✅ 2026-01-23
@@ -461,10 +476,11 @@ The current approach in `crates/fragile-clang/src/types.rs:183-580` has special-
 3. **Complete**: All STL methods work, not just mapped ones
 4. **Consistent**: STL code treated the same as any other C++ code
 5. **Self-improving**: Fixes for STL transpilation improve all C++ transpilation
+6. **Low-level**: No semantic mapping between C++ and Rust std libraries; OS interface implemented via system calls
 
 ### What This Means for Output
 
-Before (with mappings):
+**Containers** - Before (with mappings):
 ```rust
 let v: Vec<i32> = Vec::new();
 v.push(42);
@@ -472,11 +488,24 @@ v.push(42);
 
 After (transpiled from libc++):
 ```rust
-let v: std::vector<i32> = std::vector::new();
+let v: std_vector_i32 = std_vector_i32::new();
 v.push_back(42);
 ```
 
-The output is more verbose but semantically identical to the original C++
+**Console I/O** - Before (with mappings):
+```rust
+// std::cout << "Hello" << std::endl;
+writeln!(std::io::stdout(), "Hello");
+```
+
+After (low-level transpilation):
+```rust
+// std::cout << "Hello" << std::endl;
+// Transpiled libc++ ostream eventually calls:
+unsafe { libc::write(1, b"Hello\n".as_ptr() as *const _, 6); }
+```
+
+The transpiled code is lower-level but preserves exact C++ semantics without depending on Rust std abstractions
 
 ---
 
