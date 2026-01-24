@@ -1423,6 +1423,24 @@ impl AstCodeGen {
                     self.generate_global_var(name, ty, *has_init, &node.children);
                 }
             }
+            ClangNodeKind::ModuleImportDecl { module_name, is_header_unit } => {
+                // C++20 module import → comment for now (pending full module support)
+                // In the future, this could map to:
+                // - `use module_name::*;` for regular modules
+                // - `include!("header.rs");` for header units
+                if *is_header_unit {
+                    self.writeln(&format!("// C++20 header unit import: import <{}>", module_name));
+                } else {
+                    // Convert module path separators (. or ::) to Rust path
+                    let rust_path = module_name.replace('.', "::");
+                    self.writeln(&format!("// C++20 module import: import {}", module_name));
+                    // Generate a use statement as a placeholder
+                    // When modules are fully implemented, this will become functional
+                    if !rust_path.is_empty() {
+                        self.writeln(&format!("// use {}::*; // (pending module implementation)", sanitize_identifier(&rust_path)));
+                    }
+                }
+            }
             ClangNodeKind::NamespaceDecl { name } => {
                 // Generate Rust module for namespace
                 if let Some(ns_name) = name {

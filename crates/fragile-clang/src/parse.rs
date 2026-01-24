@@ -1625,6 +1625,31 @@ impl ClangParser {
                     ClangNodeKind::Unknown(format!("inclusion:{}", name))
                 }
 
+                // CXCursor_ModuleImportDecl = 600 - C++20 import declaration
+                600 => {
+                    // Get module name via clang module API if available
+                    let module = clang_sys::clang_Cursor_getModule(cursor);
+                    let module_name = if !module.is_null() {
+                        let full_name = clang_sys::clang_Module_getFullName(module);
+                        cx_string_to_string(full_name)
+                    } else {
+                        // Fallback to cursor spelling if module API doesn't work
+                        cursor_spelling(cursor)
+                    };
+
+                    // Check if this is a header unit import (import <header>)
+                    // Header units typically have file paths or start with <
+                    let is_header_unit = module_name.starts_with('<') ||
+                        module_name.ends_with(".h") ||
+                        module_name.ends_with(".hpp") ||
+                        module_name.contains('/');
+
+                    ClangNodeKind::ModuleImportDecl {
+                        module_name,
+                        is_header_unit,
+                    }
+                }
+
                 _ => {
                     let kind_spelling = clang_sys::clang_getCursorKindSpelling(kind);
                     ClangNodeKind::Unknown(cx_string_to_string(kind_spelling))
@@ -4419,6 +4444,37 @@ mod tests {
             }
         }
         panic!("Expected to find function declaration");
+    }
+
+    #[test]
+    fn test_module_import_decl_variant() {
+        // Test that ModuleImportDecl variant can be created and matched
+        // Note: Actual C++20 module parsing requires special Clang flags and module interface files,
+        // so we just test that our AST representation is correct.
+        let node = ClangNode::new(ClangNodeKind::ModuleImportDecl {
+            module_name: "std.core".to_string(),
+            is_header_unit: false,
+        });
+
+        if let ClangNodeKind::ModuleImportDecl { module_name, is_header_unit } = &node.kind {
+            assert_eq!(module_name, "std.core");
+            assert!(!is_header_unit);
+        } else {
+            panic!("Expected ModuleImportDecl");
+        }
+
+        // Test header unit variant
+        let header_node = ClangNode::new(ClangNodeKind::ModuleImportDecl {
+            module_name: "<iostream>".to_string(),
+            is_header_unit: true,
+        });
+
+        if let ClangNodeKind::ModuleImportDecl { module_name, is_header_unit } = &header_node.kind {
+            assert_eq!(module_name, "<iostream>");
+            assert!(is_header_unit);
+        } else {
+            panic!("Expected ModuleImportDecl for header unit");
+        }
     }
 }
 

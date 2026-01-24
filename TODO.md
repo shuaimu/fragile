@@ -262,10 +262,10 @@ crates/
   - [x] **17.2.2** Handle array placement new (~80 LOC) ✅ 2026-01-24 [docs/dev/plan_17_2_array_placement_new.md]
 
 ### 18. C++20 Modules (Priority: Low - Long-term)
-- [ ] **18.1** Module detection
-  - [ ] **18.1.1** Parse `module` and `export module` declarations (~60 LOC)
-  - [ ] **18.1.2** Parse `import` declarations (~50 LOC)
-  - [ ] **18.1.3** Track module partitions (~80 LOC)
+- [ ] **18.1** Module detection - ANALYZED: libclang lacks cursor kinds for `module`/`export module` declarations; only `import` is supported via CXCursor_ModuleImportDecl. Full support requires token-based parsing. [docs/dev/plan_18_1_cpp20_modules_analysis.md]
+  - [ ] **18.1.1** Parse `module` and `export module` declarations (~60 LOC) - Requires token parsing (libclang doesn't expose these)
+  - [x] **18.1.2** Parse `import` declarations (~50 LOC) ✅ 2026-01-24 - Added ModuleImportDecl AST node and CXCursor_ModuleImportDecl handler
+  - [ ] **18.1.3** Track module partitions (~80 LOC) - Requires token parsing
 - [ ] **18.2** Module mapping
   - [ ] **18.2.1** Map C++ modules to Rust modules/crates (~100 LOC)
   - [ ] **18.2.2** Handle `export` visibility → `pub` (~50 LOC)

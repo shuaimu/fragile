@@ -304,6 +304,16 @@ pub enum ClangNodeKind {
         underlying_type: CppType,
     },
 
+    // C++20 Modules
+
+    /// Module import declaration (e.g., `import foo;` or `import <header>;`)
+    ModuleImportDecl {
+        /// Module name (e.g., "std.core" or "foo.bar")
+        module_name: String,
+        /// Whether this is a header unit import (import <header>)
+        is_header_unit: bool,
+    },
+
     // Statements
     /// Compound statement (block)
     CompoundStmt,
