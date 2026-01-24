@@ -227,15 +227,20 @@ impl CppType {
                 }
             }
             CppType::Named(name) => {
+                // Normalize the name by stripping const/volatile qualifiers for matching
+                let normalized_name = name
+                    .trim_start_matches("const ")
+                    .trim_start_matches("volatile ")
+                    .trim();
                 // Handle special C++ types that don't map directly to Rust
-                match name.as_str() {
+                match normalized_name {
                     "float" => "f32".to_string(),
                     "double" | "long double" => "f64".to_string(),  // Rust doesn't have long double
                     "bool" => "bool".to_string(),
-                    "long long" | "long long int" => "i64".to_string(),
-                    "unsigned long long" | "unsigned long long int" => "u64".to_string(),
-                    "long" | "long int" => "i64".to_string(),
-                    "unsigned long" | "unsigned long int" => "u64".to_string(),
+                    "long long" | "long long int" | "long_long" | "long_long_int" => "i64".to_string(),
+                    "unsigned long long" | "unsigned long long int" | "unsigned_long_long" | "unsigned_long_long_int" => "u64".to_string(),
+                    "long" | "long int" | "long_int" => "i64".to_string(),
+                    "unsigned long" | "unsigned long int" | "unsigned_long" | "unsigned_long_int" => "u64".to_string(),
                     "int" => "i32".to_string(),
                     "unsigned" | "unsigned int" => "u32".to_string(),
                     "short" | "short int" => "i16".to_string(),
