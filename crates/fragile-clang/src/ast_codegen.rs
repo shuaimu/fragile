@@ -2533,6 +2533,12 @@ impl AstCodeGen {
                             "1" | "1i32" => "true".to_string(),
                             _ => init_str,
                         }
+                    } else if matches!(ty, CppType::Named(_)) {
+                        // For struct types, convert 0 to zeroed memory initialization
+                        match init_str.as_str() {
+                            "0" | "0i32" => "unsafe { std::mem::zeroed() }".to_string(),
+                            _ => init_str,
+                        }
                     } else {
                         init_str
                     }
