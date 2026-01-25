@@ -744,6 +744,10 @@ Get `std::vector<int>` working end-to-end.
     - Fixed: Synthesized iterator arithmetic operators (op_add, op_sub) ✅ 2026-01-24
       - Iterators with op_add_assign/op_sub_assign but no op_add/op_sub get synthesized methods
       - Only applies to iterator-like types (have op_inc or op_dec methods)
+    - Fixed: Synthesized iterator deref operator (op_deref) ✅ 2026-01-24
+      - Iterators with op_index but no op_deref get synthesized op_deref stub
+      - Note: Works for user-defined iterators; libc++ internal types (e.g., _Bit_iterator)
+        go through a different code path that doesn't track method names
     - Remaining 16 errors:
       - Template instantiation (2) - push_back expects &c_void, got i32
       - Hash function overload (2) - _Hash_impl::hash wrong arg count
