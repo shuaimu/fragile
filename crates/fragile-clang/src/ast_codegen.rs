@@ -2532,6 +2532,35 @@ impl AstCodeGen {
         }
     }
 
+    /// Check if a runtime function is declared as unsafe.
+    /// Returns true for pthread functions and other unsafe FFI wrappers.
+    fn is_unsafe_runtime_function(func_name: &str) -> bool {
+        // pthread functions (except pthread_self, pthread_equal, pthread_exit which are safe)
+        if func_name.contains("fragile_pthread_") {
+            // These few are not unsafe
+            if func_name.ends_with("pthread_self")
+                || func_name.ends_with("pthread_equal")
+                || func_name.ends_with("pthread_exit")
+            {
+                return false;
+            }
+            return true;
+        }
+        // Direct pthread calls that are unsafe (not mapped to fragile_runtime)
+        if func_name == "pthread_once" {
+            return true;
+        }
+        // Memory allocation functions
+        if func_name.contains("fragile_malloc")
+            || func_name.contains("fragile_free")
+            || func_name.contains("fragile_realloc")
+            || func_name.contains("fragile_calloc")
+        {
+            return true;
+        }
+        false
+    }
+
     /// Check if a type is std::variant (or variant without std:: prefix) and return its C++ template arguments if so.
     fn get_variant_args(ty: &CppType) -> Option<Vec<String>> {
         if let CppType::Named(name) = ty {
@@ -13919,6 +13948,9 @@ impl AstCodeGen {
                     } else if is_fn_ptr_call {
                         // Function pointer call: need to unwrap the Option<fn(...)>
                         format!("{}.unwrap()({})", func, args.join(", "))
+                    } else if Self::is_unsafe_runtime_function(&func) {
+                        // Unsafe runtime function (pthread, malloc, etc.)
+                        format!("unsafe {{ {}({}) }}", func, args.join(", "))
                     } else {
                         format!("{}({})", func, args.join(", "))
                     }
