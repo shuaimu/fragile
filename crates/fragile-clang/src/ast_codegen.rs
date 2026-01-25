@@ -3829,6 +3829,67 @@ impl AstCodeGen {
         self.writeln("}");
         self.writeln("");
 
+        // Locale nested class stubs
+        // In C++, locale::facet is a nested class. When iostream is transpiled, we get both
+        // references to locale_facet (qualified name) and the struct facet (unqualified).
+        // Generate stubs that work regardless of whether the real types exist.
+        self.writeln("// Locale nested class stubs");
+        self.writeln("#[repr(C)]");
+        self.writeln("#[derive(Default, Clone)]");
+        self.writeln("pub struct locale_facet { pub _phantom: u8 }");
+        self.writeln("#[repr(C)]");
+        self.writeln("#[derive(Default, Clone)]");
+        self.writeln("pub struct locale_id { pub _phantom: u8 }");
+        self.writeln("");
+
+        // System/pthread type stubs for libc++ threading support
+        self.writeln("// System type stubs for libc++ threading");
+        self.writeln("pub type __locale_struct = std::ffi::c_void;");
+        self.writeln("pub type __libcpp_mutex_t = usize;");
+        self.writeln("pub type __libcpp_recursive_mutex_t = usize;");
+        self.writeln("pub type __libcpp_condvar_t = usize;");
+        self.writeln("pub type pthread_mutexattr_t = u32;");
+        self.writeln("");
+
+        // Missing ctype specialization stubs
+        self.writeln("// ctype specialization stubs");
+        self.writeln("pub type ctype_char_ = std::ffi::c_void;");
+        self.writeln("pub type ctype_wchar_t_ = std::ffi::c_void;");
+        self.writeln("pub type collate_char_ = std::ffi::c_void;");
+        self.writeln("pub type collate_wchar_t_ = std::ffi::c_void;");
+        self.writeln("");
+
+        // Template placeholder type aliases for uninstantiated templates
+        self.writeln("// Template placeholder stubs for uninstantiated template types");
+        self.writeln("pub type basic_string__CharT___Traits___Allocator = std::ffi::c_void;");
+        self.writeln("pub type basic_string_view_type_parameter_0_0__type_parameter_0_1 = std::ffi::c_void;");
+        self.writeln("pub type basic_string_type_parameter_0_0__char_traits_type_parameter_0_0__allocator_type_parameter_0_0 = std::ffi::c_void;");
+        self.writeln("pub type basic_string_type_parameter_0_1__char_traits_type_parameter_0_1__type_parameter_0_2 = std::ffi::c_void;");
+        self.writeln("pub type initializer_list_type_parameter_0_0 = std::ffi::c_void;");
+        self.writeln("pub type optional__Tp = std::ffi::c_void;");
+        self.writeln("pub type string_type = std::ffi::c_void;");
+        self.writeln("pub type std_locale = std::ffi::c_void;");  // Stub - will be generated from iostream
+        self.writeln("");
+
+        // Iterator wrapper type stubs (skipped from generation but referenced)
+        self.writeln("// Iterator wrapper type stubs");
+        self.writeln("pub type __wrap_iter_typename_allocator_traits_type_parameter_0_2_const_pointer = std::ffi::c_void;");
+        self.writeln("pub type __wrap_iter_typename_allocator_traits_type_parameter_0_2_pointer = std::ffi::c_void;");
+        self.writeln("pub type reverse_iterator_const_type_parameter_0_0 = std::ffi::c_void;");
+        self.writeln("pub type reverse_iterator_type_parameter_0_0 = std::ffi::c_void;");
+        self.writeln("pub type reverse_iterator___wrap_iter_typename_allocator_traits_type_parameter_0_2_const_pointer = std::ffi::c_void;");
+        self.writeln("pub type reverse_iterator___wrap_iter_typename_allocator_traits_type_parameter_0_2_pointer = std::ffi::c_void;");
+        self.writeln("");
+
+        // Chrono and format type stubs
+        self.writeln("// Chrono and format type stubs");
+        self.writeln("pub type chrono_nanoseconds = i64;");
+        self.writeln("pub type std___extended_grapheme_custer_property_boundary___property = u32;");
+        self.writeln("pub type std___format_spec___alignment = u32;");
+        self.writeln("pub type _Real = f64;");
+        self.writeln("pub type _Cp = std::ffi::c_void;");
+        self.writeln("");
+
         // fragile_runtime stub for memory allocation
         self.writeln("// fragile_runtime stub for memory allocation");
         self.writeln("pub mod fragile_runtime {");
