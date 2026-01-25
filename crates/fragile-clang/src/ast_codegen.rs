@@ -357,7 +357,7 @@ impl AstCodeGen {
             ty if ty.starts_with("*mut ") || ty.starts_with("*const ") => {
                 "std::ptr::null_mut()".to_string()
             }
-            _ => format!("Default::default()"),
+            _ => "Default::default()".to_string(),
         }
     }
 
@@ -896,12 +896,10 @@ impl AstCodeGen {
                     } else {
                         self.writeln(&format!("(*derived).__base.{}({})", method_name, args));
                     }
+                } else if args.is_empty() {
+                    self.writeln(&format!("(*derived).{}()", method_name));
                 } else {
-                    if args.is_empty() {
-                        self.writeln(&format!("(*derived).{}()", method_name));
-                    } else {
-                        self.writeln(&format!("(*derived).{}({})", method_name, args));
-                    }
+                    self.writeln(&format!("(*derived).{}({})", method_name, args));
                 }
             }
 
@@ -1358,10 +1356,7 @@ impl AstCodeGen {
                     let mangled_name = format!("{}_{}", fn_name, sanitized_args.join("_"));
 
                     // Store the instantiation if not already present
-                    if !self.pending_fn_instantiations.contains_key(&mangled_name) {
-                        self.pending_fn_instantiations
-                            .insert(mangled_name, (fn_name.clone(), type_args));
-                    }
+                    self.pending_fn_instantiations.entry(mangled_name).or_insert_with(|| (fn_name.clone(), type_args));
                 }
             }
         }
@@ -1816,7 +1811,7 @@ impl AstCodeGen {
             "/// Instantiated with: [{}]",
             type_args.join(", ")
         ));
-        self.writeln(&format!("#[inline]"));
+        self.writeln(&"#[inline]".to_string());
         self.writeln(&format!(
             "pub fn {}({}){} {{",
             sanitized_mangled_name,
@@ -4137,7 +4132,7 @@ impl AstCodeGen {
         variants.sort_by_key(|(name, _)| name.clone());
 
         for (enum_name, rust_types) in variants {
-            self.writeln(&"/// Generated Rust enum for std::variant type".to_string());
+            self.writeln("/// Generated Rust enum for std::variant type");
             self.writeln("#[derive(Clone, Debug)]");
             self.writeln(&format!("pub enum {} {{", enum_name));
             self.indent += 1;
@@ -4869,7 +4864,7 @@ impl AstCodeGen {
                     let anon_name = format!("__anon_{}", self.anon_namespace_counter);
                     self.anon_namespace_counter += 1;
 
-                    self.writeln(&"/// Anonymous namespace (internal linkage)".to_string());
+                    self.writeln("/// Anonymous namespace (internal linkage)");
                     self.writeln(&format!("mod {} {{", anon_name));
                     self.indent += 1;
                     self.module_depth += 1;
@@ -6226,7 +6221,7 @@ impl AstCodeGen {
             }
         } else {
             // Empty enum - generate as a zero-sized struct instead (Rust doesn't support repr on empty enums)
-            self.writeln(&"#[repr(transparent)]".to_string());
+            self.writeln("#[repr(transparent)]");
             self.writeln("#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]");
             self.writeln(&format!("pub struct {}({});", safe_name, repr_type));
         }
@@ -10342,12 +10337,10 @@ impl AstCodeGen {
                                             CppType::TemplateParam { .. }
                                         ) {
                                             (&template_info.return_type, return_type.as_ref())
+                                        } else if i < params.len() {
+                                            return params[i].to_rust_type_str();
                                         } else {
-                                            if i < params.len() {
-                                                return params[i].to_rust_type_str();
-                                            } else {
-                                                return return_type.to_rust_type_str();
-                                            }
+                                            return return_type.to_rust_type_str();
                                         };
                                     extract_template_arg(
                                         template_param_ty,
@@ -12626,17 +12619,11 @@ fn sanitize_type_for_fn_name(ty: &str) -> String {
         .replace("*const ", "ptr_const_")
         .replace('*', "ptr_")
         .replace("::", "_")
-        .replace(' ', "_")
-        .replace('<', "_")
+        .replace([' ', '<'], "_")
         .replace('>', "")
         .replace(',', "_")
         .replace('&', "ref_")
-        .replace('[', "_")
-        .replace(']', "_")
-        .replace(';', "_")
-        .replace('(', "_")
-        .replace(')', "_")
-        .replace('"', "_") // Handle quotes in extern "C" linkage specifiers
+        .replace(['[', ']', ';', '(', ')', '"'], "_") // Handle quotes in extern "C" linkage specifiers
 }
 
 /// Get default value for a type.
