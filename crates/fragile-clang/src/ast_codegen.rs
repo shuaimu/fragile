@@ -126,6 +126,9 @@ pub struct AstCodeGen {
     current_return_type: Option<CppType>,
     /// Map from class name to its field names (for constructor generation)
     class_fields: HashMap<String, Vec<(String, CppType)>>,
+    /// Map from class name to its constructor signatures: class_name -> [(ctor_suffix, param_types)]
+    /// e.g., "_Bit_iterator_base" -> [("new_2", [Pointer<u64>, u64])]
+    constructor_signatures: HashMap<String, Vec<(String, Vec<CppType>)>>,
     /// Collected std::variant types: maps enum name (e.g., "Variant_i32_f64") to its Rust type arguments (e.g., ["i32", "f64"])
     variant_types: HashMap<String, Vec<String>>,
     /// Counter for generating unique anonymous namespace names
@@ -176,6 +179,7 @@ impl AstCodeGen {
             use_ctor_self: false,
             current_return_type: None,
             class_fields: HashMap::new(),
+            constructor_signatures: HashMap::new(),
             variant_types: HashMap::new(),
             anon_namespace_counter: 0,
             generated_structs: HashSet::new(),
@@ -4401,6 +4405,13 @@ impl AstCodeGen {
                 };
                 let internal_name = format!("__new_without_vbases_{}", params.len());
 
+                // Record constructor signature for base class initializer generation
+                let param_types: Vec<CppType> = params.iter().map(|(_, t)| t.clone()).collect();
+                self.constructor_signatures
+                    .entry(struct_name.to_string())
+                    .or_default()
+                    .push((fn_name.clone(), param_types));
+
                 // Deduplicate parameter names (C++ allows unnamed params, Rust doesn't)
                 let mut param_name_counts: HashMap<String, usize> = HashMap::new();
                 let mut deduped_params: Vec<String> = Vec::new();
@@ -4470,7 +4481,23 @@ impl AstCodeGen {
                                 if matches!(&node.children[i].kind, ClangNodeKind::CallExpr { .. }) {
                                     // Extract constructor arguments
                                     let args = self.extract_constructor_args(&node.children[i]);
-                                    let ctor_call = format!("{}::new_{}({})", base_class, args.len(), args.join(", "));
+
+                                    // Look up constructor signature to correct 0 -> null_mut() for pointer params
+                                    let ctor_name_lookup = format!("new_{}", args.len());
+                                    let corrected_args: Vec<String> = if let Some(ctors) = self.constructor_signatures.get(&base_class) {
+                                        // Find the matching constructor by name
+                                        if let Some((_, param_types)) = ctors.iter().find(|(name, _)| *name == ctor_name_lookup) {
+                                            args.iter().zip(param_types.iter())
+                                                .map(|(arg, ty)| correct_initializer_for_type(arg, ty))
+                                                .collect()
+                                        } else {
+                                            args.clone()
+                                        }
+                                    } else {
+                                        args.clone()
+                                    };
+
+                                    let ctor_call = format!("{}::new_{}({})", base_class, args.len(), corrected_args.join(", "));
 
                                     // Find the index of this base class to determine field name
                                     let mut non_virtual_idx = 0;
@@ -4491,11 +4518,11 @@ impl AstCodeGen {
                                         } else {
                                             let base_has_vbases = self.class_has_virtual_bases(&info.name);
                                             let ctor_name = if base_has_vbases {
-                                                format!("{}::__new_without_vbases_{}", info.name, args.len())
+                                                format!("{}::__new_without_vbases_{}", info.name, corrected_args.len())
                                             } else {
-                                                format!("{}::new_{}", info.name, args.len())
+                                                format!("{}::new_{}", info.name, corrected_args.len())
                                             };
-                                            let ctor_call = format!("{}({})", ctor_name, args.join(", "));
+                                            let ctor_call = format!("{}({})", ctor_name, corrected_args.join(", "));
                                             let field_name = if non_virtual_idx == 0 { "__base".to_string() } else { format!("__base{}", non_virtual_idx) };
                                             base_inits.push((field_name, ctor_call));
                                         }
