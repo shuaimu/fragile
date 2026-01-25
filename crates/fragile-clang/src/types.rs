@@ -576,7 +576,10 @@ impl CppType {
                             .replace("+", "_") // Template expressions (Index + 1)
                             .replace("(", "_") // Expression grouping
                             .replace(")", "_")
-                            .replace("/", "_"); // File paths in anonymous union names from system headers
+                            .replace("/", "_") // File paths in anonymous union names from system headers
+                            .replace("==", "_eq_") // C++ SFINAE template expressions
+                            .replace("!=", "_ne_") // C++ SFINAE template expressions
+                            .replace("!", "_not_"); // C++ SFINAE negation
 
                         // Log diagnostic for complex type transformations
                         if result != cleaned && (cleaned.contains('<') || cleaned.contains("::")) {

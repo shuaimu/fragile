@@ -841,7 +841,7 @@ Get `std::cout` working end-to-end.
     }
     ```
     - **Status**: Transpilation succeeds (128K chars → 23K LOC Rust)
-    - **Progress**: Compilation errors reduced from 65 → ~1200 → 19 → 15 ✅ 2026-01-25
+    - **Progress**: Compilation errors reduced from 65 → ~1200 → 19 → 15 → 5 ✅ 2026-01-25
     - Many fixes applied:
       - Skip variadic template instantiations (&&..., ...)
       - Skip decltype return types
@@ -850,10 +850,12 @@ Get `std::cout` working end-to-end.
       - Improved pointer increment/decrement (use ptr.add(1) instead of += 1)
       - Fixed cast followed by method call precedence (x as T.method() → (x as T).method())
       - Fixed const/volatile in struct initialization type names
-    - **Remaining 15 errors**: Post-increment expression handling in complex expressions
-      - Pattern like `*ptr++` generates incorrect compound assignment `{...} += 1`
-      - Root cause: Complex interaction between UnexposedExpr wrappers and post-increment
-      - This is a pre-existing bug requiring separate investigation
+      - Fixed nested unary operator parsing (*ptr++ pattern) ✅ 2026-01-25
+      - Fixed elaborated typedef types (resolve to canonical type for pointer detection) ✅ 2026-01-25
+      - Fixed SFINAE type names with == and ! operators (escape to _eq_, _ne_, _not_) ✅ 2026-01-25
+    - **Remaining 5 errors**: Variadic function va_list initialization (known limitation)
+      - VaList initialization requires special Rust nightly features
+      - These are libc++ internal locale functions, not user code
     - Fixed: Cast precedence, literal operators, static member names, trait names
     - Fixed: Added vendored libc++ config files (__config_site, __assertion_handler) ✅ 2026-01-25
     - Fixed: CLI --use-vendored-libcxx now works correctly ✅ 2026-01-25
