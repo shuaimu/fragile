@@ -4463,3 +4463,106 @@ fn test_e2e_expression_evaluator() {
         "Expression evaluator should evaluate (2+3)*4=20 and 5*(3+7)=50 correctly"
     );
 }
+
+/// Task 23.11.1: Test simple linked list implementation.
+/// This exercises:
+/// - Struct with pointer to self
+/// - Constructor with initializer list
+/// - Destructor with pointer cleanup
+/// - Template instantiation (via function template)
+#[test]
+fn test_e2e_linked_list() {
+    let source = r#"
+        // Simple singly-linked list node
+        struct Node {
+            int value;
+            Node* next;
+
+            Node(int v) : value(v), next(nullptr) {}
+            ~Node() {
+                // Recursively delete remaining nodes
+                if (next) {
+                    delete next;
+                }
+            }
+        };
+
+        // Simple linked list
+        class List {
+            Node* head;
+            int count;
+        public:
+            List() : head(nullptr), count(0) {}
+            ~List() {
+                if (head) {
+                    delete head;
+                }
+            }
+
+            void push_front(int value) {
+                Node* newNode = new Node(value);
+                newNode->next = head;
+                head = newNode;
+                count++;
+            }
+
+            int front() const {
+                return head ? head->value : 0;
+            }
+
+            int size() const {
+                return count;
+            }
+
+            int sum() const {
+                int total = 0;
+                Node* curr = head;
+                while (curr) {
+                    total += curr->value;
+                    curr = curr->next;
+                }
+                return total;
+            }
+        };
+
+        int main() {
+            List list;
+
+            // Test empty list
+            if (list.size() != 0) return 1;
+
+            // Add elements
+            list.push_front(1);
+            list.push_front(2);
+            list.push_front(3);
+
+            // Test size
+            if (list.size() != 3) return 2;
+
+            // Test front (should be 3, most recently added)
+            if (list.front() != 3) return 3;
+
+            // Test sum (3 + 2 + 1 = 6)
+            if (list.sum() != 6) return 4;
+
+            // Add more elements
+            list.push_front(4);
+            list.push_front(5);
+
+            // Final checks
+            if (list.size() != 5) return 5;
+            if (list.sum() != 15) return 6;  // 5 + 4 + 3 + 2 + 1 = 15
+            if (list.front() != 5) return 7;
+
+            return 0;  // Success - destructor will clean up
+        }
+    "#;
+
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_linked_list.cpp").expect("E2E test failed");
+
+    assert_eq!(
+        exit_code, 0,
+        "Linked list implementation should work correctly"
+    );
+}

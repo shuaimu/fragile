@@ -14,11 +14,11 @@ We just convert the fully-resolved AST to equivalent Rust code.
 ## Current Status
 
 **Grammar Tests**: 20/20 passing
-**E2E Tests**: 86/86 passing (2 ignored due to STL header limitations)
+**E2E Tests**: 87/87 passing (2 ignored due to STL header limitations)
 **libc++ Transpilation Tests**: 8/8 passing (cstddef, cstdint, type_traits, initializer_list, vector, cstddef_compilation, iostream, thread)
 **Runtime Linking Tests**: 2/2 passing (FILE I/O, pthread)
 **Runtime Function Mapping Tests**: 1/1 passing
-**Total Tests**: 205 passing
+**Total Tests**: 206 passing
 
 **Working**:
 - Simple functions with control flow (if/else, while, for, do-while, switch, recursion)
@@ -881,8 +881,10 @@ Test against actual open-source C++ projects.
 - [x] **23.11** Select and attempt real projects (partial) ✅ [26:01:25]
   - [x] **23.11.1** Single-file projects (< 1K LOC) ✅ [26:01:25]
     - [x] Expression evaluator: multi-level inheritance, pure virtual methods, virtual dispatch, new/delete
+    - [x] Linked list: self-referential structs, pointer manipulation, destructor cleanup, ternary with pointers
     - Fixed: Abstract class vtable generation (skip vtable for classes with pure virtual)
     - Fixed: Virtual dispatch through const pointer members (strip "const " prefix)
+    - Fixed: Ternary operator condition with pointer type (convert to !ptr.is_null())
     - json.hpp (nlohmann JSON, header-only) - TODO
     - fmt (format library, mostly header-only) - TODO
   - [ ] **23.11.2** Small projects (1K-5K LOC)

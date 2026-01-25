@@ -10773,10 +10773,24 @@ impl AstCodeGen {
             }
             ClangNodeKind::ConditionalOperator { .. } => {
                 if node.children.len() >= 3 {
-                    let cond = self.expr_to_string(&node.children[0]);
+                    let cond_child = &node.children[0];
+                    let cond = self.expr_to_string(cond_child);
                     let then_expr = self.expr_to_string(&node.children[1]);
                     let else_expr = self.expr_to_string(&node.children[2]);
-                    format!("if {} {{ {} }} else {{ {} }}", cond, then_expr, else_expr)
+
+                    // Check if condition is a pointer type - needs null check in Rust
+                    let cond_type = Self::get_expr_type(cond_child);
+                    let cond_str = if matches!(cond_type, Some(CppType::Pointer { .. })) {
+                        // Pointer used as boolean: convert to !ptr.is_null()
+                        format!("!{}.is_null()", cond)
+                    } else {
+                        cond
+                    };
+
+                    format!(
+                        "if {} {{ {} }} else {{ {} }}",
+                        cond_str, then_expr, else_expr
+                    )
                 } else {
                     "/* ternary error */".to_string()
                 }
