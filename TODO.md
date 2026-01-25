@@ -842,7 +842,7 @@ Get `std::cout` working end-to-end.
     ```
     - **Status**: Transpilation succeeds (128K chars → 23K LOC Rust)
     - **Progress**: Compilation errors reduced (unique error codes): 65 → ... → 491 → 476 → 457 → 452 → 442 → 438 → 435 → 366 → 357 → 354 → 343 → 337 → 336 → 330 → 326 → 322 → 321 → 312 (libstdc++) ✅ 2026-01-25
-    - **Progress v2**: Total error count (incl. duplicate locations): 1225 → 1218 → 1214 → 1205 → 1201 → 1190 → 1169 → 1112 → 1063 → 1052 → 981 → 869 → 842 → 794 → 784 → 763 → 751 → 745 → 743 → 726 → 724 → 720 → 712 → 707 → 705 → 663 → 657 → 651 → 648 → 645 → 632 → 626 → 592 → 582 → 555 → 485 ✅ 2026-01-25
+    - **Progress v2**: Total error count (incl. duplicate locations): 1225 → 1218 → 1214 → 1205 → 1201 → 1190 → 1169 → 1112 → 1063 → 1052 → 981 → 869 → 842 → 794 → 784 → 763 → 751 → 745 → 743 → 726 → 724 → 720 → 712 → 707 → 705 → 663 → 657 → 651 → 648 → 645 → 632 → 626 → 592 → 582 → 555 → 485 → 471 ✅ 2026-01-25
       - Fixed cast-after-method parsing: wrap pointer casts in parentheses before .add()/.sub()
       - Added long double math builtins (__builtin_expl, __builtin_sqrtl, etc.) - 37 functions
       - Added __to_underlying_* stubs for enum-to-int conversion
@@ -930,13 +930,13 @@ Get `std::cout` working end-to-end.
       - Added: Thread/time stubs (sched_yield, nanosleep, timespec, __errno_location) ✅ 2026-01-25
       - Added: Wide char builtins (__builtin_wcslen, __builtin_wmemcmp) ✅ 2026-01-25
       - Added: Format spec constants (__binary_lower_case, __decimal, etc.) ✅ 2026-01-25
-    - **Remaining errors at 485**: mostly code generation issues requiring deeper fixes:
+      - Fixed: Wrap unsafe runtime function calls (pthread_*, malloc, etc.) in unsafe blocks (485→471) ✅ 2026-01-25
+    - **Remaining errors at 471**: mostly code generation issues requiring deeper fixes:
       - E0308 (313): Type mismatches (usize/u64, f32/f64, i32/u32, pointer/reference)
       - E0061 (47): Wrong number of arguments (function overloading issues)
       - E0560 (21): Struct has no field (vtable virtual method generation)
       - E0599 (20): No method found (op_bitor on primitives, wrapping_neg on f64)
       - E0277 (17): Trait not satisfied (Default/Clone derives)
-      - E0133 (14): Unsafe blocks needed for pthread runtime calls
   - [ ] **23.9.2** Fix iostream static initialization (global cout/cin/cerr objects) - BLOCKED
     - libc++ uses `__start_std_streams` section for initialization
     - May need to generate Rust static initialization code
