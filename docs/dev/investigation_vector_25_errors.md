@@ -100,13 +100,59 @@ The remaining 16 errors are fundamentally about template type resolution:
 - Specialized template functions not generating correct argument patterns
 - Type coercion between templates and concrete types
 
-These require deeper changes to the template instantiation system.
+### Root Cause: Template Definition vs Instantiation
+
+**Core Problem**: The transpiler is generating structs from template *definitions*
+rather than template *instantiations*.
+
+When we include `<vector>`:
+1. Clang parses the template definition as `vector<_Tp, _Alloc>`
+2. This RecordDecl has dependent type names (`_Tp`, `_Alloc`)
+3. The transpiler generates `struct vector__Tp___Alloc` from this definition
+4. The user's `std::vector<int>` variable uses this wrong struct
+
+**Why this happens**:
+- Template definitions appear in the AST as RecordDecls with unsubstituted type parameters
+- We mistakenly generate structs for these template definitions
+- The actual instantiated type (e.g., `std::vector<int>`) should be a separate AST node
+- We're not properly connecting user variables to instantiated types
+
+**Example Flow**:
+```
+<vector> header parsing:
+  RecordDecl: vector<_Tp, _Alloc>  ← We generate struct from this (WRONG)
+
+User code: std::vector<int> v;
+  VarDecl: v
+  Type: std::vector<int, std::allocator<int>>  ← Should use THIS type
+```
+
+### Potential Fixes
+
+**Option A: Skip Template Definitions** (Recommended)
+- Detect template definitions by checking for dependent type parameters
+- Only generate structs for fully instantiated types (no `_Tp`, `_Alloc`, etc.)
+- When we see `std::vector<int>`, generate `struct vector_int` from that instantiation
+- Complexity: Medium, requires tracking template context
+
+**Option B: Template-to-Instantiation Mapping**
+- Build a map: template definition → instantiation types used
+- When generating template struct, use the first instantiation's types
+- Complexity: Medium, but may miss edge cases with multiple instantiations
+
+**Option C: Post-hoc Type Mapping**
+- Let template definitions generate with `_Tp` names
+- Map variable types: `vector__Tp___Alloc` → `vector_int` based on declared type
+- Complexity: Low, but hacky and may not handle all method calls
+
+These require changes to template handling architecture.
 
 ## Next Steps
 
 1. **Template Type Resolution** (Priority: High)
    - Improve type parameter substitution in template specializations
    - Track original template types through specialization process
+   - Consider Option A (extended substitution map) as first approach
 
 2. **Hash Function Specializations** (Priority: Medium)
    - Add special handling for float/double hash implementations
