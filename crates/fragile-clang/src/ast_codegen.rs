@@ -4141,9 +4141,19 @@ impl AstCodeGen {
         self.writeln("pub type __libcpp_recursive_mutex_t = usize;");
         self.writeln("pub type __libcpp_condvar_t = usize;");
         self.writeln("pub type pthread_mutexattr_t = u32;");
+        self.writeln("pub type pthread_cond_t = usize;");
+        self.writeln("pub type pthread_once_t = i32;");
+        self.writeln("pub type pthread_key_t = u32;");
         self.writeln("");
         self.writeln("// C locale functions");
         self.writeln("pub fn __cloc() -> locale_t { std::ptr::null_mut() }");
+        self.writeln("");
+        self.writeln("// Additional pthread functions");
+        self.writeln("pub unsafe fn pthread_once(_once_control: *mut pthread_once_t, _init_routine: Option<fn()>) -> i32 { 0 }");
+        self.writeln("pub unsafe fn pthread_setspecific(_key: pthread_key_t, _value: *const std::ffi::c_void) -> i32 { 0 }");
+        self.writeln("pub unsafe fn pthread_getspecific(_key: pthread_key_t) -> *mut std::ffi::c_void { std::ptr::null_mut() }");
+        self.writeln("pub unsafe fn pthread_key_create(_key: *mut pthread_key_t, _destructor: Option<extern \"C\" fn(*mut std::ffi::c_void)>) -> i32 { 0 }");
+        self.writeln("pub unsafe fn pthread_key_delete(_key: pthread_key_t) -> i32 { 0 }");
         self.writeln("");
 
         // Missing ctype specialization stubs
