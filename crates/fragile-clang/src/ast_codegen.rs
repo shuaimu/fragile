@@ -741,7 +741,10 @@ impl AstCodeGen {
         }
 
         // Special handling for exception class stub - it has a 'what' field in the stub vtable
-        if class_name == "exception" || class_name == "std::exception" {
+        // Only add if 'what' isn't already in the vtable entries
+        if (class_name == "exception" || class_name == "std::exception")
+            && !vtable_info.entries.iter().any(|e| e.name == "what")
+        {
             self.writeln("what: exception_vtable_what,");
         }
 
@@ -917,7 +920,10 @@ impl AstCodeGen {
         }
 
         // Special handling for exception class - generate 'what' wrapper
-        if class_name == "exception" || class_name == "std::exception" {
+        // Only add if 'what' isn't already in the vtable entries (to avoid duplicates)
+        if (class_name == "exception" || class_name == "std::exception")
+            && !vtable_info.entries.iter().any(|e| e.name == "what")
+        {
             self.writeln("");
             self.writeln("/// Vtable wrapper for `exception::what`");
             self.writeln(&format!(
@@ -4080,6 +4086,7 @@ impl AstCodeGen {
         self.writeln("pub type __gthread_mutex_t = usize;");
         self.writeln("pub type __gthread_time_t = i64;");
         self.writeln("pub type error_category = std::ffi::c_void;");
+        self.generated_aliases.insert("error_category".to_string());
         self.writeln("pub type __ctype_abstract_base_wchar_t_ = std::ffi::c_void;");
         self.writeln("pub type _OI = std::ffi::c_void;");
         self.writeln("pub type _StateT = std::ffi::c_void;");
@@ -6043,6 +6050,10 @@ impl AstCodeGen {
         if self.generated_structs.contains(&rust_name) {
             return;
         }
+        // Skip if already generated as type alias (avoid symbol collision)
+        if self.generated_aliases.contains(&rust_name) {
+            return;
+        }
 
         self.generated_structs.insert(rust_name.clone());
 
@@ -6794,14 +6805,33 @@ impl AstCodeGen {
         // Sanitize the name to handle Rust keywords (e.g., "type" -> "r#type")
         let safe_name = sanitize_identifier(name);
 
+        // Skip common internal names that are likely to conflict with struct/field names
+        // These are commonly used as internal implementation details in STL
+        if safe_name == "__base" || safe_name == "__impl" {
+            return;
+        }
+
         // Skip if this alias was already generated (common in template metaprogramming)
         if self.generated_aliases.contains(&safe_name) {
             return;
         }
-        self.generated_aliases.insert(safe_name.clone());
 
         // Convert the underlying C++ type to Rust
         let rust_type = underlying_type.to_rust_type_str();
+
+        // Skip self-referential type aliases (e.g., typedef atomic<int> atomic_int
+        // may generate pub type atomic_int = atomic_int when the template resolves to same name)
+        if safe_name == rust_type {
+            return;
+        }
+
+        // Skip if this type was already generated as a struct (avoid symbol collision)
+        // This happens when a C++ struct and typedef have the same name
+        if self.generated_structs.contains(&safe_name) {
+            return;
+        }
+
+        self.generated_aliases.insert(safe_name.clone());
         self.writeln(&format!("/// C++ typedef/using `{}`", name));
         self.writeln(&format!("pub type {} = {};", safe_name, rust_type));
         self.writeln("");
