@@ -6588,6 +6588,107 @@ impl AstCodeGen {
                 }
             }
 
+            // Add ios_base methods (setf, unsetf, clear, flags) if not already generated
+            // These are standard C++ iostream methods that may not be captured from headers
+            if name == "ios_base" {
+                // setf(fmtflags) - sets format flags
+                let has_setf = self
+                    .current_struct_methods
+                    .get("setf")
+                    .copied()
+                    .unwrap_or(0)
+                    > 0;
+                if !has_setf {
+                    self.writeln("");
+                    self.writeln("/// Sets format flags");
+                    self.writeln("pub fn setf(&mut self, __fmtfl: u32) -> u32 {");
+                    self.indent += 1;
+                    self.writeln("let __r = self.__fmtflags_;");
+                    self.writeln("self.__fmtflags_ |= __fmtfl;");
+                    self.writeln("__r");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("");
+                    self.writeln("/// Sets format flags with mask");
+                    self.writeln("pub fn setf_1(&mut self, __fmtfl: u32, __mask: u32) -> u32 {");
+                    self.indent += 1;
+                    self.writeln("let __r = self.__fmtflags_;");
+                    self.writeln("self.unsetf(__mask);");
+                    self.writeln("self.__fmtflags_ |= __fmtfl & __mask;");
+                    self.writeln("__r");
+                    self.indent -= 1;
+                    self.writeln("}");
+                }
+
+                // unsetf(fmtflags) - clears format flags
+                let has_unsetf = self
+                    .current_struct_methods
+                    .get("unsetf")
+                    .copied()
+                    .unwrap_or(0)
+                    > 0;
+                if !has_unsetf {
+                    self.writeln("");
+                    self.writeln("/// Clears format flags");
+                    self.writeln("pub fn unsetf(&mut self, __mask: u32) {");
+                    self.indent += 1;
+                    self.writeln("self.__fmtflags_ &= !__mask;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                }
+
+                // clear(iostate) - sets the state flags
+                let has_clear = self
+                    .current_struct_methods
+                    .get("clear")
+                    .copied()
+                    .unwrap_or(0)
+                    > 0;
+                if !has_clear {
+                    self.writeln("");
+                    self.writeln("/// Clears error state flags");
+                    self.writeln("pub fn clear(&mut self, __state: u32) {");
+                    self.indent += 1;
+                    self.writeln("if !self.__rdbuf_.is_null() {");
+                    self.indent += 1;
+                    self.writeln("self.__rdstate_ = __state;");
+                    self.indent -= 1;
+                    self.writeln("} else {");
+                    self.indent += 1;
+                    self.writeln("self.__rdstate_ = __state | 1;"); // badbit = 1
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.indent -= 1;
+                    self.writeln("}");
+                }
+
+                // flags() - gets format flags
+                let has_flags = self
+                    .current_struct_methods
+                    .get("flags")
+                    .copied()
+                    .unwrap_or(0)
+                    > 0;
+                if !has_flags {
+                    self.writeln("");
+                    self.writeln("/// Gets format flags");
+                    self.writeln("pub fn flags(&self) -> u32 {");
+                    self.indent += 1;
+                    self.writeln("self.__fmtflags_");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("");
+                    self.writeln("/// Sets format flags (replaces all)");
+                    self.writeln("pub fn flags_1(&mut self, __fmtfl: u32) -> u32 {");
+                    self.indent += 1;
+                    self.writeln("let __r = self.__fmtflags_;");
+                    self.writeln("self.__fmtflags_ = __fmtfl;");
+                    self.writeln("__r");
+                    self.indent -= 1;
+                    self.writeln("}");
+                }
+            }
+
             self.indent -= 1;
             self.writeln("}");
         }
