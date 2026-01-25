@@ -2911,8 +2911,12 @@ impl AstCodeGen {
         // sanitize_identifier also properly escapes Rust keywords with r#
         let rust_name = sanitize_identifier(name);
 
-        // Skip if already generated
+        // Skip if already generated as struct/union
         if self.generated_structs.contains(&rust_name) {
+            return;
+        }
+        // Skip if already generated as type alias (avoid symbol collision)
+        if self.generated_aliases.contains(&rust_name) {
             return;
         }
         self.generated_structs.insert(rust_name.clone());
