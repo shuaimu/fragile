@@ -592,6 +592,24 @@ impl CppType {
         }
     }
 
+    /// Convert to Rust type string suitable for struct fields.
+    /// References are converted to raw pointers since Rust struct fields
+    /// can't have references without explicit lifetime parameters.
+    pub fn to_rust_type_str_for_field(&self) -> String {
+        match self {
+            CppType::Reference {
+                referent,
+                is_const,
+                ..
+            } => {
+                // Convert references to raw pointers for struct fields
+                let ptr_type = if *is_const { "*const" } else { "*mut" };
+                format!("{} {}", ptr_type, referent.to_rust_type_str_for_field())
+            }
+            _ => self.to_rust_type_str(),
+        }
+    }
+
     /// Check if this type is or contains template parameters.
     pub fn is_dependent(&self) -> bool {
         match self {

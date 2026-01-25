@@ -747,16 +747,15 @@ impl AstCodeGen {
             CppType::Reference {
                 referent,
                 is_const,
-                is_rvalue,
+                ..
             } => {
+                // Convert references to raw pointers for struct fields
+                // (Rust struct fields can't have references without lifetime parameters)
                 let inner = self.substitute_template_type(referent, subst_map);
-                if *is_rvalue {
-                    // For rvalue refs, in Rust we typically pass by value or use mut ref
-                    format!("&mut {}", inner)
-                } else if *is_const {
-                    format!("&{}", inner)
+                if *is_const {
+                    format!("*const {}", inner)
                 } else {
-                    format!("&mut {}", inner)
+                    format!("*mut {}", inner)
                 }
             }
             CppType::Array { element, size } => {
@@ -1881,9 +1880,9 @@ impl AstCodeGen {
         self.writeln("// Simple FNV-1a hash stub");
         self.writeln("let mut hash: usize = 14695981039346656037;");
         self.writeln("let slice = unsafe { std::slice::from_raw_parts(_ptr as *const u8, _len) };");
-        self.writeln("for byte in slice {");
+        self.writeln("for b in slice {");
         self.indent += 1;
-        self.writeln("hash ^= *byte as usize;");
+        self.writeln("hash ^= *b as usize;");
         self.writeln("hash = hash.wrapping_mul(1099511628211);");
         self.indent -= 1;
         self.writeln("}");
@@ -2451,7 +2450,7 @@ impl AstCodeGen {
                     "{}{}: {},",
                     vis,
                     sanitized_name,
-                    ty.to_rust_type_str()
+                    ty.to_rust_type_str_for_field()
                 ));
             }
         }
@@ -3365,7 +3364,7 @@ impl AstCodeGen {
                     "{}{}: {},",
                     vis,
                     sanitized_name,
-                    ty.to_rust_type_str()
+                    ty.to_rust_type_str_for_field()
                 ));
                 fields.push((sanitized_name, ty.clone()));
             } else if let ClangNodeKind::RecordDecl {
@@ -3396,7 +3395,7 @@ impl AstCodeGen {
                                 "{}{}: {},",
                                 vis,
                                 sanitized_name,
-                                ty.to_rust_type_str()
+                                ty.to_rust_type_str_for_field()
                             ));
                             fields.push((sanitized_name, ty.clone()));
                         }
@@ -3431,7 +3430,7 @@ impl AstCodeGen {
                                 "{}{}: {},",
                                 vis,
                                 sanitized_name,
-                                ty.to_rust_type_str()
+                                ty.to_rust_type_str_for_field()
                             ));
                             fields.push((sanitized_name, ty.clone()));
                         }
