@@ -1342,6 +1342,47 @@ fn test_e2e_function_template_reference_params() {
     );
 }
 
+/// Test function template with multiple type parameters.
+/// Verifies that templates like pair<T, U> work with different instantiations.
+#[test]
+fn test_e2e_function_template_multiple_params() {
+    let source = r#"
+        template<typename T, typename U>
+        T first_of(T a, U b) {
+            return a;
+        }
+
+        template<typename T, typename U>
+        U second_of(T a, U b) {
+            return b;
+        }
+
+        int main() {
+            // Test 1: first_of with int, float
+            int a = first_of(42, 3.14f);
+            if (a != 42) return 1;
+
+            // Test 2: second_of with int, float (returns float as int)
+            float b = second_of(10, 2.5f);
+            if (b < 2.4f || b > 2.6f) return 2;
+
+            // Test 3: first_of with different types
+            int c = first_of(100, 'X');
+            if (c != 100) return 3;
+
+            return 0;  // All tests passed
+        }
+    "#;
+
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_function_template_multi.cpp").expect("E2E test failed");
+
+    assert_eq!(
+        exit_code, 0,
+        "function template with multiple type parameters should work correctly"
+    );
+}
+
 /// Test function returning struct (rvalue handling).
 #[test]
 fn test_e2e_function_returning_struct() {
