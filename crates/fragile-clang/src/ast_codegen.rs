@@ -2060,10 +2060,10 @@ impl AstCodeGen {
                 // __builtin_memcpy(dst, src, n) -> std::ptr::copy_nonoverlapping(src, dst, n)
                 if args.len() >= 3 {
                     // Note: memcpy copies n bytes, copy_nonoverlapping copies n elements
-                    // We cast to u8 pointers to copy bytes
+                    // We cast to u8 pointers to copy bytes, and count to usize
                     Some((
                         format!(
-                            "std::ptr::copy_nonoverlapping({} as *const u8, {} as *mut u8, {})",
+                            "std::ptr::copy_nonoverlapping({} as *const u8, {} as *mut u8, ({}) as usize)",
                             args[1], args[0], args[2]
                         ),
                         true,
@@ -2077,7 +2077,7 @@ impl AstCodeGen {
                 if args.len() >= 3 {
                     Some((
                         format!(
-                            "std::ptr::copy({} as *const u8, {} as *mut u8, {})",
+                            "std::ptr::copy({} as *const u8, {} as *mut u8, ({}) as usize)",
                             args[1], args[0], args[2]
                         ),
                         true,
@@ -2091,7 +2091,7 @@ impl AstCodeGen {
                 if args.len() >= 3 {
                     Some((
                         format!(
-                            "std::ptr::write_bytes({} as *mut u8, {} as u8, {})",
+                            "std::ptr::write_bytes({} as *mut u8, ({}) as u8, ({}) as usize)",
                             args[0], args[1], args[2]
                         ),
                         true,
@@ -2106,8 +2106,8 @@ impl AstCodeGen {
                 if args.len() >= 3 {
                     Some((
                         format!(
-                            "{{ let s1 = std::slice::from_raw_parts({} as *const u8, {}); \
-                         let s2 = std::slice::from_raw_parts({} as *const u8, {}); \
+                            "{{ let s1 = std::slice::from_raw_parts({} as *const u8, ({}) as usize); \
+                         let s2 = std::slice::from_raw_parts({} as *const u8, ({}) as usize); \
                          s1.cmp(s2) as i32 }}",
                             args[0], args[2], args[1], args[2]
                         ),
