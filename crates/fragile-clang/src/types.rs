@@ -431,6 +431,11 @@ impl CppType {
                         if name == "auto" {
                             return "_".to_string();
                         }
+                        // Handle "type" which is a Rust keyword - can appear from unresolved
+                        // template parameters or typename expressions
+                        if normalized_name == "type" {
+                            return "std::ffi::c_void".to_string();
+                        }
                         // Handle Clang template parameter placeholders like type-parameter-0-0
                         // These are unresolved template parameters from template definitions
                         // Note: Use normalized_name to handle const-qualified types
