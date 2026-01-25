@@ -12111,7 +12111,19 @@ impl AstCodeGen {
                     let child = &node.children[0];
                     let inner = self.expr_to_string_raw(child);
                     // Check if inner is a binary expression - needs parens for cast to apply to whole expr
-                    let needs_parens = matches!(child.kind, ClangNodeKind::BinaryOperator { .. });
+                    // Also look through wrapper nodes (ImplicitCastExpr, ParenExpr, etc.)
+                    fn is_binary_op(node: &ClangNode) -> bool {
+                        match &node.kind {
+                            ClangNodeKind::BinaryOperator { .. } => true,
+                            ClangNodeKind::ImplicitCastExpr { .. }
+                            | ClangNodeKind::ParenExpr { .. }
+                            | ClangNodeKind::Unknown(_) => {
+                                node.children.first().map_or(false, is_binary_op)
+                            }
+                            _ => false,
+                        }
+                    }
+                    let needs_parens = is_binary_op(child);
                     match cast_kind {
                         CastKind::IntegralCast => {
                             // Need explicit cast for integral conversions
@@ -13142,6 +13154,42 @@ impl AstCodeGen {
                         } else {
                             right_str
                         };
+
+                        // Handle mixed-size integer arithmetic (e.g., u128 / u32)
+                        // Rust requires matching types for arithmetic, C++ does implicit widening
+                        // Also handle cases where the cast is already embedded in the operand string
+                        let (left, right) = {
+                            let left_rust_type = left_type.as_ref().map(|t| t.to_rust_type_str());
+                            let right_rust_type = right_type.as_ref().map(|t| t.to_rust_type_str());
+
+                            // Check for u128 with smaller types - cast smaller to u128
+                            let left_is_u128 = left_rust_type.as_deref() == Some("u128");
+                            let right_is_u128 = right_rust_type.as_deref() == Some("u128");
+                            let right_is_smaller = matches!(right_rust_type.as_deref(), Some("u32") | Some("u64"))
+                                || right.ends_with(" as u32)") || right.ends_with(" as u64)")
+                                || right.ends_with("as u32") || right.ends_with("as u64");
+                            let left_is_smaller = matches!(left_rust_type.as_deref(), Some("u32") | Some("u64"))
+                                || left.ends_with(" as u32)") || left.ends_with(" as u64)")
+                                || left.ends_with("as u32") || left.ends_with("as u64");
+
+                            if left_is_u128 && right_is_smaller {
+                                (left, format!("(({}) as u128)", right))
+                            } else if right_is_u128 && left_is_smaller {
+                                (format!("(({}) as u128)", left), right)
+                            // Check for i128 with smaller types
+                            } else if left_rust_type.as_deref() == Some("i128")
+                                && matches!(right_rust_type.as_deref(), Some("i32") | Some("i64"))
+                            {
+                                (left, format!("(({}) as i128)", right))
+                            } else if right_rust_type.as_deref() == Some("i128")
+                                && matches!(left_rust_type.as_deref(), Some("i32") | Some("i64"))
+                            {
+                                (format!("(({}) as i128)", left), right)
+                            } else {
+                                (left, right)
+                            }
+                        };
+
                         format!("{} {} {}", left, op_str, right)
                     } else if matches!(
                         op,

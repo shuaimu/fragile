@@ -938,12 +938,18 @@ Get `std::cout` working end-to-end.
       - Fixed: LOCALE_FACET_VTABLE_DEFAULT const for static vtable initialization (E0015 fix) (451→449) ✅ 2026-01-25
       - Fixed: pthread_mutexattr_t as struct with new_0() instead of type alias (449→448) ✅ 2026-01-25
       - Fixed: Skip Clone derive for structs with c_void fields (448→446) ✅ 2026-01-25
-    - **Remaining errors at 446**: mostly code generation issues requiring deeper fixes:
-      - E0308 (308): Type mismatches (usize/u64, f32/f64, i32/u32, pointer/reference)
+      - Fixed: Add template parameter type stubs for unresolved types (446→445) ✅ 2026-01-25
+      - Fixed: Replace _ with auto for static variable type placeholders (445→443) ✅ 2026-01-25
+      - Fixed: i64::MIN literal handling in EvaluatedExpr and bitwise ops (443→441) ✅ 2026-01-25
+      - Fixed: Check original type for bool in arithmetic (implicit IntegralCast) ✅ 2026-01-25
+      - Fixed: Improved binary op detection for cast parenthesization ✅ 2026-01-25
+      - Fixed: u128/i128 mixed arithmetic with smaller types ✅ 2026-01-25 (attempted)
+    - **Remaining errors at 441**: mostly code generation issues requiring deeper fixes:
+      - E0308 (309): Type mismatches (usize/u64, f32/f64, i32/u32, pointer/reference)
       - E0061 (47): Wrong number of arguments (function overloading issues)
       - E0560 (21): Struct has no field (vtable virtual method generation)
       - E0609 (16): No field on type (array._unnamed, __shared_weak_count.__base)
-      - E0277 (15): Trait not satisfied (u64: Neg, c_void: Clone)
+      - E0277 (13): Trait not satisfied (bool arithmetic, c_void ops)
       - E0599 (11): No method found (__on_zero_shared, op_add on raw pointers)
   - [ ] **23.9.2** Fix iostream static initialization (global cout/cin/cerr objects) - BLOCKED
     - libc++ uses `__start_std_streams` section for initialization
