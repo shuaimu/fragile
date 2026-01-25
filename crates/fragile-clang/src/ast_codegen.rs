@@ -8375,12 +8375,38 @@ impl AstCodeGen {
                 let old_return_type = self.current_return_type.take();
                 self.current_return_type = Some(return_type.clone());
 
+                // Track reference, pointer, and array parameters for proper dereferencing
+                let saved_ref_vars = self.ref_vars.clone();
+                let saved_ptr_vars = self.ptr_vars.clone();
+                let saved_arr_vars = self.arr_vars.clone();
+                self.ref_vars.clear();
+                self.ptr_vars.clear();
+                self.arr_vars.clear();
+                for (param_name, param_type) in params {
+                    if matches!(param_type, CppType::Reference { .. }) {
+                        self.ref_vars.insert(param_name.clone());
+                    }
+                    if matches!(param_type, CppType::Pointer { .. })
+                        || matches!(param_type, CppType::Array { size: None, .. })
+                    {
+                        self.ptr_vars.insert(param_name.clone());
+                    }
+                    if matches!(param_type, CppType::Array { .. }) {
+                        self.arr_vars.insert(param_name.clone());
+                    }
+                }
+
                 // Find body
                 for child in &node.children {
                     if let ClangNodeKind::CompoundStmt = &child.kind {
                         self.generate_block_contents(&child.children, return_type);
                     }
                 }
+
+                // Restore saved state
+                self.ref_vars = saved_ref_vars;
+                self.ptr_vars = saved_ptr_vars;
+                self.arr_vars = saved_arr_vars;
 
                 self.current_return_type = old_return_type;
                 self.indent -= 1;
