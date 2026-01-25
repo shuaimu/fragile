@@ -10559,3 +10559,48 @@ fn test_e2e_abstract_class_inherited_method() {
         "Abstract class with inherited method should work correctly"
     );
 }
+
+/// Test dereferencing a post-incremented pointer.
+/// The pattern *ptr++ should:
+/// 1. Return the value at the original pointer location
+/// 2. Then increment the pointer
+/// This tests the fix for the unary operator parsing bug where
+/// nested operators like *ptr++ were incorrectly parsed.
+#[test]
+fn test_e2e_deref_postinc() {
+    let source = r#"
+        char get_and_advance(const char** ptr_ptr) {
+            const char* ptr = *ptr_ptr;
+            char result = *ptr++;  // Deref then post-increment
+            *ptr_ptr = ptr;
+            return result;
+        }
+
+        int main() {
+            const char* hello = "hello";
+            const char** pp = &hello;
+
+            // Get first char
+            char c1 = get_and_advance(pp);
+            if (c1 != 'h') return 1;
+
+            // Get second char
+            char c2 = get_and_advance(pp);
+            if (c2 != 'e') return 2;
+
+            // Get third char
+            char c3 = get_and_advance(pp);
+            if (c3 != 'l') return 3;
+
+            return 0;  // Success
+        }
+    "#;
+
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_deref_postinc.cpp").expect("E2E test failed");
+
+    assert_eq!(
+        exit_code, 0,
+        "Dereference of post-increment should work correctly"
+    );
+}

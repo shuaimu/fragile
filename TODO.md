@@ -14,11 +14,11 @@ We just convert the fully-resolved AST to equivalent Rust code.
 ## Current Status
 
 **Grammar Tests**: 20/20 passing
-**E2E Tests**: 124/124 passing (5 ignored: 2 STL header limitations, 3 transpiler limitations)
+**E2E Tests**: 125/125 passing (5 ignored: 2 STL header limitations, 3 transpiler limitations)
 **libc++ Transpilation Tests**: 8/8 passing (cstddef, cstdint, type_traits, initializer_list, vector, cstddef_compilation, iostream, thread)
 **Runtime Linking Tests**: 2/2 passing (FILE I/O, pthread)
 **Runtime Function Mapping Tests**: 1/1 passing
-**Total Tests**: 243 passing
+**Total Tests**: 244 passing
 
 **Working**:
 - Simple functions with control flow (if/else, while, for, do-while, switch, recursion)
@@ -57,10 +57,10 @@ We just convert the fully-resolved AST to equivalent Rust code.
 - Default function parameters (evaluated at call site via clang_Cursor_Evaluate)
 - Const vs non-const methods (auto-detect &self vs &mut self based on modifications)
 - Comma operator (C++ (a, b) → Rust block expression { a; b })
-- Type aliases (typedef and using declarations → Rust pub type)
+- Type aliases (typedef and using declarations → Rust pub type, elaborated typedef types resolved)
 - Global variables (static mut with unsafe access)
 - Global arrays (const-safe initialization with [0; N])
-- Pointer arithmetic (++, --, +=, -= using .add()/.sub())
+- Pointer arithmetic (++, --, +=, -= using .add()/.sub(), correct nested *ptr++ handling)
 - Subscript operator [] (returns &mut, correct argument passing, auto-dereference)
 - Assignment operators (=, +=, -=, *=, /=, etc. with correct *this return)
 - Dereference operator * (op_deref → returns &mut, pointer-to-bool via .is_null())

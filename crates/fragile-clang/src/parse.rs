@@ -1867,7 +1867,7 @@ impl ClangParser {
                     }
                 }
 
-                clang_sys::CXType_Record | clang_sys::CXType_Elaborated => {
+                clang_sys::CXType_Record => {
                     let spelling = clang_sys::clang_getTypeSpelling(ty);
                     let name = cx_string_to_string(spelling);
                     // Clean up the name (remove "struct " prefix, etc.)
@@ -1876,6 +1876,29 @@ impl ClangParser {
                         .trim_start_matches("class ")
                         .to_string();
                     CppType::Named(name)
+                }
+
+                clang_sys::CXType_Elaborated => {
+                    // Elaborated types can be either struct/class types OR typedef aliases
+                    // For typedef aliases (e.g., my_str_t which is const char*), we need
+                    // to resolve to the canonical type to properly detect pointers
+                    let canonical = clang_sys::clang_getCanonicalType(ty);
+                    if canonical.kind != clang_sys::CXType_Invalid
+                        && canonical.kind != clang_sys::CXType_Elaborated
+                        && canonical.kind != clang_sys::CXType_Record
+                    {
+                        // The canonical type is a primitive or pointer - resolve it
+                        self.convert_type(canonical)
+                    } else {
+                        // It's a struct/class type - use the name
+                        let spelling = clang_sys::clang_getTypeSpelling(ty);
+                        let name = cx_string_to_string(spelling);
+                        let name = name
+                            .trim_start_matches("struct ")
+                            .trim_start_matches("class ")
+                            .to_string();
+                        CppType::Named(name)
+                    }
                 }
 
                 clang_sys::CXType_FunctionProto => {
@@ -1892,6 +1915,21 @@ impl ClangParser {
                         return_type: Box::new(self.convert_type(return_type)),
                         params,
                         is_variadic,
+                    }
+                }
+
+                clang_sys::CXType_Typedef => {
+                    // For typedef types, get the canonical (underlying) type
+                    // This is important for recognizing typedef'd pointers (e.g., __type_name_t = const char*)
+                    let canonical = clang_sys::clang_getCanonicalType(ty);
+                    if canonical.kind != clang_sys::CXType_Invalid
+                        && canonical.kind != clang_sys::CXType_Typedef
+                    {
+                        self.convert_type(canonical)
+                    } else {
+                        // Fallback to the spelling if canonical type is unavailable
+                        let spelling = clang_sys::clang_getTypeSpelling(ty);
+                        CppType::Named(cx_string_to_string(spelling))
                     }
                 }
 
@@ -2034,8 +2072,17 @@ impl ClangParser {
                 if token_kind == 0 {
                     let token_spelling = clang_sys::clang_getTokenSpelling(tu, token);
                     let token_str = cx_string_to_string(token_spelling);
-                    // Store the operator (for ++/--, it's the same for first/last)
-                    if operator_str.is_none() || token_str == "++" || token_str == "--" {
+                    // For prefix operators, the first punctuation token is the operator
+                    // For postfix operators (++/--), they come after the operand
+                    //
+                    // Special handling: if the first token is already punctuation (like *)
+                    // and we later see ++/--, we need to keep the first operator (the prefix one)
+                    // because the inner ++/-- belongs to a nested expression
+                    if operator_str.is_none() {
+                        operator_str = Some(token_str);
+                    } else if !first_token_is_punct && (token_str == "++" || token_str == "--") {
+                        // Only overwrite with ++/-- if the first token was NOT punctuation
+                        // (meaning this is a postfix expression like x++)
                         operator_str = Some(token_str);
                     }
                 }
