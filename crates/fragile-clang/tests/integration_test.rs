@@ -1237,6 +1237,43 @@ fn test_e2e_dynamic_cast() {
     );
 }
 
+/// Test function template instantiation.
+/// Verifies that function templates are correctly instantiated with concrete types.
+#[test]
+fn test_e2e_function_template() {
+    let source = r#"
+        template<typename T>
+        T add(T a, T b) {
+            return a + b;
+        }
+
+        template<typename T>
+        T identity(T x) {
+            return x;
+        }
+
+        int main() {
+            // Test 1: int instantiation of add
+            int sum = add(3, 4);
+            if (sum != 7) return 1;
+
+            // Test 2: identity function template
+            int x = identity(42);
+            if (x != 42) return 2;
+
+            return 0;  // All tests passed
+        }
+    "#;
+
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_function_template.cpp").expect("E2E test failed");
+
+    assert_eq!(
+        exit_code, 0,
+        "function template instantiation should work correctly"
+    );
+}
+
 /// Test function returning struct (rvalue handling).
 #[test]
 fn test_e2e_function_returning_struct() {

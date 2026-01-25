@@ -232,6 +232,26 @@ pub struct AstCodeGen {
     template_definitions: HashMap<String, (Vec<String>, Vec<ClangNode>)>,
     /// Template instantiations that need struct generation: full type name (e.g., "MyVec<int>")
     pending_template_instantiations: HashSet<String>,
+    /// Function template definitions: template name -> (template params, return_type, params, body_node)
+    fn_template_definitions: HashMap<String, FnTemplateInfo>,
+    /// Pending function template instantiations: mangled name (e.g., "add_i32") -> (template_name, type_args)
+    pending_fn_instantiations: HashMap<String, (String, Vec<String>)>,
+}
+
+/// Information about a function template definition
+#[derive(Clone)]
+struct FnTemplateInfo {
+    /// Template type parameters (e.g., ["T", "U"])
+    template_params: Vec<String>,
+    /// Return type (may contain template parameter references)
+    return_type: CppType,
+    /// Parameter names and types
+    params: Vec<(String, CppType)>,
+    /// The function body (CompoundStmt node), if available
+    body: Option<ClangNode>,
+    /// Whether the function is noexcept (reserved for future use)
+    #[allow(dead_code)]
+    is_noexcept: bool,
 }
 
 impl AstCodeGen {
@@ -276,6 +296,8 @@ impl AstCodeGen {
             collected_nodes: Vec::new(),
             template_definitions: HashMap::new(),
             pending_template_instantiations: HashSet::new(),
+            fn_template_definitions: HashMap::new(),
+            pending_fn_instantiations: HashMap::new(),
         }
     }
 
@@ -340,6 +362,9 @@ impl AstCodeGen {
 
         // Generate struct definitions for template instantiations
         self.generate_template_instantiations();
+
+        // Generate function implementations for function template instantiations
+        self.generate_fn_template_instantiations();
 
         // Generate vtable structs for polymorphic classes
         self.generate_all_vtable_structs();
@@ -1073,6 +1098,33 @@ impl AstCodeGen {
                     // Recurse into template to find usages
                     self.collect_template_info(&child.children);
                 }
+                ClangNodeKind::FunctionTemplateDecl {
+                    name,
+                    template_params,
+                    return_type,
+                    params,
+                    is_noexcept,
+                    ..
+                } => {
+                    // Find the function body (CompoundStmt) among children
+                    let body = child.children.iter().find(|c| {
+                        matches!(c.kind, ClangNodeKind::CompoundStmt)
+                    }).cloned();
+
+                    // Store function template definition
+                    self.fn_template_definitions.insert(
+                        name.clone(),
+                        FnTemplateInfo {
+                            template_params: template_params.clone(),
+                            return_type: return_type.clone(),
+                            params: params.clone(),
+                            body,
+                            is_noexcept: *is_noexcept,
+                        },
+                    );
+                    // Recurse into template to find usages
+                    self.collect_template_info(&child.children);
+                }
                 ClangNodeKind::VarDecl { ty, .. } | ClangNodeKind::FieldDecl { ty, .. } => {
                     self.collect_template_type(ty);
                     self.collect_template_info(&child.children);
@@ -1099,6 +1151,12 @@ impl AstCodeGen {
                     }
                     self.collect_template_info(&child.children);
                 }
+                ClangNodeKind::CallExpr { .. } => {
+                    // Check if this is a call to a function template instantiation
+                    // by looking at the callee (first child should be DeclRefExpr or ImplicitCastExpr)
+                    self.collect_fn_template_instantiation(child);
+                    self.collect_template_info(&child.children);
+                }
                 ClangNodeKind::RecordDecl { .. }
                 | ClangNodeKind::NamespaceDecl { .. }
                 | ClangNodeKind::CompoundStmt => {
@@ -1106,6 +1164,64 @@ impl AstCodeGen {
                 }
                 _ => {
                     self.collect_template_info(&child.children);
+                }
+            }
+        }
+    }
+
+    /// Check if a CallExpr is a call to a function template, and if so, collect the instantiation.
+    fn collect_fn_template_instantiation(&mut self, call_node: &ClangNode) {
+        // The callee is typically the first child, either DeclRefExpr or ImplicitCastExpr->DeclRefExpr
+        if call_node.children.is_empty() {
+            return;
+        }
+
+        // Find the DeclRefExpr - it might be wrapped in ImplicitCastExpr
+        let decl_ref = if let ClangNodeKind::DeclRefExpr { name, ty, .. } = &call_node.children[0].kind {
+            Some((name, ty))
+        } else if let ClangNodeKind::ImplicitCastExpr { .. } = &call_node.children[0].kind {
+            // Look inside the cast
+            call_node.children[0].children.iter().find_map(|c| {
+                if let ClangNodeKind::DeclRefExpr { name, ty, .. } = &c.kind {
+                    Some((name, ty))
+                } else {
+                    None
+                }
+            })
+        } else {
+            None
+        };
+
+        if let Some((fn_name, fn_type)) = decl_ref {
+            // Check if this function name corresponds to a function template
+            if let Some(template_info) = self.fn_template_definitions.get(fn_name).cloned() {
+                // Extract concrete type arguments from the instantiated function type
+                if let CppType::Function { return_type, params, .. } = fn_type {
+                    // Build type substitution map by comparing template params with concrete types
+                    let type_args: Vec<String> = template_info.template_params.iter()
+                        .enumerate()
+                        .map(|(i, _param)| {
+                            // Try to find the concrete type from parameters or return type
+                            // For a function like T add(T a, T b), if called with int,
+                            // the params will be [int, int] and return will be int
+                            if i < params.len() {
+                                params[i].to_rust_type_str()
+                            } else {
+                                return_type.to_rust_type_str()
+                            }
+                        })
+                        .collect();
+
+                    // Generate a mangled name for the instantiation (e.g., "add_i32")
+                    let mangled_name = format!("{}_{}", fn_name, type_args.join("_"));
+
+                    // Store the instantiation if not already present
+                    if !self.pending_fn_instantiations.contains_key(&mangled_name) {
+                        self.pending_fn_instantiations.insert(
+                            mangled_name,
+                            (fn_name.clone(), type_args),
+                        );
+                    }
                 }
             }
         }
@@ -1266,6 +1382,14 @@ impl AstCodeGen {
         subst_map: &HashMap<String, String>,
     ) -> String {
         match ty {
+            CppType::TemplateParam { name, .. } => {
+                // Template parameter - substitute directly
+                if let Some(replacement) = subst_map.get(name) {
+                    return replacement.clone();
+                }
+                // Fallback to the parameter name (shouldn't happen for proper instantiations)
+                name.clone()
+            }
             CppType::Named(name) => {
                 // Check for direct substitution first
                 if let Some(replacement) = subst_map.get(name) {
@@ -1441,6 +1565,185 @@ impl AstCodeGen {
         self.indent -= 1;
         self.writeln("}");
         self.writeln("");
+    }
+
+    /// Generate function implementations for pending function template instantiations.
+    fn generate_fn_template_instantiations(&mut self) {
+        // Clone the pending instantiations to avoid borrow issues
+        let instantiations: Vec<(String, (String, Vec<String>))> = self
+            .pending_fn_instantiations
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+
+        for (mangled_name, (template_name, type_args)) in instantiations {
+            if let Some(template_info) = self.fn_template_definitions.get(&template_name).cloned() {
+                self.generate_fn_template_instance(
+                    &mangled_name,
+                    &template_name,
+                    &type_args,
+                    &template_info,
+                );
+            }
+        }
+    }
+
+    /// Generate a concrete function for a function template instantiation.
+    fn generate_fn_template_instance(
+        &mut self,
+        mangled_name: &str,
+        template_name: &str,
+        type_args: &[String],
+        template_info: &FnTemplateInfo,
+    ) {
+        // Build substitution map: T -> i32, etc.
+        let mut subst_map = HashMap::new();
+        for (param, arg) in template_info.template_params.iter().zip(type_args.iter()) {
+            subst_map.insert(param.clone(), arg.clone());
+        }
+
+        // Substitute types in return type and parameters
+        let ret_type = self.substitute_template_type(&template_info.return_type, &subst_map);
+        let ret_str = if ret_type == "()" || ret_type.is_empty() || ret_type == "_" {
+            String::new()
+        } else {
+            format!(" -> {}", Self::sanitize_return_type(&ret_type))
+        };
+
+        // Generate parameter list
+        let mut param_strs = Vec::new();
+        let mut param_name_counts: HashMap<String, usize> = HashMap::new();
+        for (param_name, param_ty) in &template_info.params {
+            let rust_ty = self.substitute_template_type(param_ty, &subst_map);
+            let mut pname = sanitize_identifier(param_name);
+            if pname.is_empty() {
+                pname = format!("_arg{}", param_strs.len());
+            }
+            let count = param_name_counts.entry(pname.clone()).or_insert(0);
+            if *count > 0 {
+                pname = format!("{}_{}", pname, *count);
+            }
+            *param_name_counts.get_mut(&sanitize_identifier(param_name)).unwrap_or(&mut 0) += 1;
+            param_strs.push(format!("{}: {}", pname, rust_ty));
+        }
+
+        self.writeln(&format!(
+            "/// Function template instantiation: {}",
+            template_name
+        ));
+        self.writeln(&format!(
+            "/// Instantiated with: [{}]",
+            type_args.join(", ")
+        ));
+        self.writeln(&format!(
+            "#[inline]"
+        ));
+        self.writeln(&format!(
+            "pub fn {}({}){} {{",
+            mangled_name,
+            param_strs.join(", "),
+            ret_str
+        ));
+        self.indent += 1;
+
+        // Generate body by processing the template body with type substitutions
+        if let Some(ref body) = template_info.body {
+            // Save current state
+            let saved_ref_vars = self.ref_vars.clone();
+            let saved_ptr_vars = self.ptr_vars.clone();
+            let saved_arr_vars = self.arr_vars.clone();
+
+            // Clear for this function
+            self.ref_vars.clear();
+            self.ptr_vars.clear();
+            self.arr_vars.clear();
+
+            // Generate the body statements with type substitution
+            self.generate_fn_template_body(body, &subst_map);
+
+            // Restore state
+            self.ref_vars = saved_ref_vars;
+            self.ptr_vars = saved_ptr_vars;
+            self.arr_vars = saved_arr_vars;
+        } else {
+            self.writeln("todo!(\"Function template body not available\")");
+        }
+
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("");
+    }
+
+    /// Generate the body of a function template instantiation with type substitution.
+    fn generate_fn_template_body(&mut self, body: &ClangNode, subst_map: &HashMap<String, String>) {
+        // For now, generate the body using expr_to_string and stmt generation
+        // with type names substituted in the output
+        if let ClangNodeKind::CompoundStmt = &body.kind {
+            for stmt in &body.children {
+                self.generate_fn_template_stmt(stmt, subst_map);
+            }
+        }
+    }
+
+    /// Generate a statement in a function template body with type substitution.
+    fn generate_fn_template_stmt(&mut self, node: &ClangNode, subst_map: &HashMap<String, String>) {
+        match &node.kind {
+            ClangNodeKind::ReturnStmt => {
+                if !node.children.is_empty() {
+                    let expr = self.expr_to_string(&node.children[0]);
+                    // Substitute template types in the expression
+                    let expr = self.substitute_type_in_expr(&expr, subst_map);
+                    self.writeln(&format!("return {};", expr));
+                } else {
+                    self.writeln("return;");
+                }
+            }
+            ClangNodeKind::DeclStmt => {
+                // Handle variable declarations
+                for child in &node.children {
+                    if let ClangNodeKind::VarDecl { name, ty, .. } = &child.kind {
+                        let rust_ty = self.substitute_template_type(ty, subst_map);
+                        let var_name = sanitize_identifier(name);
+                        if !child.children.is_empty() {
+                            let init = self.expr_to_string(&child.children[0]);
+                            let init = self.substitute_type_in_expr(&init, subst_map);
+                            self.writeln(&format!("let mut {}: {} = {};", var_name, rust_ty, init));
+                        } else {
+                            self.writeln(&format!("let mut {}: {};", var_name, rust_ty));
+                        }
+                    }
+                }
+            }
+            ClangNodeKind::CompoundStmt => {
+                self.writeln("{");
+                self.indent += 1;
+                for child in &node.children {
+                    self.generate_fn_template_stmt(child, subst_map);
+                }
+                self.indent -= 1;
+                self.writeln("}");
+            }
+            _ => {
+                // Default: generate as expression statement
+                let expr = self.expr_to_string(node);
+                let expr = self.substitute_type_in_expr(&expr, subst_map);
+                if !expr.is_empty() && expr != "()" {
+                    self.writeln(&format!("{};", expr));
+                }
+            }
+        }
+    }
+
+    /// Substitute template type names in an expression string.
+    fn substitute_type_in_expr(&self, expr: &str, subst_map: &HashMap<String, String>) -> String {
+        let mut result = expr.to_string();
+        for (from, to) in subst_map {
+            // Replace type parameter references (be careful about word boundaries)
+            result = result.replace(&format!("::{}", from), &format!("::{}", to));
+            result = result.replace(&format!("<{}>", from), &format!("<{}>", to));
+            result = result.replace(&format!("{} ", from), &format!("{} ", to));
+        }
+        result
     }
 
     /// Map C++ compiler builtin functions to Rust equivalents.
@@ -8615,6 +8918,27 @@ impl AstCodeGen {
                     // Check if this is a global variable (needs unsafe access)
                     if self.global_vars.contains(name) {
                         return format!("unsafe {{ {} }}", ident);
+                    }
+
+                    // Check if this is a function template instantiation call
+                    // If so, we need to use the mangled instantiation name
+                    // (the instantiation was already collected during collect_template_info)
+                    if let CppType::Function { params, return_type, .. } = ty {
+                        if let Some(template_info) = self.fn_template_definitions.get(name) {
+                            // Build the mangled name using one type per template parameter
+                            let type_args: Vec<String> = template_info.template_params.iter()
+                                .enumerate()
+                                .map(|(i, _)| {
+                                    if i < params.len() {
+                                        params[i].to_rust_type_str()
+                                    } else {
+                                        return_type.to_rust_type_str()
+                                    }
+                                })
+                                .collect();
+                            let mangled_name = format!("{}_{}", name, type_args.join("_"));
+                            return self.compute_relative_path(namespace_path, &mangled_name);
+                        }
                     }
 
                     // Compute relative path based on current namespace context
