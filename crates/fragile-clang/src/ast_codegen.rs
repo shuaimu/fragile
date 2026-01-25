@@ -7988,6 +7988,20 @@ impl AstCodeGen {
             }
         }
 
+        // Add what() field for exception-related classes (std::exception hierarchy)
+        // The what() virtual method may not be detected by the AST parser, so we add it explicitly
+        let is_exception_class = class_name == "exception"
+            || class_name == "std::exception"
+            || class_name.ends_with("_error")
+            || class_name.ends_with("_exception")
+            || class_name.contains("bad_");
+        if is_exception_class {
+            self.writeln(&format!(
+                "pub what: unsafe fn(*const {}) -> *const i8,",
+                sanitized_name
+            ));
+        }
+
         // Add destructor entry (always present for polymorphic classes)
         self.writeln(&format!(
             "pub __destructor: unsafe fn(*mut {}),",
