@@ -841,8 +841,17 @@ Get `std::cout` working end-to-end.
     }
     ```
     - **Status**: Transpilation succeeds (128K chars → 23K LOC Rust)
-    - **Progress**: Errors reduced from 65 to ~1200 ✅ 2026-01-25
-    - Many STL types still need stubs (basic_string, error_code, locale, etc.)
+    - **Progress**: Compilation errors reduced from 65 → ~1200 → 19 ✅ 2026-01-25
+    - Many fixes applied:
+      - Skip variadic template instantiations (&&..., ...)
+      - Skip decltype return types
+      - Skip unresolved template parameters (_Tp, _Args)
+      - Skip C-style function pointer syntax in template args
+      - Improved pointer increment/decrement (use ptr.add(1) instead of += 1)
+    - **Remaining 19 errors**: Post-increment expression handling in complex expressions
+      - Pattern like `*ptr++` generates incorrect compound assignment `{...} += 1`
+      - Root cause: Complex interaction between UnexposedExpr wrappers and post-increment
+      - This is a pre-existing bug requiring separate investigation
     - Fixed: Cast precedence, literal operators, static member names, trait names
     - Fixed: Added vendored libc++ config files (__config_site, __assertion_handler) ✅ 2026-01-25
     - Fixed: CLI --use-vendored-libcxx now works correctly ✅ 2026-01-25
