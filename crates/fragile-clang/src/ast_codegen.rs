@@ -1864,13 +1864,62 @@ impl AstCodeGen {
                      // Smart pointer internal types
                      "_Sp___rep",
                      // Bit vector implementation types
-                     "_Bit_pointer", "_Bvector_impl"] {
+                     "_Bit_pointer", "_Bvector_impl",
+                     // libc++ RTTI implementation types
+                     "__impl___type_name_t",
+                     // libc++ internal string type
+                     "std___libcpp_refstring"] {
             // Don't add to generated_structs to avoid conflict with C++ definitions
             self.writeln("#[repr(C)]");
             self.writeln("#[derive(Default, Copy, Clone)]");
             self.writeln(&format!("pub struct {};", name));
         }
         self.writeln("");
+
+        // value_type is a special case - it's a template type alias that appears
+        // in STL containers. Use c_void as a placeholder.
+        self.writeln("// Template type alias placeholder");
+        self.writeln("pub type value_type = std::ffi::c_void;");
+        self.writeln("");
+
+        // System header union types (from glibc headers)
+        // These are anonymous unions that get sanitized names based on file location
+        self.writeln("// System header union type stubs");
+        self.writeln("#[repr(C)]");
+        self.writeln("#[derive(Default, Copy, Clone)]");
+        self.writeln("pub struct union__unnamed_union_at__usr_include_x86_64_linux_gnu_bits_types___mbstate_t_h_16_3_ { pub __wch: u32 }");
+        self.writeln("");
+
+        // libc++ internal function stubs
+        self.writeln("// libc++ internal function stubs");
+        self.writeln("#[inline]");
+        self.writeln("pub fn __hash(_ptr: *const i8) -> usize {");
+        self.indent += 1;
+        self.writeln("// FNV-1a hash for null-terminated string");
+        self.writeln("let mut hash: usize = 14695981039346656037;");
+        self.writeln("if _ptr.is_null() { return hash; }");
+        self.writeln("let mut p = _ptr;");
+        self.writeln("unsafe {");
+        self.indent += 1;
+        self.writeln("while *p != 0 {");
+        self.indent += 1;
+        self.writeln("hash ^= *p as usize;");
+        self.writeln("hash = hash.wrapping_mul(1099511628211);");
+        self.writeln("p = p.add(1);");
+        self.indent -= 1;
+        self.writeln("}");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("hash");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("");
+        self.writeln("#[inline]");
+        self.writeln("pub fn __string_to_type_name(_ptr: *const i8) -> *const i8 { _ptr }");
+        self.writeln("");
+
+        // Note: libc++ ABI namespace functions (__libcpp_is_constant_evaluated, swap, move)
+        // are added to the _LIBCPP_ABI_NAMESPACE module in generate_top_level
 
         // Hash function stubs for libstdc++ hash implementation
         self.writeln("// Hash function stubs for libstdc++");
@@ -2612,6 +2661,21 @@ impl AstCodeGen {
                         }
 
                         self.current_namespace.pop();
+
+                        // Add stub functions for specific libc++ internal namespaces
+                        if ns_name == "_LIBCPP_ABI_NAMESPACE" {
+                            self.writeln("/// libc++ constant evaluation check (always returns false at runtime)");
+                            self.writeln("#[inline]");
+                            self.writeln("pub fn __libcpp_is_constant_evaluated() -> bool { false }");
+                            self.writeln("");
+                            self.writeln("/// swap function stub");
+                            self.writeln("#[inline]");
+                            self.writeln("pub fn swap<T>(a: &mut T, b: &mut T) { std::mem::swap(a, b); }");
+                            self.writeln("");
+                            self.writeln("/// move function stub  ");
+                            self.writeln("#[inline]");
+                            self.writeln("pub fn r#move<T>(v: T) -> T { v }");
+                        }
 
                         self.module_depth -= 1;
                         self.indent -= 1;

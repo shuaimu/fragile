@@ -5,14 +5,20 @@
 
 ## Summary
 
-After reducing vector errors from 2091 to 23 (98.9% reduction), and testing iostream transpilation (65 errors) and thread transpilation (40 errors), the remaining errors across all headers share the same root causes - deep architectural issues that require significant refactoring.
+After reducing vector errors from 2091 to 14 (99.3% reduction), the remaining errors are primarily architectural issues (trait generation for intermediate polymorphic classes).
 
 ### Error Counts by Header
 | Header | Transpilation | Compilation Errors |
 |--------|---------------|-------------------|
-| `<vector>` | ✅ Success | 23 errors |
-| `<iostream>` | ✅ Success | 65 errors |
-| `<thread>` | ✅ Success | 40 errors |
+| `<vector>` | ✅ Success | 14 errors |
+| `<iostream>` | ✅ Success | ~60 errors |
+| `<thread>` | ✅ Success | ~35 errors |
+
+### Recent Fixes ✅ 2026-01-24
+- Added type stubs: `value_type`, `std___libcpp_refstring`, `__impl___type_name_t`
+- Added union stub for glibc mbstate_t type
+- Added function stubs: `__hash`, `__string_to_type_name`
+- Added `_LIBCPP_ABI_NAMESPACE` module with `__libcpp_is_constant_evaluated`, `swap`, `move`
 
 All headers share the same root causes. The iostream header has more errors because it includes more STL internals (format, hash, containers for buffering, etc.).
 
