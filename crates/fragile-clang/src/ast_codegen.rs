@@ -4441,6 +4441,60 @@ impl AstCodeGen {
         self.writeln("pub type __const_reference = std::ffi::c_void;");
         self.writeln("");
 
+        // Atomic types
+        self.writeln("// Atomic types");
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct atomic_signed_char { pub __a_: i8 }");
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct atomic_unsigned_char { pub __a_: u8 }");
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct atomic_unsigned_short { pub __a_: u16 }");
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct atomic_unsigned_int { pub __a_: u32 }");
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct atomic_unsigned_long { pub __a_: u64 }");
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct atomic_long_long { pub __a_: i64 }");
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct atomic_unsigned_long_long { pub __a_: u64 }");
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct atomic___contention_t_or_largest { pub __a_: i64 }");
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct atomic_make_unsigned_t___contention_t_or_largest { pub __a_: u64 }");
+        self.writeln("");
+
+        // Char traits base types
+        self.writeln("// Char traits base types");
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct __char_traits_base_char8_t__unsigned_int__static_cast_unsigned_int___1__;");
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct __char_traits_base_char16_t__uint_least16_t__static_cast_uint_least16_t_65535_;");
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct __char_traits_base_char32_t__uint_least32_t__static_cast_uint_least32_t_4294967295U_;");
+        self.writeln("");
+
+        // Locale and collate types
+        self.writeln("// Locale and collate types");
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct collate_char;");
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct collate_wchar_t;");
+        self.writeln("");
+
+        // Format context types
+        self.writeln("// Format context types");
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct basic_format_parse_context_char;");
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct basic_format_parse_context_wchar_t;");
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct basic_format_parse_context_typename_type_parameter_0_0_char_type;");
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct basic_format_context_back_insert_iterator___format___output_buffer_char__char;");
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct basic_format_context_back_insert_iterator___format___output_buffer_wchar_t__wchar_t;");
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct basic_format_args_format_context;");
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct basic_format_args_wformat_context;");
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct __compile_time_basic_format_context_type_parameter_0_0;");
+        self.writeln("pub type basic_string_view_typename_type_parameter_0_0_char_type__char_traits_typename_type_parameter_0_0_char_type = std::ffi::c_void;");
+        self.writeln("");
+
+        // Allocator traits types
+        self.writeln("// Allocator traits types");
+        self.writeln("pub type allocator_traits_typename_allocator_traits_type_parameter_0_1_template_rebind_alloc_typename_allocator_traits_type_parameter_0_1_pointer = std::ffi::c_void;");
+        self.writeln("pub type allocator_traits_typename_allocator_traits_type_parameter_0_3_template_rebind_alloc___hash_node_type_parameter_0_0__typename_allocator_traits_type_parameter_0_3_void_pointer = std::ffi::c_void;");
+        self.writeln("pub type __allocation_result_typename_allocator_traits_type_parameter_0_2_pointer__typename_allocator_traits_type_parameter_0_2_size_type = std::ffi::c_void;");
+        self.writeln("");
+
+        // Additional template types
+        self.writeln("// Additional template types");
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct __alignment_checker_type__Alignment;");
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct __atomic_waitable_traits___decay_type_parameter_0_0___void;");
+        self.writeln("pub type __const_iterator = std::ffi::c_void;");
+        self.writeln("pub type _BMSkipTable_typename_iterator_traits_type_parameter_0_0_value_type__typename_iterator_traits_type_parameter_0_0_difference_type__type_parameter_0_1__type_parameter_0_2__is_integral_v_value_type___sizeof_value_type___eq__1___is_same_v__Hash__hash_value_type___is_same_v__BinaryPredicate__equal_to_ = std::ffi::c_void;");
+        self.writeln("");
+
         // Format and unicode related types
         self.writeln("// Format and unicode type stubs");
         self.writeln("pub type std___indic_conjunct_break___property = u32;");
@@ -4935,6 +4989,206 @@ impl AstCodeGen {
         self.writeln("pub fn __builtin_isinf(x: f64) -> bool { x.is_infinite() }");
         self.writeln("#[inline]");
         self.writeln("pub fn __builtin_isfinite(x: f64) -> bool { x.is_finite() }");
+        self.writeln("");
+
+        // f32 (float) builtins
+        self.writeln("// f32 (float) builtins");
+        self.writeln("#[inline] pub fn __builtin_huge_valf() -> f32 { f32::INFINITY }");
+        self.writeln("#[inline] pub fn __builtin_nanf(_s: *const i8) -> f32 { f32::NAN }");
+        self.writeln("#[inline] pub fn __builtin_nansf(_s: *const i8) -> f32 { f32::NAN }");
+        self.writeln("#[inline] pub fn __builtin_expf(x: f32) -> f32 { x.exp() }");
+        self.writeln("#[inline] pub fn __builtin_frexpf(x: f32, exp: *mut i32) -> f32 { unsafe { *exp = 0 }; x }");
+        self.writeln("#[inline] pub fn __builtin_ldexpf(x: f32, exp: i32) -> f32 { x * (2.0f32).powi(exp) }");
+        self.writeln("#[inline] pub fn __builtin_exp2f(x: f32) -> f32 { (2.0f32).powf(x) }");
+        self.writeln("#[inline] pub fn __builtin_expm1f(x: f32) -> f32 { x.exp() - 1.0 }");
+        self.writeln("#[inline] pub fn __builtin_scalblnf(x: f32, n: i64) -> f32 { x * (2.0f32).powi(n as i32) }");
+        self.writeln("#[inline] pub fn __builtin_scalbnf(x: f32, n: i32) -> f32 { x * (2.0f32).powi(n) }");
+        self.writeln("#[inline] pub fn __builtin_powf(x: f32, y: f32) -> f32 { x.powf(y) }");
+        self.writeln("#[inline] pub fn __builtin_fmaxf(x: f32, y: f32) -> f32 { x.max(y) }");
+        self.writeln("#[inline] pub fn __builtin_fminf(x: f32, y: f32) -> f32 { x.min(y) }");
+        self.writeln("#[inline] pub fn __builtin_sqrtf(x: f32) -> f32 { x.sqrt() }");
+        self.writeln("#[inline] pub fn __builtin_cbrtf(x: f32) -> f32 { x.cbrt() }");
+        self.writeln("#[inline] pub fn __builtin_hypotf(x: f32, y: f32) -> f32 { x.hypot(y) }");
+        self.writeln("#[inline] pub fn __builtin_copysignf(x: f32, y: f32) -> f32 { x.copysign(y) }");
+        self.writeln("#[inline] pub fn __builtin_logf(x: f32) -> f32 { x.ln() }");
+        self.writeln("#[inline] pub fn __builtin_log2f(x: f32) -> f32 { x.log2() }");
+        self.writeln("#[inline] pub fn __builtin_log10f(x: f32) -> f32 { x.log10() }");
+        self.writeln("#[inline] pub fn __builtin_log1pf(x: f32) -> f32 { (1.0 + x).ln() }");
+        self.writeln("#[inline] pub fn __builtin_fabsf(x: f32) -> f32 { x.abs() }");
+        self.writeln("#[inline] pub fn __builtin_floorf(x: f32) -> f32 { x.floor() }");
+        self.writeln("#[inline] pub fn __builtin_ceilf(x: f32) -> f32 { x.ceil() }");
+        self.writeln("#[inline] pub fn __builtin_truncf(x: f32) -> f32 { x.trunc() }");
+        self.writeln("#[inline] pub fn __builtin_roundf(x: f32) -> f32 { x.round() }");
+        self.writeln("#[inline] pub fn __builtin_sinf(x: f32) -> f32 { x.sin() }");
+        self.writeln("#[inline] pub fn __builtin_cosf(x: f32) -> f32 { x.cos() }");
+        self.writeln("#[inline] pub fn __builtin_tanf(x: f32) -> f32 { x.tan() }");
+        self.writeln("#[inline] pub fn __builtin_asinf(x: f32) -> f32 { x.asin() }");
+        self.writeln("#[inline] pub fn __builtin_acosf(x: f32) -> f32 { x.acos() }");
+        self.writeln("#[inline] pub fn __builtin_atanf(x: f32) -> f32 { x.atan() }");
+        self.writeln("#[inline] pub fn __builtin_atan2f(y: f32, x: f32) -> f32 { y.atan2(x) }");
+        self.writeln("#[inline] pub fn __builtin_sinhf(x: f32) -> f32 { x.sinh() }");
+        self.writeln("#[inline] pub fn __builtin_coshf(x: f32) -> f32 { x.cosh() }");
+        self.writeln("#[inline] pub fn __builtin_tanhf(x: f32) -> f32 { x.tanh() }");
+        self.writeln("#[inline] pub fn __builtin_asinhf(x: f32) -> f32 { x.asinh() }");
+        self.writeln("#[inline] pub fn __builtin_acoshf(x: f32) -> f32 { x.acosh() }");
+        self.writeln("#[inline] pub fn __builtin_atanhf(x: f32) -> f32 { x.atanh() }");
+        self.writeln("#[inline] pub fn __builtin_fmodf(x: f32, y: f32) -> f32 { x % y }");
+        self.writeln("#[inline] pub fn __builtin_remainderf(x: f32, y: f32) -> f32 { x % y }");
+        self.writeln("#[inline] pub fn __builtin_fmaf(x: f32, y: f32, z: f32) -> f32 { x.mul_add(y, z) }");
+        self.writeln("");
+
+        // f64 (double) builtins
+        self.writeln("// f64 (double) builtins");
+        self.writeln("#[inline] pub fn __builtin_huge_val() -> f64 { f64::INFINITY }");
+        self.writeln("#[inline] pub fn __builtin_nan(_s: *const i8) -> f64 { f64::NAN }");
+        self.writeln("#[inline] pub fn __builtin_nans(_s: *const i8) -> f64 { f64::NAN }");
+        self.writeln("#[inline] pub fn __builtin_exp(x: f64) -> f64 { x.exp() }");
+        self.writeln("#[inline] pub fn __builtin_frexp(x: f64, exp: *mut i32) -> f64 { unsafe { *exp = 0 }; x }");
+        self.writeln("#[inline] pub fn __builtin_ldexp(x: f64, exp: i32) -> f64 { x * (2.0f64).powi(exp) }");
+        self.writeln("#[inline] pub fn __builtin_exp2(x: f64) -> f64 { (2.0f64).powf(x) }");
+        self.writeln("#[inline] pub fn __builtin_expm1(x: f64) -> f64 { x.exp() - 1.0 }");
+        self.writeln("#[inline] pub fn __builtin_scalbln(x: f64, n: i64) -> f64 { x * (2.0f64).powi(n as i32) }");
+        self.writeln("#[inline] pub fn __builtin_scalbn(x: f64, n: i32) -> f64 { x * (2.0f64).powi(n) }");
+        self.writeln("#[inline] pub fn __builtin_pow(x: f64, y: f64) -> f64 { x.powf(y) }");
+        self.writeln("#[inline] pub fn __builtin_fmax(x: f64, y: f64) -> f64 { x.max(y) }");
+        self.writeln("#[inline] pub fn __builtin_fmin(x: f64, y: f64) -> f64 { x.min(y) }");
+        self.writeln("#[inline] pub fn __builtin_sqrt(x: f64) -> f64 { x.sqrt() }");
+        self.writeln("#[inline] pub fn __builtin_cbrt(x: f64) -> f64 { x.cbrt() }");
+        self.writeln("#[inline] pub fn __builtin_hypot(x: f64, y: f64) -> f64 { x.hypot(y) }");
+        self.writeln("#[inline] pub fn __builtin_copysign(x: f64, y: f64) -> f64 { x.copysign(y) }");
+        self.writeln("#[inline] pub fn __builtin_log(x: f64) -> f64 { x.ln() }");
+        self.writeln("#[inline] pub fn __builtin_log2(x: f64) -> f64 { x.log2() }");
+        self.writeln("#[inline] pub fn __builtin_log10(x: f64) -> f64 { x.log10() }");
+        self.writeln("#[inline] pub fn __builtin_log1p(x: f64) -> f64 { (1.0 + x).ln() }");
+        self.writeln("#[inline] pub fn __builtin_fabs(x: f64) -> f64 { x.abs() }");
+        self.writeln("#[inline] pub fn __builtin_floor(x: f64) -> f64 { x.floor() }");
+        self.writeln("#[inline] pub fn __builtin_ceil(x: f64) -> f64 { x.ceil() }");
+        self.writeln("#[inline] pub fn __builtin_trunc(x: f64) -> f64 { x.trunc() }");
+        self.writeln("#[inline] pub fn __builtin_round(x: f64) -> f64 { x.round() }");
+        self.writeln("#[inline] pub fn __builtin_sin(x: f64) -> f64 { x.sin() }");
+        self.writeln("#[inline] pub fn __builtin_cos(x: f64) -> f64 { x.cos() }");
+        self.writeln("#[inline] pub fn __builtin_tan(x: f64) -> f64 { x.tan() }");
+        self.writeln("#[inline] pub fn __builtin_asin(x: f64) -> f64 { x.asin() }");
+        self.writeln("#[inline] pub fn __builtin_acos(x: f64) -> f64 { x.acos() }");
+        self.writeln("#[inline] pub fn __builtin_atan(x: f64) -> f64 { x.atan() }");
+        self.writeln("#[inline] pub fn __builtin_atan2(y: f64, x: f64) -> f64 { y.atan2(x) }");
+        self.writeln("#[inline] pub fn __builtin_sinh(x: f64) -> f64 { x.sinh() }");
+        self.writeln("#[inline] pub fn __builtin_cosh(x: f64) -> f64 { x.cosh() }");
+        self.writeln("#[inline] pub fn __builtin_tanh(x: f64) -> f64 { x.tanh() }");
+        self.writeln("#[inline] pub fn __builtin_asinh(x: f64) -> f64 { x.asinh() }");
+        self.writeln("#[inline] pub fn __builtin_acosh(x: f64) -> f64 { x.acosh() }");
+        self.writeln("#[inline] pub fn __builtin_atanh(x: f64) -> f64 { x.atanh() }");
+        self.writeln("#[inline] pub fn __builtin_fmod(x: f64, y: f64) -> f64 { x % y }");
+        self.writeln("#[inline] pub fn __builtin_remainder(x: f64, y: f64) -> f64 { x % y }");
+        self.writeln("#[inline] pub fn __builtin_fma(x: f64, y: f64, z: f64) -> f64 { x.mul_add(y, z) }");
+        self.writeln("");
+
+        // Wide character builtins
+        self.writeln("// Wide character builtins");
+        self.writeln("#[inline] pub fn __builtin_wcslen(s: *const i32) -> u64 { unsafe { let mut len = 0u64; while *s.add(len as usize) != 0 { len += 1; } len } }");
+        self.writeln("#[inline] pub fn __builtin_wmemcmp(s1: *const i32, s2: *const i32, n: u64) -> i32 { unsafe { for i in 0..n as usize { let a = *s1.add(i); let b = *s2.add(i); if a != b { return if a < b { -1 } else { 1 }; } } 0 } }");
+        self.writeln("");
+
+        // Locale-specific conversion functions
+        self.writeln("// Locale-specific conversion stubs");
+        self.writeln("#[inline] pub fn strtof_l(_s: *const i8, _endptr: *mut *mut i8, _loc: *mut std::ffi::c_void) -> f32 { 0.0 }");
+        self.writeln("#[inline] pub fn strtod_l(_s: *const i8, _endptr: *mut *mut i8, _loc: *mut std::ffi::c_void) -> f64 { 0.0 }");
+        self.writeln("#[inline] pub fn strtold_l(_s: *const i8, _endptr: *mut *mut i8, _loc: *mut std::ffi::c_void) -> f64 { 0.0 }");
+        self.writeln("");
+
+        // Variadic C stdio stubs
+        self.writeln("// Variadic C stdio stubs");
+        self.writeln("#[inline] pub fn vsnprintf(_s: *mut i8, _n: u64, _fmt: *const i8, _args: *mut std::ffi::c_void) -> i32 { 0 }");
+        self.writeln("#[inline] pub fn vasprintf(_strp: *mut *mut i8, _fmt: *const i8, _args: *mut std::ffi::c_void) -> i32 { 0 }");
+        self.writeln("");
+
+        // sizeof pseudo-function
+        self.writeln("// sizeof pseudo-function");
+        self.writeln("#[inline] pub fn sizeof___<T>() -> u64 { std::mem::size_of::<T>() as u64 }");
+        self.writeln("");
+
+        // min/max function variants
+        self.writeln("// min/max function variants");
+        self.writeln("#[inline] pub fn min_bool(a: bool, b: bool) -> bool { a && b }");
+        self.writeln("#[inline] pub fn max_f32(a: f32, b: f32) -> f32 { a.max(b) }");
+        self.writeln("");
+
+        // Hypot and lerp variants (2-arg versions)
+        self.writeln("// Hypot and lerp variants");
+        self.writeln("#[inline] pub fn __hypot_f32(x: f32, y: f32) -> f32 { x.hypot(y) }");
+        self.writeln("#[inline] pub fn __lerp_f32(a: f32, b: f32, t: f32) -> f32 { a + t * (b - a) }");
+        self.writeln("");
+
+        // Memory search functions
+        self.writeln("// Memory search functions");
+        self.writeln("#[inline] pub fn __constexpr_memchr_i8_i8(s: *const i8, c: i8, n: u64) -> *const i8 { unsafe { for i in 0..n as usize { if *s.add(i) == c { return s.add(i); } } std::ptr::null() } }");
+        self.writeln("#[inline] pub fn __constexpr_memchr_u8_u8(s: *const u8, c: u8, n: u64) -> *const u8 { unsafe { for i in 0..n as usize { if *s.add(i) == c { return s.add(i); } } std::ptr::null() } }");
+        self.writeln("#[inline] pub fn fill_n_char_u64_i8(dest: *mut i8, n: u64, c: i8) -> *mut i8 { unsafe { for i in 0..n as usize { *dest.add(i) = c; } dest.add(n as usize) } }");
+        self.writeln("#[inline] pub fn __find_ptr_mut_u16_ptr_mut_u16_u16(first: *mut u16, last: *mut u16, val: u16) -> *mut u16 { unsafe { let mut p = first; while p != last { if *p == val { return p; } p = p.add(1); } last } }");
+        self.writeln("#[inline] pub fn __find_ptr_mut_u32_ptr_mut_u32_u32(first: *mut u32, last: *mut u32, val: u32) -> *mut u32 { unsafe { let mut p = first; while p != last { if *p == val { return p; } p = p.add(1); } last } }");
+        self.writeln("");
+
+        // Atomic fence and lock functions
+        self.writeln("// Atomic fence functions");
+        self.writeln("#[inline] pub fn __c11_atomic_thread_fence(_order: i32) { std::sync::atomic::fence(std::sync::atomic::Ordering::SeqCst); }");
+        self.writeln("#[inline] pub fn __c11_atomic_signal_fence(_order: i32) { std::sync::atomic::fence(std::sync::atomic::Ordering::SeqCst); }");
+        self.writeln("#[inline] pub fn __atomic_always_lock_free(_size: u64, _ptr: *const std::ffi::c_void) -> bool { true }");
+        self.writeln("");
+
+        // Thread and time functions
+        self.writeln("// Thread and time functions");
+        self.writeln("#[inline] pub fn sched_yield() -> i32 { 0 }");
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct timespec { pub tv_sec: i64, pub tv_nsec: i64 }");
+        self.writeln("#[inline] pub fn __convert_to_timespec_chrono_nanoseconds(_ns: i64) -> timespec { timespec { tv_sec: _ns / 1000000000, tv_nsec: _ns % 1000000000 } }");
+        self.writeln("#[inline] pub fn nanosleep(_req: *const timespec, _rem: *mut timespec) -> i32 { 0 }");
+        self.writeln("#[inline] pub fn __errno_location() -> *mut i32 { static mut ERRNO: i32 = 0; unsafe { &mut ERRNO as *mut i32 } }");
+        self.writeln("");
+
+        // Comparison and conversion functions
+        self.writeln("// Comparison and conversion functions");
+        self.writeln("#[inline] pub fn __lt_impl<T: PartialOrd>(a: T, b: T) -> bool { a < b }");
+        self.writeln("#[inline] pub fn copy_n_char_i32_char(src: *const i8, n: i32, dest: *mut i8) -> *mut i8 { unsafe { std::ptr::copy_nonoverlapping(src, dest, n as usize); dest.add(n as usize) } }");
+        self.writeln("#[inline] pub fn __to_chars_itoa_i8(_val: i8, _buf: *mut i8) -> *mut i8 { _buf }");
+        self.writeln("#[inline] pub fn __width_u128(_val: u128) -> u32 { if _val == 0 { 1 } else { (128 - _val.leading_zeros()) } }");
+        self.writeln("#[inline] pub fn __convert<T, U>(_val: T) -> U where U: Default { Default::default() }");
+        self.writeln("#[inline] pub fn __seed() -> u64 { 0 }");
+        self.writeln("");
+
+        // Format spec constants
+        self.writeln("// Format spec constants");
+        self.writeln("pub static __binary_lower_case: u8 = 1;");
+        self.writeln("pub static __binary_upper_case: u8 = 2;");
+        self.writeln("pub static __decimal: u8 = 3;");
+        self.writeln("pub static __octal: u8 = 4;");
+        self.writeln("pub static __hexadecimal_lower_case: u8 = 5;");
+        self.writeln("pub static __hexadecimal_upper_case: u8 = 6;");
+        self.writeln("pub static __string: u8 = 7;");
+        self.writeln("pub static __debug: u8 = 8;");
+        self.writeln("pub static __pointer_lower_case: u8 = 9;");
+        self.writeln("pub static __pointer_upper_case: u8 = 10;");
+        self.writeln("pub static __zero_padding: u8 = 1;");
+        self.writeln("pub static __left: u8 = 1;");
+        self.writeln("pub static __center: u8 = 2;");
+        self.writeln("pub static __right: u8 = 3;");
+        self.writeln("pub static less: i8 = -1;");
+        self.writeln("pub static greater: i8 = 1;");
+        self.writeln("");
+
+        // Unicode grapheme break constants
+        self.writeln("// Unicode grapheme break constants");
+        self.writeln("pub static __SpacingMark: u8 = 1;");
+        self.writeln("pub static __Prepend: u8 = 2;");
+        self.writeln("pub static __Linker: u8 = 3;");
+        self.writeln("");
+
+        // Currency/locale constants
+        self.writeln("// Currency/locale constants");
+        self.writeln("pub static _International: bool = false;");
+        self.writeln("");
+
+        // Power of 10 lookup table (for __pow10_128)
+        self.writeln("// Power of 10 lookup table");
+        self.writeln("pub static __pow10_128: [u128; 40] = [1, 10, 100, 1000, 10000, 100000, 1000000, 10000000, 100000000, 1000000000, 10000000000, 100000000000, 1000000000000, 10000000000000, 100000000000000, 1000000000000000, 10000000000000000, 100000000000000000, 1000000000000000000, 10000000000000000000, 100000000000000000000, 1000000000000000000000, 10000000000000000000000, 100000000000000000000000, 1000000000000000000000000, 10000000000000000000000000, 100000000000000000000000000, 1000000000000000000000000000, 10000000000000000000000000000, 100000000000000000000000000000, 1000000000000000000000000000000, 10000000000000000000000000000000, 100000000000000000000000000000000, 1000000000000000000000000000000000, 10000000000000000000000000000000000, 100000000000000000000000000000000000, 1000000000000000000000000000000000000, 10000000000000000000000000000000000000, 100000000000000000000000000000000000000, 0];");
         self.writeln("");
 
         // C library function stubs used by libstdc++ string conversion
