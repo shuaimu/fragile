@@ -14,11 +14,11 @@ We just convert the fully-resolved AST to equivalent Rust code.
 ## Current Status
 
 **Grammar Tests**: 20/20 passing
-**E2E Tests**: 103/103 passing (2 ignored due to STL header limitations)
+**E2E Tests**: 104/104 passing (2 ignored due to STL header limitations)
 **libc++ Transpilation Tests**: 8/8 passing (cstddef, cstdint, type_traits, initializer_list, vector, cstddef_compilation, iostream, thread)
 **Runtime Linking Tests**: 2/2 passing (FILE I/O, pthread)
 **Runtime Function Mapping Tests**: 1/1 passing
-**Total Tests**: 222 passing
+**Total Tests**: 223 passing
 
 **Working**:
 - Simple functions with control flow (if/else, while, for, do-while, switch, recursion)
@@ -903,7 +903,9 @@ Test against actual open-source C++ projects.
     - [x] Object Pool: fixed-size allocation, reuse patterns, index management
     - [x] State Machine: state transitions, event handling, switch statements
     - [x] Calculator: operator precedence, if-else chains, function composition
+    - [x] Switch const/char: const int and char literal case values
     - Fixed: Address-of pointer subscript (&arr[i] → arr.add(i as usize))
+    - Fixed: Switch case with const int/char values (evaluate DeclRefExpr, CharacterLiteral)
     - Fixed: Array initialization prefers InitListExpr over array size literal
     - Fixed: Logical NOT (!ptr) on pointers → ptr.is_null()
     - Fixed: Float/int comparison (convert int literals to float when comparing)

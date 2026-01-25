@@ -6941,3 +6941,88 @@ fn test_e2e_calculator() {
         "Calculator should work correctly"
     );
 }
+
+/// E2E test: Switch with const int and char literals
+/// Tests: const int case values, char literal case values
+#[test]
+fn test_e2e_switch_const_and_char() {
+    let source = r#"
+        // Test switch with const int case values
+        const int MODE_OFF = 0;
+        const int MODE_LOW = 1;
+        const int MODE_MEDIUM = 2;
+        const int MODE_HIGH = 3;
+
+        int getModeValue(int mode) {
+            switch (mode) {
+                case MODE_OFF:
+                    return 0;
+                case MODE_LOW:
+                    return 25;
+                case MODE_MEDIUM:
+                    return 50;
+                case MODE_HIGH:
+                    return 100;
+                default:
+                    return -1;
+            }
+        }
+
+        // Test switch with char literal case values
+        int getCharCode(char c) {
+            switch (c) {
+                case 'a':
+                    return 1;
+                case 'b':
+                    return 2;
+                case 'c':
+                    return 3;
+                case '+':
+                    return 10;
+                case '-':
+                    return 11;
+                case '*':
+                    return 12;
+                case '/':
+                    return 13;
+                default:
+                    return 0;
+            }
+        }
+
+        int main() {
+            // Test const int switch cases
+            if (getModeValue(MODE_OFF) != 0) return 1;
+            if (getModeValue(MODE_LOW) != 25) return 2;
+            if (getModeValue(MODE_MEDIUM) != 50) return 3;
+            if (getModeValue(MODE_HIGH) != 100) return 4;
+            if (getModeValue(5) != -1) return 5;
+
+            // Also test with literal values
+            if (getModeValue(0) != 0) return 6;
+            if (getModeValue(1) != 25) return 7;
+            if (getModeValue(2) != 50) return 8;
+            if (getModeValue(3) != 100) return 9;
+
+            // Test char literal switch cases
+            if (getCharCode('a') != 1) return 10;
+            if (getCharCode('b') != 2) return 11;
+            if (getCharCode('c') != 3) return 12;
+            if (getCharCode('+') != 10) return 13;
+            if (getCharCode('-') != 11) return 14;
+            if (getCharCode('*') != 12) return 15;
+            if (getCharCode('/') != 13) return 16;
+            if (getCharCode('x') != 0) return 17;
+
+            return 0;  // Success
+        }
+    "#;
+
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_switch_const_and_char.cpp").expect("E2E test failed");
+
+    assert_eq!(
+        exit_code, 0,
+        "Switch with const int and char literals should work correctly"
+    );
+}

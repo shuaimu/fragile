@@ -1263,7 +1263,9 @@ impl ClangParser {
                 clang_sys::CXCursor_CaseStmt => {
                     // Evaluate the case constant
                     // The first child of CaseStmt is the constant expression
-                    // Visit children to find the constant expression
+                    // This can be an IntegerLiteral, CharacterLiteral, DeclRefExpr (for const vars), etc.
+                    // We need to handle all these cases by evaluating the first child
+
                     extern "C" fn find_case_value(
                         child: clang_sys::CXCursor,
                         _parent: clang_sys::CXCursor,
@@ -1271,8 +1273,17 @@ impl ClangParser {
                     ) -> clang_sys::CXChildVisitResult {
                         unsafe {
                             let child_kind = clang_sys::clang_getCursorKind(child);
-                            // First child should be the case constant (or ConstantExpr wrapper)
-                            if child_kind == clang_sys::CXCursor_IntegerLiteral {
+                            // Try to evaluate any constant expression (IntegerLiteral, CharacterLiteral,
+                            // DeclRefExpr to const vars, UnaryExpr with minus, etc.)
+                            // clang_Cursor_Evaluate handles all these cases
+                            if child_kind == clang_sys::CXCursor_IntegerLiteral
+                                || child_kind == clang_sys::CXCursor_CharacterLiteral
+                                || child_kind == clang_sys::CXCursor_DeclRefExpr
+                                || child_kind == clang_sys::CXCursor_UnaryOperator
+                                || child_kind == clang_sys::CXCursor_ParenExpr
+                                || child_kind == 113
+                            {
+                                // CXCursor_ConstantExpr = 113
                                 let eval = clang_sys::clang_Cursor_Evaluate(child);
                                 if !eval.is_null() {
                                     let value_ptr = data as *mut i128;
