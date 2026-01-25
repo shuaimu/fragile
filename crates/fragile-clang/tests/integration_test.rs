@@ -1567,6 +1567,169 @@ fn main() {
     );
 }
 
+/// Test std_unordered_map_int_int stub operations directly in generated Rust code.
+/// This verifies the std_unordered_map stub in the preamble works correctly.
+#[test]
+fn test_e2e_std_unordered_map_stub() {
+    use std::fs;
+    use std::process::Command;
+
+    // Write Rust code that directly uses the std_unordered_map_int_int stub
+    let rust_code = r#"
+#![allow(dead_code)]
+#![allow(unused_variables)]
+#![allow(unused_mut)]
+
+// std::unordered_map<int, int> stub implementation (same as generated in preamble)
+#[repr(C)]
+pub struct std_unordered_map_int_int {
+    _buckets: Vec<Vec<(i32, i32)>>,
+    _size: usize,
+}
+
+impl Default for std_unordered_map_int_int {
+    fn default() -> Self {
+        Self { _buckets: vec![Vec::new(); 16], _size: 0 }
+    }
+}
+
+impl std_unordered_map_int_int {
+    pub fn new_0() -> Self { Default::default() }
+    pub fn size(&self) -> usize { self._size }
+    pub fn empty(&self) -> bool { self._size == 0 }
+    #[inline]
+    fn _hash(key: i32) -> usize {
+        (key as u32 as usize) % 16
+    }
+    pub fn insert(&mut self, key: i32, value: i32) {
+        let idx = Self::_hash(key);
+        for &mut (ref k, ref mut v) in &mut self._buckets[idx] {
+            if *k == key { *v = value; return; }
+        }
+        self._buckets[idx].push((key, value));
+        self._size += 1;
+    }
+    pub fn find(&self, key: i32) -> Option<i32> {
+        let idx = Self::_hash(key);
+        for &(k, v) in &self._buckets[idx] {
+            if k == key { return Some(v); }
+        }
+        None
+    }
+    pub fn contains(&self, key: i32) -> bool { self.find(key).is_some() }
+    pub fn op_index(&mut self, key: i32) -> &mut i32 {
+        let idx = Self::_hash(key);
+        for i in 0..self._buckets[idx].len() {
+            if self._buckets[idx][i].0 == key {
+                return &mut self._buckets[idx][i].1;
+            }
+        }
+        self._buckets[idx].push((key, 0));
+        self._size += 1;
+        let len = self._buckets[idx].len();
+        &mut self._buckets[idx][len - 1].1
+    }
+    pub fn erase(&mut self, key: i32) -> bool {
+        let idx = Self::_hash(key);
+        if let Some(pos) = self._buckets[idx].iter().position(|&(k, _)| k == key) {
+            self._buckets[idx].remove(pos);
+            self._size -= 1;
+            return true;
+        }
+        false
+    }
+    pub fn clear(&mut self) {
+        for bucket in &mut self._buckets {
+            bucket.clear();
+        }
+        self._size = 0;
+    }
+}
+
+fn main() {
+    // Test 1: Default constructor creates empty map
+    let mut m = std_unordered_map_int_int::new_0();
+    if !m.empty() { std::process::exit(1); }
+    if m.size() != 0 { std::process::exit(2); }
+
+    // Test 2: Insert and find
+    m.insert(1, 100);
+    m.insert(2, 200);
+    if m.size() != 2 { std::process::exit(3); }
+    if m.find(1) != Some(100) { std::process::exit(4); }
+    if m.find(2) != Some(200) { std::process::exit(5); }
+    if m.find(99) != None { std::process::exit(6); }
+
+    // Test 3: Update existing key
+    m.insert(1, 111);
+    if m.find(1) != Some(111) { std::process::exit(7); }
+    if m.size() != 2 { std::process::exit(8); }
+
+    // Test 4: operator[] access
+    *m.op_index(3) = 300;
+    if m.find(3) != Some(300) { std::process::exit(9); }
+    if m.size() != 3 { std::process::exit(10); }
+
+    // Test 5: contains
+    if !m.contains(1) { std::process::exit(11); }
+    if !m.contains(2) { std::process::exit(12); }
+    if !m.contains(3) { std::process::exit(13); }
+    if m.contains(99) { std::process::exit(14); }
+
+    // Test 6: erase
+    if !m.erase(1) { std::process::exit(15); }
+    if m.contains(1) { std::process::exit(16); }
+    if m.size() != 2 { std::process::exit(17); }
+    if m.erase(99) { std::process::exit(18); }  // erase non-existent
+
+    // Test 7: clear
+    m.clear();
+    if !m.empty() { std::process::exit(19); }
+    if m.size() != 0 { std::process::exit(20); }
+
+    std::process::exit(0);  // All tests passed
+}
+"#;
+
+    // Create temp directory
+    let temp_dir = std::env::temp_dir().join("fragile_e2e_tests");
+    fs::create_dir_all(&temp_dir).expect("Failed to create temp dir");
+
+    // Write Rust source
+    let rs_path = temp_dir.join("e2e_std_unordered_map_stub.rs");
+    fs::write(&rs_path, rust_code).expect("Failed to write Rust source");
+
+    // Compile with rustc
+    let binary_path = temp_dir.join("e2e_std_unordered_map_stub");
+    let compile_output = Command::new("rustc")
+        .arg(&rs_path)
+        .arg("-o")
+        .arg(&binary_path)
+        .arg("--edition=2021")
+        .output()
+        .expect("Failed to run rustc");
+
+    if !compile_output.status.success() {
+        panic!(
+            "rustc compilation failed:\nstdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&compile_output.stdout),
+            String::from_utf8_lossy(&compile_output.stderr)
+        );
+    }
+
+    // Run the binary
+    let run_output = Command::new(&binary_path)
+        .output()
+        .expect("Failed to run binary");
+
+    let exit_code = run_output.status.code().unwrap_or(-1);
+    assert_eq!(
+        exit_code, 0,
+        "std_unordered_map_int_int stub operations should work correctly (exit code: {})",
+        exit_code
+    );
+}
+
 /// Test function returning struct (rvalue handling).
 #[test]
 fn test_e2e_function_returning_struct() {

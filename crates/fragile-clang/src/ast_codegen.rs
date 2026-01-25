@@ -3246,6 +3246,118 @@ impl AstCodeGen {
         self.writeln("");
         self.generated_structs.insert("std_string".to_string());
 
+        // std::unordered_map<int, int> stub implementation
+        self.writeln("// std::unordered_map<int, int> stub implementation");
+        self.writeln("#[repr(C)]");
+        self.writeln("pub struct std_unordered_map_int_int {");
+        self.indent += 1;
+        self.writeln("_buckets: Vec<Vec<(i32, i32)>>,");
+        self.writeln("_size: usize,");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("");
+        self.writeln("impl Default for std_unordered_map_int_int {");
+        self.indent += 1;
+        self.writeln("fn default() -> Self {");
+        self.indent += 1;
+        self.writeln("Self { _buckets: vec![Vec::new(); 16], _size: 0 }");
+        self.indent -= 1;
+        self.writeln("}");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("");
+        self.writeln("impl std_unordered_map_int_int {");
+        self.indent += 1;
+        // Default constructor
+        self.writeln("pub fn new_0() -> Self { Default::default() }");
+        // size()
+        self.writeln("pub fn size(&self) -> usize { self._size }");
+        // empty()
+        self.writeln("pub fn empty(&self) -> bool { self._size == 0 }");
+        // _hash helper
+        self.writeln("#[inline]");
+        self.writeln("fn _hash(key: i32) -> usize {");
+        self.indent += 1;
+        self.writeln("(key as u32 as usize) % 16");
+        self.indent -= 1;
+        self.writeln("}");
+        // insert()
+        self.writeln("pub fn insert(&mut self, key: i32, value: i32) {");
+        self.indent += 1;
+        self.writeln("let idx = Self::_hash(key);");
+        self.writeln("for &mut (ref k, ref mut v) in &mut self._buckets[idx] {");
+        self.indent += 1;
+        self.writeln("if *k == key { *v = value; return; }");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("self._buckets[idx].push((key, value));");
+        self.writeln("self._size += 1;");
+        self.indent -= 1;
+        self.writeln("}");
+        // find()
+        self.writeln("pub fn find(&self, key: i32) -> Option<i32> {");
+        self.indent += 1;
+        self.writeln("let idx = Self::_hash(key);");
+        self.writeln("for &(k, v) in &self._buckets[idx] {");
+        self.indent += 1;
+        self.writeln("if k == key { return Some(v); }");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("None");
+        self.indent -= 1;
+        self.writeln("}");
+        // contains()
+        self.writeln("pub fn contains(&self, key: i32) -> bool { self.find(key).is_some() }");
+        // op_index() - operator[]
+        self.writeln("pub fn op_index(&mut self, key: i32) -> &mut i32 {");
+        self.indent += 1;
+        self.writeln("let idx = Self::_hash(key);");
+        self.writeln("for i in 0..self._buckets[idx].len() {");
+        self.indent += 1;
+        self.writeln("if self._buckets[idx][i].0 == key {");
+        self.indent += 1;
+        self.writeln("return &mut self._buckets[idx][i].1;");
+        self.indent -= 1;
+        self.writeln("}");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("self._buckets[idx].push((key, 0));");
+        self.writeln("self._size += 1;");
+        self.writeln("let len = self._buckets[idx].len();");
+        self.writeln("&mut self._buckets[idx][len - 1].1");
+        self.indent -= 1;
+        self.writeln("}");
+        // erase()
+        self.writeln("pub fn erase(&mut self, key: i32) -> bool {");
+        self.indent += 1;
+        self.writeln("let idx = Self::_hash(key);");
+        self.writeln("if let Some(pos) = self._buckets[idx].iter().position(|&(k, _)| k == key) {");
+        self.indent += 1;
+        self.writeln("self._buckets[idx].remove(pos);");
+        self.writeln("self._size -= 1;");
+        self.writeln("return true;");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("false");
+        self.indent -= 1;
+        self.writeln("}");
+        // clear()
+        self.writeln("pub fn clear(&mut self) {");
+        self.indent += 1;
+        self.writeln("for bucket in &mut self._buckets {");
+        self.indent += 1;
+        self.writeln("bucket.clear();");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("self._size = 0;");
+        self.indent -= 1;
+        self.writeln("}");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("");
+        self.generated_structs
+            .insert("std_unordered_map_int_int".to_string());
+
         // Template placeholder types that appear in libc++ code
         // These are unresolved template parameters that we need stubs for
         for placeholder_type in [
