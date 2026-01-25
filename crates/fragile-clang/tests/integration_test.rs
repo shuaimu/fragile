@@ -5393,3 +5393,194 @@ fn test_e2e_min_heap() {
         "Min-heap priority queue should work correctly"
     );
 }
+
+/// E2E test: Graph with adjacency list
+/// Tests: linked lists, dynamic memory, BFS traversal, visited tracking
+#[test]
+fn test_e2e_simple_graph() {
+    let source = r#"
+        // Simple graph using adjacency list
+        // Tests linked lists, dynamic memory, BFS traversal
+
+        struct Edge {
+            int to;
+            Edge* next;
+            Edge(int t) : to(t), next(nullptr) {}
+        };
+
+        class Graph {
+            static const int MAX_VERTICES = 16;
+            Edge* adj[16];  // adjacency list heads
+            int numVertices;
+
+        public:
+            Graph(int n) : numVertices(n) {
+                for (int i = 0; i < MAX_VERTICES; i++) {
+                    adj[i] = nullptr;
+                }
+            }
+
+            ~Graph() {
+                // Free all edge lists
+                for (int i = 0; i < numVertices; i++) {
+                    Edge* curr = adj[i];
+                    while (curr != nullptr) {
+                        Edge* next = curr->next;
+                        delete curr;
+                        curr = next;
+                    }
+                }
+            }
+
+            void addEdge(int from, int to) {
+                Edge* e = new Edge(to);
+                e->next = adj[from];
+                adj[from] = e;
+            }
+
+            // Count edges from a vertex
+            int outDegree(int v) const {
+                int count = 0;
+                Edge* curr = adj[v];
+                while (curr != nullptr) {
+                    count++;
+                    curr = curr->next;
+                }
+                return count;
+            }
+
+            // Simple BFS using array as queue
+            int bfsDistance(int start, int end) {
+                if (start == end) return 0;
+                if (start < 0 || start >= numVertices) return -1;
+                if (end < 0 || end >= numVertices) return -1;
+
+                bool visited[16];
+                int distance[16];
+                int queue[16];
+                int front = 0, back = 0;
+
+                for (int i = 0; i < MAX_VERTICES; i++) {
+                    visited[i] = false;
+                    distance[i] = -1;
+                }
+
+                visited[start] = true;
+                distance[start] = 0;
+                queue[back++] = start;
+
+                while (front < back) {
+                    int curr = queue[front++];
+
+                    Edge* edge = adj[curr];
+                    while (edge != nullptr) {
+                        int next = edge->to;
+                        if (!visited[next]) {
+                            visited[next] = true;
+                            distance[next] = distance[curr] + 1;
+                            if (next == end) {
+                                return distance[next];
+                            }
+                            queue[back++] = next;
+                        }
+                        edge = edge->next;
+                    }
+                }
+
+                return -1;  // Not reachable
+            }
+
+            // Check if path exists using DFS
+            bool hasPath(int from, int to) {
+                if (from == to) return true;
+                if (from < 0 || from >= numVertices) return false;
+                if (to < 0 || to >= numVertices) return false;
+
+                bool visited[16];
+                for (int i = 0; i < MAX_VERTICES; i++) {
+                    visited[i] = false;
+                }
+
+                // Explicitly pass array as pointer (workaround for array-to-pointer decay)
+                return dfsHelper(from, to, &visited[0]);
+            }
+
+        private:
+            bool dfsHelper(int curr, int target, bool* visited) {
+                if (curr == target) return true;
+                visited[curr] = true;
+
+                Edge* edge = adj[curr];
+                while (edge != nullptr) {
+                    if (!visited[edge->to]) {
+                        // Recursively pass pointer
+                        if (dfsHelper(edge->to, target, visited)) {
+                            return true;
+                        }
+                    }
+                    edge = edge->next;
+                }
+                return false;
+            }
+        };
+
+        int main() {
+            // Create a simple directed graph:
+            // 0 -> 1 -> 2
+            //      |    |
+            //      v    v
+            //      3 -> 4
+            Graph g(5);
+
+            // Test empty graph
+            if (g.outDegree(0) != 0) return 1;
+
+            // Add edges
+            g.addEdge(0, 1);
+            g.addEdge(1, 2);
+            g.addEdge(1, 3);
+            g.addEdge(2, 4);
+            g.addEdge(3, 4);
+
+            // Test out-degrees
+            if (g.outDegree(0) != 1) return 2;  // 0 -> 1
+            if (g.outDegree(1) != 2) return 3;  // 1 -> 2, 3
+            if (g.outDegree(4) != 0) return 4;  // 4 has no outgoing
+
+            // Test BFS distances
+            if (g.bfsDistance(0, 0) != 0) return 5;   // Same vertex
+            if (g.bfsDistance(0, 1) != 1) return 6;   // 0 -> 1
+            if (g.bfsDistance(0, 2) != 2) return 7;   // 0 -> 1 -> 2
+            if (g.bfsDistance(0, 3) != 2) return 8;   // 0 -> 1 -> 3
+            if (g.bfsDistance(0, 4) != 3) return 9;   // 0 -> 1 -> 2 -> 4 or 0 -> 1 -> 3 -> 4
+            if (g.bfsDistance(4, 0) != -1) return 10; // No path back
+
+            // Test hasPath
+            if (!g.hasPath(0, 4)) return 11;  // Path exists
+            if (!g.hasPath(0, 3)) return 12;  // Path exists
+            if (g.hasPath(4, 0)) return 13;   // No path
+            if (g.hasPath(2, 3)) return 14;   // No path (they're siblings from 1)
+
+            // Test with a cycle
+            Graph g2(3);
+            g2.addEdge(0, 1);
+            g2.addEdge(1, 2);
+            g2.addEdge(2, 0);  // Cycle
+
+            if (!g2.hasPath(0, 2)) return 15;
+            if (!g2.hasPath(2, 0)) return 16;  // Through cycle
+            if (g2.bfsDistance(0, 2) != 2) return 17;
+            if (g2.bfsDistance(2, 0) != 1) return 18;  // Direct edge
+
+            return 0;  // Success
+        }
+    "#;
+
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_simple_graph.cpp").expect("E2E test failed");
+
+    assert_eq!(
+        exit_code, 0,
+        "Graph with adjacency list should work correctly"
+    );
+}
