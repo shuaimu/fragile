@@ -4809,8 +4809,24 @@ impl AstCodeGen {
         }
         self.generated_structs.insert(rust_name.clone());
 
+        // Check if any field needs ManuallyDrop (non-Copy types like structs or c_void)
+        let has_non_copy_field = children.iter().any(|child| {
+            if let ClangNodeKind::FieldDecl { ty, .. } = &child.kind {
+                let type_str = ty.to_rust_type_str();
+                // c_void and structs (Named types that aren't primitives) don't impl Copy
+                type_str.contains("c_void")
+                    || matches!(ty, CppType::Named(n) if !Self::is_primitive_type_name(n))
+            } else {
+                false
+            }
+        });
+
         self.writeln(&format!("/// C++ union `{}`", name));
         self.writeln("#[repr(C)]");
+        // Can't derive Copy/Clone if any field needs ManuallyDrop
+        if !has_non_copy_field {
+            self.writeln("#[derive(Copy, Clone)]");
+        }
         self.writeln(&format!("pub union {} {{", rust_name));
         self.indent += 1;
 
@@ -4828,18 +4844,84 @@ impl AstCodeGen {
                     sanitize_identifier(field_name)
                 };
                 let vis = access_to_visibility(*access);
-                self.writeln(&format!(
-                    "{}{}: {},",
-                    vis,
-                    sanitized_name,
-                    ty.to_rust_type_str_for_field()
-                ));
+                let type_str = ty.to_rust_type_str_for_field();
+                // Wrap non-Copy types in ManuallyDrop for union compatibility
+                let wrapped_type = if type_str.contains("c_void")
+                    || matches!(ty, CppType::Named(n) if !Self::is_primitive_type_name(n))
+                {
+                    format!("std::mem::ManuallyDrop<{}>", type_str)
+                } else {
+                    type_str
+                };
+                self.writeln(&format!("{}{}: {},", vis, sanitized_name, wrapped_type));
             }
         }
 
         self.indent -= 1;
         self.writeln("}");
+
+        // Generate Default impl
         self.writeln("");
+        self.writeln(&format!("impl Default for {} {{", rust_name));
+        self.indent += 1;
+        self.writeln("fn default() -> Self {");
+        self.indent += 1;
+        self.writeln("unsafe { std::mem::zeroed() }");
+        self.indent -= 1;
+        self.writeln("}");
+        self.indent -= 1;
+        self.writeln("}");
+
+        // Generate Clone impl if we have non-Copy fields (can't derive it)
+        if has_non_copy_field {
+            self.writeln("");
+            self.writeln(&format!("impl Clone for {} {{", rust_name));
+            self.indent += 1;
+            self.writeln("fn clone(&self) -> Self {");
+            self.indent += 1;
+            self.writeln("unsafe { std::ptr::read(self) }");
+            self.indent -= 1;
+            self.writeln("}");
+            self.indent -= 1;
+            self.writeln("}");
+        }
+        self.writeln("");
+    }
+
+    /// Check if a type name is a primitive type (not a struct).
+    fn is_primitive_type_name(name: &str) -> bool {
+        matches!(
+            name,
+            "int"
+                | "unsigned"
+                | "long"
+                | "short"
+                | "char"
+                | "bool"
+                | "float"
+                | "double"
+                | "void"
+                | "i8"
+                | "i16"
+                | "i32"
+                | "i64"
+                | "u8"
+                | "u16"
+                | "u32"
+                | "u64"
+                | "isize"
+                | "usize"
+                | "f32"
+                | "f64"
+                | "size_t"
+                | "std::size_t"
+                | "ssize_t"
+                | "ptrdiff_t"
+                | "std::ptrdiff_t"
+                | "intptr_t"
+                | "uintptr_t"
+                | "wchar_t"
+        )
     }
 
     /// Generate a top-level declaration.
@@ -6430,14 +6512,16 @@ impl AstCodeGen {
         }
         self.generated_structs.insert(rust_name.clone());
 
-        // Check if any field contains c_void (requires ManuallyDrop, which breaks Copy)
-        let has_cvoid_field = children.iter().any(|child| {
+        // Check if any field needs ManuallyDrop (non-Copy types like structs or c_void)
+        let has_non_copy_field = children.iter().any(|child| {
             if let ClangNodeKind::FieldDecl { ty, is_static, .. } = &child.kind {
                 if *is_static {
                     return false;
                 }
                 let type_str = ty.to_rust_type_str();
-                type_str == "std::ffi::c_void" || type_str.contains("c_void")
+                // c_void and structs (Named types that aren't primitives) don't impl Copy
+                type_str.contains("c_void")
+                    || matches!(ty, CppType::Named(n) if !Self::is_primitive_type_name(n))
             } else {
                 false
             }
@@ -6445,8 +6529,8 @@ impl AstCodeGen {
 
         self.writeln(&format!("/// C++ union `{}`", name));
         self.writeln("#[repr(C)]");
-        // Can't derive Copy/Clone if any field needs ManuallyDrop (c_void doesn't impl Copy/Clone)
-        if !has_cvoid_field {
+        // Can't derive Copy/Clone if any field needs ManuallyDrop
+        if !has_non_copy_field {
             self.writeln("#[derive(Copy, Clone)]");
         }
         self.writeln(&format!("pub union {} {{", rust_name));
@@ -6473,8 +6557,8 @@ impl AstCodeGen {
                 let vis = access_to_visibility(*access);
                 let type_str = ty.to_rust_type_str();
                 // Wrap non-Copy types in ManuallyDrop for union compatibility
-                // c_void is used as placeholder for template types and doesn't impl Copy
-                let wrapped_type = if type_str == "std::ffi::c_void" || type_str.contains("c_void")
+                let wrapped_type = if type_str.contains("c_void")
+                    || matches!(ty, CppType::Named(n) if !Self::is_primitive_type_name(n))
                 {
                     format!("std::mem::ManuallyDrop<{}>", type_str)
                 } else {
@@ -6501,8 +6585,8 @@ impl AstCodeGen {
         self.writeln("}");
         self.writeln("");
 
-        // Generate Clone impl if we have c_void fields (can't derive it)
-        if has_cvoid_field {
+        // Generate Clone impl if we have non-Copy fields (can't derive it)
+        if has_non_copy_field {
             self.writeln(&format!("impl Clone for {} {{", rust_name));
             self.indent += 1;
             self.writeln("fn clone(&self) -> Self {");
