@@ -1968,7 +1968,22 @@ impl AstCodeGen {
                     if Self::needs_unsafe_wrapper(&expr) {
                         self.writeln(&format!("unsafe {{ {} }};", expr));
                     } else {
-                        self.writeln(&format!("{};", expr));
+                        // If expression contains `unsafe { ... }` followed by a comparison operator,
+                        // Rust requires parentheses. E.g., `unsafe { X } > Y;` is invalid,
+                        // but `(unsafe { X } > Y);` is valid (though typically unused).
+                        // This can happen with static assertions or debug comparisons.
+                        let needs_parens = expr.contains("unsafe {")
+                            && (expr.contains("} >")
+                                || expr.contains("} <")
+                                || expr.contains("} ==")
+                                || expr.contains("} !=")
+                                || expr.contains("} >=")
+                                || expr.contains("} <="));
+                        if needs_parens {
+                            self.writeln(&format!("({});", expr));
+                        } else {
+                            self.writeln(&format!("{};", expr));
+                        }
                     }
                 }
             }
@@ -9980,13 +9995,14 @@ impl AstCodeGen {
                         // Arrow access without unsafe wrapper (caller handles unsafe)
                         format!("(*{}).{}", base, member)
                     } else {
-                        // For dot access, if base starts with '*' (dereference), we need
-                        // to parenthesize it to get correct precedence.
-                        // In Rust, `.` has higher precedence than `*`, so `*x.y` means `*(x.y)`.
-                        // We want `(*x).y` instead, so wrap in parens when base starts with `*`.
+                        // For dot access, if base starts with '*' (dereference) or contains 'as' (cast),
+                        // we need to parenthesize it to get correct precedence.
+                        // In Rust, `.` has higher precedence than `*` and `as`, so:
+                        // - `*x.y` means `*(x.y)` - we want `(*x).y`
+                        // - `x as T.y` means `x as (T.y)` - we want `(x as T).y`
                         // E.g., `*ptr.add(i).field` should be `(*ptr.add(i)).field`
-                        // Also handles `*(*c).data.add(i).field` -> `(*(*c).data.add(i)).field`
-                        if base.starts_with('*') {
+                        // E.g., `ptr as *const T.field` should be `(ptr as *const T).field`
+                        if base.starts_with('*') || base.contains(" as ") {
                             format!("({}).{}", base, member)
                         } else {
                             format!("{}.{}", base, member)
@@ -10645,6 +10661,23 @@ impl AstCodeGen {
                     } else {
                         let left = self.expr_to_string(&node.children[0]);
                         let right = self.expr_to_string(&node.children[1]);
+                        // For comparison/relational operators, if left side is an unsafe block,
+                        // we need to parenthesize it. Rust requires `(unsafe { X }) > Y`,
+                        // not `unsafe { X } > Y`.
+                        let left = if matches!(
+                            op,
+                            BinaryOp::Lt
+                                | BinaryOp::Le
+                                | BinaryOp::Gt
+                                | BinaryOp::Ge
+                                | BinaryOp::Eq
+                                | BinaryOp::Ne
+                        ) && left.contains("unsafe {")
+                        {
+                            format!("({})", left)
+                        } else {
+                            left
+                        };
                         format!("{} {} {}", left, op_str, right)
                     }
                 } else {
@@ -11616,14 +11649,20 @@ impl AstCodeGen {
                         let base_has_ptr_subscript = self.is_pointer_subscript(&node.children[0]);
                         if base_has_ptr_subscript && !is_type_ref {
                             let base_raw = self.expr_to_string_raw(&node.children[0]);
-                            // If base_raw starts with *, parenthesize it for correct precedence
-                            if base_raw.starts_with('*') {
+                            // If base_raw starts with * or contains 'as', parenthesize for correct precedence
+                            if base_raw.starts_with('*') || base_raw.contains(" as ") {
                                 format!("unsafe {{ ({}).{} }}", base_raw, member)
                             } else {
                                 format!("unsafe {{ {}.{} }}", base_raw, member)
                             }
                         } else {
-                            format!("{}.{}", base, member)
+                            // Parenthesize if base contains 'as' (cast) since Rust's 'as' has lower
+                            // precedence than '.', and `x as T.method()` is invalid
+                            if base.contains(" as ") {
+                                format!("({}).{}", base, member)
+                            } else {
+                                format!("{}.{}", base, member)
+                            }
                         }
                     }
                 } else {
@@ -11698,11 +11737,25 @@ impl AstCodeGen {
                         format!("unsafe {{ {}[({}) as usize] }}", raw_name, idx)
                     } else if is_pointer {
                         let arr = self.expr_to_string(&node.children[0]);
+                        // Parenthesize if arr contains a cast (`as`) since Rust's `as` has lower
+                        // precedence than method calls, and `ptr as T.add()` is invalid
+                        let arr = if arr.contains(" as ") {
+                            format!("({})", arr)
+                        } else {
+                            arr
+                        };
                         // Pointer indexing requires unsafe pointer arithmetic
                         // Parenthesize idx to handle operator precedence (e.g., size_ - 1 as usize)
                         format!("unsafe {{ *{}.add(({}) as usize) }}", arr, idx)
                     } else {
                         let arr = self.expr_to_string(&node.children[0]);
+                        // Parenthesize if arr contains a cast (`as`) since Rust's `as` has lower
+                        // precedence than indexing, and `ptr as T[idx]` is invalid
+                        let arr = if arr.contains(" as ") {
+                            format!("({})", arr)
+                        } else {
+                            arr
+                        };
                         // Array indexing - cast index to usize
                         // Parenthesize idx to handle operator precedence (e.g., size_ - 1 as usize)
                         format!("{}[({}) as usize]", arr, idx)
