@@ -4136,10 +4136,14 @@ impl AstCodeGen {
         self.generated_structs
             .insert("pthread_mutexattr_t".to_string());
         self.writeln("pub type __locale_struct = std::ffi::c_void;");
+        self.writeln("pub type locale_t = *mut __locale_struct;");
         self.writeln("pub type __libcpp_mutex_t = usize;");
         self.writeln("pub type __libcpp_recursive_mutex_t = usize;");
         self.writeln("pub type __libcpp_condvar_t = usize;");
         self.writeln("pub type pthread_mutexattr_t = u32;");
+        self.writeln("");
+        self.writeln("// C locale functions");
+        self.writeln("pub fn __cloc() -> locale_t { std::ptr::null_mut() }");
         self.writeln("");
 
         // Missing ctype specialization stubs
@@ -4527,6 +4531,11 @@ impl AstCodeGen {
         self.indent += 1;
         // error_category functions return a reference to a static category object
         // We use static c_void as placeholder since error_category is aliased to c_void
+        // The generated code uses both patterns:
+        // - &generic_category() as *const T - wants to take address of result
+        // - generic_category() passed directly - wants a reference
+        // To handle both, we return a reference that works for direct passing,
+        // and we'll add a workaround macro or the code generator should skip the &
         self.writeln("static GENERIC_CATEGORY: std::ffi::c_void = unsafe { std::mem::zeroed() };");
         self.writeln("static SYSTEM_CATEGORY: std::ffi::c_void = unsafe { std::mem::zeroed() };");
         self.writeln("");
@@ -4534,6 +4543,9 @@ impl AstCodeGen {
         self.writeln("pub fn system_category() -> &'static std::ffi::c_void { &SYSTEM_CATEGORY }");
         self.indent -= 1;
         self.writeln("}");
+        self.writeln("// Re-export _V2 functions at module level for convenience");
+        self.writeln("pub use _V2::generic_category;");
+        self.writeln("pub use _V2::system_category;");
         self.writeln("");
 
         // Builtin function stubs
@@ -4630,6 +4642,18 @@ impl AstCodeGen {
         self.writeln("pub fn __builtin_fmal(x: f64, y: f64, z: f64) -> f64 { x * y + z }");
         self.writeln("");
 
+        // Float classification builtins
+        self.writeln("// Float classification builtins");
+        self.writeln("#[inline]");
+        self.writeln("pub fn __builtin_isnormal(x: f64) -> bool { x.is_normal() }");
+        self.writeln("#[inline]");
+        self.writeln("pub fn __builtin_isnan(x: f64) -> bool { x.is_nan() }");
+        self.writeln("#[inline]");
+        self.writeln("pub fn __builtin_isinf(x: f64) -> bool { x.is_infinite() }");
+        self.writeln("#[inline]");
+        self.writeln("pub fn __builtin_isfinite(x: f64) -> bool { x.is_finite() }");
+        self.writeln("");
+
         // C library function stubs used by libstdc++ string conversion
         self.writeln("// C library function stubs");
         self.writeln("#[inline]");
@@ -4716,6 +4740,47 @@ impl AstCodeGen {
         self.writeln("}");
         self.indent -= 1;
         self.writeln("}");
+        self.writeln("");
+
+        // pthread stubs (no-op implementations for transpiled code)
+        self.writeln("// pthread stubs (no-op implementations)");
+        self.writeln("pub unsafe fn fragile_pthread_create(_: *mut usize, _: *const std::ffi::c_void, _: Option<unsafe extern \"C\" fn(*mut std::ffi::c_void) -> *mut std::ffi::c_void>, _: *mut std::ffi::c_void) -> i32 { 0 }");
+        self.writeln("pub unsafe fn fragile_pthread_join(_: usize, _: *mut *mut std::ffi::c_void) -> i32 { 0 }");
+        self.writeln("pub fn fragile_pthread_self() -> usize { 0 }");
+        self.writeln("pub fn fragile_pthread_equal(_: usize, _: usize) -> i32 { 1 }");
+        self.writeln("pub unsafe fn fragile_pthread_detach(_: usize) -> i32 { 0 }");
+        self.writeln("pub fn fragile_pthread_exit(_: *mut std::ffi::c_void) -> ! { std::process::exit(0) }");
+        self.writeln("pub unsafe fn fragile_pthread_attr_init(_: *mut std::ffi::c_void) -> i32 { 0 }");
+        self.writeln("pub unsafe fn fragile_pthread_attr_destroy(_: *mut std::ffi::c_void) -> i32 { 0 }");
+        self.writeln("pub unsafe fn fragile_pthread_attr_setdetachstate(_: *mut std::ffi::c_void, _: i32) -> i32 { 0 }");
+        self.writeln("pub unsafe fn fragile_pthread_attr_getdetachstate(_: *const std::ffi::c_void, _: *mut i32) -> i32 { 0 }");
+        self.writeln("pub unsafe fn fragile_pthread_mutex_init(_: *mut usize, _: *const u32) -> i32 { 0 }");
+        self.writeln("pub unsafe fn fragile_pthread_mutex_destroy(_: *mut usize) -> i32 { 0 }");
+        self.writeln("pub unsafe fn fragile_pthread_mutex_lock(_: *mut usize) -> i32 { 0 }");
+        self.writeln("pub unsafe fn fragile_pthread_mutex_trylock(_: *mut usize) -> i32 { 0 }");
+        self.writeln("pub unsafe fn fragile_pthread_mutex_unlock(_: *mut usize) -> i32 { 0 }");
+        self.writeln("pub unsafe fn fragile_pthread_mutexattr_init(_: *mut u32) -> i32 { 0 }");
+        self.writeln("pub unsafe fn fragile_pthread_mutexattr_destroy(_: *mut u32) -> i32 { 0 }");
+        self.writeln("pub unsafe fn fragile_pthread_mutexattr_settype(_: *mut u32, _: i32) -> i32 { 0 }");
+        self.writeln("pub unsafe fn fragile_pthread_mutexattr_gettype(_: *const u32, _: *mut i32) -> i32 { 0 }");
+        self.writeln("pub unsafe fn fragile_pthread_cond_init(_: *mut usize, _: *const std::ffi::c_void) -> i32 { 0 }");
+        self.writeln("pub unsafe fn fragile_pthread_cond_destroy(_: *mut usize) -> i32 { 0 }");
+        self.writeln("pub unsafe fn fragile_pthread_cond_wait(_: *mut usize, _: *mut usize) -> i32 { 0 }");
+        self.writeln("pub unsafe fn fragile_pthread_cond_timedwait(_: *mut usize, _: *mut usize, _: *const std::ffi::c_void) -> i32 { 0 }");
+        self.writeln("pub unsafe fn fragile_pthread_cond_signal(_: *mut usize) -> i32 { 0 }");
+        self.writeln("pub unsafe fn fragile_pthread_cond_broadcast(_: *mut usize) -> i32 { 0 }");
+        self.writeln("pub unsafe fn fragile_pthread_condattr_init(_: *mut std::ffi::c_void) -> i32 { 0 }");
+        self.writeln("pub unsafe fn fragile_pthread_condattr_destroy(_: *mut std::ffi::c_void) -> i32 { 0 }");
+        self.writeln("pub unsafe fn fragile_pthread_rwlock_init(_: *mut std::ffi::c_void, _: *const std::ffi::c_void) -> i32 { 0 }");
+        self.writeln("pub unsafe fn fragile_pthread_rwlock_destroy(_: *mut std::ffi::c_void) -> i32 { 0 }");
+        self.writeln("pub unsafe fn fragile_pthread_rwlock_rdlock(_: *mut std::ffi::c_void) -> i32 { 0 }");
+        self.writeln("pub unsafe fn fragile_pthread_rwlock_tryrdlock(_: *mut std::ffi::c_void) -> i32 { 0 }");
+        self.writeln("pub unsafe fn fragile_pthread_rwlock_wrlock(_: *mut std::ffi::c_void) -> i32 { 0 }");
+        self.writeln("pub unsafe fn fragile_pthread_rwlock_trywrlock(_: *mut std::ffi::c_void) -> i32 { 0 }");
+        self.writeln("pub unsafe fn fragile_pthread_rwlock_unlock(_: *mut std::ffi::c_void) -> i32 { 0 }");
+        self.writeln("pub unsafe fn fragile_pthread_rwlockattr_init(_: *mut std::ffi::c_void) -> i32 { 0 }");
+        self.writeln("pub unsafe fn fragile_pthread_rwlockattr_destroy(_: *mut std::ffi::c_void) -> i32 { 0 }");
+
         self.indent -= 1;
         self.writeln("}");
         self.writeln("");
