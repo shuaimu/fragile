@@ -617,9 +617,7 @@ impl CppType {
     pub fn to_rust_type_str_for_field(&self) -> String {
         match self {
             CppType::Reference {
-                referent,
-                is_const,
-                ..
+                referent, is_const, ..
             } => {
                 // Convert references to raw pointers for struct fields
                 let ptr_type = if *is_const { "*const" } else { "*mut" };

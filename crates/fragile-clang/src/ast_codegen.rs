@@ -333,7 +333,7 @@ impl AstCodeGen {
             ty if ty.starts_with("*mut ") || ty.starts_with("*const ") => {
                 "std::ptr::null_mut()".to_string()
             }
-            _ => format!("Default::default()")
+            _ => format!("Default::default()"),
         }
     }
 
@@ -529,9 +529,9 @@ impl AstCodeGen {
         // Merge own methods: override existing or append new
         for own_method in own_methods {
             // Check if this method overrides a base method
-            let override_idx = entries
-                .iter()
-                .position(|e| e.name == own_method.name && e.params.len() == own_method.params.len());
+            let override_idx = entries.iter().position(|e| {
+                e.name == own_method.name && e.params.len() == own_method.params.len()
+            });
 
             if let Some(idx) = override_idx {
                 // Record the override: (derived_class, method_name) -> original declaring class
@@ -568,7 +568,8 @@ impl AstCodeGen {
         };
 
         // Store and return
-        self.vtables.insert(class_name.to_string(), vtable_info.clone());
+        self.vtables
+            .insert(class_name.to_string(), vtable_info.clone());
         vtable_info
     }
 
@@ -613,10 +614,7 @@ impl AstCodeGen {
         // Generate type ID constant
         let type_id = Self::compute_type_id(class_name);
         self.writeln("");
-        self.writeln(&format!(
-            "/// Type ID for `{}` (FNV-1a hash)",
-            class_name
-        ));
+        self.writeln(&format!("/// Type ID for `{}` (FNV-1a hash)", class_name));
         self.writeln(&format!(
             "pub const {}_TYPE_ID: u64 = 0x{:016x};",
             sanitized_class.to_uppercase(),
@@ -640,10 +638,7 @@ impl AstCodeGen {
         ));
 
         self.writeln("");
-        self.writeln(&format!(
-            "/// Static vtable for `{}`",
-            class_name
-        ));
+        self.writeln(&format!("/// Static vtable for `{}`", class_name));
         self.writeln(&format!(
             "pub static {}_VTABLE: {}_vtable = {}_vtable {{",
             sanitized_class.to_uppercase(),
@@ -674,9 +669,7 @@ impl AstCodeGen {
             let declaring_class = sanitize_identifier(&entry.declaring_class);
             self.writeln(&format!(
                 "{}: {}_vtable_{},",
-                method_name,
-                declaring_class,
-                method_name_for_fn
+                method_name, declaring_class, method_name_for_fn
             ));
         }
 
@@ -823,10 +816,7 @@ impl AstCodeGen {
         if sanitized_class == sanitized_root {
             self.writeln("std::ptr::drop_in_place(this);");
         } else {
-            self.writeln(&format!(
-                "let derived = this as *mut {};",
-                sanitized_class
-            ));
+            self.writeln(&format!("let derived = this as *mut {};", sanitized_class));
             self.writeln("std::ptr::drop_in_place(derived);");
         }
         self.indent -= 1;
@@ -1124,9 +1114,11 @@ impl AstCodeGen {
                     ..
                 } => {
                     // Find the function body (CompoundStmt) among children
-                    let body = child.children.iter().find(|c| {
-                        matches!(c.kind, ClangNodeKind::CompoundStmt)
-                    }).cloned();
+                    let body = child
+                        .children
+                        .iter()
+                        .find(|c| matches!(c.kind, ClangNodeKind::CompoundStmt))
+                        .cloned();
 
                     // Store function template definition
                     self.fn_template_definitions.insert(
@@ -1194,45 +1186,57 @@ impl AstCodeGen {
         }
 
         // Find the DeclRefExpr - it might be wrapped in ImplicitCastExpr
-        let decl_ref = if let ClangNodeKind::DeclRefExpr { name, ty, .. } = &call_node.children[0].kind {
-            Some((name, ty))
-        } else if let ClangNodeKind::ImplicitCastExpr { .. } = &call_node.children[0].kind {
-            // Look inside the cast
-            call_node.children[0].children.iter().find_map(|c| {
-                if let ClangNodeKind::DeclRefExpr { name, ty, .. } = &c.kind {
-                    Some((name, ty))
-                } else {
-                    None
-                }
-            })
-        } else {
-            None
-        };
+        let decl_ref =
+            if let ClangNodeKind::DeclRefExpr { name, ty, .. } = &call_node.children[0].kind {
+                Some((name, ty))
+            } else if let ClangNodeKind::ImplicitCastExpr { .. } = &call_node.children[0].kind {
+                // Look inside the cast
+                call_node.children[0].children.iter().find_map(|c| {
+                    if let ClangNodeKind::DeclRefExpr { name, ty, .. } = &c.kind {
+                        Some((name, ty))
+                    } else {
+                        None
+                    }
+                })
+            } else {
+                None
+            };
 
         if let Some((fn_name, fn_type)) = decl_ref {
             // Check if this function name corresponds to a function template
             if let Some(template_info) = self.fn_template_definitions.get(fn_name).cloned() {
                 // Extract concrete type arguments from the instantiated function type
-                if let CppType::Function { return_type, params, .. } = fn_type {
+                if let CppType::Function {
+                    return_type,
+                    params,
+                    ..
+                } = fn_type
+                {
                     // Build type substitution map by comparing template param patterns with instantiated types
                     // For example, if template has (T* a, T* b) and instantiated is (int*, int*),
                     // we need to extract T = int, not T = int*
-                    let type_args: Vec<String> = template_info.template_params.iter()
+                    let type_args: Vec<String> = template_info
+                        .template_params
+                        .iter()
                         .enumerate()
                         .map(|(i, param_name)| {
                             // Find the template parameter pattern and instantiated type
-                            let (template_param_ty, instantiated_ty) = if i < template_info.params.len() && i < params.len() {
-                                (&template_info.params[i].1, &params[i])
-                            } else if matches!(&template_info.return_type, CppType::TemplateParam { .. }) {
-                                (&template_info.return_type, return_type.as_ref())
-                            } else {
-                                // Fallback: use instantiated param directly
-                                if i < params.len() {
-                                    return params[i].to_rust_type_str();
+                            let (template_param_ty, instantiated_ty) =
+                                if i < template_info.params.len() && i < params.len() {
+                                    (&template_info.params[i].1, &params[i])
+                                } else if matches!(
+                                    &template_info.return_type,
+                                    CppType::TemplateParam { .. }
+                                ) {
+                                    (&template_info.return_type, return_type.as_ref())
                                 } else {
-                                    return return_type.to_rust_type_str();
-                                }
-                            };
+                                    // Fallback: use instantiated param directly
+                                    if i < params.len() {
+                                        return params[i].to_rust_type_str();
+                                    } else {
+                                        return return_type.to_rust_type_str();
+                                    }
+                                };
                             // Extract the template parameter from the pattern
                             extract_template_arg(template_param_ty, instantiated_ty, param_name)
                         })
@@ -1240,17 +1244,16 @@ impl AstCodeGen {
 
                     // Generate a mangled name for the instantiation (e.g., "add_i32")
                     // Sanitize type args for use in function names (replace * with ptr, spaces, etc.)
-                    let sanitized_args: Vec<String> = type_args.iter()
+                    let sanitized_args: Vec<String> = type_args
+                        .iter()
                         .map(|a| sanitize_type_for_fn_name(a))
                         .collect();
                     let mangled_name = format!("{}_{}", fn_name, sanitized_args.join("_"));
 
                     // Store the instantiation if not already present
                     if !self.pending_fn_instantiations.contains_key(&mangled_name) {
-                        self.pending_fn_instantiations.insert(
-                            mangled_name,
-                            (fn_name.clone(), type_args),
-                        );
+                        self.pending_fn_instantiations
+                            .insert(mangled_name, (fn_name.clone(), type_args));
                     }
                 }
             }
@@ -1320,7 +1323,8 @@ impl AstCodeGen {
     ) {
         // Skip template DEFINITIONS that have unresolved type parameters.
         // Only generate structs for actual instantiations with concrete types.
-        if inst_name.contains("_Tp") || inst_name.contains("_Alloc")
+        if inst_name.contains("_Tp")
+            || inst_name.contains("_Alloc")
             || inst_name.contains("type-parameter-")
         {
             return;
@@ -1469,9 +1473,7 @@ impl AstCodeGen {
                 }
             }
             CppType::Reference {
-                referent,
-                is_const,
-                ..
+                referent, is_const, ..
             } => {
                 // Convert references to raw pointers for struct fields
                 // (Rust struct fields can't have references without lifetime parameters)
@@ -1653,7 +1655,9 @@ impl AstCodeGen {
             if *count > 0 {
                 pname = format!("{}_{}", pname, *count);
             }
-            *param_name_counts.get_mut(&sanitize_identifier(param_name)).unwrap_or(&mut 0) += 1;
+            *param_name_counts
+                .get_mut(&sanitize_identifier(param_name))
+                .unwrap_or(&mut 0) += 1;
             param_strs.push(format!("{}: {}", pname, rust_ty));
         }
 
@@ -1665,9 +1669,7 @@ impl AstCodeGen {
             "/// Instantiated with: [{}]",
             type_args.join(", ")
         ));
-        self.writeln(&format!(
-            "#[inline]"
-        ));
+        self.writeln(&format!("#[inline]"));
         self.writeln(&format!(
             "pub fn {}({}){} {{",
             mangled_name,
@@ -1751,7 +1753,10 @@ impl AstCodeGen {
                         } else {
                             // No initializer, need a default value
                             let default_val = Self::get_default_value_for_type(&rust_ty);
-                            self.writeln(&format!("let mut {}: {} = {};", var_name, rust_ty, default_val));
+                            self.writeln(&format!(
+                                "let mut {}: {} = {};",
+                                var_name, rust_ty, default_val
+                            ));
                         }
                     }
                 }
@@ -3070,7 +3075,10 @@ impl AstCodeGen {
             "_Args",
             "_Elements___",
         ] {
-            self.writeln(&format!("pub type {} = std::ffi::c_void;", placeholder_type));
+            self.writeln(&format!(
+                "pub type {} = std::ffi::c_void;",
+                placeholder_type
+            ));
         }
         self.writeln("");
 
@@ -3454,7 +3462,10 @@ impl AstCodeGen {
         let ret_str = if *return_type == CppType::Void {
             String::new()
         } else {
-            format!(" -> {}", Self::sanitize_return_type(&return_type.to_rust_type_str()))
+            format!(
+                " -> {}",
+                Self::sanitize_return_type(&return_type.to_rust_type_str())
+            )
         };
 
         self.writeln(&format!(
@@ -3477,7 +3488,8 @@ impl AstCodeGen {
         let rust_name = CppType::Named(name.to_string()).to_rust_type_str();
 
         // Skip template DEFINITIONS that have unresolved type parameters
-        if name.contains("_Tp") || name.contains("_Alloc")
+        if name.contains("_Tp")
+            || name.contains("_Alloc")
             || name.contains("type-parameter-")
             || name.contains("type_parameter_")
         {
@@ -3518,10 +3530,7 @@ impl AstCodeGen {
         if let Some(vtable_info) = self.vtables.get(name).cloned() {
             if vtable_info.base_class.is_none() {
                 // This is a root polymorphic class - add vtable pointer as first field
-                self.writeln(&format!(
-                    "pub __vtable: *const {}_vtable,",
-                    rust_name
-                ));
+                self.writeln(&format!("pub __vtable: *const {}_vtable,", rust_name));
             }
         }
 
@@ -3905,11 +3914,15 @@ impl AstCodeGen {
                         if ns_name == "_LIBCPP_ABI_NAMESPACE" {
                             self.writeln("/// libc++ constant evaluation check (always returns false at runtime)");
                             self.writeln("#[inline]");
-                            self.writeln("pub fn __libcpp_is_constant_evaluated() -> bool { false }");
+                            self.writeln(
+                                "pub fn __libcpp_is_constant_evaluated() -> bool { false }",
+                            );
                             self.writeln("");
                             self.writeln("/// swap function stub");
                             self.writeln("#[inline]");
-                            self.writeln("pub fn swap<T>(a: &mut T, b: &mut T) { std::mem::swap(a, b); }");
+                            self.writeln(
+                                "pub fn swap<T>(a: &mut T, b: &mut T) { std::mem::swap(a, b); }",
+                            );
                             self.writeln("");
                             self.writeln("/// move function stub  ");
                             self.writeln("#[inline]");
@@ -4026,7 +4039,10 @@ impl AstCodeGen {
                         if *value_type == CppType::Void {
                             return String::new();
                         }
-                        return format!(" -> {}", Self::sanitize_return_type(&value_type.to_rust_type_str()));
+                        return format!(
+                            " -> {}",
+                            Self::sanitize_return_type(&value_type.to_rust_type_str())
+                        );
                     }
                     CoroutineKind::Generator => {
                         // Generators should return impl Iterator<Item=T>
@@ -4047,7 +4063,10 @@ impl AstCodeGen {
         if *return_type == CppType::Void {
             String::new()
         } else {
-            format!(" -> {}", Self::sanitize_return_type(&return_type.to_rust_type_str()))
+            format!(
+                " -> {}",
+                Self::sanitize_return_type(&return_type.to_rust_type_str())
+            )
         }
     }
 
@@ -4582,7 +4601,8 @@ impl AstCodeGen {
         // Template definitions use names like "vector<_Tp, _Alloc>" or contain type-parameter-X-X.
         // We should only generate structs for actual instantiations like "vector<int>".
         // Clang presents template definitions with dependent type parameter names.
-        if name.contains("_Tp") || name.contains("_Alloc")
+        if name.contains("_Tp")
+            || name.contains("_Alloc")
             || name.contains("type-parameter-")
             || name.contains("type_parameter_")
             || (name.contains('<') && (name.contains("_T>") || name.contains("_T,")))
@@ -4648,10 +4668,7 @@ impl AstCodeGen {
         if let Some(vtable_info) = self.vtables.get(name).cloned() {
             if vtable_info.base_class.is_none() {
                 // This is a root polymorphic class - add vtable pointer as first field
-                self.writeln(&format!(
-                    "pub __vtable: *const {}_vtable,",
-                    rust_name
-                ));
+                self.writeln(&format!("pub __vtable: *const {}_vtable,", rust_name));
             }
         }
 
@@ -4917,10 +4934,7 @@ impl AstCodeGen {
                         // Root polymorphic class - set vtable directly
                         self.writeln("Self {");
                         self.indent += 1;
-                        self.writeln(&format!(
-                            "__vtable: &{}_VTABLE,",
-                            sanitized.to_uppercase()
-                        ));
+                        self.writeln(&format!("__vtable: &{}_VTABLE,", sanitized.to_uppercase()));
                         self.writeln("..Default::default()");
                         self.indent -= 1;
                         self.writeln("}");
@@ -4959,10 +4973,17 @@ impl AstCodeGen {
             // These are called by derived classes but may not have definitions in headers
             if name == "logic_error" || name == "runtime_error" {
                 // Check if new_1 was generated (has definition)
-                let has_new_1 = self.current_struct_methods.get("new_1").copied().unwrap_or(0) > 0;
+                let has_new_1 = self
+                    .current_struct_methods
+                    .get("new_1")
+                    .copied()
+                    .unwrap_or(0)
+                    > 0;
                 if !has_new_1 {
                     self.writeln("");
-                    self.writeln("/// Stub constructor for string argument (libc++ exception class)");
+                    self.writeln(
+                        "/// Stub constructor for string argument (libc++ exception class)",
+                    );
                     self.writeln("pub fn new_1(_s: &std::ffi::c_void) -> Self {");
                     self.indent += 1;
                     self.writeln("Default::default()");
@@ -4970,10 +4991,17 @@ impl AstCodeGen {
                     self.writeln("}");
                 }
                 // Check if new_1_1 was generated
-                let has_new_1_1 = self.current_struct_methods.get("new_1_1").copied().unwrap_or(0) > 0;
+                let has_new_1_1 = self
+                    .current_struct_methods
+                    .get("new_1_1")
+                    .copied()
+                    .unwrap_or(0)
+                    > 0;
                 if !has_new_1_1 {
                     self.writeln("");
-                    self.writeln("/// Stub constructor for const char* argument (libc++ exception class)");
+                    self.writeln(
+                        "/// Stub constructor for const char* argument (libc++ exception class)",
+                    );
                     self.writeln("pub fn new_1_1(_s: *const i8) -> Self {");
                     self.indent += 1;
                     self.writeln("Default::default()");
@@ -5468,7 +5496,9 @@ impl AstCodeGen {
         self.writeln("pub __type_id: u64,");
         self.writeln("/// Number of entries in __base_type_ids array");
         self.writeln("pub __base_count: usize,");
-        self.writeln("/// Array of base class type IDs (includes self, ordered from derived to base)");
+        self.writeln(
+            "/// Array of base class type IDs (includes self, ordered from derived to base)",
+        );
         self.writeln("pub __base_type_ids: &'static [u64],");
 
         // Generate function pointer field for each virtual method
@@ -5496,10 +5526,7 @@ impl AstCodeGen {
             };
 
             if return_type == "()" {
-                self.writeln(&format!(
-                    "pub {}: unsafe fn({}),",
-                    method_name, all_params
-                ));
+                self.writeln(&format!("pub {}: unsafe fn({}),", method_name, all_params));
             } else {
                 self.writeln(&format!(
                     "pub {}: unsafe fn({}) -> {},",
@@ -6537,9 +6564,7 @@ impl AstCodeGen {
     /// or a Named type that is a typedef to a function pointer
     fn is_function_pointer_variable(node: &ClangNode) -> bool {
         match &node.kind {
-            ClangNodeKind::DeclRefExpr { ty, .. } => {
-                Self::is_function_pointer_type_or_typedef(ty)
-            }
+            ClangNodeKind::DeclRefExpr { ty, .. } => Self::is_function_pointer_type_or_typedef(ty),
             ClangNodeKind::Unknown(_) | ClangNodeKind::ImplicitCastExpr { .. } => {
                 // Look through wrapper nodes (but not FunctionToPointerDecay)
                 node.children.iter().any(Self::is_function_pointer_variable)
@@ -6551,7 +6576,9 @@ impl AstCodeGen {
     /// Check if a type is a function pointer or a typedef that resolves to one
     fn is_function_pointer_type_or_typedef(ty: &CppType) -> bool {
         match ty {
-            CppType::Pointer { pointee, .. } => matches!(pointee.as_ref(), CppType::Function { .. }),
+            CppType::Pointer { pointee, .. } => {
+                matches!(pointee.as_ref(), CppType::Function { .. })
+            }
             CppType::Named(name) => {
                 // Check for common function pointer typedef patterns
                 // In C++, typedef void (*Handler)(int) creates a named type
@@ -6559,12 +6586,33 @@ impl AstCodeGen {
                 // where we generate Option<fn(...)> for function pointers
                 // These will typically be all uppercase or PascalCase names
                 // that aren't primitive types
-                !matches!(name.as_str(),
-                    "bool" | "char" | "int" | "long" | "short" | "float" | "double"
-                    | "i8" | "i16" | "i32" | "i64" | "i128"
-                    | "u8" | "u16" | "u32" | "u64" | "u128"
-                    | "f32" | "f64" | "isize" | "usize"
-                    | "size_t" | "ptrdiff_t" | "intptr_t" | "uintptr_t"
+                !matches!(
+                    name.as_str(),
+                    "bool"
+                        | "char"
+                        | "int"
+                        | "long"
+                        | "short"
+                        | "float"
+                        | "double"
+                        | "i8"
+                        | "i16"
+                        | "i32"
+                        | "i64"
+                        | "i128"
+                        | "u8"
+                        | "u16"
+                        | "u32"
+                        | "u64"
+                        | "u128"
+                        | "f32"
+                        | "f64"
+                        | "isize"
+                        | "usize"
+                        | "size_t"
+                        | "ptrdiff_t"
+                        | "intptr_t"
+                        | "uintptr_t"
                 ) && (
                     // Check if name ends with common function pointer typedef conventions
                     name.ends_with("Fn") ||
@@ -7398,7 +7446,9 @@ impl AstCodeGen {
                         .unwrap_or(false);
 
                     // Check if this is a derived polymorphic class that needs vtable set after construction
-                    let is_derived_polymorphic = self.vtables.get(struct_name)
+                    let is_derived_polymorphic = self
+                        .vtables
+                        .get(struct_name)
                         .map(|v| v.base_class.is_some())
                         .unwrap_or(false);
 
@@ -7965,7 +8015,9 @@ impl AstCodeGen {
                         // For pointers: check if null
                         // For bool: check if false
                         let break_cond = match ty {
-                            CppType::Pointer { .. } => format!("if {}.is_null() {{ break; }}", var_name),
+                            CppType::Pointer { .. } => {
+                                format!("if {}.is_null() {{ break; }}", var_name)
+                            }
                             CppType::Bool => format!("if !{} {{ break; }}", var_name),
                             _ => format!("if {} == 0 {{ break; }}", var_name),
                         };
@@ -8414,16 +8466,25 @@ impl AstCodeGen {
                             let rust_type = ty.to_rust_type_str();
                             // Check if this is a cast to a non-primitive type (struct)
                             // Non-primitive types can't use `as` for conversion
-                            let is_primitive = matches!(ty,
-                                CppType::Int { .. } | CppType::Short { .. } |
-                                CppType::Long { .. } | CppType::LongLong { .. } |
-                                CppType::Char { .. } | CppType::Float | CppType::Double |
-                                CppType::Bool | CppType::Pointer { .. }
-                            ) || rust_type.starts_with("i") || rust_type.starts_with("u") ||
-                                rust_type.starts_with("f") || rust_type == "bool" ||
-                                rust_type.starts_with("*");
+                            let is_primitive = matches!(
+                                ty,
+                                CppType::Int { .. }
+                                    | CppType::Short { .. }
+                                    | CppType::Long { .. }
+                                    | CppType::LongLong { .. }
+                                    | CppType::Char { .. }
+                                    | CppType::Float
+                                    | CppType::Double
+                                    | CppType::Bool
+                                    | CppType::Pointer { .. }
+                            ) || rust_type.starts_with("i")
+                                || rust_type.starts_with("u")
+                                || rust_type.starts_with("f")
+                                || rust_type == "bool"
+                                || rust_type.starts_with("*");
                             // Check if inner is a zero literal (possibly with type suffix)
-                            let is_zero_literal = inner == "0" || inner.starts_with("0i") || inner.starts_with("0u");
+                            let is_zero_literal =
+                                inner == "0" || inner.starts_with("0i") || inner.starts_with("0u");
                             if !is_primitive && is_zero_literal {
                                 // Casting 0 to a struct type - use zeroed() instead
                                 format!("unsafe {{ std::mem::zeroed::<{}>() }}", rust_type)
@@ -8974,27 +9035,43 @@ impl AstCodeGen {
                     // Check if this is a function template instantiation call
                     // If so, we need to use the mangled instantiation name
                     // (the instantiation was already collected during collect_template_info)
-                    if let CppType::Function { params, return_type, .. } = ty {
+                    if let CppType::Function {
+                        params,
+                        return_type,
+                        ..
+                    } = ty
+                    {
                         if let Some(template_info) = self.fn_template_definitions.get(name) {
                             // Build the mangled name using template param extraction
-                            let type_args: Vec<String> = template_info.template_params.iter()
+                            let type_args: Vec<String> = template_info
+                                .template_params
+                                .iter()
                                 .enumerate()
                                 .map(|(i, param_name)| {
-                                    let (template_param_ty, instantiated_ty) = if i < template_info.params.len() && i < params.len() {
-                                        (&template_info.params[i].1, &params[i])
-                                    } else if matches!(&template_info.return_type, CppType::TemplateParam { .. }) {
-                                        (&template_info.return_type, return_type.as_ref())
-                                    } else {
-                                        if i < params.len() {
-                                            return params[i].to_rust_type_str();
+                                    let (template_param_ty, instantiated_ty) =
+                                        if i < template_info.params.len() && i < params.len() {
+                                            (&template_info.params[i].1, &params[i])
+                                        } else if matches!(
+                                            &template_info.return_type,
+                                            CppType::TemplateParam { .. }
+                                        ) {
+                                            (&template_info.return_type, return_type.as_ref())
                                         } else {
-                                            return return_type.to_rust_type_str();
-                                        }
-                                    };
-                                    extract_template_arg(template_param_ty, instantiated_ty, param_name)
+                                            if i < params.len() {
+                                                return params[i].to_rust_type_str();
+                                            } else {
+                                                return return_type.to_rust_type_str();
+                                            }
+                                        };
+                                    extract_template_arg(
+                                        template_param_ty,
+                                        instantiated_ty,
+                                        param_name,
+                                    )
                                 })
                                 .collect();
-                            let sanitized_args: Vec<String> = type_args.iter()
+                            let sanitized_args: Vec<String> = type_args
+                                .iter()
                                 .map(|a| sanitize_type_for_fn_name(a))
                                 .collect();
                             let mangled_name = format!("{}_{}", name, sanitized_args.join("_"));
@@ -9924,7 +10001,8 @@ impl AstCodeGen {
                         if let Some(ref qual_class) = qualified_base_class {
                             // Look up the base class in current class's hierarchy
                             if let Some(ref current_class) = self.current_class {
-                                let base_access = self.get_base_access_for_class(current_class, qual_class);
+                                let base_access =
+                                    self.get_base_access_for_class(current_class, qual_class);
                                 match base_access {
                                     BaseAccess::DirectField(field) if !field.is_empty() => {
                                         format!("{}.{}", self_name, field)
@@ -9935,7 +10013,7 @@ impl AstCodeGen {
                                     BaseAccess::VirtualPtr(field) => {
                                         format!("unsafe {{ (*{}.{}) }}", self_name, field)
                                     }
-                                    _ => self_name
+                                    _ => self_name,
                                 }
                             } else {
                                 self_name
@@ -10169,16 +10247,25 @@ impl AstCodeGen {
                             let rust_type = ty.to_rust_type_str();
                             // Check if this is a cast to a non-primitive type (struct)
                             // Non-primitive types can't use `as` for conversion
-                            let is_primitive = matches!(ty,
-                                CppType::Int { .. } | CppType::Short { .. } |
-                                CppType::Long { .. } | CppType::LongLong { .. } |
-                                CppType::Char { .. } | CppType::Float | CppType::Double |
-                                CppType::Bool | CppType::Pointer { .. }
-                            ) || rust_type.starts_with("i") || rust_type.starts_with("u") ||
-                                rust_type.starts_with("f") || rust_type == "bool" ||
-                                rust_type.starts_with("*");
+                            let is_primitive = matches!(
+                                ty,
+                                CppType::Int { .. }
+                                    | CppType::Short { .. }
+                                    | CppType::Long { .. }
+                                    | CppType::LongLong { .. }
+                                    | CppType::Char { .. }
+                                    | CppType::Float
+                                    | CppType::Double
+                                    | CppType::Bool
+                                    | CppType::Pointer { .. }
+                            ) || rust_type.starts_with("i")
+                                || rust_type.starts_with("u")
+                                || rust_type.starts_with("f")
+                                || rust_type == "bool"
+                                || rust_type.starts_with("*");
                             // Check if inner is a zero literal (possibly with type suffix)
-                            let is_zero_literal = inner == "0" || inner.starts_with("0i") || inner.starts_with("0u");
+                            let is_zero_literal =
+                                inner == "0" || inner.starts_with("0i") || inner.starts_with("0u");
                             if !is_primitive && is_zero_literal {
                                 // Casting 0 to a struct type - use zeroed() instead
                                 format!("unsafe {{ std::mem::zeroed::<{}>() }}", rust_type)
@@ -10411,7 +10498,10 @@ impl AstCodeGen {
                 let ret_str = if *return_type == CppType::Void {
                     String::new()
                 } else {
-                    format!(" -> {}", Self::sanitize_return_type(&return_type.to_rust_type_str()))
+                    format!(
+                        " -> {}",
+                        Self::sanitize_return_type(&return_type.to_rust_type_str())
+                    )
                 };
 
                 // Find the body (CompoundStmt child)
@@ -10590,10 +10680,7 @@ impl AstCodeGen {
                                 )
                             } else {
                                 // Non-polymorphic, just do static cast
-                                format!(
-                                    "{} as {} {}",
-                                    expr, ptr_prefix, inner_type
-                                )
+                                format!("{} as {} {}", expr, ptr_prefix, inner_type)
                             }
                         }
                         _ => {
@@ -10644,7 +10731,11 @@ impl AstCodeGen {
                 if let ClangNodeKind::Unknown(kind_str) = &node.kind {
                     self.log_diagnostic(
                         "Unknown node",
-                        &format!("kind='{}', has_children={}", kind_str, !node.children.is_empty()),
+                        &format!(
+                            "kind='{}', has_children={}",
+                            kind_str,
+                            !node.children.is_empty()
+                        ),
                     );
                 }
 
@@ -10858,8 +10949,8 @@ fn sanitize_identifier(name: &str) -> String {
         .replace(' ', "")
         .replace(
             [
-                '%', '=', '&', '|', '!', '*', '/', '+', '-', '[', ']', '(', ')', ',', ';', '.', ':',
-                '^', '~', '"', '\'', '#', '@', '$', '?', '\\',
+                '%', '=', '&', '|', '!', '*', '/', '+', '-', '[', ']', '(', ')', ',', ';', '.',
+                ':', '^', '~', '"', '\'', '#', '@', '$', '?', '\\',
             ],
             "_",
         );
@@ -10890,8 +10981,8 @@ fn sanitize_static_member_name(name: &str) -> String {
         .replace(' ', "")
         .replace(
             [
-                '%', '=', '&', '|', '!', '*', '/', '+', '-', '[', ']', '(', ')', ',', ';', '.', ':',
-                '^', '~', '"', '\'', '#', '@', '$', '?', '\\',
+                '%', '=', '&', '|', '!', '*', '/', '+', '-', '[', ']', '(', ')', ',', ';', '.',
+                ':', '^', '~', '"', '\'', '#', '@', '$', '?', '\\',
             ],
             "_",
         );
@@ -10963,17 +11054,36 @@ fn extract_template_arg(pattern: &CppType, instantiated: &CppType, _param_name: 
         // Direct template parameter: T → instantiated type
         (CppType::TemplateParam { .. }, ty) => ty.to_rust_type_str(),
         // Pointer to template param: T* → extract pointee from instantiated
-        (CppType::Pointer { pointee: p_pattern, .. }, CppType::Pointer { pointee: inst_pointee, .. }) => {
-            extract_template_arg(p_pattern, inst_pointee, _param_name)
-        }
+        (
+            CppType::Pointer {
+                pointee: p_pattern, ..
+            },
+            CppType::Pointer {
+                pointee: inst_pointee,
+                ..
+            },
+        ) => extract_template_arg(p_pattern, inst_pointee, _param_name),
         // Reference to template param: T& → extract referent from instantiated
-        (CppType::Reference { referent: r_pattern, .. }, CppType::Reference { referent: inst_referent, .. }) => {
-            extract_template_arg(r_pattern, inst_referent, _param_name)
-        }
+        (
+            CppType::Reference {
+                referent: r_pattern,
+                ..
+            },
+            CppType::Reference {
+                referent: inst_referent,
+                ..
+            },
+        ) => extract_template_arg(r_pattern, inst_referent, _param_name),
         // Array of template param: T[N] → extract element from instantiated
-        (CppType::Array { element: e_pattern, .. }, CppType::Array { element: inst_element, .. }) => {
-            extract_template_arg(e_pattern, inst_element, _param_name)
-        }
+        (
+            CppType::Array {
+                element: e_pattern, ..
+            },
+            CppType::Array {
+                element: inst_element,
+                ..
+            },
+        ) => extract_template_arg(e_pattern, inst_element, _param_name),
         // Pattern doesn't match structure - use instantiated type directly
         _ => instantiated.to_rust_type_str(),
     }

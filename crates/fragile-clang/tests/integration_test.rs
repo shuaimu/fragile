@@ -1232,10 +1232,7 @@ fn test_e2e_dynamic_cast() {
     let (exit_code, _stdout, _stderr) =
         transpile_compile_run(source, "e2e_dynamic_cast.cpp").expect("E2E test failed");
 
-    assert_eq!(
-        exit_code, 0,
-        "dynamic_cast should work correctly with RTTI"
-    );
+    assert_eq!(exit_code, 0, "dynamic_cast should work correctly with RTTI");
 }
 
 /// Test function template instantiation.
