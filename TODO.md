@@ -748,13 +748,20 @@ Get `std::vector<int>` working end-to-end.
       - Iterators with op_index but no op_deref get synthesized op_deref stub
       - Note: Works for user-defined iterators; libc++ internal types (e.g., _Bit_iterator)
         go through a different code path that doesn't track method names
-    - Remaining 16 errors:
-      - Template instantiation (2) - push_back expects &c_void, got i32
-      - Hash function overload (2) - _Hash_impl::hash wrong arg count
-      - Iterator deref (2) - missing op_deref method on _Bit_iterator (returns _Bit_reference proxy)
-      - numeric_limits placeholders (8) - min/max/lowest return wrong types
-      - Method on placeholder (1) - is_equal on c_void
-      - Non-primitive cast (2) - integer as _Sp___rep
+    - Fixed: Struct field references converted to raw pointers (Rust requires lifetimes) ✅ 2026-01-24
+      - to_rust_type_str_for_field() converts &T → *const T, &mut T → *mut T
+      - Applied to struct generation, union generation, and template instantiations
+    - Fixed: Hash function loop variable name conflict (byte → b) ✅ 2026-01-24
+    - **Progress**: Errors reduced from 2091 → 25 (98.8% reduction) ✅ 2026-01-24
+    - Remaining 25 errors:
+      - Template array size (3) - _Size, _PaddingSize not resolved
+      - Invalid while syntax (1) - incorrect post-increment expression in loop
+      - Missing traits (7) - bad_allocTrait, logic_errorTrait, runtime_errorTrait
+      - Missing types (5) - value_type, __impl___type_name_t, std___libcpp_refstring, etc.
+      - Missing functions (4) - __hash, __string_to_type_name, swap, __libcpp_is_constant_evaluated
+      - Module resolution (2) - _LIBCPP_ABI_NAMESPACE functions/values
+      - Invalid identifier (2) - __c, r#move
+      - Union type (1) - long path union type not found
   - [ ] **23.8.3** Execute and verify exit code - BLOCKED on 23.8.2
   - [ ] **23.8.4** Add iteration test: `for (int x : v) { ... }` - BLOCKED
   - [ ] **23.8.5** Add resize/reserve/capacity tests - BLOCKED
