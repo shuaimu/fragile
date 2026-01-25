@@ -6315,3 +6315,376 @@ fn test_e2e_merge_sort() {
         "Merge sort should sort arrays correctly"
     );
 }
+
+/// E2E test: Expression Tree with polymorphic nodes
+/// Tests: virtual methods, inheritance, polymorphism, tree structure
+#[test]
+fn test_e2e_expression_tree() {
+    let source = r#"
+        // Expression Tree with polymorphic Expr nodes
+        // Tests: virtual evaluate(), inheritance hierarchy, recursive evaluation
+
+        struct Expr {
+            virtual int evaluate() const = 0;
+            virtual ~Expr() {}
+        };
+
+        struct Number : Expr {
+            int value;
+
+            Number(int v) : value(v) {}
+
+            int evaluate() const override {
+                return value;
+            }
+        };
+
+        struct BinaryExpr : Expr {
+            Expr* left;
+            Expr* right;
+
+            BinaryExpr(Expr* l, Expr* r) : left(l), right(r) {}
+
+            ~BinaryExpr() {
+                delete left;
+                delete right;
+            }
+        };
+
+        struct Add : BinaryExpr {
+            Add(Expr* l, Expr* r) : BinaryExpr(l, r) {}
+
+            int evaluate() const override {
+                return left->evaluate() + right->evaluate();
+            }
+        };
+
+        struct Sub : BinaryExpr {
+            Sub(Expr* l, Expr* r) : BinaryExpr(l, r) {}
+
+            int evaluate() const override {
+                return left->evaluate() - right->evaluate();
+            }
+        };
+
+        struct Mul : BinaryExpr {
+            Mul(Expr* l, Expr* r) : BinaryExpr(l, r) {}
+
+            int evaluate() const override {
+                return left->evaluate() * right->evaluate();
+            }
+        };
+
+        struct Div : BinaryExpr {
+            Div(Expr* l, Expr* r) : BinaryExpr(l, r) {}
+
+            int evaluate() const override {
+                int rval = right->evaluate();
+                if (rval == 0) return 0;  // Avoid division by zero
+                return left->evaluate() / rval;
+            }
+        };
+
+        struct Negate : Expr {
+            Expr* operand;
+
+            Negate(Expr* op) : operand(op) {}
+
+            ~Negate() {
+                delete operand;
+            }
+
+            int evaluate() const override {
+                return -operand->evaluate();
+            }
+        };
+
+        int main() {
+            // Test 1: Simple number
+            Number* n1 = new Number(42);
+            if (n1->evaluate() != 42) return 1;
+            delete n1;
+
+            // Test 2: Simple addition (3 + 5 = 8)
+            Add* add1 = new Add(new Number(3), new Number(5));
+            if (add1->evaluate() != 8) return 2;
+            delete add1;
+
+            // Test 3: Simple subtraction (10 - 4 = 6)
+            Sub* sub1 = new Sub(new Number(10), new Number(4));
+            if (sub1->evaluate() != 6) return 3;
+            delete sub1;
+
+            // Test 4: Simple multiplication (6 * 7 = 42)
+            Mul* mul1 = new Mul(new Number(6), new Number(7));
+            if (mul1->evaluate() != 42) return 4;
+            delete mul1;
+
+            // Test 5: Simple division (20 / 4 = 5)
+            Div* div1 = new Div(new Number(20), new Number(4));
+            if (div1->evaluate() != 5) return 5;
+            delete div1;
+
+            // Test 6: Negation (-5 = -5)
+            Negate* neg1 = new Negate(new Number(5));
+            if (neg1->evaluate() != -5) return 6;
+            delete neg1;
+
+            // Test 7: Nested expression ((2 + 3) * 4 = 20)
+            Expr* expr1 = new Mul(new Add(new Number(2), new Number(3)), new Number(4));
+            if (expr1->evaluate() != 20) return 7;
+            delete expr1;
+
+            // Test 8: Complex expression ((10 - 2) * (3 + 1) = 32)
+            Expr* expr2 = new Mul(
+                new Sub(new Number(10), new Number(2)),
+                new Add(new Number(3), new Number(1))
+            );
+            if (expr2->evaluate() != 32) return 8;
+            delete expr2;
+
+            // Test 9: Deeply nested ((1 + 2) + (3 + 4)) = 10
+            Expr* expr3 = new Add(
+                new Add(new Number(1), new Number(2)),
+                new Add(new Number(3), new Number(4))
+            );
+            if (expr3->evaluate() != 10) return 9;
+            delete expr3;
+
+            // Test 10: Mix of all operators ((12 / 4) + (3 * 2) - 1 = 8)
+            // = 3 + 6 - 1 = 8
+            Expr* expr4 = new Sub(
+                new Add(
+                    new Div(new Number(12), new Number(4)),
+                    new Mul(new Number(3), new Number(2))
+                ),
+                new Number(1)
+            );
+            if (expr4->evaluate() != 8) return 10;
+            delete expr4;
+
+            // Test 11: With negation (-(5 + 3) = -8)
+            Expr* expr5 = new Negate(new Add(new Number(5), new Number(3)));
+            if (expr5->evaluate() != -8) return 11;
+            delete expr5;
+
+            // Test 12: Division by zero handling
+            Div* div2 = new Div(new Number(10), new Number(0));
+            if (div2->evaluate() != 0) return 12;  // Should return 0
+            delete div2;
+
+            return 0;  // Success
+        }
+    "#;
+
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_expression_tree.cpp").expect("E2E test failed");
+
+    assert_eq!(
+        exit_code, 0,
+        "Expression tree should evaluate correctly"
+    );
+}
+
+/// E2E test: Simple Object Pool
+/// Tests: fixed-size arrays, reuse patterns, index management
+#[test]
+fn test_e2e_object_pool() {
+    let source = r#"
+        // Simple Object Pool for fixed-size allocation
+        // Tests: pool-based allocation, reuse, index tracking
+
+        struct PoolObject {
+            int id;
+            int data;
+            bool active;
+        };
+
+        struct ObjectPool {
+            PoolObject objects[16];  // Fixed capacity
+            int freeList[16];        // Stack of free indices
+            int freeCount;           // Number of free slots
+            int nextId;              // For assigning unique IDs
+
+            void init() {
+                for (int i = 0; i < 16; i++) {
+                    objects[i].id = -1;
+                    objects[i].data = 0;
+                    objects[i].active = false;
+                    freeList[i] = 15 - i;  // Stack: 15, 14, 13, ... 0
+                }
+                freeCount = 16;
+                nextId = 1;
+            }
+
+            int capacity() const {
+                return 16;
+            }
+
+            int available() const {
+                return freeCount;
+            }
+
+            int inUse() const {
+                return 16 - freeCount;
+            }
+
+            // Allocate an object, returns index or -1 if full
+            int allocate(int data) {
+                if (freeCount == 0) return -1;
+                freeCount--;
+                int idx = freeList[freeCount];
+                objects[idx].id = nextId++;
+                objects[idx].data = data;
+                objects[idx].active = true;
+                return idx;
+            }
+
+            // Deallocate an object by index
+            bool deallocate(int idx) {
+                if (idx < 0 || idx >= 16) return false;
+                if (!objects[idx].active) return false;
+                objects[idx].active = false;
+                objects[idx].id = -1;
+                freeList[freeCount] = idx;
+                freeCount++;
+                return true;
+            }
+
+            // Get object by index
+            PoolObject* get(int idx) {
+                if (idx < 0 || idx >= 16) return nullptr;
+                if (!objects[idx].active) return nullptr;
+                return &objects[idx];
+            }
+
+            // Find object by ID
+            int findById(int id) {
+                for (int i = 0; i < 16; i++) {
+                    if (objects[i].active && objects[i].id == id) {
+                        return i;
+                    }
+                }
+                return -1;
+            }
+
+            // Sum of all active data values
+            int sumData() const {
+                int sum = 0;
+                for (int i = 0; i < 16; i++) {
+                    if (objects[i].active) {
+                        sum += objects[i].data;
+                    }
+                }
+                return sum;
+            }
+
+            // Count active objects
+            int countActive() const {
+                int count = 0;
+                for (int i = 0; i < 16; i++) {
+                    if (objects[i].active) {
+                        count++;
+                    }
+                }
+                return count;
+            }
+
+            void reset() {
+                for (int i = 0; i < 16; i++) {
+                    objects[i].id = -1;
+                    objects[i].data = 0;
+                    objects[i].active = false;
+                    freeList[i] = 15 - i;
+                }
+                freeCount = 16;
+            }
+        };
+
+        int main() {
+            ObjectPool pool;
+            pool.init();
+
+            // Test 1: Initial state
+            if (pool.capacity() != 16) return 1;
+            if (pool.available() != 16) return 2;
+            if (pool.inUse() != 0) return 3;
+
+            // Test 2: Allocate one object
+            int idx1 = pool.allocate(100);
+            if (idx1 < 0) return 4;
+            if (pool.available() != 15) return 5;
+            if (pool.inUse() != 1) return 6;
+
+            // Test 3: Access allocated object
+            PoolObject* obj1 = pool.get(idx1);
+            if (!obj1) return 7;
+            if (obj1->data != 100) return 8;
+            if (obj1->id != 1) return 9;  // First ID should be 1
+
+            // Test 4: Allocate more objects
+            int idx2 = pool.allocate(200);
+            int idx3 = pool.allocate(300);
+            if (idx2 < 0 || idx3 < 0) return 10;
+            if (pool.inUse() != 3) return 11;
+            if (pool.sumData() != 600) return 12;  // 100 + 200 + 300
+
+            // Test 5: Find by ID
+            int foundIdx = pool.findById(2);  // Second object
+            if (foundIdx != idx2) return 13;
+            PoolObject* obj2 = pool.get(foundIdx);
+            if (obj2->data != 200) return 14;
+
+            // Test 6: Deallocate middle object
+            if (!pool.deallocate(idx2)) return 15;
+            if (pool.inUse() != 2) return 16;
+            if (pool.get(idx2) != nullptr) return 17;  // Should be inactive
+            if (pool.sumData() != 400) return 18;  // 100 + 300
+
+            // Test 7: Reallocate - should reuse freed slot
+            int idx4 = pool.allocate(400);
+            if (idx4 < 0) return 19;
+            // The freed slot should be reused (idx2)
+            if (pool.inUse() != 3) return 20;
+            if (pool.sumData() != 800) return 21;  // 100 + 300 + 400
+
+            // Test 8: Fill pool completely
+            pool.reset();
+            for (int i = 0; i < 16; i++) {
+                int idx = pool.allocate(i * 10);
+                if (idx < 0) return 22;
+            }
+            if (pool.available() != 0) return 23;
+            if (pool.inUse() != 16) return 24;
+
+            // Test 9: Allocation should fail when full
+            int idx5 = pool.allocate(999);
+            if (idx5 != -1) return 25;  // Should return -1
+
+            // Test 10: Deallocate all
+            for (int i = 0; i < 16; i++) {
+                pool.deallocate(i);
+            }
+            if (pool.available() != 16) return 26;
+            if (pool.inUse() != 0) return 27;
+            if (pool.countActive() != 0) return 28;
+
+            // Test 11: Invalid deallocate
+            if (pool.deallocate(-1)) return 29;
+            if (pool.deallocate(20)) return 30;
+
+            // Test 12: Get from empty slot
+            if (pool.get(0) != nullptr) return 31;
+
+            return 0;  // Success
+        }
+    "#;
+
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_object_pool.cpp").expect("E2E test failed");
+
+    assert_eq!(
+        exit_code, 0,
+        "Object pool should work correctly"
+    );
+}
