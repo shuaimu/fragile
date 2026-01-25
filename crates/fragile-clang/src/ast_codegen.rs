@@ -7047,6 +7047,68 @@ impl AstCodeGen {
         }
     }
 
+    /// Check if a string expression contains an assignment (= but not == or !=)
+    fn is_assignment_expr(expr: &str) -> bool {
+        // Look for " = " that isn't part of "==" or "!=" or "+=" or "-=" etc.
+        let bytes = expr.as_bytes();
+        for i in 0..bytes.len() {
+            if bytes[i] == b'=' {
+                // Check it's not ==
+                if i + 1 < bytes.len() && bytes[i + 1] == b'=' {
+                    continue;
+                }
+                // Check it's not !=
+                if i > 0 && bytes[i - 1] == b'!' {
+                    continue;
+                }
+                // Check it's not +=, -=, *=, /=, %=, |=, &=, ^=, <<=, >>=
+                if i > 0
+                    && (bytes[i - 1] == b'+'
+                        || bytes[i - 1] == b'-'
+                        || bytes[i - 1] == b'*'
+                        || bytes[i - 1] == b'/'
+                        || bytes[i - 1] == b'%'
+                        || bytes[i - 1] == b'|'
+                        || bytes[i - 1] == b'&'
+                        || bytes[i - 1] == b'^'
+                        || bytes[i - 1] == b'<'
+                        || bytes[i - 1] == b'>')
+                {
+                    continue;
+                }
+                // Check it's not <=, >=
+                if i + 1 < bytes.len() && bytes[i + 1] == b'>' {
+                    continue;
+                }
+                // Found a simple assignment
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Extract the LHS of an assignment expression
+    /// For "*__a = expr", returns "__a" (the variable being assigned)
+    fn extract_assignment_lhs(expr: &str) -> Option<String> {
+        // Find the first " = " that's a simple assignment
+        if let Some(idx) = expr.find(" = ") {
+            let lhs = expr[..idx].trim();
+            // If LHS is a dereference like "*__a", return the variable "__a"
+            if lhs.starts_with('*') {
+                let var = lhs[1..].trim();
+                // Make sure it's a simple variable, not a complex expression
+                if var.chars().all(|c| c.is_alphanumeric() || c == '_') {
+                    return Some(var.to_string());
+                }
+            }
+            // If LHS is a simple variable, return it
+            if lhs.chars().all(|c| c.is_alphanumeric() || c == '_') {
+                return Some(format!("&mut {}", lhs));
+            }
+        }
+        None
+    }
+
     /// Check if a statement is a member field assignment (for filtering in ctor body)
     fn is_member_assignment(node: &ClangNode) -> bool {
         match &node.kind {
@@ -9198,6 +9260,21 @@ impl AstCodeGen {
                             // Assignment operator overloads already return &mut Self
                             // Don't add another &mut
                             expr
+                        } else if Self::is_assignment_expr(&expr) {
+                            // In C++, assignment expressions return the LHS
+                            // In Rust, assignment is a statement that returns ()
+                            // Split into statement + return reference
+                            // e.g., "*__a = expr" -> "*__a = expr; __a" (the mutable ref to __a)
+                            if let Some(lhs) = Self::extract_assignment_lhs(&expr) {
+                                // Write the assignment as a statement first
+                                self.writeln(&format!("{};", expr));
+                                // Return the reference to LHS
+                                lhs
+                            } else {
+                                // Fallback: just add the reference
+                                let prefix = if *is_const { "&" } else { "&mut " };
+                                format!("{}{}", prefix, expr)
+                            }
                         } else if expr.starts_with("unsafe { ") && expr.ends_with(" }") {
                             // If expression is an unsafe block like "unsafe { *ptr }",
                             // put the & or &mut inside: "unsafe { &mut *ptr }"
