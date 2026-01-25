@@ -757,8 +757,9 @@ impl AstCodeGen {
         // For locale_facet_vtable, add struct update syntax to fill in missing fields
         // This is needed because locale_facet_vtable has many optional virtual method fields
         // that different facet classes may or may not override
+        // Use LOCALE_FACET_VTABLE_DEFAULT for const compatibility in static initializers
         if sanitized_root == "locale_facet" {
-            self.writeln("..Default::default()");
+            self.writeln("..LOCALE_FACET_VTABLE_DEFAULT");
         }
 
         self.indent -= 1;
@@ -4145,42 +4146,43 @@ impl AstCodeGen {
         self.writeln("unsafe fn __locale_facet_vtable_stub_do_compare(_: *const locale_facet, _: *const i32, _: *const i32, _: *const i32, _: *const i32) -> i32 { 0 }");
         self.writeln("unsafe fn __locale_facet_vtable_stub_do_transform(_: *const locale_facet, _: *const i32, _: *const i32) -> std::ffi::c_void { unsafe { std::mem::zeroed() } }");
         self.writeln("static __LOCALE_FACET_VTABLE_DEFAULT_BASE_IDS: [u64; 0] = [];");
+        // Provide a const default instance for static initialization
+        self.writeln("pub static LOCALE_FACET_VTABLE_DEFAULT: locale_facet_vtable = locale_facet_vtable {");
+        self.writeln("    __type_id: 0,");
+        self.writeln("    __base_count: 0,");
+        self.writeln("    __base_type_ids: &__LOCALE_FACET_VTABLE_DEFAULT_BASE_IDS,");
+        self.writeln("    __destructor: __locale_facet_vtable_stub_destructor,");
+        self.writeln("    do_out: __locale_facet_vtable_stub_do_out,");
+        self.writeln("    do_in: __locale_facet_vtable_stub_do_in,");
+        self.writeln("    do_unshift: __locale_facet_vtable_stub_do_unshift,");
+        self.writeln("    do_encoding: __locale_facet_vtable_stub_do_encoding,");
+        self.writeln("    do_always_noconv: __locale_facet_vtable_stub_do_always_noconv,");
+        self.writeln("    do_length: __locale_facet_vtable_stub_do_length,");
+        self.writeln("    do_max_length: __locale_facet_vtable_stub_do_max_length,");
+        self.writeln("    do_decimal_point: __locale_facet_vtable_stub_do_decimal_point,");
+        self.writeln("    do_thousands_sep: __locale_facet_vtable_stub_do_thousands_sep,");
+        self.writeln("    do_grouping: __locale_facet_vtable_stub_do_grouping,");
+        self.writeln("    do_truename: __locale_facet_vtable_stub_do_truename,");
+        self.writeln("    do_falsename: __locale_facet_vtable_stub_do_falsename,");
+        self.writeln("    do_toupper: __locale_facet_vtable_stub_do_toupper,");
+        self.writeln("    do_toupper_1: __locale_facet_vtable_stub_do_toupper_1,");
+        self.writeln("    do_tolower: __locale_facet_vtable_stub_do_tolower,");
+        self.writeln("    do_tolower_1: __locale_facet_vtable_stub_do_tolower_1,");
+        self.writeln("    do_widen: __locale_facet_vtable_stub_do_widen,");
+        self.writeln("    do_widen_1: __locale_facet_vtable_stub_do_widen_1,");
+        self.writeln("    do_narrow: __locale_facet_vtable_stub_do_narrow,");
+        self.writeln("    do_narrow_1: __locale_facet_vtable_stub_do_narrow_1,");
+        self.writeln("    do_is: __locale_facet_vtable_stub_do_is,");
+        self.writeln("    do_is_1: __locale_facet_vtable_stub_do_is_1,");
+        self.writeln("    do_scan_is: __locale_facet_vtable_stub_do_scan_is,");
+        self.writeln("    do_scan_not: __locale_facet_vtable_stub_do_scan_not,");
+        self.writeln("    do_compare: __locale_facet_vtable_stub_do_compare,");
+        self.writeln("    do_transform: __locale_facet_vtable_stub_do_transform,");
+        self.writeln("};");
         self.writeln("impl Default for locale_facet_vtable {");
-        self.writeln("    fn default() -> Self {");
-        self.writeln("        Self {");
-        self.writeln("            __type_id: 0,");
-        self.writeln("            __base_count: 0,");
-        self.writeln("            __base_type_ids: &__LOCALE_FACET_VTABLE_DEFAULT_BASE_IDS,");
-        self.writeln("            __destructor: __locale_facet_vtable_stub_destructor,");
-        self.writeln("            do_out: __locale_facet_vtable_stub_do_out,");
-        self.writeln("            do_in: __locale_facet_vtable_stub_do_in,");
-        self.writeln("            do_unshift: __locale_facet_vtable_stub_do_unshift,");
-        self.writeln("            do_encoding: __locale_facet_vtable_stub_do_encoding,");
-        self.writeln("            do_always_noconv: __locale_facet_vtable_stub_do_always_noconv,");
-        self.writeln("            do_length: __locale_facet_vtable_stub_do_length,");
-        self.writeln("            do_max_length: __locale_facet_vtable_stub_do_max_length,");
-        self.writeln("            do_decimal_point: __locale_facet_vtable_stub_do_decimal_point,");
-        self.writeln("            do_thousands_sep: __locale_facet_vtable_stub_do_thousands_sep,");
-        self.writeln("            do_grouping: __locale_facet_vtable_stub_do_grouping,");
-        self.writeln("            do_truename: __locale_facet_vtable_stub_do_truename,");
-        self.writeln("            do_falsename: __locale_facet_vtable_stub_do_falsename,");
-        self.writeln("            do_toupper: __locale_facet_vtable_stub_do_toupper,");
-        self.writeln("            do_toupper_1: __locale_facet_vtable_stub_do_toupper_1,");
-        self.writeln("            do_tolower: __locale_facet_vtable_stub_do_tolower,");
-        self.writeln("            do_tolower_1: __locale_facet_vtable_stub_do_tolower_1,");
-        self.writeln("            do_widen: __locale_facet_vtable_stub_do_widen,");
-        self.writeln("            do_widen_1: __locale_facet_vtable_stub_do_widen_1,");
-        self.writeln("            do_narrow: __locale_facet_vtable_stub_do_narrow,");
-        self.writeln("            do_narrow_1: __locale_facet_vtable_stub_do_narrow_1,");
-        self.writeln("            do_is: __locale_facet_vtable_stub_do_is,");
-        self.writeln("            do_is_1: __locale_facet_vtable_stub_do_is_1,");
-        self.writeln("            do_scan_is: __locale_facet_vtable_stub_do_scan_is,");
-        self.writeln("            do_scan_not: __locale_facet_vtable_stub_do_scan_not,");
-        self.writeln("            do_compare: __locale_facet_vtable_stub_do_compare,");
-        self.writeln("            do_transform: __locale_facet_vtable_stub_do_transform,");
-        self.writeln("        }");
-        self.writeln("    }");
+        self.writeln("    fn default() -> Self { LOCALE_FACET_VTABLE_DEFAULT }");
         self.writeln("}");
+
 
         self.writeln("#[repr(C)]");
         self.writeln("pub struct locale_facet {");
@@ -11925,12 +11927,16 @@ impl AstCodeGen {
                             // C++ allows -bool which converts bool to int then negates
                             // In Rust, we convert to logical NOT for boolean types
                             // C++ also allows negating unsigned types (two's complement)
-                            // In Rust, we use .wrapping_neg() for unsigned types
+                            // In Rust, we use .wrapping_neg() for unsigned integral types only
                             let operand_ty = Self::get_expr_type(&node.children[0]);
                             if matches!(operand_ty, Some(CppType::Bool)) {
                                 format!("!{}", operand)
-                            } else if operand_ty.as_ref().map_or(false, |t| t.is_signed() == Some(false)) {
-                                // Unsigned type - use wrapping_neg for two's complement
+                            } else if operand_ty.as_ref().map_or(false, |t| {
+                                // Only use wrapping_neg for unsigned integral types
+                                // (is_signed returns false for floats/functions too, so check is_integral)
+                                t.is_signed() == Some(false) && t.is_integral() == Some(true)
+                            }) {
+                                // Unsigned integral type - use wrapping_neg for two's complement
                                 format!("({}).wrapping_neg()", operand)
                             } else {
                                 format!("-{}", operand)
@@ -13124,12 +13130,16 @@ impl AstCodeGen {
                             // C++ allows -bool which converts bool to int then negates
                             // In Rust, we convert to logical NOT for boolean types
                             // C++ also allows negating unsigned types (two's complement)
-                            // In Rust, we use .wrapping_neg() for unsigned types
+                            // In Rust, we use .wrapping_neg() for unsigned integral types only
                             let operand_ty = Self::get_expr_type(&node.children[0]);
                             if matches!(operand_ty, Some(CppType::Bool)) {
                                 format!("!{}", operand)
-                            } else if operand_ty.as_ref().map_or(false, |t| t.is_signed() == Some(false)) {
-                                // Unsigned type - use wrapping_neg for two's complement
+                            } else if operand_ty.as_ref().map_or(false, |t| {
+                                // Only use wrapping_neg for unsigned integral types
+                                // (is_signed returns false for floats/functions too, so check is_integral)
+                                t.is_signed() == Some(false) && t.is_integral() == Some(true)
+                            }) {
+                                // Unsigned integral type - use wrapping_neg for two's complement
                                 format!("({}).wrapping_neg()", operand)
                             } else {
                                 format!("-{}", operand)
