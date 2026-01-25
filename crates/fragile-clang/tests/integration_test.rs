@@ -279,6 +279,7 @@ fn transpile_compile_run(
 /// Helper function to transpile C++ source, compile with rustc + fragile-runtime, and run.
 /// This version links against fragile-runtime for tests that need runtime support.
 /// Returns (exit_code, stdout, stderr).
+#[allow(dead_code)] // Reserved for future STL transpilation tests
 fn transpile_compile_run_with_runtime(
     cpp_source: &str,
     filename: &str,
