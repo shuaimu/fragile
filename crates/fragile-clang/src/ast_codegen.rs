@@ -4358,7 +4358,14 @@ impl AstCodeGen {
         self.writeln("pub type std_ios_base_seekdir = i32;");
         self.writeln("pub type std_ios_base = std::ffi::c_void;");
         self.writeln("pub type std_ios_base_event = i32;");
-        self.writeln("pub type union__unnamed_union_at__home_shuai_workspace_fragile_vendor_llvm_project_libcxx_include___functional_hash_h_416_5_ = std::ffi::c_void;");
+        // Union for f64 hashing - has __s (struct with __a, __b: u32) and __t (f64)
+        self.writeln("#[repr(C)] #[derive(Clone, Copy)] pub union union__unnamed_union_at__home_shuai_workspace_fragile_vendor_llvm_project_libcxx_include___functional_hash_h_416_5_ { pub __s: union__hash_f64_inner, pub __t: f64 }");
+        self.writeln("#[repr(C)] #[derive(Clone, Copy, Default)] pub struct union__hash_f64_inner { pub __a: u32, pub __b: u32 }");
+        self.writeln("impl Default for union__unnamed_union_at__home_shuai_workspace_fragile_vendor_llvm_project_libcxx_include___functional_hash_h_416_5_ { fn default() -> Self { Self { __s: Default::default() } } }");
+        // File position type stub - simple version that works without __mbstate_t
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct fpos_mbstate_t { pub __pos: i64, pub __state_count: i32, pub __state_value: u32 }");
+        self.writeln("pub type fpos___mbstate_t = fpos_mbstate_t;");
+        self.writeln("");
         // Placeholder types that need Clone/Default (can't use c_void as base for structs)
         self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct string_view;");
         self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct wstring_view;");
@@ -4385,6 +4392,53 @@ impl AstCodeGen {
         // Formatter types used as base classes - need Clone/Default
         self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct __formatter_char_char;");
         self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct __formatter_char_wchar_t;");
+        self.writeln("");
+
+        // Placeholder types and missing stubs
+        self.writeln("// Placeholder and arg bindings");
+        self.writeln("pub type __ph_1 = std::ffi::c_void;");
+        self.writeln("pub type __ph_2 = std::ffi::c_void;");
+        self.writeln("pub type __ph_3 = std::ffi::c_void;");
+        self.writeln("pub type __ph_4 = std::ffi::c_void;");
+        self.writeln("pub type __ph_5 = std::ffi::c_void;");
+        self.writeln("pub type __ph_6 = std::ffi::c_void;");
+        self.writeln("pub type __ph_7 = std::ffi::c_void;");
+        self.writeln("pub type __ph_8 = std::ffi::c_void;");
+        self.writeln("pub type __ph_9 = std::ffi::c_void;");
+        self.writeln("pub type __ph_10 = std::ffi::c_void;");
+        self.writeln("pub type __prev = std::ffi::c_void;");
+        self.writeln("pub type __short = std::ffi::c_void;");
+        self.writeln("pub type __sigset_t = u64;");
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct __scalar_hash_long_double;");
+        self.writeln("pub type __remove_cv_type_parameter_0_0_ = std::ffi::c_void;");
+        self.writeln("pub type __remove_cv_type_parameter_0_1_ = std::ffi::c_void;");
+        self.writeln("pub type std___backoff_results = std::ffi::c_void;");
+        self.writeln("pub type __split_buffer_typename_allocator_traits_type_parameter_0_1_pointer__typename_allocator_traits_type_parameter_0_1_template_rebind_alloc_typename_allocator_traits_type_parameter_0_1_pointer__std___split_buffer_pointer_layout = std::ffi::c_void;");
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct __char_traits_base_wchar_t__wint_t__static_cast_wint_t__4294967295U__;");
+        self.writeln("");
+
+        // More template and locale type stubs
+        self.writeln("// More template and locale type stubs");
+        self.writeln("pub type __output_buffer__CharT = std::ffi::c_void;");
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct numpunct_wchar_t;");
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct numpunct_char;");
+        self.writeln("pub type __next = std::ffi::c_void;");
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct mbstate_t { pub __count: i32, pub __value: u32 }");  // standalone definition
+        self.writeln("pub type __iter_swap___fn = std::ffi::c_void;");
+        self.writeln("pub type __iter_move___fn = std::ffi::c_void;");
+        self.writeln("pub type _IntT = i64;");
+        self.writeln("pub type __hash_node_type_parameter_0_0__typename_allocator_traits_type_parameter_0_3_void_pointer = std::ffi::c_void;");
+        self.writeln("pub type __hash_node_base_typename_pointer_traits_typename_allocator_traits_type_parameter_0_3_void_pointer_template_rebind___hash_node_type_parameter_0_0__typename_allocator_traits_type_parameter_0_3_void_pointer = std::ffi::c_void;");
+        self.writeln("pub type __handle = std::ffi::c_void;");
+        self.writeln("pub type __dtor_type_parameter_0_0___Traits___destructible_trait = std::ffi::c_void;");
+        self.writeln("pub type __distance = std::ffi::c_void;");
+        self.writeln("pub type __decay_type_parameter_0_0_ = std::ffi::c_void;");
+        self.writeln("pub type __decay_typename___invoke_result_type_parameter_0_2____decay_typename___invoke_result_type_parameter_0_1__type_parameter_0_0_type__type_ = std::ffi::c_void;");
+        self.writeln("pub type __decay_typename___invoke_result_type_parameter_0_1__type_parameter_0_0_type_ = std::ffi::c_void;");
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct __cxx_atomic_impl___cxx_contention_t;");
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct ctype_wchar_t;");
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct ctype_char;");
+        self.writeln("pub type __const_reference = std::ffi::c_void;");
         self.writeln("");
 
         // Format and unicode related types
