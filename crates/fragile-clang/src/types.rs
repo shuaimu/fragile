@@ -1,5 +1,16 @@
 //! C++ type representation.
 
+/// Log a type diagnostic message if FRAGILE_DIAGNOSTIC is enabled.
+/// Used for debugging type conversion issues.
+fn log_type_diagnostic(category: &str, message: &str) {
+    if std::env::var("FRAGILE_DIAGNOSTIC")
+        .map(|v| v == "1" || v.to_lowercase() == "true")
+        .unwrap_or(false)
+    {
+        eprintln!("[FRAGILE-DIAG] Type {}: {}", category, message);
+    }
+}
+
 /// Parse comma-separated template arguments, respecting nested templates.
 /// Returns a vector of trimmed argument strings.
 ///
@@ -535,7 +546,7 @@ impl CppType {
                         // e.g., std::vector<int> -> std_vector_int
                         // e.g., type-parameter-0-0 -> type_parameter_0_0
                         // Note: replace "::" first, then single ":" for line:col references
-                        cleaned
+                        let result = cleaned
                             .replace("::", "_")
                             .replace(":", "_") // Single colon in file line:col references
                             .replace("<", "_") // Convert template open bracket
@@ -554,7 +565,17 @@ impl CppType {
                             .replace("+", "_") // Template expressions (Index + 1)
                             .replace("(", "_") // Expression grouping
                             .replace(")", "_")
-                            .replace("/", "_") // File paths in anonymous union names from system headers
+                            .replace("/", "_"); // File paths in anonymous union names from system headers
+
+                        // Log diagnostic for complex type transformations
+                        if result != cleaned && (cleaned.contains('<') || cleaned.contains("::")) {
+                            log_type_diagnostic(
+                                "conversion",
+                                &format!("'{}' -> '{}'", cleaned, result),
+                            );
+                        }
+
+                        result
                     }
                 }
             }

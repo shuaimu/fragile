@@ -520,9 +520,11 @@ The critical gap is that we've never actually tested transpiling code that `#inc
     - Added `test_libcxx_vector_transpilation` in integration_test.rs
     - Uses `ClangParser::with_vendored_libcxx()`
     - Transpilation succeeds - generates 215K chars of Rust code
-  - [ ] **23.1.2** Create diagnostic mode to dump problematic AST nodes (~50 LOC)
-    - When transpiler hits Unknown node, log the Clang cursor kind value
-    - When type conversion fails, log the original C++ type spelling
+  - [x] **23.1.2** Create diagnostic mode to dump problematic AST nodes ✅ 2026-01-24
+    - Enable via FRAGILE_DIAGNOSTIC=1 environment variable
+    - Logs Unknown node kinds (e.g., `UnexposedExpr`, `TypeRef:enum std::byte`)
+    - Logs type conversion transformations for complex types
+    - [docs/dev/plan_23_1_2_diagnostic_mode.md]
   - [x] **23.1.3** Triage libc++ header complexity ✅ 2026-01-24
     - Test: `<cstddef>` - PASSES (test_libcxx_cstddef_transpilation)
     - Test: `<cstdint>` - PASSES (test_libcxx_cstdint_transpilation)

@@ -118,6 +118,9 @@ impl BitFieldGroup {
 pub struct AstCodeGen {
     output: String,
     indent: usize,
+    /// Diagnostic mode: when enabled, log problematic AST nodes and type conversions
+    /// Enable via FRAGILE_DIAGNOSTIC=1 environment variable
+    diagnostic_mode: bool,
     /// Track variable names that are declared as reference types
     ref_vars: HashSet<String>,
     /// Track variable names that are declared as pointer types
@@ -183,9 +186,15 @@ pub struct AstCodeGen {
 
 impl AstCodeGen {
     pub fn new() -> Self {
+        // Check for diagnostic mode via environment variable
+        let diagnostic_mode = std::env::var("FRAGILE_DIAGNOSTIC")
+            .map(|v| v == "1" || v.to_lowercase() == "true")
+            .unwrap_or(false);
+
         Self {
             output: String::new(),
             indent: 0,
+            diagnostic_mode,
             ref_vars: HashSet::new(),
             ptr_vars: HashSet::new(),
             arr_vars: HashSet::new(),
@@ -215,6 +224,14 @@ impl AstCodeGen {
             collected_nodes: Vec::new(),
             template_definitions: HashMap::new(),
             pending_template_instantiations: HashSet::new(),
+        }
+    }
+
+    /// Log a diagnostic message if diagnostic mode is enabled.
+    /// Used for debugging problematic AST nodes and type conversions.
+    fn log_diagnostic(&self, category: &str, message: &str) {
+        if self.diagnostic_mode {
+            eprintln!("[FRAGILE-DIAG] {}: {}", category, message);
         }
     }
 
@@ -9057,6 +9074,14 @@ impl AstCodeGen {
                 }
             }
             _ => {
+                // Log diagnostic for unknown node types
+                if let ClangNodeKind::Unknown(kind_str) = &node.kind {
+                    self.log_diagnostic(
+                        "Unknown node",
+                        &format!("kind='{}', has_children={}", kind_str, !node.children.is_empty()),
+                    );
+                }
+
                 // Fallback: try children
                 if !node.children.is_empty() {
                     self.expr_to_string(&node.children[0])
