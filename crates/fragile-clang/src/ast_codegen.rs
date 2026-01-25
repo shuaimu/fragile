@@ -13942,22 +13942,33 @@ impl AstCodeGen {
                         }
                     }
 
+                    // Check if inner expression is a binary operation - needs parentheses
+                    // to avoid precedence issues with "as" (e.g., "a | b as u8" != "(a | b) as u8")
+                    let inner_is_binary = inner_node.map_or(false, |n| {
+                        matches!(&n.kind, ClangNodeKind::BinaryOperator { .. })
+                    });
+                    let inner_wrapped = if inner_is_binary {
+                        format!("({})", inner)
+                    } else {
+                        inner
+                    };
+
                     match cast_kind {
                         CastKind::Static | CastKind::Reinterpret => {
                             // Generate Rust "as" cast
-                            format!("{} as {}", inner, rust_type)
+                            format!("{} as {}", inner_wrapped, rust_type)
                         }
                         CastKind::Const => {
                             // const_cast usually just changes mutability, pass through
-                            inner
+                            inner_wrapped
                         }
                         CastKind::Other => {
                             // For other cast kinds (primitive types), generate as cast
-                            format!("{} as {}", inner, rust_type)
+                            format!("{} as {}", inner_wrapped, rust_type)
                         }
                         _ => {
                             // For other cast kinds, generate as cast
-                            format!("{} as {}", inner, rust_type)
+                            format!("{} as {}", inner_wrapped, rust_type)
                         }
                     }
                 } else {
