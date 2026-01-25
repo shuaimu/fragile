@@ -919,7 +919,17 @@ Test against actual open-source C++ projects.
     - Fixed: Abstract class vtable generation (skip vtable for classes with pure virtual)
     - Fixed: Virtual dispatch through const pointer members (strip "const " prefix)
     - Fixed: Ternary operator condition with pointer type (convert to !ptr.is_null())
-    - json.hpp (nlohmann JSON, header-only) - TODO
+    - [x] json.hpp (nlohmann JSON, header-only) - INVESTIGATED ✅ [26:01:25]
+      - Transpilation: ✅ Succeeds (920KB header → 26K LOC Rust)
+      - Compilation: ❌ Blocked by complex template metaprogramming (~2450 errors)
+      - Fixed during investigation:
+        - Type names with `?` from conditional types → `_cond_` replacement
+        - Type names with `{}` from pack expansion → `_` replacement
+        - Skip struct generation for qualified types (std::ffi::c_void)
+        - Skip function templates with typename-prefixed return types
+        - Skip function templates with T[N] array parameters
+        - Parenthesize casts before shift operators (`(1 as u64) << X`)
+      - Remaining issues: cast-method call precedence, deep template instantiation
     - fmt (format library, mostly header-only) - TODO
   - [x] **23.11.2** Small projects (1K-5K LOC) - Partial ✅ [26:01:25]
     - [x] Binary Search Tree: recursive insert/search/traversal, tree structure

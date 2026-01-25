@@ -1453,6 +1453,12 @@ impl AstCodeGen {
         // Convert instantiation name to valid Rust identifier
         let rust_name = CppType::Named(inst_name.to_string()).to_rust_type_str();
 
+        // Skip if the rust_name is invalid (contains :: which means it's a qualified type like std::ffi::c_void)
+        // These are placeholder types that shouldn't become struct definitions
+        if rust_name.contains("::") {
+            return;
+        }
+
         // Skip if already generated
         if self.generated_structs.contains(&rust_name) {
             return;
@@ -1753,8 +1759,9 @@ impl AstCodeGen {
                 || param_str.contains("_CharT")  // Skip unresolved template params
                 || param_str.contains("__va_list_tag")  // Skip variadic internal types
                 || param_str.contains("int (")  // Skip C-style function pointer: int (*)(...)
-                || param_str.contains("void (")
-            // Skip C-style function pointer: void (*)(...)
+                || param_str.contains("void (")  // Skip C-style function pointer: void (*)(...)
+                || param_str.contains("T[")  // Skip unresolved template array param like T[N]
+                || param_str.contains(" N]")  // Skip unresolved array size
             {
                 // C-style function pointer syntax like void (*)(void *) can't be parsed by Rust
                 return;
@@ -1770,8 +1777,8 @@ impl AstCodeGen {
             || ret_type.contains("_CharT")
             || ret_type.contains("__va_list_tag")
             || ret_type.contains("__gnu_cxx::")  // Skip GCC extension types
-            || ret_type.contains("__enable_if")
-        // Skip SFINAE return types
+            || ret_type.contains("__enable_if")  // Skip SFINAE return types
+            || ret_type.contains("typename ")  // Skip C++ dependent types with typename keyword
         {
             return;
         }
@@ -10625,6 +10632,15 @@ impl AstCodeGen {
                         // This handles cases like `isize / 64i32` -> `isize / 64`
                         let left = strip_literal_suffix(&self.expr_to_string(&node.children[0]));
                         let right = strip_literal_suffix(&self.expr_to_string(&node.children[1]));
+                        // For shift operators, if left side contains `as` (a cast), we need to
+                        // parenthesize it. Otherwise Rust parses `1 as u64 << X` as `1 as (u64<<X>)`.
+                        let left = if matches!(op, BinaryOp::Shl | BinaryOp::Shr)
+                            && left.contains(" as ")
+                        {
+                            format!("({})", left)
+                        } else {
+                            left
+                        };
                         format!("{} {} {}", left, op_str, right)
                     } else {
                         let left = self.expr_to_string(&node.children[0]);
