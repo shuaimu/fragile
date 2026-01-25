@@ -4128,6 +4128,29 @@ impl AstCodeGen {
         self.writeln("pub fn __builtin_addressof<T>(x: &T) -> *const T { x as *const T }");
         self.writeln("");
 
+        // C library function stubs used by libstdc++ string conversion
+        self.writeln("// C library function stubs");
+        self.writeln("#[inline]");
+        self.writeln("pub fn strtol(_s: *const i8, _endptr: *mut *mut i8, _base: i32) -> i64 {");
+        self.indent += 1;
+        self.writeln("// Stub: just return 0 for now");
+        self.writeln("0");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("#[inline]");
+        self.writeln("pub fn strtoul(_s: *const i8, _endptr: *mut *mut i8, _base: i32) -> u64 { 0 }");
+        self.writeln("#[inline]");
+        self.writeln("pub fn strtoll(_s: *const i8, _endptr: *mut *mut i8, _base: i32) -> i64 { 0 }");
+        self.writeln("#[inline]");
+        self.writeln("pub fn strtoull(_s: *const i8, _endptr: *mut *mut i8, _base: i32) -> u64 { 0 }");
+        self.writeln("#[inline]");
+        self.writeln("pub fn strtof(_s: *const i8, _endptr: *mut *mut i8) -> f32 { 0.0 }");
+        self.writeln("#[inline]");
+        self.writeln("pub fn strtod(_s: *const i8, _endptr: *mut *mut i8) -> f64 { 0.0 }");
+        self.writeln("#[inline]");
+        self.writeln("pub fn strtold(_s: *const i8, _endptr: *mut *mut i8) -> f64 { 0.0 }");
+        self.writeln("");
+
         // fragile_runtime stub for memory allocation
         self.writeln("// fragile_runtime stub for memory allocation");
         self.writeln("pub mod fragile_runtime {");
