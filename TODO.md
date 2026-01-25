@@ -14,7 +14,7 @@ We just convert the fully-resolved AST to equivalent Rust code.
 ## Current Status
 
 **Grammar Tests**: 20/20 passing
-**E2E Tests**: 62/62 passing (2 ignored due to STL header limitations)
+**E2E Tests**: 77/77 passing (2 ignored due to STL header limitations)
 **libc++ Transpilation Tests**: 8/8 passing (cstddef, cstdint, type_traits, initializer_list, vector, cstddef_compilation, iostream, thread)
 **Runtime Linking Tests**: 2/2 passing (FILE I/O, pthread)
 **Runtime Function Mapping Tests**: 1/1 passing
@@ -1023,11 +1023,19 @@ fn call_what(e: *const exception) -> *const i8 {
   - [ ] **25.9.2** Add `__type_info: *const type_info` to vtable struct
   - [ ] **25.9.3** Implement runtime type check by walking vtable type_info chain
 
-- [ ] **25.10** Testing
-  - [ ] **25.10.1** Update existing E2E tests for virtual methods
-  - [ ] **25.10.2** Add test for deep inheritance hierarchy (A → B → C → D)
-  - [ ] **25.10.3** Add test for multiple inheritance with virtuals
-  - [ ] **25.10.4** Verify libc++ exception hierarchy compiles (bad_alloc, logic_error, etc.)
+- [x] **25.10** Testing ✅ 2026-01-25
+  - [x] **25.10.1** Update existing E2E tests for virtual methods ✅ 2026-01-25
+    - test_e2e_virtual_override passes (basic single inheritance virtual dispatch)
+    - test_e2e_dynamic_dispatch passes (base pointer polymorphism)
+  - [x] **25.10.2** Add test for deep inheritance hierarchy (A → B → C → D) ✅ 2026-01-25
+    - test_e2e_deep_inheritance: Base → Level1 → Level2 → Level3 → Level4
+    - Tests vtable path computation for deep inheritance (`__base.__base.__base.__vtable`)
+    - Tests inherited methods without override (Level4 inherits Level3's level())
+  - [x] **25.10.3** Add test for multiple inheritance with virtuals ✅ 2026-01-25
+    - test_e2e_multiple_inheritance passes (existing test covers this)
+    - test_e2e_virtual_diamond passes (diamond inheritance with virtual)
+  - [x] **25.10.4** Verify libc++ exception hierarchy compiles (bad_alloc, logic_error, etc.) ✅ 2026-01-25
+    - Fixed by vtable approach: no more missing trait errors for intermediate classes
 
 ### Why This is Better
 

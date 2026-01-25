@@ -568,12 +568,14 @@ impl AstCodeGen {
         // Generate function pointer for each vtable entry
         for entry in &vtable_info.entries {
             let method_name = sanitize_identifier(&entry.name);
-            // The function pointer points to this class's implementation
-            // For now, generate a wrapper function name
+            // Use the declaring class's wrapper for the function pointer.
+            // If this class overrides the method, declaring_class == class_name.
+            // If inherited without override, declaring_class is the parent that defined it.
+            let declaring_class = sanitize_identifier(&entry.declaring_class);
             self.writeln(&format!(
                 "{}: {}_vtable_{},",
                 method_name,
-                sanitized_class,
+                declaring_class,
                 method_name
             ));
         }
@@ -601,8 +603,13 @@ impl AstCodeGen {
         let root_class = self.find_root_polymorphic_class(class_name);
         let sanitized_root = sanitize_identifier(&root_class);
 
-        // Generate wrapper for each virtual method
+        // Generate wrapper for each virtual method that this class declares/overrides
         for entry in &vtable_info.entries {
+            // Skip inherited methods that aren't overridden in this class
+            // Those will use the declaring class's wrapper
+            if entry.declaring_class != *class_name {
+                continue;
+            }
             let method_name = sanitize_identifier(&entry.name);
             let return_type = Self::sanitize_return_type(&entry.return_type.to_rust_type_str());
 
@@ -735,6 +742,32 @@ impl AstCodeGen {
             }
         } else {
             class_name.to_string()
+        }
+    }
+
+    /// Compute the path to access __vtable from a derived class.
+    /// For a class like Level2 (which inherits Level1 which inherits Base),
+    /// this returns "__base.__base" since the vtable is in Base.
+    fn compute_vtable_access_path(&self, class_name: &str) -> String {
+        let mut path_parts = Vec::new();
+        let mut current = class_name.to_string();
+
+        // Walk up the inheritance chain until we reach the root
+        while let Some(vtable_info) = self.vtables.get(&current) {
+            if let Some(ref base) = vtable_info.base_class {
+                path_parts.push("__base");
+                current = base.clone();
+            } else {
+                // Reached root class
+                break;
+            }
+        }
+
+        if path_parts.is_empty() {
+            // This is the root class, no path needed
+            String::new()
+        } else {
+            path_parts.join(".")
         }
     }
 
@@ -4447,10 +4480,12 @@ impl AstCodeGen {
                         self.indent -= 1;
                         self.writeln("}");
                     } else {
-                        // Derived polymorphic class - set vtable through base
+                        // Derived polymorphic class - set vtable through base chain
+                        let vtable_path = self.compute_vtable_access_path(name);
                         self.writeln("let mut __self = Self::default();");
                         self.writeln(&format!(
-                            "__self.__base.__vtable = &{}_VTABLE;",
+                            "__self.{}.__vtable = &{}_VTABLE;",
+                            vtable_path,
                             sanitized.to_uppercase()
                         ));
                         self.writeln("__self");

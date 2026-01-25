@@ -1073,6 +1073,71 @@ fn test_e2e_dynamic_dispatch() {
     );
 }
 
+/// Test deep inheritance hierarchy (A → B → C → D) with virtual methods.
+/// Verifies vtable dispatch works through multiple inheritance levels.
+#[test]
+fn test_e2e_deep_inheritance() {
+    let source = r#"
+        // Root class with virtual method
+        class Base {
+        public:
+            virtual int level() { return 0; }
+        };
+
+        // Level 1 - overrides Base::level
+        class Level1 : public Base {
+        public:
+            int level() override { return 1; }
+        };
+
+        // Level 2 - overrides Level1::level
+        class Level2 : public Level1 {
+        public:
+            int level() override { return 2; }
+        };
+
+        // Level 3 - overrides Level2::level
+        class Level3 : public Level2 {
+        public:
+            int level() override { return 3; }
+        };
+
+        // Level 4 - does NOT override, inherits Level3::level
+        class Level4 : public Level3 {
+        public:
+            // No override - should still return 3
+        };
+
+        int getLevel(Base* b) {
+            return b->level();
+        }
+
+        int main() {
+            Base b;
+            Level1 l1;
+            Level2 l2;
+            Level3 l3;
+            Level4 l4;
+
+            // Test virtual dispatch at each level
+            int sum = getLevel(&b) + getLevel(&l1) + getLevel(&l2) + getLevel(&l3) + getLevel(&l4);
+            // Expected: 0 + 1 + 2 + 3 + 3 = 9
+            if (sum == 9) {
+                return 0;
+            }
+            return 1;
+        }
+    "#;
+
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_deep_inheritance.cpp").expect("E2E test failed");
+
+    assert_eq!(
+        exit_code, 0,
+        "Deep inheritance virtual dispatch should work correctly"
+    );
+}
+
 /// Test function returning struct (rvalue handling).
 #[test]
 fn test_e2e_function_returning_struct() {
