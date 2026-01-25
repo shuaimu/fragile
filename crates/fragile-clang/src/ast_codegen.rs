@@ -3111,6 +3111,141 @@ impl AstCodeGen {
         self.writeln("");
         self.generated_structs.insert("std_vector_int".to_string());
 
+        // std::string stub implementation
+        self.writeln("// std::string stub implementation");
+        self.writeln("#[repr(C)]");
+        self.writeln("#[derive(Default)]");
+        self.writeln("pub struct std_string {");
+        self.indent += 1;
+        self.writeln("_data: *mut i8,");
+        self.writeln("_size: usize,");
+        self.writeln("_capacity: usize,");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("");
+        self.writeln("impl std_string {");
+        self.indent += 1;
+        // Default constructor
+        self.writeln("pub fn new_0() -> Self {");
+        self.indent += 1;
+        self.writeln("Self { _data: std::ptr::null_mut(), _size: 0, _capacity: 0 }");
+        self.indent -= 1;
+        self.writeln("}");
+        // Constructor from C string
+        self.writeln("pub fn new_1(s: *const i8) -> Self {");
+        self.indent += 1;
+        self.writeln("if s.is_null() {");
+        self.indent += 1;
+        self.writeln("return Self::new_0();");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("let mut len = 0usize;");
+        self.writeln("unsafe { while *s.add(len) != 0 { len += 1; } }");
+        self.writeln("let cap = len + 1;");
+        self.writeln("let layout = std::alloc::Layout::array::<i8>(cap).unwrap();");
+        self.writeln("let data = unsafe { std::alloc::alloc(layout) as *mut i8 };");
+        self.writeln("unsafe { std::ptr::copy_nonoverlapping(s, data, len); }");
+        self.writeln("unsafe { *data.add(len) = 0; }");
+        self.writeln("Self { _data: data, _size: len, _capacity: cap }");
+        self.indent -= 1;
+        self.writeln("}");
+        // c_str() - returns null-terminated string
+        self.writeln("pub fn c_str(&self) -> *const i8 {");
+        self.indent += 1;
+        self.writeln("if self._data.is_null() {");
+        self.indent += 1;
+        self.writeln("b\"\\0\".as_ptr() as *const i8");
+        self.indent -= 1;
+        self.writeln("} else {");
+        self.indent += 1;
+        self.writeln("self._data as *const i8");
+        self.indent -= 1;
+        self.writeln("}");
+        self.indent -= 1;
+        self.writeln("}");
+        // size() and length()
+        self.writeln("pub fn size(&self) -> usize { self._size }");
+        self.writeln("pub fn length(&self) -> usize { self._size }");
+        // empty()
+        self.writeln("pub fn empty(&self) -> bool { self._size == 0 }");
+        // push_back(char)
+        self.writeln("pub fn push_back(&mut self, c: i8) {");
+        self.indent += 1;
+        self.writeln("if self._size + 1 >= self._capacity {");
+        self.indent += 1;
+        self.writeln("let new_cap = if self._capacity == 0 { 16 } else { self._capacity * 2 };");
+        self.writeln("let new_layout = std::alloc::Layout::array::<i8>(new_cap).unwrap();");
+        self.writeln("let new_data = unsafe { std::alloc::alloc(new_layout) as *mut i8 };");
+        self.writeln("if !self._data.is_null() {");
+        self.indent += 1;
+        self.writeln("unsafe { std::ptr::copy_nonoverlapping(self._data, new_data, self._size); }");
+        self.writeln("let old_layout = std::alloc::Layout::array::<i8>(self._capacity).unwrap();");
+        self.writeln("unsafe { std::alloc::dealloc(self._data as *mut u8, old_layout); }");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("self._data = new_data;");
+        self.writeln("self._capacity = new_cap;");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("unsafe { *self._data.add(self._size) = c; }");
+        self.writeln("self._size += 1;");
+        self.writeln("unsafe { *self._data.add(self._size) = 0; }");
+        self.indent -= 1;
+        self.writeln("}");
+        // append(const char*)
+        self.writeln("pub fn append(&mut self, s: *const i8) -> &mut Self {");
+        self.indent += 1;
+        self.writeln("if s.is_null() { return self; }");
+        self.writeln("let mut len = 0usize;");
+        self.writeln("unsafe { while *s.add(len) != 0 { len += 1; } }");
+        self.writeln("for i in 0..len {");
+        self.indent += 1;
+        self.writeln("self.push_back(unsafe { *s.add(i) });");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("self");
+        self.indent -= 1;
+        self.writeln("}");
+        // operator+=(const char*)
+        self.writeln("pub fn op_plus_assign(&mut self, s: *const i8) -> &mut Self {");
+        self.indent += 1;
+        self.writeln("self.append(s)");
+        self.indent -= 1;
+        self.writeln("}");
+        // clear()
+        self.writeln("pub fn clear(&mut self) {");
+        self.indent += 1;
+        self.writeln("self._size = 0;");
+        self.writeln("if !self._data.is_null() {");
+        self.indent += 1;
+        self.writeln("unsafe { *self._data = 0; }");
+        self.indent -= 1;
+        self.writeln("}");
+        self.indent -= 1;
+        self.writeln("}");
+        // capacity()
+        self.writeln("pub fn capacity(&self) -> usize { self._capacity }");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("");
+        // Implement Drop to free memory
+        self.writeln("impl Drop for std_string {");
+        self.indent += 1;
+        self.writeln("fn drop(&mut self) {");
+        self.indent += 1;
+        self.writeln("if !self._data.is_null() && self._capacity > 0 {");
+        self.indent += 1;
+        self.writeln("let layout = std::alloc::Layout::array::<i8>(self._capacity).unwrap();");
+        self.writeln("unsafe { std::alloc::dealloc(self._data as *mut u8, layout); }");
+        self.indent -= 1;
+        self.writeln("}");
+        self.indent -= 1;
+        self.writeln("}");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("");
+        self.generated_structs.insert("std_string".to_string());
+
         // Template placeholder types that appear in libc++ code
         // These are unresolved template parameters that we need stubs for
         for placeholder_type in [

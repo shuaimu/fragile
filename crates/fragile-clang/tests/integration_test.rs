@@ -1383,6 +1383,190 @@ fn test_e2e_function_template_multiple_params() {
     );
 }
 
+/// Test std_string stub operations directly in generated Rust code.
+/// This verifies the std_string stub in the preamble works correctly.
+/// Note: This test compiles hand-written Rust that uses the stub, rather than
+/// transpiling C++ std::string usage, because full std::string transpilation
+/// requires complete libc++ support (which is still in progress).
+#[test]
+fn test_e2e_std_string_stub() {
+    use std::fs;
+    use std::process::Command;
+
+    // Write Rust code that directly uses the std_string stub from preamble
+    let rust_code = r#"
+#![allow(dead_code)]
+#![allow(unused_variables)]
+#![allow(unused_mut)]
+
+// std::string stub implementation (same as generated in preamble)
+#[repr(C)]
+#[derive(Default)]
+pub struct std_string {
+    _data: *mut i8,
+    _size: usize,
+    _capacity: usize,
+}
+
+impl std_string {
+    pub fn new_0() -> Self {
+        Self { _data: std::ptr::null_mut(), _size: 0, _capacity: 0 }
+    }
+    pub fn new_1(s: *const i8) -> Self {
+        if s.is_null() {
+            return Self::new_0();
+        }
+        let mut len = 0usize;
+        unsafe { while *s.add(len) != 0 { len += 1; } }
+        let cap = len + 1;
+        let layout = std::alloc::Layout::array::<i8>(cap).unwrap();
+        let data = unsafe { std::alloc::alloc(layout) as *mut i8 };
+        unsafe { std::ptr::copy_nonoverlapping(s, data, len); }
+        unsafe { *data.add(len) = 0; }
+        Self { _data: data, _size: len, _capacity: cap }
+    }
+    pub fn c_str(&self) -> *const i8 {
+        if self._data.is_null() {
+            b"\0".as_ptr() as *const i8
+        } else {
+            self._data as *const i8
+        }
+    }
+    pub fn size(&self) -> usize { self._size }
+    pub fn length(&self) -> usize { self._size }
+    pub fn empty(&self) -> bool { self._size == 0 }
+    pub fn push_back(&mut self, c: i8) {
+        if self._size + 1 >= self._capacity {
+            let new_cap = if self._capacity == 0 { 16 } else { self._capacity * 2 };
+            let new_layout = std::alloc::Layout::array::<i8>(new_cap).unwrap();
+            let new_data = unsafe { std::alloc::alloc(new_layout) as *mut i8 };
+            if !self._data.is_null() {
+                unsafe { std::ptr::copy_nonoverlapping(self._data, new_data, self._size); }
+                let old_layout = std::alloc::Layout::array::<i8>(self._capacity).unwrap();
+                unsafe { std::alloc::dealloc(self._data as *mut u8, old_layout); }
+            }
+            self._data = new_data;
+            self._capacity = new_cap;
+        }
+        unsafe { *self._data.add(self._size) = c; }
+        self._size += 1;
+        unsafe { *self._data.add(self._size) = 0; }
+    }
+    pub fn append(&mut self, s: *const i8) -> &mut Self {
+        if s.is_null() { return self; }
+        let mut len = 0usize;
+        unsafe { while *s.add(len) != 0 { len += 1; } }
+        for i in 0..len {
+            self.push_back(unsafe { *s.add(i) });
+        }
+        self
+    }
+    pub fn clear(&mut self) {
+        self._size = 0;
+        if !self._data.is_null() {
+            unsafe { *self._data = 0; }
+        }
+    }
+    pub fn capacity(&self) -> usize { self._capacity }
+}
+
+impl Drop for std_string {
+    fn drop(&mut self) {
+        if !self._data.is_null() && self._capacity > 0 {
+            let layout = std::alloc::Layout::array::<i8>(self._capacity).unwrap();
+            unsafe { std::alloc::dealloc(self._data as *mut u8, layout); }
+        }
+    }
+}
+
+fn main() {
+    // Test 1: Default constructor creates empty string
+    let mut s = std_string::new_0();
+    if !s.empty() { std::process::exit(1); }
+    if s.size() != 0 { std::process::exit(2); }
+
+    // Test 2: Push back characters
+    s.push_back(b'H' as i8);
+    s.push_back(b'i' as i8);
+    if s.size() != 2 { std::process::exit(3); }
+    if s.empty() { std::process::exit(4); }
+
+    // Test 3: c_str() returns correct data
+    let cs = s.c_str();
+    unsafe {
+        if *cs.add(0) != b'H' as i8 { std::process::exit(5); }
+        if *cs.add(1) != b'i' as i8 { std::process::exit(6); }
+        if *cs.add(2) != 0 { std::process::exit(7); }  // null terminator
+    }
+
+    // Test 4: clear() empties the string
+    s.clear();
+    if !s.empty() { std::process::exit(8); }
+    if s.size() != 0 { std::process::exit(9); }
+
+    // Test 5: length() is alias for size()
+    s.push_back(b'X' as i8);
+    if s.length() != 1 { std::process::exit(10); }
+
+    // Test 6: Constructor from C string
+    let hello = b"Hello\0".as_ptr() as *const i8;
+    let s2 = std_string::new_1(hello);
+    if s2.size() != 5 { std::process::exit(11); }
+    unsafe {
+        let cs2 = s2.c_str();
+        if *cs2.add(0) != b'H' as i8 { std::process::exit(12); }
+        if *cs2.add(4) != b'o' as i8 { std::process::exit(13); }
+    }
+
+    // Test 7: append()
+    let mut s3 = std_string::new_0();
+    let world = b"World\0".as_ptr() as *const i8;
+    s3.append(world);
+    if s3.size() != 5 { std::process::exit(14); }
+
+    std::process::exit(0);  // All tests passed
+}
+"#;
+
+    // Create temp directory
+    let temp_dir = std::env::temp_dir().join("fragile_e2e_tests");
+    fs::create_dir_all(&temp_dir).expect("Failed to create temp dir");
+
+    // Write Rust source
+    let rs_path = temp_dir.join("e2e_std_string_stub.rs");
+    fs::write(&rs_path, rust_code).expect("Failed to write Rust source");
+
+    // Compile with rustc
+    let binary_path = temp_dir.join("e2e_std_string_stub");
+    let compile_output = Command::new("rustc")
+        .arg(&rs_path)
+        .arg("-o")
+        .arg(&binary_path)
+        .arg("--edition=2021")
+        .output()
+        .expect("Failed to run rustc");
+
+    if !compile_output.status.success() {
+        panic!(
+            "rustc compilation failed:\nstdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&compile_output.stdout),
+            String::from_utf8_lossy(&compile_output.stderr)
+        );
+    }
+
+    // Run the binary
+    let run_output = Command::new(&binary_path)
+        .output()
+        .expect("Failed to run binary");
+
+    let exit_code = run_output.status.code().unwrap_or(-1);
+    assert_eq!(
+        exit_code, 0,
+        "std_string stub operations should work correctly (exit code: {})",
+        exit_code
+    );
+}
+
 /// Test function returning struct (rvalue handling).
 #[test]
 fn test_e2e_function_returning_struct() {
