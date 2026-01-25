@@ -10707,6 +10707,24 @@ impl AstCodeGen {
                             left
                         };
                         format!("{} {} {}", left, op_str, right)
+                    } else if matches!(op, BinaryOp::Add | BinaryOp::Sub) && left_is_pointer {
+                        // Pointer + integer or pointer - integer -> ptr.add(n) or ptr.sub(n)
+                        // Note: pointer - pointer is handled earlier with offset_from
+                        let left_str = self.expr_to_string(&node.children[0]);
+                        let right_str =
+                            strip_literal_suffix(&self.expr_to_string(&node.children[1]));
+                        let method = if matches!(op, BinaryOp::Add) {
+                            "add"
+                        } else {
+                            "sub"
+                        };
+                        // Wrap complex expressions in parens before casting to usize
+                        let right_needs_parens = right_str.contains(' ') || right_str.contains("as ");
+                        if right_needs_parens {
+                            format!("unsafe {{ {}.{}(({}) as usize) }}", left_str, method, right_str)
+                        } else {
+                            format!("unsafe {{ {}.{}({} as usize) }}", left_str, method, right_str)
+                        }
                     } else if matches!(
                         op,
                         BinaryOp::Add
