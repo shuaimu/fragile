@@ -948,7 +948,7 @@ Test against actual open-source C++ projects.
     - [x] LRU cache: key-value pairs, struct array initialization ✅ 2026-01-25
       - Fixed: Large array default initialization uses zeroed() instead of Default::default()
       - Fixed: Skip #[derive(Default)] for structs with large arrays of non-primitives
-    - [ ] Tokenizer: char classification, state machine (ignored - enum comparison with literals)
+    - [x] Tokenizer: char classification, state machine ✅ 2026-01-25
     - Fixed: Address-of pointer subscript (&arr[i] → arr.add(i as usize))
     - Fixed: Switch case with const int/char values (evaluate DeclRefExpr, CharacterLiteral)
     - Fixed: Array initialization prefers InitListExpr over array size literal
