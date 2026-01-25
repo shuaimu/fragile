@@ -8825,8 +8825,9 @@ impl AstCodeGen {
                                 self.skip_literal_suffix = true;
                                 let expr = self.expr_to_string(init_node);
                                 self.skip_literal_suffix = false;
-                                // If expression is unsupported, fall back to default
-                                if expr.contains("unsupported") {
+                                // If expression is unsupported or errored, fall back to default
+                                // Common error patterns: "unsupported", "/* call error */"
+                                if expr.contains("unsupported") || expr.contains("/* call error */") {
                                     format!(" = {}", default_value_for_type(ty))
                                 } else if is_ref {
                                     // Reference initialization: add &mut or & prefix
