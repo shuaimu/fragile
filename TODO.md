@@ -855,12 +855,13 @@ Test against actual open-source C++ projects.
 2. Code formatting doesn't match `cargo fmt` style
 3. Clippy warnings (currently non-blocking but noisy)
 
-- [ ] **24.1** Fix CI workflow configuration
-  - [ ] **24.1.1** Remove `test-nightly` job that references non-existent `fragile-rustc-driver`
+- [x] **24.1** Fix CI workflow configuration ✅ 2026-01-24
+  - [x] **24.1.1** Remove `test-nightly` job that references non-existent `fragile-rustc-driver` ✅ 2026-01-24
     - File: `.github/workflows/ci.yml`
     - The `fragile-rustc-driver` crate was removed; CI still tries to build it
-    - Either remove the job entirely or update to current crate structure
-  - [ ] **24.1.2** Simplify CI to just: build, test, clippy (optional), fmt (optional)
+    - Removed the entire test-nightly job since it references non-existent package
+  - [x] **24.1.2** Simplify CI to just: build, test, clippy (optional), fmt (optional) ✅ 2026-01-24
+    - CI now has three jobs: build, lint (clippy), fmt
 
 - [ ] **24.2** Fix code formatting
   - [ ] **24.2.1** Run `cargo fmt --all` to fix formatting across all crates
