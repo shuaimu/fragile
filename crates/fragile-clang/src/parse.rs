@@ -204,11 +204,20 @@ impl ClangParser {
     /// 2. Current working directory
     /// 3. Executable's parent directories (up to 5 levels)
     pub fn detect_vendored_libcxx_path() -> Option<String> {
-        let vendored_subpath = "vendor/llvm-project/libcxx/include";
+        Self::detect_vendored_path("vendor/llvm-project/libcxx/include")
+    }
 
+    /// Detect vendored libc++ config path.
+    /// Looks for vendor/libcxx-config/ which contains __config_site and __assertion_handler.
+    pub fn detect_vendored_libcxx_config_path() -> Option<String> {
+        Self::detect_vendored_path("vendor/libcxx-config")
+    }
+
+    /// Helper to detect a vendored path relative to project root.
+    fn detect_vendored_path(subpath: &str) -> Option<String> {
         // Try FRAGILE_ROOT environment variable
         if let Ok(root) = std::env::var("FRAGILE_ROOT") {
-            let path = Path::new(&root).join(vendored_subpath);
+            let path = Path::new(&root).join(subpath);
             if path.exists() {
                 return Some(path.to_string_lossy().to_string());
             }
@@ -216,7 +225,7 @@ impl ClangParser {
 
         // Try current working directory
         if let Ok(cwd) = std::env::current_dir() {
-            let path = cwd.join(vendored_subpath);
+            let path = cwd.join(subpath);
             if path.exists() {
                 return Some(path.to_string_lossy().to_string());
             }
@@ -227,7 +236,7 @@ impl ClangParser {
             let mut dir = exe.parent().map(|p| p.to_path_buf());
             for _ in 0..5 {
                 if let Some(ref parent) = dir {
-                    let path = parent.join(vendored_subpath);
+                    let path = parent.join(subpath);
                     if path.exists() {
                         return Some(path.to_string_lossy().to_string());
                     }
@@ -254,6 +263,8 @@ impl ClangParser {
     /// 1. FRAGILE_ROOT environment variable
     /// 2. Current working directory
     /// 3. Executable's parent directories
+    ///
+    /// Also requires `vendor/libcxx-config/` with `__config_site` and `__assertion_handler`.
     pub fn with_vendored_libcxx() -> Result<Self> {
         let vendored_path = Self::detect_vendored_libcxx_path().ok_or_else(|| {
             miette!(
@@ -262,7 +273,16 @@ impl ClangParser {
             )
         })?;
 
-        let system_paths = vec![vendored_path];
+        // Config path contains __config_site and __assertion_handler
+        let config_path = Self::detect_vendored_libcxx_config_path().ok_or_else(|| {
+            miette!(
+                "Vendored libc++ config not found. Expected at vendor/libcxx-config/\n\
+                 This directory should contain __config_site and __assertion_handler."
+            )
+        })?;
+
+        // Config path must come first so __config_site is found before including libc++ headers
+        let system_paths = vec![config_path, vendored_path];
         // Add defines for libc++ compatibility
         let defines = vec!["_LIBCPP_HAS_NO_PRAGMA_SYSTEM_HEADER".to_string()];
 
@@ -278,7 +298,16 @@ impl ClangParser {
             )
         })?;
 
-        let system_paths = vec![vendored_path];
+        // Config path contains __config_site and __assertion_handler
+        let config_path = Self::detect_vendored_libcxx_config_path().ok_or_else(|| {
+            miette!(
+                "Vendored libc++ config not found. Expected at vendor/libcxx-config/\n\
+                 This directory should contain __config_site and __assertion_handler."
+            )
+        })?;
+
+        // Config path must come first so __config_site is found before including libc++ headers
+        let system_paths = vec![config_path, vendored_path];
         let defines = vec!["_LIBCPP_HAS_NO_PRAGMA_SYSTEM_HEADER".to_string()];
 
         Self::with_full_options(include_paths, system_paths, defines, Vec::new(), true)
