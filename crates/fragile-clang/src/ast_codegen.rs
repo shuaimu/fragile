@@ -9218,7 +9218,49 @@ impl AstCodeGen {
                         // In C++, returning 0 or NULL for a pointer type means return null pointer
                         "std::ptr::null()".to_string()
                     } else {
-                        expr
+                        // Check if we need to add a cast for primitive integer return types
+                        // This handles cases like `return *__c;` where __c is u32 but return type is i32
+                        let expr_type = Self::get_expr_type(&node.children[0]);
+                        let int_primitives = ["i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "isize", "usize"];
+
+                        let ret_rust_type = self
+                            .current_return_type
+                            .as_ref()
+                            .map(|t| t.to_rust_type_str());
+                        let expr_rust_type = expr_type.as_ref().map(|t| t.to_rust_type_str());
+
+                        let ret_is_int =
+                            ret_rust_type.as_ref().map_or(false, |t| int_primitives.contains(&t.as_str()));
+                        let expr_is_int =
+                            expr_rust_type.as_ref().map_or(false, |t| int_primitives.contains(&t.as_str()));
+
+                        // Add cast if both are integer primitives but different types
+                        // Also handle case where expr type is unknown but return type is int and expr is a deref
+                        let needs_explicit_cast = ret_is_int && expr_is_int && ret_rust_type != expr_rust_type;
+
+                        // Handle case where expression type is unknown or known but not detected as int
+                        // We're returning from an int function and the expression is a simple dereference
+                        // The expr might be "*__c" but also handle "(*__c)" and similar patterns
+                        let is_deref_expr = expr.starts_with('*') || expr.starts_with("(*");
+                        let is_comparison_expr =
+                            expr.contains("==") || expr.contains("!=") || expr.contains('<') || expr.contains('>');
+
+                        // Unconditional cast for deref expressions returning integers
+                        // This handles wint_t (u32) -> wchar_t (i32) and similar conversions
+                        let needs_deref_cast = ret_is_int
+                            && is_deref_expr
+                            && !expr.contains(" as ")
+                            && !is_comparison_expr;
+
+                        if needs_explicit_cast || needs_deref_cast {
+                            if let Some(rust_type) = ret_rust_type {
+                                format!("{} as {}", expr, rust_type)
+                            } else {
+                                expr
+                            }
+                        } else {
+                            expr
+                        }
                     };
                     self.writeln(&format!("return {};", expr));
                 }
