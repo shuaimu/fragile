@@ -841,7 +841,7 @@ Get `std::cout` working end-to-end.
     }
     ```
     - **Status**: Transpilation succeeds (128K chars → 23K LOC Rust)
-    - **Progress**: Compilation errors reduced: 65 → 1200 → 19 → 15 → 5 → 2581 (vendored) → 2256 → 2184 → 700 → 652 (libstdc++) ✅ 2026-01-25
+    - **Progress**: Compilation errors reduced: 65 → 1200 → 19 → 15 → 5 → 2581 (vendored) → 2256 → 2184 → 700 → 651 (libstdc++) ✅ 2026-01-25
     - Many fixes applied:
       - Skip variadic template instantiations (&&..., ...)
       - Skip decltype return types
@@ -864,7 +864,8 @@ Get `std::cout` working end-to-end.
       - Fixed duplicate _V2 module error (track both root and std:: paths) ✅ 2026-01-25
       - Fixed duplicate vtable wrapper functions for overloaded methods ✅ 2026-01-25
       - Added exception type and vtable stub ✅ 2026-01-25
-    - **Remaining errors**: ~652 (libstdc++) - mostly complex template issues:
+      - Skip vtable struct generation if already defined in stubs ✅ 2026-01-25
+    - **Remaining errors**: ~651 (libstdc++) - mostly complex template issues:
       - Type mismatches (165): u32/i32 mixing, array size as initializer
       - _unnamed values (26): unresolved template placeholders
       - Dereference errors (32): scalar types incorrectly dereferenced
