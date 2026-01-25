@@ -705,6 +705,14 @@ impl AstCodeGen {
         type_args: &[String],
         children: &[ClangNode],
     ) {
+        // Skip template DEFINITIONS that have unresolved type parameters.
+        // Only generate structs for actual instantiations with concrete types.
+        if inst_name.contains("_Tp") || inst_name.contains("_Alloc")
+            || inst_name.contains("type-parameter-")
+        {
+            return;
+        }
+
         // Convert instantiation name to valid Rust identifier
         let rust_name = CppType::Named(inst_name.to_string()).to_rust_type_str();
 
@@ -1950,6 +1958,64 @@ impl AstCodeGen {
             self.writeln("#[repr(C)]");
             self.writeln("#[derive(Default, Copy, Clone)]");
             self.writeln(&format!("pub struct {};", name));
+        }
+        self.writeln("");
+
+        // Generate std::vector<T> template instantiation stubs
+        // Since we skip template definitions, we need stubs for common instantiations
+        self.writeln("// std::vector<int> instantiation stub");
+        self.writeln("#[repr(C)]");
+        self.writeln("#[derive(Default)]");
+        self.writeln("pub struct std_vector_int {");
+        self.indent += 1;
+        self.writeln("_data: *mut i32,");
+        self.writeln("_size: usize,");
+        self.writeln("_capacity: usize,");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("");
+        self.writeln("impl std_vector_int {");
+        self.indent += 1;
+        self.writeln("pub fn new_0() -> Self { Self { _data: std::ptr::null_mut(), _size: 0, _capacity: 0 } }");
+        self.writeln("pub fn push_back(&mut self, val: i32) {");
+        self.indent += 1;
+        self.writeln("if self._size >= self._capacity {");
+        self.indent += 1;
+        self.writeln("let new_cap = if self._capacity == 0 { 4 } else { self._capacity * 2 };");
+        self.writeln("let new_layout = std::alloc::Layout::array::<i32>(new_cap).unwrap();");
+        self.writeln("let new_data = unsafe { std::alloc::alloc(new_layout) as *mut i32 };");
+        self.writeln("if !self._data.is_null() {");
+        self.indent += 1;
+        self.writeln("unsafe { std::ptr::copy_nonoverlapping(self._data, new_data, self._size); }");
+        self.writeln("let old_layout = std::alloc::Layout::array::<i32>(self._capacity).unwrap();");
+        self.writeln("unsafe { std::alloc::dealloc(self._data as *mut u8, old_layout); }");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("self._data = new_data;");
+        self.writeln("self._capacity = new_cap;");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("unsafe { *self._data.add(self._size) = val; }");
+        self.writeln("self._size += 1;");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("pub fn size(&self) -> usize { self._size }");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("");
+        self.generated_structs.insert("std_vector_int".to_string());
+
+        // Template placeholder types that appear in libc++ code
+        // These are unresolved template parameters that we need stubs for
+        for placeholder_type in [
+            "tuple_type_parameter_0_0___",
+            "_Int__Tp",
+            "_Tp",
+            "_Up",
+            "_Args",
+            "_Elements___",
+        ] {
+            self.writeln(&format!("pub type {} = std::ffi::c_void;", placeholder_type));
         }
         self.writeln("");
 
@@ -3396,6 +3462,20 @@ impl AstCodeGen {
         // to_rust_type_str() maps some types to primitives (e.g., exception -> c_void)
         // which is wrong for struct definitions - we want the actual struct name
         let rust_name = sanitize_identifier(name);
+
+        // Skip template DEFINITIONS that have unresolved type parameters.
+        // Template definitions use names like "vector<_Tp, _Alloc>" or contain type-parameter-X-X.
+        // We should only generate structs for actual instantiations like "vector<int>".
+        // Clang presents template definitions with dependent type parameter names.
+        if name.contains("_Tp") || name.contains("_Alloc")
+            || name.contains("type-parameter-")
+            || name.contains("type_parameter_")
+            || (name.contains('<') && (name.contains("_T>") || name.contains("_T,")))
+        {
+            // This is a template definition, not an instantiation - skip it
+            // The actual instantiation (e.g., std::vector<int>) will generate its own struct
+            return;
+        }
 
         // Skip if already generated (handles duplicate template instantiations)
         if self.generated_structs.contains(&rust_name) {

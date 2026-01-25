@@ -395,13 +395,10 @@ impl CppType {
                     // NOTE: STL string type mappings removed - types pass through as-is
                     // See Section 22 in TODO.md for rationale
                     _ => {
-                        // Map std::vector<T> instantiations to the base template struct
-                        // The transpiler generates a single `vector__Tp___Alloc` struct
-                        if normalized_name.starts_with("std::vector<")
-                            || normalized_name.starts_with("vector<")
-                        {
-                            return "vector__Tp___Alloc".to_string();
-                        }
+                        // NOTE: std::vector<T> mapping removed - let types go through
+                        // normal conversion to generate unique struct per instantiation
+                        // e.g., std::vector<int> -> std_vector_int_ (fixed in sanitize step)
+
                         // Map std::_Bit_iterator to _Bit_iterator (strip std:: prefix)
                         if normalized_name == "std::_Bit_iterator" {
                             return "_Bit_iterator".to_string();
