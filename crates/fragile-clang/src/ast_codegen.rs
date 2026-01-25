@@ -6637,10 +6637,9 @@ impl AstCodeGen {
                 ));
             }
         } else {
-            // Empty enum - generate as a zero-sized struct instead (Rust doesn't support repr on empty enums)
-            self.writeln("#[repr(transparent)]");
-            self.writeln("#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]");
-            self.writeln(&format!("pub struct {}({});", safe_name, repr_type));
+            // Empty enum - generate as a type alias instead of struct
+            // This allows casts like `byte as u32` to work
+            self.writeln(&format!("pub type {} = {};", safe_name, repr_type));
         }
         self.writeln("");
     }
