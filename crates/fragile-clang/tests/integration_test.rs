@@ -4566,3 +4566,149 @@ fn test_e2e_linked_list() {
         "Linked list implementation should work correctly"
     );
 }
+
+/// Task 23.11.2: Test binary search tree implementation.
+/// This exercises:
+/// - Tree structures with left/right pointers
+/// - Recursive algorithms (insert, search, traversal)
+/// - Destructor with recursive cleanup
+/// - More complex control flow (tree rotations would be next level)
+#[test]
+fn test_e2e_binary_search_tree() {
+    let source = r#"
+        // Binary search tree node
+        struct TreeNode {
+            int value;
+            TreeNode* left;
+            TreeNode* right;
+
+            TreeNode(int v) : value(v), left(nullptr), right(nullptr) {}
+
+            ~TreeNode() {
+                // Recursively delete children
+                if (left) delete left;
+                if (right) delete right;
+            }
+        };
+
+        // Binary search tree
+        class BST {
+            TreeNode* root;
+            int count;
+
+            // Helper: recursive insert
+            TreeNode* insertHelper(TreeNode* node, int value) {
+                if (!node) {
+                    count++;
+                    return new TreeNode(value);
+                }
+                if (value < node->value) {
+                    node->left = insertHelper(node->left, value);
+                } else if (value > node->value) {
+                    node->right = insertHelper(node->right, value);
+                }
+                // Duplicate values ignored
+                return node;
+            }
+
+            // Helper: recursive search
+            bool searchHelper(TreeNode* node, int value) const {
+                if (!node) return false;
+                if (value == node->value) return true;
+                if (value < node->value) return searchHelper(node->left, value);
+                return searchHelper(node->right, value);
+            }
+
+            // Helper: in-order traversal sum
+            int sumHelper(TreeNode* node) const {
+                if (!node) return 0;
+                return sumHelper(node->left) + node->value + sumHelper(node->right);
+            }
+
+        public:
+            BST() : root(nullptr), count(0) {}
+
+            ~BST() {
+                if (root) delete root;
+            }
+
+            void insert(int value) {
+                root = insertHelper(root, value);
+            }
+
+            bool search(int value) const {
+                return searchHelper(root, value);
+            }
+
+            int size() const { return count; }
+
+            int sum() const {
+                return sumHelper(root);
+            }
+
+            // Get root value (for testing)
+            int rootValue() const {
+                return root ? root->value : 0;
+            }
+        };
+
+        int main() {
+            BST tree;
+
+            // Test empty tree
+            if (tree.size() != 0) return 1;
+            if (tree.search(10)) return 2;  // Should not find anything
+
+            // Insert values: 50, 30, 70, 20, 40, 60, 80
+            //        50
+            //       /  \
+            //      30   70
+            //     / \   / \
+            //    20 40 60 80
+            tree.insert(50);
+            tree.insert(30);
+            tree.insert(70);
+            tree.insert(20);
+            tree.insert(40);
+            tree.insert(60);
+            tree.insert(80);
+
+            // Test size
+            if (tree.size() != 7) return 3;
+
+            // Test root
+            if (tree.rootValue() != 50) return 4;
+
+            // Test search for existing values
+            if (!tree.search(50)) return 5;
+            if (!tree.search(30)) return 6;
+            if (!tree.search(70)) return 7;
+            if (!tree.search(20)) return 8;
+            if (!tree.search(40)) return 9;
+            if (!tree.search(60)) return 10;
+            if (!tree.search(80)) return 11;
+
+            // Test search for non-existing values
+            if (tree.search(10)) return 12;
+            if (tree.search(55)) return 13;
+            if (tree.search(100)) return 14;
+
+            // Test sum (20+30+40+50+60+70+80 = 350)
+            if (tree.sum() != 350) return 15;
+
+            // Test duplicate insertion (should be ignored)
+            tree.insert(50);
+            if (tree.size() != 7) return 16;  // Size unchanged
+
+            return 0;  // Success
+        }
+    "#;
+
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_binary_search_tree.cpp").expect("E2E test failed");
+
+    assert_eq!(
+        exit_code, 0,
+        "Binary search tree should work correctly (insert, search, sum)"
+    );
+}

@@ -8965,8 +8965,11 @@ impl AstCodeGen {
                             let operand_ty = Self::get_expr_type(&node.children[0]);
                             if matches!(operand_ty, Some(CppType::Bool)) {
                                 format!("!{}", operand)
+                            } else if matches!(operand_ty, Some(CppType::Pointer { .. })) {
+                                // For pointer types, use is_null()
+                                format!("{}.is_null()", operand)
                             } else {
-                                // For non-bool types, use != 0 comparison
+                                // For non-bool non-pointer types, use == 0 comparison
                                 format!("(({}) == 0)", operand)
                             }
                         }
@@ -9860,8 +9863,11 @@ impl AstCodeGen {
                             let operand_ty = Self::get_expr_type(&node.children[0]);
                             if matches!(operand_ty, Some(CppType::Bool)) {
                                 format!("!{}", operand)
+                            } else if matches!(operand_ty, Some(CppType::Pointer { .. })) {
+                                // For pointer types, use is_null()
+                                format!("{}.is_null()", operand)
                             } else {
-                                // For non-bool types, use != 0 comparison
+                                // For non-bool non-pointer types, use == 0 comparison
                                 format!("(({}) == 0)", operand)
                             }
                         }
