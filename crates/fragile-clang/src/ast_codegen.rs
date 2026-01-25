@@ -3587,6 +3587,76 @@ impl AstCodeGen {
         }
     }
 
+    /// Check if a method's body only returns *this (self)
+    /// Used to fix return types when c_void is a placeholder
+    fn method_returns_this_only(node: &ClangNode) -> bool {
+        // Find CompoundStmt (method body)
+        for child in &node.children {
+            if let ClangNodeKind::CompoundStmt = &child.kind {
+                // Check if the only meaningful statement is "return *this" or similar
+                return Self::body_returns_this(&child.children);
+            }
+        }
+        false
+    }
+
+    /// Check if a list of statements ultimately returns *this
+    fn body_returns_this(stmts: &[ClangNode]) -> bool {
+        // Must have at least one statement
+        if stmts.is_empty() {
+            return false;
+        }
+
+        // The last (or only) statement that matters should be a return of *this
+        for stmt in stmts {
+            match &stmt.kind {
+                ClangNodeKind::ReturnStmt => {
+                    // Check if it returns *this
+                    if !stmt.children.is_empty() {
+                        return Self::expr_is_this(&stmt.children[0]);
+                    }
+                    return false;
+                }
+                ClangNodeKind::ExprStmt => {
+                    // Skip other expressions, continue to check return
+                    continue;
+                }
+                _ => {
+                    // Any other statement type (like if/while/etc) - don't assume
+                    continue;
+                }
+            }
+        }
+        false
+    }
+
+    /// Check if an expression is *this
+    fn expr_is_this(node: &ClangNode) -> bool {
+        match &node.kind {
+            ClangNodeKind::UnaryOperator { op: UnaryOp::Deref, .. } => {
+                // *this pattern
+                if !node.children.is_empty() {
+                    if let ClangNodeKind::CXXThisExpr { .. } = &node.children[0].kind {
+                        return true;
+                    }
+                }
+                false
+            }
+            ClangNodeKind::CXXThisExpr { .. } => {
+                // Just 'this' (returning pointer to self)
+                true
+            }
+            ClangNodeKind::ImplicitCastExpr { .. } => {
+                // Check through casts
+                if !node.children.is_empty() {
+                    return Self::expr_is_this(&node.children[0]);
+                }
+                false
+            }
+            _ => false,
+        }
+    }
+
     /// Check if a statement is a member field assignment (for filtering in ctor body)
     fn is_member_assignment(node: &ClangNode) -> bool {
         match &node.kind {
@@ -4624,10 +4694,21 @@ impl AstCodeGen {
                     .collect::<Vec<_>>()
                     .join(", ");
 
+                // Determine return type, fixing c_void placeholders for methods returning *this
+                let rust_return_type = return_type.to_rust_type_str();
                 let ret_str = if *return_type == CppType::Void {
                     String::new()
+                } else if (rust_return_type.contains("c_void") || rust_return_type == "*mut ()")
+                          && Self::method_returns_this_only(node) {
+                    // Method returns *this but return type is a c_void placeholder
+                    // Use Self instead of the placeholder type
+                    if returns_mut_ref || is_mutable_method {
+                        " -> &mut Self".to_string()
+                    } else {
+                        " -> Self".to_string()
+                    }
                 } else {
-                    format!(" -> {}", return_type.to_rust_type_str())
+                    format!(" -> {}", rust_return_type)
                 };
 
                 // Special handling for operators that have const/non-const overloads
