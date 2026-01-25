@@ -4006,6 +4006,14 @@ impl AstCodeGen {
         self.writeln("    pub __base_count: usize,");
         self.writeln("    pub __base_type_ids: &'static [u64],");
         self.writeln("    pub __destructor: unsafe fn(*mut locale_facet),");
+        // codecvt virtual methods (used by derived locale facets)
+        self.writeln("    pub do_out: unsafe fn(*const locale_facet, *mut std::ffi::c_void, *const i8, *const i8, *mut *const i8, *mut i8, *mut i8, *mut *mut i8) -> i32,");
+        self.writeln("    pub do_in: unsafe fn(*const locale_facet, *mut std::ffi::c_void, *const i8, *const i8, *mut *const i8, *mut i8, *mut i8, *mut *mut i8) -> i32,");
+        self.writeln("    pub do_unshift: unsafe fn(*const locale_facet, *mut std::ffi::c_void, *mut i8, *mut i8, *mut *mut i8) -> i32,");
+        self.writeln("    pub do_encoding: unsafe fn(*const locale_facet) -> i32,");
+        self.writeln("    pub do_always_noconv: unsafe fn(*const locale_facet) -> bool,");
+        self.writeln("    pub do_length: unsafe fn(*const locale_facet, *const std::ffi::c_void, *const i8, *const i8, usize) -> isize,");
+        self.writeln("    pub do_max_length: unsafe fn(*const locale_facet) -> isize,");
         self.writeln("}");
         self.writeln("#[repr(C)]");
         self.writeln("pub struct locale_facet {");
