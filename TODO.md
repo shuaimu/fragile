@@ -1005,18 +1005,18 @@ fn call_what(e: *const exception) -> *const i8 {
   - [x] **25.6.2** For derived classes, set after base constructor: `__self.__base.__vtable = &{CLASS}_VTABLE`
   - [ ] **25.6.3** Handle virtual base classes (shared vtable pointer) (future)
 
-**Note**: Tasks 25.1-25.6 complete the vtable infrastructure. Tasks 25.7-25.8 would switch from trait-based dispatch to vtable dispatch. The infrastructure is ready but dispatch still uses traits for now.
+**Note**: Tasks 25.1-25.7 complete the vtable infrastructure and dispatch. Task 25.8 removes the old trait-based code.
 
-- [ ] **25.7** Generate virtual call dispatch (Future: switch from traits to vtable dispatch)
-  - [ ] **25.7.1** Virtual method call `obj.method()` → `((*obj.__vtable).method)(obj, args...)`
-  - [ ] **25.7.2** Handle method calls through base pointer (cast as needed)
-  - [ ] **25.7.3** Non-virtual calls remain direct: `obj.method()` → `Class::method(&obj, args...)`
+- [x] **25.7** Generate virtual call dispatch ✅ 2026-01-25
+  - [x] **25.7.1** Virtual method call `obj.method()` → `((*obj.__vtable).method)(obj, args...)`
+  - [x] **25.7.2** Handle method calls through base pointer (cast as needed)
+  - [x] **25.7.3** Generate derived-to-base pointer casts for polymorphic class pointers
 
-- [ ] **25.8** Remove trait-based code (Future: after 25.7)
-  - [ ] **25.8.1** Remove `generate_trait_for_class()` function
-  - [ ] **25.8.2** Remove `generate_trait_impl()` function
-  - [ ] **25.8.3** Remove `{ClassName}Trait` generation
-  - [ ] **25.8.4** Update `virtual_methods` HashMap usage
+- [x] **25.8** Remove trait-based code ✅ 2026-01-25
+  - [x] **25.8.1** Remove `generate_trait_for_class()` function
+  - [x] **25.8.2** Remove `generate_trait_impl()` function
+  - [x] **25.8.3** Remove `{ClassName}Trait` generation
+  - [x] **25.8.4** Preserved `virtual_methods` HashMap for vtable construction
 
 - [ ] **25.9** Update dynamic_cast
   - [ ] **25.9.1** dynamic_cast needs RTTI info in vtable (type_info pointer)
