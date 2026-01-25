@@ -4434,8 +4434,15 @@ impl AstCodeGen {
                     } else if let ClangNodeKind::Unknown(s) = &node.children[i].kind {
                         // Check for TypeRef:ClassName pattern indicating base class initializer
                         if let Some(base_class_cpp) = s.strip_prefix("TypeRef:") {
-                            // Convert C++ type name to Rust type name
-                            let base_class = CppType::Named(base_class_cpp.to_string()).to_rust_type_str();
+                            // Convert C++ type name to Rust struct name
+                            // Strip namespace prefix to match struct definition naming
+                            // (struct _Bit_iterator_base is defined without std:: prefix)
+                            let base_class_unqual = if let Some(last_colon_pos) = base_class_cpp.rfind("::") {
+                                &base_class_cpp[last_colon_pos + 2..]
+                            } else {
+                                base_class_cpp
+                            };
+                            let base_class = sanitize_identifier(base_class_unqual);
                             // Next sibling should be constructor call
                             if i + 1 < node.children.len() {
                                 i += 1;

@@ -194,8 +194,13 @@ fn find_fragile_runtime_path() -> Option<PathBuf> {
             let content = fs::read_to_string(&cargo_toml).ok()?;
             if content.contains("[workspace]") {
                 // Found workspace root, look for runtime library
+                // Check release first (more common in CI), then debug
+                let release_path = current.join("target/release");
+                if release_path.join("libfragile_runtime.rlib").exists() {
+                    return Some(release_path);
+                }
                 let debug_path = current.join("target/debug");
-                if debug_path.exists() {
+                if debug_path.join("libfragile_runtime.rlib").exists() {
                     return Some(debug_path);
                 }
             }
