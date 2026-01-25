@@ -7236,6 +7236,24 @@ impl AstCodeGen {
         }
     }
 
+    /// Strip namespace prefix and template arguments from a class name.
+    /// Used for comparing class names when detecting inherited member access.
+    /// e.g., "std::ctype<char>" -> "ctype", "std::_Bit_reference" -> "_Bit_reference"
+    fn strip_namespace_and_template(s: &str) -> String {
+        // First strip namespace prefix
+        let unqual = if let Some(pos) = s.rfind("::") {
+            &s[pos + 2..]
+        } else {
+            s
+        };
+        // Then strip template arguments (e.g., ctype<char> -> ctype)
+        if let Some(pos) = unqual.find('<') {
+            unqual[..pos].to_string()
+        } else {
+            unqual.to_string()
+        }
+    }
+
     /// Get the base access path for a member declared in a specific base class.
     fn get_base_access_for_class(&self, current_class: &str, declaring_class: &str) -> BaseAccess {
         // Strip namespace prefix from current_class for lookup
@@ -11359,20 +11377,12 @@ impl AstCodeGen {
                         } else {
                             let base_class_name = Self::extract_class_name(&base_type);
                             if let Some(name) = base_class_name {
-                                // Strip namespace prefix from BOTH sides for comparison
-                                // (e.g., std::_Bit_reference -> _Bit_reference)
-                                let name_unqual = if let Some(pos) = name.rfind("::") {
-                                    &name[pos + 2..]
-                                } else {
-                                    name.as_str()
-                                };
-                                let decl_class_unqual = if let Some(pos) = decl_class.rfind("::") {
-                                    &decl_class[pos + 2..]
-                                } else {
-                                    decl_class.as_str()
-                                };
-                                // Compare unqualified names
-                                if name_unqual != decl_class_unqual {
+                                // Strip namespace prefix and template arguments from BOTH sides for comparison
+                                // (e.g., std::ctype<char> -> ctype, std::_Bit_reference -> _Bit_reference)
+                                let name_base = Self::strip_namespace_and_template(&name);
+                                let decl_class_base = Self::strip_namespace_and_template(decl_class);
+                                // Compare base names (without namespaces or template args)
+                                if name_base != decl_class_base {
                                     // Need base access - get correct field for MI support
                                     let access = self.get_base_access_for_class(&name, decl_class);
                                     (true, access)
@@ -11460,20 +11470,12 @@ impl AstCodeGen {
                             {
                                 (false, BaseAccess::DirectField(String::new()))
                             } else {
-                                // Strip namespace prefix from BOTH sides for comparison
-                                // (e.g., std::_Bit_reference -> _Bit_reference)
-                                let current_unqual = if let Some(pos) = current.rfind("::") {
-                                    &current[pos + 2..]
-                                } else {
-                                    current.as_str()
-                                };
-                                let decl_class_unqual = if let Some(pos) = decl_class.rfind("::") {
-                                    &decl_class[pos + 2..]
-                                } else {
-                                    decl_class.as_str()
-                                };
-                                // Compare unqualified names
-                                if current_unqual != decl_class_unqual {
+                                // Strip namespace prefix and template arguments from BOTH sides for comparison
+                                // (e.g., std::ctype<char> -> ctype, std::_Bit_reference -> _Bit_reference)
+                                let current_base = Self::strip_namespace_and_template(current);
+                                let decl_class_base = Self::strip_namespace_and_template(decl_class);
+                                // Compare base names (without namespaces or template args)
+                                if current_base != decl_class_base {
                                     let access =
                                         self.get_base_access_for_class(current, decl_class);
                                     (true, access)
