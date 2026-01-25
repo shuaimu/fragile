@@ -754,6 +754,13 @@ impl AstCodeGen {
             sanitized_class
         ));
 
+        // For locale_facet_vtable, add struct update syntax to fill in missing fields
+        // This is needed because locale_facet_vtable has many optional virtual method fields
+        // that different facet classes may or may not override
+        if sanitized_root == "locale_facet" {
+            self.writeln("..Default::default()");
+        }
+
         self.indent -= 1;
         self.writeln("};");
 
@@ -4038,6 +4045,74 @@ impl AstCodeGen {
         self.writeln("    pub do_compare: unsafe fn(*const locale_facet, *const i32, *const i32, *const i32, *const i32) -> i32,");
         self.writeln("    pub do_transform: unsafe fn(*const locale_facet, *const i32, *const i32) -> std::ffi::c_void,");
         self.writeln("}");
+
+        // Default implementation with stub functions for locale_facet_vtable
+        self.writeln("// Stub functions for locale_facet_vtable Default implementation");
+        self.writeln("unsafe fn __locale_facet_vtable_stub_destructor(_: *mut locale_facet) {}");
+        self.writeln("unsafe fn __locale_facet_vtable_stub_do_out(_: *const locale_facet, _: *mut std::ffi::c_void, _: *const i8, _: *const i8, _: *mut *const i8, _: *mut i8, _: *mut i8, _: *mut *mut i8) -> i32 { 0 }");
+        self.writeln("unsafe fn __locale_facet_vtable_stub_do_in(_: *const locale_facet, _: *mut std::ffi::c_void, _: *const i8, _: *const i8, _: *mut *const i8, _: *mut i8, _: *mut i8, _: *mut *mut i8) -> i32 { 0 }");
+        self.writeln("unsafe fn __locale_facet_vtable_stub_do_unshift(_: *const locale_facet, _: *mut std::ffi::c_void, _: *mut i8, _: *mut i8, _: *mut *mut i8) -> i32 { 0 }");
+        self.writeln("unsafe fn __locale_facet_vtable_stub_do_encoding(_: *const locale_facet) -> i32 { 0 }");
+        self.writeln("unsafe fn __locale_facet_vtable_stub_do_always_noconv(_: *const locale_facet) -> bool { false }");
+        self.writeln("unsafe fn __locale_facet_vtable_stub_do_length(_: *const locale_facet, _: *const std::ffi::c_void, _: *const i8, _: *const i8, _: usize) -> isize { 0 }");
+        self.writeln("unsafe fn __locale_facet_vtable_stub_do_max_length(_: *const locale_facet) -> isize { 0 }");
+        self.writeln("unsafe fn __locale_facet_vtable_stub_do_decimal_point(_: *const locale_facet) -> i32 { 0 }");
+        self.writeln("unsafe fn __locale_facet_vtable_stub_do_thousands_sep(_: *const locale_facet) -> i32 { 0 }");
+        self.writeln("unsafe fn __locale_facet_vtable_stub_do_grouping(_: *const locale_facet) -> std::ffi::c_void { unsafe { std::mem::zeroed() } }");
+        self.writeln("unsafe fn __locale_facet_vtable_stub_do_truename(_: *const locale_facet) -> std::ffi::c_void { unsafe { std::mem::zeroed() } }");
+        self.writeln("unsafe fn __locale_facet_vtable_stub_do_falsename(_: *const locale_facet) -> std::ffi::c_void { unsafe { std::mem::zeroed() } }");
+        self.writeln("unsafe fn __locale_facet_vtable_stub_do_toupper(_: *const locale_facet, c: i32) -> i32 { c }");
+        self.writeln("unsafe fn __locale_facet_vtable_stub_do_toupper_1(_: *const locale_facet, _: *mut i32, e: *const i32) -> *const i32 { e }");
+        self.writeln("unsafe fn __locale_facet_vtable_stub_do_tolower(_: *const locale_facet, c: i32) -> i32 { c }");
+        self.writeln("unsafe fn __locale_facet_vtable_stub_do_tolower_1(_: *const locale_facet, _: *mut i32, e: *const i32) -> *const i32 { e }");
+        self.writeln("unsafe fn __locale_facet_vtable_stub_do_widen(_: *const locale_facet, c: i8) -> i32 { c as i32 }");
+        self.writeln("unsafe fn __locale_facet_vtable_stub_do_widen_1(_: *const locale_facet, _: *const i8, e: *const i8, _: *mut i32) -> *const i8 { e }");
+        self.writeln("unsafe fn __locale_facet_vtable_stub_do_narrow(_: *const locale_facet, _: i32, d: i8) -> i8 { d }");
+        self.writeln("unsafe fn __locale_facet_vtable_stub_do_narrow_1(_: *const locale_facet, _: *const i32, e: *const i32, _: i8, _: *mut i8) -> *const i32 { e }");
+        self.writeln("unsafe fn __locale_facet_vtable_stub_do_is(_: *const locale_facet, _: u32, _: i32) -> bool { false }");
+        self.writeln("unsafe fn __locale_facet_vtable_stub_do_is_1(_: *const locale_facet, _: *const i32, e: *const i32, _: *mut u32) -> *const i32 { e }");
+        self.writeln("unsafe fn __locale_facet_vtable_stub_do_scan_is(_: *const locale_facet, _: u32, _: *const i32, e: *const i32) -> *const i32 { e }");
+        self.writeln("unsafe fn __locale_facet_vtable_stub_do_scan_not(_: *const locale_facet, _: u32, _: *const i32, e: *const i32) -> *const i32 { e }");
+        self.writeln("unsafe fn __locale_facet_vtable_stub_do_compare(_: *const locale_facet, _: *const i32, _: *const i32, _: *const i32, _: *const i32) -> i32 { 0 }");
+        self.writeln("unsafe fn __locale_facet_vtable_stub_do_transform(_: *const locale_facet, _: *const i32, _: *const i32) -> std::ffi::c_void { unsafe { std::mem::zeroed() } }");
+        self.writeln("static __LOCALE_FACET_VTABLE_DEFAULT_BASE_IDS: [u64; 0] = [];");
+        self.writeln("impl Default for locale_facet_vtable {");
+        self.writeln("    fn default() -> Self {");
+        self.writeln("        Self {");
+        self.writeln("            __type_id: 0,");
+        self.writeln("            __base_count: 0,");
+        self.writeln("            __base_type_ids: &__LOCALE_FACET_VTABLE_DEFAULT_BASE_IDS,");
+        self.writeln("            __destructor: __locale_facet_vtable_stub_destructor,");
+        self.writeln("            do_out: __locale_facet_vtable_stub_do_out,");
+        self.writeln("            do_in: __locale_facet_vtable_stub_do_in,");
+        self.writeln("            do_unshift: __locale_facet_vtable_stub_do_unshift,");
+        self.writeln("            do_encoding: __locale_facet_vtable_stub_do_encoding,");
+        self.writeln("            do_always_noconv: __locale_facet_vtable_stub_do_always_noconv,");
+        self.writeln("            do_length: __locale_facet_vtable_stub_do_length,");
+        self.writeln("            do_max_length: __locale_facet_vtable_stub_do_max_length,");
+        self.writeln("            do_decimal_point: __locale_facet_vtable_stub_do_decimal_point,");
+        self.writeln("            do_thousands_sep: __locale_facet_vtable_stub_do_thousands_sep,");
+        self.writeln("            do_grouping: __locale_facet_vtable_stub_do_grouping,");
+        self.writeln("            do_truename: __locale_facet_vtable_stub_do_truename,");
+        self.writeln("            do_falsename: __locale_facet_vtable_stub_do_falsename,");
+        self.writeln("            do_toupper: __locale_facet_vtable_stub_do_toupper,");
+        self.writeln("            do_toupper_1: __locale_facet_vtable_stub_do_toupper_1,");
+        self.writeln("            do_tolower: __locale_facet_vtable_stub_do_tolower,");
+        self.writeln("            do_tolower_1: __locale_facet_vtable_stub_do_tolower_1,");
+        self.writeln("            do_widen: __locale_facet_vtable_stub_do_widen,");
+        self.writeln("            do_widen_1: __locale_facet_vtable_stub_do_widen_1,");
+        self.writeln("            do_narrow: __locale_facet_vtable_stub_do_narrow,");
+        self.writeln("            do_narrow_1: __locale_facet_vtable_stub_do_narrow_1,");
+        self.writeln("            do_is: __locale_facet_vtable_stub_do_is,");
+        self.writeln("            do_is_1: __locale_facet_vtable_stub_do_is_1,");
+        self.writeln("            do_scan_is: __locale_facet_vtable_stub_do_scan_is,");
+        self.writeln("            do_scan_not: __locale_facet_vtable_stub_do_scan_not,");
+        self.writeln("            do_compare: __locale_facet_vtable_stub_do_compare,");
+        self.writeln("            do_transform: __locale_facet_vtable_stub_do_transform,");
+        self.writeln("        }");
+        self.writeln("    }");
+        self.writeln("}");
+
         self.writeln("#[repr(C)]");
         self.writeln("pub struct locale_facet {");
         self.writeln("    pub __vtable: *const locale_facet_vtable,");
@@ -4291,6 +4366,28 @@ impl AstCodeGen {
         self.generated_structs.insert("basic_string_view_char8_t".to_string());
         self.generated_structs.insert("basic_string_view_char16_t".to_string());
         self.generated_structs.insert("basic_string_view_char32_t".to_string());
+        self.writeln("");
+
+        // Struct stubs for template instantiations that need constructors
+        self.writeln("// Template instantiation stubs with constructors");
+        // Empty tuple (tuple<>)
+        self.writeln("#[repr(C)]");
+        self.writeln("#[derive(Default, Clone)]");
+        self.writeln("pub struct tuple_ { }");
+        self.writeln("impl tuple_ {");
+        self.writeln("    pub fn new_0() -> Self { Self { } }");
+        self.writeln("    pub fn new_1(_unused: i32) -> Self { Self { } }");
+        self.writeln("}");
+        self.generated_structs.insert("tuple_".to_string());
+        // __cxx_atomic_impl<bool>
+        self.writeln("#[repr(C)]");
+        self.writeln("#[derive(Default, Clone)]");
+        self.writeln("pub struct __cxx_atomic_impl_bool { pub __a_value: bool }");
+        self.writeln("impl __cxx_atomic_impl_bool {");
+        self.writeln("    pub fn new_0() -> Self { Default::default() }");
+        self.writeln("    pub fn new_1(_val: bool) -> Self { Self { __a_value: _val } }");
+        self.writeln("}");
+        self.generated_structs.insert("__cxx_atomic_impl_bool".to_string());
         self.writeln("");
 
         // char_traits module stub (libstdc++ uses std::char_traits)
@@ -6659,6 +6756,88 @@ impl AstCodeGen {
                     self.writeln("pub fn what(&self) -> *const i8 {");
                     self.indent += 1;
                     self.writeln("b\"exception\\0\".as_ptr() as *const i8");
+                    self.indent -= 1;
+                    self.writeln("}");
+                }
+            }
+
+            // Add stub constructor new_1 for C++20 comparison types
+            // _CmpUnspecifiedParam is used for three-way comparison with 0
+            if name == "_CmpUnspecifiedParam" {
+                let has_new_1 = self
+                    .current_struct_methods
+                    .get("new_1")
+                    .copied()
+                    .unwrap_or(0)
+                    > 0;
+                if !has_new_1 {
+                    self.writeln("");
+                    self.writeln("/// Stub constructor for comparison with 0");
+                    self.writeln("pub fn new_1(_val: i32) -> Self {");
+                    self.indent += 1;
+                    self.writeln("Default::default()");
+                    self.indent -= 1;
+                    self.writeln("}");
+                }
+            }
+
+            // Add stub constructor for __mbstate_t (multibyte state)
+            if name == "__mbstate_t" {
+                let has_new_1 = self
+                    .current_struct_methods
+                    .get("new_1")
+                    .copied()
+                    .unwrap_or(0)
+                    > 0;
+                if !has_new_1 {
+                    self.writeln("");
+                    self.writeln("/// Stub constructor for mbstate_t");
+                    self.writeln("pub fn new_1(_unused: i32) -> Self {");
+                    self.indent += 1;
+                    self.writeln("Default::default()");
+                    self.indent -= 1;
+                    self.writeln("}");
+                }
+            }
+
+            // Add stub constructor for tuple_ (empty tuple type)
+            // The original C++ name for empty tuple is "tuple<>"
+            if name == "tuple_" || name == "tuple" || name == "tuple<>" {
+                let has_new_1 = self
+                    .current_struct_methods
+                    .get("new_1")
+                    .copied()
+                    .unwrap_or(0)
+                    > 0;
+                if !has_new_1 {
+                    self.writeln("");
+                    self.writeln("/// Stub constructor for tuple");
+                    self.writeln("pub fn new_1(_unused: i32) -> Self {");
+                    self.indent += 1;
+                    self.writeln("Default::default()");
+                    self.indent -= 1;
+                    self.writeln("}");
+                }
+            }
+
+            // Add stub constructor for __cxx_atomic_impl_bool
+            // The original C++ name is "__cxx_atomic_impl<bool>"
+            if name == "__cxx_atomic_impl_bool"
+                || name == "__cxx_atomic_impl<bool>"
+                || name.starts_with("__cxx_atomic_impl")
+            {
+                let has_new_1 = self
+                    .current_struct_methods
+                    .get("new_1")
+                    .copied()
+                    .unwrap_or(0)
+                    > 0;
+                if !has_new_1 {
+                    self.writeln("");
+                    self.writeln("/// Stub constructor for atomic type");
+                    self.writeln("pub fn new_1(_val: bool) -> Self {");
+                    self.indent += 1;
+                    self.writeln("Default::default()");
                     self.indent -= 1;
                     self.writeln("}");
                 }
