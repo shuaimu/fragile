@@ -5458,17 +5458,28 @@ impl AstCodeGen {
             ClangNodeKind::ImplicitCastExpr { cast_kind, ty } => {
                 // Handle implicit casts - some need explicit conversion in Rust
                 if !node.children.is_empty() {
-                    let inner = self.expr_to_string_raw(&node.children[0]);
+                    let child = &node.children[0];
+                    let inner = self.expr_to_string_raw(child);
+                    // Check if inner is a binary expression - needs parens for cast to apply to whole expr
+                    let needs_parens = matches!(child.kind, ClangNodeKind::BinaryOperator { .. });
                     match cast_kind {
                         CastKind::IntegralCast => {
                             // Need explicit cast for integral conversions
                             let rust_type = ty.to_rust_type_str();
-                            format!("{} as {}", inner, rust_type)
+                            if needs_parens {
+                                format!("({}) as {}", inner, rust_type)
+                            } else {
+                                format!("{} as {}", inner, rust_type)
+                            }
                         }
                         CastKind::FloatingCast | CastKind::IntegralToFloating | CastKind::FloatingToIntegral => {
                             // Need explicit cast for floating conversions
                             let rust_type = ty.to_rust_type_str();
-                            format!("{} as {}", inner, rust_type)
+                            if needs_parens {
+                                format!("({}) as {}", inner, rust_type)
+                            } else {
+                                format!("{} as {}", inner, rust_type)
+                            }
                         }
                         CastKind::FunctionToPointerDecay => {
                             // Function to pointer decay - wrap in Some() for Option<fn(...)> type
@@ -6731,17 +6742,28 @@ impl AstCodeGen {
             ClangNodeKind::ImplicitCastExpr { cast_kind, ty } => {
                 // Handle implicit casts - some need explicit conversion in Rust
                 if !node.children.is_empty() {
-                    let inner = self.expr_to_string(&node.children[0]);
+                    let child = &node.children[0];
+                    let inner = self.expr_to_string(child);
+                    // Check if inner is a binary expression - needs parens for cast to apply to whole expr
+                    let needs_parens = matches!(child.kind, ClangNodeKind::BinaryOperator { .. });
                     match cast_kind {
                         CastKind::IntegralCast => {
                             // Need explicit cast for integral conversions
                             let rust_type = ty.to_rust_type_str();
-                            format!("{} as {}", inner, rust_type)
+                            if needs_parens {
+                                format!("({}) as {}", inner, rust_type)
+                            } else {
+                                format!("{} as {}", inner, rust_type)
+                            }
                         }
                         CastKind::FloatingCast | CastKind::IntegralToFloating | CastKind::FloatingToIntegral => {
                             // Need explicit cast for floating conversions
                             let rust_type = ty.to_rust_type_str();
-                            format!("{} as {}", inner, rust_type)
+                            if needs_parens {
+                                format!("({}) as {}", inner, rust_type)
+                            } else {
+                                format!("{} as {}", inner, rust_type)
+                            }
                         }
                         CastKind::FunctionToPointerDecay => {
                             // Function to pointer decay - wrap in Some() for Option<fn(...)> type
