@@ -9731,3 +9731,468 @@ fn test_e2e_trie() {
 
     assert_eq!(exit_code, 0, "Trie should work correctly");
 }
+
+/// E2E test: Selection sort
+/// Tests: Array traversal, swapping, O(n²) sorting
+#[test]
+fn test_e2e_selection_sort() {
+    let source = r#"
+        // Selection sort implementation
+
+        void swap(int* a, int* b) {
+            int temp = *a;
+            *a = *b;
+            *b = temp;
+        }
+
+        // Find index of minimum element from arr[start] to arr[n-1]
+        int findMinIndex(int* arr, int start, int n) {
+            int minIdx = start;
+            for (int i = start + 1; i < n; i++) {
+                if (arr[i] < arr[minIdx]) {
+                    minIdx = i;
+                }
+            }
+            return minIdx;
+        }
+
+        // Selection sort
+        void selectionSort(int* arr, int n) {
+            for (int i = 0; i < n - 1; i++) {
+                int minIdx = findMinIndex(arr, i, n);
+                if (minIdx != i) {
+                    swap(&arr[i], &arr[minIdx]);
+                }
+            }
+        }
+
+        // Check if sorted in ascending order
+        bool isSorted(int* arr, int n) {
+            for (int i = 0; i < n - 1; i++) {
+                if (arr[i] > arr[i + 1]) return false;
+            }
+            return true;
+        }
+
+        // Check if sorted in descending order
+        bool isSortedDesc(int* arr, int n) {
+            for (int i = 0; i < n - 1; i++) {
+                if (arr[i] < arr[i + 1]) return false;
+            }
+            return true;
+        }
+
+        // Selection sort descending
+        void selectionSortDesc(int* arr, int n) {
+            for (int i = 0; i < n - 1; i++) {
+                int maxIdx = i;
+                for (int j = i + 1; j < n; j++) {
+                    if (arr[j] > arr[maxIdx]) {
+                        maxIdx = j;
+                    }
+                }
+                if (maxIdx != i) {
+                    swap(&arr[i], &arr[maxIdx]);
+                }
+            }
+        }
+
+        int main() {
+            // Test selection sort ascending
+            int arr1[5] = {64, 25, 12, 22, 11};
+            selectionSort(arr1, 5);
+            if (!isSorted(arr1, 5)) return 1;
+            if (arr1[0] != 11 || arr1[4] != 64) return 2;
+
+            // Already sorted
+            int arr2[4] = {1, 2, 3, 4};
+            selectionSort(arr2, 4);
+            if (!isSorted(arr2, 4)) return 3;
+
+            // Reverse sorted
+            int arr3[4] = {4, 3, 2, 1};
+            selectionSort(arr3, 4);
+            if (!isSorted(arr3, 4)) return 4;
+
+            // Single element
+            int arr4[1] = {42};
+            selectionSort(arr4, 1);
+            if (arr4[0] != 42) return 5;
+
+            // Two elements
+            int arr5[2] = {5, 3};
+            selectionSort(arr5, 2);
+            if (arr5[0] != 3 || arr5[1] != 5) return 6;
+
+            // Duplicates
+            int arr6[6] = {5, 2, 5, 1, 5, 3};
+            selectionSort(arr6, 6);
+            if (!isSorted(arr6, 6)) return 7;
+
+            // Test descending sort
+            int arr7[5] = {1, 2, 3, 4, 5};
+            selectionSortDesc(arr7, 5);
+            if (!isSortedDesc(arr7, 5)) return 8;
+            if (arr7[0] != 5 || arr7[4] != 1) return 9;
+
+            // Test findMinIndex
+            int arr8[5] = {3, 1, 4, 1, 5};
+            if (findMinIndex(arr8, 0, 5) != 1) return 10;
+            if (findMinIndex(arr8, 2, 5) != 3) return 11;
+            if (findMinIndex(arr8, 4, 5) != 4) return 12;
+
+            return 0;  // Success
+        }
+    "#;
+
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_selection_sort.cpp").expect("E2E test failed");
+
+    assert_eq!(exit_code, 0, "Selection sort should work correctly");
+}
+
+/// E2E test: 2D Point/Coordinate operations
+/// Tests: Struct methods, distance calculations, geometry
+#[test]
+fn test_e2e_point_2d() {
+    let source = r#"
+        // 2D Point operations
+
+        struct Point {
+            int x;
+            int y;
+        };
+
+        // Create a point
+        Point makePoint(int x, int y) {
+            Point p;
+            p.x = x;
+            p.y = y;
+            return p;
+        }
+
+        // Initialize a point via pointer
+        void initPoint(Point* p, int x, int y) {
+            p->x = x;
+            p->y = y;
+        }
+
+        // Add two points
+        Point addPoints(Point a, Point b) {
+            Point result;
+            result.x = a.x + b.x;
+            result.y = a.y + b.y;
+            return result;
+        }
+
+        // Subtract two points
+        Point subPoints(Point a, Point b) {
+            Point result;
+            result.x = a.x - b.x;
+            result.y = a.y - b.y;
+            return result;
+        }
+
+        // Scale a point
+        Point scalePoint(Point p, int factor) {
+            Point result;
+            result.x = p.x * factor;
+            result.y = p.y * factor;
+            return result;
+        }
+
+        // Manhattan distance between two points
+        int manhattanDistance(Point a, Point b) {
+            int dx = a.x - b.x;
+            int dy = a.y - b.y;
+            if (dx < 0) dx = -dx;
+            if (dy < 0) dy = -dy;
+            return dx + dy;
+        }
+
+        // Squared Euclidean distance (to avoid floating point)
+        int squaredDistance(Point a, Point b) {
+            int dx = a.x - b.x;
+            int dy = a.y - b.y;
+            return dx * dx + dy * dy;
+        }
+
+        // Dot product
+        int dotProduct(Point a, Point b) {
+            return a.x * b.x + a.y * b.y;
+        }
+
+        // Cross product (2D gives scalar)
+        int crossProduct(Point a, Point b) {
+            return a.x * b.y - a.y * b.x;
+        }
+
+        // Check if points are equal
+        bool pointsEqual(Point a, Point b) {
+            return a.x == b.x && a.y == b.y;
+        }
+
+        // Check if point is at origin
+        bool isOrigin(Point p) {
+            return p.x == 0 && p.y == 0;
+        }
+
+        // Negate a point
+        Point negatePoint(Point p) {
+            Point result;
+            result.x = -p.x;
+            result.y = -p.y;
+            return result;
+        }
+
+        int main() {
+            // Test makePoint and basic access
+            Point p1 = makePoint(3, 4);
+            if (p1.x != 3 || p1.y != 4) return 1;
+
+            // Test initPoint
+            Point p2;
+            initPoint(&p2, 5, 6);
+            if (p2.x != 5 || p2.y != 6) return 2;
+
+            // Test addPoints
+            Point sum = addPoints(p1, p2);
+            if (sum.x != 8 || sum.y != 10) return 3;
+
+            // Test subPoints
+            Point diff = subPoints(p2, p1);
+            if (diff.x != 2 || diff.y != 2) return 4;
+
+            // Test scalePoint
+            Point scaled = scalePoint(p1, 2);
+            if (scaled.x != 6 || scaled.y != 8) return 5;
+
+            // Test manhattanDistance
+            Point origin = makePoint(0, 0);
+            if (manhattanDistance(origin, p1) != 7) return 6;  // |3| + |4| = 7
+            if (manhattanDistance(p1, p2) != 4) return 7;      // |2| + |2| = 4
+
+            // Test squaredDistance
+            if (squaredDistance(origin, p1) != 25) return 8;   // 3*3 + 4*4 = 25
+            if (squaredDistance(p1, p2) != 8) return 9;        // 2*2 + 2*2 = 8
+
+            // Test dotProduct
+            Point a = makePoint(1, 2);
+            Point b = makePoint(3, 4);
+            if (dotProduct(a, b) != 11) return 10;  // 1*3 + 2*4 = 11
+
+            // Test crossProduct
+            if (crossProduct(a, b) != -2) return 11;  // 1*4 - 2*3 = -2
+
+            // Test pointsEqual
+            Point c = makePoint(1, 2);
+            if (!pointsEqual(a, c)) return 12;
+            if (pointsEqual(a, b)) return 13;
+
+            // Test isOrigin
+            if (!isOrigin(origin)) return 14;
+            if (isOrigin(p1)) return 15;
+
+            // Test negatePoint
+            Point neg = negatePoint(p1);
+            if (neg.x != -3 || neg.y != -4) return 16;
+
+            // Test with negative coordinates
+            Point negPoint = makePoint(-5, -7);
+            if (manhattanDistance(origin, negPoint) != 12) return 17;
+            if (squaredDistance(origin, negPoint) != 74) return 18;  // 25 + 49
+
+            return 0;  // Success
+        }
+    "#;
+
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_point_2d.cpp").expect("E2E test failed");
+
+    assert_eq!(exit_code, 0, "Point 2D operations should work correctly");
+}
+
+/// E2E test: Simple event queue
+/// Tests: Queue operations with event structures
+/// Note: Uses helper functions for struct member access to avoid transpiler limitation
+#[test]
+fn test_e2e_event_queue() {
+    let source = r#"
+        // Simple event queue implementation
+        // Using int arrays instead of struct array to avoid transpiler limitations
+
+        // Event types
+        const int EVENT_NONE = 0;
+        const int EVENT_START = 1;
+        const int EVENT_STOP = 2;
+        const int EVENT_DATA = 3;
+        const int EVENT_ERROR = 4;
+
+        // Event represented as 3 consecutive ints: type, priority, data
+        struct EventQueue {
+            int* events;  // Flat array: [type0, pri0, data0, type1, pri1, data1, ...]
+            int head;
+            int tail;
+            int count;
+            int capacity;
+        };
+
+        void queueInit(EventQueue* q, int* buffer, int capacity) {
+            q->events = buffer;
+            q->head = 0;
+            q->tail = 0;
+            q->count = 0;
+            q->capacity = capacity;
+        }
+
+        bool queueIsEmpty(EventQueue* q) {
+            return q->count == 0;
+        }
+
+        bool queueIsFull(EventQueue* q) {
+            return q->count == q->capacity;
+        }
+
+        bool queueEnqueue(EventQueue* q, int type, int priority, int data) {
+            if (queueIsFull(q)) return false;
+
+            int idx = q->tail * 3;  // 3 ints per event
+            q->events[idx] = type;
+            q->events[idx + 1] = priority;
+            q->events[idx + 2] = data;
+
+            q->tail = (q->tail + 1) % q->capacity;
+            q->count = q->count + 1;
+            return true;
+        }
+
+        bool queueDequeue(EventQueue* q, int* outType, int* outPriority, int* outData) {
+            if (queueIsEmpty(q)) return false;
+
+            int idx = q->head * 3;
+            *outType = q->events[idx];
+            *outPriority = q->events[idx + 1];
+            *outData = q->events[idx + 2];
+
+            q->head = (q->head + 1) % q->capacity;
+            q->count = q->count - 1;
+            return true;
+        }
+
+        bool queuePeek(EventQueue* q, int* outType, int* outPriority, int* outData) {
+            if (queueIsEmpty(q)) return false;
+
+            int idx = q->head * 3;
+            *outType = q->events[idx];
+            *outPriority = q->events[idx + 1];
+            *outData = q->events[idx + 2];
+            return true;
+        }
+
+        int queueSize(EventQueue* q) {
+            return q->count;
+        }
+
+        void queueClear(EventQueue* q) {
+            q->head = 0;
+            q->tail = 0;
+            q->count = 0;
+        }
+
+        // Process events - returns sum of data from all processed events
+        int processAllEvents(EventQueue* q) {
+            int sum = 0;
+            int type, priority, data;
+            while (queueDequeue(q, &type, &priority, &data)) {
+                sum = sum + data;
+            }
+            return sum;
+        }
+
+        // Count events of a specific type
+        int countEventsOfType(EventQueue* q, int targetType) {
+            int count = 0;
+            int idx = q->head;
+            for (int i = 0; i < q->count; i++) {
+                int eventType = q->events[idx * 3];
+                if (eventType == targetType) {
+                    count = count + 1;
+                }
+                idx = (idx + 1) % q->capacity;
+            }
+            return count;
+        }
+
+        int main() {
+            int buffer[24];  // 8 events * 3 ints per event
+            EventQueue queue;
+            queueInit(&queue, buffer, 8);
+
+            // Test empty queue
+            if (!queueIsEmpty(&queue)) return 1;
+            if (queueIsFull(&queue)) return 2;
+            if (queueSize(&queue) != 0) return 3;
+
+            // Test enqueue
+            if (!queueEnqueue(&queue, EVENT_START, 1, 100)) return 4;
+            if (queueIsEmpty(&queue)) return 5;
+            if (queueSize(&queue) != 1) return 6;
+
+            // Test peek
+            int type, priority, data;
+            if (!queuePeek(&queue, &type, &priority, &data)) return 7;
+            if (type != EVENT_START || data != 100) return 8;
+            if (queueSize(&queue) != 1) return 9;  // Peek shouldn't remove
+
+            // Test dequeue
+            if (!queueDequeue(&queue, &type, &priority, &data)) return 10;
+            if (type != EVENT_START || data != 100) return 11;
+            if (queueSize(&queue) != 0) return 12;
+
+            // Fill queue
+            for (int i = 0; i < 8; i++) {
+                if (!queueEnqueue(&queue, EVENT_DATA, i, i * 10)) return 13;
+            }
+            if (!queueIsFull(&queue)) return 14;
+            if (queueEnqueue(&queue, EVENT_ERROR, 0, 0)) return 15;  // Should fail
+
+            // Test countEventsOfType
+            queueClear(&queue);
+            queueEnqueue(&queue, EVENT_START, 1, 0);
+            queueEnqueue(&queue, EVENT_DATA, 2, 10);
+            queueEnqueue(&queue, EVENT_DATA, 2, 20);
+            queueEnqueue(&queue, EVENT_STOP, 1, 0);
+            queueEnqueue(&queue, EVENT_DATA, 2, 30);
+
+            if (countEventsOfType(&queue, EVENT_DATA) != 3) return 16;
+            if (countEventsOfType(&queue, EVENT_START) != 1) return 17;
+            if (countEventsOfType(&queue, EVENT_ERROR) != 0) return 18;
+
+            // Test processAllEvents
+            int sum = processAllEvents(&queue);
+            if (sum != 60) return 19;  // 0 + 10 + 20 + 0 + 30
+            if (!queueIsEmpty(&queue)) return 20;
+
+            // Test wrap-around
+            int buffer2[12];  // 4 events * 3 ints per event
+            queueInit(&queue, buffer2, 4);
+            queueEnqueue(&queue, EVENT_DATA, 1, 1);
+            queueEnqueue(&queue, EVENT_DATA, 1, 2);
+            queueDequeue(&queue, &type, &priority, &data);
+            queueDequeue(&queue, &type, &priority, &data);
+            queueEnqueue(&queue, EVENT_DATA, 1, 3);
+            queueEnqueue(&queue, EVENT_DATA, 1, 4);
+            queueEnqueue(&queue, EVENT_DATA, 1, 5);
+
+            sum = processAllEvents(&queue);
+            if (sum != 12) return 21;  // 3 + 4 + 5
+
+            return 0;  // Success
+        }
+    "#;
+
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_event_queue.cpp").expect("E2E test failed");
+
+    assert_eq!(exit_code, 0, "Event queue should work correctly");
+}
