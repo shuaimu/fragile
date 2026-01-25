@@ -3239,13 +3239,22 @@ impl AstCodeGen {
             None => return,
         };
 
+        // Track anonymous bit field count for unique naming
+        let mut anon_count = 0;
+
         for group in &groups {
             let storage_type = group.storage_type();
             let storage_field = format!("_bitfield_{}", group.group_index);
 
             for field in &group.fields {
                 let vis = access_to_visibility(field.access);
-                let field_name = sanitize_identifier(&field.field_name);
+                // Handle anonymous bit fields: give them unique names
+                let field_name = if field.field_name.is_empty() {
+                    anon_count += 1;
+                    format!("_unnamed_{}", anon_count)
+                } else {
+                    sanitize_identifier(&field.field_name)
+                };
                 let ret_type = field.original_type.to_rust_type_str();
 
                 // Calculate mask for this field's width
