@@ -9670,7 +9670,20 @@ impl AstCodeGen {
                 if !node.children.is_empty() {
                     let operand = self.expr_to_string_raw(&node.children[0]);
                     match op {
-                        UnaryOp::Deref => format!("*{}", operand),
+                        UnaryOp::Deref => {
+                            // Check if operand is a reference variable (tracked in ref_vars)
+                            // In Rust, dereferencing a reference for method calls is automatic
+                            // So *ref_var.method() should just be ref_var.method()
+                            if let ClangNodeKind::DeclRefExpr { name, .. } =
+                                &node.children[0].kind
+                            {
+                                if self.ref_vars.contains(name) {
+                                    // Skip the dereference - Rust auto-derefs for method calls
+                                    return operand;
+                                }
+                            }
+                            format!("*{}", operand)
+                        }
                         UnaryOp::Minus => {
                             // C++ allows -bool which converts bool to int then negates
                             // In Rust, we convert to logical NOT for boolean types
@@ -10803,6 +10816,18 @@ impl AstCodeGen {
                             // in Rust 'self' is already the object (not a pointer)
                             if matches!(&node.children[0].kind, ClangNodeKind::CXXThisExpr { .. }) {
                                 operand // Just return 'self' directly
+                            } else if let ClangNodeKind::DeclRefExpr { name, .. } =
+                                &node.children[0].kind
+                            {
+                                // Check if operand is a reference variable (tracked in ref_vars)
+                                // In Rust, dereferencing a reference for method calls is automatic
+                                if self.ref_vars.contains(name) {
+                                    // Skip the dereference - Rust auto-derefs
+                                    operand
+                                } else {
+                                    // Raw pointer dereference needs unsafe
+                                    format!("unsafe {{ *{} }}", operand)
+                                }
                             } else {
                                 // Raw pointer dereference needs unsafe
                                 format!("unsafe {{ *{} }}", operand)
@@ -11684,9 +11709,11 @@ impl AstCodeGen {
                                 format!("unsafe {{ {}.{} }}", base_raw, member)
                             }
                         } else {
-                            // Parenthesize if base contains 'as' (cast) since Rust's 'as' has lower
-                            // precedence than '.', and `x as T.method()` is invalid
-                            if base.contains(" as ") {
+                            // Parenthesize if base starts with '*' (deref) or contains 'as' (cast)
+                            // since Rust's '*' and 'as' have lower precedence than '.'
+                            // - `*x.y` means `*(x.y)` in Rust, we want `(*x).y`
+                            // - `x as T.y` is invalid, we want `(x as T).y`
+                            if base.starts_with('*') || base.contains(" as ") {
                                 format!("({}).{}", base, member)
                             } else {
                                 format!("{}.{}", base, member)
