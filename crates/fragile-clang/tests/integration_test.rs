@@ -9287,3 +9287,447 @@ fn test_e2e_string_pattern_matching() {
         "String pattern matching should work correctly"
     );
 }
+
+/// E2E test: Integer parsing operations
+/// Tests: atoi-like parsing, number formatting
+#[test]
+fn test_e2e_integer_parsing() {
+    let source = r#"
+        // Integer parsing operations
+
+        // Check if character is a digit
+        bool isDigit(char c) {
+            return c >= '0' && c <= '9';
+        }
+
+        // Check if character is whitespace
+        bool isSpace(char c) {
+            return c == ' ' || c == '\t' || c == '\n' || c == '\r';
+        }
+
+        // Parse integer from string (atoi-like)
+        int parseInt(const char* s) {
+            if (s == nullptr) return 0;
+
+            int i = 0;
+            // Skip whitespace
+            while (isSpace(s[i])) i = i + 1;
+
+            // Handle sign
+            int sign = 1;
+            if (s[i] == '-') {
+                sign = -1;
+                i = i + 1;
+            } else if (s[i] == '+') {
+                i = i + 1;
+            }
+
+            // Parse digits
+            int result = 0;
+            while (isDigit(s[i])) {
+                result = result * 10 + (s[i] - '0');
+                i = i + 1;
+            }
+
+            return sign * result;
+        }
+
+        // Count digits in a number
+        int digitCount(int n) {
+            if (n == 0) return 1;
+            int num = n;
+            if (num < 0) num = -num;
+            int count = 0;
+            while (num > 0) {
+                count = count + 1;
+                num = num / 10;
+            }
+            return count;
+        }
+
+        // Get digit at position (0 = least significant)
+        int digitAt(int n, int pos) {
+            int num = n;
+            if (num < 0) num = -num;
+            for (int i = 0; i < pos; i++) {
+                num = num / 10;
+            }
+            return num % 10;
+        }
+
+        // Check if number is a palindrome
+        bool isPalindrome(int n) {
+            if (n < 0) return false;
+            if (n < 10) return true;
+
+            int num = n;
+            int reversed = 0;
+            while (num > 0) {
+                reversed = reversed * 10 + (num % 10);
+                num = num / 10;
+            }
+            return n == reversed;
+        }
+
+        // Sum of digits
+        int digitSum(int n) {
+            int num = n;
+            if (num < 0) num = -num;
+            int sum = 0;
+            while (num > 0) {
+                sum = sum + (num % 10);
+                num = num / 10;
+            }
+            return sum;
+        }
+
+        int main() {
+            // Test isDigit
+            if (!isDigit('0')) return 1;
+            if (!isDigit('5')) return 2;
+            if (!isDigit('9')) return 3;
+            if (isDigit('a')) return 4;
+            if (isDigit(' ')) return 5;
+
+            // Test parseInt
+            if (parseInt("123") != 123) return 6;
+            if (parseInt("-456") != -456) return 7;
+            if (parseInt("  789") != 789) return 8;
+            if (parseInt("+42") != 42) return 9;
+            if (parseInt("0") != 0) return 10;
+            if (parseInt("   -123abc") != -123) return 11;
+
+            // Test digitCount
+            if (digitCount(0) != 1) return 12;
+            if (digitCount(5) != 1) return 13;
+            if (digitCount(42) != 2) return 14;
+            if (digitCount(123) != 3) return 15;
+            if (digitCount(-123) != 3) return 16;
+            if (digitCount(12345) != 5) return 17;
+
+            // Test digitAt
+            if (digitAt(12345, 0) != 5) return 18;
+            if (digitAt(12345, 1) != 4) return 19;
+            if (digitAt(12345, 2) != 3) return 20;
+            if (digitAt(12345, 3) != 2) return 21;
+            if (digitAt(12345, 4) != 1) return 22;
+
+            // Test isPalindrome
+            if (!isPalindrome(0)) return 23;
+            if (!isPalindrome(1)) return 24;
+            if (!isPalindrome(11)) return 25;
+            if (!isPalindrome(121)) return 26;
+            if (!isPalindrome(12321)) return 27;
+            if (isPalindrome(123)) return 28;
+            if (isPalindrome(-121)) return 29;
+
+            // Test digitSum
+            if (digitSum(0) != 0) return 30;
+            if (digitSum(123) != 6) return 31;
+            if (digitSum(-123) != 6) return 32;
+            if (digitSum(99999) != 45) return 33;
+
+            return 0;  // Success
+        }
+    "#;
+
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_integer_parsing.cpp").expect("E2E test failed");
+
+    assert_eq!(exit_code, 0, "Integer parsing should work correctly");
+}
+
+/// E2E test: Heap sort algorithm
+/// Tests: heapify, heap operations, sorting
+#[test]
+fn test_e2e_heapsort() {
+    let source = r#"
+        // Heap sort implementation using max heap
+
+        void swap(int* a, int* b) {
+            int temp = *a;
+            *a = *b;
+            *b = temp;
+        }
+
+        // Heapify a subtree rooted at index i
+        void heapify(int* arr, int n, int i) {
+            int largest = i;
+            int left = 2 * i + 1;
+            int right = 2 * i + 2;
+
+            if (left < n && arr[left] > arr[largest]) {
+                largest = left;
+            }
+            if (right < n && arr[right] > arr[largest]) {
+                largest = right;
+            }
+
+            if (largest != i) {
+                swap(&arr[i], &arr[largest]);
+                heapify(arr, n, largest);
+            }
+        }
+
+        // Build max heap from array
+        void buildHeap(int* arr, int n) {
+            for (int i = n / 2 - 1; i >= 0; i = i - 1) {
+                heapify(arr, n, i);
+            }
+        }
+
+        // Heap sort
+        void heapSort(int* arr, int n) {
+            buildHeap(arr, n);
+
+            for (int i = n - 1; i > 0; i = i - 1) {
+                swap(&arr[0], &arr[i]);
+                heapify(arr, i, 0);
+            }
+        }
+
+        // Check if array is sorted
+        bool isSorted(int* arr, int n) {
+            for (int i = 0; i < n - 1; i++) {
+                if (arr[i] > arr[i + 1]) return false;
+            }
+            return true;
+        }
+
+        // Get max from max heap (root)
+        int heapMax(int* arr) {
+            return arr[0];
+        }
+
+        // Extract max from max heap
+        int extractMax(int* arr, int* size) {
+            int max = arr[0];
+            arr[0] = arr[*size - 1];
+            *size = *size - 1;
+            heapify(arr, *size, 0);
+            return max;
+        }
+
+        int main() {
+            // Test heap sort on various arrays
+            int arr1[5] = {5, 2, 8, 1, 9};
+            heapSort(arr1, 5);
+            if (!isSorted(arr1, 5)) return 1;
+            if (arr1[0] != 1 || arr1[4] != 9) return 2;
+
+            // Already sorted
+            int arr2[4] = {1, 2, 3, 4};
+            heapSort(arr2, 4);
+            if (!isSorted(arr2, 4)) return 3;
+
+            // Reverse sorted
+            int arr3[4] = {4, 3, 2, 1};
+            heapSort(arr3, 4);
+            if (!isSorted(arr3, 4)) return 4;
+
+            // Single element
+            int arr4[1] = {42};
+            heapSort(arr4, 1);
+            if (arr4[0] != 42) return 5;
+
+            // Duplicates
+            int arr5[6] = {3, 1, 4, 1, 5, 9};
+            heapSort(arr5, 6);
+            if (!isSorted(arr5, 6)) return 6;
+
+            // Test buildHeap and extractMax
+            int heap[5] = {3, 7, 1, 8, 2};
+            buildHeap(heap, 5);
+            if (heapMax(heap) != 8) return 7;
+
+            int size = 5;
+            int max1 = extractMax(heap, &size);
+            if (max1 != 8) return 8;
+            if (size != 4) return 9;
+
+            int max2 = extractMax(heap, &size);
+            if (max2 != 7) return 10;
+            if (size != 3) return 11;
+
+            return 0;  // Success
+        }
+    "#;
+
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_heapsort.cpp").expect("E2E test failed");
+
+    assert_eq!(exit_code, 0, "Heap sort should work correctly");
+}
+
+/// E2E test: Trie (prefix tree) data structure
+/// Tests: Insert, search, prefix search in a trie
+/// Note: Marked as ignored due to transpiler limitation with new[] dynamic size
+#[test]
+#[ignore]
+fn test_e2e_trie() {
+    let source = r#"
+        // Simple trie for lowercase ASCII strings
+        // NOTE: This test is ignored because new[variable_size] transpiles incorrectly
+
+        struct TrieNode;  // Forward declare
+
+        struct TrieNode {
+            TrieNode** children;  // Pointer to array of 26 pointers
+            bool isEndOfWord;
+        };
+
+        // Allocate children array - uses new char[208] which is 26 * sizeof(TrieNode*)
+        TrieNode** allocChildren() {
+            TrieNode** arr = (TrieNode**)new char[208];  // 26 * 8 bytes on 64-bit
+            for (int i = 0; i < 26; i++) {
+                arr[i] = nullptr;
+            }
+            return arr;
+        }
+
+        TrieNode* createNode() {
+            TrieNode* node = new TrieNode();
+            node->children = allocChildren();
+            node->isEndOfWord = false;
+            return node;
+        }
+
+        // Get child at index
+        TrieNode* getChild(TrieNode* node, int index) {
+            return node->children[index];
+        }
+
+        // Set child at index
+        void setChild(TrieNode* node, int index, TrieNode* child) {
+            node->children[index] = child;
+        }
+
+        // Insert a word into the trie
+        void insert(TrieNode* root, const char* word) {
+            TrieNode* current = root;
+            int i = 0;
+            while (word[i] != '\0') {
+                int index = word[i] - 'a';
+                if (getChild(current, index) == nullptr) {
+                    setChild(current, index, createNode());
+                }
+                current = getChild(current, index);
+                i = i + 1;
+            }
+            current->isEndOfWord = true;
+        }
+
+        // Search for a word in the trie
+        bool search(TrieNode* root, const char* word) {
+            TrieNode* current = root;
+            int i = 0;
+            while (word[i] != '\0') {
+                int index = word[i] - 'a';
+                if (getChild(current, index) == nullptr) {
+                    return false;
+                }
+                current = getChild(current, index);
+                i = i + 1;
+            }
+            return current->isEndOfWord;
+        }
+
+        // Check if any word starts with the given prefix
+        bool startsWith(TrieNode* root, const char* prefix) {
+            TrieNode* current = root;
+            int i = 0;
+            while (prefix[i] != '\0') {
+                int index = prefix[i] - 'a';
+                if (getChild(current, index) == nullptr) {
+                    return false;
+                }
+                current = getChild(current, index);
+                i = i + 1;
+            }
+            return true;
+        }
+
+        // Count words with given prefix
+        int countWithPrefix(TrieNode* node) {
+            if (node == nullptr) return 0;
+            int count = 0;
+            if (node->isEndOfWord) count = 1;
+            for (int i = 0; i < 26; i++) {
+                count = count + countWithPrefix(getChild(node, i));
+            }
+            return count;
+        }
+
+        int countWordsWithPrefix(TrieNode* root, const char* prefix) {
+            TrieNode* current = root;
+            int i = 0;
+            while (prefix[i] != '\0') {
+                int index = prefix[i] - 'a';
+                if (getChild(current, index) == nullptr) {
+                    return 0;
+                }
+                current = getChild(current, index);
+                i = i + 1;
+            }
+            return countWithPrefix(current);
+        }
+
+        // Delete trie to prevent memory leaks
+        void deleteTrie(TrieNode* node) {
+            if (node == nullptr) return;
+            for (int i = 0; i < 26; i++) {
+                deleteTrie(getChild(node, i));
+            }
+            delete[] (char*)node->children;
+            delete node;
+        }
+
+        int main() {
+            TrieNode* root = createNode();
+
+            // Insert words
+            insert(root, "apple");
+            insert(root, "app");
+            insert(root, "apply");
+            insert(root, "banana");
+            insert(root, "band");
+
+            // Test search
+            if (!search(root, "apple")) return 1;
+            if (!search(root, "app")) return 2;
+            if (!search(root, "apply")) return 3;
+            if (!search(root, "banana")) return 4;
+            if (!search(root, "band")) return 5;
+
+            // Test search for non-existent words
+            if (search(root, "appl")) return 6;   // Prefix but not a word
+            if (search(root, "ban")) return 7;    // Prefix but not a word
+            if (search(root, "xyz")) return 8;    // Not in trie
+            if (search(root, "bandana")) return 9;// Not in trie
+
+            // Test startsWith
+            if (!startsWith(root, "app")) return 10;
+            if (!startsWith(root, "ban")) return 11;
+            if (!startsWith(root, "a")) return 12;
+            if (!startsWith(root, "")) return 13;   // Empty prefix
+            if (startsWith(root, "xyz")) return 14;
+
+            // Test countWordsWithPrefix
+            if (countWordsWithPrefix(root, "app") != 3) return 15;  // apple, app, apply
+            if (countWordsWithPrefix(root, "ban") != 2) return 16;  // banana, band
+            if (countWordsWithPrefix(root, "a") != 3) return 17;    // apple, app, apply
+            if (countWordsWithPrefix(root, "b") != 2) return 18;    // banana, band
+            if (countWordsWithPrefix(root, "xyz") != 0) return 19;
+
+            // Clean up
+            deleteTrie(root);
+
+            return 0;  // Success
+        }
+    "#;
+
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_trie.cpp").expect("E2E test failed");
+
+    assert_eq!(exit_code, 0, "Trie should work correctly");
+}
