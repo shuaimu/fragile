@@ -367,12 +367,13 @@ impl CppType {
                     // Boolean type traits used for tag dispatching
                     "true_type" | "std::true_type" => "bool".to_string(),
                     "false_type" | "std::false_type" => "bool".to_string(),
-                    // C++ exception types - these are rarely instantiated directly
-                    // Map to c_void to avoid generating complex inheritance hierarchies
-                    "logic_error" | "std::logic_error" => "std::ffi::c_void".to_string(),
-                    "runtime_error" | "std::runtime_error" => "std::ffi::c_void".to_string(),
-                    "bad_alloc" | "std::bad_alloc" => "std::ffi::c_void".to_string(),
-                    "exception" | "std::exception" => "std::ffi::c_void".to_string(),
+                    // C++ exception types - pass through as proper types
+                    // Previously mapped to c_void, but this breaks inheritance (bad_alloc : exception)
+                    // Now these types are generated as proper structs with inheritance fields
+                    "logic_error" | "std::logic_error" => "logic_error".to_string(),
+                    "runtime_error" | "std::runtime_error" => "runtime_error".to_string(),
+                    "bad_alloc" | "std::bad_alloc" => "bad_alloc".to_string(),
+                    "exception" | "std::exception" => "exception".to_string(),
                     // Time and stream types
                     "timespec" => "i64".to_string(), // Simplify to i64 timestamp
                     "streambuf_type" | "char_type" => "std::ffi::c_void".to_string(),
