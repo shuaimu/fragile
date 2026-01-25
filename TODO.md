@@ -684,11 +684,16 @@ Get `std::vector<int>` working end-to-end.
     - Fixed: Strip literal type suffixes in assignments and comparisons ✅ 2026-01-24
       - C++ allows `x = 64` for any integer type; Rust needs unsuffixed literal for inference
       - Applies to assignment operators (=, +=, etc.) and comparison operators (==, <, etc.)
-    - **Progress**: Errors reduced from 2091 to 97 (95.4% reduction) ✅ 2026-01-24
-    - Remaining 97 errors:
-      - Type mismatches (iterator/reference types)
+    - Fixed: Add partial_ordering stub with comparison operators (op_eq, op_lt, etc.) ✅ 2026-01-24
+      - C++20 comparison ordering types have friend operators that need method stubs
+    - Fixed: Handle unary minus on bool types as logical NOT ✅ 2026-01-24
+      - C++ allows -bool, Rust does not; convert to !bool
+    - Fixed: Add parentheses around binary expressions in implicit casts ✅ 2026-01-24
+      - Rust's `as` binds tighter than arithmetic ops; wrap binary exprs in parens
+    - **Progress**: Errors reduced from 2091 to 91 (95.6% reduction) ✅ 2026-01-24
+    - Remaining 91 errors:
+      - Type mismatches (iterator/reference types, u32+isize arithmetic)
       - Missing types (template instantiation aliases like __strictest_alignment__Types___)
-      - Missing comparison methods on partial_ordering
       - Missing fragile_runtime crate reference
   - [ ] **23.8.3** Execute and verify exit code - BLOCKED on 23.8.2
   - [ ] **23.8.4** Add iteration test: `for (int x : v) { ... }` - BLOCKED
