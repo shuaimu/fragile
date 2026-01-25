@@ -2704,6 +2704,18 @@ impl AstCodeGen {
         self.writeln(&format!("pub struct {} {{", rust_name));
         self.indent += 1;
 
+        // Add vtable pointer for ROOT polymorphic classes (those without a polymorphic base)
+        // Derived classes inherit the vtable pointer through __base
+        if let Some(vtable_info) = self.vtables.get(name).cloned() {
+            if vtable_info.base_class.is_none() {
+                // This is a root polymorphic class - add vtable pointer as first field
+                self.writeln(&format!(
+                    "pub __vtable: *const {}_vtable,",
+                    rust_name
+                ));
+            }
+        }
+
         // First, embed non-virtual base classes as fields (supports multiple inheritance)
         // Also collect base fields for class_fields tracking
         let mut base_fields = Vec::new();
@@ -3821,6 +3833,18 @@ impl AstCodeGen {
         }
         self.writeln(&format!("pub struct {} {{", rust_name));
         self.indent += 1;
+
+        // Add vtable pointer for ROOT polymorphic classes (those without a polymorphic base)
+        // Derived classes inherit the vtable pointer through __base
+        if let Some(vtable_info) = self.vtables.get(name).cloned() {
+            if vtable_info.base_class.is_none() {
+                // This is a root polymorphic class - add vtable pointer as first field
+                self.writeln(&format!(
+                    "pub __vtable: *const {}_vtable,",
+                    rust_name
+                ));
+            }
+        }
 
         // First, embed non-virtual base classes as fields (supports multiple inheritance)
         // Base classes must come first to maintain C++ memory layout

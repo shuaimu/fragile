@@ -990,10 +990,10 @@ fn call_what(e: *const exception) -> *const i8 {
   - [x] **25.3.3** Add `__destructor` entry for destructor (always present for polymorphic classes)
   - [x] **25.3.4** Handle covariant return types (use declaring class type in vtable)
 
-- [ ] **25.4** Add vtable pointer to classes
-  - [ ] **25.4.1** Add `__vtable: *const {ClassName}_vtable` as first field in polymorphic classes
-  - [ ] **25.4.2** For derived classes, vtable pointer is in `__base` (no duplicate pointer)
-  - [ ] **25.4.3** Multiple inheritance: add separate vtable pointers for each polymorphic base
+- [x] **25.4** Add vtable pointer to classes ✅ 2026-01-25
+  - [x] **25.4.1** Add `__vtable: *const {ClassName}_vtable` as first field in ROOT polymorphic classes
+  - [x] **25.4.2** For derived classes, vtable pointer is in `__base` (no duplicate pointer)
+  - [ ] **25.4.3** Multiple inheritance: add separate vtable pointers for each polymorphic base (future)
 
 - [ ] **25.5** Generate static vtable instances
   - [ ] **25.5.1** For each concrete class, generate `static {CLASS}_VTABLE: {Base}_vtable = ...`
