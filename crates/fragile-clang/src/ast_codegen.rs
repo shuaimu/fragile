@@ -235,6 +235,17 @@ impl AstCodeGen {
         }
     }
 
+    /// Sanitize a return type string, replacing invalid placeholders.
+    /// The `_` placeholder is valid in variable types but NOT in function return types.
+    fn sanitize_return_type(type_str: &str) -> String {
+        // Replace standalone `_` with `()` (unit type) for stub functions
+        if type_str == "_" {
+            "()".to_string()
+        } else {
+            type_str.to_string()
+        }
+    }
+
     /// Generate Rust source code from a Clang AST.
     pub fn generate(mut self, ast: &ClangNode) -> String {
         // First pass: collect polymorphic class information
@@ -902,10 +913,10 @@ impl AstCodeGen {
                         param_strs.push(format!("{}: {}", pname, rust_ty));
                     }
 
-                    let ret_str = if ret_type == "()" || ret_type.is_empty() {
+                    let ret_str = if ret_type == "()" || ret_type.is_empty() || ret_type == "_" {
                         String::new()
                     } else {
-                        format!(" -> {}", ret_type)
+                        format!(" -> {}", Self::sanitize_return_type(&ret_type))
                     };
 
                     // Handle method overloading by appending suffix for duplicates
@@ -2319,7 +2330,7 @@ impl AstCodeGen {
         let ret_str = if *return_type == CppType::Void {
             String::new()
         } else {
-            format!(" -> {}", return_type.to_rust_type_str())
+            format!(" -> {}", Self::sanitize_return_type(&return_type.to_rust_type_str()))
         };
 
         self.writeln(&format!(
@@ -2853,14 +2864,14 @@ impl AstCodeGen {
                         if *value_type == CppType::Void {
                             return String::new();
                         }
-                        return format!(" -> {}", value_type.to_rust_type_str());
+                        return format!(" -> {}", Self::sanitize_return_type(&value_type.to_rust_type_str()));
                     }
                     CoroutineKind::Generator => {
                         // Generators should return impl Iterator<Item=T>
                         // Note: Rust generators are unstable, so this is forward-looking
                         return format!(
                             " -> impl Iterator<Item={}>",
-                            value_type.to_rust_type_str()
+                            Self::sanitize_return_type(&value_type.to_rust_type_str())
                         );
                     }
                     CoroutineKind::Custom => {
@@ -2874,7 +2885,7 @@ impl AstCodeGen {
         if *return_type == CppType::Void {
             String::new()
         } else {
-            format!(" -> {}", return_type.to_rust_type_str())
+            format!(" -> {}", Self::sanitize_return_type(&return_type.to_rust_type_str()))
         }
     }
 
@@ -4236,7 +4247,7 @@ impl AstCodeGen {
 
         for method in methods {
             let method_name = sanitize_identifier(&method.name);
-            let return_type = method.return_type.to_rust_type_str();
+            let return_type = Self::sanitize_return_type(&method.return_type.to_rust_type_str());
 
             // Build parameter list (skip first param which is self)
             let params: Vec<String> = method
@@ -4287,7 +4298,7 @@ impl AstCodeGen {
 
         for method in methods {
             let method_name = sanitize_identifier(&method.name);
-            let return_type = method.return_type.to_rust_type_str();
+            let return_type = Self::sanitize_return_type(&method.return_type.to_rust_type_str());
 
             // Build parameter list
             let params: Vec<String> = method
@@ -5826,7 +5837,7 @@ impl AstCodeGen {
                         " -> Self".to_string()
                     }
                 } else {
-                    format!(" -> {}", rust_return_type)
+                    format!(" -> {}", Self::sanitize_return_type(&rust_return_type))
                 };
 
                 // Special handling for operators that have const/non-const overloads
@@ -9013,7 +9024,7 @@ impl AstCodeGen {
                 let ret_str = if *return_type == CppType::Void {
                     String::new()
                 } else {
-                    format!(" -> {}", return_type.to_rust_type_str())
+                    format!(" -> {}", Self::sanitize_return_type(&return_type.to_rust_type_str()))
                 };
 
                 // Find the body (CompoundStmt child)
