@@ -5714,37 +5714,32 @@ impl AstCodeGen {
         });
 
         // Check if there's any field that would prevent deriving Default:
-        // - Arrays larger than 32 elements with non-primitive types (Rust's Default only up to [T; 32])
-        let has_large_array_field = children.iter().any(|child| {
+        // - Arrays larger than 32 elements (Rust's Default is only impl'd for arrays up to [T; 32])
+        // - Fields of type c_void which doesn't implement Default
+        let has_non_default_field = children.iter().any(|child| {
             if let ClangNodeKind::FieldDecl { ty, is_static, .. } = &child.kind {
                 if *is_static {
                     return false;
                 }
-                if let CppType::Array {
-                    element,
-                    size: Some(n),
-                } = ty
-                {
+                // Check for large arrays (Default only impl'd up to [T; 32])
+                if let CppType::Array { size: Some(n), .. } = ty {
                     if *n > 32 {
-                        // Check if element type is non-primitive (needs manual Default impl)
-                        !matches!(
-                            element.as_ref(),
-                            CppType::Bool
-                                | CppType::Char { .. }
-                                | CppType::Short { .. }
-                                | CppType::Int { .. }
-                                | CppType::Long { .. }
-                                | CppType::LongLong { .. }
-                                | CppType::Float
-                                | CppType::Double
-                                | CppType::Pointer { .. }
-                        )
-                    } else {
-                        false
+                        return true;
                     }
-                } else {
-                    false
                 }
+                // Check for c_void fields (c_void doesn't implement Default)
+                let type_str = ty.to_rust_type_str();
+                if type_str == "std::ffi::c_void" || type_str.ends_with("c_void") {
+                    return true;
+                }
+                // Check for array of c_void
+                if let CppType::Array { element, .. } = ty {
+                    let elem_str = element.to_rust_type_str();
+                    if elem_str == "std::ffi::c_void" || elem_str.ends_with("c_void") {
+                        return true;
+                    }
+                }
+                false
             } else {
                 false
             }
@@ -5755,9 +5750,9 @@ impl AstCodeGen {
         self.writeln("#[repr(C)]");
         // Derive Clone for trivially copyable types (no explicit copy ctor)
         // For types with explicit copy ctor, we generate Clone impl separately
-        // Skip Default derive if struct has large array of non-primitives (Default only works up to [T; 32])
-        if has_large_array_field {
-            // Can't derive Default - the struct needs a custom constructor
+        // Skip Default derive if struct has fields that don't impl Default (large arrays, c_void)
+        if has_non_default_field {
+            // Can't derive Default - the struct needs a manual Default impl
             if has_explicit_copy_ctor {
                 // Neither Default nor Clone can be derived
             } else {
@@ -5960,6 +5955,16 @@ impl AstCodeGen {
 
         self.indent -= 1;
         self.writeln("}");
+
+        // Generate manual Default impl for structs that can't derive Default
+        // (due to large arrays or c_void fields)
+        if has_non_default_field && !has_explicit_copy_ctor {
+            self.writeln(&format!("impl Default for {} {{", rust_name));
+            self.indent += 1;
+            self.writeln("fn default() -> Self { unsafe { std::mem::zeroed() } }");
+            self.indent -= 1;
+            self.writeln("}");
+        }
 
         // Generate static member variables as globals
         for child in children {
