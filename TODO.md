@@ -841,7 +841,7 @@ Get `std::cout` working end-to-end.
     }
     ```
     - **Status**: Transpilation succeeds (128K chars → 23K LOC Rust)
-    - **Progress**: Compilation errors reduced: 65 → ... → 491 → 476 → 457 → 452 → 442 → 438 → 435 → 366 → 357 → 354 → 343 → 337 → 336 → 330 → 326 (libstdc++) ✅ 2026-01-25
+    - **Progress**: Compilation errors reduced: 65 → ... → 491 → 476 → 457 → 452 → 442 → 438 → 435 → 366 → 357 → 354 → 343 → 337 → 336 → 330 → 326 → 322 → 321 → 312 (libstdc++) ✅ 2026-01-25
     - Many fixes applied:
       - Skip variadic template instantiations (&&..., ...)
       - Skip decltype return types
@@ -890,6 +890,9 @@ Get `std::cout` working end-to-end.
     - Fixed: Return type casts for conditional expressions with ConditionalOperator type handling (337→336) ✅ 2026-01-25
     - Fixed: Wrap non-Copy struct fields in ManuallyDrop for unions (336→330) ✅ 2026-01-25
     - Fixed: error_category functions return proper reference types (330→326) ✅ 2026-01-25
+    - Fixed: Hash functions use u64 for size_t compatibility (326→322) ✅ 2026-01-25
+    - Fixed: Added to_string function stubs (322→321) ✅ 2026-01-25
+    - Fixed: Added type stubs (_StateT, _T1, _T2, __gthread_time_t, ctype_type_parameter_0_0) (321→312) ✅ 2026-01-25
   - [ ] **23.9.2** Fix iostream static initialization (global cout/cin/cerr objects) - BLOCKED
     - libc++ uses `__start_std_streams` section for initialization
     - May need to generate Rust static initialization code
