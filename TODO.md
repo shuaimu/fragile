@@ -626,7 +626,7 @@ Get `std::vector<int>` working end-to-end.
     }
     ```
   - [ ] **23.8.2** Compile transpiled code with rustc + fragile-runtime - IN PROGRESS
-    - **Progress**: Errors reduced 2091 → 106 (94.9% reduction) ✅ 2026-01-24
+    - **Progress**: Errors reduced 2091 → 107 (94.9% reduction) ✅ 2026-01-24
     - Fixed: super:: path computation now accounts for flattened namespaces (std, __)
     - Fixed: Method overloading deduplication within struct impl blocks (23.8.3)
     - Fixed: Constructor overloading with same param count but different types
@@ -658,11 +658,13 @@ Get `std::vector<int>` working end-to-end.
     - Fixed: Skip union generation if name conflicts with type alias ✅ 2026-01-24
     - Fixed: Base class TypeRef namespace prefix stripping (std::X → X) ✅ 2026-01-24
     - Fixed: find_fragile_runtime_path to check release builds ✅ 2026-01-24
-    - Remaining 106 errors:
-      - 23 mismatched types (integer literal/return type issues)
-      - Missing types (template instantiation types, dependent types)
-      - Missing methods (op_bool, op_eq, op_add, is_equal)
-      - __base field access on non-inheriting types
+    - Fixed: InitListExpr for scalar types (don't wrap single element in array brackets) ✅ 2026-01-24
+    - Remaining 107 errors:
+      - 23 mismatched types (integer literal type suffixes, e.g. 0i32 where usize expected)
+      - Missing types (template instantiation types like __numeric_traits_floating_*)
+      - Missing comparison methods on partial_ordering (op_eq, op_lt, op_le, op_gt, op_ge)
+      - Missing op_bool on _Bit_reference
+      - Incorrect __base field access on non-inheriting types (_Bit_reference, _Bit_iterator)
   - [ ] **23.8.3** Execute and verify exit code - BLOCKED on 23.8.2
   - [ ] **23.8.4** Add iteration test: `for (int x : v) { ... }` - BLOCKED
   - [ ] **23.8.5** Add resize/reserve/capacity tests - BLOCKED
