@@ -7423,3 +7423,592 @@ fn test_e2e_matrix_operations() {
         "Matrix operations should work correctly"
     );
 }
+
+/// E2E test: String comparison utilities
+/// Tests: string comparison functions, prefix/suffix checks, case conversion
+/// This simulates a simple string utility library pattern
+#[test]
+fn test_e2e_string_utilities() {
+    let source = r#"
+        // String utility functions - simulates a small library
+        // Uses C-style strings (char*) for simplicity
+
+        // String length
+        int strLen(const char* s) {
+            int len = 0;
+            while (s[len] != '\0') len++;
+            return len;
+        }
+
+        // String comparison (0 = equal, <0 if a<b, >0 if a>b)
+        int strCmp(const char* a, const char* b) {
+            int i = 0;
+            while (a[i] != '\0' && b[i] != '\0') {
+                if (a[i] != b[i]) return a[i] - b[i];
+                i++;
+            }
+            return a[i] - b[i];
+        }
+
+        // Check if string starts with prefix
+        bool startsWith(const char* str, const char* prefix) {
+            int i = 0;
+            while (prefix[i] != '\0') {
+                if (str[i] == '\0' || str[i] != prefix[i]) return false;
+                i++;
+            }
+            return true;
+        }
+
+        // Check if string ends with suffix
+        bool endsWith(const char* str, const char* suffix) {
+            int strLen_val = strLen(str);
+            int suffixLen = strLen(suffix);
+            if (suffixLen > strLen_val) return false;
+            int offset = strLen_val - suffixLen;
+            for (int i = 0; i < suffixLen; i++) {
+                if (str[offset + i] != suffix[i]) return false;
+            }
+            return true;
+        }
+
+        // Check if character is uppercase
+        bool isUpper(char c) {
+            return c >= 'A' && c <= 'Z';
+        }
+
+        // Check if character is lowercase
+        bool isLower(char c) {
+            return c >= 'a' && c <= 'z';
+        }
+
+        // Convert to uppercase
+        char toUpper(char c) {
+            if (isLower(c)) return (char)(c - 32);
+            return c;
+        }
+
+        // Convert to lowercase
+        char toLower(char c) {
+            if (isUpper(c)) return (char)(c + 32);
+            return c;
+        }
+
+        // Case-insensitive comparison
+        int strCmpIgnoreCase(const char* a, const char* b) {
+            int i = 0;
+            while (a[i] != '\0' && b[i] != '\0') {
+                char ca = toLower(a[i]);
+                char cb = toLower(b[i]);
+                if (ca != cb) return ca - cb;
+                i++;
+            }
+            return toLower(a[i]) - toLower(b[i]);
+        }
+
+        // Count occurrences of a character
+        int countChar(const char* str, char c) {
+            int count = 0;
+            for (int i = 0; str[i] != '\0'; i++) {
+                if (str[i] == c) count++;
+            }
+            return count;
+        }
+
+        // Find first occurrence of character
+        int findChar(const char* str, char c) {
+            for (int i = 0; str[i] != '\0'; i++) {
+                if (str[i] == c) return i;
+            }
+            return -1;
+        }
+
+        // Find last occurrence of character
+        int findLastChar(const char* str, char c) {
+            int last = -1;
+            for (int i = 0; str[i] != '\0'; i++) {
+                if (str[i] == c) last = i;
+            }
+            return last;
+        }
+
+        int main() {
+            // Test strLen
+            if (strLen("hello") != 5) return 1;
+            if (strLen("") != 0) return 2;
+            if (strLen("a") != 1) return 3;
+
+            // Test strCmp
+            if (strCmp("abc", "abc") != 0) return 4;
+            if (strCmp("abc", "abd") >= 0) return 5;  // c < d
+            if (strCmp("abd", "abc") <= 0) return 6;  // d > c
+            if (strCmp("ab", "abc") >= 0) return 7;   // shorter
+            if (strCmp("abc", "ab") <= 0) return 8;   // longer
+
+            // Test startsWith
+            if (!startsWith("hello world", "hello")) return 9;
+            if (startsWith("hello", "world")) return 10;
+            if (!startsWith("abc", "a")) return 11;
+            if (!startsWith("", "")) return 12;
+            if (startsWith("a", "ab")) return 13;
+
+            // Test endsWith
+            if (!endsWith("hello world", "world")) return 14;
+            if (endsWith("hello", "world")) return 15;
+            if (!endsWith("abc", "c")) return 16;
+            if (!endsWith("", "")) return 17;
+            if (endsWith("a", "ab")) return 18;
+
+            // Test case functions
+            if (!isUpper('A')) return 19;
+            if (isUpper('a')) return 20;
+            if (!isLower('z')) return 21;
+            if (isLower('Z')) return 22;
+            if (toUpper('a') != 'A') return 23;
+            if (toLower('Z') != 'z') return 24;
+            if (toUpper('A') != 'A') return 25;  // already upper
+            if (toLower('z') != 'z') return 26;  // already lower
+
+            // Test case-insensitive comparison
+            if (strCmpIgnoreCase("ABC", "abc") != 0) return 27;
+            if (strCmpIgnoreCase("Hello", "HELLO") != 0) return 28;
+            if (strCmpIgnoreCase("abc", "abd") >= 0) return 29;
+
+            // Test countChar
+            if (countChar("hello", 'l') != 2) return 30;
+            if (countChar("hello", 'x') != 0) return 31;
+            if (countChar("aaa", 'a') != 3) return 32;
+
+            // Test findChar
+            if (findChar("hello", 'e') != 1) return 33;
+            if (findChar("hello", 'l') != 2) return 34;  // first l
+            if (findChar("hello", 'x') != -1) return 35;
+
+            // Test findLastChar
+            if (findLastChar("hello", 'l') != 3) return 36;  // last l
+            if (findLastChar("hello", 'h') != 0) return 37;
+            if (findLastChar("hello", 'x') != -1) return 38;
+
+            return 0;  // Success
+        }
+    "#;
+
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_string_utilities.cpp").expect("E2E test failed");
+
+    assert_eq!(
+        exit_code, 0,
+        "String utilities should work correctly"
+    );
+}
+
+/// E2E test: Command-line argument parsing pattern
+/// Tests: argc/argv handling, option parsing, flag detection
+/// This simulates a simple CLI argument parser
+#[test]
+fn test_e2e_cli_arg_parser() {
+    let source = r#"
+        // Simple CLI argument parser - simulates a mini CLI tool pattern
+        // Uses argc/argv style command line handling
+
+        // Check if two strings are equal
+        bool strEqual(const char* a, const char* b) {
+            int i = 0;
+            while (a[i] != '\0' && b[i] != '\0') {
+                if (a[i] != b[i]) return false;
+                i++;
+            }
+            return a[i] == b[i];
+        }
+
+        // Check if string starts with prefix
+        bool startsWith(const char* str, const char* prefix) {
+            int i = 0;
+            while (prefix[i] != '\0') {
+                if (str[i] == '\0' || str[i] != prefix[i]) return false;
+                i++;
+            }
+            return true;
+        }
+
+        // Parse integer from string
+        int parseInt(const char* str) {
+            int result = 0;
+            int sign = 1;
+            int i = 0;
+            if (str[0] == '-') {
+                sign = -1;
+                i = 1;
+            }
+            while (str[i] != '\0') {
+                if (str[i] >= '0' && str[i] <= '9') {
+                    result = result * 10 + (str[i] - '0');
+                }
+                i++;
+            }
+            return result * sign;
+        }
+
+        // Argument parser struct
+        struct ArgParser {
+            bool help;
+            bool verbose;
+            int count;
+            const char* output;
+            int positionalCount;
+        };
+
+        // Initialize parser with defaults
+        void initParser(ArgParser* parser) {
+            parser->help = false;
+            parser->verbose = false;
+            parser->count = 1;
+            parser->output = "";
+            parser->positionalCount = 0;
+        }
+
+        // Parse single argument, return number of args consumed
+        int parseArg(ArgParser* parser, int argc, const char* const* argv, int index) {
+            const char* arg = argv[index];
+
+            // Help flag
+            if (strEqual(arg, "-h") || strEqual(arg, "--help")) {
+                parser->help = true;
+                return 1;
+            }
+
+            // Verbose flag
+            if (strEqual(arg, "-v") || strEqual(arg, "--verbose")) {
+                parser->verbose = true;
+                return 1;
+            }
+
+            // Count option with value
+            if (strEqual(arg, "-n") || strEqual(arg, "--count")) {
+                if (index + 1 < argc) {
+                    parser->count = parseInt(argv[index + 1]);
+                    return 2;
+                }
+                return 1;
+            }
+
+            // Count option with equals sign
+            if (startsWith(arg, "--count=")) {
+                parser->count = parseInt(&arg[8]);
+                return 1;
+            }
+
+            // Output option with value
+            if (strEqual(arg, "-o") || strEqual(arg, "--output")) {
+                if (index + 1 < argc) {
+                    parser->output = argv[index + 1];
+                    return 2;
+                }
+                return 1;
+            }
+
+            // Not a known option, treat as positional
+            parser->positionalCount = parser->positionalCount + 1;
+            return 1;
+        }
+
+        // Parse all arguments
+        void parseAll(ArgParser* parser, int argc, const char* const* argv) {
+            int i = 1;  // Skip program name
+            while (i < argc) {
+                int consumed = parseArg(parser, argc, argv, i);
+                i += consumed;
+            }
+        }
+
+        int main() {
+            ArgParser parser;
+
+            // Test 1: Empty args (just program name)
+            {
+                const char* args1[] = {"program"};
+                initParser(&parser);
+                parseAll(&parser, 1, args1);
+                if (parser.help) return 1;
+                if (parser.verbose) return 2;
+                if (parser.count != 1) return 3;
+                if (parser.positionalCount != 0) return 4;
+            }
+
+            // Test 2: Help flag (short)
+            {
+                const char* args2[] = {"program", "-h"};
+                initParser(&parser);
+                parseAll(&parser, 2, args2);
+                if (!parser.help) return 5;
+            }
+
+            // Test 3: Help flag (long)
+            {
+                const char* args3[] = {"program", "--help"};
+                initParser(&parser);
+                parseAll(&parser, 2, args3);
+                if (!parser.help) return 6;
+            }
+
+            // Test 4: Verbose flag
+            {
+                const char* args4[] = {"program", "-v"};
+                initParser(&parser);
+                parseAll(&parser, 2, args4);
+                if (!parser.verbose) return 7;
+            }
+
+            // Test 5: Count option with separate value
+            {
+                const char* args5[] = {"program", "-n", "42"};
+                initParser(&parser);
+                parseAll(&parser, 3, args5);
+                if (parser.count != 42) return 8;
+            }
+
+            // Test 6: Count option with equals
+            {
+                const char* args6[] = {"program", "--count=100"};
+                initParser(&parser);
+                parseAll(&parser, 2, args6);
+                if (parser.count != 100) return 9;
+            }
+
+            // Test 7: Output option
+            {
+                const char* args7[] = {"program", "-o", "file.txt"};
+                initParser(&parser);
+                parseAll(&parser, 3, args7);
+                if (!strEqual(parser.output, "file.txt")) return 10;
+            }
+
+            // Test 8: Multiple flags
+            {
+                const char* args8[] = {"program", "-v", "-h"};
+                initParser(&parser);
+                parseAll(&parser, 3, args8);
+                if (!parser.verbose) return 11;
+                if (!parser.help) return 12;
+            }
+
+            // Test 9: Mixed options and positional
+            {
+                const char* args9[] = {"program", "-v", "input.txt", "-n", "5", "output.txt"};
+                initParser(&parser);
+                parseAll(&parser, 6, args9);
+                if (!parser.verbose) return 13;
+                if (parser.count != 5) return 14;
+                if (parser.positionalCount != 2) return 15;  // input.txt and output.txt
+            }
+
+            // Test 10: Negative number parsing
+            {
+                const char* args10[] = {"program", "-n", "-5"};
+                initParser(&parser);
+                parseAll(&parser, 3, args10);
+                if (parser.count != -5) return 16;
+            }
+
+            // Test 11: Integer parsing edge cases
+            if (parseInt("0") != 0) return 17;
+            if (parseInt("123") != 123) return 18;
+            if (parseInt("-456") != -456) return 19;
+
+            return 0;  // Success
+        }
+    "#;
+
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_cli_arg_parser.cpp").expect("E2E test failed");
+
+    assert_eq!(
+        exit_code, 0,
+        "CLI argument parser should work correctly"
+    );
+}
+
+/// E2E test: Simple assertion library pattern
+/// Tests: assertion functions, test functions as unit of work
+/// This simulates a mini testing library (simplified version)
+#[test]
+fn test_e2e_assertion_library() {
+    let source = r#"
+        // Assertion library - simulates testing library utilities
+        // Demonstrates boolean logic, comparison, and test organization
+
+        // Assertion helpers
+        bool assertEqual(int expected, int actual) {
+            return expected == actual;
+        }
+
+        bool assertNotEqual(int a, int b) {
+            return a != b;
+        }
+
+        bool assertTrue(bool condition) {
+            return condition;
+        }
+
+        bool assertFalse(bool condition) {
+            return !condition;
+        }
+
+        bool assertNull(void* ptr) {
+            return ptr == nullptr;
+        }
+
+        bool assertNotNull(void* ptr) {
+            return ptr != nullptr;
+        }
+
+        bool assertInRange(int value, int minVal, int maxVal) {
+            return value >= minVal && value <= maxVal;
+        }
+
+        bool assertPositive(int value) {
+            return value > 0;
+        }
+
+        bool assertNegative(int value) {
+            return value < 0;
+        }
+
+        bool assertZero(int value) {
+            return value == 0;
+        }
+
+        // Simple math library to test
+        int add(int a, int b) { return a + b; }
+        int subtract(int a, int b) { return a - b; }
+        int multiply(int a, int b) { return a * b; }
+        int divide(int a, int b) { return b != 0 ? a / b : 0; }
+        int absolute(int x) { return x < 0 ? -x : x; }
+        int maxVal(int a, int b) { return a > b ? a : b; }
+        int minVal(int a, int b) { return a < b ? a : b; }
+        int clamp(int value, int lo, int hi) {
+            if (value < lo) return lo;
+            if (value > hi) return hi;
+            return value;
+        }
+
+        // Test functions (return true if all assertions pass)
+        bool testAddition() {
+            if (!assertEqual(5, add(2, 3))) return false;
+            if (!assertEqual(0, add(0, 0))) return false;
+            if (!assertEqual(-1, add(-3, 2))) return false;
+            if (!assertEqual(100, add(50, 50))) return false;
+            return true;
+        }
+
+        bool testSubtraction() {
+            if (!assertEqual(1, subtract(3, 2))) return false;
+            if (!assertEqual(-5, subtract(0, 5))) return false;
+            if (!assertEqual(0, subtract(5, 5))) return false;
+            if (!assertNegative(subtract(3, 10))) return false;
+            return true;
+        }
+
+        bool testMultiplication() {
+            if (!assertEqual(6, multiply(2, 3))) return false;
+            if (!assertZero(multiply(0, 100))) return false;
+            if (!assertEqual(-6, multiply(-2, 3))) return false;
+            if (!assertPositive(multiply(-2, -3))) return false;
+            return true;
+        }
+
+        bool testDivision() {
+            if (!assertEqual(2, divide(6, 3))) return false;
+            if (!assertZero(divide(0, 5))) return false;
+            if (!assertZero(divide(5, 0))) return false;  // Safe division by zero
+            if (!assertNegative(divide(-6, 3))) return false;
+            return true;
+        }
+
+        bool testAbsoluteValue() {
+            if (!assertEqual(5, absolute(5))) return false;
+            if (!assertEqual(5, absolute(-5))) return false;
+            if (!assertZero(absolute(0))) return false;
+            if (!assertPositive(absolute(-100))) return false;
+            return true;
+        }
+
+        bool testMinMax() {
+            if (!assertEqual(5, maxVal(3, 5))) return false;
+            if (!assertEqual(5, maxVal(5, 3))) return false;
+            if (!assertEqual(3, minVal(3, 5))) return false;
+            if (!assertEqual(3, minVal(5, 3))) return false;
+            if (!assertZero(maxVal(0, 0))) return false;
+            return true;
+        }
+
+        bool testClamp() {
+            if (!assertEqual(5, clamp(5, 0, 10))) return false;    // In range
+            if (!assertEqual(0, clamp(-5, 0, 10))) return false;   // Below min
+            if (!assertEqual(10, clamp(15, 0, 10))) return false;  // Above max
+            if (!assertEqual(5, clamp(5, 5, 5))) return false;     // Tight bounds
+            return true;
+        }
+
+        bool testRangeAssertions() {
+            if (!assertInRange(5, 0, 10)) return false;
+            if (assertInRange(-1, 0, 10)) return false;  // Should fail
+            if (assertInRange(11, 0, 10)) return false;  // Should fail
+            if (!assertInRange(0, 0, 10)) return false;  // Boundary
+            if (!assertInRange(10, 0, 10)) return false; // Boundary
+            return true;
+        }
+
+        bool testPointerAssertions() {
+            int x = 42;
+            int* ptr = &x;
+            void* null_ptr = nullptr;
+
+            if (!assertNotNull((void*)ptr)) return false;
+            if (!assertNull(null_ptr)) return false;
+            if (assertNull((void*)ptr)) return false;
+            if (assertNotNull(null_ptr)) return false;
+            return true;
+        }
+
+        int main() {
+            int passed = 0;
+            int failed = 0;
+
+            // Run all tests and count results
+            if (testAddition()) passed = passed + 1; else failed = failed + 1;
+            if (testSubtraction()) passed = passed + 1; else failed = failed + 1;
+            if (testMultiplication()) passed = passed + 1; else failed = failed + 1;
+            if (testDivision()) passed = passed + 1; else failed = failed + 1;
+            if (testAbsoluteValue()) passed = passed + 1; else failed = failed + 1;
+            if (testMinMax()) passed = passed + 1; else failed = failed + 1;
+            if (testClamp()) passed = passed + 1; else failed = failed + 1;
+            if (testRangeAssertions()) passed = passed + 1; else failed = failed + 1;
+            if (testPointerAssertions()) passed = passed + 1; else failed = failed + 1;
+
+            // Verify all tests passed (9 tests total)
+            if (passed != 9) return 1;
+            if (failed != 0) return 2;
+
+            // Additional validation of assertion functions directly
+            if (!assertEqual(42, 42)) return 3;
+            if (assertEqual(1, 2)) return 4;
+            if (!assertNotEqual(1, 2)) return 5;
+            if (assertNotEqual(5, 5)) return 6;
+            if (!assertTrue(true)) return 7;
+            if (assertTrue(false)) return 8;
+            if (!assertFalse(false)) return 9;
+            if (assertFalse(true)) return 10;
+
+            return 0;  // Success
+        }
+    "#;
+
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_assertion_library.cpp").expect("E2E test failed");
+
+    assert_eq!(
+        exit_code, 0,
+        "Assertion library should work correctly"
+    );
+}

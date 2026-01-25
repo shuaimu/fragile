@@ -14,11 +14,11 @@ We just convert the fully-resolved AST to equivalent Rust code.
 ## Current Status
 
 **Grammar Tests**: 20/20 passing
-**E2E Tests**: 107/107 passing (2 ignored due to STL header limitations)
+**E2E Tests**: 110/110 passing (2 ignored due to STL header limitations)
 **libc++ Transpilation Tests**: 8/8 passing (cstddef, cstdint, type_traits, initializer_list, vector, cstddef_compilation, iostream, thread)
 **Runtime Linking Tests**: 2/2 passing (FILE I/O, pthread)
 **Runtime Function Mapping Tests**: 1/1 passing
-**Total Tests**: 226 passing
+**Total Tests**: 229 passing
 
 **Working**:
 - Simple functions with control flow (if/else, while, for, do-while, switch, recursion)
@@ -907,6 +907,9 @@ Test against actual open-source C++ projects.
     - [x] Function pointer callbacks: advanced function pointer patterns, pass-through
     - [x] Bit manipulation: bitwise AND/OR/XOR/NOT, shifts, popcount, power-of-2 checks
     - [x] Matrix operations: 2D arrays, nested loops, transpose, multiply, sum
+    - [x] String utilities: C-style strings, comparison, prefix/suffix checks, case conversion
+    - [x] CLI argument parser: argc/argv patterns, option parsing, flag detection
+    - [x] Assertion library: boolean assertions, test organization, result counting
     - Fixed: Address-of pointer subscript (&arr[i] → arr.add(i as usize))
     - Fixed: Switch case with const int/char values (evaluate DeclRefExpr, CharacterLiteral)
     - Fixed: Array initialization prefers InitListExpr over array size literal
@@ -917,8 +920,6 @@ Test against actual open-source C++ projects.
     - Fixed: Array subscript type cast precedence (`idx as usize` → `(idx) as usize`)
     - Fixed: Non-const methods use `&mut self` based on C++ const qualifier
     - Fixed: Parameters assigned to in method body get `mut` prefix
-    - A simple CLI tool - TODO
-    - A small library with tests - TODO
   - [ ] **23.11.3** Medium projects (5K-50K LOC)
     - Target: compile and run test suite
     - Accept partial success (some tests may fail)
