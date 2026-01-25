@@ -10196,3 +10196,273 @@ fn test_e2e_event_queue() {
 
     assert_eq!(exit_code, 0, "Event queue should work correctly");
 }
+
+/// E2E test: Insertion sort
+/// Tests: Shifting elements, in-place sorting, stable sort
+#[test]
+fn test_e2e_insertion_sort() {
+    let source = r#"
+        // Insertion sort implementation
+
+        void insertionSort(int* arr, int n) {
+            for (int i = 1; i < n; i++) {
+                int key = arr[i];
+                int j = i - 1;
+
+                // Shift elements greater than key to the right
+                while (j >= 0 && arr[j] > key) {
+                    arr[j + 1] = arr[j];
+                    j = j - 1;
+                }
+                arr[j + 1] = key;
+            }
+        }
+
+        // Check if sorted
+        bool isSorted(int* arr, int n) {
+            for (int i = 0; i < n - 1; i++) {
+                if (arr[i] > arr[i + 1]) return false;
+            }
+            return true;
+        }
+
+        // Binary search (requires sorted array)
+        int binarySearch(int* arr, int n, int target) {
+            int lo = 0;
+            int hi = n - 1;
+            while (lo <= hi) {
+                int mid = lo + (hi - lo) / 2;
+                if (arr[mid] == target) return mid;
+                if (arr[mid] < target) {
+                    lo = mid + 1;
+                } else {
+                    hi = mid - 1;
+                }
+            }
+            return -1;
+        }
+
+        // Find insertion position (lower bound)
+        int lowerBound(int* arr, int n, int target) {
+            int lo = 0;
+            int hi = n;
+            while (lo < hi) {
+                int mid = lo + (hi - lo) / 2;
+                if (arr[mid] < target) {
+                    lo = mid + 1;
+                } else {
+                    hi = mid;
+                }
+            }
+            return lo;
+        }
+
+        int main() {
+            // Test insertion sort
+            int arr1[5] = {5, 2, 4, 6, 1};
+            insertionSort(arr1, 5);
+            if (!isSorted(arr1, 5)) return 1;
+            if (arr1[0] != 1 || arr1[4] != 6) return 2;
+
+            // Already sorted
+            int arr2[4] = {1, 2, 3, 4};
+            insertionSort(arr2, 4);
+            if (!isSorted(arr2, 4)) return 3;
+
+            // Reverse sorted
+            int arr3[4] = {4, 3, 2, 1};
+            insertionSort(arr3, 4);
+            if (!isSorted(arr3, 4)) return 4;
+
+            // Single element
+            int arr4[1] = {42};
+            insertionSort(arr4, 1);
+            if (arr4[0] != 42) return 5;
+
+            // Duplicates
+            int arr5[6] = {3, 1, 4, 1, 5, 9};
+            insertionSort(arr5, 6);
+            if (!isSorted(arr5, 6)) return 6;
+
+            // Test binary search on sorted array
+            int sorted[7] = {1, 3, 5, 7, 9, 11, 13};
+            if (binarySearch(sorted, 7, 7) != 3) return 7;
+            if (binarySearch(sorted, 7, 1) != 0) return 8;
+            if (binarySearch(sorted, 7, 13) != 6) return 9;
+            if (binarySearch(sorted, 7, 6) != -1) return 10;
+            if (binarySearch(sorted, 7, 0) != -1) return 11;
+            if (binarySearch(sorted, 7, 14) != -1) return 12;
+
+            // Test lower bound
+            int arr6[7] = {1, 2, 4, 4, 4, 7, 9};
+            if (lowerBound(arr6, 7, 4) != 2) return 13;  // First 4 at index 2
+            if (lowerBound(arr6, 7, 1) != 0) return 14;
+            if (lowerBound(arr6, 7, 9) != 6) return 15;
+            if (lowerBound(arr6, 7, 3) != 2) return 16;  // Would insert before 4
+            if (lowerBound(arr6, 7, 0) != 0) return 17;  // Would insert at start
+            if (lowerBound(arr6, 7, 10) != 7) return 18; // Would insert at end
+
+            return 0;  // Success
+        }
+    "#;
+
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_insertion_sort.cpp").expect("E2E test failed");
+
+    assert_eq!(exit_code, 0, "Insertion sort should work correctly");
+}
+
+/// E2E test: Interval overlap operations
+/// Tests: Range comparisons, overlap detection, merge operations
+#[test]
+fn test_e2e_interval_ops() {
+    let source = r#"
+        // Interval operations
+
+        struct Interval {
+            int start;
+            int end;
+        };
+
+        void initInterval(Interval* iv, int start, int end) {
+            iv->start = start;
+            iv->end = end;
+        }
+
+        // Check if two intervals overlap
+        bool overlaps(Interval* a, Interval* b) {
+            return a->start < b->end && b->start < a->end;
+        }
+
+        // Check if interval a contains interval b
+        bool contains(Interval* a, Interval* b) {
+            return a->start <= b->start && b->end <= a->end;
+        }
+
+        // Check if point is within interval
+        bool containsPoint(Interval* iv, int point) {
+            return iv->start <= point && point < iv->end;
+        }
+
+        // Get length of interval
+        int length(Interval* iv) {
+            return iv->end - iv->start;
+        }
+
+        // Check if interval is empty
+        bool isEmpty(Interval* iv) {
+            return iv->start >= iv->end;
+        }
+
+        // Get intersection of two intervals (result in out)
+        // Returns true if intersection is non-empty
+        bool intersect(Interval* a, Interval* b, Interval* out) {
+            int maxStart = a->start;
+            if (b->start > maxStart) maxStart = b->start;
+
+            int minEnd = a->end;
+            if (b->end < minEnd) minEnd = b->end;
+
+            out->start = maxStart;
+            out->end = minEnd;
+
+            return maxStart < minEnd;
+        }
+
+        // Get union of two overlapping intervals
+        void unite(Interval* a, Interval* b, Interval* out) {
+            int minStart = a->start;
+            if (b->start < minStart) minStart = b->start;
+
+            int maxEnd = a->end;
+            if (b->end > maxEnd) maxEnd = b->end;
+
+            out->start = minStart;
+            out->end = maxEnd;
+        }
+
+        // Check if intervals are adjacent (can be merged)
+        bool adjacent(Interval* a, Interval* b) {
+            return a->end == b->start || b->end == a->start;
+        }
+
+        int main() {
+            Interval a, b, c, result;
+
+            // Test overlaps
+            initInterval(&a, 1, 5);
+            initInterval(&b, 3, 7);
+            if (!overlaps(&a, &b)) return 1;  // [1,5) and [3,7) overlap
+
+            initInterval(&a, 1, 3);
+            initInterval(&b, 5, 7);
+            if (overlaps(&a, &b)) return 2;  // [1,3) and [5,7) don't overlap
+
+            initInterval(&a, 1, 5);
+            initInterval(&b, 5, 7);
+            if (overlaps(&a, &b)) return 3;  // [1,5) and [5,7) don't overlap (touching)
+
+            // Test contains
+            initInterval(&a, 1, 10);
+            initInterval(&b, 3, 7);
+            if (!contains(&a, &b)) return 4;  // [1,10) contains [3,7)
+            if (contains(&b, &a)) return 5;   // [3,7) doesn't contain [1,10)
+
+            // Test containsPoint
+            initInterval(&a, 1, 5);
+            if (!containsPoint(&a, 1)) return 6;
+            if (!containsPoint(&a, 4)) return 7;
+            if (containsPoint(&a, 5)) return 8;   // 5 is exclusive
+            if (containsPoint(&a, 0)) return 9;
+
+            // Test length
+            initInterval(&a, 3, 7);
+            if (length(&a) != 4) return 10;
+
+            initInterval(&a, 5, 5);
+            if (length(&a) != 0) return 11;
+
+            // Test isEmpty
+            initInterval(&a, 3, 7);
+            if (isEmpty(&a)) return 12;
+
+            initInterval(&a, 5, 5);
+            if (!isEmpty(&a)) return 13;
+
+            initInterval(&a, 7, 3);
+            if (!isEmpty(&a)) return 14;
+
+            // Test intersect
+            initInterval(&a, 1, 7);
+            initInterval(&b, 4, 10);
+            if (!intersect(&a, &b, &result)) return 15;
+            if (result.start != 4 || result.end != 7) return 16;
+
+            initInterval(&a, 1, 3);
+            initInterval(&b, 5, 7);
+            if (intersect(&a, &b, &result)) return 17;  // No intersection
+
+            // Test unite
+            initInterval(&a, 1, 5);
+            initInterval(&b, 3, 7);
+            unite(&a, &b, &result);
+            if (result.start != 1 || result.end != 7) return 18;
+
+            // Test adjacent
+            initInterval(&a, 1, 5);
+            initInterval(&b, 5, 10);
+            if (!adjacent(&a, &b)) return 19;
+
+            initInterval(&a, 1, 5);
+            initInterval(&b, 6, 10);
+            if (adjacent(&a, &b)) return 20;
+
+            return 0;  // Success
+        }
+    "#;
+
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_interval_ops.cpp").expect("E2E test failed");
+
+    assert_eq!(exit_code, 0, "Interval operations should work correctly");
+}
