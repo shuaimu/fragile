@@ -74,7 +74,7 @@ impl SourceFile {
             .get(line as usize + 1)
             .map(|&e| e as usize)
             .unwrap_or(self.content.len());
-        &self.content[start..end].trim_end_matches('\n')
+        self.content[start..end].trim_end_matches('\n')
     }
 }
 

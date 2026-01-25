@@ -248,7 +248,7 @@ pub extern "C" fn fragile_pthread_mutexattr_settype(
     if attr.is_null() {
         return 22; // EINVAL
     }
-    if kind < 0 || kind > 2 {
+    if !(0..=2).contains(&kind) {
         return 22; // EINVAL - invalid type
     }
     unsafe {

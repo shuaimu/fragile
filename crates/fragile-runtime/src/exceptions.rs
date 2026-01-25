@@ -61,7 +61,7 @@ impl ExceptionState {
 
 #[cfg(feature = "std")]
 thread_local! {
-    static EXCEPTION_STATE: RefCell<ExceptionState> = RefCell::new(ExceptionState::new());
+    static EXCEPTION_STATE: RefCell<ExceptionState> = const { RefCell::new(ExceptionState::new()) };
 }
 
 #[cfg(not(feature = "std"))]

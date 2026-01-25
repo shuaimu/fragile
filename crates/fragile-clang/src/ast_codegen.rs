@@ -33,10 +33,9 @@ fn strip_literal_suffix(s: &str) -> String {
         "i64", "u64", "i32", "u32", "i16", "u16", "i8", "u8", "f64", "f32",
     ];
     for suffix in suffixes {
-        if s.ends_with(suffix) {
-            let prefix = &s[..s.len() - suffix.len()];
+        if let Some(prefix) = s.strip_suffix(suffix) {
             // Make sure the prefix is a valid number (not ending with a letter)
-            if !prefix.is_empty() && prefix.chars().last().map_or(false, |c| c.is_ascii_digit()) {
+            if !prefix.is_empty() && prefix.chars().last().is_some_and(|c| c.is_ascii_digit()) {
                 return prefix.to_string();
             }
         }
@@ -403,7 +402,7 @@ impl AstCodeGen {
     fn class_has_virtual_bases(&self, class_name: &str) -> bool {
         self.virtual_bases
             .get(class_name)
-            .map_or(false, |v| !v.is_empty())
+            .is_some_and(|v| !v.is_empty())
     }
 
     /// Collect all std::variant types used in the code.
@@ -487,9 +486,7 @@ impl AstCodeGen {
                         let enum_name = format!("Variant_{}", sanitized_types.join("_"));
 
                         // Store if not already recorded
-                        if !self.variant_types.contains_key(&enum_name) {
-                            self.variant_types.insert(enum_name, rust_types);
-                        }
+                        self.variant_types.entry(enum_name).or_insert(rust_types);
                     }
                 }
             }
@@ -529,7 +526,7 @@ impl AstCodeGen {
                             self.collected_nodes.push(grandchild.clone());
                             self.merged_namespace_children
                                 .entry(path_key.clone())
-                                .or_insert_with(Vec::new)
+                                .or_default()
                                 .push(idx);
                         }
 
@@ -951,7 +948,7 @@ impl AstCodeGen {
             }
             "__builtin_strlen" => {
                 // __builtin_strlen(s) -> strlen equivalent
-                if args.len() >= 1 {
+                if !args.is_empty() {
                     Some((
                         format!(
                             "{{ let mut __len = 0usize; let mut __p = {} as *const u8; \
@@ -966,7 +963,7 @@ impl AstCodeGen {
             }
             "__builtin_expect" => {
                 // __builtin_expect(exp, c) -> exp (hint for branch prediction, just return exp)
-                if args.len() >= 1 {
+                if !args.is_empty() {
                     Some((args[0].clone(), false))
                 } else {
                     None
@@ -983,7 +980,7 @@ impl AstCodeGen {
             "__builtin_abort" => Some(("std::process::abort()".to_string(), false)),
             "__builtin_clz" | "__builtin_clzl" | "__builtin_clzll" => {
                 // Count leading zeros
-                if args.len() >= 1 {
+                if !args.is_empty() {
                     Some((format!("({}).leading_zeros() as i32", args[0]), false))
                 } else {
                     None
@@ -991,7 +988,7 @@ impl AstCodeGen {
             }
             "__builtin_ctz" | "__builtin_ctzl" | "__builtin_ctzll" => {
                 // Count trailing zeros
-                if args.len() >= 1 {
+                if !args.is_empty() {
                     Some((format!("({}).trailing_zeros() as i32", args[0]), false))
                 } else {
                     None
@@ -999,28 +996,28 @@ impl AstCodeGen {
             }
             "__builtin_popcount" | "__builtin_popcountl" | "__builtin_popcountll" => {
                 // Population count (number of 1 bits)
-                if args.len() >= 1 {
+                if !args.is_empty() {
                     Some((format!("({}).count_ones() as i32", args[0]), false))
                 } else {
                     None
                 }
             }
             "__builtin_bswap16" => {
-                if args.len() >= 1 {
+                if !args.is_empty() {
                     Some((format!("({}).swap_bytes()", args[0]), false))
                 } else {
                     None
                 }
             }
             "__builtin_bswap32" => {
-                if args.len() >= 1 {
+                if !args.is_empty() {
                     Some((format!("({}).swap_bytes()", args[0]), false))
                 } else {
                     None
                 }
             }
             "__builtin_bswap64" => {
-                if args.len() >= 1 {
+                if !args.is_empty() {
                     Some((format!("({}).swap_bytes()", args[0]), false))
                 } else {
                     None
@@ -1095,8 +1092,8 @@ impl AstCodeGen {
             "__type_name_to_string" | "__string_to_type_name" => {
                 // These convert between type_info and string representations
                 // Return a placeholder (empty string or dummy pointer)
-                if args.len() >= 1 {
-                    Some((format!("b\"\\0\".as_ptr() as *const i8"), false))
+                if !args.is_empty() {
+                    Some(("b\"\\0\".as_ptr() as *const i8".to_string(), false))
                 } else {
                     Some(("b\"\\0\".as_ptr() as *const i8".to_string(), false))
                 }
@@ -1113,7 +1110,7 @@ impl AstCodeGen {
             // Hash and comparison functions for libc++ internals
             "__hash" => {
                 // Generic hash function - return a placeholder hash
-                if args.len() >= 1 {
+                if !args.is_empty() {
                     Some((
                         format!("({} as usize).wrapping_mul(0x9e3779b9)", args[0]),
                         false,
@@ -1353,7 +1350,7 @@ impl AstCodeGen {
 
     /// Check if this is a std::get call on a variant.
     /// Returns (variant_arg_node, variant_type, return_type) if it is.
-    fn is_std_get_call<'a>(node: &'a ClangNode) -> Option<(&'a ClangNode, CppType, &'a CppType)> {
+    fn is_std_get_call(node: &ClangNode) -> Option<(&ClangNode, CppType, &CppType)> {
         if let ClangNodeKind::CallExpr { ty } = &node.kind {
             // Look for the callee - it may be directly a DeclRefExpr or wrapped in ImplicitCastExpr
             let callee = node.children.first()?;
@@ -1400,9 +1397,9 @@ impl AstCodeGen {
     /// Returns (visitor_node, variant_nodes_with_types) if it is.
     /// visitor_node is the first argument (the callable).
     /// variant_nodes_with_types is a vec of (node, variant_type) for each variant argument.
-    fn is_std_visit_call<'a>(
-        node: &'a ClangNode,
-    ) -> Option<(&'a ClangNode, Vec<(&'a ClangNode, CppType)>)> {
+    fn is_std_visit_call(
+        node: &ClangNode,
+    ) -> Option<(&ClangNode, Vec<(&ClangNode, CppType)>)> {
         if let ClangNodeKind::CallExpr { .. } = &node.kind {
             // Look for the callee - it may be directly a DeclRefExpr or wrapped in ImplicitCastExpr
             let callee = node.children.first()?;
@@ -1483,9 +1480,9 @@ impl AstCodeGen {
     /// Check if this is a std::views range adaptor call.
     /// Returns (adaptor_name, range_node, optional_arg_node) if it is.
     /// adaptor_name is one of: "filter", "transform", "take", "drop", "reverse"
-    fn is_std_views_adaptor_call<'a>(
-        node: &'a ClangNode,
-    ) -> Option<(&'static str, &'a ClangNode, Option<&'a ClangNode>)> {
+    fn is_std_views_adaptor_call(
+        node: &ClangNode,
+    ) -> Option<(&'static str, &ClangNode, Option<&ClangNode>)> {
         if let ClangNodeKind::CallExpr { .. } = &node.kind {
             // Look for the callee - it may be directly a DeclRefExpr or wrapped in ImplicitCastExpr
             let callee = node.children.first()?;
@@ -1524,9 +1521,9 @@ impl AstCodeGen {
 
     /// Check if this is a std::ranges algorithm call.
     /// Returns (algorithm_name, range_node, optional_arg_node) if it is.
-    fn is_std_ranges_algorithm_call<'a>(
-        node: &'a ClangNode,
-    ) -> Option<(&'static str, &'a ClangNode, Option<&'a ClangNode>)> {
+    fn is_std_ranges_algorithm_call(
+        node: &ClangNode,
+    ) -> Option<(&'static str, &ClangNode, Option<&ClangNode>)> {
         if let ClangNodeKind::CallExpr { .. } = &node.kind {
             let callee = node.children.first()?;
             let decl_ref = match &callee.kind {
@@ -1961,7 +1958,7 @@ impl AstCodeGen {
         variants.sort_by_key(|(name, _)| name.clone());
 
         for (enum_name, rust_types) in variants {
-            self.writeln(&format!("/// Generated Rust enum for std::variant type"));
+            self.writeln(&"/// Generated Rust enum for std::variant type".to_string());
             self.writeln("#[derive(Clone, Debug)]");
             self.writeln(&format!("pub enum {} {{", enum_name));
             self.indent += 1;
@@ -2630,7 +2627,7 @@ impl AstCodeGen {
                     let anon_name = format!("__anon_{}", self.anon_namespace_counter);
                     self.anon_namespace_counter += 1;
 
-                    self.writeln(&format!("/// Anonymous namespace (internal linkage)"));
+                    self.writeln(&"/// Anonymous namespace (internal linkage)".to_string());
                     self.writeln(&format!("mod {} {{", anon_name));
                     self.indent += 1;
                     self.module_depth += 1;
@@ -3790,7 +3787,7 @@ impl AstCodeGen {
             }
         } else {
             // Empty enum - generate as a zero-sized struct instead (Rust doesn't support repr on empty enums)
-            self.writeln(&format!("#[repr(transparent)]"));
+            self.writeln(&"#[repr(transparent)]".to_string());
             self.writeln("#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]");
             self.writeln(&format!("pub struct {}({});", safe_name, repr_type));
         }
@@ -4259,11 +4256,10 @@ impl AstCodeGen {
         } = &node.kind
         {
             // Left side of assignment - check if it's a member expression
-            if !node.children.is_empty() {
-                if Self::is_member_access(&node.children[0]) {
+            if !node.children.is_empty()
+                && Self::is_member_access(&node.children[0]) {
                     return true;
                 }
-            }
         }
         // Also check compound assignment operators
         if let ClangNodeKind::BinaryOperator { op, .. } = &node.kind {
@@ -4278,11 +4274,10 @@ impl AstCodeGen {
                 | BinaryOp::XorAssign
                 | BinaryOp::ShlAssign
                 | BinaryOp::ShrAssign => {
-                    if !node.children.is_empty() {
-                        if Self::is_member_access(&node.children[0]) {
+                    if !node.children.is_empty()
+                        && Self::is_member_access(&node.children[0]) {
                             return true;
                         }
-                    }
                 }
                 _ => {}
             }
@@ -4291,11 +4286,10 @@ impl AstCodeGen {
         if let ClangNodeKind::UnaryOperator { op, .. } = &node.kind {
             match op {
                 UnaryOp::PreInc | UnaryOp::PostInc | UnaryOp::PreDec | UnaryOp::PostDec => {
-                    if !node.children.is_empty() {
-                        if Self::is_member_access(&node.children[0]) {
+                    if !node.children.is_empty()
+                        && Self::is_member_access(&node.children[0]) {
                             return true;
                         }
-                    }
                 }
                 _ => {}
             }
@@ -4863,7 +4857,7 @@ impl AstCodeGen {
     /// For example, "const Point" -> "Point", Reference { pointee: Named("Point") } -> "Point"
     fn extract_class_name(ty: &Option<CppType>) -> Option<String> {
         ty.as_ref()
-            .and_then(|t| Self::extract_class_name_from_type(t))
+            .and_then(Self::extract_class_name_from_type)
     }
 
     /// Helper to extract class name from a CppType.
@@ -5174,8 +5168,8 @@ impl AstCodeGen {
             ..
         } = &node.kind
         {
-            if member_name.starts_with('~') {
-                if !node.children.is_empty() {
+            if member_name.starts_with('~')
+                && !node.children.is_empty() {
                     if *is_arrow {
                         let obj_expr = self.expr_to_string(&node.children[0]);
                         return Some(obj_expr);
@@ -5187,7 +5181,6 @@ impl AstCodeGen {
                         return Some(format!("&mut {}", obj_expr));
                     }
                 }
-            }
         }
         None
     }
@@ -5232,7 +5225,7 @@ impl AstCodeGen {
             }
             ClangNodeKind::Unknown(_) | ClangNodeKind::ImplicitCastExpr { .. } => {
                 // Look through wrapper nodes
-                node.children.iter().any(|c| Self::is_function_reference(c))
+                node.children.iter().any(Self::is_function_reference)
             }
             _ => false,
         }
@@ -5260,7 +5253,7 @@ impl AstCodeGen {
                 // Look through wrapper nodes (but not FunctionToPointerDecay)
                 node.children
                     .iter()
-                    .any(|c| Self::is_function_pointer_variable(c))
+                    .any(Self::is_function_pointer_variable)
             }
             _ => false,
         }
@@ -5272,7 +5265,7 @@ impl AstCodeGen {
             ClangNodeKind::NullPtrLiteral => true,
             ClangNodeKind::Unknown(_) | ClangNodeKind::ImplicitCastExpr { .. } => {
                 // Look through wrapper nodes
-                node.children.iter().any(|c| Self::is_nullptr_literal(c))
+                node.children.iter().any(Self::is_nullptr_literal)
             }
             _ => false,
         }
@@ -5342,11 +5335,10 @@ impl AstCodeGen {
             ClangNodeKind::CallExpr { .. } => {
                 // A chained operator<< also returns an ostream - check if this is one
                 if let Some((op_name, left_idx, _)) = Self::get_operator_call_info(node) {
-                    if op_name == "operator<<" || op_name == "operator>>" {
-                        if !node.children.is_empty() && left_idx < node.children.len() {
+                    if (op_name == "operator<<" || op_name == "operator>>")
+                        && !node.children.is_empty() && left_idx < node.children.len() {
                             return Self::get_io_stream_type(&node.children[left_idx]);
                         }
-                    }
                 }
                 None
             }
@@ -5390,7 +5382,7 @@ impl AstCodeGen {
         match &node.kind {
             ClangNodeKind::TypeidExpr { .. } => true,
             ClangNodeKind::Unknown(_) | ClangNodeKind::ImplicitCastExpr { .. } => {
-                node.children.iter().any(|c| Self::contains_typeid_expr(c))
+                node.children.iter().any(Self::contains_typeid_expr)
             }
             _ => false,
         }
@@ -5439,7 +5431,7 @@ impl AstCodeGen {
         };
 
         // Check if the last argument is std::endl
-        let has_newline = args.last().map_or(false, |arg| {
+        let has_newline = args.last().is_some_and(|arg| {
             Self::is_stream_manipulator(arg) == Some("newline")
         });
 
@@ -5609,12 +5601,10 @@ impl AstCodeGen {
 
                 let self_param = if *is_static {
                     "".to_string()
+                } else if is_mutable_method {
+                    "&mut self, ".to_string()
                 } else {
-                    if is_mutable_method {
-                        "&mut self, ".to_string()
-                    } else {
-                        "&self, ".to_string()
-                    }
+                    "&self, ".to_string()
                 };
                 // Deduplicate parameter names (C++ allows unnamed params, Rust doesn't)
                 let mut param_name_counts: HashMap<String, usize> = HashMap::new();
@@ -5908,7 +5898,7 @@ impl AstCodeGen {
                                             .current_class
                                             .as_ref()
                                             .and_then(|c| self.virtual_bases.get(c))
-                                            .map(|vbases| vbases.iter().any(|vb| *vb == base_class))
+                                            .map(|vbases| vbases.contains(&base_class))
                                             .unwrap_or(false);
 
                                         if is_transitive_vbase {
@@ -6271,7 +6261,7 @@ impl AstCodeGen {
                                         // Use unsafe zeroed for template types (contain __)
                                         // since they may not have new_0 or Default impl
                                         if rust_type.contains("__") {
-                                            format!(" = unsafe {{ std::mem::zeroed() }}")
+                                            " = unsafe { std::mem::zeroed() }".to_string()
                                         } else {
                                             format!(" = {}::new_0()", rust_type)
                                         }
@@ -6626,7 +6616,7 @@ impl AstCodeGen {
 
         // Add default arm if not present (Rust requires exhaustive match)
         // Note: We add _ => {} only if no DefaultStmt was found
-        let has_default = node.children.get(1).map_or(false, |c| {
+        let has_default = node.children.get(1).is_some_and(|c| {
             if let ClangNodeKind::CompoundStmt = &c.kind {
                 c.children
                     .iter()
@@ -7519,7 +7509,7 @@ impl AstCodeGen {
                     // Handle function pointer comparison with nullptr: use .is_none() / .is_some()
                     let left_is_fn_ptr = left_type
                         .as_ref()
-                        .map_or(false, |t| Self::is_function_pointer_type(t));
+                        .is_some_and(Self::is_function_pointer_type);
                     if left_is_fn_ptr
                         && matches!(op, BinaryOp::Eq | BinaryOp::Ne)
                         && Self::is_nullptr_literal(&node.children[1])
@@ -7973,9 +7963,7 @@ impl AstCodeGen {
                         // Find the size argument - it's the child that's not the function reference
                         let size_arg = node
                             .children
-                            .iter()
-                            .filter(|c| !Self::is_function_reference(c))
-                            .next()
+                            .iter().find(|c| !Self::is_function_reference(c))
                             .map(|c| self.expr_to_string(c))
                             .unwrap_or_else(|| "0".to_string());
                         return format!(
@@ -7988,9 +7976,7 @@ impl AstCodeGen {
                         // Find the pointer argument - it's the child that's not the function reference
                         let ptr_arg = node
                             .children
-                            .iter()
-                            .filter(|c| !Self::is_function_reference(c))
-                            .next()
+                            .iter().find(|c| !Self::is_function_reference(c))
                             .map(|c| self.expr_to_string(c))
                             .unwrap_or_else(|| "std::ptr::null_mut()".to_string());
                         return format!("unsafe {{ crate::fragile_runtime::fragile_free({} as *mut std::ffi::c_void) }}", ptr_arg);
@@ -8101,7 +8087,7 @@ impl AstCodeGen {
                     // Check if this is a function call (not a constructor)
                     // A function call has a DeclRefExpr child with Function type
                     let is_function_call =
-                        node.children.iter().any(|c| Self::is_function_reference(c));
+                        node.children.iter().any(Self::is_function_reference);
 
                     if is_function_call && !node.children.is_empty() {
                         // Regular function call that returns a struct
@@ -8179,7 +8165,7 @@ impl AstCodeGen {
                                 // For non-struct types, just use the first argument as-is
                                 // (copy "constructor" becomes identity, default "constructor" becomes Default)
                                 if num_args == 0 {
-                                    format!("Default::default()")
+                                    "Default::default()".to_string()
                                 } else if num_args == 1 {
                                     args[0].clone()
                                 } else {
@@ -8415,25 +8401,23 @@ impl AstCodeGen {
                             // Dereferencing raw pointers requires unsafe
                             format!("unsafe {{ (*{}).{} }}", base, member)
                         }
-                    } else {
-                        if needs_base_access {
-                            match base_access {
-                                BaseAccess::VirtualPtr(field) => {
-                                    format!("unsafe {{ (*{}.{}).{} }}", base, field, member)
-                                }
-                                BaseAccess::DirectField(field) | BaseAccess::FieldChain(field) => {
-                                    // If field is empty, this is a template/stub type without base class info
-                                    // Just access the member directly
-                                    if field.is_empty() {
-                                        format!("{}.{}", base, member)
-                                    } else {
-                                        format!("{}.{}.{}", base, field, member)
-                                    }
+                    } else if needs_base_access {
+                        match base_access {
+                            BaseAccess::VirtualPtr(field) => {
+                                format!("unsafe {{ (*{}.{}).{} }}", base, field, member)
+                            }
+                            BaseAccess::DirectField(field) | BaseAccess::FieldChain(field) => {
+                                // If field is empty, this is a template/stub type without base class info
+                                // Just access the member directly
+                                if field.is_empty() {
+                                    format!("{}.{}", base, member)
+                                } else {
+                                    format!("{}.{}.{}", base, field, member)
                                 }
                             }
-                        } else {
-                            format!("{}.{}", base, member)
                         }
+                    } else {
+                        format!("{}.{}", base, member)
                     }
                 } else {
                     // Implicit this - check if member is inherited
@@ -8651,8 +8635,7 @@ impl AstCodeGen {
                     for child in &node.children {
                         // Check if child is UnexposedExpr wrapper with MemberRef designator
                         if matches!(&child.kind, ClangNodeKind::Unknown(s) if s == "UnexposedExpr")
-                        {
-                            if child.children.len() >= 2 {
+                            && child.children.len() >= 2 {
                                 if let ClangNodeKind::MemberRef { name: field_name } =
                                     &child.children[0].kind
                                 {
@@ -8664,7 +8647,6 @@ impl AstCodeGen {
                                     continue;
                                 }
                             }
-                        }
                         // Non-designated: just get the value
                         let value = self.expr_to_string(child);
                         field_values.push((String::new(), value));
@@ -9009,7 +8991,7 @@ impl AstCodeGen {
                                 if expr == "0" && !is_primitive {
                                     // Use unsafe zeroed for template types (contain __)
                                     if rust_type.contains("__") {
-                                        format!(" = unsafe {{ std::mem::zeroed() }}")
+                                        " = unsafe { std::mem::zeroed() }".to_string()
                                     } else {
                                         format!(" = {}::new_0()", rust_type)
                                     }
@@ -9117,8 +9099,8 @@ fn sanitize_identifier(name: &str) -> String {
             "operator float" => "op_float".to_string(),
             _ => {
                 // Handle other conversion operators like "operator SomeType"
-                if name.starts_with("operator ") {
-                    let type_part = &name[9..]; // Skip "operator "
+                if let Some(type_part) = name.strip_prefix("operator ") {
+                    // Skip "operator "
                     format!("op_{}", sanitize_identifier(type_part))
                 } else {
                     name.replace("operator", "op_")
@@ -9132,26 +9114,9 @@ fn sanitize_identifier(name: &str) -> String {
     // Replace invalid characters
     result = result
         .replace("::", "_")
-        .replace('<', "_")
-        .replace('>', "_")
+        .replace(['<', '>'], "_")
         .replace(' ', "")
-        .replace('%', "_")
-        .replace('=', "_")
-        .replace('&', "_")
-        .replace('|', "_")
-        .replace('!', "_")
-        .replace('*', "_")
-        .replace('/', "_")
-        .replace('+', "_")
-        .replace('-', "_")
-        .replace('[', "_")
-        .replace(']', "_")
-        .replace('(', "_")
-        .replace(')', "_")
-        .replace(',', "_")
-        .replace(';', "_")
-        .replace('.', "_")
-        .replace(':', "_");
+        .replace(['%', '=', '&', '|', '!', '*', '/', '+', '-', '[', ']', '(', ')', ',', ';', '.', ':'], "_");
 
     // Handle keywords
     if RUST_KEYWORDS.contains(&result.as_str()) {
