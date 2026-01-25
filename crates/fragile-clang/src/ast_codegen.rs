@@ -4050,9 +4050,14 @@ impl AstCodeGen {
         self.writeln("pub type std__Ios_Iostate = u32;");
         self.writeln("pub type std__Ios_Seekdir = i32;");
         self.writeln("pub type __gthread_mutex_t = usize;");
+        self.writeln("pub type __gthread_time_t = i64;");
         self.writeln("pub type error_category = std::ffi::c_void;");
         self.writeln("pub type __ctype_abstract_base_wchar_t_ = std::ffi::c_void;");
         self.writeln("pub type _OI = std::ffi::c_void;");
+        self.writeln("pub type _StateT = std::ffi::c_void;");
+        self.writeln("pub type _T1 = std::ffi::c_void;");
+        self.writeln("pub type _T2 = std::ffi::c_void;");
+        self.writeln("pub type ctype_type_parameter_0_0 = std::ffi::c_void;");
         self.writeln("");
 
         // Template instantiation placeholders (for libstdc++ basic_string template)
