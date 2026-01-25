@@ -1545,6 +1545,33 @@ impl AstCodeGen {
         self.indent -= 1;
         self.writeln("}");
         self.writeln("");
+
+        // partial_ordering - C++20 comparison result type
+        // Comparison methods are friend functions in C++, so we add them as methods here
+        // Mark as generated to avoid duplicate from the C++ version
+        self.generated_structs.insert("partial_ordering".to_string());
+        self.writeln("#[repr(C)]");
+        self.writeln("#[derive(Default, Copy, Clone)]");
+        self.writeln("pub struct partial_ordering { pub _M_value: __cmp_cat_type }");
+        self.writeln("impl partial_ordering {");
+        self.indent += 1;
+        self.writeln("pub fn new_0() -> Self { Default::default() }");
+        self.writeln("pub fn new_1(_v: __cmp_cat__Ord) -> Self { Self { _M_value: 0 } }");
+        self.writeln("pub fn new_1_1(_v: __cmp_cat__Ncmp) -> Self { Self { _M_value: -127 } }");
+        // Comparison operators against __cmp_cat___unspec
+        self.writeln("pub fn op_eq(&self, _other: &__cmp_cat___unspec) -> bool { self._M_value == 0 }");
+        self.writeln("pub fn op_ne(&self, _other: &__cmp_cat___unspec) -> bool { self._M_value != 0 }");
+        self.writeln("pub fn op_lt(&self, _other: &__cmp_cat___unspec) -> bool { self._M_value < 0 && self._M_value != -127 }");
+        self.writeln("pub fn op_le(&self, _other: &__cmp_cat___unspec) -> bool { self._M_value <= 0 && self._M_value != -127 }");
+        self.writeln("pub fn op_gt(&self, _other: &__cmp_cat___unspec) -> bool { self._M_value > 0 }");
+        self.writeln("pub fn op_ge(&self, _other: &__cmp_cat___unspec) -> bool { self._M_value >= 0 }");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("pub static PARTIAL_ORDERING_LESS: partial_ordering = partial_ordering { _M_value: -1 };");
+        self.writeln("pub static PARTIAL_ORDERING_EQUIVALENT: partial_ordering = partial_ordering { _M_value: 0 };");
+        self.writeln("pub static PARTIAL_ORDERING_GREATER: partial_ordering = partial_ordering { _M_value: 1 };");
+        self.writeln("pub static PARTIAL_ORDERING_UNORDERED: partial_ordering = partial_ordering { _M_value: -127 };");
+        self.writeln("");
     }
 
     /// Generate Rust enum definitions for all collected std::variant types.
