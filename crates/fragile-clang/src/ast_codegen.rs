@@ -4542,6 +4542,14 @@ impl AstCodeGen {
         self.writeln("pub fn __is_continuation_char(_c: u8) -> bool { (_c & 0xC0) == 0x80 }");
         self.writeln("");
 
+        // C++20 bit manipulation stubs
+        self.writeln("// C++20 bit manipulation stubs (std::countl_one, etc.)");
+        self.writeln("#[inline]");
+        self.writeln("pub fn countl_one_u8(x: u8) -> u32 { (!x).leading_zeros() as u32 - 24 }");
+        self.writeln("#[inline]");
+        self.writeln("pub fn countl_zero_u8(x: u8) -> u32 { x.leading_zeros() as u32 - 24 }");
+        self.writeln("");
+
         // More type stubs for libstdc++
         self.writeln("// More libstdc++ type stubs");
         self.writeln(
@@ -12089,6 +12097,25 @@ impl AstCodeGen {
                             right_str
                         };
 
+                        // For bitwise compound assignments (|=, &=, ^=), ensure RHS type matches LHS
+                        // C++ allows mixing signed/unsigned in bitwise ops, Rust doesn't
+                        let is_bitwise_assign = matches!(
+                            op,
+                            BinaryOp::AndAssign | BinaryOp::OrAssign | BinaryOp::XorAssign
+                        );
+                        let right_raw = if is_bitwise_assign && left_type.is_some() {
+                            let lhs_rust_type = left_type.as_ref().unwrap().to_rust_type_str();
+                            let needs_cast = (lhs_rust_type.starts_with('u') && right_raw.contains("as i"))
+                                || (lhs_rust_type.starts_with('i') && right_raw.contains("as u"));
+                            if needs_cast {
+                                format!("(({}) as {})", right_raw, lhs_rust_type)
+                            } else {
+                                right_raw
+                            }
+                        } else {
+                            right_raw
+                        };
+
                         format!("unsafe {{ {} {} {} }}", left_raw, op_str, right_raw)
                     } else if matches!(
                         op,
@@ -12112,12 +12139,35 @@ impl AstCodeGen {
                         // Check if left side is float type and right side is integer literal
                         // Rust requires float literals (e.g., 1.0) when assigning to float
                         let left_type = Self::get_expr_type(&node.children[0]);
+                        let right_type = Self::get_expr_type(&node.children[1]);
                         let left_is_float =
                             matches!(left_type, Some(CppType::Float | CppType::Double));
                         let right = if left_is_float && is_integer_literal_str(&right_str) {
                             int_literal_to_float(&right_str)
                         } else {
                             right_str
+                        };
+
+                        // For bitwise compound assignments (|=, &=, ^=), ensure RHS type matches LHS
+                        // C++ allows mixing signed/unsigned in bitwise ops, Rust doesn't
+                        // Always cast RHS to LHS type for bitwise assignments to be safe
+                        let is_bitwise_assign = matches!(
+                            op,
+                            BinaryOp::AndAssign | BinaryOp::OrAssign | BinaryOp::XorAssign
+                        );
+                        let right = if is_bitwise_assign && left_type.is_some() {
+                            let lhs_rust_type = left_type.as_ref().unwrap().to_rust_type_str();
+                            // Only wrap if the RHS expression contains a different integer type cast
+                            // (like "as i32" when LHS is u32)
+                            let needs_cast = (lhs_rust_type.starts_with('u') && right.contains("as i"))
+                                || (lhs_rust_type.starts_with('i') && right.contains("as u"));
+                            if needs_cast {
+                                format!("(({}) as {})", right, lhs_rust_type)
+                            } else {
+                                right
+                            }
+                        } else {
+                            right
                         };
 
                         format!("{} {} {}", left, op_str, right)
@@ -13691,11 +13741,23 @@ impl AstCodeGen {
 
                     if has_designators {
                         // All values have field names from designators
+                        // Check if we're missing some fields - if so, use ..Default::default()
+                        let struct_fields_opt = self
+                            .class_fields
+                            .get(name)
+                            .or_else(|| self.class_fields.get(struct_name));
+                        let total_fields = struct_fields_opt.map(|f| f.len()).unwrap_or(0);
+                        let needs_default = field_values.len() < total_fields;
+
                         let inits: Vec<String> = field_values
                             .iter()
                             .map(|(f, v)| format!("{}: {}", f, v))
                             .collect();
-                        format!("{} {{ {} }}", struct_name, inits.join(", "))
+                        if needs_default {
+                            format!("{} {{ {}, ..Default::default() }}", struct_name, inits.join(", "))
+                        } else {
+                            format!("{} {{ {} }}", struct_name, inits.join(", "))
+                        }
                     } else {
                         // Try to get field names for this struct (positional)
                         // Try both original name and stripped name for lookup
@@ -13704,6 +13766,9 @@ impl AstCodeGen {
                             .get(name)
                             .or_else(|| self.class_fields.get(struct_name));
                         if let Some(struct_fields) = struct_fields_opt {
+                            // Check if we're missing some fields - if so, use ..Default::default()
+                            let needs_default = field_values.len() < struct_fields.len();
+
                             let inits: Vec<String> = field_values
                                 .iter()
                                 .enumerate()
@@ -13715,7 +13780,11 @@ impl AstCodeGen {
                                     }
                                 })
                                 .collect();
-                            format!("{} {{ {} }}", struct_name, inits.join(", "))
+                            if needs_default {
+                                format!("{} {{ {}, ..Default::default() }}", struct_name, inits.join(", "))
+                            } else {
+                                format!("{} {{ {} }}", struct_name, inits.join(", "))
+                            }
                         } else {
                             // Fallback: can't determine field names
                             let values: Vec<String> =
