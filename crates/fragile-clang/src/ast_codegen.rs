@@ -216,6 +216,9 @@ pub struct AstCodeGen {
     /// Map from original variable name to prefixed global variable name
     /// This is needed to resolve DeclRefExpr references to globals with __gv_ prefix
     global_var_mapping: HashMap<String, String>,
+    /// Local variables in current function (parameters and locals)
+    /// Used to determine whether a DeclRefExpr should use local or global variable
+    local_vars: HashSet<String>,
     /// Current namespace path during code generation (for relative path computation)
     current_namespace: Vec<String>,
     /// When true, use __self instead of self for this expressions
@@ -302,6 +305,7 @@ impl AstCodeGen {
             static_members: HashMap::new(),
             global_vars: HashSet::new(),
             global_var_mapping: HashMap::new(),
+            local_vars: HashSet::new(),
             current_namespace: Vec::new(),
             use_ctor_self: false,
             current_return_type: None,
@@ -1928,6 +1932,9 @@ impl AstCodeGen {
                     if let ClangNodeKind::VarDecl { name, ty, .. } = &child.kind {
                         let rust_ty = self.substitute_template_type(ty, subst_map);
                         let var_name = sanitize_identifier(name);
+
+                        // Track local variable to avoid using global prefixes
+                        self.local_vars.insert(var_name.clone());
 
                         // Check if this is an array type
                         let is_array = rust_ty.starts_with('[') && rust_ty.contains(';');
@@ -5580,7 +5587,11 @@ impl AstCodeGen {
         self.ref_vars.clear();
         self.ptr_vars.clear();
         self.arr_vars.clear();
+        // Track local variables (parameters) to avoid using global variable prefixes
+        self.local_vars.clear();
         for (param_name, param_type) in params {
+            // Add parameter to local vars set
+            self.local_vars.insert(sanitize_identifier(param_name));
             if matches!(param_type, CppType::Reference { .. }) {
                 self.ref_vars.insert(param_name.clone());
             }
@@ -7802,10 +7813,16 @@ impl AstCodeGen {
 
     /// Get the raw variable name from a DeclRefExpr (unwrapping casts).
     /// If the variable is a global variable, returns the prefixed name (__gv_...).
+    /// Local variables take precedence over globals with the same name.
     fn get_raw_var_name(&self, node: &ClangNode) -> Option<String> {
         match &node.kind {
             ClangNodeKind::DeclRefExpr { name, .. } => {
                 let sanitized = sanitize_identifier(name);
+                // Check if this is a local variable (parameter or local declaration)
+                // Local variables shadow globals, so don't use the __gv_ prefix
+                if self.local_vars.contains(&sanitized) {
+                    return Some(sanitized);
+                }
                 // Check if this is a global variable and return the prefixed name
                 if let Some(prefixed) = self.global_var_mapping.get(&sanitized) {
                     Some(prefixed.clone())
@@ -9471,6 +9488,9 @@ impl AstCodeGen {
                             self.ptr_vars.insert(name.clone());
                         }
 
+                        // Track all local variables to avoid using global prefixes
+                        self.local_vars.insert(sanitize_identifier(name));
+
                         // Find the actual initializer, skipping reference nodes and type nodes
                         // ParmVarDecl nodes appear in function pointer VarDecls to describe parameter types
                         // For arrays, prefer InitListExpr over IntegerLiteral (which is the array size)
@@ -10640,8 +10660,11 @@ impl AstCodeGen {
 
                     // Check if this is a global variable (already in unsafe context, no wrapper needed)
                     // Global variables are prefixed with __gv_ to avoid parameter shadowing
-                    if let Some(prefixed_name) = self.global_var_mapping.get(&ident) {
-                        return prefixed_name.clone();
+                    // But only if it's not a local variable (local vars shadow globals)
+                    if !self.local_vars.contains(&ident) {
+                        if let Some(prefixed_name) = self.global_var_mapping.get(&ident) {
+                            return prefixed_name.clone();
+                        }
                     }
 
                     ident
@@ -11090,8 +11113,11 @@ impl AstCodeGen {
 
                     // Check if this is a global variable (needs unsafe access)
                     // Global variables are prefixed with __gv_ to avoid parameter shadowing
-                    if let Some(prefixed_name) = self.global_var_mapping.get(&ident) {
-                        return format!("unsafe {{ {} }}", prefixed_name);
+                    // But only if it's not a local variable (local vars shadow globals)
+                    if !self.local_vars.contains(&ident) {
+                        if let Some(prefixed_name) = self.global_var_mapping.get(&ident) {
+                            return format!("unsafe {{ {} }}", prefixed_name);
+                        }
                     }
 
                     // Check if this is a function template instantiation call
