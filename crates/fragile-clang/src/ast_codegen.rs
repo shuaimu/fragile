@@ -6099,8 +6099,9 @@ impl AstCodeGen {
                                     format!("unsafe {{ {} {} 1; {} }}", raw_name, op_str, raw_name)
                                 }
                             } else if is_pointer {
+                                // Pointer arithmetic with .add/.sub is unsafe
                                 let method = if matches!(op, UnaryOp::PreInc) { "add" } else { "sub" };
-                                format!("{{ {} = {}.{}(1); {} }}", operand, operand, method, operand)
+                                format!("unsafe {{ {} = {}.{}(1); {} }}", operand, operand, method, operand)
                             } else {
                                 let op_str = if matches!(op, UnaryOp::PreInc) { "+=" } else { "-=" };
                                 format!("{{ {} {} 1; {} }}", operand, op_str, operand)
@@ -6119,8 +6120,9 @@ impl AstCodeGen {
                                     format!("unsafe {{ let __v = {}; {} {} 1; __v }}", raw_name, raw_name, op_str)
                                 }
                             } else if is_pointer {
+                                // Pointer arithmetic with .add/.sub is unsafe
                                 let method = if matches!(op, UnaryOp::PostInc) { "add" } else { "sub" };
-                                format!("{{ let __v = {}; {} = {}.{}(1); __v }}", operand, operand, operand, method)
+                                format!("unsafe {{ let __v = {}; {} = {}.{}(1); __v }}", operand, operand, operand, method)
                             } else {
                                 let op_str = if matches!(op, UnaryOp::PostInc) { "+=" } else { "-=" };
                                 format!("{{ let __v = {}; {} {} 1; __v }}", operand, operand, op_str)
