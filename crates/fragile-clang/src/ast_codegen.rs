@@ -4079,8 +4079,41 @@ impl AstCodeGen {
         self.writeln("pub fn to_int_type(_c: i8) -> i32 { _c as i32 }");
         self.writeln("pub fn eof() -> i32 { -1 }");
         self.writeln("pub fn not_eof(_c: i32) -> i32 { if _c == -1 { 0 } else { _c } }");
+        self.writeln("");
+        // Additional char_traits functions with type-mangled names (for wchar_t, char8_t, char16_t, char32_t)
+        self.writeln("// move functions for different char types");
+        self.writeln("pub fn move_ptr_mut_i8_ptr_const_i8(_dest: *mut i8, _src: *const i8, _n: u64) -> *mut i8 { unsafe { std::ptr::copy(_src, _dest, _n as usize); _dest } }");
+        self.writeln("pub fn move_ptr_mut_i32_ptr_const_i32(_dest: *mut i32, _src: *const i32, _n: u64) -> *mut i32 { unsafe { std::ptr::copy(_src, _dest, _n as usize); _dest } }");
+        self.writeln("pub fn move_ptr_mut_u8_ptr_const_u8(_dest: *mut u8, _src: *const u8, _n: u64) -> *mut u8 { unsafe { std::ptr::copy(_src, _dest, _n as usize); _dest } }");
+        self.writeln("pub fn move_ptr_mut_u16_ptr_const_u16(_dest: *mut u16, _src: *const u16, _n: u64) -> *mut u16 { unsafe { std::ptr::copy(_src, _dest, _n as usize); _dest } }");
+        self.writeln("pub fn move_ptr_mut_u32_ptr_const_u32(_dest: *mut u32, _src: *const u32, _n: u64) -> *mut u32 { unsafe { std::ptr::copy(_src, _dest, _n as usize); _dest } }");
+        self.writeln("");
+        self.writeln("// assign functions for different char types (fill)");
+        self.writeln("pub fn assign_ptr_mut_i8(_s: *mut i8, _n: u64, _a: i8) -> *mut i8 { unsafe { for i in 0.._n as usize { *_s.add(i) = _a; } _s } }");
+        self.writeln("pub fn assign_ptr_mut_i32(_s: *mut i32, _n: u64, _a: i32) -> *mut i32 { unsafe { for i in 0.._n as usize { *_s.add(i) = _a; } _s } }");
+        self.writeln("pub fn assign_ptr_mut_u8(_s: *mut u8, _n: u64, _a: u8) -> *mut u8 { unsafe { for i in 0.._n as usize { *_s.add(i) = _a; } _s } }");
+        self.writeln("pub fn assign_u16(_dest: &mut u16, _src: &u16) { *_dest = *_src; }");
+        self.writeln("pub fn assign_u32(_dest: &mut u32, _src: &u32) { *_dest = *_src; }");
+        self.writeln("");
+        self.writeln("// compare functions for different char types");
+        self.writeln("pub fn compare_ptr_const_i32(_s1: *const i32, _s2: *const i32, _n: u64) -> i32 { unsafe { for i in 0.._n as usize { let a = *_s1.add(i); let b = *_s2.add(i); if a != b { return if a < b { -1 } else { 1 }; } } 0 } }");
+        self.writeln("pub fn compare_ptr_const_u8(_s1: *const u8, _s2: *const u8, _n: u64) -> i32 { unsafe { for i in 0.._n as usize { let a = *_s1.add(i); let b = *_s2.add(i); if a != b { return if a < b { -1 } else { 1 }; } } 0 } }");
         self.indent -= 1;
         self.writeln("}");
+        self.writeln("");
+
+        // construct_at stubs for placement new (C++20 std::construct_at)
+        self.writeln("// construct_at stubs for placement new (C++20 std::construct_at)");
+        self.writeln("#[inline]");
+        self.writeln("pub fn construct_at_i8_ref_i8(_p: *const i8, _val: i8) -> *mut i8 { unsafe { let p = _p as *mut i8; *p = _val; p } }");
+        self.writeln("#[inline]");
+        self.writeln("pub fn construct_at_i32_ref_i32(_p: *const i32, _val: i32) -> *mut i32 { unsafe { let p = _p as *mut i32; *p = _val; p } }");
+        self.writeln("#[inline]");
+        self.writeln("pub fn construct_at_u8_ref_u8(_p: *const u8, _val: u8) -> *mut u8 { unsafe { let p = _p as *mut u8; *p = _val; p } }");
+        self.writeln("#[inline]");
+        self.writeln("pub fn construct_at_u16_ref_u16(_p: *const u16, _val: u16) -> *mut u16 { unsafe { let p = _p as *mut u16; *p = _val; p } }");
+        self.writeln("#[inline]");
+        self.writeln("pub fn construct_at_u32_ref_u32(_p: *const u32, _val: u32) -> *mut u32 { unsafe { let p = _p as *mut u32; *p = _val; p } }");
         self.writeln("");
 
         // More type stubs for libstdc++
