@@ -22,19 +22,28 @@ fn log_type_diagnostic(category: &str, message: &str) {
 pub fn parse_template_args(args: &str) -> Vec<String> {
     let mut result = Vec::new();
     let mut current = String::new();
-    let mut depth = 0;
+    let mut angle_depth = 0; // Depth for <>
+    let mut paren_depth = 0; // Depth for () - for function pointer types
 
     for ch in args.chars() {
         match ch {
             '<' => {
-                depth += 1;
+                angle_depth += 1;
                 current.push(ch);
             }
             '>' => {
-                depth -= 1;
+                angle_depth -= 1;
                 current.push(ch);
             }
-            ',' if depth == 0 => {
+            '(' => {
+                paren_depth += 1;
+                current.push(ch);
+            }
+            ')' => {
+                paren_depth -= 1;
+                current.push(ch);
+            }
+            ',' if angle_depth == 0 && paren_depth == 0 => {
                 let trimmed = current.trim().to_string();
                 if !trimmed.is_empty() {
                     result.push(trimmed);
@@ -1421,5 +1430,23 @@ mod tests {
 
         // Empty
         assert_eq!(parse_template_args(""), Vec::<String>::new());
+
+        // Function pointer in template arguments
+        assert_eq!(
+            parse_template_args("char, void (*)(void *)"),
+            vec!["char", "void (*)(void *)"]
+        );
+
+        // More complex function pointer
+        assert_eq!(
+            parse_template_args("int, int (*)(int, int), double"),
+            vec!["int", "int (*)(int, int)", "double"]
+        );
+
+        // Function pointer with nested templates
+        assert_eq!(
+            parse_template_args("std::vector<int>, void (*)(std::string &)"),
+            vec!["std::vector<int>", "void (*)(std::string &)"]
+        );
     }
 }
