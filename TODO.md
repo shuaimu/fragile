@@ -626,7 +626,7 @@ Get `std::vector<int>` working end-to-end.
     }
     ```
   - [ ] **23.8.2** Compile transpiled code with rustc + fragile-runtime - IN PROGRESS
-    - **Progress**: Errors reduced 2091 → 103 (95.1% reduction) ✅ 2026-01-24
+    - **Progress**: Errors reduced 2091 → 102 (95.1% reduction) ✅ 2026-01-24
     - Fixed: super:: path computation now accounts for flattened namespaces (std, __)
     - Fixed: Method overloading deduplication within struct impl blocks (23.8.3)
     - Fixed: Constructor overloading with same param count but different types
@@ -678,8 +678,11 @@ Get `std::vector<int>` working end-to-end.
     - Fixed: Base class constructor pointer arguments (0 → null_mut()) ✅ 2026-01-24
       - Track constructor signatures in constructor_signatures HashMap
       - Use signatures to convert `0` to `null_mut()` for pointer parameters in base class calls
-    - **Progress**: Errors reduced from 2091 to 103 (95.1% reduction) ✅ 2026-01-24
-    - Remaining 103 errors:
+    - Fixed: C++ logical NOT operator for non-bool types ✅ 2026-01-24
+      - `!x` on non-bool now generates `(x == 0)` instead of `!x`
+      - Fixes `!!x` idiom which converts any integer to bool
+    - **Progress**: Errors reduced from 2091 to 102 (95.1% reduction) ✅ 2026-01-24
+    - Remaining 102 errors:
       - Type mismatches (iterator/reference types)
       - Missing types (template instantiation aliases like __strictest_alignment__Types___)
       - Missing comparison methods on partial_ordering
