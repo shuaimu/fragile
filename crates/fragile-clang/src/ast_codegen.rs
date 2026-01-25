@@ -2319,6 +2319,35 @@ impl AstCodeGen {
                     Some(("false".to_string(), false))
                 }
             }
+            "__builtin_addressof" => {
+                // __builtin_addressof(expr) -> &raw const expr (address of expr)
+                // Special case: if the argument is a dereference (*ptr), just return ptr
+                if args.len() == 1 {
+                    let arg = args[0].trim();
+                    if arg.starts_with('*') {
+                        // *ptr -> ptr (address of dereference is the original pointer)
+                        let ptr_expr = arg[1..].trim();
+                        Some((format!("{} as *const _", ptr_expr), false))
+                    } else if arg.starts_with("unsafe { *") && arg.ends_with('}') {
+                        // unsafe { *ptr } -> ptr
+                        let inner = arg
+                            .strip_prefix("unsafe { *")
+                            .and_then(|s| s.strip_suffix('}'))
+                            .map(|s| s.trim());
+                        if let Some(ptr_expr) = inner {
+                            Some((format!("{} as *const _", ptr_expr), false))
+                        } else {
+                            // Fallback: take address with addr_of!
+                            Some((format!("std::ptr::addr_of!({}) as *const _", arg), false))
+                        }
+                    } else {
+                        // Regular case: take address of expression
+                        Some((format!("&{} as *const _", arg), false))
+                    }
+                } else {
+                    None
+                }
+            }
             _ => None,
         }
     }
