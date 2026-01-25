@@ -694,10 +694,14 @@ Get `std::vector<int>` working end-to-end.
       - `.add(1)` and `.sub(1)` are unsafe even for local pointers
     - Fixed: Wrap c_void union fields in ManuallyDrop ✅ 2026-01-24
       - c_void doesn't impl Copy, so unions need ManuallyDrop wrapper
-    - **Progress**: Errors reduced from 2091 to 88 (95.8% reduction) ✅ 2026-01-24
-    - Remaining 88 errors:
+    - Fixed: Add type trait and hash base stubs for STL compatibility ✅ 2026-01-24
+      - __bool_constant_true/false, __hash_base_size_t__* for all primitive types
+    - Fixed: Add numeric traits and template placeholder stubs ✅ 2026-01-24
+      - __numeric_traits_floating_*, _dependent_type, _Elt, etc.
+    - **Progress**: Errors reduced from 2091 to 65 (96.9% reduction) ✅ 2026-01-24
+    - Remaining 65 errors:
       - Type mismatches (21) - mostly u32+isize arithmetic, template placeholders
-      - Missing types (many) - template instantiation aliases
+      - Missing types - complex template instantiation aliases
       - Missing fragile_runtime crate reference
   - [ ] **23.8.3** Execute and verify exit code - BLOCKED on 23.8.2
   - [ ] **23.8.4** Add iteration test: `for (int x : v) { ... }` - BLOCKED
