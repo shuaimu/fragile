@@ -841,7 +841,7 @@ Get `std::cout` working end-to-end.
     }
     ```
     - **Status**: Transpilation succeeds (128K chars → 23K LOC Rust)
-    - **Progress**: Compilation errors reduced: 65 → 1200 → 19 → 15 → 5 → 2581 (vendored) → 2256 → 2184 ✅ 2026-01-25
+    - **Progress**: Compilation errors reduced: 65 → 1200 → 19 → 15 → 5 → 2581 (vendored) → 2256 → 2184 → 700 (libstdc++) ✅ 2026-01-25
     - Many fixes applied:
       - Skip variadic template instantiations (&&..., ...)
       - Skip decltype return types
@@ -855,9 +855,14 @@ Get `std::cout` working end-to-end.
       - Fixed SFINAE type names with == and ! operators (escape to _eq_, _ne_, _not_) ✅ 2026-01-25
       - Fixed global variable parameter shadowing (prefix globals with __gv_) ✅ 2026-01-25
       - Added type mappings for std::byte, std::memory_order, codecvt_base::result ✅ 2026-01-25
-    - **Remaining errors**: ~2184 (mostly missing template type definitions)
-      - Main issue: uninstantiated template types (basic_string, __wrap_iter, etc.)
-      - Missing ios_base methods (setf, unsetf)
+      - Added type stubs for locale nested classes (locale_facet, locale_id) ✅ 2026-01-25
+      - Added system type stubs (__locale_struct, pthread types, ctype types) ✅ 2026-01-25
+      - Added template placeholder stubs (basic_string, iterator types) ✅ 2026-01-25
+      - Added iostream base type stubs (std__Ios_Fmtflags, etc.) for libstdc++ ✅ 2026-01-25
+      - Added char_traits module stub with basic functions ✅ 2026-01-25
+    - **Remaining errors**: ~700 (libstdc++) / ~2184 (vendored libc++)
+      - Main issue: Type mismatches (165), _unnamed values (26), operator issues (32)
+      - Missing exception type (15), _dependent_type new_N calls (31)
       - VaList initialization (Rust nightly limitation)
     - Fixed: Cast precedence, literal operators, static member names, trait names
     - Fixed: Added vendored libc++ config files (__config_site, __assertion_handler) ✅ 2026-01-25
