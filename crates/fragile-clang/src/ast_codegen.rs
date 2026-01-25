@@ -6183,8 +6183,8 @@ impl AstCodeGen {
                         format!("{}({})", func, args.join(", "))
                     } else {
                         // Constructor call: all children are arguments (but skip TypeRef nodes)
-                        // For copy constructors (1 argument of same type), pass by reference
-                        let args: Vec<String> = node.children.iter()
+                        // First, filter to get only argument nodes
+                        let arg_nodes: Vec<&ClangNode> = node.children.iter()
                             .filter(|c| {
                                 // Skip TypeRef nodes (they're type references, not arguments)
                                 if let ClangNodeKind::Unknown(s) = &c.kind {
@@ -6194,24 +6194,56 @@ impl AstCodeGen {
                                 }
                                 true
                             })
-                            .map(|c| {
-                                let arg_str = self.expr_to_string(c);
-                                // Check if this is a copy constructor call (arg type matches struct)
-                                let arg_type = Self::get_expr_type(c);
-                                let arg_class = Self::extract_class_name(&arg_type);
-                                if let Some(name) = arg_class {
-                                    // Compare using C++ name for copy constructor detection
-                                    if name == *cpp_struct_name {
-                                        // Pass by reference for copy constructor
-                                        return format!("&{}", arg_str);
-                                    }
-                                }
-                                arg_str
-                            })
                             .collect();
-                        let num_args = args.len();
-                        // Always use StructName::new_N(args) to ensure custom constructor bodies run
-                        format!("{}::new_{}({})", struct_name, num_args, args.join(", "))
+
+                        // Check if this is a copy constructor call (single arg of same type)
+                        let is_copy_ctor = arg_nodes.len() == 1 && {
+                            let arg_type = Self::get_expr_type(arg_nodes[0]);
+                            let arg_class = Self::extract_class_name(&arg_type);
+                            arg_class.map(|name| name == *cpp_struct_name).unwrap_or(false)
+                        };
+
+                        if is_copy_ctor {
+                            // For copy constructor, use .clone() since structs may not be Copy
+                            // This maps to the Clone impl which calls new_1(self)
+                            let arg_str = self.expr_to_string(arg_nodes[0]);
+                            format!("{}.clone()", arg_str)
+                        } else {
+                            // Regular constructor - convert args and call new_N
+                            let args: Vec<String> = arg_nodes.iter()
+                                .map(|c| self.expr_to_string(c))
+                                .collect();
+                            let num_args = args.len();
+
+                            // Check if the type maps to a pointer, primitive, or non-struct type
+                            // that can't have a constructor (e.g., `*mut std::ffi::c_void`)
+                            let is_non_struct = struct_name.starts_with('*')
+                                || struct_name.starts_with('&')
+                                || struct_name == "std::ffi::c_void"
+                                || struct_name == "()"
+                                || struct_name == "bool"
+                                || struct_name == "i8" || struct_name == "i16" || struct_name == "i32" || struct_name == "i64" || struct_name == "i128"
+                                || struct_name == "u8" || struct_name == "u16" || struct_name == "u32" || struct_name == "u64" || struct_name == "u128"
+                                || struct_name == "f32" || struct_name == "f64"
+                                || struct_name == "isize" || struct_name == "usize"
+                                || struct_name == "char";
+
+                            if is_non_struct {
+                                // For non-struct types, just use the first argument as-is
+                                // (copy "constructor" becomes identity, default "constructor" becomes Default)
+                                if num_args == 0 {
+                                    format!("Default::default()")
+                                } else if num_args == 1 {
+                                    args[0].clone()
+                                } else {
+                                    // Multiple args for non-struct type - shouldn't happen but handle gracefully
+                                    args[0].clone()
+                                }
+                            } else {
+                                // Always use StructName::new_N(args) to ensure custom constructor bodies run
+                                format!("{}::new_{}({})", struct_name, num_args, args.join(", "))
+                            }
+                        }
                     }
                 } else if !node.children.is_empty() {
                     // Check if this is a virtual base method call
