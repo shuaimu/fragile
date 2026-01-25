@@ -2357,8 +2357,10 @@ impl AstCodeGen {
         // Check if base is a pointer to a polymorphic class
         let class_name = if let Some(CppType::Pointer { pointee, .. }) = &base_type {
             if let CppType::Named(name) = pointee.as_ref() {
-                if self.polymorphic_classes.contains(name) {
-                    name.clone()
+                // Strip "const " prefix if present for polymorphic class lookup
+                let base_name = name.strip_prefix("const ").unwrap_or(name);
+                if self.polymorphic_classes.contains(base_name) {
+                    base_name.to_string()
                 } else {
                     return None;
                 }
@@ -5479,7 +5481,10 @@ impl AstCodeGen {
                 // Check if this is a polymorphic class that needs vtable initialization
                 if let Some(vtable_info) = self.vtables.get(name).cloned() {
                     let sanitized = sanitize_identifier(name);
-                    if vtable_info.base_class.is_none() {
+                    // Abstract classes don't have vtable instances, use Default
+                    if vtable_info.is_abstract {
+                        self.writeln("Default::default()");
+                    } else if vtable_info.base_class.is_none() {
                         // Root polymorphic class - set vtable directly
                         self.writeln("Self {");
                         self.indent += 1;
@@ -7995,10 +8000,11 @@ impl AstCodeGen {
                         .unwrap_or(false);
 
                     // Check if this is a derived polymorphic class that needs vtable set after construction
+                    // Abstract classes don't have vtable instances, so skip vtable assignment
                     let is_derived_polymorphic = self
                         .vtables
                         .get(struct_name)
-                        .map(|v| v.base_class.is_some())
+                        .map(|v| v.base_class.is_some() && !v.is_abstract)
                         .unwrap_or(false);
 
                     // Use __self pattern if we need to do post-construction work

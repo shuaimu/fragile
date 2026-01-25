@@ -4370,3 +4370,96 @@ fn test_libcxx_thread_transpilation() {
         "Should either succeed or report errors, not crash"
     );
 }
+
+/// Task 23.11.1: Test a realistic single-file C++ program.
+/// This is an expression evaluator that exercises multiple features:
+/// - Class inheritance hierarchy (Expr -> BinaryExpr -> Add/Mul)
+/// - Virtual methods (eval())
+/// - Pure virtual methods (= 0)
+/// - new/delete for memory management
+/// - Operator overloading (through virtual dispatch)
+#[test]
+fn test_e2e_expression_evaluator() {
+    let source = r#"
+        // Base class with pure virtual eval() method
+        class Expr {
+        public:
+            virtual ~Expr() {}
+            virtual int eval() const = 0;
+        };
+
+        // Leaf node: a number literal
+        class Number : public Expr {
+            int value;
+        public:
+            Number(int v) : value(v) {}
+            int eval() const override { return value; }
+        };
+
+        // Intermediate class for binary expressions
+        class BinaryExpr : public Expr {
+        protected:
+            Expr* left;
+            Expr* right;
+        public:
+            BinaryExpr(Expr* l, Expr* r) : left(l), right(r) {}
+            ~BinaryExpr() override {
+                delete left;
+                delete right;
+            }
+        };
+
+        // Addition expression
+        class Add : public BinaryExpr {
+        public:
+            Add(Expr* l, Expr* r) : BinaryExpr(l, r) {}
+            int eval() const override { return left->eval() + right->eval(); }
+        };
+
+        // Multiplication expression
+        class Mul : public BinaryExpr {
+        public:
+            Mul(Expr* l, Expr* r) : BinaryExpr(l, r) {}
+            int eval() const override { return left->eval() * right->eval(); }
+        };
+
+        int main() {
+            // Build expression: (2 + 3) * 4 = 20
+            Expr* expr = new Mul(
+                new Add(new Number(2), new Number(3)),
+                new Number(4)
+            );
+
+            int result = expr->eval();
+            delete expr;
+
+            // Verify result
+            if (result != 20) {
+                return 1;  // Failure: wrong result
+            }
+
+            // Test another expression: 5 * (3 + 7) = 50
+            Expr* expr2 = new Mul(
+                new Number(5),
+                new Add(new Number(3), new Number(7))
+            );
+
+            int result2 = expr2->eval();
+            delete expr2;
+
+            if (result2 != 50) {
+                return 2;  // Failure: wrong result for expr2
+            }
+
+            return 0;  // Success
+        }
+    "#;
+
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_expression_evaluator.cpp").expect("E2E test failed");
+
+    assert_eq!(
+        exit_code, 0,
+        "Expression evaluator should evaluate (2+3)*4=20 and 5*(3+7)=50 correctly"
+    );
+}
