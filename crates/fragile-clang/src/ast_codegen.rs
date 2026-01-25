@@ -1572,6 +1572,30 @@ impl AstCodeGen {
         self.writeln("pub static PARTIAL_ORDERING_GREATER: partial_ordering = partial_ordering { _M_value: 1 };");
         self.writeln("pub static PARTIAL_ORDERING_UNORDERED: partial_ordering = partial_ordering { _M_value: -127 };");
         self.writeln("");
+
+        // Type trait stubs - common types from <type_traits>
+        self.writeln("// Type trait stubs");
+        self.writeln("#[repr(C)]");
+        self.writeln("#[derive(Default, Copy, Clone)]");
+        self.writeln("pub struct __bool_constant_true;");
+        self.writeln("#[repr(C)]");
+        self.writeln("#[derive(Default, Copy, Clone)]");
+        self.writeln("pub struct __bool_constant_false;");
+        self.writeln("");
+
+        // Hash base stubs - used as base classes for std::hash specializations
+        self.writeln("// Hash base stubs for std::hash specializations");
+        for ty in &["bool", "char", "signed_char", "unsigned_char", "wchar_t",
+                   "char8_t", "char16_t", "char32_t", "short", "int", "long",
+                   "long_long", "unsigned_short", "unsigned_int", "unsigned_long",
+                   "unsigned_long_long", "float", "double", "long_double", "nullptr_t"] {
+            let name = format!("__hash_base_size_t__{}", ty);
+            self.generated_structs.insert(name.clone());
+            self.writeln("#[repr(C)]");
+            self.writeln("#[derive(Default, Copy, Clone)]");
+            self.writeln(&format!("pub struct {};", name));
+        }
+        self.writeln("");
     }
 
     /// Generate Rust enum definitions for all collected std::variant types.
