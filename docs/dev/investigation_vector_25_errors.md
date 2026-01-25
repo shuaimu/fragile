@@ -27,13 +27,17 @@ All headers share the same root causes. The iostream header has more errors beca
 **Attempted fix**: Modified trait impl generation to trace up hierarchy
 **Result**: Made things worse (exposed 100+ more errors due to `c_void` base class issue)
 
-### 2. Base Class Type Resolution (contributes to many errors)
+### 2. Base Class Type Resolution ✅ FIXED
 - `exception` → `std::ffi::c_void` instead of `exception` type
-- All exception hierarchy classes have `__base: std::ffi::c_void`
-- This breaks trait implementations and method calls
+- All exception hierarchy classes had `__base: std::ffi::c_void`
 
-**Root cause**: In libc++, base classes are being resolved to `c_void` during AST parsing
-**Location**: Likely in `parse.rs` when resolving `CXXBaseSpecifier` types
+**Root cause**: Was in `types.rs` - exception types were explicitly mapped to c_void
+**Fix**: Changed mappings in `to_rust_type_str()` to preserve exception type names:
+  - `exception` | `std::exception` → `"exception"` (was `"std::ffi::c_void"`)
+  - `bad_alloc` | `std::bad_alloc` → `"bad_alloc"` (was `"std::ffi::c_void"`)
+  - etc.
+
+**Status**: Fixed ✅ - `bad_alloc` now correctly has `__base: exception`
 
 ### 3. Template Array Sizes (vector: 3, iostream: 1)
 - `_Size`, `_PaddingSize` used as array sizes but not resolved
@@ -69,21 +73,23 @@ All headers share the same root causes. The iostream header has more errors beca
 
 ## Recommended Next Steps
 
-1. **Fix base class type resolution** (Priority: High)
-   - Investigate `parse.rs` CXXBaseSpecifier handling
-   - Ensure proper type names are preserved for polymorphic base classes
-   - This will fix ~30% of remaining errors
+1. ~~**Fix base class type resolution** (Priority: High)~~ ✅ DONE
+   - Fixed in types.rs by changing exception type mappings
 
-2. **Generate traits for intermediate polymorphic classes** (Priority: Medium)
+2. **Generate traits for intermediate polymorphic classes** (Priority: High)
    - Modify `generate_struct` to generate traits for all polymorphic classes
    - Not just root classes (those without bases)
+   - This will fix 6 errors (bad_allocTrait, logic_errorTrait x4, runtime_errorTrait)
 
-3. **Add libc++ type stubs** (Priority: Low)
+3. **Add libc++ type stubs** (Priority: Medium)
    - Add stubs in preamble for common missing types
-   - `std___libcpp_refstring`, `__impl___type_name_t`, etc.
+   - `std___libcpp_refstring`, `__impl___type_name_t`, `value_type`, etc.
+
+4. **Fix complex while loop conditions** (Priority: Low)
+   - The `while (unsigned char c = *ptr++)` pattern produces invalid code
+   - Affects only 1 function (`__non_unique_impl::__hash`)
 
 ## Files to Modify
 
-- `crates/fragile-clang/src/parse.rs` - Base class type resolution
 - `crates/fragile-clang/src/ast_codegen.rs` - Trait generation logic
-- `crates/fragile-clang/src/types.rs` - Type name mapping
+- `crates/fragile-clang/src/types.rs` - Type stubs for missing libc++ types
