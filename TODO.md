@@ -841,7 +841,7 @@ Get `std::cout` working end-to-end.
     }
     ```
     - **Status**: Transpilation succeeds (128K chars → 23K LOC Rust)
-    - **Progress**: Compilation errors reduced: 65 → 1200 → 19 → 15 → 5 → 2581 (vendored) → 2256 → 2184 → 700 → 651 → 642 (libstdc++) ✅ 2026-01-25
+    - **Progress**: Compilation errors reduced: 65 → 1200 → 19 → 15 → 5 → 2581 (vendored) → 2256 → 2184 → 700 → 651 → 642 → 554 (libstdc++) ✅ 2026-01-25
     - Many fixes applied:
       - Skip variadic template instantiations (&&..., ...)
       - Skip decltype return types
@@ -869,12 +869,13 @@ Get `std::cout` working end-to-end.
       - Fixed template specialization member access comparison ✅ 2026-01-25
         - Strip template arguments when comparing class names (e.g., ctype<char> → ctype)
         - Fixes incorrect self.__base._M_widen_ok → self._M_widen_ok for direct members
-    - **Remaining errors**: ~642 (libstdc++) - mostly complex template issues:
-      - Type mismatches (165): u32/i32 mixing in binary operations
-      - _unnamed values (26): unresolved template placeholders
+    - **Remaining errors**: ~554 (libstdc++) - mostly complex template issues:
+      - Type mismatches (154): u32/i32 mixing in binary operations
       - Dereference errors (32): scalar types incorrectly dereferenced
-      - _dependent_type new_N calls (31): template-dependent constructors
+      - Missing functions (9): cascade from skipping broken functions
       - VaList initialization (Rust nightly limitation)
+      - Fixed: Skip template instantiation functions with _dependent_type::new_* calls ✅ 2026-01-25
+      - Fixed: Skip functions with bare c_void return type or parameter ✅ 2026-01-25
     - Fixed: Cast precedence, literal operators, static member names, trait names
     - Fixed: Added vendored libc++ config files (__config_site, __assertion_handler) ✅ 2026-01-25
     - Fixed: CLI --use-vendored-libcxx now works correctly ✅ 2026-01-25
