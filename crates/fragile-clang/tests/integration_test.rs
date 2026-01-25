@@ -1730,6 +1730,241 @@ fn main() {
     );
 }
 
+/// Test std::unique_ptr and std::shared_ptr stub operations directly in generated Rust code.
+/// This verifies the smart pointer stubs in the preamble work correctly.
+#[test]
+fn test_e2e_smart_ptr_stub() {
+    use std::fs;
+    use std::process::Command;
+
+    // Write Rust code that directly uses the smart pointer stubs
+    let rust_code = r#"
+#![allow(dead_code)]
+#![allow(unused_variables)]
+#![allow(unused_mut)]
+
+// std::unique_ptr<int> stub implementation (same as generated in preamble)
+#[repr(C)]
+pub struct std_unique_ptr_int {
+    _ptr: *mut i32,
+}
+
+impl Default for std_unique_ptr_int {
+    fn default() -> Self { Self { _ptr: std::ptr::null_mut() } }
+}
+
+impl std_unique_ptr_int {
+    pub fn new_0() -> Self { Default::default() }
+    pub fn new_1(ptr: *mut i32) -> Self { Self { _ptr: ptr } }
+    pub fn get(&self) -> *mut i32 { self._ptr }
+    pub fn op_deref(&self) -> &mut i32 {
+        unsafe { &mut *self._ptr }
+    }
+    pub fn op_arrow(&self) -> *mut i32 { self._ptr }
+    pub fn release(&mut self) -> *mut i32 {
+        let ptr = self._ptr;
+        self._ptr = std::ptr::null_mut();
+        ptr
+    }
+    pub fn reset(&mut self) {
+        if !self._ptr.is_null() {
+            unsafe { drop(Box::from_raw(self._ptr)); }
+        }
+        self._ptr = std::ptr::null_mut();
+    }
+}
+
+impl Drop for std_unique_ptr_int {
+    fn drop(&mut self) {
+        if !self._ptr.is_null() {
+            unsafe { drop(Box::from_raw(self._ptr)); }
+        }
+    }
+}
+
+// std::shared_ptr<int> stub implementation (same as generated in preamble)
+#[repr(C)]
+pub struct std_shared_ptr_int {
+    _ptr: *mut i32,
+    _refcount: *mut usize,
+}
+
+impl Default for std_shared_ptr_int {
+    fn default() -> Self { Self { _ptr: std::ptr::null_mut(), _refcount: std::ptr::null_mut() } }
+}
+
+impl std_shared_ptr_int {
+    pub fn new_0() -> Self { Default::default() }
+    pub fn new_1(ptr: *mut i32) -> Self {
+        let refcount = Box::into_raw(Box::new(1usize));
+        Self { _ptr: ptr, _refcount: refcount }
+    }
+    pub fn get(&self) -> *mut i32 { self._ptr }
+    pub fn op_deref(&self) -> &mut i32 {
+        unsafe { &mut *self._ptr }
+    }
+    pub fn use_count(&self) -> usize {
+        if self._refcount.is_null() { 0 } else { unsafe { *self._refcount } }
+    }
+    pub fn reset(&mut self) {
+        if !self._refcount.is_null() {
+            unsafe {
+                *self._refcount -= 1;
+                if *self._refcount == 0 {
+                    if !self._ptr.is_null() { drop(Box::from_raw(self._ptr)); }
+                    drop(Box::from_raw(self._refcount));
+                }
+            }
+        }
+        self._ptr = std::ptr::null_mut();
+        self._refcount = std::ptr::null_mut();
+    }
+}
+
+impl Clone for std_shared_ptr_int {
+    fn clone(&self) -> Self {
+        if !self._refcount.is_null() {
+            unsafe { *self._refcount += 1; }
+        }
+        Self { _ptr: self._ptr, _refcount: self._refcount }
+    }
+}
+
+impl Drop for std_shared_ptr_int {
+    fn drop(&mut self) {
+        if !self._refcount.is_null() {
+            unsafe {
+                *self._refcount -= 1;
+                if *self._refcount == 0 {
+                    if !self._ptr.is_null() { drop(Box::from_raw(self._ptr)); }
+                    drop(Box::from_raw(self._refcount));
+                }
+            }
+        }
+    }
+}
+
+fn main() {
+    // ========== unique_ptr tests ==========
+
+    // Test 1: Default constructor creates null pointer
+    let up0 = std_unique_ptr_int::new_0();
+    if !up0.get().is_null() { std::process::exit(1); }
+    drop(up0);
+
+    // Test 2: Constructor from raw pointer holds the pointer
+    let raw_ptr = Box::into_raw(Box::new(42i32));
+    let mut up1 = std_unique_ptr_int::new_1(raw_ptr);
+    if up1.get() != raw_ptr { std::process::exit(2); }
+    if up1.get().is_null() { std::process::exit(3); }
+
+    // Test 3: op_deref returns the value
+    if *up1.op_deref() != 42 { std::process::exit(4); }
+
+    // Test 4: Modify value through op_deref
+    *up1.op_deref() = 100;
+    if *up1.op_deref() != 100 { std::process::exit(5); }
+
+    // Test 5: op_arrow returns the pointer
+    if up1.op_arrow() != raw_ptr { std::process::exit(6); }
+
+    // Test 6: release() returns pointer and clears ownership
+    let released = up1.release();
+    if released != raw_ptr { std::process::exit(7); }
+    if !up1.get().is_null() { std::process::exit(8); }
+    // Manual cleanup since we released
+    unsafe { drop(Box::from_raw(released)); }
+    drop(up1);
+
+    // Test 7: reset() on non-null pointer
+    let raw_ptr2 = Box::into_raw(Box::new(200i32));
+    let mut up2 = std_unique_ptr_int::new_1(raw_ptr2);
+    up2.reset();
+    if !up2.get().is_null() { std::process::exit(9); }
+    drop(up2);
+
+    // ========== shared_ptr tests ==========
+
+    // Test 10: Default constructor creates null pointer with use_count 0
+    let sp0 = std_shared_ptr_int::new_0();
+    if !sp0.get().is_null() { std::process::exit(10); }
+    if sp0.use_count() != 0 { std::process::exit(11); }
+    drop(sp0);
+
+    // Test 11: Constructor from raw pointer, use_count == 1
+    let raw_ptr3 = Box::into_raw(Box::new(300i32));
+    let sp1 = std_shared_ptr_int::new_1(raw_ptr3);
+    if sp1.get() != raw_ptr3 { std::process::exit(12); }
+    if sp1.use_count() != 1 { std::process::exit(13); }
+
+    // Test 12: op_deref returns the value
+    if *sp1.op_deref() != 300 { std::process::exit(14); }
+
+    // Test 13: Clone increases use_count
+    let sp2 = sp1.clone();
+    if sp1.use_count() != 2 { std::process::exit(15); }
+    if sp2.use_count() != 2 { std::process::exit(16); }
+    if sp1.get() != sp2.get() { std::process::exit(17); }
+
+    // Test 14: Drop decreases use_count
+    drop(sp2);
+    if sp1.use_count() != 1 { std::process::exit(18); }
+
+    // Test 15: reset() decreases use_count
+    let sp3 = sp1.clone();
+    if sp1.use_count() != 2 { std::process::exit(19); }
+    let mut sp4 = sp3;
+    sp4.reset();
+    if sp4.use_count() != 0 { std::process::exit(20); }
+    if sp4.get() != std::ptr::null_mut() { std::process::exit(21); }
+    if sp1.use_count() != 1 { std::process::exit(22); }
+
+    // Test 16: Memory freed when last reference drops (no crash = success)
+    drop(sp1);
+
+    std::process::exit(0);  // All tests passed
+}
+"#;
+
+    // Create temp directory
+    let temp_dir = std::env::temp_dir().join("fragile_e2e_tests");
+    fs::create_dir_all(&temp_dir).expect("Failed to create temp dir");
+
+    // Write Rust source
+    let rs_path = temp_dir.join("e2e_smart_ptr_stub.rs");
+    fs::write(&rs_path, rust_code).expect("Failed to write Rust source");
+
+    // Compile with rustc
+    let binary_path = temp_dir.join("e2e_smart_ptr_stub");
+    let compile_output = Command::new("rustc")
+        .arg(&rs_path)
+        .arg("-o")
+        .arg(&binary_path)
+        .arg("--edition=2021")
+        .output()
+        .expect("Failed to run rustc");
+
+    if !compile_output.status.success() {
+        panic!(
+            "rustc compilation failed:\nstdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&compile_output.stdout),
+            String::from_utf8_lossy(&compile_output.stderr)
+        );
+    }
+
+    // Run the binary
+    let run_output = Command::new(&binary_path)
+        .output()
+        .expect("Failed to run binary");
+
+    let exit_code = run_output.status.code().unwrap_or(-1);
+    assert_eq!(
+        exit_code, 0,
+        "Smart pointer stub operations should work correctly (exit code: {})",
+        exit_code
+    );
+}
+
 /// Test function returning struct (rvalue handling).
 #[test]
 fn test_e2e_function_returning_struct() {

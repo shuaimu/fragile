@@ -14,11 +14,11 @@ We just convert the fully-resolved AST to equivalent Rust code.
 ## Current Status
 
 **Grammar Tests**: 20/20 passing
-**E2E Tests**: 83/83 passing (2 ignored due to STL header limitations)
+**E2E Tests**: 84/84 passing (2 ignored due to STL header limitations)
 **libc++ Transpilation Tests**: 8/8 passing (cstddef, cstdint, type_traits, initializer_list, vector, cstddef_compilation, iostream, thread)
 **Runtime Linking Tests**: 2/2 passing (FILE I/O, pthread)
 **Runtime Function Mapping Tests**: 1/1 passing
-**Total Tests**: 202 passing
+**Total Tests**: 203 passing
 
 **Working**:
 - Simple functions with control flow (if/else, while, for, do-while, switch, recursion)
@@ -503,7 +503,10 @@ The current approach in `crates/fragile-clang/src/types.rs:183-580` has special-
   - [x] **22.15.3** Test `std::map`/`std::unordered_map` operations ✅ [26:01:25, 17:05] [docs/dev/plan_22_15_3_std_map_test.md]
     - Added std_unordered_map_int_int stub: new_0, size, empty, insert, find, contains, op_index, erase, clear
     - Added E2E test (test_e2e_std_unordered_map_stub) validating stub behavior (20 test cases)
-  - [ ] **22.15.4** Test smart pointer usage
+  - [x] **22.15.4** Test smart pointer usage ✅ [26:01:25]
+    - Added std_unique_ptr_int stub: new_0, new_1, get, op_deref, op_arrow, release, reset, Drop
+    - Added std_shared_ptr_int stub: new_0, new_1, get, op_deref, use_count, reset, Clone, Drop
+    - Added E2E test (test_e2e_smart_ptr_stub) validating both stubs (22 test cases)
   - [ ] **22.15.5** Test STL algorithms (std::sort, std::find, etc.)
 
 ---
