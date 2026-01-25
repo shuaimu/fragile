@@ -736,6 +736,11 @@ impl AstCodeGen {
             ));
         }
 
+        // Special handling for exception class stub - it has a 'what' field in the stub vtable
+        if class_name == "exception" || class_name == "std::exception" {
+            self.writeln("what: exception_vtable_what,");
+        }
+
         // Add destructor
         self.writeln(&format!(
             "__destructor: {}_vtable_destructor,",
@@ -903,6 +908,20 @@ impl AstCodeGen {
                 }
             }
 
+            self.indent -= 1;
+            self.writeln("}");
+        }
+
+        // Special handling for exception class - generate 'what' wrapper
+        if class_name == "exception" || class_name == "std::exception" {
+            self.writeln("");
+            self.writeln("/// Vtable wrapper for `exception::what`");
+            self.writeln(&format!(
+                "unsafe fn {}_vtable_what(this: *const {}) -> *const i8 {{",
+                sanitized_class, sanitized_root
+            ));
+            self.indent += 1;
+            self.writeln("(*this).what()");
             self.indent -= 1;
             self.writeln("}");
         }
