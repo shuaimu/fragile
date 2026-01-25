@@ -406,6 +406,22 @@ impl AstCodeGen {
         visiting.remove(class_name);
     }
 
+    /// Find the root polymorphic ancestor of a class.
+    /// The root is the first polymorphic class in the hierarchy (has no polymorphic bases).
+    /// Returns the class name itself if it's already the root.
+    fn find_root_polymorphic_ancestor(&self, class_name: &str) -> String {
+        if let Some(bases) = self.class_bases.get(class_name) {
+            for base in bases {
+                if self.polymorphic_classes.contains(&base.name) {
+                    // This base is polymorphic, recurse to find its root
+                    return self.find_root_polymorphic_ancestor(&base.name);
+                }
+            }
+        }
+        // No polymorphic base found, this is the root
+        class_name.to_string()
+    }
+
     fn virtual_base_field_name(&self, base_name: &str) -> String {
         let sanitized = base_name.replace("::", "_");
         format!("__vbase_{}", sanitize_identifier(&sanitized))
@@ -3708,22 +3724,29 @@ impl AstCodeGen {
             self.writeln("}");
         }
 
-        // Generate trait for polymorphic base classes
-        // Only generate trait if this class declares virtual methods AND is not a derived class
-        let is_base_class = !self.class_bases.contains_key(name);
-        if is_base_class && self.polymorphic_classes.contains(name) {
+        // Generate trait for ROOT polymorphic classes only
+        // A ROOT is a polymorphic class that has no polymorphic base
+        // Derived classes will implement the root's trait, not their own
+        let is_root_polymorphic = self.polymorphic_classes.contains(name)
+            && !self.class_bases.get(name).map_or(false, |bases| {
+                bases.iter().any(|b| self.polymorphic_classes.contains(&b.name))
+            });
+        if is_root_polymorphic {
             if let Some(methods) = self.virtual_methods.get(name).cloned() {
                 self.generate_trait_for_class(name, &methods);
                 self.generate_trait_impl(name, name, &methods, children, None);
             }
         }
 
-        // If this class derives from polymorphic bases, implement each base's trait
+        // If this class derives from polymorphic bases, implement the ROOT's trait
+        // This ensures we always implement the trait that actually exists (root traits only)
         if let Some(base_infos) = self.class_bases.get(name).cloned() {
             let mut non_virtual_idx = 0;
             for base in base_infos {
                 if self.polymorphic_classes.contains(&base.name) {
-                    if let Some(methods) = self.virtual_methods.get(&base.name).cloned() {
+                    // Find the root polymorphic ancestor to get the trait name
+                    let root_class = self.find_root_polymorphic_ancestor(&base.name);
+                    if let Some(methods) = self.virtual_methods.get(&root_class).cloned() {
                         let base_access = if base.is_virtual {
                             BaseAccess::VirtualPtr(self.virtual_base_field_name(&base.name))
                         } else {
@@ -3736,7 +3759,7 @@ impl AstCodeGen {
                         };
                         self.generate_trait_impl(
                             name,
-                            &base.name,
+                            &root_class,  // Use root class for trait name
                             &methods,
                             children,
                             Some(base_access),
