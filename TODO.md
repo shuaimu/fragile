@@ -626,7 +626,7 @@ Get `std::vector<int>` working end-to-end.
     }
     ```
   - [ ] **23.8.2** Compile transpiled code with rustc + fragile-runtime - IN PROGRESS
-    - **Progress**: Errors reduced 2091 → 104 (95.0% reduction) ✅ 2026-01-24
+    - **Progress**: Errors reduced 2091 → 105 (95.0% reduction) ✅ 2026-01-24
     - Fixed: super:: path computation now accounts for flattened namespaces (std, __)
     - Fixed: Method overloading deduplication within struct impl blocks (23.8.3)
     - Fixed: Constructor overloading with same param count but different types
@@ -675,8 +675,8 @@ Get `std::vector<int>` working end-to-end.
       - Rust infers return type from function signature
     - Fixed: Pointer field initialization (0 → null_mut()) ✅ 2026-01-24
       - correct_initializer_for_type() converts literal 0 to std::ptr::null_mut() for pointer fields
-    - **Progress**: Errors reduced from 2091 to 104 (95.0% reduction) ✅ 2026-01-24
-    - Remaining 104 errors:
+    - **Progress**: Errors reduced from 2091 to 105 (95.0% reduction) ✅ 2026-01-24
+    - Remaining 105 errors:
       - Type mismatches (iterator/reference types)
       - Missing types (template instantiation aliases like __strictest_alignment__Types___)
       - Missing comparison methods on partial_ordering
