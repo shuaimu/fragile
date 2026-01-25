@@ -320,6 +320,23 @@ impl AstCodeGen {
         }
     }
 
+    /// Get a default value for a Rust type (used for uninitialized template variables)
+    fn get_default_value_for_type(rust_ty: &str) -> String {
+        match rust_ty {
+            "i8" | "i16" | "i32" | "i64" | "i128" | "isize" => "0".to_string(),
+            "u8" | "u16" | "u32" | "u64" | "u128" | "usize" => "0".to_string(),
+            "f32" => "0.0f32".to_string(),
+            "f64" => "0.0".to_string(),
+            "bool" => "false".to_string(),
+            "char" => "'\\0'".to_string(),
+            "()" => "()".to_string(),
+            ty if ty.starts_with("*mut ") || ty.starts_with("*const ") => {
+                "std::ptr::null_mut()".to_string()
+            }
+            _ => format!("Default::default()")
+        }
+    }
+
     /// Generate Rust source code from a Clang AST.
     pub fn generate(mut self, ast: &ClangNode) -> String {
         // First pass: collect polymorphic class information
@@ -1197,23 +1214,36 @@ impl AstCodeGen {
             if let Some(template_info) = self.fn_template_definitions.get(fn_name).cloned() {
                 // Extract concrete type arguments from the instantiated function type
                 if let CppType::Function { return_type, params, .. } = fn_type {
-                    // Build type substitution map by comparing template params with concrete types
+                    // Build type substitution map by comparing template param patterns with instantiated types
+                    // For example, if template has (T* a, T* b) and instantiated is (int*, int*),
+                    // we need to extract T = int, not T = int*
                     let type_args: Vec<String> = template_info.template_params.iter()
                         .enumerate()
-                        .map(|(i, _param)| {
-                            // Try to find the concrete type from parameters or return type
-                            // For a function like T add(T a, T b), if called with int,
-                            // the params will be [int, int] and return will be int
-                            if i < params.len() {
-                                params[i].to_rust_type_str()
+                        .map(|(i, param_name)| {
+                            // Find the template parameter pattern and instantiated type
+                            let (template_param_ty, instantiated_ty) = if i < template_info.params.len() && i < params.len() {
+                                (&template_info.params[i].1, &params[i])
+                            } else if matches!(&template_info.return_type, CppType::TemplateParam { .. }) {
+                                (&template_info.return_type, return_type.as_ref())
                             } else {
-                                return_type.to_rust_type_str()
-                            }
+                                // Fallback: use instantiated param directly
+                                if i < params.len() {
+                                    return params[i].to_rust_type_str();
+                                } else {
+                                    return return_type.to_rust_type_str();
+                                }
+                            };
+                            // Extract the template parameter from the pattern
+                            extract_template_arg(template_param_ty, instantiated_ty, param_name)
                         })
                         .collect();
 
                     // Generate a mangled name for the instantiation (e.g., "add_i32")
-                    let mangled_name = format!("{}_{}", fn_name, type_args.join("_"));
+                    // Sanitize type args for use in function names (replace * with ptr, spaces, etc.)
+                    let sanitized_args: Vec<String> = type_args.iter()
+                        .map(|a| sanitize_type_for_fn_name(a))
+                        .collect();
+                    let mangled_name = format!("{}_{}", fn_name, sanitized_args.join("_"));
 
                     // Store the instantiation if not already present
                     if !self.pending_fn_instantiations.contains_key(&mangled_name) {
@@ -1704,12 +1734,24 @@ impl AstCodeGen {
                     if let ClangNodeKind::VarDecl { name, ty, .. } = &child.kind {
                         let rust_ty = self.substitute_template_type(ty, subst_map);
                         let var_name = sanitize_identifier(name);
-                        if !child.children.is_empty() {
-                            let init = self.expr_to_string(&child.children[0]);
+                        // Find the initializer expression (skip TypeRef nodes)
+                        let init_expr = child.children.iter().find(|c| {
+                            !matches!(
+                                &c.kind,
+                                ClangNodeKind::Unknown(s) if s.starts_with("TypeRef") || s.starts_with("TemplateRef")
+                            ) && !matches!(
+                                &c.kind,
+                                ClangNodeKind::TemplateTypeParmDecl { .. }
+                            )
+                        });
+                        if let Some(init_node) = init_expr {
+                            let init = self.expr_to_string(init_node);
                             let init = self.substitute_type_in_expr(&init, subst_map);
                             self.writeln(&format!("let mut {}: {} = {};", var_name, rust_ty, init));
                         } else {
-                            self.writeln(&format!("let mut {}: {};", var_name, rust_ty));
+                            // No initializer, need a default value
+                            let default_val = Self::get_default_value_for_type(&rust_ty);
+                            self.writeln(&format!("let mut {}: {} = {};", var_name, rust_ty, default_val));
                         }
                     }
                 }
@@ -2313,10 +2355,19 @@ impl AstCodeGen {
             format!("(*{}){}.", base_expr, path)
         };
 
-        let all_args = if args.is_empty() {
+        // The vtable function expects a pointer to the root polymorphic class.
+        // If we're calling through a derived class pointer, we need to cast it.
+        let self_arg = if class_name == root_class {
             base_expr.clone()
         } else {
-            format!("{}, {}", base_expr, args.join(", "))
+            // Cast derived pointer to root class pointer
+            format!("{} as *mut {}", base_expr, root_class)
+        };
+
+        let all_args = if args.is_empty() {
+            self_arg
+        } else {
+            format!("{}, {}", self_arg, args.join(", "))
         };
 
         Some(format!(
@@ -8925,18 +8976,28 @@ impl AstCodeGen {
                     // (the instantiation was already collected during collect_template_info)
                     if let CppType::Function { params, return_type, .. } = ty {
                         if let Some(template_info) = self.fn_template_definitions.get(name) {
-                            // Build the mangled name using one type per template parameter
+                            // Build the mangled name using template param extraction
                             let type_args: Vec<String> = template_info.template_params.iter()
                                 .enumerate()
-                                .map(|(i, _)| {
-                                    if i < params.len() {
-                                        params[i].to_rust_type_str()
+                                .map(|(i, param_name)| {
+                                    let (template_param_ty, instantiated_ty) = if i < template_info.params.len() && i < params.len() {
+                                        (&template_info.params[i].1, &params[i])
+                                    } else if matches!(&template_info.return_type, CppType::TemplateParam { .. }) {
+                                        (&template_info.return_type, return_type.as_ref())
                                     } else {
-                                        return_type.to_rust_type_str()
-                                    }
+                                        if i < params.len() {
+                                            return params[i].to_rust_type_str();
+                                        } else {
+                                            return return_type.to_rust_type_str();
+                                        }
+                                    };
+                                    extract_template_arg(template_param_ty, instantiated_ty, param_name)
                                 })
                                 .collect();
-                            let mangled_name = format!("{}_{}", name, type_args.join("_"));
+                            let sanitized_args: Vec<String> = type_args.iter()
+                                .map(|a| sanitize_type_for_fn_name(a))
+                                .collect();
+                            let mangled_name = format!("{}_{}", name, sanitized_args.join("_"));
                             return self.compute_relative_path(namespace_path, &mangled_name);
                         }
                     }
@@ -10892,6 +10953,48 @@ fn binop_to_string(op: &BinaryOp) -> &'static str {
         BinaryOp::Comma => ",",
         BinaryOp::Spaceship => "cmp", // Handled specially - placeholder
     }
+}
+
+/// Extract the template argument by comparing the template pattern with the instantiated type.
+/// For example, if pattern is `T*` and instantiated is `int*`, returns "i32".
+/// If pattern is `T` and instantiated is `int`, returns "i32".
+fn extract_template_arg(pattern: &CppType, instantiated: &CppType, _param_name: &str) -> String {
+    match (pattern, instantiated) {
+        // Direct template parameter: T → instantiated type
+        (CppType::TemplateParam { .. }, ty) => ty.to_rust_type_str(),
+        // Pointer to template param: T* → extract pointee from instantiated
+        (CppType::Pointer { pointee: p_pattern, .. }, CppType::Pointer { pointee: inst_pointee, .. }) => {
+            extract_template_arg(p_pattern, inst_pointee, _param_name)
+        }
+        // Reference to template param: T& → extract referent from instantiated
+        (CppType::Reference { referent: r_pattern, .. }, CppType::Reference { referent: inst_referent, .. }) => {
+            extract_template_arg(r_pattern, inst_referent, _param_name)
+        }
+        // Array of template param: T[N] → extract element from instantiated
+        (CppType::Array { element: e_pattern, .. }, CppType::Array { element: inst_element, .. }) => {
+            extract_template_arg(e_pattern, inst_element, _param_name)
+        }
+        // Pattern doesn't match structure - use instantiated type directly
+        _ => instantiated.to_rust_type_str(),
+    }
+}
+
+/// Sanitize a type name for use in function names (e.g., template instantiation mangling).
+/// Converts "*mut i32" to "ptr_mut_i32", "i32" stays "i32", etc.
+fn sanitize_type_for_fn_name(ty: &str) -> String {
+    ty.replace("*mut ", "ptr_mut_")
+        .replace("*const ", "ptr_const_")
+        .replace('*', "ptr_")
+        .replace(' ', "_")
+        .replace('<', "_")
+        .replace('>', "")
+        .replace(',', "_")
+        .replace('&', "ref_")
+        .replace('[', "_")
+        .replace(']', "_")
+        .replace(';', "_")
+        .replace('(', "_")
+        .replace(')', "_")
 }
 
 /// Get default value for a type.
