@@ -3935,16 +3935,17 @@ impl AstCodeGen {
         // are added to the _LIBCPP_ABI_NAMESPACE module in generate_top_level
 
         // Hash function stubs for libstdc++ hash implementation
+        // Use u64 to match callers that pass size_t as u64
         self.writeln("// Hash function stubs for libstdc++");
         self.writeln("#[inline]");
-        self.writeln("pub fn _Hash_bytes(_ptr: *const (), _len: usize, _seed: usize) -> usize {");
+        self.writeln("pub fn _Hash_bytes(_ptr: *const (), _len: u64, _seed: u64) -> u64 {");
         self.indent += 1;
         self.writeln("// Simple FNV-1a hash stub");
-        self.writeln("let mut hash: usize = 14695981039346656037;");
-        self.writeln("let slice = unsafe { std::slice::from_raw_parts(_ptr as *const u8, _len) };");
+        self.writeln("let mut hash: u64 = 14695981039346656037;");
+        self.writeln("let slice = unsafe { std::slice::from_raw_parts(_ptr as *const u8, _len as usize) };");
         self.writeln("for b in slice {");
         self.indent += 1;
-        self.writeln("hash ^= *b as usize;");
+        self.writeln("hash ^= *b as u64;");
         self.writeln("hash = hash.wrapping_mul(1099511628211);");
         self.indent -= 1;
         self.writeln("}");
@@ -3954,7 +3955,7 @@ impl AstCodeGen {
         self.writeln("");
         self.writeln("#[inline]");
         self.writeln(
-            "pub fn _Fnv_hash_bytes(_ptr: *const (), _len: usize, _seed: usize) -> usize {",
+            "pub fn _Fnv_hash_bytes(_ptr: *const (), _len: u64, _seed: u64) -> u64 {",
         );
         self.indent += 1;
         self.writeln("// FNV-1a hash");
