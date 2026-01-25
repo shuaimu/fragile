@@ -12201,14 +12201,25 @@ impl AstCodeGen {
                             matches!(left_type, Some(CppType::Float | CppType::Double));
                         let right_is_float =
                             matches!(right_type, Some(CppType::Float | CppType::Double));
+                        let left_is_bool = matches!(left_type, Some(CppType::Bool));
+                        let right_is_bool = matches!(right_type, Some(CppType::Bool));
 
+                        // Handle type conversions for arithmetic:
+                        // - bool operands need to be cast to integer (C++ implicit conversion)
+                        // - integer literals need to become float literals when mixed with floats
                         let left = if right_is_float && is_integer_literal_str(&left_str) {
                             int_literal_to_float(&left_str)
+                        } else if left_is_bool {
+                            // C++ implicitly converts bool to int in arithmetic
+                            format!("({} as i32)", left_str)
                         } else {
                             left_str
                         };
                         let right = if left_is_float && is_integer_literal_str(&right_str) {
                             int_literal_to_float(&right_str)
+                        } else if right_is_bool {
+                            // C++ implicitly converts bool to int in arithmetic
+                            format!("({} as i32)", right_str)
                         } else {
                             right_str
                         };
