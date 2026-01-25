@@ -8349,9 +8349,7 @@ fn test_e2e_lru_cache() {
 
 /// E2E test: Tokenizer/Lexer pattern
 /// Tests: character classification, state machine, string parsing
-/// Note: Ignored - requires struct return assignment (op_assign) which isn't supported yet
 #[test]
-#[ignore]
 fn test_e2e_tokenizer() {
     let source = r#"
         // Simple tokenizer/lexer for arithmetic expressions

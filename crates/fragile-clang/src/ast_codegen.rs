@@ -11027,6 +11027,29 @@ impl AstCodeGen {
                         }
 
                         let right_type = Self::get_expr_type(&node.children[right_idx]);
+
+                        // Special case: operator= (copy assignment vs converting assignment)
+                        // For simple structs without explicit operator=, Clang generates implicit
+                        // operator= calls. We should use Rust assignment instead of calling op_assign,
+                        // since simple structs derive Clone and don't need op_assign method.
+                        // This covers POD types like struct Token { int type; int value; }
+                        //
+                        // However, if the RHS type differs from LHS type, it's a converting assignment
+                        // (e.g., Counter::operator=(int)) and we must call op_assign to perform conversion.
+                        if op_name == "operator=" {
+                            let left_type = Self::get_expr_type(&node.children[left_idx]);
+                            let is_same_type = match (&left_type, &right_type) {
+                                (Some(left_ty), Some(right_ty)) => left_ty == right_ty,
+                                _ => false,
+                            };
+
+                            if is_same_type {
+                                // Copy assignment - use Rust assignment with clone() for struct types
+                                // For primitives, clone() is optimized away
+                                return format!("{} = {}.clone()", left_operand, right_operand);
+                            }
+                            // Otherwise, fall through to generate op_assign call for converting assignment
+                        }
                         // Pass class/struct types by reference, primitives by value
                         // Named types that are typedefs to primitives should be passed by value
                         let needs_ref = match &right_type {
