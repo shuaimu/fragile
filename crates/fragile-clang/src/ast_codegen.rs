@@ -3981,9 +3981,30 @@ impl AstCodeGen {
         // references to locale_facet (qualified name) and the struct facet (unqualified).
         // Generate stubs that work regardless of whether the real types exist.
         self.writeln("// Locale nested class stubs");
+        // Forward declare vtable type first
+        // Mark as generated to prevent duplicate definitions in iostream
+        self.generated_structs
+            .insert("locale_facet_vtable".to_string());
+        self.generated_structs.insert("locale_facet".to_string());
         self.writeln("#[repr(C)]");
-        self.writeln("#[derive(Default, Clone)]");
-        self.writeln("pub struct locale_facet { pub _phantom: u8 }");
+        self.writeln("#[derive(Clone, Copy)]");
+        self.writeln("pub struct locale_facet_vtable {");
+        self.writeln("    pub __type_id: u64,");
+        self.writeln("    pub __base_count: usize,");
+        self.writeln("    pub __base_type_ids: &'static [u64],");
+        self.writeln("    pub __destructor: unsafe fn(*mut locale_facet),");
+        self.writeln("}");
+        self.writeln("#[repr(C)]");
+        self.writeln("pub struct locale_facet {");
+        self.writeln("    pub __vtable: *const locale_facet_vtable,");
+        self.writeln("    pub __refs_: u32,");
+        self.writeln("}");
+        self.writeln("impl Default for locale_facet {");
+        self.writeln("    fn default() -> Self { Self { __vtable: std::ptr::null(), __refs_: 0 } }");
+        self.writeln("}");
+        self.writeln("impl Clone for locale_facet {");
+        self.writeln("    fn clone(&self) -> Self { Self { __vtable: self.__vtable, __refs_: self.__refs_ } }");
+        self.writeln("}");
         self.writeln("#[repr(C)]");
         self.writeln("#[derive(Default, Clone)]");
         self.writeln("pub struct locale_id { pub _phantom: u8 }");
