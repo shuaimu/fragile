@@ -9380,11 +9380,22 @@ impl AstCodeGen {
         // Children: condition, then-branch, [else-branch]
         if node.children.len() >= 2 {
             let cond = self.expr_to_string(&node.children[0]);
-            // In C++, pointers can be used in boolean context (non-null = true)
-            // In Rust, we need to explicitly check .is_null()
+            // In C++, pointers and integers can be used in boolean context
+            // Pointers: non-null = true; Integers: non-zero = true
+            // In Rust, we need explicit checks
             let cond_type = Self::get_expr_type(&node.children[0]);
             let cond = if matches!(cond_type, Some(CppType::Pointer { .. })) {
                 format!("!{}.is_null()", cond)
+            } else if matches!(
+                cond_type,
+                Some(CppType::Int { .. })
+                    | Some(CppType::Short { .. })
+                    | Some(CppType::Long { .. })
+                    | Some(CppType::LongLong { .. })
+                    | Some(CppType::Char { .. })
+            ) {
+                // Integer in boolean context: non-zero = true
+                format!("({}) != 0", cond)
             } else {
                 cond
             };
