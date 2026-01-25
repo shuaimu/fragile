@@ -4229,6 +4229,53 @@ impl AstCodeGen {
         self.writeln("pub type __make_unsigned_typename_conditional___is_primary_template_iterator_traits_remove_cvref_t__Ip_value__incrementable_traits___remove_cvref_type_parameter_0_0___iterator_traits___remove_cvref_type_parameter_0_0__type_difference_type_ = std::ffi::c_void;");
         self.writeln("");
 
+        // Struct stubs for types used with method calls (can't use type aliases to c_void)
+        self.writeln("// Struct stubs for types used with constructor/method calls");
+        self.writeln("#[repr(C)]");
+        self.writeln("#[derive(Default, Clone)]");
+        self.writeln("pub struct basic_string_view_char { pub __data_: *const i8, pub __size_: u64 }");
+        self.writeln("impl basic_string_view_char {");
+        self.writeln("    pub fn new_0() -> Self { Default::default() }");
+        self.writeln("    pub fn new_1(__str: *const i8) -> Self { Self { __data_: __str, __size_: 0 } }");
+        self.writeln("    pub fn new_2(__str: *const i8, __len: u64) -> Self { Self { __data_: __str, __size_: __len } }");
+        self.writeln("    pub fn new_3(_tag: u64, __str: *const i8, __len: u64) -> Self { Self { __data_: __str, __size_: __len } }");
+        self.writeln("}");
+        self.writeln("#[repr(C)]");
+        self.writeln("#[derive(Default, Clone)]");
+        self.writeln("pub struct basic_string_view_wchar_t { pub __data_: *const i32, pub __size_: u64 }");
+        self.writeln("impl basic_string_view_wchar_t {");
+        self.writeln("    pub fn new_0() -> Self { Default::default() }");
+        self.writeln("    pub fn new_3(_tag: u64, __str: *const i32, __len: u64) -> Self { Self { __data_: __str, __size_: __len } }");
+        self.writeln("}");
+        self.writeln("#[repr(C)]");
+        self.writeln("#[derive(Default, Clone)]");
+        self.writeln("pub struct basic_string_view_char8_t { pub __data_: *const u8, pub __size_: u64 }");
+        self.writeln("impl basic_string_view_char8_t {");
+        self.writeln("    pub fn new_0() -> Self { Default::default() }");
+        self.writeln("    pub fn new_3(_tag: u64, __str: *const u8, __len: u64) -> Self { Self { __data_: __str, __size_: __len } }");
+        self.writeln("}");
+        self.writeln("#[repr(C)]");
+        self.writeln("#[derive(Default, Clone)]");
+        self.writeln("pub struct basic_string_view_char16_t { pub __data_: *const u16, pub __size_: u64 }");
+        self.writeln("impl basic_string_view_char16_t {");
+        self.writeln("    pub fn new_0() -> Self { Default::default() }");
+        self.writeln("    pub fn new_3(_tag: u64, __str: *const u16, __len: u64) -> Self { Self { __data_: __str, __size_: __len } }");
+        self.writeln("}");
+        self.writeln("#[repr(C)]");
+        self.writeln("#[derive(Default, Clone)]");
+        self.writeln("pub struct basic_string_view_char32_t { pub __data_: *const u32, pub __size_: u64 }");
+        self.writeln("impl basic_string_view_char32_t {");
+        self.writeln("    pub fn new_0() -> Self { Default::default() }");
+        self.writeln("    pub fn new_3(_tag: u64, __str: *const u32, __len: u64) -> Self { Self { __data_: __str, __size_: __len } }");
+        self.writeln("}");
+        // Track as generated to prevent duplicates
+        self.generated_structs.insert("basic_string_view_char".to_string());
+        self.generated_structs.insert("basic_string_view_wchar_t".to_string());
+        self.generated_structs.insert("basic_string_view_char8_t".to_string());
+        self.generated_structs.insert("basic_string_view_char16_t".to_string());
+        self.generated_structs.insert("basic_string_view_char32_t".to_string());
+        self.writeln("");
+
         // char_traits module stub (libstdc++ uses std::char_traits)
         // Use generic functions to support char, wchar_t, char8_t, char16_t, char32_t
         self.writeln("// char_traits module stub");
@@ -4767,6 +4814,8 @@ impl AstCodeGen {
                     } else {
                         self.writeln(&format!("pub mod {} {{", sanitize_identifier(ns_name)));
                         self.indent += 1;
+                        // Re-export parent module items for name resolution
+                        self.writeln("use super::*;");
                         for child in &node.children {
                             self.generate_stub_top_level(child);
                         }
@@ -5336,6 +5385,8 @@ impl AstCodeGen {
                         self.writeln(&format!("pub mod {} {{", sanitize_identifier(ns_name)));
                         self.indent += 1;
                         self.module_depth += 1; // Track actual Rust module depth
+                        // Re-export parent module items for name resolution
+                        self.writeln("use super::*;");
 
                         // Track current namespace for relative path computation
                         self.current_namespace.push(ns_name.clone());
