@@ -995,10 +995,10 @@ fn call_what(e: *const exception) -> *const i8 {
   - [x] **25.4.2** For derived classes, vtable pointer is in `__base` (no duplicate pointer)
   - [ ] **25.4.3** Multiple inheritance: add separate vtable pointers for each polymorphic base (future)
 
-- [ ] **25.5** Generate static vtable instances
-  - [ ] **25.5.1** For each concrete class, generate `static {CLASS}_VTABLE: {Base}_vtable = ...`
-  - [ ] **25.5.2** Fill in function pointers (own implementation or inherited)
-  - [ ] **25.5.3** Handle abstract classes (no static vtable, or vtable with panic stubs)
+- [x] **25.5** Generate static vtable instances ✅ 2026-01-25
+  - [x] **25.5.1** For each concrete class, generate `static {CLASS}_VTABLE: {Root}_vtable = ...`
+  - [x] **25.5.2** Generate vtable wrapper functions that call actual methods
+  - [x] **25.5.3** Skip abstract classes (is_abstract flag from ClassVTableInfo)
 
 - [ ] **25.6** Update constructors
   - [ ] **25.6.1** Set vtable pointer in constructor: `self.__vtable = &{CLASS}_VTABLE`

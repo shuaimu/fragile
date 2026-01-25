@@ -338,6 +338,9 @@ impl AstCodeGen {
             }
         }
 
+        // Generate static vtable instances (after class definitions)
+        self.generate_all_static_vtables();
+
         self.output
     }
 
@@ -524,6 +527,213 @@ impl AstCodeGen {
             if vtable_info.base_class.is_none() {
                 self.generate_vtable_struct(&vtable_info.class_name, &vtable_info);
             }
+        }
+    }
+
+    /// Generate static vtable instances for all concrete (non-abstract) polymorphic classes.
+    fn generate_all_static_vtables(&mut self) {
+        let vtable_infos: Vec<_> = self.vtables.values().cloned().collect();
+        for vtable_info in vtable_infos {
+            // Skip abstract classes (have pure virtual methods)
+            if vtable_info.is_abstract {
+                continue;
+            }
+            self.generate_static_vtable(&vtable_info);
+        }
+    }
+
+    /// Generate a static vtable instance for a concrete class.
+    fn generate_static_vtable(&mut self, vtable_info: &ClassVTableInfo) {
+        let class_name = &vtable_info.class_name;
+        let sanitized_class = sanitize_identifier(class_name);
+
+        // Find the root class (the one with the vtable type)
+        let root_class = self.find_root_polymorphic_class(class_name);
+        let sanitized_root = sanitize_identifier(&root_class);
+
+        self.writeln("");
+        self.writeln(&format!(
+            "/// Static vtable for `{}`",
+            class_name
+        ));
+        self.writeln(&format!(
+            "pub static {}_VTABLE: {}_vtable = {}_vtable {{",
+            sanitized_class.to_uppercase(),
+            sanitized_root,
+            sanitized_root
+        ));
+        self.indent += 1;
+
+        // Generate function pointer for each vtable entry
+        for entry in &vtable_info.entries {
+            let method_name = sanitize_identifier(&entry.name);
+            // The function pointer points to this class's implementation
+            // For now, generate a wrapper function name
+            self.writeln(&format!(
+                "{}: {}_vtable_{},",
+                method_name,
+                sanitized_class,
+                method_name
+            ));
+        }
+
+        // Add destructor
+        self.writeln(&format!(
+            "__destructor: {}_vtable_destructor,",
+            sanitized_class
+        ));
+
+        self.indent -= 1;
+        self.writeln("};");
+
+        // Generate wrapper functions for this class's vtable
+        self.generate_vtable_wrappers(vtable_info);
+    }
+
+    /// Generate vtable wrapper functions for a class.
+    /// These are unsafe functions that take raw pointers and call the actual methods.
+    fn generate_vtable_wrappers(&mut self, vtable_info: &ClassVTableInfo) {
+        let class_name = &vtable_info.class_name;
+        let sanitized_class = sanitize_identifier(class_name);
+
+        // Find root class for pointer type
+        let root_class = self.find_root_polymorphic_class(class_name);
+        let sanitized_root = sanitize_identifier(&root_class);
+
+        // Generate wrapper for each virtual method
+        for entry in &vtable_info.entries {
+            let method_name = sanitize_identifier(&entry.name);
+            let return_type = Self::sanitize_return_type(&entry.return_type.to_rust_type_str());
+
+            // Build parameter list
+            let self_ptr = if entry.is_const {
+                format!("*const {}", sanitized_root)
+            } else {
+                format!("*mut {}", sanitized_root)
+            };
+
+            let param_decls: Vec<String> = entry
+                .params
+                .iter()
+                .enumerate()
+                .map(|(i, (pname, ptype))| {
+                    let pname = if pname.is_empty() {
+                        format!("arg{}", i)
+                    } else {
+                        sanitize_identifier(pname)
+                    };
+                    format!("{}: {}", pname, ptype.to_rust_type_str())
+                })
+                .collect();
+
+            let param_names: Vec<String> = entry
+                .params
+                .iter()
+                .enumerate()
+                .map(|(i, (pname, _))| {
+                    if pname.is_empty() {
+                        format!("arg{}", i)
+                    } else {
+                        sanitize_identifier(pname)
+                    }
+                })
+                .collect();
+
+            let all_params = if param_decls.is_empty() {
+                format!("this: {}", self_ptr)
+            } else {
+                format!("this: {}, {}", self_ptr, param_decls.join(", "))
+            };
+
+            self.writeln("");
+            self.writeln(&format!(
+                "/// Vtable wrapper for `{}::{}`",
+                class_name, entry.name
+            ));
+
+            if return_type == "()" {
+                self.writeln(&format!(
+                    "unsafe fn {}_vtable_{}({}) {{",
+                    sanitized_class, method_name, all_params
+                ));
+            } else {
+                self.writeln(&format!(
+                    "unsafe fn {}_vtable_{}({}) -> {} {{",
+                    sanitized_class, method_name, all_params, return_type
+                ));
+            }
+
+            self.indent += 1;
+
+            // Cast the root pointer to this class's type and call the method
+            let args = if param_names.is_empty() {
+                String::new()
+            } else {
+                param_names.join(", ")
+            };
+
+            if sanitized_class == sanitized_root {
+                // Same class, call directly
+                if args.is_empty() {
+                    self.writeln(&format!("(*this).{}()", method_name));
+                } else {
+                    self.writeln(&format!("(*this).{}({})", method_name, args));
+                }
+            } else {
+                // Different class, need to cast through pointer
+                // Since derived class embeds base in __base, we cast the pointer
+                self.writeln(&format!(
+                    "let derived = this as *{} {};",
+                    if entry.is_const { "const" } else { "mut" },
+                    sanitized_class
+                ));
+                if args.is_empty() {
+                    self.writeln(&format!("(*derived).{}()", method_name));
+                } else {
+                    self.writeln(&format!("(*derived).{}({})", method_name, args));
+                }
+            }
+
+            self.indent -= 1;
+            self.writeln("}");
+        }
+
+        // Generate destructor wrapper
+        self.writeln("");
+        self.writeln(&format!(
+            "/// Vtable destructor wrapper for `{}`",
+            class_name
+        ));
+        self.writeln(&format!(
+            "unsafe fn {}_vtable_destructor(this: *mut {}) {{",
+            sanitized_class, sanitized_root
+        ));
+        self.indent += 1;
+        if sanitized_class == sanitized_root {
+            self.writeln("std::ptr::drop_in_place(this);");
+        } else {
+            self.writeln(&format!(
+                "let derived = this as *mut {};",
+                sanitized_class
+            ));
+            self.writeln("std::ptr::drop_in_place(derived);");
+        }
+        self.indent -= 1;
+        self.writeln("}");
+    }
+
+    /// Find the root polymorphic class in the inheritance chain.
+    fn find_root_polymorphic_class(&self, class_name: &str) -> String {
+        if let Some(vtable_info) = self.vtables.get(class_name) {
+            if let Some(ref base) = vtable_info.base_class {
+                // Recursively find root
+                self.find_root_polymorphic_class(base)
+            } else {
+                // This is the root
+                class_name.to_string()
+            }
+        } else {
+            class_name.to_string()
         }
     }
 
