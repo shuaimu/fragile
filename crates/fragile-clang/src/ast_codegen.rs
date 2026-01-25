@@ -4640,18 +4640,14 @@ impl AstCodeGen {
         self.generated_modules.insert("std::_V2".to_string());
         self.writeln("pub mod _V2 {");
         self.indent += 1;
+        self.writeln("use super::error_category;");
         // error_category functions return a reference to a static category object
-        // We use static c_void as placeholder since error_category is aliased to c_void
-        // The generated code uses both patterns:
-        // - &generic_category() as *const T - wants to take address of result
-        // - generic_category() passed directly - wants a reference
-        // To handle both, we return a reference that works for direct passing,
-        // and we'll add a workaround macro or the code generator should skip the &
-        self.writeln("static GENERIC_CATEGORY: std::ffi::c_void = unsafe { std::mem::zeroed() };");
-        self.writeln("static SYSTEM_CATEGORY: std::ffi::c_void = unsafe { std::mem::zeroed() };");
+        // Return &'static error_category to match the struct type we defined
+        self.writeln("static GENERIC_CATEGORY: error_category = error_category;");
+        self.writeln("static SYSTEM_CATEGORY: error_category = error_category;");
         self.writeln("");
-        self.writeln("pub fn generic_category() -> &'static std::ffi::c_void { &GENERIC_CATEGORY }");
-        self.writeln("pub fn system_category() -> &'static std::ffi::c_void { &SYSTEM_CATEGORY }");
+        self.writeln("pub fn generic_category() -> &'static error_category { &GENERIC_CATEGORY }");
+        self.writeln("pub fn system_category() -> &'static error_category { &SYSTEM_CATEGORY }");
         self.indent -= 1;
         self.writeln("}");
         self.writeln("// Re-export _V2 functions at module level for convenience");
