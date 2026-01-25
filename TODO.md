@@ -841,7 +841,7 @@ Get `std::cout` working end-to-end.
     }
     ```
     - **Status**: Transpilation succeeds (128K chars → 23K LOC Rust)
-    - **Progress**: Compilation errors reduced: 65 → 1200 → 19 → 15 → 5 → 2581 (vendored) → 2256 ✅ 2026-01-25
+    - **Progress**: Compilation errors reduced: 65 → 1200 → 19 → 15 → 5 → 2581 (vendored) → 2256 → 2184 ✅ 2026-01-25
     - Many fixes applied:
       - Skip variadic template instantiations (&&..., ...)
       - Skip decltype return types
@@ -854,7 +854,8 @@ Get `std::cout` working end-to-end.
       - Fixed elaborated typedef types (resolve to canonical type for pointer detection) ✅ 2026-01-25
       - Fixed SFINAE type names with == and ! operators (escape to _eq_, _ne_, _not_) ✅ 2026-01-25
       - Fixed global variable parameter shadowing (prefix globals with __gv_) ✅ 2026-01-25
-    - **Remaining errors**: ~2256 (mostly missing template type definitions)
+      - Added type mappings for std::byte, std::memory_order, codecvt_base::result ✅ 2026-01-25
+    - **Remaining errors**: ~2184 (mostly missing template type definitions)
       - Main issue: uninstantiated template types (basic_string, __wrap_iter, etc.)
       - Missing ios_base methods (setf, unsetf)
       - VaList initialization (Rust nightly limitation)
