@@ -7209,6 +7209,37 @@ impl AstCodeGen {
         }
     }
 
+    /// Fix casts in return expressions to match the expected return type.
+    /// e.g., "if cond { 0 } else { *__c as i32 }" with return type "u16"
+    /// -> "if cond { 0 } else { *__c as u16 }"
+    fn fix_return_type_casts(expr: &str, return_type: &str) -> String {
+        // Only fix if the return type is a primitive integer type
+        let int_types = ["i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "isize", "usize"];
+        if !int_types.contains(&return_type) {
+            return expr.to_string();
+        }
+
+        // Look for `as iXX` or `as uXX` patterns and replace with correct return type
+        let mut result = expr.to_string();
+        for wrong_type in &int_types {
+            if *wrong_type != return_type {
+                // Replace " as wrongType}" with " as returnType}"
+                // This handles conditional expressions where the cast is at the end of a branch
+                let pattern = format!(" as {}}}", wrong_type);
+                let replacement = format!(" as {}}}", return_type);
+                result = result.replace(&pattern, &replacement);
+
+                // Also handle cases where the cast is at the end of the expression
+                // e.g., "*__c as i32" -> "*__c as u16"
+                if result.ends_with(&format!(" as {}", wrong_type)) {
+                    let prefix_len = result.len() - format!(" as {}", wrong_type).len();
+                    result = format!("{} as {}", &result[..prefix_len], return_type);
+                }
+            }
+        }
+        result
+    }
+
     /// Check if a statement is a member field assignment (for filtering in ctor body)
     fn is_member_assignment(node: &ClangNode) -> bool {
         match &node.kind {
@@ -7587,6 +7618,8 @@ impl AstCodeGen {
             ClangNodeKind::FloatingLiteral { cpp_type, .. } => cpp_type.clone(),
             ClangNodeKind::BoolLiteral(_) => Some(CppType::Bool),
             ClangNodeKind::StringLiteral(_) => Some(CppType::Named("const char*".to_string())),
+            // Conditional operator has its own type
+            ClangNodeKind::ConditionalOperator { ty } => Some(ty.clone()),
             // For unknown or wrapper nodes, look through to children
             ClangNodeKind::Unknown(_) | ClangNodeKind::ParenExpr { .. } => {
                 if !node.children.is_empty() {
@@ -9442,11 +9475,25 @@ impl AstCodeGen {
                             // Convert integer to bool: non-zero = true
                             format!("({}) != 0", expr)
                         } else if needs_explicit_cast || needs_deref_cast {
-                            if let Some(rust_type) = ret_rust_type {
-                                format!("{} as {}", expr, rust_type)
+                            if let Some(ref rust_type) = ret_rust_type {
+                                // First fix any wrong inner casts to match return type
+                                let fixed_expr = Self::fix_return_type_casts(&expr, rust_type);
+                                // Only add outer cast if the inner fix didn't fully resolve it
+                                if fixed_expr.contains(&format!(" as {}", rust_type))
+                                    || fixed_expr.contains(&format!(" as {}}}", rust_type))
+                                {
+                                    // Already has correct cast, no need to wrap
+                                    fixed_expr
+                                } else {
+                                    format!("{} as {}", fixed_expr, rust_type)
+                                }
                             } else {
                                 expr
                             }
+                        } else if let Some(ref ret_type) = ret_rust_type {
+                            // Check if expression contains a wrong cast that should match return type
+                            // e.g., "*__c as i32" when return type is "u16" -> "*__c as u16"
+                            Self::fix_return_type_casts(&expr, ret_type)
                         } else {
                             expr
                         }
