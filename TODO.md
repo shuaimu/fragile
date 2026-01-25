@@ -804,7 +804,9 @@ Get `std::vector<int>` working end-to-end.
     - Added IntoIterator impl for std_vector_int stub
     - Created std_vector_int_iter iterator struct
     - Test: `sum += x` over vector {1, 2, 3} returns sum == 6 correctly
-  - [ ] **23.8.5** Add resize/reserve/capacity tests
+  - [x] **23.8.5** Add resize/reserve/capacity tests ✅ 2026-01-25
+    - Added reserve(), resize(), capacity() methods to std_vector_int stub
+    - Test: reserve(10), push_back, resize(5) works correctly
 
   **Identifier sanitization fixes completed**: ✅ 2026-01-24
   - Fixed keyword escaping in type aliases (e.g., "type" -> "r#type")
