@@ -681,8 +681,11 @@ Get `std::vector<int>` working end-to-end.
     - Fixed: C++ logical NOT operator for non-bool types ✅ 2026-01-24
       - `!x` on non-bool now generates `(x == 0)` instead of `!x`
       - Fixes `!!x` idiom which converts any integer to bool
-    - **Progress**: Errors reduced from 2091 to 102 (95.1% reduction) ✅ 2026-01-24
-    - Remaining 102 errors:
+    - Fixed: Strip literal type suffixes in assignments and comparisons ✅ 2026-01-24
+      - C++ allows `x = 64` for any integer type; Rust needs unsuffixed literal for inference
+      - Applies to assignment operators (=, +=, etc.) and comparison operators (==, <, etc.)
+    - **Progress**: Errors reduced from 2091 to 97 (95.4% reduction) ✅ 2026-01-24
+    - Remaining 97 errors:
       - Type mismatches (iterator/reference types)
       - Missing types (template instantiation aliases like __strictest_alignment__Types___)
       - Missing comparison methods on partial_ordering
