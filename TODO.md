@@ -815,7 +815,7 @@ Get `std::vector<int>` working end-to-end.
 
 Get `std::cout` working end-to-end.
 
-- [ ] **23.9** iostream E2E milestone - BLOCKED (same issues as vector)
+- [ ] **23.9** iostream E2E milestone - IN PROGRESS
   - [x] **23.9.1** Transpile simple cout usage ✅ 2026-01-24
     ```cpp
     #include <iostream>
@@ -824,9 +824,10 @@ Get `std::cout` working end-to-end.
         return 0;
     }
     ```
-    - **Status**: Transpilation succeeds (128K chars), 65 compilation errors
-    - Same root causes as vector (template params, base class resolution, etc.)
-    - See `docs/dev/investigation_vector_25_errors.md` for details
+    - **Status**: Transpilation succeeds (128K chars)
+    - **Progress**: Errors reduced from 65 to ~1200 ✅ 2026-01-25
+    - Many STL types still need stubs (basic_string, error_code, locale, etc.)
+    - Fixed: Cast precedence, literal operators, static member names, trait names
   - [ ] **23.9.2** Fix iostream static initialization (global cout/cin/cerr objects) - BLOCKED
     - libc++ uses `__start_std_streams` section for initialization
     - May need to generate Rust static initialization code
