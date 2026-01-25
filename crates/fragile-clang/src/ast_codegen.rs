@@ -9442,7 +9442,8 @@ impl AstCodeGen {
                         };
 
                         if is_trait_object {
-                            // For trait objects, no dereference - call method directly
+                            // For polymorphic class pointers, use direct method call
+                            // The trait implementation will dispatch correctly
                             format!("{}.{}", base, member)
                         } else if needs_base_access {
                             match base_access {
