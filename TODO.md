@@ -626,7 +626,7 @@ Get `std::vector<int>` working end-to-end.
     }
     ```
   - [ ] **23.8.2** Compile transpiled code with rustc + fragile-runtime - IN PROGRESS
-    - **Progress**: Errors reduced 2091 → 145 (93% reduction) ✅ 2026-01-24
+    - **Progress**: Errors reduced 2091 → 136 (93.5% reduction) ✅ 2026-01-24
     - Fixed: super:: path computation now accounts for flattened namespaces (std, __)
     - Fixed: Method overloading deduplication within struct impl blocks (23.8.3)
     - Fixed: Constructor overloading with same param count but different types
@@ -651,11 +651,12 @@ Get `std::vector<int>` working end-to-end.
     - Fixed: Template method deduplication in generate_template_impl() ✅ 2026-01-24
     - Fixed: Comparison category stubs (__cmp_cat_type, __cmp_cat__Ord, etc.) ✅ 2026-01-24
     - Added: Fixed-width integer types (int8_t through uint64_t) ✅ 2026-01-24
-    - Remaining 145 errors:
-      - 24 mismatched types (integer type coercion issues)
-      - Missing types (template instantiation types like __hash_base_size_t__*)
-      - Missing values (_unnamed in numeric_limits)
-      - c_void constructor calls (types mapped to void shouldn't have constructors)
+    - Fixed: Unresolved _unnamed in global variable init → default value ✅ 2026-01-24
+    - Remaining 136 errors:
+      - 23 mismatched types (integer type coercion issues)
+      - c_void constructor calls (iterator types mapped to void)
+      - Missing methods on bit vector types (op_bool, op_eq, etc.)
+      - Missing types (template instantiation types)
   - [ ] **23.8.3** Execute and verify exit code - BLOCKED on 23.8.2
   - [ ] **23.8.4** Add iteration test: `for (int x : v) { ... }` - BLOCKED
   - [ ] **23.8.5** Add resize/reserve/capacity tests - BLOCKED
