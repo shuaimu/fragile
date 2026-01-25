@@ -683,11 +683,32 @@ impl AstCodeGen {
             sanitized_class.to_uppercase()
         ));
 
+        // Track method names to handle overloaded methods consistently
+        let mut method_name_counts: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
+
         // Generate function pointer for each vtable entry
         for entry in &vtable_info.entries {
-            let method_name = sanitize_identifier(&entry.name);
+            let base_method_name = sanitize_identifier(&entry.name);
             // For composite function names, strip r# prefix
-            let method_name_for_fn = sanitize_identifier_for_composite(&entry.name);
+            let base_method_name_for_fn = sanitize_identifier_for_composite(&entry.name);
+
+            // Handle overloaded methods by adding suffix for duplicates
+            // Must use same counter logic as generate_vtable_struct and generate_vtable_wrappers
+            let count = method_name_counts
+                .entry(base_method_name.clone())
+                .or_insert(0);
+            let (method_name, method_name_for_fn) = if *count == 0 {
+                *count += 1;
+                (base_method_name, base_method_name_for_fn)
+            } else {
+                *count += 1;
+                (
+                    format!("{}_{}", base_method_name, *count - 1),
+                    format!("{}_{}", base_method_name_for_fn, *count - 1),
+                )
+            };
+
             // Use the declaring class's wrapper for the function pointer.
             // If this class overrides the method, declaring_class == class_name.
             // If inherited without override, declaring_class is the parent that defined it.
@@ -738,6 +759,10 @@ impl AstCodeGen {
         let root_class = self.find_root_polymorphic_class(class_name);
         let sanitized_root = sanitize_identifier(&root_class);
 
+        // Track wrapper function names to handle overloaded methods
+        let mut wrapper_counts: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
+
         // Generate wrapper for each virtual method that this class declares/overrides
         for entry in &vtable_info.entries {
             // Skip inherited methods that aren't overridden in this class,
@@ -767,8 +792,22 @@ impl AstCodeGen {
 
             // For composite function names, use sanitize_identifier_for_composite
             // to avoid r# prefixes in function names like Class_vtable_type
-            let method_name_for_fn = sanitize_identifier_for_composite(&entry.name);
+            let base_method_name_for_fn = sanitize_identifier_for_composite(&entry.name);
             let method_name = sanitize_identifier(&entry.name);
+
+            // Handle overloaded methods by adding suffix for duplicates
+            let wrapper_key = format!(
+                "{}_vtable_{}",
+                sanitized_class, base_method_name_for_fn
+            );
+            let count = wrapper_counts.entry(wrapper_key.clone()).or_insert(0);
+            let method_name_for_fn = if *count == 0 {
+                *count += 1;
+                base_method_name_for_fn
+            } else {
+                *count += 1;
+                format!("{}_{}", base_method_name_for_fn, *count - 1)
+            };
             let return_type = Self::sanitize_return_type(&entry.return_type.to_rust_type_str());
 
             // Build parameter list
@@ -3843,7 +3882,12 @@ impl AstCodeGen {
         self.writeln("");
 
         // System/pthread type stubs for libc++ threading support
+        // Mark as generated to prevent duplicate struct definitions
         self.writeln("// System type stubs for libc++ threading");
+        self.generated_structs
+            .insert("__locale_struct".to_string());
+        self.generated_structs
+            .insert("pthread_mutexattr_t".to_string());
         self.writeln("pub type __locale_struct = std::ffi::c_void;");
         self.writeln("pub type __libcpp_mutex_t = usize;");
         self.writeln("pub type __libcpp_recursive_mutex_t = usize;");
@@ -3962,7 +4006,49 @@ impl AstCodeGen {
         self.writeln("pub type memory_resource = std::ffi::c_void;");
         self.writeln("");
 
+        // Exception class stub - base class for all exception types
+        // Forward declare exception_vtable to break circular dependency
+        self.writeln("// Exception class stub (std::exception base class)");
+        self.writeln("// Forward declaration of exception_vtable");
+        self.writeln("#[repr(C)]");
+        self.writeln("pub struct exception_vtable {");
+        self.indent += 1;
+        self.writeln("pub __type_id: u64,");
+        self.writeln("pub __base_count: usize,");
+        self.writeln("pub __base_type_ids: &'static [u64],");
+        self.writeln("pub what: unsafe fn(*const exception) -> *const i8,");
+        self.writeln("pub __destructor: unsafe fn(*mut exception),");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("");
+        self.generated_structs.insert("exception".to_string());
+        self.generated_structs
+            .insert("exception_vtable".to_string());
+        self.writeln("#[repr(C)]");
+        self.writeln("#[derive(Clone, Copy)]");
+        self.writeln("pub struct exception {");
+        self.indent += 1;
+        self.writeln("pub __vtable: *const exception_vtable,");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("impl Default for exception {");
+        self.indent += 1;
+        self.writeln("fn default() -> Self { Self { __vtable: std::ptr::null() } }");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("impl exception {");
+        self.indent += 1;
+        self.writeln("pub fn new_0() -> Self { Default::default() }");
+        self.writeln("pub fn what(&self) -> *const i8 { b\"exception\\0\".as_ptr() as *const i8 }");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("");
+
         // _V2 module stub for libstdc++ categories
+        // Mark as generated to avoid duplicate from C++ code
+        // The actual C++ _V2 namespace is usually inside std:: so track both
+        self.generated_modules.insert("_V2".to_string());
+        self.generated_modules.insert("std::_V2".to_string());
         self.writeln("pub mod _V2 {");
         self.indent += 1;
         self.writeln("pub fn generic_category() -> () { }");
@@ -5009,19 +5095,25 @@ impl AstCodeGen {
 
         // Special handling for C++ main function
         let is_main = name == "main" && params.is_empty();
-        let base_func_name = if is_main { "cpp_main" } else { name };
+        // Use sanitized name for duplicate tracking to avoid suffix issues with operators
+        // e.g., "operator&" becomes "op_bitand", so we track "op_bitand" not "operator&"
+        let sanitized_base_name = if is_main {
+            "cpp_main".to_string()
+        } else {
+            sanitize_identifier(name)
+        };
 
         // Handle function overloading by appending suffix for duplicates
         let count = self
             .generated_functions
-            .entry(base_func_name.to_string())
+            .entry(sanitized_base_name.clone())
             .or_insert(0);
         let func_name = if *count == 0 {
             *count += 1;
-            base_func_name.to_string()
+            sanitized_base_name
         } else {
             *count += 1;
-            format!("{}_{}", base_func_name, *count - 1)
+            format!("{}_{}", sanitized_base_name, *count - 1)
         };
 
         // Doc comment
@@ -5128,7 +5220,7 @@ impl AstCodeGen {
             let struct_name = format!("{}Generator", to_pascal_case(&func_name));
             self.writeln(&format!(
                 "pub fn {}({}){} {{",
-                sanitize_identifier(&func_name),
+                func_name,  // Already sanitized above
                 params_str,
                 ret_str
             ));
@@ -5162,7 +5254,7 @@ impl AstCodeGen {
                 "pub {}{}fn {}({}){} {{",
                 async_keyword,
                 extern_c,
-                sanitize_identifier(&func_name),
+                func_name,  // Already sanitized above
                 params_with_variadic,
                 ret_str
             ));
@@ -6350,9 +6442,24 @@ impl AstCodeGen {
         );
         self.writeln("pub __base_type_ids: &'static [u64],");
 
+        // Track method names to handle overloaded methods
+        let mut method_name_counts: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
+
         // Generate function pointer field for each virtual method
         for entry in &vtable_info.entries {
-            let method_name = sanitize_identifier(&entry.name);
+            let base_method_name = sanitize_identifier(&entry.name);
+            // Handle overloaded methods by adding suffix for duplicates
+            let count = method_name_counts
+                .entry(base_method_name.clone())
+                .or_insert(0);
+            let method_name = if *count == 0 {
+                *count += 1;
+                base_method_name
+            } else {
+                *count += 1;
+                format!("{}_{}", base_method_name, *count - 1)
+            };
             let return_type = Self::sanitize_return_type(&entry.return_type.to_rust_type_str());
 
             // Build parameter list: first param is self pointer, then explicit params
