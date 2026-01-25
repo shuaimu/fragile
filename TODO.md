@@ -842,7 +842,7 @@ Get `std::cout` working end-to-end.
     ```
     - **Status**: Transpilation succeeds (128K chars → 23K LOC Rust)
     - **Progress**: Compilation errors reduced (unique error codes): 65 → ... → 491 → 476 → 457 → 452 → 442 → 438 → 435 → 366 → 357 → 354 → 343 → 337 → 336 → 330 → 326 → 322 → 321 → 312 (libstdc++) ✅ 2026-01-25
-    - **Progress v2**: Total error count (incl. duplicate locations): 1225 → 1218 → 1214 → 1205 → 1201 → 1190 → 1169 → 1112 → 1063 → 1052 → 981 → 869 → 842 → 794 → 784 → 763 → 751 → 745 → 743 → 726 → 724 → 720 → 712 → 707 → 705 → 663 → 657 → 651 → 648 → 645 → 632 → 626 → 592 → 582 → 555 → 485 → 471 → 465 → 464 ✅ 2026-01-25
+    - **Progress v2**: Total error count (incl. duplicate locations): 1225 → 1218 → 1214 → 1205 → 1201 → 1190 → 1169 → 1112 → 1063 → 1052 → 981 → 869 → 842 → 794 → 784 → 763 → 751 → 745 → 743 → 726 → 724 → 720 → 712 → 707 → 705 → 663 → 657 → 651 → 648 → 645 → 632 → 626 → 592 → 582 → 555 → 485 → 471 → 465 → 464 → 452 → 448 ✅ 2026-01-25
       - Fixed cast-after-method parsing: wrap pointer casts in parentheses before .add()/.sub()
       - Added long double math builtins (__builtin_expl, __builtin_sqrtl, etc.) - 37 functions
       - Added __to_underlying_* stubs for enum-to-int conversion
@@ -933,12 +933,17 @@ Get `std::cout` working end-to-end.
       - Fixed: Wrap unsafe runtime function calls (pthread_*, malloc, etc.) in unsafe blocks (485→471) ✅ 2026-01-25
       - Fixed: Add byte/chars_format to is_primitive_type() for native operators (471→465) ✅ 2026-01-25
       - Fixed: sizeof___ return type from u64 to usize for array size contexts (465→464) ✅ 2026-01-25
-    - **Remaining errors at 464**: mostly code generation issues requiring deeper fixes:
-      - E0308 (313): Type mismatches (usize/u64, f32/f64, i32/u32, pointer/reference)
+      - Fixed: Skip C variadic functions (require unstable Rust features) (463→455) ✅ 2026-01-25
+      - Fixed: wrapping_neg only for unsigned integral types, not floats/functions (452→451) ✅ 2026-01-25
+      - Fixed: LOCALE_FACET_VTABLE_DEFAULT const for static vtable initialization (E0015 fix) (451→449) ✅ 2026-01-25
+      - Fixed: pthread_mutexattr_t as struct with new_0() instead of type alias (449→448) ✅ 2026-01-25
+    - **Remaining errors at 448**: mostly code generation issues requiring deeper fixes:
+      - E0308 (308): Type mismatches (usize/u64, f32/f64, i32/u32, pointer/reference)
       - E0061 (47): Wrong number of arguments (function overloading issues)
       - E0560 (21): Struct has no field (vtable virtual method generation)
-      - E0599 (20): No method found (op_bitor on primitives, wrapping_neg on f64)
-      - E0277 (17): Trait not satisfied (Default/Clone derives)
+      - E0609 (16): No field on type (array._unnamed, __shared_weak_count.__base)
+      - E0277 (17): Trait not satisfied (Default/Clone derives, u64: Neg)
+      - E0599 (11): No method found (__on_zero_shared, op_add on raw pointers)
   - [ ] **23.9.2** Fix iostream static initialization (global cout/cin/cerr objects) - BLOCKED
     - libc++ uses `__start_std_streams` section for initialization
     - May need to generate Rust static initialization code
