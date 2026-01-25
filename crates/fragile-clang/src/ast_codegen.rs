@@ -448,6 +448,7 @@ impl AstCodeGen {
                     params,
                     is_virtual,
                     is_pure_virtual,
+                    is_const,
                     ..
                 } => {
                     if *is_virtual {
@@ -455,7 +456,7 @@ impl AstCodeGen {
                             name: name.clone(),
                             return_type: return_type.clone(),
                             params: params.clone(),
-                            is_const: false, // TODO: Parse const from method qualifiers when available
+                            is_const: *is_const,
                             is_pure_virtual: *is_pure_virtual,
                             declaring_class: class_name.to_string(),
                             vtable_index: virtual_methods.len(), // Will be updated during full vtable construction
