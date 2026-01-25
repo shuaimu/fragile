@@ -1892,16 +1892,42 @@ impl AstCodeGen {
                     if let ClangNodeKind::VarDecl { name, ty, .. } = &child.kind {
                         let rust_ty = self.substitute_template_type(ty, subst_map);
                         let var_name = sanitize_identifier(name);
+
+                        // Check if this is an array type
+                        let is_array = rust_ty.starts_with('[') && rust_ty.contains(';');
+
                         // Find the initializer expression (skip TypeRef nodes)
-                        let init_expr = child.children.iter().find(|c| {
-                            !matches!(
-                                &c.kind,
-                                ClangNodeKind::Unknown(s) if s.starts_with("TypeRef") || s.starts_with("TemplateRef")
-                            ) && !matches!(
-                                &c.kind,
-                                ClangNodeKind::TemplateTypeParmDecl { .. }
-                            )
-                        });
+                        // For arrays, skip IntegerLiteral which is the array size, not initializer
+                        let init_expr = if is_array {
+                            // For arrays, look specifically for InitListExpr first
+                            child.children.iter().find(|c| {
+                                matches!(&c.kind, ClangNodeKind::InitListExpr { .. })
+                            }).or_else(|| {
+                                // Fall back to other expressions (skip array size)
+                                child.children.iter().find(|c| {
+                                    !matches!(
+                                        &c.kind,
+                                        ClangNodeKind::Unknown(s) if s.starts_with("TypeRef") || s.starts_with("TemplateRef")
+                                    ) && !matches!(
+                                        &c.kind,
+                                        ClangNodeKind::TemplateTypeParmDecl { .. }
+                                    ) && !matches!(
+                                        &c.kind,
+                                        ClangNodeKind::IntegerLiteral { .. }
+                                    )
+                                })
+                            })
+                        } else {
+                            child.children.iter().find(|c| {
+                                !matches!(
+                                    &c.kind,
+                                    ClangNodeKind::Unknown(s) if s.starts_with("TypeRef") || s.starts_with("TemplateRef")
+                                ) && !matches!(
+                                    &c.kind,
+                                    ClangNodeKind::TemplateTypeParmDecl { .. }
+                                )
+                            })
+                        };
                         if let Some(init_node) = init_expr {
                             let init = self.expr_to_string(init_node);
                             let init = self.substitute_type_in_expr(&init, subst_map);
