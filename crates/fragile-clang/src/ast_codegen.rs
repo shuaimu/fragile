@@ -4253,6 +4253,29 @@ impl AstCodeGen {
         self.writeln("pub fn strtold(_s: *const i8, _endptr: *mut *mut i8) -> f64 { 0.0 }");
         self.writeln("");
 
+        // to_string stubs for std::to_string functions
+        // These return a placeholder basic_string that the caller expects
+        self.writeln("// to_string stubs (placeholder implementations)");
+        self.writeln("pub struct __to_string_result { data: [i8; 32], len: usize }");
+        self.writeln("impl __to_string_result {");
+        self.indent += 1;
+        self.writeln("pub fn op_basic_string_view(&self) -> *const i8 { self.data.as_ptr() }");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("#[inline]");
+        self.writeln("pub fn to_string(_val: i32) -> __to_string_result { __to_string_result { data: [0; 32], len: 0 } }");
+        self.writeln("#[inline]");
+        self.writeln("pub fn to_string_1(_val: u32) -> __to_string_result { __to_string_result { data: [0; 32], len: 0 } }");
+        self.writeln("#[inline]");
+        self.writeln("pub fn to_string_2(_val: i64) -> __to_string_result { __to_string_result { data: [0; 32], len: 0 } }");
+        self.writeln("#[inline]");
+        self.writeln("pub fn to_string_3(_val: u64) -> __to_string_result { __to_string_result { data: [0; 32], len: 0 } }");
+        self.writeln("#[inline]");
+        self.writeln("pub fn to_string_4(_val: f32) -> __to_string_result { __to_string_result { data: [0; 32], len: 0 } }");
+        self.writeln("#[inline]");
+        self.writeln("pub fn to_string_5(_val: f64) -> __to_string_result { __to_string_result { data: [0; 32], len: 0 } }");
+        self.writeln("");
+
         // glibc internal variable stubs
         self.writeln("// glibc internal variable stubs");
         self.writeln("pub static __libc_single_threaded: i8 = 0;");
