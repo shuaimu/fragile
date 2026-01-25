@@ -11940,6 +11940,7 @@ fn sanitize_type_for_fn_name(ty: &str) -> String {
     ty.replace("*mut ", "ptr_mut_")
         .replace("*const ", "ptr_const_")
         .replace('*', "ptr_")
+        .replace("::", "_")
         .replace(' ', "_")
         .replace('<', "_")
         .replace('>', "")
