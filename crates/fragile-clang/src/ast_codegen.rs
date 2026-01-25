@@ -4211,7 +4211,12 @@ impl AstCodeGen {
         self.writeln("pub type __libcpp_mutex_t = usize;");
         self.writeln("pub type __libcpp_recursive_mutex_t = usize;");
         self.writeln("pub type __libcpp_condvar_t = usize;");
-        self.writeln("pub type pthread_mutexattr_t = u32;");
+        // pthread_mutexattr_t needs to be a struct with new_0() for C++ constructor calls
+        // Layout must match fragile_pthread_mutexattr_t from fragile-runtime
+        self.writeln("#[repr(C)]");
+        self.writeln("#[derive(Default, Clone, Copy)]");
+        self.writeln("pub struct pthread_mutexattr_t { pub kind: i32 }");
+        self.writeln("impl pthread_mutexattr_t { pub fn new_0() -> Self { Default::default() } }");
         self.writeln("pub type pthread_cond_t = usize;");
         self.writeln("pub type pthread_once_t = i32;");
         self.writeln("pub type pthread_key_t = u32;");
@@ -5326,15 +5331,16 @@ impl AstCodeGen {
         self.writeln("pub unsafe fn fragile_pthread_attr_destroy(_: *mut std::ffi::c_void) -> i32 { 0 }");
         self.writeln("pub unsafe fn fragile_pthread_attr_setdetachstate(_: *mut std::ffi::c_void, _: i32) -> i32 { 0 }");
         self.writeln("pub unsafe fn fragile_pthread_attr_getdetachstate(_: *const std::ffi::c_void, _: *mut i32) -> i32 { 0 }");
-        self.writeln("pub unsafe fn fragile_pthread_mutex_init(_: *mut usize, _: *const u32) -> i32 { 0 }");
+        self.writeln("pub unsafe fn fragile_pthread_mutex_init(_: *mut usize, _: *const super::pthread_mutexattr_t) -> i32 { 0 }");
         self.writeln("pub unsafe fn fragile_pthread_mutex_destroy(_: *mut usize) -> i32 { 0 }");
         self.writeln("pub unsafe fn fragile_pthread_mutex_lock(_: *mut usize) -> i32 { 0 }");
         self.writeln("pub unsafe fn fragile_pthread_mutex_trylock(_: *mut usize) -> i32 { 0 }");
         self.writeln("pub unsafe fn fragile_pthread_mutex_unlock(_: *mut usize) -> i32 { 0 }");
-        self.writeln("pub unsafe fn fragile_pthread_mutexattr_init(_: *mut u32) -> i32 { 0 }");
-        self.writeln("pub unsafe fn fragile_pthread_mutexattr_destroy(_: *mut u32) -> i32 { 0 }");
-        self.writeln("pub unsafe fn fragile_pthread_mutexattr_settype(_: *mut u32, _: i32) -> i32 { 0 }");
-        self.writeln("pub unsafe fn fragile_pthread_mutexattr_gettype(_: *const u32, _: *mut i32) -> i32 { 0 }");
+        // Use super:: to access pthread_mutexattr_t struct defined in the outer scope
+        self.writeln("pub unsafe fn fragile_pthread_mutexattr_init(_: *mut super::pthread_mutexattr_t) -> i32 { 0 }");
+        self.writeln("pub unsafe fn fragile_pthread_mutexattr_destroy(_: *mut super::pthread_mutexattr_t) -> i32 { 0 }");
+        self.writeln("pub unsafe fn fragile_pthread_mutexattr_settype(_: *mut super::pthread_mutexattr_t, _: i32) -> i32 { 0 }");
+        self.writeln("pub unsafe fn fragile_pthread_mutexattr_gettype(_: *const super::pthread_mutexattr_t, _: *mut i32) -> i32 { 0 }");
         self.writeln("pub unsafe fn fragile_pthread_cond_init(_: *mut usize, _: *const std::ffi::c_void) -> i32 { 0 }");
         self.writeln("pub unsafe fn fragile_pthread_cond_destroy(_: *mut usize) -> i32 { 0 }");
         self.writeln("pub unsafe fn fragile_pthread_cond_wait(_: *mut usize, _: *mut usize) -> i32 { 0 }");
