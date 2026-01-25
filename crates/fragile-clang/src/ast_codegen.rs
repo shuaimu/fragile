@@ -4267,7 +4267,16 @@ impl AstCodeGen {
         self.writeln("pub type __gthread_mutex_t = usize;");
         self.writeln("pub type __gthread_time_t = i64;");
         // Empty structs for types used as base classes (need Clone/Default)
+        // Note: error_category methods that use error_condition/error_code are defined later
+        // after those types are available
         self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct error_category;");
+        self.writeln("impl error_category {");
+        self.indent += 1;
+        self.writeln("pub fn op_eq(&self, _other: &error_category) -> bool { std::ptr::eq(self, _other) }");
+        self.writeln("pub fn op____(&self, _other: &error_category) -> bool { !std::ptr::eq(self, _other) }");
+        self.writeln("pub fn name(&self) -> *const i8 { b\"unknown\\0\".as_ptr() as *const i8 }");
+        self.indent -= 1;
+        self.writeln("}");
         self.generated_aliases.insert("error_category".to_string());
         self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct __ctype_abstract_base_wchar_t_;");
         self.writeln("pub type _OI = std::ffi::c_void;");
@@ -4587,6 +4596,68 @@ impl AstCodeGen {
         self.writeln("pub fn countl_zero_u8(x: u8) -> u32 { x.leading_zeros() as u32 - 24 }");
         self.writeln("");
 
+        // iostream type aliases (libc++ uses these as type aliases to template instantiations)
+        self.writeln("// iostream type aliases");
+        self.writeln("pub type basic_filebuf_char = std::ffi::c_void;");
+        self.writeln("pub type basic_filebuf_wchar_t = std::ffi::c_void;");
+        self.writeln("pub type basic_ifstream_char = std::ffi::c_void;");
+        self.writeln("pub type basic_ifstream_wchar_t = std::ffi::c_void;");
+        self.writeln("pub type basic_ofstream_char = std::ffi::c_void;");
+        self.writeln("pub type basic_ofstream_wchar_t = std::ffi::c_void;");
+        self.writeln("pub type basic_fstream_char = std::ffi::c_void;");
+        self.writeln("pub type basic_fstream_wchar_t = std::ffi::c_void;");
+        self.writeln("pub type basic_ios_char = std::ffi::c_void;");
+        self.writeln("pub type basic_ios_wchar_t = std::ffi::c_void;");
+        self.writeln("pub type basic_istream_char = std::ffi::c_void;");
+        self.writeln("pub type basic_istream_wchar_t = std::ffi::c_void;");
+        self.writeln("pub type basic_ostream_char = std::ffi::c_void;");
+        self.writeln("pub type basic_ostream_wchar_t = std::ffi::c_void;");
+        self.writeln("pub type basic_iostream_char = std::ffi::c_void;");
+        self.writeln("pub type basic_iostream_wchar_t = std::ffi::c_void;");
+        self.writeln("pub type basic_streambuf_char = std::ffi::c_void;");
+        self.writeln("pub type basic_streambuf_wchar_t = std::ffi::c_void;");
+        self.writeln("pub type basic_stringbuf_char = std::ffi::c_void;");
+        self.writeln("pub type basic_stringbuf_wchar_t = std::ffi::c_void;");
+        self.writeln("pub type basic_istringstream_char = std::ffi::c_void;");
+        self.writeln("pub type basic_istringstream_wchar_t = std::ffi::c_void;");
+        self.writeln("pub type basic_ostringstream_char = std::ffi::c_void;");
+        self.writeln("pub type basic_ostringstream_wchar_t = std::ffi::c_void;");
+        self.writeln("pub type basic_stringstream_char = std::ffi::c_void;");
+        self.writeln("pub type basic_stringstream_wchar_t = std::ffi::c_void;");
+        self.writeln("");
+
+        // Template parameter placeholder types
+        self.writeln("// Template parameter placeholder types");
+        self.writeln("pub type __impl_type_parameter_0_0___ = std::ffi::c_void;");
+        self.writeln("pub type __remove_reference_t__Tp_ = std::ffi::c_void;");
+        self.writeln("pub type __remove_cvref_type_parameter_0_1_ = std::ffi::c_void;");
+        self.writeln("pub type __swap___fn = std::ffi::c_void;");
+        self.writeln("pub type __strong_order___fn = std::ffi::c_void;");
+        self.writeln("pub type __weak_order___fn = std::ffi::c_void;");
+        self.writeln("pub type __partial_order___fn = std::ffi::c_void;");
+        self.writeln("pub type __compare_partial_order_fallback___fn = std::ffi::c_void;");
+        self.writeln("pub type __compare_strong_order_fallback___fn = std::ffi::c_void;");
+        self.writeln("pub type __compare_weak_order_fallback___fn = std::ffi::c_void;");
+        self.writeln("pub type back_insert_iterator = std::ffi::c_void;");
+        self.writeln("");
+
+        // Function stubs
+        self.writeln("// Function stubs");
+        self.writeln("pub fn __gv_swap<T>(_a: &mut T, _b: &mut T) { std::mem::swap(_a, _b); }");
+        self.writeln("pub fn r#move<T>(x: T) -> T { x }");
+        self.writeln("pub fn uselocale(_locale: *mut std::ffi::c_void) -> *mut std::ffi::c_void { std::ptr::null_mut() }");
+        self.writeln("pub fn max_f64(a: f64, b: f64) -> f64 { if a > b { a } else { b } }");
+        self.writeln("pub fn equal<T: PartialEq>(_first1: *const T, _last1: *const T, _first2: *const T) -> bool { true }");
+        self.writeln("pub fn __libcpp_atomic_refcount_increment_i64(_ptr: *mut i64) -> i64 { unsafe { *_ptr += 1; *_ptr } }");
+        self.writeln("pub fn __libcpp_atomic_refcount_decrement_i64(_ptr: *mut i64) -> i64 { unsafe { *_ptr -= 1; *_ptr } }");
+        self.writeln("");
+
+        // Shared pointer support
+        self.writeln("// Shared pointer support");
+        self.writeln("pub static __SHARED_COUNT_VTABLE: () = ();");
+        self.writeln("pub static __Control: () = ();");
+        self.writeln("");
+
         // More type stubs for libstdc++
         self.writeln("// More libstdc++ type stubs");
         self.writeln(
@@ -4641,11 +4712,10 @@ impl AstCodeGen {
         self.writeln("pub mod _V2 {");
         self.indent += 1;
         self.writeln("use super::error_category;");
-        // error_category functions - return &'static error_category
-        // The generated code may have patterns like:
-        // - generic_category() - used directly (needs &error_category)
-        // - &generic_category() as *const T - needs pointer (should just use result directly)
-        // We return a reference that can be converted to pointer via `as *const _`
+        // error_category functions - return &'static error_category (matches C++ const&)
+        // C++ returns const error_category&, and:
+        // - Used directly: generic_category() -> &error_category (works)
+        // - Address taken: &generic_category() as *const -> need special handling
         self.writeln("static GENERIC_CATEGORY: error_category = error_category;");
         self.writeln("static SYSTEM_CATEGORY: error_category = error_category;");
         self.writeln("");
@@ -8003,7 +8073,20 @@ impl AstCodeGen {
                 // Get member name from left side
                 if let Some(member_name) = Self::get_member_name(&node.children[0]) {
                     // Get value from right side
-                    let value = codegen.expr_to_string(&node.children[1]);
+                    let mut value = codegen.expr_to_string(&node.children[1]);
+                    // Fix double-address patterns for functions that return pointers
+                    // e.g., &generic_category() as *const X -> generic_category()
+                    // These functions (generic_category, system_category) now return pointers directly
+                    for func in &["generic_category", "system_category"] {
+                        let pattern = format!("&{}() as *const", func);
+                        if value.contains(&pattern) {
+                            value = value.replace(&pattern, &format!("{}() as *const", func));
+                        }
+                    }
+                    // Fix double-reference pattern: &param as *const T where param is already a reference
+                    if value.contains("&__cat as *const") {
+                        value = value.replace("&__cat as *const", "__cat as *const");
+                    }
                     initializers.push((member_name, value));
                 }
             }
@@ -9885,8 +9968,21 @@ impl AstCodeGen {
                             i += 1;
                             // Skip literal suffixes - Rust will infer the type from struct field
                             self.skip_literal_suffix = true;
-                            let val = self.expr_to_string(&node.children[i]);
+                            let mut val = self.expr_to_string(&node.children[i]);
                             self.skip_literal_suffix = false;
+                            // Fix double-address patterns for functions that return pointers
+                            // e.g., &generic_category() as *const X -> generic_category()
+                            for func in &["generic_category", "system_category"] {
+                                let pattern = format!("&{}() as *const", func);
+                                if val.contains(&pattern) {
+                                    val = val.replace(&pattern, &format!("{}() as *const", func));
+                                }
+                            }
+                            // Fix double-reference pattern: &param as *const T where param is already a reference
+                            // Pattern: &__cat as *const error_category -> __cat as *const error_category
+                            if val.contains("&__cat as *const") {
+                                val = val.replace("&__cat as *const", "__cat as *const");
+                            }
                             val
                         } else {
                             "Default::default()".to_string()
@@ -11335,12 +11431,30 @@ impl AstCodeGen {
                                 }
                             }
                             let rust_ty = ty.to_rust_type_str();
+                            // Check if the operand already returns a reference type
+                            // (e.g., generic_category() returns &'static error_category)
+                            // In that case, don't add another & - just cast directly
+                            let child_type = Self::get_expr_type(&node.children[0]);
+                            let child_returns_ref = matches!(child_type, Some(CppType::Reference { .. }));
+
                             if rust_ty.starts_with("*mut ") {
-                                format!("&mut {} as {}", operand, rust_ty)
+                                if child_returns_ref {
+                                    format!("{} as {}", operand, rust_ty)
+                                } else {
+                                    format!("&mut {} as {}", operand, rust_ty)
+                                }
                             } else if rust_ty.starts_with("*const ") {
-                                format!("&{} as {}", operand, rust_ty)
+                                if child_returns_ref {
+                                    format!("{} as {}", operand, rust_ty)
+                                } else {
+                                    format!("&{} as {}", operand, rust_ty)
+                                }
                             } else {
-                                format!("&{}", operand)
+                                if child_returns_ref {
+                                    operand // Already a reference
+                                } else {
+                                    format!("&{}", operand)
+                                }
                             }
                         }
                         UnaryOp::PreInc => {
@@ -12221,6 +12335,18 @@ impl AstCodeGen {
                             right_raw
                         };
 
+                        // Fix double-address patterns for functions that return pointers
+                        let right_raw = {
+                            let mut r = right_raw;
+                            for func in &["generic_category", "system_category"] {
+                                let pattern = format!("&{}() as *const", func);
+                                if r.contains(&pattern) {
+                                    r = r.replace(&pattern, &format!("{}() as *const", func));
+                                }
+                            }
+                            r
+                        };
+
                         format!("unsafe {{ {} {} {} }}", left_raw, op_str, right_raw)
                     } else if matches!(
                         op,
@@ -12273,6 +12399,19 @@ impl AstCodeGen {
                             }
                         } else {
                             right
+                        };
+
+                        // Fix double-address patterns for functions that return pointers
+                        // e.g., &generic_category() as *const X -> generic_category()
+                        let right = {
+                            let mut r = right;
+                            for func in &["generic_category", "system_category"] {
+                                let pattern = format!("&{}() as *const", func);
+                                if r.contains(&pattern) {
+                                    r = r.replace(&pattern, &format!("{}() as *const", func));
+                                }
+                            }
+                            r
                         };
 
                         format!("{} {} {}", left, op_str, right)
@@ -12520,12 +12659,30 @@ impl AstCodeGen {
                             }
                             // For regular C++ pointers, cast reference to raw pointer
                             let rust_ty = ty.to_rust_type_str();
+                            // Check if the operand already returns a reference type
+                            // (e.g., generic_category() returns &'static error_category)
+                            // In that case, don't add another & - just cast directly
+                            let child_type = Self::get_expr_type(&node.children[0]);
+                            let child_returns_ref = matches!(child_type, Some(CppType::Reference { .. }));
+
                             if rust_ty.starts_with("*mut ") {
-                                format!("&mut {} as {}", operand, rust_ty)
+                                if child_returns_ref {
+                                    format!("{} as {}", operand, rust_ty)
+                                } else {
+                                    format!("&mut {} as {}", operand, rust_ty)
+                                }
                             } else if rust_ty.starts_with("*const ") {
-                                format!("&{} as {}", operand, rust_ty)
+                                if child_returns_ref {
+                                    format!("{} as {}", operand, rust_ty)
+                                } else {
+                                    format!("&{} as {}", operand, rust_ty)
+                                }
                             } else {
-                                format!("&{}", operand)
+                                if child_returns_ref {
+                                    operand // Already a reference
+                                } else {
+                                    format!("&{}", operand)
+                                }
                             }
                         }
                         UnaryOp::Deref => {
