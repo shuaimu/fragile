@@ -6224,11 +6224,12 @@ impl AstCodeGen {
                         let right = self.expr_to_string(&node.children[1]);
                         let method = if matches!(op, BinaryOp::AddAssign) { "add" } else { "sub" };
                         // Wrap complex expressions in parens before casting to usize
+                        // ptr.add() is unsafe, so wrap in unsafe block
                         let right_needs_parens = right.contains(' ') || right.contains("as ");
                         if right_needs_parens {
-                            format!("{} = {}.{}(({}) as usize)", left, left, method, right)
+                            format!("unsafe {{ {} = {}.{}(({}) as usize) }}", left, left, method, right)
                         } else {
-                            format!("{} = {}.{}({} as usize)", left, left, method, right)
+                            format!("unsafe {{ {} = {}.{}({} as usize) }}", left, left, method, right)
                         }
                     } else if matches!(op, BinaryOp::Assign | BinaryOp::AddAssign | BinaryOp::SubAssign |
                                    BinaryOp::MulAssign | BinaryOp::DivAssign |
@@ -6598,7 +6599,21 @@ impl AstCodeGen {
 
                         let right_type = Self::get_expr_type(&node.children[right_idx]);
                         // Pass class/struct types by reference, primitives by value
-                        let needs_ref = matches!(right_type, Some(CppType::Named(_)));
+                        // Named types that are typedefs to primitives should be passed by value
+                        let needs_ref = match &right_type {
+                            Some(CppType::Named(name)) => {
+                                // These are typedefs to primitive types - pass by value
+                                !matches!(name.as_str(),
+                                    "ptrdiff_t" | "std::ptrdiff_t" | "ssize_t" |
+                                    "size_t" | "std::size_t" |
+                                    "intptr_t" | "std::intptr_t" |
+                                    "uintptr_t" | "std::uintptr_t" |
+                                    "difference_type" | "size_type" |
+                                    "int8_t" | "int16_t" | "int32_t" | "int64_t" |
+                                    "uint8_t" | "uint16_t" | "uint32_t" | "uint64_t")
+                            }
+                            _ => false,
+                        };
                         if needs_ref {
                             format!("{}.{}(&{})", left_operand, method_name, right_operand)
                         } else {
