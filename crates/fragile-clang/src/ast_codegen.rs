@@ -5400,7 +5400,16 @@ impl AstCodeGen {
                     let operand = self.expr_to_string_raw(&node.children[0]);
                     match op {
                         UnaryOp::Deref => format!("*{}", operand),
-                        UnaryOp::Minus => format!("-{}", operand),
+                        UnaryOp::Minus => {
+                            // C++ allows -bool which converts bool to int then negates
+                            // In Rust, we convert to logical NOT for boolean types
+                            let operand_ty = Self::get_expr_type(&node.children[0]);
+                            if matches!(operand_ty, Some(CppType::Bool)) {
+                                format!("!{}", operand)
+                            } else {
+                                format!("-{}", operand)
+                            }
+                        }
                         UnaryOp::Plus => operand,
                         UnaryOp::LNot => {
                             // C++ logical NOT (!x) converts to bool first
@@ -6009,7 +6018,16 @@ impl AstCodeGen {
 
                     let operand = self.expr_to_string(&node.children[0]);
                     match op {
-                        UnaryOp::Minus => format!("-{}", operand),
+                        UnaryOp::Minus => {
+                            // C++ allows -bool which converts bool to int then negates
+                            // In Rust, we convert to logical NOT for boolean types
+                            let operand_ty = Self::get_expr_type(&node.children[0]);
+                            if matches!(operand_ty, Some(CppType::Bool)) {
+                                format!("!{}", operand)
+                            } else {
+                                format!("-{}", operand)
+                            }
+                        }
                         UnaryOp::Plus => operand,
                         UnaryOp::LNot => {
                             // C++ logical NOT (!x) converts to bool first
