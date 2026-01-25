@@ -7162,7 +7162,7 @@ impl AstCodeGen {
         }
     }
 
-    /// Convert an operator name to Rust native binary operator.
+    /// Convert a binary operator name to Rust native operator.
     /// Returns None if the operator should not be converted to a native operator.
     fn operator_to_native_rust(op_name: &str) -> Option<&'static str> {
         match op_name {
@@ -7182,6 +7182,29 @@ impl AstCodeGen {
             "operator<=" => Some("<="),
             "operator>" => Some(">"),
             "operator>=" => Some(">="),
+            // Compound assignment operators
+            "operator+=" => Some("+="),
+            "operator-=" => Some("-="),
+            "operator*=" => Some("*="),
+            "operator/=" => Some("/="),
+            "operator%=" => Some("%="),
+            "operator&=" => Some("&="),
+            "operator|=" => Some("|="),
+            "operator^=" => Some("^="),
+            "operator<<=" => Some("<<="),
+            "operator>>=" => Some(">>="),
+            _ => None,
+        }
+    }
+
+    /// Convert a unary operator name to Rust native prefix operator.
+    /// Returns None if the operator should not be converted to a native operator.
+    fn unary_operator_to_native_rust(op_name: &str) -> Option<&'static str> {
+        match op_name {
+            "operator~" => Some("!"),  // C++ ~ is Rust ! for bitwise not
+            "operator!" => Some("!"),  // Logical not
+            "operator-" => Some("-"),  // Unary minus
+            "operator+" => Some(""),   // Unary plus (no-op in Rust)
             _ => None,
         }
     }
@@ -11677,7 +11700,29 @@ impl AstCodeGen {
                             format!("{}.{}({})", left_paren, method_name, right_operand)
                         }
                     } else {
-                        // Other unary operators: operand.op_X()
+                        // Unary operators: operand.op_X() or native Rust for primitives
+                        let operand_type = Self::get_expr_type(&node.children[left_idx]);
+
+                        // For primitives, use native Rust unary operators
+                        if let Some(rust_op) = Self::unary_operator_to_native_rust(&op_name) {
+                            let is_primitive = operand_type
+                                .as_ref()
+                                .is_some_and(|t| Self::is_primitive_type(t));
+                            if is_primitive {
+                                // Unary plus is no-op, just return the operand
+                                if rust_op.is_empty() {
+                                    return left_operand;
+                                }
+                                // Parenthesize if it contains a cast or spaces
+                                let needs_parens = left_operand.contains(" as ")
+                                    || left_operand.contains(' ');
+                                if needs_parens {
+                                    return format!("{}({})", rust_op, left_operand);
+                                }
+                                return format!("{}{}", rust_op, left_operand);
+                            }
+                        }
+
                         // Parenthesize if it contains a cast
                         let left_paren = if left_operand.contains(" as ") {
                             format!("({})", left_operand)
