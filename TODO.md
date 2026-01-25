@@ -870,9 +870,9 @@ Test against actual open-source C++ projects.
     - `crates/fragile-clang/src/ast_codegen.rs` (various formatting)
     - `crates/fragile-clang/src/types.rs` (various formatting)
 
-- [x] **24.3** Address clippy warnings (optional, non-blocking) - PARTIAL ✅ 2026-01-24
+- [x] **24.3** Address clippy warnings (optional, non-blocking) ✅ 2026-01-24
   - [x] **24.3.1** Fix `thread_local` const initializer warnings in fragile-runtime ✅ 2026-01-24
-  - [ ] **24.3.2** Add `# Safety` documentation to unsafe functions (4 remaining)
+  - [x] **24.3.2** Add `# Safety` documentation to unsafe functions ✅ 2026-01-24
   - [x] **24.3.3** Fix `map_or` simplification suggestions ✅ 2026-01-24
   - [x] **24.3.4** Fix length comparison warnings (`len() >= 1` → `!is_empty()`) ✅ 2026-01-24
   - [x] **24.3.5** Fix `needless_borrow` warnings ✅ 2026-01-24
