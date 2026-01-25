@@ -4235,6 +4235,94 @@ impl AstCodeGen {
         self.writeln("pub fn __builtin_addressof<T>(x: &T) -> *const T { x as *const T }");
         self.writeln("");
 
+        // Long double math builtins (using f64 since Rust doesn't have f128)
+        self.writeln("// Long double math builtins (using f64 approximation)");
+        self.writeln("#[inline]");
+        self.writeln("pub fn __builtin_huge_vall() -> f64 { f64::INFINITY }");
+        self.writeln("#[inline]");
+        self.writeln("pub fn __builtin_nanl(_s: *const i8) -> f64 { f64::NAN }");
+        self.writeln("#[inline]");
+        self.writeln("pub fn __builtin_nansl(_s: *const i8) -> f64 { f64::NAN }");
+        self.writeln("#[inline]");
+        self.writeln("pub fn __builtin_expl(x: f64) -> f64 { x.exp() }");
+        self.writeln("#[inline]");
+        self.writeln("pub fn __builtin_frexpl(x: f64, exp: *mut i32) -> f64 { unsafe { *exp = 0 }; x }");
+        self.writeln("#[inline]");
+        self.writeln("pub fn __builtin_ldexpl(x: f64, exp: i32) -> f64 { x * (2.0f64).powi(exp) }");
+        self.writeln("#[inline]");
+        self.writeln("pub fn __builtin_exp2l(x: f64) -> f64 { (2.0f64).powf(x) }");
+        self.writeln("#[inline]");
+        self.writeln("pub fn __builtin_expm1l(x: f64) -> f64 { x.exp() - 1.0 }");
+        self.writeln("#[inline]");
+        self.writeln("pub fn __builtin_scalblnl(x: f64, n: i64) -> f64 { x * (2.0f64).powi(n as i32) }");
+        self.writeln("#[inline]");
+        self.writeln("pub fn __builtin_scalbnl(x: f64, n: i32) -> f64 { x * (2.0f64).powi(n) }");
+        self.writeln("#[inline]");
+        self.writeln("pub fn __builtin_powl(x: f64, y: f64) -> f64 { x.powf(y) }");
+        self.writeln("#[inline]");
+        self.writeln("pub fn __builtin_fmaxl(x: f64, y: f64) -> f64 { x.max(y) }");
+        self.writeln("#[inline]");
+        self.writeln("pub fn __builtin_fminl(x: f64, y: f64) -> f64 { x.min(y) }");
+        self.writeln("#[inline]");
+        self.writeln("pub fn __builtin_sqrtl(x: f64) -> f64 { x.sqrt() }");
+        self.writeln("#[inline]");
+        self.writeln("pub fn __builtin_cbrtl(x: f64) -> f64 { x.cbrt() }");
+        self.writeln("#[inline]");
+        self.writeln("pub fn __builtin_hypotl(x: f64, y: f64) -> f64 { x.hypot(y) }");
+        self.writeln("#[inline]");
+        self.writeln("pub fn __builtin_copysignl(x: f64, y: f64) -> f64 { x.copysign(y) }");
+        self.writeln("#[inline]");
+        self.writeln("pub fn __builtin_logl(x: f64) -> f64 { x.ln() }");
+        self.writeln("#[inline]");
+        self.writeln("pub fn __builtin_log2l(x: f64) -> f64 { x.log2() }");
+        self.writeln("#[inline]");
+        self.writeln("pub fn __builtin_log10l(x: f64) -> f64 { x.log10() }");
+        self.writeln("#[inline]");
+        self.writeln("pub fn __builtin_log1pl(x: f64) -> f64 { (1.0 + x).ln() }");
+        self.writeln("#[inline]");
+        self.writeln("pub fn __builtin_fabsl(x: f64) -> f64 { x.abs() }");
+        self.writeln("#[inline]");
+        self.writeln("pub fn __builtin_floorl(x: f64) -> f64 { x.floor() }");
+        self.writeln("#[inline]");
+        self.writeln("pub fn __builtin_ceill(x: f64) -> f64 { x.ceil() }");
+        self.writeln("#[inline]");
+        self.writeln("pub fn __builtin_truncl(x: f64) -> f64 { x.trunc() }");
+        self.writeln("#[inline]");
+        self.writeln("pub fn __builtin_roundl(x: f64) -> f64 { x.round() }");
+        self.writeln("#[inline]");
+        self.writeln("pub fn __builtin_sinl(x: f64) -> f64 { x.sin() }");
+        self.writeln("#[inline]");
+        self.writeln("pub fn __builtin_cosl(x: f64) -> f64 { x.cos() }");
+        self.writeln("#[inline]");
+        self.writeln("pub fn __builtin_tanl(x: f64) -> f64 { x.tan() }");
+        self.writeln("#[inline]");
+        self.writeln("pub fn __builtin_asinl(x: f64) -> f64 { x.asin() }");
+        self.writeln("#[inline]");
+        self.writeln("pub fn __builtin_acosl(x: f64) -> f64 { x.acos() }");
+        self.writeln("#[inline]");
+        self.writeln("pub fn __builtin_atanl(x: f64) -> f64 { x.atan() }");
+        self.writeln("#[inline]");
+        self.writeln("pub fn __builtin_atan2l(y: f64, x: f64) -> f64 { y.atan2(x) }");
+        self.writeln("#[inline]");
+        self.writeln("pub fn __builtin_sinhl(x: f64) -> f64 { x.sinh() }");
+        self.writeln("#[inline]");
+        self.writeln("pub fn __builtin_coshl(x: f64) -> f64 { x.cosh() }");
+        self.writeln("#[inline]");
+        self.writeln("pub fn __builtin_tanhl(x: f64) -> f64 { x.tanh() }");
+        self.writeln("#[inline]");
+        self.writeln("pub fn __builtin_asinhl(x: f64) -> f64 { x.asinh() }");
+        self.writeln("#[inline]");
+        self.writeln("pub fn __builtin_acoshl(x: f64) -> f64 { x.acosh() }");
+        self.writeln("#[inline]");
+        self.writeln("pub fn __builtin_atanhl(x: f64) -> f64 { x.atanh() }");
+        self.writeln("#[inline]");
+        self.writeln("pub fn __builtin_fmodl(x: f64, y: f64) -> f64 { x % y }");
+        self.writeln("#[inline]");
+        self.writeln("pub fn __builtin_remainderl(x: f64, y: f64) -> f64 { x % y }");
+        self.writeln("#[inline]");
+        self.writeln("pub fn __builtin_fmal(x: f64, y: f64, z: f64) -> f64 { x * y + z }");
+        self.writeln("");
+
         // C library function stubs used by libstdc++ string conversion
         self.writeln("// C library function stubs");
         self.writeln("#[inline]");
@@ -4281,9 +4369,22 @@ impl AstCodeGen {
         self.writeln("pub fn to_string_5(_val: f64) -> __to_string_result { __to_string_result { data: [0; 32], len: 0 } }");
         self.writeln("");
 
+        // __to_underlying_* stubs for converting enums to underlying types
+        self.writeln("// __to_underlying stubs");
+        self.writeln("#[inline]");
+        self.writeln("pub fn __to_underlying_u32(_val: u32) -> u32 { _val }");
+        self.writeln("#[inline]");
+        self.writeln("pub fn __to_underlying_i32(_val: i32) -> i32 { _val }");
+        self.writeln("");
+
         // glibc internal variable stubs
         self.writeln("// glibc internal variable stubs");
         self.writeln("pub static __libc_single_threaded: i8 = 0;");
+        self.writeln("");
+
+        // Math constants
+        self.writeln("// Math constants");
+        self.writeln("pub static inf: f64 = f64::INFINITY;");
         self.writeln("");
 
         // fragile_runtime stub for memory allocation
@@ -11104,18 +11205,26 @@ impl AstCodeGen {
                         } else {
                             "sub"
                         };
+                        // Wrap left side in parens if it contains "as" to prevent
+                        // `ptr as *const T.add()` being parsed incorrectly
+                        let left_needs_parens = left.contains(" as ");
+                        let left_for_method = if left_needs_parens {
+                            format!("({})", left)
+                        } else {
+                            left.clone()
+                        };
                         // Wrap complex expressions in parens before casting to usize
                         // ptr.add() is unsafe, so wrap in unsafe block
                         let right_needs_parens = right.contains(' ') || right.contains("as ");
                         if right_needs_parens {
                             format!(
                                 "unsafe {{ {} = {}.{}(({}) as usize) }}",
-                                left, left, method, right
+                                left, left_for_method, method, right
                             )
                         } else {
                             format!(
                                 "unsafe {{ {} = {}.{}({} as usize) }}",
-                                left, left, method, right
+                                left, left_for_method, method, right
                             )
                         }
                     } else if matches!(
@@ -11235,12 +11344,20 @@ impl AstCodeGen {
                         } else {
                             "sub"
                         };
+                        // Wrap left side in parens if it contains "as" to prevent
+                        // `ptr as *const T.add()` being parsed as `ptr as (*const T.add())`
+                        let left_needs_parens = left_str.contains(" as ");
+                        let left_wrapped = if left_needs_parens {
+                            format!("({})", left_str)
+                        } else {
+                            left_str
+                        };
                         // Wrap complex expressions in parens before casting to usize
                         let right_needs_parens = right_str.contains(' ') || right_str.contains("as ");
                         if right_needs_parens {
-                            format!("unsafe {{ {}.{}(({}) as usize) }}", left_str, method, right_str)
+                            format!("unsafe {{ {}.{}(({}) as usize) }}", left_wrapped, method, right_str)
                         } else {
-                            format!("unsafe {{ {}.{}({} as usize) }}", left_str, method, right_str)
+                            format!("unsafe {{ {}.{}({} as usize) }}", left_wrapped, method, right_str)
                         }
                     } else if matches!(
                         op,
@@ -12630,6 +12747,30 @@ impl AstCodeGen {
                         self.expr_to_string(&node.children[0])
                     };
                     let rust_type = ty.to_rust_type_str();
+
+                    // Handle casts to bool specially - Rust doesn't allow `X as bool`
+                    if matches!(ty, CppType::Bool) {
+                        // Convert to comparison: val != 0 for integers, !ptr.is_null() for pointers
+                        if inner == "0" || inner == "0i32" || inner == "0u32" || inner == "0i64" || inner == "0u64" {
+                            return "false".to_string();
+                        } else if inner.contains("is_null") || inner.ends_with(".is_null()") {
+                            return inner;  // Already a boolean
+                        } else if inner.starts_with("!") {
+                            return inner;  // Already negated
+                        } else if inner == "true" || inner == "false" {
+                            return inner;  // Already boolean
+                        } else {
+                            // Check if inner is a pointer type
+                            let inner_ty = Self::get_expr_type(&node.children.iter().find(|c| {
+                                !matches!(&c.kind, ClangNodeKind::Unknown(s) if s.starts_with("TypeRef"))
+                            }).unwrap_or(&node.children[0]));
+                            if matches!(inner_ty, Some(CppType::Pointer { .. })) {
+                                return format!("!{}.is_null()", inner);
+                            }
+                            return format!("({}) != 0", inner);
+                        }
+                    }
+
                     match cast_kind {
                         CastKind::Static | CastKind::Reinterpret => {
                             // Generate Rust "as" cast
