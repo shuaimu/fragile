@@ -1665,6 +1665,44 @@ impl AstCodeGen {
         self.indent -= 1;
         self.writeln("}");
         self.writeln("");
+
+        // numeric_limits stub for libstdc++
+        self.writeln("// numeric_limits stub for libstdc++ allocator");
+        self.writeln("pub mod numeric_limits {");
+        self.indent += 1;
+        self.writeln("#[inline]");
+        self.writeln("pub fn min() -> isize { isize::MIN }");
+        self.writeln("#[inline]");
+        self.writeln("pub fn max() -> isize { isize::MAX }");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("");
+
+        // fragile_runtime stub for memory allocation
+        self.writeln("// fragile_runtime stub for memory allocation");
+        self.writeln("pub mod fragile_runtime {");
+        self.indent += 1;
+        self.writeln("#[inline]");
+        self.writeln("pub unsafe fn fragile_malloc(size: usize) -> *mut u8 {");
+        self.indent += 1;
+        self.writeln("let layout = std::alloc::Layout::from_size_align(size.max(1), std::mem::align_of::<usize>()).unwrap();");
+        self.writeln("std::alloc::alloc(layout)");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("#[inline]");
+        self.writeln("pub unsafe fn fragile_free(ptr: *mut u8, size: usize) {");
+        self.indent += 1;
+        self.writeln("if !ptr.is_null() {");
+        self.indent += 1;
+        self.writeln("let layout = std::alloc::Layout::from_size_align(size.max(1), std::mem::align_of::<usize>()).unwrap();");
+        self.writeln("std::alloc::dealloc(ptr, layout);");
+        self.indent -= 1;
+        self.writeln("}");
+        self.indent -= 1;
+        self.writeln("}");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("");
     }
 
     /// Generate Rust enum definitions for all collected std::variant types.
