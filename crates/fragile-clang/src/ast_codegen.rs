@@ -7109,6 +7109,83 @@ impl AstCodeGen {
         None
     }
 
+    /// Check if a C++ type is primitive or a typedef to a primitive.
+    /// Returns true for bool, char, short, int, long, float, double,
+    /// and common typedefs like size_t, int32_t, etc.
+    fn is_primitive_type(ty: &CppType) -> bool {
+        match ty {
+            CppType::Bool
+            | CppType::Char { .. }
+            | CppType::Short { .. }
+            | CppType::Int { .. }
+            | CppType::Long { .. }
+            | CppType::LongLong { .. }
+            | CppType::Float
+            | CppType::Double => true,
+            CppType::Named(name) => {
+                // Check for common typedefs to primitives
+                matches!(
+                    name.as_str(),
+                    "size_t"
+                        | "std::size_t"
+                        | "ssize_t"
+                        | "ptrdiff_t"
+                        | "std::ptrdiff_t"
+                        | "intptr_t"
+                        | "std::intptr_t"
+                        | "uintptr_t"
+                        | "std::uintptr_t"
+                        | "int8_t"
+                        | "int16_t"
+                        | "int32_t"
+                        | "int64_t"
+                        | "uint8_t"
+                        | "uint16_t"
+                        | "uint32_t"
+                        | "uint64_t"
+                        | "wchar_t"
+                        | "char8_t"
+                        | "char16_t"
+                        | "char32_t"
+                        | "difference_type"
+                        | "size_type"
+                        // iOS stream flags are enums/typedefs to integer types
+                        | "_Ios_Fmtflags"
+                        | "_Ios_Openmode"
+                        | "_Ios_Iostate"
+                        | "std::_Ios_Fmtflags"
+                        | "std::_Ios_Openmode"
+                        | "std::_Ios_Iostate"
+                )
+            }
+            _ => false,
+        }
+    }
+
+    /// Convert an operator name to Rust native binary operator.
+    /// Returns None if the operator should not be converted to a native operator.
+    fn operator_to_native_rust(op_name: &str) -> Option<&'static str> {
+        match op_name {
+            "operator+" => Some("+"),
+            "operator-" => Some("-"),
+            "operator*" => Some("*"),
+            "operator/" => Some("/"),
+            "operator%" => Some("%"),
+            "operator&" => Some("&"),
+            "operator|" => Some("|"),
+            "operator^" => Some("^"),
+            "operator<<" => Some("<<"),
+            "operator>>" => Some(">>"),
+            "operator==" => Some("=="),
+            "operator!=" => Some("!="),
+            "operator<" => Some("<"),
+            "operator<=" => Some("<="),
+            "operator>" => Some(">"),
+            "operator>=" => Some(">="),
+            _ => None,
+        }
+    }
+
     /// Check if a statement is a member field assignment (for filtering in ctor body)
     fn is_member_assignment(node: &ClangNode) -> bool {
         match &node.kind {
@@ -11517,6 +11594,24 @@ impl AstCodeGen {
                         }
 
                         let right_type = Self::get_expr_type(&node.children[right_idx]);
+                        let left_type = Self::get_expr_type(&node.children[left_idx]);
+
+                        // Special case: for primitive types, use native Rust operators
+                        // instead of method calls. Primitives (and typedefs to primitives)
+                        // don't have op_X methods, they use built-in operators.
+                        if let Some(rust_op) = Self::operator_to_native_rust(&op_name) {
+                            let left_is_primitive = left_type
+                                .as_ref()
+                                .is_some_and(|t| Self::is_primitive_type(t));
+                            let right_is_primitive = right_type
+                                .as_ref()
+                                .is_some_and(|t| Self::is_primitive_type(t));
+
+                            if left_is_primitive && right_is_primitive {
+                                // Use native Rust operator for primitives
+                                return format!("{} {} {}", left_operand, rust_op, right_operand);
+                            }
+                        }
 
                         // Special case: operator= (copy assignment vs converting assignment)
                         // For simple structs without explicit operator=, Clang generates implicit
@@ -11527,7 +11622,6 @@ impl AstCodeGen {
                         // However, if the RHS type differs from LHS type, it's a converting assignment
                         // (e.g., Counter::operator=(int)) and we must call op_assign to perform conversion.
                         if op_name == "operator=" {
-                            let left_type = Self::get_expr_type(&node.children[left_idx]);
                             let is_same_type = match (&left_type, &right_type) {
                                 (Some(left_ty), Some(right_ty)) => left_ty == right_ty,
                                 _ => false,
