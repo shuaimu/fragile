@@ -4275,6 +4275,10 @@ impl AstCodeGen {
         self.writeln("pub fn op_eq(&self, _other: &error_category) -> bool { std::ptr::eq(self, _other) }");
         self.writeln("pub fn op____(&self, _other: &error_category) -> bool { !std::ptr::eq(self, _other) }");
         self.writeln("pub fn name(&self) -> *const i8 { b\"unknown\\0\".as_ptr() as *const i8 }");
+        // Note: equivalent methods use error_condition/error_code which may not be defined yet
+        // Use c_void as a placeholder - the actual generated code provides the real types
+        self.writeln("pub fn equivalent(&self, _code: i32, _condition: *const std::ffi::c_void) -> bool { _code == 0 }");
+        self.writeln("pub fn equivalent_1(&self, _code: *const std::ffi::c_void, _condition: i32) -> bool { _condition == 0 }");
         self.indent -= 1;
         self.writeln("}");
         self.generated_aliases.insert("error_category".to_string());
@@ -4650,6 +4654,9 @@ impl AstCodeGen {
         self.writeln("pub fn equal<T: PartialEq>(_first1: *const T, _last1: *const T, _first2: *const T) -> bool { true }");
         self.writeln("pub fn __libcpp_atomic_refcount_increment_i64(_ptr: *mut i64) -> i64 { unsafe { *_ptr += 1; *_ptr } }");
         self.writeln("pub fn __libcpp_atomic_refcount_decrement_i64(_ptr: *mut i64) -> i64 { unsafe { *_ptr -= 1; *_ptr } }");
+        self.writeln("// Math function stubs");
+        self.writeln("pub fn __lerp_f64(a: f64, b: f64, t: f64) -> f64 { a + t * (b - a) }");
+        self.writeln("pub fn __hypot_f64(x: f64, y: f64, z: f64) -> f64 { (x * x + y * y + z * z).sqrt() }");
         self.writeln("");
 
         // Shared pointer support
@@ -4718,14 +4725,17 @@ impl AstCodeGen {
         // - Address taken: &generic_category() as *const -> need special handling
         self.writeln("static GENERIC_CATEGORY: error_category = error_category;");
         self.writeln("static SYSTEM_CATEGORY: error_category = error_category;");
+        self.writeln("static IOSTREAM_CATEGORY: error_category = error_category;");
         self.writeln("");
         self.writeln("pub fn generic_category() -> &'static error_category { &GENERIC_CATEGORY }");
         self.writeln("pub fn system_category() -> &'static error_category { &SYSTEM_CATEGORY }");
+        self.writeln("pub fn iostream_category() -> &'static error_category { &IOSTREAM_CATEGORY }");
         self.indent -= 1;
         self.writeln("}");
         self.writeln("// Re-export _V2 functions at module level for convenience");
         self.writeln("pub use _V2::generic_category;");
         self.writeln("pub use _V2::system_category;");
+        self.writeln("pub use _V2::iostream_category;");
         self.writeln("");
 
         // Builtin function stubs
@@ -7023,6 +7033,71 @@ impl AstCodeGen {
                     self.writeln("pub fn new_1(_val: i32) -> Self {");
                     self.indent += 1;
                     self.writeln("Default::default()");
+                    self.indent -= 1;
+                    self.writeln("}");
+                }
+            }
+
+            // Add stub comparison operators for strong_ordering
+            // strong_ordering needs op_eq, op_ne, op_lt, op_le, op_gt, op_ge
+            // to compare against _CmpUnspecifiedParam (which represents 0)
+            if name == "strong_ordering" {
+                // Check if op_eq is already defined
+                let has_op_eq = self
+                    .current_struct_methods
+                    .get("op_eq")
+                    .copied()
+                    .unwrap_or(0)
+                    > 0;
+                if !has_op_eq {
+                    self.writeln("");
+                    self.writeln("/// Comparison operators for three-way comparison with 0");
+                    self.writeln("pub fn op_eq(&self, _other: &_CmpUnspecifiedParam) -> bool { self.__value_ == 0 }");
+                    self.writeln("pub fn op_ne(&self, _other: &_CmpUnspecifiedParam) -> bool { self.__value_ != 0 }");
+                    self.writeln("pub fn op_lt(&self, _other: &_CmpUnspecifiedParam) -> bool { self.__value_ < 0 }");
+                    self.writeln("pub fn op_le(&self, _other: &_CmpUnspecifiedParam) -> bool { self.__value_ <= 0 }");
+                    self.writeln("pub fn op_gt(&self, _other: &_CmpUnspecifiedParam) -> bool { self.__value_ > 0 }");
+                    self.writeln("pub fn op_ge(&self, _other: &_CmpUnspecifiedParam) -> bool { self.__value_ >= 0 }");
+                }
+            }
+
+            // Add stub comparison operators for weak_ordering
+            if name == "weak_ordering" {
+                let has_op_eq = self
+                    .current_struct_methods
+                    .get("op_eq")
+                    .copied()
+                    .unwrap_or(0)
+                    > 0;
+                if !has_op_eq {
+                    self.writeln("");
+                    self.writeln("/// Comparison operators for three-way comparison with 0");
+                    self.writeln("pub fn op_eq(&self, _other: &_CmpUnspecifiedParam) -> bool { self.__value_ == 0 }");
+                    self.writeln("pub fn op_ne(&self, _other: &_CmpUnspecifiedParam) -> bool { self.__value_ != 0 }");
+                    self.writeln("pub fn op_lt(&self, _other: &_CmpUnspecifiedParam) -> bool { self.__value_ < 0 }");
+                    self.writeln("pub fn op_le(&self, _other: &_CmpUnspecifiedParam) -> bool { self.__value_ <= 0 }");
+                    self.writeln("pub fn op_gt(&self, _other: &_CmpUnspecifiedParam) -> bool { self.__value_ > 0 }");
+                    self.writeln("pub fn op_ge(&self, _other: &_CmpUnspecifiedParam) -> bool { self.__value_ >= 0 }");
+                }
+            }
+
+            // Add stub equality operator for __thread_id
+            // The generated code calls __x.op_eq(&__y) but the free function is op_eq_4(__x, __y)
+            if name == "__thread_id" {
+                let has_op_eq = self
+                    .current_struct_methods
+                    .get("op_eq")
+                    .copied()
+                    .unwrap_or(0)
+                    > 0;
+                if !has_op_eq {
+                    self.writeln("");
+                    self.writeln("/// Stub equality operator for __thread_id");
+                    self.writeln("pub fn op_eq(&self, other: &__thread_id) -> bool {");
+                    self.indent += 1;
+                    self.writeln("if self.__id_ == 0 { return other.__id_ == 0; }");
+                    self.writeln("if other.__id_ == 0 { return false; }");
+                    self.writeln("self.__id_ == other.__id_");
                     self.indent -= 1;
                     self.writeln("}");
                 }
@@ -13777,7 +13852,20 @@ impl AstCodeGen {
                     let child = &node.children[0];
                     let inner = self.expr_to_string(child);
                     // Check if inner is a binary expression - needs parens for cast to apply to whole expr
-                    let needs_parens = matches!(child.kind, ClangNodeKind::BinaryOperator { .. });
+                    // Also look through ImplicitCastExpr, CastExpr, and ParenExpr wrappers to find underlying BinaryOperator
+                    fn contains_binary_op_impl(node: &ClangNode) -> bool {
+                        match &node.kind {
+                            ClangNodeKind::BinaryOperator { .. } => true,
+                            ClangNodeKind::ImplicitCastExpr { .. }
+                            | ClangNodeKind::CastExpr { .. }
+                            | ClangNodeKind::ParenExpr { .. } => {
+                                // Look through wrapper for BinaryOperator
+                                node.children.first().map_or(false, |c| contains_binary_op_impl(c))
+                            }
+                            _ => false,
+                        }
+                    }
+                    let needs_parens = contains_binary_op_impl(child);
                     match cast_kind {
                         CastKind::IntegralCast => {
                             // Need explicit cast for integral conversions
@@ -13944,9 +14032,20 @@ impl AstCodeGen {
 
                     // Check if inner expression is a binary operation - needs parentheses
                     // to avoid precedence issues with "as" (e.g., "a | b as u8" != "(a | b) as u8")
-                    let inner_is_binary = inner_node.map_or(false, |n| {
-                        matches!(&n.kind, ClangNodeKind::BinaryOperator { .. })
-                    });
+                    // Also look through ImplicitCastExpr, CastExpr, and ParenExpr wrappers to find the underlying BinaryOperator
+                    fn contains_binary_op(node: &ClangNode) -> bool {
+                        match &node.kind {
+                            ClangNodeKind::BinaryOperator { .. } => true,
+                            ClangNodeKind::ImplicitCastExpr { .. }
+                            | ClangNodeKind::CastExpr { .. }
+                            | ClangNodeKind::ParenExpr { .. } => {
+                                // Look through wrapper for BinaryOperator
+                                node.children.first().map_or(false, |child| contains_binary_op(child))
+                            }
+                            _ => false,
+                        }
+                    }
+                    let inner_is_binary = inner_node.map_or(false, contains_binary_op);
                     let inner_wrapped = if inner_is_binary {
                         format!("({})", inner)
                     } else {

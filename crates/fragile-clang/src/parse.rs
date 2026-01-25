@@ -2816,7 +2816,15 @@ impl ClangParser {
                         | (CppType::Long { .. }, CppType::Short { .. })
                         | (CppType::Long { .. }, CppType::Char { .. })
                         | (CppType::LongLong { .. }, CppType::Int { .. })
-                        | (CppType::LongLong { .. }, CppType::Long { .. }) => {
+                        | (CppType::LongLong { .. }, CppType::Long { .. })
+                        // Narrowing conversions (int to char, long to short, etc.)
+                        | (CppType::Char { .. }, CppType::Int { .. })
+                        | (CppType::Char { .. }, CppType::Long { .. })
+                        | (CppType::Char { .. }, CppType::Short { .. })
+                        | (CppType::Short { .. }, CppType::Int { .. })
+                        | (CppType::Short { .. }, CppType::Long { .. })
+                        | (CppType::Int { .. }, CppType::Long { .. })
+                        | (CppType::Int { .. }, CppType::LongLong { .. }) => {
                             Some(CastKind::IntegralCast)
                         }
                         // Named size types (ptrdiff_t, size_t) from integral
