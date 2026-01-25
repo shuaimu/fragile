@@ -6423,13 +6423,21 @@ impl AstCodeGen {
     /// The vtable contains function pointers for all virtual methods.
     fn generate_vtable_struct(&mut self, class_name: &str, vtable_info: &ClassVTableInfo) {
         let sanitized_name = sanitize_identifier(class_name);
+        let vtable_name = format!("{}_vtable", sanitized_name);
+
+        // Skip if vtable struct is already generated (e.g., from stubs)
+        if self.generated_structs.contains(&vtable_name) {
+            return;
+        }
+        self.generated_structs.insert(vtable_name.clone());
+
         self.writeln("");
         self.writeln(&format!(
             "/// VTable for polymorphic class `{}`",
             class_name
         ));
         self.writeln("#[repr(C)]");
-        self.writeln(&format!("pub struct {}_vtable {{", sanitized_name));
+        self.writeln(&format!("pub struct {} {{", vtable_name));
         self.indent += 1;
 
         // RTTI fields for dynamic_cast support
