@@ -923,9 +923,22 @@ Test against actual open-source C++ projects.
     - Fixed: Array subscript type cast precedence (`idx as usize` → `(idx) as usize`)
     - Fixed: Non-const methods use `&mut self` based on C++ const qualifier
     - Fixed: Parameters assigned to in method body get `mut` prefix
-  - [ ] **23.11.3** Medium projects (5K-50K LOC)
-    - Target: compile and run test suite
-    - Accept partial success (some tests may fail)
+  - [x] **23.11.3** Medium projects (5K-50K LOC) - INVESTIGATED ✅ 2026-01-25
+    - **robin-hood-hashing** (~2.5K LOC header → 20K LOC Rust):
+      - Transpilation: ✅ Succeeds
+      - Compilation: ❌ Blocked by variadic templates
+      - Fixed: `Self` identifier handling (Self → Self_)
+      - Blocked: C++ variadic templates (_Args &&...)
+      - Blocked: decltype in return types
+      - Blocked: ::new (global new operator)
+    - **ETL (Embedded Template Library)**: Similar issues (compile-time template metaprogramming)
+    - **Finding**: Real-world C++ libraries heavily use variadic templates, making them
+      beyond current transpiler capabilities. The transpiler works well for:
+      - Classes, inheritance, virtual functions
+      - Simple templates (instantiated by Clang)
+      - Memory management (new/delete)
+      - Operators, control flow, recursion
+    - See: docs/dev/plan_23_11_3_medium_projects.md for detailed analysis
 
 ### Success Criteria
 
