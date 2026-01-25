@@ -5840,16 +5840,32 @@ impl AstCodeGen {
                     vis, field_name, ret_type
                 ));
                 self.indent += 1;
+                // Bool needs special handling: Rust doesn't allow `X as bool`
+                let is_bool = ret_type == "bool";
                 if field.offset == 0 {
-                    self.writeln(&format!(
-                        "(self.{} & 0x{:X}) as {}",
-                        storage_field, mask, ret_type
-                    ));
+                    if is_bool {
+                        self.writeln(&format!(
+                            "(self.{} & 0x{:X}) != 0",
+                            storage_field, mask
+                        ));
+                    } else {
+                        self.writeln(&format!(
+                            "(self.{} & 0x{:X}) as {}",
+                            storage_field, mask, ret_type
+                        ));
+                    }
                 } else {
-                    self.writeln(&format!(
-                        "((self.{} >> {}) & 0x{:X}) as {}",
-                        storage_field, field.offset, mask, ret_type
-                    ));
+                    if is_bool {
+                        self.writeln(&format!(
+                            "((self.{} >> {}) & 0x{:X}) != 0",
+                            storage_field, field.offset, mask
+                        ));
+                    } else {
+                        self.writeln(&format!(
+                            "((self.{} >> {}) & 0x{:X}) as {}",
+                            storage_field, field.offset, mask, ret_type
+                        ));
+                    }
                 }
                 self.indent -= 1;
                 self.writeln("}");
