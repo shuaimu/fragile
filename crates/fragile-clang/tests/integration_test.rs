@@ -2356,6 +2356,62 @@ fn test_e2e_access_specifiers() {
 // transpiled with the vendored libc++. They capture transpiler errors to
 // document which patterns fail.
 
+/// Helper function to transpile code with vendored libc++ and attempt compilation.
+/// Returns (transpile_success, rust_code, errors, compile_success, compile_errors).
+fn transpile_and_compile_with_vendored_libcxx(
+    cpp_source: &str,
+    filename: &str,
+) -> (bool, String, String, bool, String) {
+    let (transpile_success, rust_code, transpile_errors) =
+        transpile_with_vendored_libcxx(cpp_source, filename);
+
+    if !transpile_success {
+        return (false, rust_code, transpile_errors, false, String::new());
+    }
+
+    // Try to compile the generated Rust code
+    let temp_dir = std::env::temp_dir().join("fragile_libcxx_tests");
+    let _ = fs::create_dir_all(&temp_dir);
+
+    let rs_path = temp_dir.join(format!("{}.rs", filename.replace(".cpp", "")));
+    if let Err(e) = fs::write(&rs_path, &rust_code) {
+        return (
+            true,
+            rust_code,
+            String::new(),
+            false,
+            format!("Failed to write Rust source: {}", e),
+        );
+    }
+
+    // Compile with rustc
+    let binary_path = temp_dir.join(filename.replace(".cpp", ""));
+    let compile_output = match Command::new("rustc")
+        .arg(&rs_path)
+        .arg("-o")
+        .arg(&binary_path)
+        .output()
+    {
+        Ok(output) => output,
+        Err(e) => {
+            return (
+                true,
+                rust_code,
+                String::new(),
+                false,
+                format!("Failed to run rustc: {}", e),
+            )
+        }
+    };
+
+    if compile_output.status.success() {
+        (true, rust_code, String::new(), true, String::new())
+    } else {
+        let stderr = String::from_utf8_lossy(&compile_output.stderr).to_string();
+        (true, rust_code, String::new(), false, stderr)
+    }
+}
+
 /// Helper function to transpile code with vendored libc++ and capture errors.
 /// Returns (success, rust_code, errors) where errors are transpiler/parse errors.
 fn transpile_with_vendored_libcxx(cpp_source: &str, filename: &str) -> (bool, String, String) {
@@ -3069,4 +3125,116 @@ fn test_operator_new_delete_mapping() {
     println!("=== Operator new/delete mapping test ===");
     println!("operator new -> fragile_malloc: OK");
     println!("operator delete -> fragile_free: OK");
+}
+
+/// Test 23.9.1: Transpile minimal <iostream> usage
+/// This test documents the current state of libc++ iostream transpilation.
+#[test]
+fn test_libcxx_iostream_transpilation() {
+    if !ClangParser::is_vendored_libcxx_available() {
+        eprintln!("Skipping test: vendored libc++ not available");
+        return;
+    }
+
+    let source = r#"
+        #include <iostream>
+
+        int main() {
+            std::cout << "Hello" << std::endl;
+            return 0;
+        }
+    "#;
+
+    let (transpile_ok, rust_code, transpile_errors, compile_ok, compile_errors) =
+        transpile_and_compile_with_vendored_libcxx(source, "test_iostream.cpp");
+
+    println!("=== libc++ iostream transpilation test ===");
+    println!("Transpilation success: {}", transpile_ok);
+    println!("Generated Rust code length: {} chars", rust_code.len());
+    println!("Compilation success: {}", compile_ok);
+
+    if !transpile_errors.is_empty() {
+        println!("Transpilation errors:\n{}", transpile_errors);
+    }
+
+    if !compile_ok && !compile_errors.is_empty() {
+        // Count errors
+        let error_count = compile_errors.matches("error[E").count();
+        println!("Compilation errors: {} total", error_count);
+        // Show first 5000 chars of errors
+        let preview = if compile_errors.len() > 5000 {
+            format!(
+                "{}...\n[truncated, {} more chars]",
+                &compile_errors[..5000],
+                compile_errors.len() - 5000
+            )
+        } else {
+            compile_errors.clone()
+        };
+        println!("Compile errors:\n{}", preview);
+    }
+
+    // For now, we just check that the transpiler doesn't crash
+    // Later tests will verify the code compiles and runs
+    assert!(
+        transpile_ok || !transpile_errors.is_empty(),
+        "Should either succeed or report errors, not crash"
+    );
+}
+
+/// Test 23.10.1: Transpile minimal <thread> usage
+/// This test documents the current state of libc++ thread transpilation.
+#[test]
+fn test_libcxx_thread_transpilation() {
+    if !ClangParser::is_vendored_libcxx_available() {
+        eprintln!("Skipping test: vendored libc++ not available");
+        return;
+    }
+
+    let source = r#"
+        #include <thread>
+
+        void worker() { }
+
+        int main() {
+            std::thread t(worker);
+            t.join();
+            return 0;
+        }
+    "#;
+
+    let (transpile_ok, rust_code, transpile_errors, compile_ok, compile_errors) =
+        transpile_and_compile_with_vendored_libcxx(source, "test_thread.cpp");
+
+    println!("=== libc++ thread transpilation test ===");
+    println!("Transpilation success: {}", transpile_ok);
+    println!("Generated Rust code length: {} chars", rust_code.len());
+    println!("Compilation success: {}", compile_ok);
+
+    if !transpile_errors.is_empty() {
+        println!("Transpilation errors:\n{}", transpile_errors);
+    }
+
+    if !compile_ok && !compile_errors.is_empty() {
+        // Count errors
+        let error_count = compile_errors.matches("error[E").count();
+        println!("Compilation errors: {} total", error_count);
+        // Show first 5000 chars of errors
+        let preview = if compile_errors.len() > 5000 {
+            format!(
+                "{}...\n[truncated, {} more chars]",
+                &compile_errors[..5000],
+                compile_errors.len() - 5000
+            )
+        } else {
+            compile_errors.clone()
+        };
+        println!("Compile errors:\n{}", preview);
+    }
+
+    // For now, we just check that the transpiler doesn't crash
+    assert!(
+        transpile_ok || !transpile_errors.is_empty(),
+        "Should either succeed or report errors, not crash"
+    );
 }

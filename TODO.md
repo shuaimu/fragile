@@ -15,10 +15,10 @@ We just convert the fully-resolved AST to equivalent Rust code.
 
 **Grammar Tests**: 20/20 passing
 **E2E Tests**: 62/62 passing (2 ignored due to STL header limitations)
-**libc++ Transpilation Tests**: 6/6 passing (cstddef, cstdint, type_traits, initializer_list, vector, cstddef_compilation)
+**libc++ Transpilation Tests**: 8/8 passing (cstddef, cstdint, type_traits, initializer_list, vector, cstddef_compilation, iostream, thread)
 **Runtime Linking Tests**: 2/2 passing (FILE I/O, pthread)
 **Runtime Function Mapping Tests**: 1/1 passing
-**Total Tests**: 194 passing
+**Total Tests**: 196 passing
 
 **Working**:
 - Simple functions with control flow (if/else, while, for, do-while, switch, recursion)
@@ -778,8 +778,8 @@ Get `std::vector<int>` working end-to-end.
 
 Get `std::cout` working end-to-end.
 
-- [ ] **23.9** iostream E2E milestone
-  - [ ] **23.9.1** Transpile simple cout usage:
+- [ ] **23.9** iostream E2E milestone - BLOCKED (same issues as vector)
+  - [x] **23.9.1** Transpile simple cout usage ✅ 2026-01-24
     ```cpp
     #include <iostream>
     int main() {
@@ -787,20 +787,23 @@ Get `std::cout` working end-to-end.
         return 0;
     }
     ```
-  - [ ] **23.9.2** Fix iostream static initialization (global cout/cin/cerr objects)
+    - **Status**: Transpilation succeeds (128K chars), 65 compilation errors
+    - Same root causes as vector (template params, base class resolution, etc.)
+    - See `docs/dev/investigation_vector_25_errors.md` for details
+  - [ ] **23.9.2** Fix iostream static initialization (global cout/cin/cerr objects) - BLOCKED
     - libc++ uses `__start_std_streams` section for initialization
     - May need to generate Rust static initialization code
-  - [ ] **23.9.3** Fix streambuf → stdio integration
+  - [ ] **23.9.3** Fix streambuf → stdio integration - BLOCKED
     - libc++ `basic_filebuf` calls `fwrite`/`fread`
     - Verify our stdio implementation is compatible
-  - [ ] **23.9.4** Execute and capture stdout, verify "Hello\n"
+  - [ ] **23.9.4** Execute and capture stdout, verify "Hello\n" - BLOCKED
 
 ### Phase 6: Threading Working (Priority: Medium)
 
 Get `std::thread` working end-to-end.
 
-- [ ] **23.10** std::thread E2E milestone
-  - [ ] **23.10.1** Transpile simple thread usage:
+- [ ] **23.10** std::thread E2E milestone - BLOCKED (same issues as vector)
+  - [x] **23.10.1** Transpile simple thread usage ✅ 2026-01-24
     ```cpp
     #include <thread>
     void worker() { }
@@ -810,9 +813,12 @@ Get `std::thread` working end-to-end.
         return 0;
     }
     ```
-  - [ ] **23.10.2** Verify pthread_create/join are called correctly
-  - [ ] **23.10.3** Add mutex test with std::mutex
-  - [ ] **23.10.4** Add condition variable test
+    - **Status**: Transpilation succeeds (112K chars), 40 compilation errors
+    - Same root causes as vector (template params, base class resolution, etc.)
+    - See `docs/dev/investigation_vector_25_errors.md` for details
+  - [ ] **23.10.2** Verify pthread_create/join are called correctly - BLOCKED
+  - [ ] **23.10.3** Add mutex test with std::mutex - BLOCKED
+  - [ ] **23.10.4** Add condition variable test - BLOCKED
 
 ### Phase 7: Real-World Project Test (Priority: Goal)
 
