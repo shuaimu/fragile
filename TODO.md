@@ -626,7 +626,7 @@ Get `std::vector<int>` working end-to-end.
     }
     ```
   - [ ] **23.8.2** Compile transpiled code with rustc + fragile-runtime - IN PROGRESS
-    - **Progress**: Errors reduced 2091 → 103 (95.1% reduction) ✅ 2026-01-24
+    - **Progress**: Errors reduced 2091 → 101 (95.2% reduction) ✅ 2026-01-24
     - Fixed: super:: path computation now accounts for flattened namespaces (std, __)
     - Fixed: Method overloading deduplication within struct impl blocks (23.8.3)
     - Fixed: Constructor overloading with same param count but different types
@@ -665,11 +665,13 @@ Get `std::vector<int>` working end-to-end.
     - Fixed: Add C++ conversion function support (operator bool → op_bool) ✅ 2026-01-24
       - Handle CXCursor_ConversionFunction in parser (cursor kind 26)
       - Transpile as regular CXXMethodDecl with sanitized name
-    - Remaining 103 errors:
-      - 24 mismatched types (integer literal type suffixes, e.g. 0i32 where usize expected)
-      - Missing types (template instantiation types like __numeric_traits_floating_*)
+    - Fixed: Skip literal type suffixes in constructor/static initializers ✅ 2026-01-24
+      - Rust infers type from context, prevents 0i32/0u8/etc. mismatches
+    - Remaining 101 errors:
+      - 22 mismatched types (iterator/reference type mismatches, return type issues)
       - Missing comparison methods on partial_ordering (op_eq, op_lt, op_le, op_gt, op_ge)
       - Incorrect __base field access on _Bit_iterator (struct missing base class field)
+        - Issue: _Bit_iterator generated from forward reference, then full definition skipped
       - Missing types: std__Bit_iterator, _Sp___rep, _dependent_type
   - [ ] **23.8.3** Execute and verify exit code - BLOCKED on 23.8.2
   - [ ] **23.8.4** Add iteration test: `for (int x : v) { ... }` - BLOCKED
