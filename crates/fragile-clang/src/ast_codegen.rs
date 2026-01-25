@@ -2905,13 +2905,19 @@ impl AstCodeGen {
 
     /// Generate an enum definition.
     fn generate_enum(&mut self, name: &str, is_scoped: bool, underlying_type: &CppType, children: &[ClangNode]) {
+        // Skip enums with dependent types (template parameters)
+        let repr_type = underlying_type.to_rust_type_str();
+        if repr_type == "_dependent_type" || repr_type == "integral_constant__Tp____v" ||
+           repr_type.starts_with("type_parameter_") || repr_type.contains("_parameter_") {
+            return;
+        }
+
         // Skip unnamed enums that have problematic names (e.g., "(unnamed enum at ...)")
         // These are typically internal implementation details in C++ headers
         if name.starts_with("(unnamed") || name.contains(" at ") {
             // For unnamed enums with constants, generate the constants as standalone constants
             for child in children {
                 if let ClangNodeKind::EnumConstantDecl { name: const_name, value } = &child.kind {
-                    let repr_type = underlying_type.to_rust_type_str();
                     if let Some(v) = value {
                         self.writeln(&format!("pub const {}: {} = {};", sanitize_identifier(const_name), repr_type, v));
                     }
@@ -3104,9 +3110,16 @@ impl AstCodeGen {
         if self.global_vars.contains(&safe_name) {
             return;
         }
+
+        // Skip template non-type parameters and dependent types
+        // These are placeholder types from templates that shouldn't become global variables
+        let rust_type = ty.to_rust_type_str();
+        if rust_type == "_dependent_type" || rust_type == "integral_constant__Tp____v" ||
+           rust_type.starts_with("type_parameter_") || rust_type.contains("_parameter_") {
+            return;
+        }
         // Track this as a global variable (needs unsafe access and deduplication)
         self.global_vars.insert(safe_name.clone());
-        let rust_type = ty.to_rust_type_str();
         self.writeln(&format!("/// C++ global variable `{}`", name));
 
         // Get initial value if present
