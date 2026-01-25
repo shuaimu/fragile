@@ -566,6 +566,9 @@ pub unsafe extern "C" fn fgetc(stream: *mut FILE) -> c_int {
 }
 
 /// Read a character from a stream (macro-safe version, same as fgetc).
+///
+/// # Safety
+/// Caller must ensure `stream` is a valid FILE pointer.
 #[no_mangle]
 #[cfg(feature = "std")]
 pub unsafe extern "C" fn getc(stream: *mut FILE) -> c_int {
@@ -573,6 +576,9 @@ pub unsafe extern "C" fn getc(stream: *mut FILE) -> c_int {
 }
 
 /// Read a character from stdin.
+///
+/// # Safety
+/// This function accesses the global stdin stream, which must be properly initialized.
 #[no_mangle]
 #[cfg(feature = "std")]
 pub unsafe extern "C" fn getchar() -> c_int {
@@ -617,6 +623,9 @@ pub unsafe extern "C" fn fputc(c: c_int, stream: *mut FILE) -> c_int {
 }
 
 /// Write a character to a stream (macro-safe version, same as fputc).
+///
+/// # Safety
+/// Caller must ensure `stream` is a valid FILE pointer.
 #[no_mangle]
 #[cfg(feature = "std")]
 pub unsafe extern "C" fn putc(c: c_int, stream: *mut FILE) -> c_int {
@@ -624,6 +633,9 @@ pub unsafe extern "C" fn putc(c: c_int, stream: *mut FILE) -> c_int {
 }
 
 /// Write a character to stdout.
+///
+/// # Safety
+/// This function accesses the global stdout stream, which must be properly initialized.
 #[no_mangle]
 #[cfg(feature = "std")]
 pub unsafe extern "C" fn putchar(c: c_int) -> c_int {
