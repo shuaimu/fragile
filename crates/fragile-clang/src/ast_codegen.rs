@@ -43,6 +43,26 @@ fn strip_literal_suffix(s: &str) -> String {
     s.to_string()
 }
 
+/// Check if a string is an integer literal (possibly with suffix).
+/// Returns true for: "0", "123", "0i32", "456u64", etc.
+fn is_integer_literal_str(s: &str) -> bool {
+    let stripped = strip_literal_suffix(s);
+    // Check if it's a valid integer (optionally with leading minus)
+    let s = stripped.strip_prefix('-').unwrap_or(&stripped);
+    !s.is_empty() && s.chars().all(|c| c.is_ascii_digit())
+}
+
+/// Convert an integer literal string to a float literal.
+/// E.g., "0" -> "0.0", "123i32" -> "123.0", "-5" -> "-5.0"
+fn int_literal_to_float(s: &str) -> String {
+    let stripped = strip_literal_suffix(s);
+    // If it's already a float literal (contains '.'), return as-is
+    if stripped.contains('.') {
+        return stripped;
+    }
+    format!("{}.0", stripped)
+}
+
 /// Rust reserved keywords that need raw identifier syntax.
 const RUST_KEYWORDS: &[&str] = &[
     "as", "async", "await", "break", "const", "continue", "crate", "dyn", "else", "enum", "extern",
@@ -6835,6 +6855,20 @@ impl AstCodeGen {
                     None
                 }
             }
+            ClangNodeKind::MemberExpr { ty, .. } => {
+                // For method calls, ty may be a Function type (for regular methods)
+                // or a special "<bound member function type>" string in Named
+                if let CppType::Function { params, .. } = ty {
+                    Some(params.clone())
+                } else if let CppType::Named(name) = ty {
+                    // Parse "<bound member function type>" - contains param types
+                    // Format: "type (Class::*)(param1, param2, ...) const"
+                    // For now, try to extract from the type string
+                    Self::parse_member_function_params(name)
+                } else {
+                    None
+                }
+            }
             ClangNodeKind::ImplicitCastExpr { .. } => {
                 // Look through casts (e.g., FunctionToPointerDecay)
                 if !node.children.is_empty() {
@@ -6853,6 +6887,54 @@ impl AstCodeGen {
             }
             _ => None,
         }
+    }
+
+    /// Parse parameter types from a bound member function type string.
+    /// The format is typically "<bound member function type>" but might also be
+    /// "type (Class::*)(param1, param2, ...) const" style.
+    fn parse_member_function_params(type_str: &str) -> Option<Vec<CppType>> {
+        // Most common case: "<bound member function type>" doesn't contain actual type info
+        // We need a different approach - check the function signature from the class
+        if type_str.contains("bound member function type") {
+            return None;
+        }
+
+        // Try to parse "(param1, param2, ...)" from the string
+        if let Some(start) = type_str.find(")(") {
+            if let Some(end) = type_str[start + 2..].find(')') {
+                let params_str = &type_str[start + 2..start + 2 + end];
+                if params_str.is_empty() {
+                    return Some(vec![]);
+                }
+                // Split by comma and parse each param type
+                let params: Vec<CppType> = params_str
+                    .split(',')
+                    .map(|s| {
+                        let s = s.trim();
+                        // Check for reference types
+                        if s.ends_with('&') {
+                            let inner = s.trim_end_matches('&').trim();
+                            let is_const = inner.starts_with("const ");
+                            let inner_type = if is_const {
+                                inner.strip_prefix("const ").unwrap_or(inner).trim()
+                            } else {
+                                inner
+                            };
+                            CppType::Reference {
+                                referent: Box::new(CppType::Named(inner_type.to_string())),
+                                is_const,
+                                is_rvalue: false,
+                            }
+                        } else {
+                            CppType::Named(s.to_string())
+                        }
+                    })
+                    .collect();
+                return Some(params);
+            }
+        }
+
+        None
     }
 
     /// Check if a MemberExpr (possibly wrapped) is a virtual base method call.
@@ -9802,8 +9884,27 @@ impl AstCodeGen {
                             | BinaryOp::Ge
                     ) {
                         // For comparison operators, strip literal suffixes - Rust infers compatible types
-                        let left = strip_literal_suffix(&self.expr_to_string(&node.children[0]));
-                        let right = strip_literal_suffix(&self.expr_to_string(&node.children[1]));
+                        let left_str = strip_literal_suffix(&self.expr_to_string(&node.children[0]));
+                        let right_str = strip_literal_suffix(&self.expr_to_string(&node.children[1]));
+
+                        // Check if one side is float and the other is an integer literal
+                        // Rust requires float literals (e.g., 0.0) when comparing with floats
+                        let left_type = Self::get_expr_type(&node.children[0]);
+                        let right_type = Self::get_expr_type(&node.children[1]);
+                        let left_is_float = matches!(left_type, Some(CppType::Float | CppType::Double));
+                        let right_is_float = matches!(right_type, Some(CppType::Float | CppType::Double));
+
+                        let left = if right_is_float && is_integer_literal_str(&left_str) {
+                            int_literal_to_float(&left_str)
+                        } else {
+                            left_str
+                        };
+                        let right = if left_is_float && is_integer_literal_str(&right_str) {
+                            int_literal_to_float(&right_str)
+                        } else {
+                            right_str
+                        };
+
                         // Wrap left operand in parens if it ends with "as TYPE" to prevent
                         // < being interpreted as generic arguments (e.g., `x as i32 < y`)
                         let left = if left.contains(" as ") && !left.starts_with('(') {
@@ -9819,13 +9920,37 @@ impl AstCodeGen {
                             | BinaryOp::Mul
                             | BinaryOp::Div
                             | BinaryOp::Rem
-                            | BinaryOp::And
+                    ) {
+                        // For arithmetic operators, strip literal suffixes and handle float/int mixing
+                        let left_str = strip_literal_suffix(&self.expr_to_string(&node.children[0]));
+                        let right_str = strip_literal_suffix(&self.expr_to_string(&node.children[1]));
+
+                        // Check if one side is float and the other is an integer literal
+                        let left_type = Self::get_expr_type(&node.children[0]);
+                        let right_type = Self::get_expr_type(&node.children[1]);
+                        let left_is_float = matches!(left_type, Some(CppType::Float | CppType::Double));
+                        let right_is_float = matches!(right_type, Some(CppType::Float | CppType::Double));
+
+                        let left = if right_is_float && is_integer_literal_str(&left_str) {
+                            int_literal_to_float(&left_str)
+                        } else {
+                            left_str
+                        };
+                        let right = if left_is_float && is_integer_literal_str(&right_str) {
+                            int_literal_to_float(&right_str)
+                        } else {
+                            right_str
+                        };
+                        format!("{} {} {}", left, op_str, right)
+                    } else if matches!(
+                        op,
+                        BinaryOp::And
                             | BinaryOp::Or
                             | BinaryOp::Xor
                             | BinaryOp::Shl
                             | BinaryOp::Shr
                     ) {
-                        // For arithmetic/bitwise operators, strip literal suffixes to let Rust infer types
+                        // For bitwise operators, strip literal suffixes to let Rust infer types
                         // This handles cases like `isize / 64i32` -> `isize / 64`
                         let left = strip_literal_suffix(&self.expr_to_string(&node.children[0]));
                         let right = strip_literal_suffix(&self.expr_to_string(&node.children[1]));
@@ -10465,6 +10590,58 @@ impl AstCodeGen {
                                     }
                                 }
                             }
+
+                            // Fallback: For method calls (MemberExpr as callee), if the argument is
+                            // a class/struct type, pass by reference. This handles cases where param_types
+                            // couldn't be extracted (e.g., "<bound member function type>").
+                            let is_method_call = matches!(
+                                &node.children[0].kind,
+                                ClangNodeKind::MemberExpr { .. }
+                            ) || matches!(
+                                &node.children[0].kind,
+                                ClangNodeKind::ImplicitCastExpr { .. }
+                                    if node.children[0].children.iter().any(|child| {
+                                        matches!(&child.kind, ClangNodeKind::MemberExpr { .. })
+                                    })
+                            );
+
+                            if is_method_call && param_types.is_none() {
+                                let arg_type = Self::get_expr_type(c);
+                                // Check if the argument is a class/struct type that should be passed by reference
+                                let needs_ref = match &arg_type {
+                                    Some(CppType::Named(name)) => {
+                                        // These are typedefs to primitive types - pass by value
+                                        !matches!(
+                                            name.as_str(),
+                                            "ptrdiff_t"
+                                                | "std::ptrdiff_t"
+                                                | "ssize_t"
+                                                | "size_t"
+                                                | "std::size_t"
+                                                | "intptr_t"
+                                                | "std::intptr_t"
+                                                | "uintptr_t"
+                                                | "std::uintptr_t"
+                                                | "difference_type"
+                                                | "size_type"
+                                                | "int8_t"
+                                                | "int16_t"
+                                                | "int32_t"
+                                                | "int64_t"
+                                                | "uint8_t"
+                                                | "uint16_t"
+                                                | "uint32_t"
+                                                | "uint64_t"
+                                        )
+                                    }
+                                    _ => false,
+                                };
+                                if needs_ref {
+                                    let arg_str = self.expr_to_string(c);
+                                    return format!("&{}", arg_str);
+                                }
+                            }
+
                             self.expr_to_string(c)
                         })
                         .collect();

@@ -4712,3 +4712,137 @@ fn test_e2e_binary_search_tree() {
         "Binary search tree should work correctly (insert, search, sum)"
     );
 }
+
+/// Task 23.11.2: Test a simple 2D vector class with operator overloading.
+/// This exercises:
+/// - Operator overloading (+, -, *, ==, !=)
+/// - Copy constructor
+/// - Static factory methods
+/// - Const methods
+#[test]
+fn test_e2e_vector2d() {
+    let source = r#"
+        class Vec2 {
+            float x, y;
+        public:
+            Vec2() : x(0), y(0) {}
+            Vec2(float x_, float y_) : x(x_), y(y_) {}
+
+            // Copy constructor
+            Vec2(const Vec2& other) : x(other.x), y(other.y) {}
+
+            // Static factory methods
+            static Vec2 zero() { return Vec2(0, 0); }
+            static Vec2 one() { return Vec2(1, 1); }
+            static Vec2 unit_x() { return Vec2(1, 0); }
+            static Vec2 unit_y() { return Vec2(0, 1); }
+
+            // Accessors
+            float getX() const { return x; }
+            float getY() const { return y; }
+
+            // Magnitude squared (avoid sqrt for simplicity)
+            float length_squared() const {
+                return x * x + y * y;
+            }
+
+            // Dot product
+            float dot(const Vec2& other) const {
+                return x * other.x + y * other.y;
+            }
+
+            // Operator overloading
+            Vec2 operator+(const Vec2& other) const {
+                return Vec2(x + other.x, y + other.y);
+            }
+
+            Vec2 operator-(const Vec2& other) const {
+                return Vec2(x - other.x, y - other.y);
+            }
+
+            Vec2 operator*(float scalar) const {
+                return Vec2(x * scalar, y * scalar);
+            }
+
+            bool operator==(const Vec2& other) const {
+                return x == other.x && y == other.y;
+            }
+
+            bool operator!=(const Vec2& other) const {
+                return !(*this == other);
+            }
+
+            // Compound assignment
+            Vec2& operator+=(const Vec2& other) {
+                x += other.x;
+                y += other.y;
+                return *this;
+            }
+        };
+
+        int main() {
+            // Test default constructor
+            Vec2 v1;
+            if (v1.getX() != 0 || v1.getY() != 0) return 1;
+
+            // Test parameterized constructor
+            Vec2 v2(3, 4);
+            if (v2.getX() != 3 || v2.getY() != 4) return 2;
+
+            // Test copy constructor
+            Vec2 v3(v2);
+            if (v3.getX() != 3 || v3.getY() != 4) return 3;
+
+            // Test static factory methods
+            Vec2 zero = Vec2::zero();
+            if (zero.getX() != 0 || zero.getY() != 0) return 4;
+
+            Vec2 one = Vec2::one();
+            if (one.getX() != 1 || one.getY() != 1) return 5;
+
+            // Test addition
+            Vec2 sum = v2 + one;
+            if (sum.getX() != 4 || sum.getY() != 5) return 6;
+
+            // Test subtraction
+            Vec2 diff = v2 - one;
+            if (diff.getX() != 2 || diff.getY() != 3) return 7;
+
+            // Test scalar multiplication
+            Vec2 scaled = v2 * 2;
+            if (scaled.getX() != 6 || scaled.getY() != 8) return 8;
+
+            // Test length squared (3*3 + 4*4 = 25)
+            float len_sq = v2.length_squared();
+            if (len_sq != 25) return 9;
+
+            // Test dot product ((3,4) . (1,1) = 3 + 4 = 7)
+            float dot = v2.dot(one);
+            if (dot != 7) return 10;
+
+            // Test equality
+            Vec2 v4(3, 4);
+            if (!(v2 == v4)) return 11;
+            if (v2 != v4) return 12;
+
+            // Test inequality
+            if (v2 == one) return 13;
+            if (!(v2 != one)) return 14;
+
+            // Test compound assignment
+            Vec2 v5(1, 2);
+            v5 += v2;  // (1,2) + (3,4) = (4,6)
+            if (v5.getX() != 4 || v5.getY() != 6) return 15;
+
+            return 0;  // Success
+        }
+    "#;
+
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_vector2d.cpp").expect("E2E test failed");
+
+    assert_eq!(
+        exit_code, 0,
+        "Vec2 class with operator overloading should work correctly"
+    );
+}
