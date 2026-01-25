@@ -11659,7 +11659,14 @@ impl AstCodeGen {
                             self_name
                         }
                     } else {
-                        self.expr_to_string(&node.children[0])
+                        // For member access, check if base is a reference variable
+                        // Rust auto-derefs for `.` access, so we don't need explicit `*`
+                        // This prevents generating `*__str.method()` which parses as `*(__str.method())`
+                        if let Some(ref_ident) = self.get_ref_var_ident(&node.children[0]) {
+                            ref_ident
+                        } else {
+                            self.expr_to_string(&node.children[0])
+                        }
                     };
                     // Check if this is accessing an inherited member
                     // Use get_original_expr_type to look through implicit casts (like UncheckedDerivedToBase)
