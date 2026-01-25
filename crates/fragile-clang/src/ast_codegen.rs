@@ -4608,6 +4608,8 @@ impl AstCodeGen {
         self.writeln("// Builtin function stubs");
         self.writeln("#[inline]");
         self.writeln("pub fn __builtin_addressof<T>(x: &T) -> *const T { x as *const T }");
+        self.writeln("#[inline]");
+        self.writeln("pub fn addressof<T>(x: &T) -> *const T { x as *const T }");
         self.writeln("");
 
         // Long double math builtins (using f64 since Rust doesn't have f128)
