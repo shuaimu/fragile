@@ -8547,3 +8547,296 @@ fn test_e2e_tokenizer() {
         "Tokenizer should work correctly"
     );
 }
+
+/// E2E test: Prime number generation
+/// Tests: modular arithmetic, nested loops, early termination
+#[test]
+fn test_e2e_prime_sieve() {
+    let source = r#"
+        // Prime number sieve - tests nested loops, early termination, modular arithmetic
+
+        bool isPrime(int n) {
+            if (n <= 1) return false;
+            if (n <= 3) return true;
+            if (n % 2 == 0 || n % 3 == 0) return false;
+
+            // Check divisors up to sqrt(n)
+            int i = 5;
+            while (i * i <= n) {
+                if (n % i == 0 || n % (i + 2) == 0) return false;
+                i = i + 6;
+            }
+            return true;
+        }
+
+        // Count primes up to n (exclusive)
+        int countPrimes(int n) {
+            int count = 0;
+            for (int i = 2; i < n; i++) {
+                if (isPrime(i)) count = count + 1;
+            }
+            return count;
+        }
+
+        // Get nth prime (1-indexed: 1st prime = 2)
+        int nthPrime(int n) {
+            int count = 0;
+            int candidate = 2;
+            while (count < n) {
+                if (isPrime(candidate)) count = count + 1;
+                if (count < n) candidate = candidate + 1;
+            }
+            return candidate;
+        }
+
+        // Sum of primes up to n
+        int sumPrimes(int n) {
+            int sum = 0;
+            for (int i = 2; i <= n; i++) {
+                if (isPrime(i)) sum = sum + i;
+            }
+            return sum;
+        }
+
+        // Greatest common divisor (Euclidean algorithm)
+        // Use local copies since function params aren't mutable in Rust
+        int gcd(int x, int y) {
+            int a = x;
+            int b = y;
+            while (b != 0) {
+                int temp = b;
+                b = a % b;
+                a = temp;
+            }
+            return a;
+        }
+
+        // Least common multiple
+        int lcm(int a, int b) {
+            return (a / gcd(a, b)) * b;
+        }
+
+        int main() {
+            // Test isPrime
+            if (isPrime(0)) return 1;
+            if (isPrime(1)) return 2;
+            if (!isPrime(2)) return 3;
+            if (!isPrime(3)) return 4;
+            if (isPrime(4)) return 5;
+            if (!isPrime(5)) return 6;
+            if (isPrime(6)) return 7;
+            if (!isPrime(7)) return 8;
+            if (isPrime(9)) return 9;
+            if (!isPrime(11)) return 10;
+            if (!isPrime(13)) return 11;
+            if (isPrime(15)) return 12;
+            if (!isPrime(17)) return 13;
+            if (!isPrime(97)) return 14;
+            if (isPrime(100)) return 15;
+
+            // Test countPrimes
+            if (countPrimes(10) != 4) return 16;   // 2, 3, 5, 7
+            if (countPrimes(20) != 8) return 17;   // 2, 3, 5, 7, 11, 13, 17, 19
+            if (countPrimes(2) != 0) return 18;
+            if (countPrimes(3) != 1) return 19;
+
+            // Test nthPrime
+            if (nthPrime(1) != 2) return 20;
+            if (nthPrime(2) != 3) return 21;
+            if (nthPrime(3) != 5) return 22;
+            if (nthPrime(4) != 7) return 23;
+            if (nthPrime(5) != 11) return 24;
+            if (nthPrime(10) != 29) return 25;
+
+            // Test sumPrimes
+            if (sumPrimes(10) != 17) return 26;   // 2 + 3 + 5 + 7
+            if (sumPrimes(2) != 2) return 27;
+            if (sumPrimes(1) != 0) return 28;
+
+            // Test gcd
+            if (gcd(12, 8) != 4) return 29;
+            if (gcd(15, 25) != 5) return 30;
+            if (gcd(17, 13) != 1) return 31;
+            if (gcd(100, 10) != 10) return 32;
+            if (gcd(7, 7) != 7) return 33;
+
+            // Test lcm
+            if (lcm(4, 6) != 12) return 34;
+            if (lcm(3, 5) != 15) return 35;
+            if (lcm(6, 8) != 24) return 36;
+            if (lcm(7, 1) != 7) return 37;
+
+            return 0;  // Success
+        }
+    "#;
+
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_prime_sieve.cpp").expect("E2E test failed");
+
+    assert_eq!(exit_code, 0, "Prime sieve should work correctly");
+}
+
+/// E2E test: Recursive algorithms
+/// Tests: recursion, tail recursion patterns, memoization-like patterns
+#[test]
+fn test_e2e_recursive_algorithms() {
+    let source = r#"
+        // Recursive algorithms - tests various recursion patterns
+
+        // Classic fibonacci (exponential)
+        int fibSlow(int n) {
+            if (n <= 1) return n;
+            return fibSlow(n - 1) + fibSlow(n - 2);
+        }
+
+        // Iterative fibonacci (linear)
+        int fibFast(int n) {
+            if (n <= 1) return n;
+            int prev = 0;
+            int curr = 1;
+            for (int i = 2; i <= n; i++) {
+                int next = prev + curr;
+                prev = curr;
+                curr = next;
+            }
+            return curr;
+        }
+
+        // Power function (recursive)
+        int power(int base, int exp) {
+            if (exp == 0) return 1;
+            if (exp == 1) return base;
+            if (exp % 2 == 0) {
+                int half = power(base, exp / 2);
+                return half * half;
+            } else {
+                return base * power(base, exp - 1);
+            }
+        }
+
+        // Sum of digits (recursive)
+        int sumDigits(int num) {
+            int n = num;
+            if (n < 0) n = -n;  // Handle negative
+            if (n < 10) return n;
+            return (n % 10) + sumDigits(n / 10);
+        }
+
+        // Count digits
+        int countDigits(int num) {
+            int n = num;
+            if (n < 0) n = -n;
+            if (n < 10) return 1;
+            return 1 + countDigits(n / 10);
+        }
+
+        // Reverse digits
+        int reverseDigitsHelper(int n, int rev) {
+            if (n == 0) return rev;
+            return reverseDigitsHelper(n / 10, rev * 10 + n % 10);
+        }
+
+        int reverseDigits(int n) {
+            if (n < 0) return -reverseDigitsHelper(-n, 0);
+            return reverseDigitsHelper(n, 0);
+        }
+
+        // Check palindrome number
+        bool isPalindrome(int n) {
+            if (n < 0) return false;
+            return n == reverseDigits(n);
+        }
+
+        // Ackermann function (limited to small values)
+        int ackermann(int m, int n) {
+            if (m == 0) return n + 1;
+            if (n == 0) return ackermann(m - 1, 1);
+            return ackermann(m - 1, ackermann(m, n - 1));
+        }
+
+        // Count ways to climb stairs (1 or 2 steps at a time)
+        int climbStairs(int n) {
+            if (n <= 2) return n;
+            int prev = 1;
+            int curr = 2;
+            for (int i = 3; i <= n; i++) {
+                int next = prev + curr;
+                prev = curr;
+                curr = next;
+            }
+            return curr;
+        }
+
+        int main() {
+            // Test fibonacci
+            if (fibSlow(0) != 0) return 1;
+            if (fibSlow(1) != 1) return 2;
+            if (fibSlow(2) != 1) return 3;
+            if (fibSlow(5) != 5) return 4;
+            if (fibSlow(10) != 55) return 5;
+
+            // Verify fast and slow give same results
+            for (int i = 0; i <= 15; i++) {
+                if (fibSlow(i) != fibFast(i)) return 6;
+            }
+
+            // Test power
+            if (power(2, 0) != 1) return 7;
+            if (power(2, 1) != 2) return 8;
+            if (power(2, 10) != 1024) return 9;
+            if (power(3, 4) != 81) return 10;
+            if (power(5, 3) != 125) return 11;
+
+            // Test sumDigits
+            if (sumDigits(0) != 0) return 12;
+            if (sumDigits(5) != 5) return 13;
+            if (sumDigits(123) != 6) return 14;
+            if (sumDigits(9999) != 36) return 15;
+            if (sumDigits(-123) != 6) return 16;
+
+            // Test countDigits
+            if (countDigits(0) != 1) return 17;
+            if (countDigits(5) != 1) return 18;
+            if (countDigits(123) != 3) return 19;
+            if (countDigits(10000) != 5) return 20;
+
+            // Test reverseDigits
+            if (reverseDigits(0) != 0) return 21;
+            if (reverseDigits(5) != 5) return 22;
+            if (reverseDigits(123) != 321) return 23;
+            if (reverseDigits(1000) != 1) return 24;
+            if (reverseDigits(-123) != -321) return 25;
+
+            // Test isPalindrome
+            if (!isPalindrome(0)) return 26;
+            if (!isPalindrome(5)) return 27;
+            if (!isPalindrome(121)) return 28;
+            if (!isPalindrome(12321)) return 29;
+            if (isPalindrome(123)) return 30;
+            if (isPalindrome(-121)) return 31;
+
+            // Test Ackermann (small values only!)
+            if (ackermann(0, 0) != 1) return 32;
+            if (ackermann(1, 1) != 3) return 33;
+            if (ackermann(2, 2) != 7) return 34;
+            if (ackermann(3, 2) != 29) return 35;
+
+            // Test climbStairs
+            if (climbStairs(1) != 1) return 36;
+            if (climbStairs(2) != 2) return 37;
+            if (climbStairs(3) != 3) return 38;
+            if (climbStairs(4) != 5) return 39;
+            if (climbStairs(5) != 8) return 40;
+
+            return 0;  // Success
+        }
+    "#;
+
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_recursive_algorithms.cpp").expect("E2E test failed");
+
+    assert_eq!(
+        exit_code, 0,
+        "Recursive algorithms should work correctly"
+    );
+}
