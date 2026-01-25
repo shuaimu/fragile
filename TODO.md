@@ -863,12 +863,12 @@ Test against actual open-source C++ projects.
   - [x] **24.1.2** Simplify CI to just: build, test, clippy (optional), fmt (optional) ✅ 2026-01-24
     - CI now has three jobs: build, lint (clippy), fmt
 
-- [ ] **24.2** Fix code formatting
-  - [ ] **24.2.1** Run `cargo fmt --all` to fix formatting across all crates
-  - [ ] **24.2.2** Affected files include:
+- [x] **24.2** Fix code formatting ✅ 2026-01-24
+  - [x] **24.2.1** Run `cargo fmt --all` to fix formatting across all crates ✅ 2026-01-24
+  - [x] **24.2.2** Affected files include:
     - `crates/fragile-build/src/compile_commands.rs` (boolean chain formatting)
     - `crates/fragile-clang/src/ast_codegen.rs` (various formatting)
-    - Other files as needed
+    - `crates/fragile-clang/src/types.rs` (various formatting)
 
 - [ ] **24.3** Address clippy warnings (optional, non-blocking)
   - [ ] **24.3.1** Fix `thread_local` const initializer warnings in fragile-runtime

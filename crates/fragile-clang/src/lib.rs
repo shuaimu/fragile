@@ -11,15 +11,18 @@
 //! C++ Source → libclang → Clang AST → Rust Source (via AstCodeGen)
 //! ```
 
-mod parse;
 mod ast;
-mod types;
 mod ast_codegen;
+mod parse;
+mod types;
 
-pub use parse::ClangParser;
-pub use ast::{AccessSpecifier, BinaryOp, UnaryOp, ClangAst, ClangNode, ClangNodeKind, ConstructorKind, Requirement, TypeTraitKind};
-pub use types::{CppType, TypeProperties, TypeTraitResult, TypeTraitEvaluator};
+pub use ast::{
+    AccessSpecifier, BinaryOp, ClangAst, ClangNode, ClangNodeKind, ConstructorKind, Requirement,
+    TypeTraitKind, UnaryOp,
+};
 pub use ast_codegen::AstCodeGen;
+pub use parse::ClangParser;
+pub use types::{CppType, TypeProperties, TypeTraitEvaluator, TypeTraitResult};
 
 use miette::Result;
 use std::path::Path;

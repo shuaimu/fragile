@@ -123,7 +123,10 @@ pub extern "C" fn fragile_pthread_create(
 /// # Returns
 /// 0 on success, error code on failure.
 #[no_mangle]
-pub extern "C" fn fragile_pthread_join(thread: fragile_pthread_t, retval: *mut *mut c_void) -> c_int {
+pub extern "C" fn fragile_pthread_join(
+    thread: fragile_pthread_t,
+    retval: *mut *mut c_void,
+) -> c_int {
     if thread.handle_ptr.is_null() {
         return 22; // EINVAL - no valid handle
     }
@@ -202,7 +205,10 @@ pub extern "C" fn fragile_pthread_attr_destroy(_attr: *mut fragile_pthread_attr_
 
 /// Set detach state in thread attributes.
 #[no_mangle]
-pub extern "C" fn fragile_pthread_attr_setdetachstate(attr: *mut fragile_pthread_attr_t, detachstate: c_int) -> c_int {
+pub extern "C" fn fragile_pthread_attr_setdetachstate(
+    attr: *mut fragile_pthread_attr_t,
+    detachstate: c_int,
+) -> c_int {
     if attr.is_null() {
         return 22; // EINVAL
     }
@@ -214,7 +220,10 @@ pub extern "C" fn fragile_pthread_attr_setdetachstate(attr: *mut fragile_pthread
 
 /// Get detach state from thread attributes.
 #[no_mangle]
-pub extern "C" fn fragile_pthread_attr_getdetachstate(attr: *const fragile_pthread_attr_t, detachstate: *mut c_int) -> c_int {
+pub extern "C" fn fragile_pthread_attr_getdetachstate(
+    attr: *const fragile_pthread_attr_t,
+    detachstate: *mut c_int,
+) -> c_int {
     if attr.is_null() || detachstate.is_null() {
         return 22; // EINVAL
     }

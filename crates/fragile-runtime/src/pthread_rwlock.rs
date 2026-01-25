@@ -202,7 +202,7 @@ pub extern "C" fn fragile_pthread_rwlock_tryrdlock(rwlock: *mut fragile_pthread_
             .state
             .compare_exchange(state, state + 1, Ordering::AcqRel, Ordering::Relaxed)
         {
-            Ok(_) => 0,  // Success
+            Ok(_) => 0,   // Success
             Err(_) => 16, // EBUSY - state changed
         }
     }
@@ -271,7 +271,7 @@ pub extern "C" fn fragile_pthread_rwlock_trywrlock(rwlock: *mut fragile_pthread_
             .state
             .compare_exchange(0, -1, Ordering::AcqRel, Ordering::Relaxed)
         {
-            Ok(_) => 0,  // Success
+            Ok(_) => 0,   // Success
             Err(_) => 16, // EBUSY - lock is held
         }
     }
@@ -333,7 +333,9 @@ pub extern "C" fn fragile_pthread_rwlock_unlock(rwlock: *mut fragile_pthread_rwl
 
 /// Initialize read-write lock attributes with default values.
 #[no_mangle]
-pub extern "C" fn fragile_pthread_rwlockattr_init(attr: *mut fragile_pthread_rwlockattr_t) -> c_int {
+pub extern "C" fn fragile_pthread_rwlockattr_init(
+    attr: *mut fragile_pthread_rwlockattr_t,
+) -> c_int {
     if attr.is_null() {
         return 22; // EINVAL
     }
@@ -345,7 +347,9 @@ pub extern "C" fn fragile_pthread_rwlockattr_init(attr: *mut fragile_pthread_rwl
 
 /// Destroy read-write lock attributes.
 #[no_mangle]
-pub extern "C" fn fragile_pthread_rwlockattr_destroy(_attr: *mut fragile_pthread_rwlockattr_t) -> c_int {
+pub extern "C" fn fragile_pthread_rwlockattr_destroy(
+    _attr: *mut fragile_pthread_rwlockattr_t,
+) -> c_int {
     0 // Nothing to clean up
 }
 
@@ -357,7 +361,10 @@ mod tests {
     fn test_rwlock_init_destroy() {
         let mut rwlock = fragile_pthread_rwlock_t::new();
 
-        assert_eq!(fragile_pthread_rwlock_init(&mut rwlock, std::ptr::null()), 0);
+        assert_eq!(
+            fragile_pthread_rwlock_init(&mut rwlock, std::ptr::null()),
+            0
+        );
         assert!(rwlock.initialized == RWLK_INIT_MARKER);
         assert!(!rwlock.rwlock_ptr.is_null());
 
@@ -369,7 +376,10 @@ mod tests {
     #[test]
     fn test_rwlock_rdlock_unlock() {
         let mut rwlock = fragile_pthread_rwlock_t::new();
-        assert_eq!(fragile_pthread_rwlock_init(&mut rwlock, std::ptr::null()), 0);
+        assert_eq!(
+            fragile_pthread_rwlock_init(&mut rwlock, std::ptr::null()),
+            0
+        );
 
         // Read lock should succeed
         assert_eq!(fragile_pthread_rwlock_rdlock(&mut rwlock), 0);
@@ -383,7 +393,10 @@ mod tests {
     #[test]
     fn test_rwlock_wrlock_unlock() {
         let mut rwlock = fragile_pthread_rwlock_t::new();
-        assert_eq!(fragile_pthread_rwlock_init(&mut rwlock, std::ptr::null()), 0);
+        assert_eq!(
+            fragile_pthread_rwlock_init(&mut rwlock, std::ptr::null()),
+            0
+        );
 
         // Write lock should succeed
         assert_eq!(fragile_pthread_rwlock_wrlock(&mut rwlock), 0);
@@ -397,7 +410,10 @@ mod tests {
     #[test]
     fn test_rwlock_multiple_readers() {
         let mut rwlock = fragile_pthread_rwlock_t::new();
-        assert_eq!(fragile_pthread_rwlock_init(&mut rwlock, std::ptr::null()), 0);
+        assert_eq!(
+            fragile_pthread_rwlock_init(&mut rwlock, std::ptr::null()),
+            0
+        );
 
         // Multiple read locks should succeed
         assert_eq!(fragile_pthread_rwlock_rdlock(&mut rwlock), 0);
@@ -415,7 +431,10 @@ mod tests {
     #[test]
     fn test_rwlock_tryrdlock() {
         let mut rwlock = fragile_pthread_rwlock_t::new();
-        assert_eq!(fragile_pthread_rwlock_init(&mut rwlock, std::ptr::null()), 0);
+        assert_eq!(
+            fragile_pthread_rwlock_init(&mut rwlock, std::ptr::null()),
+            0
+        );
 
         // Try read lock should succeed
         assert_eq!(fragile_pthread_rwlock_tryrdlock(&mut rwlock), 0);
@@ -433,7 +452,10 @@ mod tests {
     #[test]
     fn test_rwlock_trywrlock() {
         let mut rwlock = fragile_pthread_rwlock_t::new();
-        assert_eq!(fragile_pthread_rwlock_init(&mut rwlock, std::ptr::null()), 0);
+        assert_eq!(
+            fragile_pthread_rwlock_init(&mut rwlock, std::ptr::null()),
+            0
+        );
 
         // Try write lock should succeed
         assert_eq!(fragile_pthread_rwlock_trywrlock(&mut rwlock), 0);
@@ -453,7 +475,10 @@ mod tests {
     #[test]
     fn test_rwlock_writer_excludes_readers() {
         let mut rwlock = fragile_pthread_rwlock_t::new();
-        assert_eq!(fragile_pthread_rwlock_init(&mut rwlock, std::ptr::null()), 0);
+        assert_eq!(
+            fragile_pthread_rwlock_init(&mut rwlock, std::ptr::null()),
+            0
+        );
 
         // Acquire read lock
         assert_eq!(fragile_pthread_rwlock_rdlock(&mut rwlock), 0);

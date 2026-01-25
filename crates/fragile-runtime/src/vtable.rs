@@ -24,10 +24,7 @@ pub struct Vtable {
 /// - `obj` must be a valid pointer to a C++ object with a vtable
 /// - `index` must be a valid vtable index
 #[no_mangle]
-pub unsafe extern "C" fn fragile_rt_vfunc_get(
-    obj: *const c_void,
-    index: usize,
-) -> VtableEntry {
+pub unsafe extern "C" fn fragile_rt_vfunc_get(obj: *const c_void, index: usize) -> VtableEntry {
     // First pointer in object is vtable pointer
     let vtable_ptr = *(obj as *const *const VtableEntry);
 
@@ -40,10 +37,7 @@ pub unsafe extern "C" fn fragile_rt_vfunc_get(
 /// # Safety
 /// Same as fragile_rt_vfunc_get.
 #[no_mangle]
-pub unsafe extern "C" fn fragile_rt_vcall_0(
-    obj: *mut c_void,
-    index: usize,
-) {
+pub unsafe extern "C" fn fragile_rt_vcall_0(obj: *mut c_void, index: usize) {
     let func = fragile_rt_vfunc_get(obj, index);
     func(obj);
 }
@@ -53,11 +47,7 @@ pub unsafe extern "C" fn fragile_rt_vcall_0(
 /// # Safety
 /// Same as fragile_rt_vfunc_get.
 #[no_mangle]
-pub unsafe extern "C" fn fragile_rt_vcall_1(
-    obj: *mut c_void,
-    index: usize,
-    arg1: *mut c_void,
-) {
+pub unsafe extern "C" fn fragile_rt_vcall_1(obj: *mut c_void, index: usize, arg1: *mut c_void) {
     type VFunc1 = unsafe extern "C" fn(*mut c_void, *mut c_void);
 
     let func = fragile_rt_vfunc_get(obj, index);
@@ -131,10 +121,7 @@ pub unsafe extern "C" fn fragile_rt_dynamic_cast(
 /// # Safety
 /// Caller must ensure the cast is valid.
 #[no_mangle]
-pub unsafe extern "C" fn fragile_rt_static_cast(
-    obj: *mut c_void,
-    offset: isize,
-) -> *mut c_void {
+pub unsafe extern "C" fn fragile_rt_static_cast(obj: *mut c_void, offset: isize) -> *mut c_void {
     if obj.is_null() {
         return core::ptr::null_mut();
     }
@@ -149,10 +136,7 @@ pub unsafe extern "C" fn fragile_rt_static_cast(
 /// # Safety
 /// `obj` must be a valid pointer with space for a vtable pointer.
 #[no_mangle]
-pub unsafe extern "C" fn fragile_rt_init_vtable(
-    obj: *mut c_void,
-    vtable: *const VtableEntry,
-) {
+pub unsafe extern "C" fn fragile_rt_init_vtable(obj: *mut c_void, vtable: *const VtableEntry) {
     let vtable_slot = obj as *mut *const VtableEntry;
     *vtable_slot = vtable;
 }

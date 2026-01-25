@@ -1,6 +1,6 @@
 //! Integration tests for Clang AST parsing and Rust code generation.
 
-use fragile_clang::{ClangParser, AstCodeGen};
+use fragile_clang::{AstCodeGen, ClangParser};
 
 /// Test parsing a simple add function.
 #[test]
@@ -13,7 +13,9 @@ fn test_parse_add_function() {
         }
     "#;
 
-    let ast = parser.parse_string(source, "add.cpp").expect("Failed to parse");
+    let ast = parser
+        .parse_string(source, "add.cpp")
+        .expect("Failed to parse");
 
     // Check that we got a translation unit
     assert!(matches!(
@@ -36,7 +38,9 @@ fn test_generate_rust_code() {
         }
     "#;
 
-    let ast = parser.parse_string(source, "add.cpp").expect("Failed to parse");
+    let ast = parser
+        .parse_string(source, "add.cpp")
+        .expect("Failed to parse");
     let code = AstCodeGen::new().generate(&ast.translation_unit);
 
     // Check that the generated code contains the function
@@ -63,7 +67,9 @@ fn test_generate_stubs() {
         };
     "#;
 
-    let ast = parser.parse_string(source, "test.cpp").expect("Failed to parse");
+    let ast = parser
+        .parse_string(source, "test.cpp")
+        .expect("Failed to parse");
     let stubs = AstCodeGen::new().generate_stubs(&ast.translation_unit);
 
     // Check that the stubs contain the function declaration
@@ -92,7 +98,9 @@ fn test_end_to_end() {
         }
     "#;
 
-    let ast = parser.parse_string(source, "math.cpp").expect("Failed to parse");
+    let ast = parser
+        .parse_string(source, "math.cpp")
+        .expect("Failed to parse");
     let code = AstCodeGen::new().generate(&ast.translation_unit);
 
     // Verify both functions are generated
@@ -115,7 +123,9 @@ fn test_namespace_function() {
         }
     "#;
 
-    let ast = parser.parse_string(source, "ns.cpp").expect("Failed to parse");
+    let ast = parser
+        .parse_string(source, "ns.cpp")
+        .expect("Failed to parse");
     let code = AstCodeGen::new().generate(&ast.translation_unit);
 
     // Function should be generated
@@ -138,7 +148,9 @@ fn test_control_flow() {
         }
     "#;
 
-    let ast = parser.parse_string(source, "max.cpp").expect("Failed to parse");
+    let ast = parser
+        .parse_string(source, "max.cpp")
+        .expect("Failed to parse");
     let code = AstCodeGen::new().generate(&ast.translation_unit);
 
     // Check natural control flow is preserved
@@ -165,7 +177,9 @@ fn test_while_loop() {
         }
     "#;
 
-    let ast = parser.parse_string(source, "sum.cpp").expect("Failed to parse");
+    let ast = parser
+        .parse_string(source, "sum.cpp")
+        .expect("Failed to parse");
     let code = AstCodeGen::new().generate(&ast.translation_unit);
 
     // Check while loop is preserved
@@ -178,8 +192,8 @@ fn test_while_loop() {
 // ============================================================================
 
 use std::fs;
-use std::process::Command;
 use std::path::PathBuf;
+use std::process::Command;
 
 /// Helper to find the fragile-runtime library path.
 /// Looks in the target directory for the compiled rlib.
@@ -212,11 +226,16 @@ fn find_fragile_runtime_path() -> Option<PathBuf> {
 
 /// Helper function to transpile C++ source, compile with rustc, and run.
 /// Returns (exit_code, stdout, stderr).
-fn transpile_compile_run(cpp_source: &str, filename: &str) -> Result<(i32, String, String), String> {
+fn transpile_compile_run(
+    cpp_source: &str,
+    filename: &str,
+) -> Result<(i32, String, String), String> {
     let parser = ClangParser::new().map_err(|e| format!("Failed to create parser: {}", e))?;
 
     // Parse and generate Rust code
-    let ast = parser.parse_string(cpp_source, filename).map_err(|e| format!("Failed to parse: {}", e))?;
+    let ast = parser
+        .parse_string(cpp_source, filename)
+        .map_err(|e| format!("Failed to parse: {}", e))?;
     let rust_code = AstCodeGen::new().generate(&ast.translation_unit);
 
     // Create temp directory
@@ -260,11 +279,16 @@ fn transpile_compile_run(cpp_source: &str, filename: &str) -> Result<(i32, Strin
 /// Helper function to transpile C++ source, compile with rustc + fragile-runtime, and run.
 /// This version links against fragile-runtime for tests that need runtime support.
 /// Returns (exit_code, stdout, stderr).
-fn transpile_compile_run_with_runtime(cpp_source: &str, filename: &str) -> Result<(i32, String, String), String> {
+fn transpile_compile_run_with_runtime(
+    cpp_source: &str,
+    filename: &str,
+) -> Result<(i32, String, String), String> {
     let parser = ClangParser::new().map_err(|e| format!("Failed to create parser: {}", e))?;
 
     // Parse and generate Rust code
-    let ast = parser.parse_string(cpp_source, filename).map_err(|e| format!("Failed to parse: {}", e))?;
+    let ast = parser
+        .parse_string(cpp_source, filename)
+        .map_err(|e| format!("Failed to parse: {}", e))?;
     let rust_code = AstCodeGen::new().generate(&ast.translation_unit);
 
     // Create temp directory
@@ -291,7 +315,10 @@ fn transpile_compile_run_with_runtime(cpp_source: &str, filename: &str) -> Resul
         .arg("-L")
         .arg(runtime_path.join("deps"))
         .arg("--extern")
-        .arg(format!("fragile_runtime={}/libfragile_runtime.rlib", runtime_path.display()))
+        .arg(format!(
+            "fragile_runtime={}/libfragile_runtime.rlib",
+            runtime_path.display()
+        ))
         .output()
         .map_err(|e| format!("Failed to run rustc: {}", e))?;
 
@@ -329,8 +356,8 @@ fn test_e2e_simple_add() {
         }
     "#;
 
-    let (exit_code, _stdout, _stderr) = transpile_compile_run(source, "e2e_add.cpp")
-        .expect("E2E test failed");
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_add.cpp").expect("E2E test failed");
 
     assert_eq!(exit_code, 0, "add(5, 7) should equal 12");
 }
@@ -355,8 +382,8 @@ fn test_e2e_factorial() {
         }
     "#;
 
-    let (exit_code, _stdout, _stderr) = transpile_compile_run(source, "e2e_factorial.cpp")
-        .expect("E2E test failed");
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_factorial.cpp").expect("E2E test failed");
 
     assert_eq!(exit_code, 0, "factorial(5) should equal 120");
 }
@@ -384,8 +411,8 @@ fn test_e2e_while_loop() {
         }
     "#;
 
-    let (exit_code, _stdout, _stderr) = transpile_compile_run(source, "e2e_while.cpp")
-        .expect("E2E test failed");
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_while.cpp").expect("E2E test failed");
 
     assert_eq!(exit_code, 0, "sum_to_n(10) should equal 55");
 }
@@ -410,8 +437,8 @@ fn test_e2e_for_loop() {
         }
     "#;
 
-    let (exit_code, _stdout, _stderr) = transpile_compile_run(source, "e2e_for.cpp")
-        .expect("E2E test failed");
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_for.cpp").expect("E2E test failed");
 
     assert_eq!(exit_code, 0, "sum_for(10) should equal 55");
 }
@@ -445,8 +472,8 @@ fn test_e2e_struct_methods() {
         }
     "#;
 
-    let (exit_code, _stdout, _stderr) = transpile_compile_run(source, "e2e_struct.cpp")
-        .expect("E2E test failed");
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_struct.cpp").expect("E2E test failed");
 
     assert_eq!(exit_code, 0, "Counter should increment to 3");
 }
@@ -478,8 +505,8 @@ fn test_e2e_arrays() {
         }
     "#;
 
-    let (exit_code, _stdout, _stderr) = transpile_compile_run(source, "e2e_arrays.cpp")
-        .expect("E2E test failed");
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_arrays.cpp").expect("E2E test failed");
 
     assert_eq!(exit_code, 0, "sum_array should equal 15");
 }
@@ -505,8 +532,8 @@ fn test_e2e_pointers() {
         }
     "#;
 
-    let (exit_code, _stdout, _stderr) = transpile_compile_run(source, "e2e_pointers.cpp")
-        .expect("E2E test failed");
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_pointers.cpp").expect("E2E test failed");
 
     assert_eq!(exit_code, 0, "swap should exchange x and y");
 }
@@ -530,8 +557,8 @@ fn test_e2e_references() {
         }
     "#;
 
-    let (exit_code, _stdout, _stderr) = transpile_compile_run(source, "e2e_references.cpp")
-        .expect("E2E test failed");
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_references.cpp").expect("E2E test failed");
 
     assert_eq!(exit_code, 0, "val should be incremented twice to 7");
 }
@@ -567,8 +594,8 @@ fn test_e2e_nested_control() {
         }
     "#;
 
-    let (exit_code, _stdout, _stderr) = transpile_compile_run(source, "e2e_prime.cpp")
-        .expect("E2E test failed");
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_prime.cpp").expect("E2E test failed");
 
     assert_eq!(exit_code, 0, "There should be 8 primes between 1 and 20");
 }
@@ -600,8 +627,8 @@ fn test_e2e_constructor() {
         }
     "#;
 
-    let (exit_code, _stdout, _stderr) = transpile_compile_run(source, "e2e_constructor.cpp")
-        .expect("E2E test failed");
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_constructor.cpp").expect("E2E test failed");
 
     assert_eq!(exit_code, 0, "Point(3,4).distance_sq() should be 25");
 }
@@ -623,8 +650,8 @@ fn test_e2e_nullptr() {
         }
     "#;
 
-    let (exit_code, _stdout, _stderr) = transpile_compile_run(source, "e2e_nullptr.cpp")
-        .expect("E2E test failed");
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_nullptr.cpp").expect("E2E test failed");
 
     assert_eq!(exit_code, 0, "nullptr should be handled correctly");
 }
@@ -647,8 +674,8 @@ fn test_e2e_casts() {
         }
     "#;
 
-    let (exit_code, _stdout, _stderr) = transpile_compile_run(source, "e2e_casts.cpp")
-        .expect("E2E test failed");
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_casts.cpp").expect("E2E test failed");
 
     assert_eq!(exit_code, 0, "static_cast<int>(3.7) should equal 3");
 }
@@ -668,8 +695,8 @@ fn test_e2e_new_delete() {
         }
     "#;
 
-    let (exit_code, _stdout, _stderr) = transpile_compile_run(source, "e2e_new_delete.cpp")
-        .expect("E2E test failed");
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_new_delete.cpp").expect("E2E test failed");
 
     assert_eq!(exit_code, 0, "new int(42) should create value 42");
 }
@@ -691,10 +718,13 @@ fn test_e2e_array_new_delete() {
         }
     "#;
 
-    let (exit_code, _stdout, _stderr) = transpile_compile_run(source, "e2e_array_new.cpp")
-        .expect("E2E test failed");
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_array_new.cpp").expect("E2E test failed");
 
-    assert_eq!(exit_code, 0, "new int[5] should create array that can be indexed");
+    assert_eq!(
+        exit_code, 0,
+        "new int[5] should create array that can be indexed"
+    );
 }
 
 /// E2E test: Single inheritance
@@ -720,10 +750,13 @@ fn test_e2e_inheritance() {
         }
     "#;
 
-    let (exit_code, _stdout, _stderr) = transpile_compile_run(source, "e2e_inheritance.cpp")
-        .expect("E2E test failed");
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_inheritance.cpp").expect("E2E test failed");
 
-    assert_eq!(exit_code, 0, "Inheritance should embed base struct as __base field");
+    assert_eq!(
+        exit_code, 0,
+        "Inheritance should embed base struct as __base field"
+    );
 }
 
 /// E2E test: Destructor → Drop trait
@@ -757,10 +790,13 @@ fn test_e2e_destructor() {
         }
     "#;
 
-    let (exit_code, _stdout, _stderr) = transpile_compile_run(source, "e2e_destructor.cpp")
-        .expect("E2E test failed");
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_destructor.cpp").expect("E2E test failed");
 
-    assert_eq!(exit_code, 0, "Struct with destructor should compile and run");
+    assert_eq!(
+        exit_code, 0,
+        "Struct with destructor should compile and run"
+    );
 }
 
 #[test]
@@ -802,10 +838,13 @@ fn test_e2e_copy_constructor() {
         }
     "#;
 
-    let (exit_code, _stdout, _stderr) = transpile_compile_run(source, "e2e_copy_ctor.cpp")
-        .expect("E2E test failed");
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_copy_ctor.cpp").expect("E2E test failed");
 
-    assert_eq!(exit_code, 0, "Struct with copy constructor should compile and run");
+    assert_eq!(
+        exit_code, 0,
+        "Struct with copy constructor should compile and run"
+    );
 }
 
 #[test]
@@ -839,8 +878,8 @@ fn test_e2e_exception_handling() {
         }
     "#;
 
-    let (exit_code, _stdout, _stderr) = transpile_compile_run(source, "e2e_exception.cpp")
-        .expect("E2E test failed");
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_exception.cpp").expect("E2E test failed");
 
     assert_eq!(exit_code, 0, "Exception handling should compile and run");
 }
@@ -870,8 +909,8 @@ fn test_e2e_namespaces() {
         }
     "#;
 
-    let (exit_code, _stdout, _stderr) = transpile_compile_run(source, "e2e_namespace.cpp")
-        .expect("E2E test failed");
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_namespace.cpp").expect("E2E test failed");
 
     assert_eq!(exit_code, 0, "Namespace functions should compile and run");
 }
@@ -908,10 +947,13 @@ fn test_e2e_virtual_override() {
         }
     "#;
 
-    let (exit_code, _stdout, _stderr) = transpile_compile_run(source, "e2e_virtual_override.cpp")
-        .expect("E2E test failed");
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_virtual_override.cpp").expect("E2E test failed");
 
-    assert_eq!(exit_code, 0, "Virtual method override should work correctly");
+    assert_eq!(
+        exit_code, 0,
+        "Virtual method override should work correctly"
+    );
 }
 
 /// Test base class constructor delegation.
@@ -942,10 +984,13 @@ fn test_e2e_base_constructor() {
         }
     "#;
 
-    let (exit_code, _stdout, _stderr) = transpile_compile_run(source, "e2e_base_constructor.cpp")
-        .expect("E2E test failed");
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_base_constructor.cpp").expect("E2E test failed");
 
-    assert_eq!(exit_code, 0, "Base class constructor delegation should work");
+    assert_eq!(
+        exit_code, 0,
+        "Base class constructor delegation should work"
+    );
 }
 
 /// Test operator overloading.
@@ -978,8 +1023,8 @@ fn test_e2e_operator_overloading() {
         }
     "#;
 
-    let (exit_code, _stdout, _stderr) = transpile_compile_run(source, "e2e_operator_overloading.cpp")
-        .expect("E2E test failed");
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_operator_overloading.cpp").expect("E2E test failed");
 
     assert_eq!(exit_code, 0, "Operator overloading should work correctly");
 }
@@ -1019,10 +1064,13 @@ fn test_e2e_dynamic_dispatch() {
         }
     "#;
 
-    let (exit_code, _stdout, _stderr) = transpile_compile_run(source, "e2e_dynamic_dispatch.cpp")
-        .expect("E2E test failed");
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_dynamic_dispatch.cpp").expect("E2E test failed");
 
-    assert_eq!(exit_code, 0, "Dynamic dispatch should correctly call derived class methods");
+    assert_eq!(
+        exit_code, 0,
+        "Dynamic dispatch should correctly call derived class methods"
+    );
 }
 
 /// Test function returning struct (rvalue handling).
@@ -1049,10 +1097,14 @@ fn test_e2e_function_returning_struct() {
         }
     "#;
 
-    let (exit_code, _stdout, _stderr) = transpile_compile_run(source, "e2e_function_returning_struct.cpp")
-        .expect("E2E test failed");
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_function_returning_struct.cpp")
+            .expect("E2E test failed");
 
-    assert_eq!(exit_code, 0, "Function returning struct should work correctly");
+    assert_eq!(
+        exit_code, 0,
+        "Function returning struct should work correctly"
+    );
 }
 
 /// Test multiple inheritance.
@@ -1093,10 +1145,13 @@ fn test_e2e_multiple_inheritance() {
         }
     "#;
 
-    let (exit_code, _stdout, _stderr) = transpile_compile_run(source, "e2e_multiple_inheritance.cpp")
-        .expect("E2E test failed");
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_multiple_inheritance.cpp").expect("E2E test failed");
 
-    assert_eq!(exit_code, 0, "Multiple inheritance should work correctly with access to both base classes");
+    assert_eq!(
+        exit_code, 0,
+        "Multiple inheritance should work correctly with access to both base classes"
+    );
 }
 
 /// Test enum class (scoped enums).
@@ -1117,10 +1172,13 @@ fn test_e2e_enum_class() {
         }
     "#;
 
-    let (exit_code, _stdout, _stderr) = transpile_compile_run(source, "e2e_enum_class.cpp")
-        .expect("E2E test failed");
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_enum_class.cpp").expect("E2E test failed");
 
-    assert_eq!(exit_code, 0, "Enum class should work correctly with scoped access");
+    assert_eq!(
+        exit_code, 0,
+        "Enum class should work correctly with scoped access"
+    );
 }
 
 /// Test static class members.
@@ -1149,8 +1207,8 @@ fn test_e2e_static_members() {
         }
     "#;
 
-    let (exit_code, _stdout, _stderr) = transpile_compile_run(source, "e2e_static_members.cpp")
-        .expect("E2E test failed");
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_static_members.cpp").expect("E2E test failed");
 
     assert_eq!(exit_code, 0, "Static class members should work correctly");
 }
@@ -1173,10 +1231,13 @@ fn test_e2e_lambda_basic() {
         }
     "#;
 
-    let (exit_code, _stdout, _stderr) = transpile_compile_run(source, "e2e_lambda_basic.cpp")
-        .expect("E2E test failed");
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_lambda_basic.cpp").expect("E2E test failed");
 
-    assert_eq!(exit_code, 0, "Basic lambda expressions should work correctly");
+    assert_eq!(
+        exit_code, 0,
+        "Basic lambda expressions should work correctly"
+    );
 }
 
 /// Test lambda captures (by value and by reference).
@@ -1203,8 +1264,8 @@ fn test_e2e_lambda_captures() {
         }
     "#;
 
-    let (exit_code, _stdout, _stderr) = transpile_compile_run(source, "e2e_lambda_captures.cpp")
-        .expect("E2E test failed");
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_lambda_captures.cpp").expect("E2E test failed");
 
     assert_eq!(exit_code, 0, "Lambda captures should work correctly");
 }
@@ -1229,10 +1290,13 @@ fn test_e2e_generic_lambda() {
         }
     "#;
 
-    let (exit_code, _stdout, _stderr) = transpile_compile_run(source, "e2e_generic_lambda.cpp")
-        .expect("E2E test failed");
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_generic_lambda.cpp").expect("E2E test failed");
 
-    assert_eq!(exit_code, 0, "Generic lambdas with single type usage should work");
+    assert_eq!(
+        exit_code, 0,
+        "Generic lambdas with single type usage should work"
+    );
 }
 
 /// Test E2E: Range-based for loops
@@ -1254,10 +1318,13 @@ fn test_e2e_range_for() {
         }
     "#;
 
-    let (exit_code, _stdout, _stderr) = transpile_compile_run(source, "e2e_range_for.cpp")
-        .expect("E2E test failed");
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_range_for.cpp").expect("E2E test failed");
 
-    assert_eq!(exit_code, 0, "Range-based for loop should iterate over array");
+    assert_eq!(
+        exit_code, 0,
+        "Range-based for loop should iterate over array"
+    );
 }
 
 /// Test E2E: Increment/decrement operators (prefix and postfix)
@@ -1278,10 +1345,13 @@ fn test_e2e_increment_decrement() {
         }
     "#;
 
-    let (exit_code, _stdout, _stderr) = transpile_compile_run(source, "e2e_increment_decrement.cpp")
-        .expect("E2E test failed");
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_increment_decrement.cpp").expect("E2E test failed");
 
-    assert_eq!(exit_code, 0, "Increment/decrement operators should work correctly");
+    assert_eq!(
+        exit_code, 0,
+        "Increment/decrement operators should work correctly"
+    );
 }
 
 /// Test E2E: Default function parameters
@@ -1304,10 +1374,13 @@ fn test_e2e_default_params() {
         }
     "#;
 
-    let (exit_code, _stdout, _stderr) = transpile_compile_run(source, "e2e_default_params.cpp")
-        .expect("E2E test failed");
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_default_params.cpp").expect("E2E test failed");
 
-    assert_eq!(exit_code, 0, "Default function parameters should be evaluated correctly");
+    assert_eq!(
+        exit_code, 0,
+        "Default function parameters should be evaluated correctly"
+    );
 }
 
 /// Test E2E: Const vs non-const methods (mut self detection)
@@ -1338,10 +1411,13 @@ fn test_e2e_const_methods() {
         }
     "#;
 
-    let (exit_code, _stdout, _stderr) = transpile_compile_run(source, "e2e_const_methods.cpp")
-        .expect("E2E test failed");
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_const_methods.cpp").expect("E2E test failed");
 
-    assert_eq!(exit_code, 0, "Const methods should use &self, non-const should use &mut self");
+    assert_eq!(
+        exit_code, 0,
+        "Const methods should use &self, non-const should use &mut self"
+    );
 }
 
 /// Test E2E: Switch statements (including fallthrough)
@@ -1376,10 +1452,13 @@ fn test_e2e_switch() {
         }
     "#;
 
-    let (exit_code, _stdout, _stderr) = transpile_compile_run(source, "e2e_switch.cpp")
-        .expect("E2E test failed");
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_switch.cpp").expect("E2E test failed");
 
-    assert_eq!(exit_code, 0, "Switch statements with fallthrough should work correctly");
+    assert_eq!(
+        exit_code, 0,
+        "Switch statements with fallthrough should work correctly"
+    );
 }
 
 /// Test E2E: Comma operator
@@ -1397,10 +1476,13 @@ fn test_e2e_comma_operator() {
         }
     "#;
 
-    let (exit_code, _stdout, _stderr) = transpile_compile_run(source, "e2e_comma_operator.cpp")
-        .expect("E2E test failed");
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_comma_operator.cpp").expect("E2E test failed");
 
-    assert_eq!(exit_code, 0, "Comma operator should evaluate both expressions and return the last");
+    assert_eq!(
+        exit_code, 0,
+        "Comma operator should evaluate both expressions and return the last"
+    );
 }
 
 /// Test E2E: Typedef type aliases
@@ -1420,8 +1502,8 @@ fn test_e2e_typedef() {
         }
     "#;
 
-    let (exit_code, _stdout, _stderr) = transpile_compile_run(source, "e2e_typedef.cpp")
-        .expect("E2E test failed");
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_typedef.cpp").expect("E2E test failed");
 
     assert_eq!(exit_code, 0, "Typedef type aliases should work correctly");
 }
@@ -1447,10 +1529,13 @@ fn test_e2e_global_var() {
         }
     "#;
 
-    let (exit_code, _stdout, _stderr) = transpile_compile_run(source, "e2e_global_var.cpp")
-        .expect("E2E test failed");
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_global_var.cpp").expect("E2E test failed");
 
-    assert_eq!(exit_code, 0, "Global variables should work with unsafe access");
+    assert_eq!(
+        exit_code, 0,
+        "Global variables should work with unsafe access"
+    );
 }
 
 /// Test E2E: Global arrays
@@ -1475,10 +1560,13 @@ fn test_e2e_global_array() {
         }
     "#;
 
-    let (exit_code, _stdout, _stderr) = transpile_compile_run(source, "e2e_global_array.cpp")
-        .expect("E2E test failed");
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_global_array.cpp").expect("E2E test failed");
 
-    assert_eq!(exit_code, 0, "Global arrays should work with unsafe access and proper initialization");
+    assert_eq!(
+        exit_code, 0,
+        "Global arrays should work with unsafe access and proper initialization"
+    );
 }
 
 /// Test virtual diamond inheritance - ensures virtual base class is shared.
@@ -1526,10 +1614,13 @@ fn test_e2e_virtual_diamond() {
         }
     "#;
 
-    let (exit_code, _stdout, _stderr) = transpile_compile_run(source, "e2e_virtual_diamond.cpp")
-        .expect("E2E test failed");
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_virtual_diamond.cpp").expect("E2E test failed");
 
-    assert_eq!(exit_code, 0, "Virtual diamond inheritance should share a single virtual base instance");
+    assert_eq!(
+        exit_code, 0,
+        "Virtual diamond inheritance should share a single virtual base instance"
+    );
 }
 
 /// Test namespace function call path resolution.
@@ -1562,10 +1653,13 @@ fn test_e2e_namespace_path_resolution() {
         }
     "#;
 
-    let (exit_code, _stdout, _stderr) = transpile_compile_run(source, "e2e_namespace_path.cpp")
-        .expect("E2E test failed");
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_namespace_path.cpp").expect("E2E test failed");
 
-    assert_eq!(exit_code, 0, "Namespace function calls should use correct relative paths");
+    assert_eq!(
+        exit_code, 0,
+        "Namespace function calls should use correct relative paths"
+    );
 }
 
 /// Test function call operator (functor/callable object).
@@ -1589,10 +1683,13 @@ fn test_e2e_functor() {
         }
     "#;
 
-    let (exit_code, _stdout, _stderr) = transpile_compile_run(source, "e2e_functor.cpp")
-        .expect("E2E test failed");
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_functor.cpp").expect("E2E test failed");
 
-    assert_eq!(exit_code, 0, "Function call operator should work with arguments");
+    assert_eq!(
+        exit_code, 0,
+        "Function call operator should work with arguments"
+    );
 }
 
 /// Test constructor body statements (non-initializer assignments).
@@ -1622,10 +1719,13 @@ fn test_e2e_ctor_body_stmts() {
         }
     "#;
 
-    let (exit_code, _stdout, _stderr) = transpile_compile_run(source, "e2e_ctor_body.cpp")
-        .expect("E2E test failed");
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_ctor_body.cpp").expect("E2E test failed");
 
-    assert_eq!(exit_code, 0, "Constructor body statements should execute correctly");
+    assert_eq!(
+        exit_code, 0,
+        "Constructor body statements should execute correctly"
+    );
 }
 
 /// Test subscript operator [] (returns mutable reference, correct argument passing).
@@ -1666,10 +1766,13 @@ fn test_e2e_subscript_operator() {
         }
     "#;
 
-    let (exit_code, _stdout, _stderr) = transpile_compile_run(source, "e2e_subscript.cpp")
-        .expect("E2E test failed");
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_subscript.cpp").expect("E2E test failed");
 
-    assert_eq!(exit_code, 0, "Subscript operator should work with reads and writes");
+    assert_eq!(
+        exit_code, 0,
+        "Subscript operator should work with reads and writes"
+    );
 }
 
 /// Test assignment operators (=, +=, -=) for custom types.
@@ -1719,8 +1822,8 @@ fn test_e2e_assignment_operators() {
         }
     "#;
 
-    let (exit_code, _stdout, _stderr) = transpile_compile_run(source, "e2e_assign_ops.cpp")
-        .expect("E2E test failed");
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_assign_ops.cpp").expect("E2E test failed");
 
     assert_eq!(exit_code, 0, "Assignment operators should work correctly");
 }
@@ -1761,10 +1864,13 @@ fn test_e2e_deref_operator() {
         }
     "#;
 
-    let (exit_code, _stdout, _stderr) = transpile_compile_run(source, "e2e_deref_op.cpp")
-        .expect("E2E test failed");
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_deref_op.cpp").expect("E2E test failed");
 
-    assert_eq!(exit_code, 0, "Dereference operator should work with reads and writes");
+    assert_eq!(
+        exit_code, 0,
+        "Dereference operator should work with reads and writes"
+    );
 }
 
 /// Test arrow operator -> for smart pointer types.
@@ -1805,10 +1911,13 @@ fn test_e2e_arrow_operator() {
         }
     "#;
 
-    let (exit_code, _stdout, _stderr) = transpile_compile_run(source, "e2e_arrow_op.cpp")
-        .expect("E2E test failed");
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_arrow_op.cpp").expect("E2E test failed");
 
-    assert_eq!(exit_code, 0, "Arrow operator should work for member access and method calls");
+    assert_eq!(
+        exit_code, 0,
+        "Arrow operator should work for member access and method calls"
+    );
 }
 
 /// Test sizeof and alignof operators.
@@ -1850,10 +1959,13 @@ fn test_e2e_sizeof_alignof() {
         }
     "#;
 
-    let (exit_code, _stdout, _stderr) = transpile_compile_run(source, "e2e_sizeof_alignof.cpp")
-        .expect("E2E test failed");
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_sizeof_alignof.cpp").expect("E2E test failed");
 
-    assert_eq!(exit_code, 0, "sizeof and alignof should be evaluated at compile time");
+    assert_eq!(
+        exit_code, 0,
+        "sizeof and alignof should be evaluated at compile time"
+    );
 }
 
 /// Test string literals and implicit char-to-int casts.
@@ -1881,10 +1993,13 @@ fn test_e2e_string_literals_and_char_casts() {
         }
     "#;
 
-    let (exit_code, _stdout, _stderr) = transpile_compile_run(source, "e2e_string_char.cpp")
-        .expect("E2E test failed");
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_string_char.cpp").expect("E2E test failed");
 
-    assert_eq!(exit_code, 0, "String literals and char casts should work correctly");
+    assert_eq!(
+        exit_code, 0,
+        "String literals and char casts should work correctly"
+    );
 }
 
 /// E2E test: Designated initializers (C++20)
@@ -1920,10 +2035,13 @@ fn test_e2e_designated_initializers() {
         }
     "#;
 
-    let (exit_code, _stdout, _stderr) = transpile_compile_run(source, "e2e_designated_init.cpp")
-        .expect("E2E test failed");
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_designated_init.cpp").expect("E2E test failed");
 
-    assert_eq!(exit_code, 0, "Designated initializers should work correctly");
+    assert_eq!(
+        exit_code, 0,
+        "Designated initializers should work correctly"
+    );
 }
 
 /// E2E test: Function pointers
@@ -1985,8 +2103,8 @@ fn test_e2e_function_pointers() {
         }
     "#;
 
-    let (exit_code, _stdout, _stderr) = transpile_compile_run(source, "e2e_function_pointers.cpp")
-        .expect("E2E test failed");
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_function_pointers.cpp").expect("E2E test failed");
 
     assert_eq!(exit_code, 0, "Function pointers should work correctly");
 }
@@ -2030,8 +2148,8 @@ fn test_e2e_std_get() {
         }
     "#;
 
-    let (exit_code, _stdout, _stderr) = transpile_compile_run(source, "e2e_std_get.cpp")
-        .expect("E2E test failed");
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_std_get.cpp").expect("E2E test failed");
 
     assert_eq!(exit_code, 0, "std::get on variant should work correctly");
 }
@@ -2066,8 +2184,8 @@ fn test_e2e_std_visit() {
         }
     "#;
 
-    let (exit_code, _stdout, _stderr) = transpile_compile_run(source, "e2e_std_visit.cpp")
-        .expect("E2E test failed");
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_std_visit.cpp").expect("E2E test failed");
 
     assert_eq!(exit_code, 0, "std::visit on variant should work correctly");
 }
@@ -2094,10 +2212,13 @@ fn test_e2e_anonymous_namespace() {
         }
     "#;
 
-    let (exit_code, _stdout, _stderr) = transpile_compile_run(source, "e2e_anon_namespace.cpp")
-        .expect("E2E test failed");
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_anon_namespace.cpp").expect("E2E test failed");
 
-    assert_eq!(exit_code, 0, "Anonymous namespace items should be accessible");
+    assert_eq!(
+        exit_code, 0,
+        "Anonymous namespace items should be accessible"
+    );
 }
 
 #[test]
@@ -2133,10 +2254,13 @@ fn test_e2e_anonymous_struct() {
         }
     "#;
 
-    let (exit_code, _stdout, _stderr) = transpile_compile_run(source, "e2e_anon_struct.cpp")
-        .expect("E2E test failed");
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_anon_struct.cpp").expect("E2E test failed");
 
-    assert_eq!(exit_code, 30, "Anonymous struct fields should be flattened and accessible");
+    assert_eq!(
+        exit_code, 30,
+        "Anonymous struct fields should be flattened and accessible"
+    );
 }
 
 #[test]
@@ -2171,10 +2295,13 @@ fn test_e2e_anonymous_union() {
         }
     "#;
 
-    let (exit_code, _stdout, _stderr) = transpile_compile_run(source, "e2e_anon_union.cpp")
-        .expect("E2E test failed");
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_anon_union.cpp").expect("E2E test failed");
 
-    assert_eq!(exit_code, 42, "Anonymous union fields should be flattened and accessible");
+    assert_eq!(
+        exit_code, 42,
+        "Anonymous union fields should be flattened and accessible"
+    );
 }
 
 #[test]
@@ -2213,10 +2340,13 @@ fn test_e2e_access_specifiers() {
         }
     "#;
 
-    let (exit_code, _stdout, _stderr) = transpile_compile_run(source, "e2e_access_specifiers.cpp")
-        .expect("E2E test failed");
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_access_specifiers.cpp").expect("E2E test failed");
 
-    assert_eq!(exit_code, 60, "Access specifiers should generate appropriate visibility");
+    assert_eq!(
+        exit_code, 60,
+        "Access specifiers should generate appropriate visibility"
+    );
 }
 
 // =============================================================================
@@ -2235,7 +2365,11 @@ fn transpile_with_vendored_libcxx(cpp_source: &str, filename: &str) -> (bool, St
     let parser = match ClangParser::with_vendored_libcxx() {
         Ok(p) => p,
         Err(e) => {
-            return (false, String::new(), format!("Failed to create parser with vendored libc++: {}", e));
+            return (
+                false,
+                String::new(),
+                format!("Failed to create parser with vendored libc++: {}", e),
+            );
         }
     };
 
@@ -2245,9 +2379,7 @@ fn transpile_with_vendored_libcxx(cpp_source: &str, filename: &str) -> (bool, St
             let rust_code = AstCodeGen::new().generate(&ast.translation_unit);
             (true, rust_code, String::new())
         }
-        Err(e) => {
-            (false, String::new(), format!("Parse error: {}", e))
-        }
+        Err(e) => (false, String::new(), format!("Parse error: {}", e)),
     }
 }
 
@@ -2285,7 +2417,11 @@ fn test_libcxx_vector_transpilation() {
     if !rust_code.is_empty() {
         // Only print first 2000 chars to avoid overwhelming output
         let preview = if rust_code.len() > 2000 {
-            format!("{}...\n[truncated, {} more chars]", &rust_code[..2000], rust_code.len() - 2000)
+            format!(
+                "{}...\n[truncated, {} more chars]",
+                &rust_code[..2000],
+                rust_code.len() - 2000
+            )
         } else {
             rust_code.clone()
         };
@@ -2294,7 +2430,10 @@ fn test_libcxx_vector_transpilation() {
 
     // For now, we just check that the transpiler doesn't crash
     // Later tests will verify the code compiles and runs
-    assert!(success || !errors.is_empty(), "Should either succeed or report errors, not crash");
+    assert!(
+        success || !errors.is_empty(),
+        "Should either succeed or report errors, not crash"
+    );
 }
 
 /// Test 23.1.3.1: Transpile minimal <cstddef> (just typedefs)
@@ -2327,7 +2466,10 @@ fn test_libcxx_cstddef_transpilation() {
         println!("Generated Rust code:\n{}", rust_code);
     }
 
-    assert!(success || !errors.is_empty(), "Should either succeed or report errors");
+    assert!(
+        success || !errors.is_empty(),
+        "Should either succeed or report errors"
+    );
 }
 
 /// Test 23.1.3.2: Transpile <cstdint> (integer types)
@@ -2366,7 +2508,10 @@ fn test_libcxx_cstdint_transpilation() {
         println!("Generated Rust code:\n{}", rust_code);
     }
 
-    assert!(success || !errors.is_empty(), "Should either succeed or report errors");
+    assert!(
+        success || !errors.is_empty(),
+        "Should either succeed or report errors"
+    );
 }
 
 /// Test 23.1.3.3: Transpile <initializer_list> (simple container)
@@ -2410,7 +2555,10 @@ fn test_libcxx_initializer_list_transpilation() {
         println!("Generated Rust code:\n{}", preview);
     }
 
-    assert!(success || !errors.is_empty(), "Should either succeed or report errors");
+    assert!(
+        success || !errors.is_empty(),
+        "Should either succeed or report errors"
+    );
 }
 
 /// Test 23.1.3.4: Transpile <type_traits> (template metaprogramming)
@@ -2436,7 +2584,8 @@ fn test_libcxx_type_traits_transpilation() {
         }
     "#;
 
-    let (success, rust_code, errors) = transpile_with_vendored_libcxx(source, "test_type_traits.cpp");
+    let (success, rust_code, errors) =
+        transpile_with_vendored_libcxx(source, "test_type_traits.cpp");
 
     println!("=== libc++ type_traits transpilation test ===");
     println!("Transpilation success: {}", success);
@@ -2452,7 +2601,10 @@ fn test_libcxx_type_traits_transpilation() {
         println!("Generated Rust code:\n{}", preview);
     }
 
-    assert!(success || !errors.is_empty(), "Should either succeed or report errors");
+    assert!(
+        success || !errors.is_empty(),
+        "Should either succeed or report errors"
+    );
 }
 
 /// Test 23.4: Attempt to compile transpiled libc++ code with rustc.
@@ -2474,7 +2626,8 @@ fn test_libcxx_cstddef_compilation() {
         }
     "#;
 
-    let (success, rust_code, errors) = transpile_with_vendored_libcxx(source, "compile_cstddef.cpp");
+    let (success, rust_code, errors) =
+        transpile_with_vendored_libcxx(source, "compile_cstddef.cpp");
 
     if !success {
         println!("Transpilation failed: {}", errors);
@@ -2508,7 +2661,12 @@ fn test_libcxx_cstddef_compilation() {
 
         // Show first few errors
         let lines: Vec<&str> = stderr.lines().collect();
-        let preview = lines.iter().take(50).cloned().collect::<Vec<_>>().join("\n");
+        let preview = lines
+            .iter()
+            .take(50)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("\n");
         println!("First 50 lines of compiler output:\n{}", preview);
     }
 
@@ -2598,8 +2756,8 @@ fn main() {
     fs::write(&rs_path, rust_code).expect("Failed to write Rust source");
 
     // Find fragile-runtime library path
-    let runtime_path = find_fragile_runtime_path()
-        .expect("Could not find fragile-runtime library path");
+    let runtime_path =
+        find_fragile_runtime_path().expect("Could not find fragile-runtime library path");
 
     // Compile with rustc, linking against fragile-runtime
     let binary_path = temp_dir.join("runtime_file_io");
@@ -2613,7 +2771,10 @@ fn main() {
         .arg("-L")
         .arg(runtime_path.join("deps"))
         .arg("--extern")
-        .arg(format!("fragile_runtime={}/libfragile_runtime.rlib", runtime_path.display()))
+        .arg(format!(
+            "fragile_runtime={}/libfragile_runtime.rlib",
+            runtime_path.display()
+        ))
         .output()
         .expect("Failed to run rustc");
 
@@ -2721,8 +2882,8 @@ fn main() {
     fs::write(&rs_path, rust_code).expect("Failed to write Rust source");
 
     // Find fragile-runtime library path
-    let runtime_path = find_fragile_runtime_path()
-        .expect("Could not find fragile-runtime library path");
+    let runtime_path =
+        find_fragile_runtime_path().expect("Could not find fragile-runtime library path");
 
     // Compile with rustc, linking against fragile-runtime
     let binary_path = temp_dir.join("runtime_pthread");
@@ -2736,7 +2897,10 @@ fn main() {
         .arg("-L")
         .arg(runtime_path.join("deps"))
         .arg("--extern")
-        .arg(format!("fragile_runtime={}/libfragile_runtime.rlib", runtime_path.display()))
+        .arg(format!(
+            "fragile_runtime={}/libfragile_runtime.rlib",
+            runtime_path.display()
+        ))
         .output()
         .expect("Failed to run rustc");
 
@@ -2788,7 +2952,9 @@ fn test_runtime_function_name_mapping() {
         }
     "#;
 
-    let ast = parser.parse_string(source, "pthread_test.cpp").expect("Failed to parse");
+    let ast = parser
+        .parse_string(source, "pthread_test.cpp")
+        .expect("Failed to parse");
     let rust_code = AstCodeGen::new().generate(&ast.translation_unit);
 
     // Check that pthread_create is mapped to fragile_runtime
@@ -2815,7 +2981,9 @@ fn test_runtime_function_name_mapping() {
         }
     "#;
 
-    let ast2 = parser.parse_string(source2, "stdio_test.cpp").expect("Failed to parse");
+    let ast2 = parser
+        .parse_string(source2, "stdio_test.cpp")
+        .expect("Failed to parse");
     let rust_code2 = AstCodeGen::new().generate(&ast2.translation_unit);
 
     // Check that fopen is mapped to fragile_runtime
@@ -2828,8 +2996,22 @@ fn test_runtime_function_name_mapping() {
     );
 
     println!("=== Runtime function name mapping test ===");
-    println!("pthread mapping: {}", if rust_code.contains("fragile_runtime::fragile_pthread_create") { "OK" } else { "Not triggered (header not parsed)" });
-    println!("stdio mapping: {}", if rust_code2.contains("fragile_runtime::fopen") { "OK" } else { "Not triggered (header not parsed)" });
+    println!(
+        "pthread mapping: {}",
+        if rust_code.contains("fragile_runtime::fragile_pthread_create") {
+            "OK"
+        } else {
+            "Not triggered (header not parsed)"
+        }
+    );
+    println!(
+        "stdio mapping: {}",
+        if rust_code2.contains("fragile_runtime::fopen") {
+            "OK"
+        } else {
+            "Not triggered (header not parsed)"
+        }
+    );
 }
 
 /// Test 23.7: Verify operator new/delete are correctly mapped to fragile-runtime.
@@ -2858,7 +3040,9 @@ fn test_operator_new_delete_mapping() {
         }
     "#;
 
-    let ast = parser.parse_string(source, "opnew_test.cpp").expect("Failed to parse");
+    let ast = parser
+        .parse_string(source, "opnew_test.cpp")
+        .expect("Failed to parse");
     let rust_code = AstCodeGen::new().generate(&ast.translation_unit);
 
     // Check that operator new is mapped to fragile_malloc

@@ -30,7 +30,9 @@ fn main() {
         }
     "#;
 
-    let ast = parser.parse_string(code, "test.cpp").expect("Failed to parse");
+    let ast = parser
+        .parse_string(code, "test.cpp")
+        .expect("Failed to parse");
 
     println!("=== Full AST ===");
     print_ast(&ast.translation_unit, 0);

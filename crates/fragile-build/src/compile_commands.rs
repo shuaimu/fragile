@@ -135,18 +135,18 @@ impl CompileCommand {
         args.into_iter()
             .skip(1) // Skip compiler executable
             .filter(|arg| {
-                !arg.starts_with("-I") &&
-                !arg.starts_with("-D") &&
-                !arg.starts_with("-std=") &&
-                !arg.starts_with("-O") &&
-                !arg.starts_with("-W") &&
-                arg != "-g" &&
-                arg != "-c" &&
-                !arg.starts_with("-o") &&
-                !arg.ends_with(".cc") &&
-                !arg.ends_with(".cpp") &&
-                !arg.ends_with(".cxx") &&
-                !arg.ends_with(".c")
+                !arg.starts_with("-I")
+                    && !arg.starts_with("-D")
+                    && !arg.starts_with("-std=")
+                    && !arg.starts_with("-O")
+                    && !arg.starts_with("-W")
+                    && arg != "-g"
+                    && arg != "-c"
+                    && !arg.starts_with("-o")
+                    && !arg.ends_with(".cc")
+                    && !arg.ends_with(".cpp")
+                    && !arg.ends_with(".cxx")
+                    && !arg.ends_with(".c")
             })
             .collect()
     }
@@ -179,9 +179,9 @@ impl CompileCommands {
 
     /// Find the compile command for a specific source file.
     pub fn find_command(&self, source: &Path) -> Option<&CompileCommand> {
-        self.commands.iter().find(|cmd| {
-            cmd.file == source || cmd.file.ends_with(source)
-        })
+        self.commands
+            .iter()
+            .find(|cmd| cmd.file == source || cmd.file.ends_with(source))
     }
 
     /// Get all unique include directories across all commands.

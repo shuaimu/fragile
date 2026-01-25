@@ -54,7 +54,10 @@ impl Diagnostic {
     }
 
     pub fn with_span(mut self, span: Span) -> Self {
-        self.span = Some(SourceSpan::new((span.start as usize).into(), span.len() as usize));
+        self.span = Some(SourceSpan::new(
+            (span.start as usize).into(),
+            span.len() as usize,
+        ));
         self
     }
 

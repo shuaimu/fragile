@@ -186,7 +186,7 @@ pub extern "C" fn fragile_pthread_mutex_trylock(mutex: *mut fragile_pthread_mute
             .locked
             .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
         {
-            Ok(_) => 0,  // Success
+            Ok(_) => 0,   // Success
             Err(_) => 16, // EBUSY - already locked
         }
     }
@@ -233,13 +233,18 @@ pub extern "C" fn fragile_pthread_mutexattr_init(attr: *mut fragile_pthread_mute
 
 /// Destroy mutex attributes.
 #[no_mangle]
-pub extern "C" fn fragile_pthread_mutexattr_destroy(_attr: *mut fragile_pthread_mutexattr_t) -> c_int {
+pub extern "C" fn fragile_pthread_mutexattr_destroy(
+    _attr: *mut fragile_pthread_mutexattr_t,
+) -> c_int {
     0 // Nothing to clean up
 }
 
 /// Set mutex type in attributes.
 #[no_mangle]
-pub extern "C" fn fragile_pthread_mutexattr_settype(attr: *mut fragile_pthread_mutexattr_t, kind: c_int) -> c_int {
+pub extern "C" fn fragile_pthread_mutexattr_settype(
+    attr: *mut fragile_pthread_mutexattr_t,
+    kind: c_int,
+) -> c_int {
     if attr.is_null() {
         return 22; // EINVAL
     }
@@ -254,7 +259,10 @@ pub extern "C" fn fragile_pthread_mutexattr_settype(attr: *mut fragile_pthread_m
 
 /// Get mutex type from attributes.
 #[no_mangle]
-pub extern "C" fn fragile_pthread_mutexattr_gettype(attr: *const fragile_pthread_mutexattr_t, kind: *mut c_int) -> c_int {
+pub extern "C" fn fragile_pthread_mutexattr_gettype(
+    attr: *const fragile_pthread_mutexattr_t,
+    kind: *mut c_int,
+) -> c_int {
     if attr.is_null() || kind.is_null() {
         return 22; // EINVAL
     }
@@ -327,7 +335,10 @@ mod tests {
         assert_eq!(fragile_pthread_mutexattr_init(&mut attr), 0);
         assert_eq!(attr.kind, FRAGILE_PTHREAD_MUTEX_NORMAL);
 
-        assert_eq!(fragile_pthread_mutexattr_settype(&mut attr, FRAGILE_PTHREAD_MUTEX_RECURSIVE), 0);
+        assert_eq!(
+            fragile_pthread_mutexattr_settype(&mut attr, FRAGILE_PTHREAD_MUTEX_RECURSIVE),
+            0
+        );
 
         let mut kind = 0;
         assert_eq!(fragile_pthread_mutexattr_gettype(&attr, &mut kind), 0);

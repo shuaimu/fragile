@@ -1,6 +1,6 @@
 //! Debug AST structure for constructor calls.
 
-use fragile_clang::{ClangParser, ClangNode, ClangNodeKind};
+use fragile_clang::{ClangNode, ClangNodeKind, ClangParser};
 use std::env;
 use std::path::Path;
 
@@ -16,7 +16,10 @@ fn print_node(node: &ClangNode, indent: usize) {
             println!("{}FunctionDecl {{ name: \"{}\" }}", prefix, name);
         }
         ClangNodeKind::VarDecl { name, ty, has_init } => {
-            println!("{}VarDecl {{ name: \"{}\", ty: {:?}, has_init: {} }}", prefix, name, ty, has_init);
+            println!(
+                "{}VarDecl {{ name: \"{}\", ty: {:?}, has_init: {} }}",
+                prefix, name, ty, has_init
+            );
         }
         ClangNodeKind::DeclStmt => {
             println!("{}DeclStmt", prefix);
@@ -24,7 +27,13 @@ fn print_node(node: &ClangNode, indent: usize) {
         ClangNodeKind::CallExpr { ty } => {
             println!("{}CallExpr {{ ty: {:?} }}", prefix, ty);
         }
-        ClangNodeKind::MemberExpr { member_name, is_arrow, ty, declaring_class, is_static } => {
+        ClangNodeKind::MemberExpr {
+            member_name,
+            is_arrow,
+            ty,
+            declaring_class,
+            is_static,
+        } => {
             println!("{}MemberExpr {{ member_name: \"{}\", is_arrow: {}, ty: {:?}, declaring_class: {:?}, is_static: {} }}", prefix, member_name, is_arrow, ty, declaring_class, is_static);
         }
         other => {

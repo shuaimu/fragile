@@ -1,0 +1,366 @@
+   Compiling fragile-clang v0.1.0 (/home/shuai/workspace/fragile/crates/fragile-clang)
+   Compiling fragile-hir v0.1.0 (/home/shuai/workspace/fragile/crates/fragile-hir)
+warning: unused import: `Symbol`
+ --> crates/fragile-hir/src/stmt.rs:1:28
+  |
+1 | use fragile_common::{Span, Symbol};
+  |                            ^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` on by default
+
+warning: unused import: `crate::stmt::Stmt`
+ --> crates/fragile-hir/src/item.rs:3:5
+  |
+3 | use crate::stmt::Stmt;
+  |     ^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `SourceId`, `Span`, `Spanned`, and `Symbol`
+  --> crates/fragile-hir/src/lib.rs:13:22
+   |
+13 | use fragile_common::{SourceId, Symbol, Span, Spanned};
+   |                      ^^^^^^^^  ^^^^^^  ^^^^  ^^^^^^^
+
+warning: unused import: `AccessSpecifier`
+ --> crates/fragile-clang/src/convert.rs:3:18
+  |
+3 | use crate::ast::{AccessSpecifier, BinaryOp, ClangAst, ClangNode, ClangNodeKind, UnaryOp};
+  |                  ^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` on by default
+
+   Compiling fragile-frontend-cpp v0.1.0 (/home/shuai/workspace/fragile/crates/fragile-frontend-cpp)
+   Compiling fragile-frontend-go v0.1.0 (/home/shuai/workspace/fragile/crates/fragile-frontend-go)
+   Compiling fragile-frontend-rust v0.1.0 (/home/shuai/workspace/fragile/crates/fragile-frontend-rust)
+   Compiling fragile-codegen v0.1.0 (/home/shuai/workspace/fragile/crates/fragile-codegen)
+warning: `fragile-hir` (lib) generated 3 warnings (3 duplicates)
+warning: unused variable: `span`
+   --> crates/fragile-frontend-cpp/src/lower.rs:186:13
+    |
+186 |         let span = self.span(node);
+    |             ^^^^ help: if this is intentional, prefix it with an underscore: `_span`
+    |
+    = note: `#[warn(unused_variables)]` on by default
+
+warning: unused import: `SourceId`
+ --> crates/fragile-frontend-rust/src/lower.rs:1:34
+  |
+1 | use fragile_common::{SourceFile, SourceId, Span, Symbol, SymbolInterner};
+  |                                  ^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` on by default
+
+warning: unused import: `SourceMap`
+ --> crates/fragile-frontend-rust/src/lib.rs:7:34
+  |
+7 | use fragile_common::{SourceFile, SourceMap, SymbolInterner};
+  |                                  ^^^^^^^^^
+
+warning: unused import: `std::sync::Arc`
+  --> crates/fragile-frontend-rust/src/lib.rs:10:5
+   |
+10 | use std::sync::Arc;
+   |     ^^^^^^^^^^^^^^
+
+warning: unused imports: `FnSig`, `Param`, and `TypeParam`
+ --> crates/fragile-codegen/src/codegen.rs:3:50
+  |
+3 |     Abi, BinOp, ConstDef, Expr, ExprKind, FnDef, FnSig, Item, ItemKind, Literal, Module, Mutability,
+  |                                                  ^^^^^
+4 |     Param, PrimitiveType, StaticDef, Stmt, StmtKind, StructDef, Type, TypeAlias, TypeParam, UnaryOp,
+  |     ^^^^^                                                                        ^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` on by default
+
+warning: unused import: `CallSiteValue`
+  --> crates/fragile-codegen/src/codegen.rs:13:75
+   |
+13 | use inkwell::values::{BasicMetadataValueEnum, BasicValue, BasicValueEnum, CallSiteValue, FunctionValue, PointerValue};
+   |                                                                           ^^^^^^^^^^^^^
+
+warning: use of deprecated method `inkwell::types::IntType::<'ctx>::ptr_type`: Starting from version 15.0, LLVM doesn't differentiate between pointer types. Use Context::ptr_type instead.
+    --> crates/fragile-codegen/src/codegen.rs:1235:45
+     |
+1235 | ...                   data_ty.ptr_type(inkwell::AddressSpace::default()),
+     |                               ^^^^^^^^
+     |
+     = note: `#[warn(deprecated)]` on by default
+
+warning: use of deprecated method `inkwell::types::BasicType::ptr_type`: Starting from version 15.0, LLVM doesn't differentiate between pointer types. Use Context::ptr_type instead.
+    --> crates/fragile-codegen/src/codegen.rs:2248:70
+     |
+2248 | ...                   field_ty.ptr_type(inkwell::AddressSpace::default()),
+     |                                ^^^^^^^^
+
+warning: unused variable: `fn_name`
+   --> crates/fragile-codegen/src/codegen.rs:120:25
+    |
+120 |                     let fn_name = compiler.interner.resolve(fn_def.name);
+    |                         ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_fn_name`
+    |
+    = note: `#[warn(unused_variables)]` on by default
+
+warning: unused variable: `receiver_val`
+    --> crates/fragile-codegen/src/codegen.rs:1388:21
+     |
+1388 |                 let receiver_val = self
+     |                     ^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_receiver_val`
+
+warning: unused variable: `ptr`
+    --> crates/fragile-codegen/src/codegen.rs:1768:43
+     |
+1768 | ...                   if let Some(&(ptr, ty)) = self.variables.get(name.as_str()) {
+     |                                     ^^^ help: if this is intentional, prefix it with an underscore: `_ptr`
+
+warning: unused variable: `field_name`
+    --> crates/fragile-codegen/src/codegen.rs:1770:41
+     |
+1770 | ...                   let field_name = self.interner.resolve(*field);
+     |                           ^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_field_name`
+
+warning: unused variable: `function`
+    --> crates/fragile-codegen/src/codegen.rs:3107:9
+     |
+3107 |         function: FunctionValue<'ctx>,
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_function`
+
+warning: `fragile-frontend-cpp` (lib) generated 1 warning
+warning: call to `.clone()` on a reference in this situation does nothing
+    --> crates/fragile-codegen/src/codegen.rs:2586:106
+     |
+2586 |   ...                   .ok_or_else(|| miette::miette!("Unknown struct type for destructuring"))?
+     |  ________________________________________________________________________________________________^
+2587 | | ...                   .clone();
+     | |______________________________^
+     |
+     = note: the type `StructInfo<'_>` does not implement `Clone`, so calling `clone` on `&StructInfo<'_>` copies the reference, which does not do anything and can be removed
+     = note: `#[warn(noop_method_call)]` on by default
+help: remove this redundant call
+     |
+2586 -                                 .ok_or_else(|| miette::miette!("Unknown struct type for destructuring"))?
+2587 -                                 .clone();
+2586 +                                 .ok_or_else(|| miette::miette!("Unknown struct type for destructuring"))?;
+     |
+help: if you meant to clone `StructInfo<'_>`, implement `Clone` for it
+     |
+170  + #[derive(Clone)]
+171  | struct StructInfo<'ctx> {
+     |
+
+warning: field `current_function` is never read
+  --> crates/fragile-clang/src/convert.rs:15:5
+   |
+13 | pub struct MirConverter {
+   |            ------------ field in this struct
+14 |     /// Current function being converted
+15 |     current_function: Option<FunctionBuilder>,
+   |     ^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` on by default
+
+   Compiling fragile-driver v0.1.0 (/home/shuai/workspace/fragile/crates/fragile-driver)
+warning: `fragile-frontend-rust` (lib) generated 3 warnings (run `cargo fix --lib -p fragile-frontend-rust` to apply 3 suggestions)
+   Compiling fragile-rustc-driver v0.1.0 (/home/shuai/workspace/fragile/crates/fragile-rustc-driver)
+warning: variable does not need to be mutable
+  --> crates/fragile-driver/src/lib.rs:32:13
+   |
+32 |         let mut program = Program::new();
+   |             ----^^^^^^^
+   |             |
+   |             help: remove this `mut`
+   |
+   = note: `#[warn(unused_mut)]` on by default
+
+warning: `fragile-hir` (lib test) generated 3 warnings (run `cargo fix --lib -p fragile-hir --tests` to apply 3 suggestions)
+warning: unused import: `CppFunction`
+ --> crates/fragile-rustc-driver/src/queries.rs:3:21
+  |
+3 | use fragile_clang::{CppFunction, CppModule, MirBody};
+  |                     ^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` on by default
+
+warning: unused import: `fragile_clang::CppModule`
+  --> crates/fragile-rustc-driver/src/lib.rs:74:5
+   |
+74 | use fragile_clang::CppModule;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: `fragile-codegen` (lib) generated 10 warnings (run `cargo fix --lib -p fragile-codegen` to apply 3 suggestions)
+warning: `fragile-driver` (lib) generated 1 warning (run `cargo fix --lib -p fragile-driver` to apply 1 suggestion)
+   Compiling fragile-cli v0.1.0 (/home/shuai/workspace/fragile/crates/fragile-cli)
+warning: `fragile-clang` (lib) generated 2 warnings (run `cargo fix --lib -p fragile-clang` to apply 1 suggestion)
+warning: `fragile-rustc-driver` (lib) generated 2 warnings (run `cargo fix --lib -p fragile-rustc-driver` to apply 2 suggestions)
+warning: `fragile-codegen` (lib test) generated 10 warnings (10 duplicates)
+warning: `fragile-frontend-cpp` (lib test) generated 1 warning (1 duplicate)
+warning: `fragile-frontend-rust` (lib test) generated 3 warnings (3 duplicates)
+warning: `fragile-rustc-driver` (lib test) generated 2 warnings (2 duplicates)
+warning: `fragile-clang` (lib test) generated 2 warnings (2 duplicates)
+warning: `fragile-driver` (lib test) generated 1 warning (1 duplicate)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.18s
+     Running unittests src/lib.rs (target/debug/deps/fragile_clang-92084ed20cb11b50)
+
+running 6 tests
+test parse::tests::test_parse_namespace ... ok
+test parse::tests::test_parse_using_nested_namespace ... ok
+test parse::tests::test_parse_anonymous_namespace ... ok
+test convert::tests::test_convert_simple_function ... ok
+test parse::tests::test_parse_simple_function ... ok
+test parse::tests::test_parse_using_namespace ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/integration_test.rs (target/debug/deps/integration_test-d0c78cfd8b78e213)
+
+running 13 tests
+test test_struct_default_access ... ok
+test test_anonymous_namespace ... ok
+test test_parse_add_function ... ok
+test test_convert_add_function ... ok
+test test_using_namespace_in_scope ... ok
+test test_using_nested_namespace_conversion ... ok
+test test_generate_stubs ... ok
+test test_using_namespace_conversion ... ok
+test test_nested_namespace ... ok
+test test_class_access_specifiers ... ok
+test test_namespace_function ... ok
+test test_end_to_end ... ok
+test test_namespace_struct ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+     Running unittests src/main.rs (target/debug/deps/fragile-b05b9516d3b79c8b)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/fragile_codegen-a6e96662cee3addc)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/fragile_common-1b0c25f4103154b3)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/fragile_driver-3f5fc24a86839d4a)
+
+running 3 tests
+test tests::test_parse_go_file ... ok
+test tests::test_parse_cpp_file ... ok
+test tests::test_parse_rust_file ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/fragile_frontend_cpp-3b86f6909de3f97a)
+
+running 2 tests
+test parser::tests::test_parse_simple_function ... ok
+test parser::tests::test_parse_function_with_params ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/fragile_frontend_go-7d2c6c34c2f559d0)
+
+running 2 tests
+test parser::tests::test_parse_simple_function ... ok
+test parser::tests::test_parse_function_with_return ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/fragile_frontend_rust-c08d92c3c5bc3ee5)
+
+running 2 tests
+test parser::tests::test_parse_simple_function ... ok
+test parser::tests::test_parse_function_with_return ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/fragile_hir-1b29a15c72a5de22)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/fragile_runtime-d33425fdbb6a0653)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/fragile_rustc_driver-09bbdd2dd937f465)
+
+running 6 tests
+test queries::tests::test_registry_register_and_lookup ... ok
+test driver::tests::test_driver_creation ... ok
+test stubs::tests::test_generate_function_stub ... ok
+test stubs::tests::test_generate_struct_stub ... ok
+test stubs::tests::test_generate_struct_stub_with_private_fields ... ok
+test stubs::tests::test_generate_rust_stubs ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests fragile_clang
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests fragile_codegen
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests fragile_common
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests fragile_driver
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests fragile_frontend_cpp
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests fragile_frontend_go
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests fragile_frontend_rust
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests fragile_hir
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests fragile_runtime
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests fragile_rustc_driver
+
+running 1 test
+test crates/fragile-rustc-driver/src/lib.rs - (line 50) ... ignored
+
+test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

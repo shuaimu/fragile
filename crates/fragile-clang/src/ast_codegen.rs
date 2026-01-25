@@ -4,9 +4,12 @@
 //! without going through an intermediate MIR representation.
 //! This produces cleaner, more idiomatic Rust code.
 
-use crate::ast::{ClangNode, ClangNodeKind, BinaryOp, UnaryOp, CastKind, ConstructorKind, CoroutineInfo, CoroutineKind, AccessSpecifier};
-use crate::types::{CppType, parse_template_args};
-use std::collections::{HashSet, HashMap};
+use crate::ast::{
+    AccessSpecifier, BinaryOp, CastKind, ClangNode, ClangNodeKind, ConstructorKind, CoroutineInfo,
+    CoroutineKind, UnaryOp,
+};
+use crate::types::{parse_template_args, CppType};
+use std::collections::{HashMap, HashSet};
 
 /// Convert C++ access specifier to Rust visibility prefix.
 /// - Public → "pub "
@@ -26,9 +29,8 @@ fn strip_literal_suffix(s: &str) -> String {
     // Check for integer suffixes: i8, i16, i32, i64, i128, isize, u8, u16, u32, u64, u128, usize
     // Check for float suffixes: f32, f64
     let suffixes = [
-        "i128", "u128", "isize", "usize",  // longest first
-        "i64", "u64", "i32", "u32", "i16", "u16", "i8", "u8",
-        "f64", "f32",
+        "i128", "u128", "isize", "usize", // longest first
+        "i64", "u64", "i32", "u32", "i16", "u16", "i8", "u8", "f64", "f32",
     ];
     for suffix in suffixes {
         if s.ends_with(suffix) {
@@ -44,13 +46,11 @@ fn strip_literal_suffix(s: &str) -> String {
 
 /// Rust reserved keywords that need raw identifier syntax.
 const RUST_KEYWORDS: &[&str] = &[
-    "as", "async", "await", "break", "const", "continue", "crate", "dyn",
-    "else", "enum", "extern", "false", "fn", "for", "if", "impl", "in",
-    "let", "loop", "match", "mod", "move", "mut", "pub", "ref", "return",
-    "self", "Self", "static", "struct", "super", "trait", "true", "type",
-    "unsafe", "use", "where", "while",
-    "abstract", "become", "box", "do", "final", "macro", "override",
-    "priv", "try", "typeof", "unsized", "virtual", "yield",
+    "as", "async", "await", "break", "const", "continue", "crate", "dyn", "else", "enum", "extern",
+    "false", "fn", "for", "if", "impl", "in", "let", "loop", "match", "mod", "move", "mut", "pub",
+    "ref", "return", "self", "Self", "static", "struct", "super", "trait", "true", "type",
+    "unsafe", "use", "where", "while", "abstract", "become", "box", "do", "final", "macro",
+    "override", "priv", "try", "typeof", "unsized", "virtual", "yield",
 ];
 
 /// Information about a virtual method for trait generation.
@@ -295,7 +295,11 @@ impl AstCodeGen {
         for child in children {
             match &child.kind {
                 ClangNodeKind::CXXMethodDecl {
-                    name, return_type, params, is_virtual, ..
+                    name,
+                    return_type,
+                    params,
+                    is_virtual,
+                    ..
                 } => {
                     if *is_virtual {
                         virtual_methods.push(VirtualMethodInfo {
@@ -306,11 +310,21 @@ impl AstCodeGen {
                         });
                     }
                 }
-                ClangNodeKind::CXXBaseSpecifier { base_type, is_virtual, .. } => {
+                ClangNodeKind::CXXBaseSpecifier {
+                    base_type,
+                    is_virtual,
+                    ..
+                } => {
                     // Extract base class name - collect ALL bases for MI
                     if let CppType::Named(base_name) = base_type {
-                        let base_name = base_name.strip_prefix("const ").unwrap_or(base_name).to_string();
-                        base_classes.push(BaseInfo { name: base_name, is_virtual: *is_virtual });
+                        let base_name = base_name
+                            .strip_prefix("const ")
+                            .unwrap_or(base_name)
+                            .to_string();
+                        base_classes.push(BaseInfo {
+                            name: base_name,
+                            is_virtual: *is_virtual,
+                        });
                     }
                 }
                 _ => {}
@@ -320,7 +334,8 @@ impl AstCodeGen {
         // If this class has virtual methods, mark it as polymorphic
         if !virtual_methods.is_empty() {
             self.polymorphic_classes.insert(class_name.to_string());
-            self.virtual_methods.insert(class_name.to_string(), virtual_methods);
+            self.virtual_methods
+                .insert(class_name.to_string(), virtual_methods);
         }
 
         // Record inheritance relationships (supports multiple bases)
@@ -332,7 +347,8 @@ impl AstCodeGen {
                     break;
                 }
             }
-            self.class_bases.insert(class_name.to_string(), base_classes);
+            self.class_bases
+                .insert(class_name.to_string(), base_classes);
         }
     }
 
@@ -350,7 +366,12 @@ impl AstCodeGen {
         }
     }
 
-    fn collect_virtual_bases(&self, class_name: &str, out: &mut HashSet<String>, visiting: &mut HashSet<String>) {
+    fn collect_virtual_bases(
+        &self,
+        class_name: &str,
+        out: &mut HashSet<String>,
+        visiting: &mut HashSet<String>,
+    ) {
         if visiting.contains(class_name) {
             return;
         }
@@ -380,7 +401,9 @@ impl AstCodeGen {
     }
 
     fn class_has_virtual_bases(&self, class_name: &str) -> bool {
-        self.virtual_bases.get(class_name).map_or(false, |v| !v.is_empty())
+        self.virtual_bases
+            .get(class_name)
+            .map_or(false, |v| !v.is_empty())
     }
 
     /// Collect all std::variant types used in the code.
@@ -393,7 +416,11 @@ impl AstCodeGen {
                 ClangNodeKind::FieldDecl { ty, .. } => {
                     self.collect_variant_from_type(ty);
                 }
-                ClangNodeKind::FunctionDecl { return_type, params, .. } => {
+                ClangNodeKind::FunctionDecl {
+                    return_type,
+                    params,
+                    ..
+                } => {
                     self.collect_variant_from_type(return_type);
                     for (_, param_ty) in params {
                         self.collect_variant_from_type(param_ty);
@@ -401,7 +428,11 @@ impl AstCodeGen {
                     // Recurse into function body
                     self.collect_variant_types(&child.children);
                 }
-                ClangNodeKind::CXXMethodDecl { return_type, params, .. } => {
+                ClangNodeKind::CXXMethodDecl {
+                    return_type,
+                    params,
+                    ..
+                } => {
                     self.collect_variant_from_type(return_type);
                     for (_, param_ty) in params {
                         self.collect_variant_from_type(param_ty);
@@ -409,8 +440,7 @@ impl AstCodeGen {
                     // Recurse into method body
                     self.collect_variant_types(&child.children);
                 }
-                ClangNodeKind::RecordDecl { .. } |
-                ClangNodeKind::NamespaceDecl { .. } => {
+                ClangNodeKind::RecordDecl { .. } | ClangNodeKind::NamespaceDecl { .. } => {
                     self.collect_variant_types(&child.children);
                 }
                 ClangNodeKind::CompoundStmt => {
@@ -433,12 +463,14 @@ impl AstCodeGen {
                     let args = parse_template_args(inner);
                     if !args.is_empty() {
                         // Convert each C++ type to its Rust equivalent
-                        let rust_types: Vec<String> = args.iter()
+                        let rust_types: Vec<String> = args
+                            .iter()
                             .map(|a| CppType::Named(a.clone()).to_rust_type_str())
                             .collect();
 
                         // Generate the enum name (same logic as in types.rs)
-                        let sanitized_types: Vec<String> = rust_types.iter()
+                        let sanitized_types: Vec<String> = rust_types
+                            .iter()
                             .map(|t| {
                                 t.replace('<', "_")
                                     .replace('>', "")
@@ -520,34 +552,48 @@ impl AstCodeGen {
     fn collect_template_info(&mut self, children: &[ClangNode]) {
         for child in children {
             match &child.kind {
-                ClangNodeKind::ClassTemplateDecl { name, template_params, .. } => {
+                ClangNodeKind::ClassTemplateDecl {
+                    name,
+                    template_params,
+                    ..
+                } => {
                     // Store template definition
-                    self.template_definitions.insert(name.clone(), (template_params.clone(), child.children.clone()));
+                    self.template_definitions.insert(
+                        name.clone(),
+                        (template_params.clone(), child.children.clone()),
+                    );
                     // Recurse into template to find usages
                     self.collect_template_info(&child.children);
                 }
-                ClangNodeKind::VarDecl { ty, .. } |
-                ClangNodeKind::FieldDecl { ty, .. } => {
+                ClangNodeKind::VarDecl { ty, .. } | ClangNodeKind::FieldDecl { ty, .. } => {
                     self.collect_template_type(ty);
                     self.collect_template_info(&child.children);
                 }
-                ClangNodeKind::FunctionDecl { return_type, params, .. } => {
+                ClangNodeKind::FunctionDecl {
+                    return_type,
+                    params,
+                    ..
+                } => {
                     self.collect_template_type(return_type);
                     for (_, param_ty) in params {
                         self.collect_template_type(param_ty);
                     }
                     self.collect_template_info(&child.children);
                 }
-                ClangNodeKind::CXXMethodDecl { return_type, params, .. } => {
+                ClangNodeKind::CXXMethodDecl {
+                    return_type,
+                    params,
+                    ..
+                } => {
                     self.collect_template_type(return_type);
                     for (_, param_ty) in params {
                         self.collect_template_type(param_ty);
                     }
                     self.collect_template_info(&child.children);
                 }
-                ClangNodeKind::RecordDecl { .. } |
-                ClangNodeKind::NamespaceDecl { .. } |
-                ClangNodeKind::CompoundStmt => {
+                ClangNodeKind::RecordDecl { .. }
+                | ClangNodeKind::NamespaceDecl { .. }
+                | ClangNodeKind::CompoundStmt => {
                     self.collect_template_info(&child.children);
                 }
                 _ => {
@@ -583,7 +629,11 @@ impl AstCodeGen {
 
     /// Generate struct definitions for pending template instantiations.
     fn generate_template_instantiations(&mut self) {
-        let instantiations: Vec<String> = self.pending_template_instantiations.iter().cloned().collect();
+        let instantiations: Vec<String> = self
+            .pending_template_instantiations
+            .iter()
+            .cloned()
+            .collect();
         for inst_name in instantiations {
             // Parse template arguments
             if let Some(open_idx) = inst_name.find('<') {
@@ -591,16 +641,29 @@ impl AstCodeGen {
                 let args_str = &inst_name[open_idx + 1..inst_name.len() - 1]; // Strip < and >
                 let type_args = parse_template_args(args_str);
 
-                if let Some((template_params, template_children)) = self.template_definitions.get(template_name).cloned() {
+                if let Some((template_params, template_children)) =
+                    self.template_definitions.get(template_name).cloned()
+                {
                     // Generate struct with substituted types
-                    self.generate_template_struct(&inst_name, &template_params, &type_args, &template_children);
+                    self.generate_template_struct(
+                        &inst_name,
+                        &template_params,
+                        &type_args,
+                        &template_children,
+                    );
                 }
             }
         }
     }
 
     /// Generate a struct for a template instantiation.
-    fn generate_template_struct(&mut self, inst_name: &str, template_params: &[String], type_args: &[String], children: &[ClangNode]) {
+    fn generate_template_struct(
+        &mut self,
+        inst_name: &str,
+        template_params: &[String],
+        type_args: &[String],
+        children: &[ClangNode],
+    ) {
         // Convert instantiation name to valid Rust identifier
         let rust_name = CppType::Named(inst_name.to_string()).to_rust_type_str();
 
@@ -613,7 +676,10 @@ impl AstCodeGen {
         // Build substitution map: T -> int, etc.
         let mut subst_map = HashMap::new();
         for (param, arg) in template_params.iter().zip(type_args.iter()) {
-            subst_map.insert(param.clone(), CppType::Named(arg.clone()).to_rust_type_str());
+            subst_map.insert(
+                param.clone(),
+                CppType::Named(arg.clone()).to_rust_type_str(),
+            );
         }
 
         self.writeln(&format!("/// C++ template instantiation `{}`", inst_name));
@@ -624,7 +690,14 @@ impl AstCodeGen {
         // Generate fields with substituted types
         let mut fields = Vec::new();
         for child in children {
-            if let ClangNodeKind::FieldDecl { name, ty, access, is_static, .. } = &child.kind {
+            if let ClangNodeKind::FieldDecl {
+                name,
+                ty,
+                access,
+                is_static,
+                ..
+            } = &child.kind
+            {
                 if *is_static {
                     continue;
                 }
@@ -653,7 +726,11 @@ impl AstCodeGen {
     }
 
     /// Substitute template parameters in a type.
-    fn substitute_template_type(&self, ty: &CppType, subst_map: &HashMap<String, String>) -> String {
+    fn substitute_template_type(
+        &self,
+        ty: &CppType,
+        subst_map: &HashMap<String, String>,
+    ) -> String {
         match ty {
             CppType::Named(name) => {
                 if let Some(replacement) = subst_map.get(name) {
@@ -670,7 +747,11 @@ impl AstCodeGen {
                     format!("*mut {}", inner)
                 }
             }
-            CppType::Reference { referent, is_const, is_rvalue } => {
+            CppType::Reference {
+                referent,
+                is_const,
+                is_rvalue,
+            } => {
                 let inner = self.substitute_template_type(referent, subst_map);
                 if *is_rvalue {
                     // For rvalue refs, in Rust we typically pass by value or use mut ref
@@ -693,10 +774,22 @@ impl AstCodeGen {
     }
 
     /// Generate impl block for a template instantiation.
-    fn generate_template_impl(&mut self, _inst_name: &str, rust_name: &str, children: &[ClangNode], subst_map: &HashMap<String, String>) {
+    fn generate_template_impl(
+        &mut self,
+        _inst_name: &str,
+        rust_name: &str,
+        children: &[ClangNode],
+        subst_map: &HashMap<String, String>,
+    ) {
         let mut has_methods = false;
         for child in children {
-            if matches!(&child.kind, ClangNodeKind::CXXMethodDecl { is_definition: true, .. }) {
+            if matches!(
+                &child.kind,
+                ClangNodeKind::CXXMethodDecl {
+                    is_definition: true,
+                    ..
+                }
+            ) {
                 has_methods = true;
                 break;
             }
@@ -713,7 +806,15 @@ impl AstCodeGen {
         let mut method_counts: HashMap<String, usize> = HashMap::new();
 
         for child in children {
-            if let ClangNodeKind::CXXMethodDecl { name, return_type, params, is_definition, is_static, .. } = &child.kind {
+            if let ClangNodeKind::CXXMethodDecl {
+                name,
+                return_type,
+                params,
+                is_definition,
+                is_static,
+                ..
+            } = &child.kind
+            {
                 if *is_definition {
                     // Generate method with substituted types
                     let ret_type = self.substitute_template_type(return_type, subst_map);
@@ -733,7 +834,9 @@ impl AstCodeGen {
                         if *count > 0 {
                             pname = format!("{}_{}", pname, *count);
                         }
-                        *param_name_counts.get_mut(&sanitize_identifier(param_name)).unwrap() += 1;
+                        *param_name_counts
+                            .get_mut(&sanitize_identifier(param_name))
+                            .unwrap() += 1;
                         param_strs.push(format!("{}: {}", pname, rust_ty));
                     }
 
@@ -754,7 +857,12 @@ impl AstCodeGen {
                         format!("{}_{}", base_method_name, *count - 1)
                     };
 
-                    self.writeln(&format!("pub fn {}({}){} {{", method_name, param_strs.join(", "), ret_str));
+                    self.writeln(&format!(
+                        "pub fn {}({}){} {{",
+                        method_name,
+                        param_strs.join(", "),
+                        ret_str
+                    ));
                     self.indent += 1;
                     self.writeln("todo!(\"Template method body\")");
                     self.indent -= 1;
@@ -785,10 +893,13 @@ impl AstCodeGen {
                 if args.len() >= 3 {
                     // Note: memcpy copies n bytes, copy_nonoverlapping copies n elements
                     // We cast to u8 pointers to copy bytes
-                    Some((format!(
-                        "std::ptr::copy_nonoverlapping({} as *const u8, {} as *mut u8, {})",
-                        args[1], args[0], args[2]
-                    ), true))
+                    Some((
+                        format!(
+                            "std::ptr::copy_nonoverlapping({} as *const u8, {} as *mut u8, {})",
+                            args[1], args[0], args[2]
+                        ),
+                        true,
+                    ))
                 } else {
                     None
                 }
@@ -796,10 +907,13 @@ impl AstCodeGen {
             "__builtin_memmove" => {
                 // __builtin_memmove(dst, src, n) -> std::ptr::copy(src, dst, n)
                 if args.len() >= 3 {
-                    Some((format!(
-                        "std::ptr::copy({} as *const u8, {} as *mut u8, {})",
-                        args[1], args[0], args[2]
-                    ), true))
+                    Some((
+                        format!(
+                            "std::ptr::copy({} as *const u8, {} as *mut u8, {})",
+                            args[1], args[0], args[2]
+                        ),
+                        true,
+                    ))
                 } else {
                     None
                 }
@@ -807,10 +921,13 @@ impl AstCodeGen {
             "__builtin_memset" => {
                 // __builtin_memset(dst, val, n) -> std::ptr::write_bytes(dst, val, n)
                 if args.len() >= 3 {
-                    Some((format!(
-                        "std::ptr::write_bytes({} as *mut u8, {} as u8, {})",
-                        args[0], args[1], args[2]
-                    ), true))
+                    Some((
+                        format!(
+                            "std::ptr::write_bytes({} as *mut u8, {} as u8, {})",
+                            args[0], args[1], args[2]
+                        ),
+                        true,
+                    ))
                 } else {
                     None
                 }
@@ -819,12 +936,15 @@ impl AstCodeGen {
                 // __builtin_memcmp(s1, s2, n) -> compare n bytes
                 // Rust doesn't have a direct equivalent, use libc or slice comparison
                 if args.len() >= 3 {
-                    Some((format!(
-                        "{{ let s1 = std::slice::from_raw_parts({} as *const u8, {}); \
+                    Some((
+                        format!(
+                            "{{ let s1 = std::slice::from_raw_parts({} as *const u8, {}); \
                          let s2 = std::slice::from_raw_parts({} as *const u8, {}); \
                          s1.cmp(s2) as i32 }}",
-                        args[0], args[2], args[1], args[2]
-                    ), true))
+                            args[0], args[2], args[1], args[2]
+                        ),
+                        true,
+                    ))
                 } else {
                     None
                 }
@@ -832,11 +952,14 @@ impl AstCodeGen {
             "__builtin_strlen" => {
                 // __builtin_strlen(s) -> strlen equivalent
                 if args.len() >= 1 {
-                    Some((format!(
-                        "{{ let mut __len = 0usize; let mut __p = {} as *const u8; \
+                    Some((
+                        format!(
+                            "{{ let mut __len = 0usize; let mut __p = {} as *const u8; \
                          while *__p != 0 {{ __len += 1; __p = __p.add(1); }} __len }}",
-                        args[0]
-                    ), true))
+                            args[0]
+                        ),
+                        true,
+                    ))
                 } else {
                     None
                 }
@@ -857,9 +980,7 @@ impl AstCodeGen {
                 // __builtin_trap() -> std::intrinsics::abort() or panic
                 Some(("std::process::abort()".to_string(), false))
             }
-            "__builtin_abort" => {
-                Some(("std::process::abort()".to_string(), false))
-            }
+            "__builtin_abort" => Some(("std::process::abort()".to_string(), false)),
             "__builtin_clz" | "__builtin_clzl" | "__builtin_clzll" => {
                 // Count leading zeros
                 if args.len() >= 1 {
@@ -933,7 +1054,10 @@ impl AstCodeGen {
                 // va_start(ap, param) - Initialize va_list
                 // In Rust, we treat this as a no-op since VaList comes pre-initialized
                 // when passed as a function parameter
-                Some(("{ /* va_start: va_list already initialized */ }".to_string(), false))
+                Some((
+                    "{ /* va_start: va_list already initialized */ }".to_string(),
+                    false,
+                ))
             }
             "__builtin_va_end" => {
                 // va_end(ap) - Clean up va_list
@@ -952,14 +1076,17 @@ impl AstCodeGen {
                 // __builtin_strcmp(s1, s2) -> compare C strings
                 // Returns negative if s1 < s2, positive if s1 > s2, 0 if equal
                 if args.len() >= 2 {
-                    Some((format!(
-                        "{{ let mut __p1 = {} as *const u8; let mut __p2 = {} as *const u8; \
+                    Some((
+                        format!(
+                            "{{ let mut __p1 = {} as *const u8; let mut __p2 = {} as *const u8; \
                          loop {{ let c1 = *__p1; let c2 = *__p2; \
                          if c1 != c2 {{ break (c1 as i32) - (c2 as i32); }} \
                          if c1 == 0 {{ break 0; }} \
                          __p1 = __p1.add(1); __p2 = __p2.add(1); }} }}",
-                        args[0], args[1]
-                    ), true))
+                            args[0], args[1]
+                        ),
+                        true,
+                    ))
                 } else {
                     None
                 }
@@ -987,7 +1114,10 @@ impl AstCodeGen {
             "__hash" => {
                 // Generic hash function - return a placeholder hash
                 if args.len() >= 1 {
-                    Some((format!("({} as usize).wrapping_mul(0x9e3779b9)", args[0]), false))
+                    Some((
+                        format!("({} as usize).wrapping_mul(0x9e3779b9)", args[0]),
+                        false,
+                    ))
                 } else {
                     Some(("0usize".to_string(), false))
                 }
@@ -1022,40 +1152,80 @@ impl AstCodeGen {
             "pthread_exit" => Some("crate::fragile_runtime::fragile_pthread_exit"),
             "pthread_attr_init" => Some("crate::fragile_runtime::fragile_pthread_attr_init"),
             "pthread_attr_destroy" => Some("crate::fragile_runtime::fragile_pthread_attr_destroy"),
-            "pthread_attr_setdetachstate" => Some("crate::fragile_runtime::fragile_pthread_attr_setdetachstate"),
-            "pthread_attr_getdetachstate" => Some("crate::fragile_runtime::fragile_pthread_attr_getdetachstate"),
+            "pthread_attr_setdetachstate" => {
+                Some("crate::fragile_runtime::fragile_pthread_attr_setdetachstate")
+            }
+            "pthread_attr_getdetachstate" => {
+                Some("crate::fragile_runtime::fragile_pthread_attr_getdetachstate")
+            }
 
             // pthread mutex functions
             "pthread_mutex_init" => Some("crate::fragile_runtime::fragile_pthread_mutex_init"),
-            "pthread_mutex_destroy" => Some("crate::fragile_runtime::fragile_pthread_mutex_destroy"),
+            "pthread_mutex_destroy" => {
+                Some("crate::fragile_runtime::fragile_pthread_mutex_destroy")
+            }
             "pthread_mutex_lock" => Some("crate::fragile_runtime::fragile_pthread_mutex_lock"),
-            "pthread_mutex_trylock" => Some("crate::fragile_runtime::fragile_pthread_mutex_trylock"),
+            "pthread_mutex_trylock" => {
+                Some("crate::fragile_runtime::fragile_pthread_mutex_trylock")
+            }
             "pthread_mutex_unlock" => Some("crate::fragile_runtime::fragile_pthread_mutex_unlock"),
-            "pthread_mutexattr_init" => Some("crate::fragile_runtime::fragile_pthread_mutexattr_init"),
-            "pthread_mutexattr_destroy" => Some("crate::fragile_runtime::fragile_pthread_mutexattr_destroy"),
-            "pthread_mutexattr_settype" => Some("crate::fragile_runtime::fragile_pthread_mutexattr_settype"),
-            "pthread_mutexattr_gettype" => Some("crate::fragile_runtime::fragile_pthread_mutexattr_gettype"),
+            "pthread_mutexattr_init" => {
+                Some("crate::fragile_runtime::fragile_pthread_mutexattr_init")
+            }
+            "pthread_mutexattr_destroy" => {
+                Some("crate::fragile_runtime::fragile_pthread_mutexattr_destroy")
+            }
+            "pthread_mutexattr_settype" => {
+                Some("crate::fragile_runtime::fragile_pthread_mutexattr_settype")
+            }
+            "pthread_mutexattr_gettype" => {
+                Some("crate::fragile_runtime::fragile_pthread_mutexattr_gettype")
+            }
 
             // pthread condition variable functions
             "pthread_cond_init" => Some("crate::fragile_runtime::fragile_pthread_cond_init"),
             "pthread_cond_destroy" => Some("crate::fragile_runtime::fragile_pthread_cond_destroy"),
             "pthread_cond_wait" => Some("crate::fragile_runtime::fragile_pthread_cond_wait"),
-            "pthread_cond_timedwait" => Some("crate::fragile_runtime::fragile_pthread_cond_timedwait"),
+            "pthread_cond_timedwait" => {
+                Some("crate::fragile_runtime::fragile_pthread_cond_timedwait")
+            }
             "pthread_cond_signal" => Some("crate::fragile_runtime::fragile_pthread_cond_signal"),
-            "pthread_cond_broadcast" => Some("crate::fragile_runtime::fragile_pthread_cond_broadcast"),
-            "pthread_condattr_init" => Some("crate::fragile_runtime::fragile_pthread_condattr_init"),
-            "pthread_condattr_destroy" => Some("crate::fragile_runtime::fragile_pthread_condattr_destroy"),
+            "pthread_cond_broadcast" => {
+                Some("crate::fragile_runtime::fragile_pthread_cond_broadcast")
+            }
+            "pthread_condattr_init" => {
+                Some("crate::fragile_runtime::fragile_pthread_condattr_init")
+            }
+            "pthread_condattr_destroy" => {
+                Some("crate::fragile_runtime::fragile_pthread_condattr_destroy")
+            }
 
             // pthread rwlock functions
             "pthread_rwlock_init" => Some("crate::fragile_runtime::fragile_pthread_rwlock_init"),
-            "pthread_rwlock_destroy" => Some("crate::fragile_runtime::fragile_pthread_rwlock_destroy"),
-            "pthread_rwlock_rdlock" => Some("crate::fragile_runtime::fragile_pthread_rwlock_rdlock"),
-            "pthread_rwlock_tryrdlock" => Some("crate::fragile_runtime::fragile_pthread_rwlock_tryrdlock"),
-            "pthread_rwlock_wrlock" => Some("crate::fragile_runtime::fragile_pthread_rwlock_wrlock"),
-            "pthread_rwlock_trywrlock" => Some("crate::fragile_runtime::fragile_pthread_rwlock_trywrlock"),
-            "pthread_rwlock_unlock" => Some("crate::fragile_runtime::fragile_pthread_rwlock_unlock"),
-            "pthread_rwlockattr_init" => Some("crate::fragile_runtime::fragile_pthread_rwlockattr_init"),
-            "pthread_rwlockattr_destroy" => Some("crate::fragile_runtime::fragile_pthread_rwlockattr_destroy"),
+            "pthread_rwlock_destroy" => {
+                Some("crate::fragile_runtime::fragile_pthread_rwlock_destroy")
+            }
+            "pthread_rwlock_rdlock" => {
+                Some("crate::fragile_runtime::fragile_pthread_rwlock_rdlock")
+            }
+            "pthread_rwlock_tryrdlock" => {
+                Some("crate::fragile_runtime::fragile_pthread_rwlock_tryrdlock")
+            }
+            "pthread_rwlock_wrlock" => {
+                Some("crate::fragile_runtime::fragile_pthread_rwlock_wrlock")
+            }
+            "pthread_rwlock_trywrlock" => {
+                Some("crate::fragile_runtime::fragile_pthread_rwlock_trywrlock")
+            }
+            "pthread_rwlock_unlock" => {
+                Some("crate::fragile_runtime::fragile_pthread_rwlock_unlock")
+            }
+            "pthread_rwlockattr_init" => {
+                Some("crate::fragile_runtime::fragile_pthread_rwlockattr_init")
+            }
+            "pthread_rwlockattr_destroy" => {
+                Some("crate::fragile_runtime::fragile_pthread_rwlockattr_destroy")
+            }
 
             // stdio functions
             "fopen" => Some("crate::fragile_runtime::fopen"),
@@ -1096,7 +1266,8 @@ impl AstCodeGen {
     fn get_variant_args(ty: &CppType) -> Option<Vec<String>> {
         if let CppType::Named(name) = ty {
             // Handle both "std::variant<...>" and "variant<...>" (libclang sometimes omits std::)
-            let rest = name.strip_prefix("std::variant<")
+            let rest = name
+                .strip_prefix("std::variant<")
                 .or_else(|| name.strip_prefix("variant<"))?;
             let inner = rest.strip_suffix(">")?;
             return Some(parse_template_args(inner));
@@ -1136,10 +1307,10 @@ impl AstCodeGen {
             // If this is an EvaluatedExpr, it contains the value directly
             ClangNodeKind::EvaluatedExpr { .. } => Some(node),
             // If this is an IntegerLiteral, FloatingLiteral, etc., use it
-            ClangNodeKind::IntegerLiteral { .. } |
-            ClangNodeKind::FloatingLiteral { .. } |
-            ClangNodeKind::StringLiteral(_) |
-            ClangNodeKind::BoolLiteral(_) => Some(node),
+            ClangNodeKind::IntegerLiteral { .. }
+            | ClangNodeKind::FloatingLiteral { .. }
+            | ClangNodeKind::StringLiteral(_)
+            | ClangNodeKind::BoolLiteral(_) => Some(node),
             // If this is a DeclRefExpr (variable reference), use it
             ClangNodeKind::DeclRefExpr { .. } => Some(node),
             // For CallExpr to variant constructor, look for the argument
@@ -1195,7 +1366,10 @@ impl AstCodeGen {
                 _ => return None,
             };
 
-            if let ClangNodeKind::DeclRefExpr { name, ty: func_ty, .. } = &decl_ref.kind {
+            if let ClangNodeKind::DeclRefExpr {
+                name, ty: func_ty, ..
+            } = &decl_ref.kind
+            {
                 if name == "get" {
                     // Check if first parameter is a reference to variant type
                     if let CppType::Function { params, .. } = func_ty {
@@ -1226,7 +1400,9 @@ impl AstCodeGen {
     /// Returns (visitor_node, variant_nodes_with_types) if it is.
     /// visitor_node is the first argument (the callable).
     /// variant_nodes_with_types is a vec of (node, variant_type) for each variant argument.
-    fn is_std_visit_call<'a>(node: &'a ClangNode) -> Option<(&'a ClangNode, Vec<(&'a ClangNode, CppType)>)> {
+    fn is_std_visit_call<'a>(
+        node: &'a ClangNode,
+    ) -> Option<(&'a ClangNode, Vec<(&'a ClangNode, CppType)>)> {
         if let ClangNodeKind::CallExpr { .. } = &node.kind {
             // Look for the callee - it may be directly a DeclRefExpr or wrapped in ImplicitCastExpr
             let callee = node.children.first()?;
@@ -1239,7 +1415,10 @@ impl AstCodeGen {
                 _ => return None,
             };
 
-            if let ClangNodeKind::DeclRefExpr { name, ty: func_ty, .. } = &decl_ref.kind {
+            if let ClangNodeKind::DeclRefExpr {
+                name, ty: func_ty, ..
+            } = &decl_ref.kind
+            {
                 if name == "visit" {
                     // std::visit signature: visit(Visitor&& vis, Variants&&... vars)
                     // So we expect at least 2 children: callee + visitor + at least one variant
@@ -1280,7 +1459,9 @@ impl AstCodeGen {
                             if let Some(var_type) = Self::get_expr_type(arg) {
                                 // Unwrap reference types to get the actual variant type
                                 let inner_type = match &var_type {
-                                    CppType::Reference { referent, .. } => referent.as_ref().clone(),
+                                    CppType::Reference { referent, .. } => {
+                                        referent.as_ref().clone()
+                                    }
                                     _ => var_type.clone(),
                                 };
                                 if Self::get_variant_args(&inner_type).is_some() {
@@ -1302,7 +1483,9 @@ impl AstCodeGen {
     /// Check if this is a std::views range adaptor call.
     /// Returns (adaptor_name, range_node, optional_arg_node) if it is.
     /// adaptor_name is one of: "filter", "transform", "take", "drop", "reverse"
-    fn is_std_views_adaptor_call<'a>(node: &'a ClangNode) -> Option<(&'static str, &'a ClangNode, Option<&'a ClangNode>)> {
+    fn is_std_views_adaptor_call<'a>(
+        node: &'a ClangNode,
+    ) -> Option<(&'static str, &'a ClangNode, Option<&'a ClangNode>)> {
         if let ClangNodeKind::CallExpr { .. } = &node.kind {
             // Look for the callee - it may be directly a DeclRefExpr or wrapped in ImplicitCastExpr
             let callee = node.children.first()?;
@@ -1341,7 +1524,9 @@ impl AstCodeGen {
 
     /// Check if this is a std::ranges algorithm call.
     /// Returns (algorithm_name, range_node, optional_arg_node) if it is.
-    fn is_std_ranges_algorithm_call<'a>(node: &'a ClangNode) -> Option<(&'static str, &'a ClangNode, Option<&'a ClangNode>)> {
+    fn is_std_ranges_algorithm_call<'a>(
+        node: &'a ClangNode,
+    ) -> Option<(&'static str, &'a ClangNode, Option<&'a ClangNode>)> {
         if let ClangNodeKind::CallExpr { .. } = &node.kind {
             let callee = node.children.first()?;
             let decl_ref = match &callee.kind {
@@ -1379,7 +1564,10 @@ impl AstCodeGen {
     /// Get the variant index by matching the return type to variant template arguments.
     /// The return type from std::get is T& where T is one of the variant types.
     /// For std::get<I>, the return type may be variant_alternative_t<I, variant<...>>.
-    fn get_variant_index_from_return_type(variant_type: &CppType, return_type: &CppType) -> Option<usize> {
+    fn get_variant_index_from_return_type(
+        variant_type: &CppType,
+        return_type: &CppType,
+    ) -> Option<usize> {
         let variant_args = Self::get_variant_args(variant_type)?;
 
         // Extract the referent type if return_type is a reference (std::get returns T&)
@@ -1396,7 +1584,8 @@ impl AstCodeGen {
                 if let Some(comma_pos) = rest.find(',') {
                     let idx_str = rest[..comma_pos].trim();
                     // Remove suffix like "UL" or "u" from the index
-                    let idx_num: String = idx_str.chars().take_while(|c| c.is_ascii_digit()).collect();
+                    let idx_num: String =
+                        idx_str.chars().take_while(|c| c.is_ascii_digit()).collect();
                     if let Ok(idx) = idx_num.parse::<usize>() {
                         return Some(idx);
                     }
@@ -1446,7 +1635,12 @@ impl AstCodeGen {
     /// Generate a match expression for std::visit on one or more variants.
     /// visitor_node is the visitor (lambda, functor, or function).
     /// variants is a list of (node, type) pairs for each variant argument.
-    fn generate_visit_match(&self, visitor_node: &ClangNode, variants: &[(&ClangNode, CppType)], _return_type: &CppType) -> String {
+    fn generate_visit_match(
+        &self,
+        visitor_node: &ClangNode,
+        variants: &[(&ClangNode, CppType)],
+        _return_type: &CppType,
+    ) -> String {
         if variants.is_empty() {
             return "/* std::visit error: no variants */".to_string();
         }
@@ -1464,12 +1658,22 @@ impl AstCodeGen {
             if let Some(enum_name) = Self::get_variant_enum_name(var_type) {
                 if let Some(args) = Self::get_variant_args(var_type) {
                     let arms: Vec<String> = (0..args.len())
-                        .map(|i| format!("{}::V{}(__v) => {}", enum_name, i, call_format.replace("{}", "__v")))
+                        .map(|i| {
+                            format!(
+                                "{}::V{}(__v) => {}",
+                                enum_name,
+                                i,
+                                call_format.replace("{}", "__v")
+                            )
+                        })
                         .collect();
                     return format!("match &{} {{ {} }}", var_expr, arms.join(", "));
                 }
             }
-            return format!("/* std::visit error: cannot process variant type {:?} */", var_type);
+            return format!(
+                "/* std::visit error: cannot process variant type {:?} */",
+                var_type
+            );
         }
 
         // For multiple variants, generate cartesian product of match arms
@@ -1496,14 +1700,19 @@ impl AstCodeGen {
         let mut indices: Vec<usize> = vec![0; var_info.len()];
         loop {
             // Build pattern for this combination: (Enum1::V0(__v0), Enum2::V1(__v1), ...)
-            let patterns: Vec<String> = var_info.iter()
+            let patterns: Vec<String> = var_info
+                .iter()
                 .enumerate()
                 .map(|(i, (_, enum_name, _))| format!("{}::V{}(__v{})", enum_name, indices[i], i))
                 .collect();
             // Build visitor call with appropriate call format
             let args: Vec<String> = (0..var_info.len()).map(|i| format!("__v{}", i)).collect();
             let args_str = args.join(", ");
-            arms.push(format!("({}) => {}", patterns.join(", "), call_format.replace("{}", &args_str)));
+            arms.push(format!(
+                "({}) => {}",
+                patterns.join(", "),
+                call_format.replace("{}", &args_str)
+            ));
 
             // Increment indices (like counting in mixed-radix)
             let mut carry = true;
@@ -1523,7 +1732,11 @@ impl AstCodeGen {
             }
         }
 
-        format!("match ({}) {{ {} }}", tuple_expr.join(", "), arms.join(", "))
+        format!(
+            "match ({}) {{ {} }}",
+            tuple_expr.join(", "),
+            arms.join(", ")
+        )
     }
 
     /// Generate stub struct definitions for C++ comparison category types.
@@ -1550,7 +1763,8 @@ impl AstCodeGen {
         // partial_ordering - C++20 comparison result type
         // Comparison methods are friend functions in C++, so we add them as methods here
         // Mark as generated to avoid duplicate from the C++ version
-        self.generated_structs.insert("partial_ordering".to_string());
+        self.generated_structs
+            .insert("partial_ordering".to_string());
         self.writeln("#[repr(C)]");
         self.writeln("#[derive(Default, Copy, Clone)]");
         self.writeln("pub struct partial_ordering { pub _M_value: __cmp_cat_type }");
@@ -1560,12 +1774,20 @@ impl AstCodeGen {
         self.writeln("pub fn new_1(_v: __cmp_cat__Ord) -> Self { Self { _M_value: 0 } }");
         self.writeln("pub fn new_1_1(_v: __cmp_cat__Ncmp) -> Self { Self { _M_value: -127 } }");
         // Comparison operators against __cmp_cat___unspec
-        self.writeln("pub fn op_eq(&self, _other: &__cmp_cat___unspec) -> bool { self._M_value == 0 }");
-        self.writeln("pub fn op_ne(&self, _other: &__cmp_cat___unspec) -> bool { self._M_value != 0 }");
+        self.writeln(
+            "pub fn op_eq(&self, _other: &__cmp_cat___unspec) -> bool { self._M_value == 0 }",
+        );
+        self.writeln(
+            "pub fn op_ne(&self, _other: &__cmp_cat___unspec) -> bool { self._M_value != 0 }",
+        );
         self.writeln("pub fn op_lt(&self, _other: &__cmp_cat___unspec) -> bool { self._M_value < 0 && self._M_value != -127 }");
         self.writeln("pub fn op_le(&self, _other: &__cmp_cat___unspec) -> bool { self._M_value <= 0 && self._M_value != -127 }");
-        self.writeln("pub fn op_gt(&self, _other: &__cmp_cat___unspec) -> bool { self._M_value > 0 }");
-        self.writeln("pub fn op_ge(&self, _other: &__cmp_cat___unspec) -> bool { self._M_value >= 0 }");
+        self.writeln(
+            "pub fn op_gt(&self, _other: &__cmp_cat___unspec) -> bool { self._M_value > 0 }",
+        );
+        self.writeln(
+            "pub fn op_ge(&self, _other: &__cmp_cat___unspec) -> bool { self._M_value >= 0 }",
+        );
         self.indent -= 1;
         self.writeln("}");
         self.writeln("pub static PARTIAL_ORDERING_LESS: partial_ordering = partial_ordering { _M_value: -1 };");
@@ -1586,10 +1808,28 @@ impl AstCodeGen {
 
         // Hash base stubs - used as base classes for std::hash specializations
         self.writeln("// Hash base stubs for std::hash specializations");
-        for ty in &["bool", "char", "signed_char", "unsigned_char", "wchar_t",
-                   "char8_t", "char16_t", "char32_t", "short", "int", "long",
-                   "long_long", "unsigned_short", "unsigned_int", "unsigned_long",
-                   "unsigned_long_long", "float", "double", "long_double", "nullptr_t"] {
+        for ty in &[
+            "bool",
+            "char",
+            "signed_char",
+            "unsigned_char",
+            "wchar_t",
+            "char8_t",
+            "char16_t",
+            "char32_t",
+            "short",
+            "int",
+            "long",
+            "long_long",
+            "unsigned_short",
+            "unsigned_int",
+            "unsigned_long",
+            "unsigned_long_long",
+            "float",
+            "double",
+            "long_double",
+            "nullptr_t",
+        ] {
             let name = format!("__hash_base_size_t__{}", ty);
             self.generated_structs.insert(name.clone());
             self.writeln("#[repr(C)]");
@@ -1608,7 +1848,6 @@ impl AstCodeGen {
             self.writeln(&format!("pub struct {};", name));
         }
         self.writeln("");
-
 
         // Additional template placeholder stubs - only for abstract types that aren't generated from C++ code
         // These are abstract type placeholders, NOT template instantiations
@@ -1658,7 +1897,9 @@ impl AstCodeGen {
         self.writeln("}");
         self.writeln("");
         self.writeln("#[inline]");
-        self.writeln("pub fn _Fnv_hash_bytes(_ptr: *const (), _len: usize, _seed: usize) -> usize {");
+        self.writeln(
+            "pub fn _Fnv_hash_bytes(_ptr: *const (), _len: usize, _seed: usize) -> usize {",
+        );
         self.indent += 1;
         self.writeln("// FNV-1a hash");
         self.writeln("_Hash_bytes(_ptr, _len, _seed)");
@@ -1712,7 +1953,9 @@ impl AstCodeGen {
         }
 
         // Clone and sort by enum name for deterministic output
-        let mut variants: Vec<_> = self.variant_types.iter()
+        let mut variants: Vec<_> = self
+            .variant_types
+            .iter()
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
         variants.sort_by_key(|(name, _)| name.clone());
@@ -1743,12 +1986,11 @@ impl AstCodeGen {
 
         // Count how many namespaces in target_ns are "real" (generate modules)
         // vs "flattened" (std, __ prefixed namespaces that don't generate modules)
-        let is_real_namespace = |ns: &str| -> bool {
-            !ns.starts_with("__") && ns != "std"
-        };
+        let is_real_namespace = |ns: &str| -> bool { !ns.starts_with("__") && ns != "std" };
 
         // Find the common prefix length
-        let common_len = target_ns.iter()
+        let common_len = target_ns
+            .iter()
             .zip(self.current_namespace.iter())
             .take_while(|(a, b)| a == b)
             .count();
@@ -1756,10 +1998,11 @@ impl AstCodeGen {
         // Calculate how many real module levels to go up
         // We can only go up as many levels as we have actual Rust modules
         let levels_up = self.module_depth.min(
-            self.current_namespace.iter()
+            self.current_namespace
+                .iter()
                 .skip(common_len)
                 .filter(|ns| is_real_namespace(ns))
-                .count()
+                .count(),
         );
 
         // Build the path: super:: for going up, then the remaining target path
@@ -1812,7 +2055,9 @@ impl AstCodeGen {
         self.writeln("let offset = header_size + padding;");
         self.writeln("let elem_size = std::mem::size_of::<T>();");
         self.writeln("let total_size = offset + elem_size.saturating_mul(len);");
-        self.writeln("let layout = std::alloc::Layout::from_size_align(total_size, align).unwrap();");
+        self.writeln(
+            "let layout = std::alloc::Layout::from_size_align(total_size, align).unwrap();",
+        );
         self.writeln("let base = std::alloc::alloc(layout);");
         self.writeln("if base.is_null() { std::alloc::handle_alloc_error(layout); }");
         self.writeln("let header = base as *mut usize;");
@@ -1844,7 +2089,9 @@ impl AstCodeGen {
         self.writeln("}");
         self.writeln("let elem_size = std::mem::size_of::<T>();");
         self.writeln("let total_size = offset + elem_size.saturating_mul(len);");
-        self.writeln("let layout = std::alloc::Layout::from_size_align(total_size, align).unwrap();");
+        self.writeln(
+            "let layout = std::alloc::Layout::from_size_align(total_size, align).unwrap();",
+        );
         self.writeln("std::alloc::dealloc(base, layout);");
         self.indent -= 1;
         self.writeln("}");
@@ -1854,18 +2101,41 @@ impl AstCodeGen {
     /// Generate a top-level stub declaration (signatures only).
     fn generate_stub_top_level(&mut self, node: &ClangNode) {
         match &node.kind {
-            ClangNodeKind::FunctionDecl { name, mangled_name, return_type, params, is_definition, is_variadic, .. } => {
+            ClangNodeKind::FunctionDecl {
+                name,
+                mangled_name,
+                return_type,
+                params,
+                is_definition,
+                is_variadic,
+                ..
+            } => {
                 if *is_definition {
-                    self.generate_function_stub(name, mangled_name, return_type, params, *is_variadic);
+                    self.generate_function_stub(
+                        name,
+                        mangled_name,
+                        return_type,
+                        params,
+                        *is_variadic,
+                    );
                 }
             }
-            ClangNodeKind::RecordDecl { name, is_class, is_definition, .. } => {
+            ClangNodeKind::RecordDecl {
+                name,
+                is_class,
+                is_definition,
+                ..
+            } => {
                 // Only generate struct stub for definitions
                 if *is_definition {
                     self.generate_struct_stub(name, *is_class, &node.children);
                 }
             }
-            ClangNodeKind::EnumDecl { name, is_scoped, underlying_type } => {
+            ClangNodeKind::EnumDecl {
+                name,
+                is_scoped,
+                underlying_type,
+            } => {
                 self.generate_enum_stub(name, *is_scoped, underlying_type, &node.children);
             }
             ClangNodeKind::UnionDecl { name, .. } => {
@@ -1899,14 +2169,21 @@ impl AstCodeGen {
     }
 
     /// Generate a function stub (signature with placeholder body).
-    fn generate_function_stub(&mut self, name: &str, mangled_name: &str, return_type: &CppType,
-                              params: &[(String, CppType)], is_variadic: bool) {
+    fn generate_function_stub(
+        &mut self,
+        name: &str,
+        mangled_name: &str,
+        return_type: &CppType,
+        params: &[(String, CppType)],
+        is_variadic: bool,
+    ) {
         self.writeln(&format!("/// @fragile_cpp_mangled: {}", mangled_name));
         self.writeln(&format!("#[export_name = \"{}\"]", mangled_name));
 
         // Deduplicate parameter names (C++ allows unnamed params, Rust doesn't)
         let mut param_name_counts: HashMap<String, usize> = HashMap::new();
-        let params_str = params.iter()
+        let params_str = params
+            .iter()
             .map(|(n, t)| {
                 let mut param_name = sanitize_identifier(n);
                 let count = param_name_counts.entry(param_name.clone()).or_insert(0);
@@ -1936,7 +2213,12 @@ impl AstCodeGen {
             format!(" -> {}", return_type.to_rust_type_str())
         };
 
-        self.writeln(&format!("pub extern \"C\" fn {}({}){} {{", sanitize_identifier(name), params_with_variadic, ret_str));
+        self.writeln(&format!(
+            "pub extern \"C\" fn {}({}){} {{",
+            sanitize_identifier(name),
+            params_with_variadic,
+            ret_str
+        ));
         self.indent += 1;
         self.writeln("// Stub body - replaced by MIR injection at compile time");
         self.writeln("unreachable!(\"Fragile: C++ MIR should be injected\")");
@@ -1967,14 +2249,24 @@ impl AstCodeGen {
         let mut base_fields = Vec::new();
         let mut base_idx = 0;
         for child in children {
-            if let ClangNodeKind::CXXBaseSpecifier { base_type, access, is_virtual, .. } = &child.kind {
+            if let ClangNodeKind::CXXBaseSpecifier {
+                base_type,
+                access,
+                is_virtual,
+                ..
+            } = &child.kind
+            {
                 if !matches!(access, crate::ast::AccessSpecifier::Private) {
                     if *is_virtual {
                         continue;
                     }
                     let base_name = base_type.to_rust_type_str();
                     // Use __base for single inheritance, __base0/__base1/etc for MI
-                    let field_name = if base_idx == 0 { "__base".to_string() } else { format!("__base{}", base_idx) };
+                    let field_name = if base_idx == 0 {
+                        "__base".to_string()
+                    } else {
+                        format!("__base{}", base_idx)
+                    };
                     self.writeln(&format!("pub {}: {},", field_name, base_name));
                     base_fields.push((field_name, base_type.clone()));
                     base_idx += 1;
@@ -1994,44 +2286,83 @@ impl AstCodeGen {
         // Then add derived class fields (including flattened anonymous struct fields)
         let mut fields = Vec::new();
         for child in children {
-            if let ClangNodeKind::FieldDecl { name: field_name, ty, access, .. } = &child.kind {
+            if let ClangNodeKind::FieldDecl {
+                name: field_name,
+                ty,
+                access,
+                ..
+            } = &child.kind
+            {
                 let sanitized_name = if field_name.is_empty() {
                     "_field".to_string()
                 } else {
                     sanitize_identifier(field_name)
                 };
                 let vis = access_to_visibility(*access);
-                self.writeln(&format!("{}{}: {},", vis, sanitized_name, ty.to_rust_type_str()));
+                self.writeln(&format!(
+                    "{}{}: {},",
+                    vis,
+                    sanitized_name,
+                    ty.to_rust_type_str()
+                ));
                 fields.push((sanitized_name, ty.clone()));
-            } else if let ClangNodeKind::RecordDecl { name: anon_name, .. } = &child.kind {
+            } else if let ClangNodeKind::RecordDecl {
+                name: anon_name, ..
+            } = &child.kind
+            {
                 // Flatten anonymous struct fields into parent
                 if anon_name.starts_with("(anonymous") || anon_name.starts_with("__anon_") {
                     for anon_child in &child.children {
-                        if let ClangNodeKind::FieldDecl { name: field_name, ty, access, .. } = &anon_child.kind {
+                        if let ClangNodeKind::FieldDecl {
+                            name: field_name,
+                            ty,
+                            access,
+                            ..
+                        } = &anon_child.kind
+                        {
                             let sanitized_name = if field_name.is_empty() {
                                 "_field".to_string()
                             } else {
                                 sanitize_identifier(field_name)
                             };
                             let vis = access_to_visibility(*access);
-                            self.writeln(&format!("{}{}: {},", vis, sanitized_name, ty.to_rust_type_str()));
+                            self.writeln(&format!(
+                                "{}{}: {},",
+                                vis,
+                                sanitized_name,
+                                ty.to_rust_type_str()
+                            ));
                             fields.push((sanitized_name, ty.clone()));
                         }
                     }
                 }
-            } else if let ClangNodeKind::UnionDecl { name: anon_name, .. } = &child.kind {
+            } else if let ClangNodeKind::UnionDecl {
+                name: anon_name, ..
+            } = &child.kind
+            {
                 // Flatten anonymous union fields into parent
                 // In C++, anonymous unions allow direct access to their members from the parent
                 if anon_name.starts_with("(anonymous") || anon_name.starts_with("__anon_union_") {
                     for anon_child in &child.children {
-                        if let ClangNodeKind::FieldDecl { name: field_name, ty, access, .. } = &anon_child.kind {
+                        if let ClangNodeKind::FieldDecl {
+                            name: field_name,
+                            ty,
+                            access,
+                            ..
+                        } = &anon_child.kind
+                        {
                             let sanitized_name = if field_name.is_empty() {
                                 "_field".to_string()
                             } else {
                                 sanitize_identifier(field_name)
                             };
                             let vis = access_to_visibility(*access);
-                            self.writeln(&format!("{}{}: {},", vis, sanitized_name, ty.to_rust_type_str()));
+                            self.writeln(&format!(
+                                "{}{}: {},",
+                                vis,
+                                sanitized_name,
+                                ty.to_rust_type_str()
+                            ));
                             fields.push((sanitized_name, ty.clone()));
                         }
                     }
@@ -2049,15 +2380,21 @@ impl AstCodeGen {
     }
 
     /// Generate an enum stub.
-    fn generate_enum_stub(&mut self, name: &str, is_scoped: bool, underlying_type: &CppType, children: &[ClangNode]) {
+    fn generate_enum_stub(
+        &mut self,
+        name: &str,
+        is_scoped: bool,
+        underlying_type: &CppType,
+        children: &[ClangNode],
+    ) {
         let kind = if is_scoped { "enum class" } else { "enum" };
         self.writeln(&format!("/// C++ {} `{}`", kind, name));
 
         // Generate as Rust enum
         // Use a valid primitive type for repr - fall back to i32 if the type is not a standard primitive
         let repr_type = match underlying_type.to_rust_type_str().as_str() {
-            "i8" | "i16" | "i32" | "i64" | "i128" | "isize" |
-            "u8" | "u16" | "u32" | "u64" | "u128" | "usize" => underlying_type.to_rust_type_str(),
+            "i8" | "i16" | "i32" | "i64" | "i128" | "isize" | "u8" | "u16" | "u32" | "u64"
+            | "u128" | "usize" => underlying_type.to_rust_type_str(),
             _ => "i32".to_string(),
         };
         self.writeln(&format!("#[repr({})]", repr_type));
@@ -2066,7 +2403,11 @@ impl AstCodeGen {
         self.indent += 1;
 
         for child in children {
-            if let ClangNodeKind::EnumConstantDecl { name: const_name, value } = &child.kind {
+            if let ClangNodeKind::EnumConstantDecl {
+                name: const_name,
+                value,
+            } = &child.kind
+            {
                 if let Some(v) = value {
                     self.writeln(&format!("{} = {},", const_name, v));
                 } else {
@@ -2098,14 +2439,25 @@ impl AstCodeGen {
         self.indent += 1;
 
         for child in children {
-            if let ClangNodeKind::FieldDecl { name: field_name, ty, access, .. } = &child.kind {
+            if let ClangNodeKind::FieldDecl {
+                name: field_name,
+                ty,
+                access,
+                ..
+            } = &child.kind
+            {
                 let sanitized_name = if field_name.is_empty() {
                     "_field".to_string()
                 } else {
                     sanitize_identifier(field_name)
                 };
                 let vis = access_to_visibility(*access);
-                self.writeln(&format!("{}{}: {},", vis, sanitized_name, ty.to_rust_type_str()));
+                self.writeln(&format!(
+                    "{}{}: {},",
+                    vis,
+                    sanitized_name,
+                    ty.to_rust_type_str()
+                ));
             }
         }
 
@@ -2117,46 +2469,86 @@ impl AstCodeGen {
     /// Generate a top-level declaration.
     fn generate_top_level(&mut self, node: &ClangNode) {
         match &node.kind {
-            ClangNodeKind::FunctionDecl { name, mangled_name, return_type, params, is_definition, is_variadic, is_coroutine, coroutine_info, .. } => {
+            ClangNodeKind::FunctionDecl {
+                name,
+                mangled_name,
+                return_type,
+                params,
+                is_definition,
+                is_variadic,
+                is_coroutine,
+                coroutine_info,
+                ..
+            } => {
                 if *is_definition {
-                    self.generate_function(name, mangled_name, return_type, params, *is_variadic, *is_coroutine, coroutine_info, &node.children);
+                    self.generate_function(
+                        name,
+                        mangled_name,
+                        return_type,
+                        params,
+                        *is_variadic,
+                        *is_coroutine,
+                        coroutine_info,
+                        &node.children,
+                    );
                 }
             }
-            ClangNodeKind::RecordDecl { name, is_class, is_definition, .. } => {
+            ClangNodeKind::RecordDecl {
+                name,
+                is_class,
+                is_definition,
+                ..
+            } => {
                 // Only generate struct for definitions, not forward declarations
                 if *is_definition {
                     self.generate_struct(name, *is_class, &node.children);
                 }
             }
-            ClangNodeKind::EnumDecl { name, is_scoped, underlying_type } => {
+            ClangNodeKind::EnumDecl {
+                name,
+                is_scoped,
+                underlying_type,
+            } => {
                 self.generate_enum(name, *is_scoped, underlying_type, &node.children);
             }
             ClangNodeKind::UnionDecl { name, .. } => {
                 self.generate_union(name, &node.children);
             }
-            ClangNodeKind::TypedefDecl { name, underlying_type } => {
+            ClangNodeKind::TypedefDecl {
+                name,
+                underlying_type,
+            } => {
                 self.generate_type_alias(name, underlying_type);
             }
-            ClangNodeKind::TypeAliasDecl { name, underlying_type } => {
+            ClangNodeKind::TypeAliasDecl {
+                name,
+                underlying_type,
+            } => {
                 self.generate_type_alias(name, underlying_type);
             }
             ClangNodeKind::VarDecl { name, ty, has_init } => {
                 // Skip out-of-class static member definitions (TypeRef child indicates qualified name)
                 // These are already handled in the class generation
-                let is_static_member_def = node.children.iter().any(|c| {
-                    matches!(&c.kind, ClangNodeKind::Unknown(s) if s.starts_with("TypeRef:"))
-                });
+                let is_static_member_def = node.children.iter().any(
+                    |c| matches!(&c.kind, ClangNodeKind::Unknown(s) if s.starts_with("TypeRef:")),
+                );
                 if !is_static_member_def {
                     self.generate_global_var(name, ty, *has_init, &node.children);
                 }
             }
-            ClangNodeKind::ModuleImportDecl { module_name, is_header_unit } => {
+            ClangNodeKind::ModuleImportDecl {
+                module_name,
+                is_header_unit,
+            } => {
                 // C++20 module import → comment for now (pending full module support)
                 // In the future, this could map to:
                 // - `use module_name::*;` for regular modules
                 // - `include!("header.rs");` for header units
                 if *is_header_unit {
-                    self.writeln(&format!("// C++20 header unit import: import <{}>", module_name));
+                    self.writeln(&format!(
+                        "// C++20 header unit import: import <{}>",
+                        module_name
+                    ));
                 } else {
                     // Convert module path separators (. or ::) to Rust path
                     let rust_path = module_name.replace('.', "::");
@@ -2164,7 +2556,10 @@ impl AstCodeGen {
                     // Generate a use statement as a placeholder
                     // When modules are fully implemented, this will become functional
                     if !rust_path.is_empty() {
-                        self.writeln(&format!("// use {}::*; // (pending module implementation)", sanitize_identifier(&rust_path)));
+                        self.writeln(&format!(
+                            "// use {}::*; // (pending module implementation)",
+                            sanitize_identifier(&rust_path)
+                        ));
                     }
                 }
             }
@@ -2207,7 +2602,9 @@ impl AstCodeGen {
 
                         // Use merged namespace contents from all occurrences
                         // This handles C++ namespace reopening (same namespace declared multiple times)
-                        if let Some(merged_indices) = self.merged_namespace_children.get(&module_key).cloned() {
+                        if let Some(merged_indices) =
+                            self.merged_namespace_children.get(&module_key).cloned()
+                        {
                             for idx in merged_indices {
                                 if let Some(child) = self.collected_nodes.get(idx).cloned() {
                                     self.generate_top_level(&child);
@@ -2254,19 +2651,34 @@ impl AstCodeGen {
                     self.writeln("");
                 }
             }
-            ClangNodeKind::ClassTemplateDecl { name: template_name, template_params, .. } => {
+            ClangNodeKind::ClassTemplateDecl {
+                name: template_name,
+                template_params,
+                ..
+            } => {
                 // Store template definition for later instantiation
                 // Children include TemplateTypeParmDecl (template params) and FieldDecl/CXXMethodDecl (members)
-                self.template_definitions.insert(template_name.clone(), (template_params.clone(), node.children.clone()));
+                self.template_definitions.insert(
+                    template_name.clone(),
+                    (template_params.clone(), node.children.clone()),
+                );
 
                 // Process children of class template to find implicit instantiations
                 for child in &node.children {
                     match &child.kind {
                         // Template instantiations appear as RecordDecl children with
                         // type names containing template arguments (e.g., "MyVec<int>")
-                        ClangNodeKind::RecordDecl { name: child_name, is_class, is_definition, .. } => {
+                        ClangNodeKind::RecordDecl {
+                            name: child_name,
+                            is_class,
+                            is_definition,
+                            ..
+                        } => {
                             // Only process instantiations (names with <...>) that are definitions
-                            if *is_definition && child_name.contains('<') && child_name.contains('>') {
+                            if *is_definition
+                                && child_name.contains('<')
+                                && child_name.contains('>')
+                            {
                                 self.generate_struct(child_name, *is_class, &child.children);
                             }
                         }
@@ -2282,7 +2694,13 @@ impl AstCodeGen {
                 // The name will include the specialization pattern (e.g., "Pair<T, T>")
                 // For now, process children to find any instantiations
                 for child in &node.children {
-                    if let ClangNodeKind::RecordDecl { name: child_name, is_class, is_definition, .. } = &child.kind {
+                    if let ClangNodeKind::RecordDecl {
+                        name: child_name,
+                        is_class,
+                        is_definition,
+                        ..
+                    } = &child.kind
+                    {
                         // Only generate for definitions
                         if *is_definition && child_name.contains('<') && child_name.contains('>') {
                             self.generate_struct(child_name, *is_class, &child.children);
@@ -2297,7 +2715,11 @@ impl AstCodeGen {
     /// Get the appropriate return type string for a function, considering coroutine info.
     /// For async coroutines with value type, uses the extracted type.
     /// For generators, could use impl Iterator<Item=T> (future enhancement).
-    fn get_coroutine_return_type(&self, return_type: &CppType, coroutine_info: &Option<CoroutineInfo>) -> String {
+    fn get_coroutine_return_type(
+        &self,
+        return_type: &CppType,
+        coroutine_info: &Option<CoroutineInfo>,
+    ) -> String {
         if let Some(info) = coroutine_info {
             // If we extracted a value type from the coroutine return type, use it
             if let Some(ref value_type) = info.value_type {
@@ -2312,7 +2734,10 @@ impl AstCodeGen {
                     CoroutineKind::Generator => {
                         // Generators should return impl Iterator<Item=T>
                         // Note: Rust generators are unstable, so this is forward-looking
-                        return format!(" -> impl Iterator<Item={}>", value_type.to_rust_type_str());
+                        return format!(
+                            " -> impl Iterator<Item={}>",
+                            value_type.to_rust_type_str()
+                        );
                     }
                     CoroutineKind::Custom => {
                         // Fall through to default handling
@@ -2358,7 +2783,10 @@ impl AstCodeGen {
         let struct_name = format!("{}Generator", to_pascal_case(func_name));
 
         // Generate the struct
-        self.writeln(&format!("/// State machine struct for generator `{}`", func_name));
+        self.writeln(&format!(
+            "/// State machine struct for generator `{}`",
+            func_name
+        ));
         self.writeln(&format!("pub struct {} {{", struct_name));
         self.indent += 1;
         self.writeln("__state: i32,");
@@ -2378,7 +2806,12 @@ impl AstCodeGen {
 
         // Generate match arms for each yield
         for (i, yield_val) in yields.iter().enumerate() {
-            self.writeln(&format!("{} => {{ self.__state = {}; Some({}) }}", i, i + 1, yield_val));
+            self.writeln(&format!(
+                "{} => {{ self.__state = {}; Some({}) }}",
+                i,
+                i + 1,
+                yield_val
+            ));
         }
 
         // Final state returns None
@@ -2394,15 +2827,26 @@ impl AstCodeGen {
     }
 
     /// Generate a function definition.
-    fn generate_function(&mut self, name: &str, mangled_name: &str, return_type: &CppType,
-                         params: &[(String, CppType)], is_variadic: bool, is_coroutine: bool,
-                         coroutine_info: &Option<CoroutineInfo>, children: &[ClangNode]) {
+    fn generate_function(
+        &mut self,
+        name: &str,
+        mangled_name: &str,
+        return_type: &CppType,
+        params: &[(String, CppType)],
+        is_variadic: bool,
+        is_coroutine: bool,
+        coroutine_info: &Option<CoroutineInfo>,
+        children: &[ClangNode],
+    ) {
         // Special handling for C++ main function
         let is_main = name == "main" && params.is_empty();
         let base_func_name = if is_main { "cpp_main" } else { name };
 
         // Handle function overloading by appending suffix for duplicates
-        let count = self.generated_functions.entry(base_func_name.to_string()).or_insert(0);
+        let count = self
+            .generated_functions
+            .entry(base_func_name.to_string())
+            .or_insert(0);
         let func_name = if *count == 0 {
             *count += 1;
             base_func_name.to_string()
@@ -2423,7 +2867,10 @@ impl AstCodeGen {
                 CoroutineKind::Task => "task",
                 CoroutineKind::Custom => "custom",
             };
-            self.writeln(&format!("/// Coroutine: {} ({})", kind_str, info.return_type_spelling));
+            self.writeln(&format!(
+                "/// Coroutine: {} ({})",
+                kind_str, info.return_type_spelling
+            ));
         }
 
         // Track reference, pointer, and array parameters - clear any from previous function
@@ -2437,7 +2884,8 @@ impl AstCodeGen {
             // Unsized arrays in function parameters are actually pointers in C++
             // (int arr[] is equivalent to int* arr)
             if matches!(param_type, CppType::Pointer { .. })
-                || matches!(param_type, CppType::Array { size: None, .. }) {
+                || matches!(param_type, CppType::Array { size: None, .. })
+            {
                 self.ptr_vars.insert(param_name.clone());
             }
             // Only track sized arrays as arrays
@@ -2449,7 +2897,8 @@ impl AstCodeGen {
         // Function signature - convert polymorphic pointers to trait objects
         // Deduplicate parameter names (C++ allows unnamed params, Rust doesn't)
         let mut param_name_counts: HashMap<String, usize> = HashMap::new();
-        let params_str = params.iter()
+        let params_str = params
+            .iter()
             .map(|(n, t)| {
                 let type_str = self.convert_type_for_polymorphism(t);
                 let mut param_name = sanitize_identifier(n);
@@ -2468,16 +2917,18 @@ impl AstCodeGen {
         let ret_str = self.get_coroutine_return_type(return_type, coroutine_info);
 
         // Check if this is a generator
-        let is_generator = is_coroutine && matches!(
-            coroutine_info.as_ref().map(|i| i.kind),
-            Some(CoroutineKind::Generator)
-        );
+        let is_generator = is_coroutine
+            && matches!(
+                coroutine_info.as_ref().map(|i| i.kind),
+                Some(CoroutineKind::Generator)
+            );
 
         // Determine if this should be an async function
-        let is_async = is_coroutine && matches!(
-            coroutine_info.as_ref().map(|i| i.kind),
-            Some(CoroutineKind::Async) | Some(CoroutineKind::Task) | None
-        );
+        let is_async = is_coroutine
+            && matches!(
+                coroutine_info.as_ref().map(|i| i.kind),
+                Some(CoroutineKind::Async) | Some(CoroutineKind::Task) | None
+            );
 
         // Handle generators with state machine
         if is_generator {
@@ -2500,7 +2951,12 @@ impl AstCodeGen {
 
             // Generate the function that returns the generator
             let struct_name = format!("{}Generator", to_pascal_case(&func_name));
-            self.writeln(&format!("pub fn {}({}){} {{", sanitize_identifier(&func_name), params_str, ret_str));
+            self.writeln(&format!(
+                "pub fn {}({}){} {{",
+                sanitize_identifier(&func_name),
+                params_str,
+                ret_str
+            ));
             self.indent += 1;
             self.writeln(&format!("{} {{ __state: 0 }}", struct_name));
             self.indent -= 1;
@@ -2527,7 +2983,14 @@ impl AstCodeGen {
             } else {
                 ("", "")
             };
-            self.writeln(&format!("pub {}{}fn {}({}){} {{", async_keyword, extern_c, sanitize_identifier(&func_name), params_with_variadic, ret_str));
+            self.writeln(&format!(
+                "pub {}{}fn {}({}){} {{",
+                async_keyword,
+                extern_c,
+                sanitize_identifier(&func_name),
+                params_with_variadic,
+                ret_str
+            ));
             self.indent += 1;
 
             // Find the compound statement (function body)
@@ -2563,7 +3026,14 @@ impl AstCodeGen {
         let mut group_index = 0;
 
         for (idx, child) in children.iter().enumerate() {
-            if let ClangNodeKind::FieldDecl { name: field_name, ty, access, is_static, bit_field_width } = &child.kind {
+            if let ClangNodeKind::FieldDecl {
+                name: field_name,
+                ty,
+                access,
+                is_static,
+                bit_field_width,
+            } = &child.kind
+            {
                 if *is_static {
                     continue; // Static fields handled separately
                 }
@@ -2659,14 +3129,21 @@ impl AstCodeGen {
 
                 // Getter: extract bits and cast to original type
                 self.writeln(&format!("/// Getter for bit field `{}`", field.field_name));
-                self.writeln(&format!("{}fn {}(&self) -> {} {{", vis, field_name, ret_type));
+                self.writeln(&format!(
+                    "{}fn {}(&self) -> {} {{",
+                    vis, field_name, ret_type
+                ));
                 self.indent += 1;
                 if field.offset == 0 {
-                    self.writeln(&format!("(self.{} & 0x{:X}) as {}",
-                        storage_field, mask, ret_type));
+                    self.writeln(&format!(
+                        "(self.{} & 0x{:X}) as {}",
+                        storage_field, mask, ret_type
+                    ));
                 } else {
-                    self.writeln(&format!("((self.{} >> {}) & 0x{:X}) as {}",
-                        storage_field, field.offset, mask, ret_type));
+                    self.writeln(&format!(
+                        "((self.{} >> {}) & 0x{:X}) as {}",
+                        storage_field, field.offset, mask, ret_type
+                    ));
                 }
                 self.indent -= 1;
                 self.writeln("}");
@@ -2674,15 +3151,27 @@ impl AstCodeGen {
 
                 // Setter: clear bits and set new value
                 self.writeln(&format!("/// Setter for bit field `{}`", field.field_name));
-                self.writeln(&format!("{}fn set_{}(&mut self, v: {}) {{", vis, field_name, ret_type));
+                self.writeln(&format!(
+                    "{}fn set_{}(&mut self, v: {}) {{",
+                    vis, field_name, ret_type
+                ));
                 self.indent += 1;
                 if field.offset == 0 {
-                    self.writeln(&format!("self.{} = (self.{} & !0x{:X}) | ((v as {}) & 0x{:X});",
-                        storage_field, storage_field, mask, storage_type, mask));
+                    self.writeln(&format!(
+                        "self.{} = (self.{} & !0x{:X}) | ((v as {}) & 0x{:X});",
+                        storage_field, storage_field, mask, storage_type, mask
+                    ));
                 } else {
                     let shifted_mask = mask << field.offset;
-                    self.writeln(&format!("self.{} = (self.{} & !0x{:X}) | (((v as {}) & 0x{:X}) << {});",
-                        storage_field, storage_field, shifted_mask, storage_type, mask, field.offset));
+                    self.writeln(&format!(
+                        "self.{} = (self.{} & !0x{:X}) | (((v as {}) & 0x{:X}) << {});",
+                        storage_field,
+                        storage_field,
+                        shifted_mask,
+                        storage_type,
+                        mask,
+                        field.offset
+                    ));
                 }
                 self.indent -= 1;
                 self.writeln("}");
@@ -2773,7 +3262,14 @@ impl AstCodeGen {
         // Check if there's an explicit copy constructor - if so, we'll generate Clone impl later
         // Otherwise, derive Clone along with Default
         let has_explicit_copy_ctor = children.iter().any(|child| {
-            matches!(&child.kind, ClangNodeKind::ConstructorDecl { ctor_kind: ConstructorKind::Copy, is_definition: true, .. })
+            matches!(
+                &child.kind,
+                ClangNodeKind::ConstructorDecl {
+                    ctor_kind: ConstructorKind::Copy,
+                    is_definition: true,
+                    ..
+                }
+            )
         });
 
         let kind = if is_class { "class" } else { "struct" };
@@ -2794,7 +3290,13 @@ impl AstCodeGen {
         let mut base_fields = Vec::new();
         let mut base_idx = 0;
         for child in children {
-            if let ClangNodeKind::CXXBaseSpecifier { base_type, access, is_virtual, .. } = &child.kind {
+            if let ClangNodeKind::CXXBaseSpecifier {
+                base_type,
+                access,
+                is_virtual,
+                ..
+            } = &child.kind
+            {
                 // Only include public/protected bases (private inheritance is more complex)
                 if !matches!(access, crate::ast::AccessSpecifier::Private) {
                     if *is_virtual {
@@ -2802,7 +3304,11 @@ impl AstCodeGen {
                     }
                     let base_name = base_type.to_rust_type_str();
                     // Use __base for first base (backward compatible), __base1/__base2/etc for MI
-                    let field_name = if base_idx == 0 { "__base".to_string() } else { format!("__base{}", base_idx) };
+                    let field_name = if base_idx == 0 {
+                        "__base".to_string()
+                    } else {
+                        format!("__base{}", base_idx)
+                    };
                     self.writeln(&format!("/// Inherited from `{}`", base_name));
                     self.writeln(&format!("pub {}: {},", field_name, base_name));
                     base_fields.push((field_name, base_type.clone()));
@@ -2826,7 +3332,8 @@ impl AstCodeGen {
 
         // Store bit field groups for this struct (for accessor generation)
         if !bit_groups.is_empty() {
-            self.bit_field_groups.insert(name.to_string(), bit_groups.clone());
+            self.bit_field_groups
+                .insert(name.to_string(), bit_groups.clone());
         }
 
         // Generate bit field storage fields first
@@ -2842,7 +3349,14 @@ impl AstCodeGen {
         let mut fields = Vec::new();
         for &idx in &regular_indices {
             let child = &children[idx];
-            if let ClangNodeKind::FieldDecl { name: fname, ty, is_static, access, bit_field_width } = &child.kind {
+            if let ClangNodeKind::FieldDecl {
+                name: fname,
+                ty,
+                is_static,
+                access,
+                bit_field_width,
+            } = &child.kind
+            {
                 if *is_static || bit_field_width.is_some() {
                     continue; // Static fields handled separately, bit fields handled above
                 }
@@ -2852,13 +3366,28 @@ impl AstCodeGen {
                     sanitize_identifier(fname)
                 };
                 let vis = access_to_visibility(*access);
-                self.writeln(&format!("{}{}: {},", vis, sanitized_name, ty.to_rust_type_str()));
+                self.writeln(&format!(
+                    "{}{}: {},",
+                    vis,
+                    sanitized_name,
+                    ty.to_rust_type_str()
+                ));
                 fields.push((sanitized_name, ty.clone()));
-            } else if let ClangNodeKind::RecordDecl { name: anon_name, .. } = &child.kind {
+            } else if let ClangNodeKind::RecordDecl {
+                name: anon_name, ..
+            } = &child.kind
+            {
                 // Flatten anonymous struct fields into parent
                 if anon_name.starts_with("(anonymous") || anon_name.starts_with("__anon_") {
                     for anon_child in &child.children {
-                        if let ClangNodeKind::FieldDecl { name: fname, ty, is_static, access, bit_field_width } = &anon_child.kind {
+                        if let ClangNodeKind::FieldDecl {
+                            name: fname,
+                            ty,
+                            is_static,
+                            access,
+                            bit_field_width,
+                        } = &anon_child.kind
+                        {
                             if *is_static || bit_field_width.is_some() {
                                 continue;
                             }
@@ -2868,17 +3397,32 @@ impl AstCodeGen {
                                 sanitize_identifier(fname)
                             };
                             let vis = access_to_visibility(*access);
-                            self.writeln(&format!("{}{}: {},", vis, sanitized_name, ty.to_rust_type_str()));
+                            self.writeln(&format!(
+                                "{}{}: {},",
+                                vis,
+                                sanitized_name,
+                                ty.to_rust_type_str()
+                            ));
                             fields.push((sanitized_name, ty.clone()));
                         }
                     }
                 }
-            } else if let ClangNodeKind::UnionDecl { name: anon_name, .. } = &child.kind {
+            } else if let ClangNodeKind::UnionDecl {
+                name: anon_name, ..
+            } = &child.kind
+            {
                 // Flatten anonymous union fields into parent
                 // In C++, anonymous unions allow direct access to their members from the parent
                 if anon_name.starts_with("(anonymous") || anon_name.starts_with("__anon_union_") {
                     for anon_child in &child.children {
-                        if let ClangNodeKind::FieldDecl { name: fname, ty, is_static, access, bit_field_width } = &anon_child.kind {
+                        if let ClangNodeKind::FieldDecl {
+                            name: fname,
+                            ty,
+                            is_static,
+                            access,
+                            bit_field_width,
+                        } = &anon_child.kind
+                        {
                             if *is_static || bit_field_width.is_some() {
                                 continue;
                             }
@@ -2888,7 +3432,12 @@ impl AstCodeGen {
                                 sanitize_identifier(fname)
                             };
                             let vis = access_to_visibility(*access);
-                            self.writeln(&format!("{}{}: {},", vis, sanitized_name, ty.to_rust_type_str()));
+                            self.writeln(&format!(
+                                "{}{}: {},",
+                                vis,
+                                sanitized_name,
+                                ty.to_rust_type_str()
+                            ));
                             fields.push((sanitized_name, ty.clone()));
                         }
                     }
@@ -2919,18 +3468,32 @@ impl AstCodeGen {
 
         // Generate static member variables as globals
         for child in children {
-            if let ClangNodeKind::FieldDecl { name: field_name, ty, is_static: true, .. } = &child.kind {
+            if let ClangNodeKind::FieldDecl {
+                name: field_name,
+                ty,
+                is_static: true,
+                ..
+            } = &child.kind
+            {
                 let sanitized_field = sanitize_identifier(field_name);
                 let sanitized_struct = sanitize_identifier(name);
                 let rust_ty = ty.to_rust_type_str();
-                let global_name = format!("{}_{}", sanitized_struct.to_uppercase(), sanitized_field.to_uppercase());
+                let global_name = format!(
+                    "{}_{}",
+                    sanitized_struct.to_uppercase(),
+                    sanitized_field.to_uppercase()
+                );
                 self.writeln("");
                 self.writeln(&format!("/// Static member `{}::{}`", name, field_name));
-                self.writeln(&format!("static mut {}: {} = {};",
-                    global_name, rust_ty,
-                    Self::default_value_for_type(ty)));
+                self.writeln(&format!(
+                    "static mut {}: {} = {};",
+                    global_name,
+                    rust_ty,
+                    Self::default_value_for_type(ty)
+                ));
                 // Register the static member for later lookup
-                self.static_members.insert((name.to_string(), field_name.clone()), global_name);
+                self.static_members
+                    .insert((name.to_string(), field_name.clone()), global_name);
             }
         }
 
@@ -2940,10 +3503,21 @@ impl AstCodeGen {
         });
 
         // Generate impl block for methods
-        let methods: Vec<_> = children.iter().filter(|c| {
-            matches!(&c.kind, ClangNodeKind::CXXMethodDecl { is_definition: true, .. } |
-                              ClangNodeKind::ConstructorDecl { is_definition: true, .. })
-        }).collect();
+        let methods: Vec<_> = children
+            .iter()
+            .filter(|c| {
+                matches!(
+                    &c.kind,
+                    ClangNodeKind::CXXMethodDecl {
+                        is_definition: true,
+                        ..
+                    } | ClangNodeKind::ConstructorDecl {
+                        is_definition: true,
+                        ..
+                    }
+                )
+            })
+            .collect();
 
         // Check if we have bit fields that need accessor methods
         let has_bit_fields = self.bit_field_groups.contains_key(name);
@@ -2986,7 +3560,11 @@ impl AstCodeGen {
 
         // Generate Drop impl if there's a destructor
         for child in children {
-            if let ClangNodeKind::DestructorDecl { is_definition: true, .. } = &child.kind {
+            if let ClangNodeKind::DestructorDecl {
+                is_definition: true,
+                ..
+            } = &child.kind
+            {
                 self.writeln("");
                 self.writeln(&format!("impl Drop for {} {{", rust_name));
                 self.indent += 1;
@@ -3041,10 +3619,20 @@ impl AstCodeGen {
                         let base_access = if base.is_virtual {
                             BaseAccess::VirtualPtr(self.virtual_base_field_name(&base.name))
                         } else {
-                            let field_name = if non_virtual_idx == 0 { "__base".to_string() } else { format!("__base{}", non_virtual_idx) };
+                            let field_name = if non_virtual_idx == 0 {
+                                "__base".to_string()
+                            } else {
+                                format!("__base{}", non_virtual_idx)
+                            };
                             BaseAccess::DirectField(field_name)
                         };
-                        self.generate_trait_impl(name, &base.name, &methods, children, Some(base_access));
+                        self.generate_trait_impl(
+                            name,
+                            &base.name,
+                            &methods,
+                            children,
+                            Some(base_access),
+                        );
                     }
                 }
                 if !base.is_virtual {
@@ -3057,11 +3645,20 @@ impl AstCodeGen {
     }
 
     /// Generate an enum definition.
-    fn generate_enum(&mut self, name: &str, is_scoped: bool, underlying_type: &CppType, children: &[ClangNode]) {
+    fn generate_enum(
+        &mut self,
+        name: &str,
+        is_scoped: bool,
+        underlying_type: &CppType,
+        children: &[ClangNode],
+    ) {
         // Skip enums with dependent types (template parameters)
         let repr_type = underlying_type.to_rust_type_str();
-        if repr_type == "_dependent_type" || repr_type == "integral_constant__Tp____v" ||
-           repr_type.starts_with("type_parameter_") || repr_type.contains("_parameter_") {
+        if repr_type == "_dependent_type"
+            || repr_type == "integral_constant__Tp____v"
+            || repr_type.starts_with("type_parameter_")
+            || repr_type.contains("_parameter_")
+        {
             return;
         }
 
@@ -3070,13 +3667,25 @@ impl AstCodeGen {
         if name.starts_with("(unnamed") || name.contains(" at ") {
             // For unnamed enums with constants, generate the constants as standalone constants
             for child in children {
-                if let ClangNodeKind::EnumConstantDecl { name: const_name, value } = &child.kind {
+                if let ClangNodeKind::EnumConstantDecl {
+                    name: const_name,
+                    value,
+                } = &child.kind
+                {
                     if let Some(v) = value {
-                        self.writeln(&format!("pub const {}: {} = {};", sanitize_identifier(const_name), repr_type, v));
+                        self.writeln(&format!(
+                            "pub const {}: {} = {};",
+                            sanitize_identifier(const_name),
+                            repr_type,
+                            v
+                        ));
                     }
                 }
             }
-            if children.iter().any(|c| matches!(&c.kind, ClangNodeKind::EnumConstantDecl { .. })) {
+            if children
+                .iter()
+                .any(|c| matches!(&c.kind, ClangNodeKind::EnumConstantDecl { .. }))
+            {
                 self.writeln("");
             }
             return;
@@ -3097,13 +3706,15 @@ impl AstCodeGen {
         // Generate as Rust enum
         // Use a valid primitive type for repr - fall back to i32 if the type is not a standard primitive
         let repr_type = match underlying_type.to_rust_type_str().as_str() {
-            "i8" | "i16" | "i32" | "i64" | "i128" | "isize" |
-            "u8" | "u16" | "u32" | "u64" | "u128" | "usize" => underlying_type.to_rust_type_str(),
+            "i8" | "i16" | "i32" | "i64" | "i128" | "isize" | "u8" | "u16" | "u32" | "u64"
+            | "u128" | "usize" => underlying_type.to_rust_type_str(),
             _ => "i32".to_string(), // Default to i32 for non-primitive underlying types
         };
 
         // Check if this is an empty enum (no variants)
-        let has_variants = children.iter().any(|c| matches!(&c.kind, ClangNodeKind::EnumConstantDecl { .. }));
+        let has_variants = children
+            .iter()
+            .any(|c| matches!(&c.kind, ClangNodeKind::EnumConstantDecl { .. }));
 
         if has_variants {
             // First pass: collect all variants and detect duplicates
@@ -3111,7 +3722,11 @@ impl AstCodeGen {
             let mut duplicates: Vec<(String, i64, String)> = Vec::new(); // (alias_name, value, original_name)
 
             for child in children {
-                if let ClangNodeKind::EnumConstantDecl { name: const_name, value } = &child.kind {
+                if let ClangNodeKind::EnumConstantDecl {
+                    name: const_name,
+                    value,
+                } = &child.kind
+                {
                     let safe_const_name = sanitize_identifier(const_name);
                     if let Some(v) = value {
                         if let Some(original) = seen_values.get(v) {
@@ -3131,12 +3746,19 @@ impl AstCodeGen {
 
             let mut first = true;
             for child in children {
-                if let ClangNodeKind::EnumConstantDecl { name: const_name, value } = &child.kind {
+                if let ClangNodeKind::EnumConstantDecl {
+                    name: const_name,
+                    value,
+                } = &child.kind
+                {
                     // Sanitize enum constant names (e.g., "unsized" is a Rust reserved keyword)
                     let safe_const_name = sanitize_identifier(const_name);
 
                     // Skip if this is a duplicate value alias
-                    if duplicates.iter().any(|(alias, _, _)| alias == &safe_const_name) {
+                    if duplicates
+                        .iter()
+                        .any(|(alias, _, _)| alias == &safe_const_name)
+                    {
                         continue;
                     }
 
@@ -3158,8 +3780,13 @@ impl AstCodeGen {
 
             // Generate const aliases for duplicate values
             for (alias_name, _value, original_name) in &duplicates {
-                self.writeln(&format!("pub const {}: {} = {}::{};",
-                    alias_name.to_uppercase(), safe_name, safe_name, original_name));
+                self.writeln(&format!(
+                    "pub const {}: {} = {}::{};",
+                    alias_name.to_uppercase(),
+                    safe_name,
+                    safe_name,
+                    original_name
+                ));
             }
         } else {
             // Empty enum - generate as a zero-sized struct instead (Rust doesn't support repr on empty enums)
@@ -3212,7 +3839,14 @@ impl AstCodeGen {
 
         let mut fields = Vec::new();
         for child in children {
-            if let ClangNodeKind::FieldDecl { name: field_name, ty, is_static, access, .. } = &child.kind {
+            if let ClangNodeKind::FieldDecl {
+                name: field_name,
+                ty,
+                is_static,
+                access,
+                ..
+            } = &child.kind
+            {
                 if *is_static {
                     continue;
                 }
@@ -3225,7 +3859,8 @@ impl AstCodeGen {
                 let type_str = ty.to_rust_type_str();
                 // Wrap non-Copy types in ManuallyDrop for union compatibility
                 // c_void is used as placeholder for template types and doesn't impl Copy
-                let wrapped_type = if type_str == "std::ffi::c_void" || type_str.contains("c_void") {
+                let wrapped_type = if type_str == "std::ffi::c_void" || type_str.contains("c_void")
+                {
                     format!("std::mem::ManuallyDrop<{}>", type_str)
                 } else {
                     type_str
@@ -3292,7 +3927,13 @@ impl AstCodeGen {
     }
 
     /// Generate a global variable declaration.
-    fn generate_global_var(&mut self, name: &str, ty: &CppType, _has_init: bool, children: &[ClangNode]) {
+    fn generate_global_var(
+        &mut self,
+        name: &str,
+        ty: &CppType,
+        _has_init: bool,
+        children: &[ClangNode],
+    ) {
         // Sanitize the name to handle special characters and keywords
         let safe_name = sanitize_identifier(name);
 
@@ -3304,8 +3945,11 @@ impl AstCodeGen {
         // Skip template non-type parameters and dependent types
         // These are placeholder types from templates that shouldn't become global variables
         let rust_type = ty.to_rust_type_str();
-        if rust_type == "_dependent_type" || rust_type == "integral_constant__Tp____v" ||
-           rust_type.starts_with("type_parameter_") || rust_type.contains("_parameter_") {
+        if rust_type == "_dependent_type"
+            || rust_type == "integral_constant__Tp____v"
+            || rust_type.starts_with("type_parameter_")
+            || rust_type.contains("_parameter_")
+        {
             return;
         }
         // Track this as a global variable (needs unsafe access and deduplication)
@@ -3320,9 +3964,14 @@ impl AstCodeGen {
         // - Regular variables have their initializer as first child
         let init_value = if !children.is_empty() {
             // Find the actual initializer, skipping TypeRef for qualified definitions
-            let init_idx = if matches!(&children[0].kind, ClangNodeKind::Unknown(s) if s.starts_with("TypeRef:")) {
+            let init_idx = if matches!(&children[0].kind, ClangNodeKind::Unknown(s) if s.starts_with("TypeRef:"))
+            {
                 // Skip TypeRef child for qualified definitions like "int Counter::count = 0"
-                if children.len() > 1 { Some(1) } else { None }
+                if children.len() > 1 {
+                    Some(1)
+                } else {
+                    None
+                }
             } else {
                 Some(0)
             };
@@ -3375,14 +4024,20 @@ impl AstCodeGen {
             Self::default_value_for_static(ty)
         };
 
-        self.writeln(&format!("static mut {}: {} = {};", safe_name, rust_type, init_value));
+        self.writeln(&format!(
+            "static mut {}: {} = {};",
+            safe_name, rust_type, init_value
+        ));
         self.writeln("");
     }
 
     /// Generate a const-safe default value for static variables.
     fn default_value_for_static(ty: &CppType) -> String {
         match ty {
-            CppType::Int { .. } | CppType::Short { .. } | CppType::Long { .. } | CppType::LongLong { .. }
+            CppType::Int { .. }
+            | CppType::Short { .. }
+            | CppType::Long { .. }
+            | CppType::LongLong { .. }
             | CppType::Char { .. } => "0".to_string(),
             CppType::Float => "0.0f32".to_string(),
             CppType::Double => "0.0f64".to_string(),
@@ -3417,8 +4072,16 @@ impl AstCodeGen {
             let return_type = method.return_type.to_rust_type_str();
 
             // Build parameter list (skip first param which is self)
-            let params: Vec<String> = method.params.iter()
-                .map(|(pname, ptype)| format!("{}: {}", sanitize_identifier(pname), ptype.to_rust_type_str()))
+            let params: Vec<String> = method
+                .params
+                .iter()
+                .map(|(pname, ptype)| {
+                    format!(
+                        "{}: {}",
+                        sanitize_identifier(pname),
+                        ptype.to_rust_type_str()
+                    )
+                })
                 .collect();
 
             let params_str = if params.is_empty() {
@@ -3430,7 +4093,10 @@ impl AstCodeGen {
             if return_type == "()" {
                 self.writeln(&format!("fn {}({});", method_name, params_str));
             } else {
-                self.writeln(&format!("fn {}({}) -> {};", method_name, params_str, return_type));
+                self.writeln(&format!(
+                    "fn {}({}) -> {};",
+                    method_name, params_str, return_type
+                ));
             }
         }
 
@@ -3440,7 +4106,14 @@ impl AstCodeGen {
 
     /// Generate trait implementation for a class.
     /// base_access is the access path to delegate to if this is a derived class.
-    fn generate_trait_impl(&mut self, class_name: &str, trait_class: &str, methods: &[VirtualMethodInfo], children: &[ClangNode], base_access: Option<BaseAccess>) {
+    fn generate_trait_impl(
+        &mut self,
+        class_name: &str,
+        trait_class: &str,
+        methods: &[VirtualMethodInfo],
+        children: &[ClangNode],
+        base_access: Option<BaseAccess>,
+    ) {
         self.writeln("");
         self.writeln(&format!("impl {}Trait for {} {{", trait_class, class_name));
         self.indent += 1;
@@ -3450,8 +4123,16 @@ impl AstCodeGen {
             let return_type = method.return_type.to_rust_type_str();
 
             // Build parameter list
-            let params: Vec<String> = method.params.iter()
-                .map(|(pname, ptype)| format!("{}: {}", sanitize_identifier(pname), ptype.to_rust_type_str()))
+            let params: Vec<String> = method
+                .params
+                .iter()
+                .map(|(pname, ptype)| {
+                    format!(
+                        "{}: {}",
+                        sanitize_identifier(pname),
+                        ptype.to_rust_type_str()
+                    )
+                })
                 .collect();
 
             let params_str = if params.is_empty() {
@@ -3469,13 +4150,18 @@ impl AstCodeGen {
             if return_type == "()" {
                 self.writeln(&format!("fn {}({}) {{", method_name, params_str));
             } else {
-                self.writeln(&format!("fn {}({}) -> {} {{", method_name, params_str, return_type));
+                self.writeln(&format!(
+                    "fn {}({}) -> {} {{",
+                    method_name, params_str, return_type
+                ));
             }
             self.indent += 1;
 
             if has_override || class_name == trait_class {
                 // Call the actual method on self
-                let args: Vec<String> = method.params.iter()
+                let args: Vec<String> = method
+                    .params
+                    .iter()
                     .map(|(pname, _)| sanitize_identifier(pname))
                     .collect();
                 if args.is_empty() {
@@ -3485,28 +4171,45 @@ impl AstCodeGen {
                 }
             } else if let Some(ref base_access) = base_access {
                 // Delegate to the correct base class field
-                let args: Vec<String> = method.params.iter()
+                let args: Vec<String> = method
+                    .params
+                    .iter()
                     .map(|(pname, _)| sanitize_identifier(pname))
                     .collect();
                 match base_access {
                     BaseAccess::VirtualPtr(field) => {
                         if args.is_empty() {
-                            self.writeln(&format!("unsafe {{ (*self.{}).{}() }}", field, method_name));
+                            self.writeln(&format!(
+                                "unsafe {{ (*self.{}).{}() }}",
+                                field, method_name
+                            ));
                         } else {
-                            self.writeln(&format!("unsafe {{ (*self.{}).{}({}) }}", field, method_name, args.join(", ")));
+                            self.writeln(&format!(
+                                "unsafe {{ (*self.{}).{}({}) }}",
+                                field,
+                                method_name,
+                                args.join(", ")
+                            ));
                         }
                     }
                     BaseAccess::DirectField(field) | BaseAccess::FieldChain(field) => {
                         if args.is_empty() {
                             self.writeln(&format!("self.{}.{}()", field, method_name));
                         } else {
-                            self.writeln(&format!("self.{}.{}({})", field, method_name, args.join(", ")));
+                            self.writeln(&format!(
+                                "self.{}.{}({})",
+                                field,
+                                method_name,
+                                args.join(", ")
+                            ));
                         }
                     }
                 }
             } else {
                 // Fallback to __base (shouldn't happen with proper calls)
-                let args: Vec<String> = method.params.iter()
+                let args: Vec<String> = method
+                    .params
+                    .iter()
                     .map(|(pname, _)| sanitize_identifier(pname))
                     .collect();
                 if args.is_empty() {
@@ -3550,7 +4253,11 @@ impl AstCodeGen {
     /// Check if a method modifies self (has assignments to member fields).
     fn method_modifies_self(node: &ClangNode) -> bool {
         // Check if this node is an assignment to a member
-        if let ClangNodeKind::BinaryOperator { op: BinaryOp::Assign, .. } = &node.kind {
+        if let ClangNodeKind::BinaryOperator {
+            op: BinaryOp::Assign,
+            ..
+        } = &node.kind
+        {
             // Left side of assignment - check if it's a member expression
             if !node.children.is_empty() {
                 if Self::is_member_access(&node.children[0]) {
@@ -3561,10 +4268,16 @@ impl AstCodeGen {
         // Also check compound assignment operators
         if let ClangNodeKind::BinaryOperator { op, .. } = &node.kind {
             match op {
-                BinaryOp::AddAssign | BinaryOp::SubAssign | BinaryOp::MulAssign |
-                BinaryOp::DivAssign | BinaryOp::RemAssign | BinaryOp::AndAssign |
-                BinaryOp::OrAssign | BinaryOp::XorAssign | BinaryOp::ShlAssign |
-                BinaryOp::ShrAssign => {
+                BinaryOp::AddAssign
+                | BinaryOp::SubAssign
+                | BinaryOp::MulAssign
+                | BinaryOp::DivAssign
+                | BinaryOp::RemAssign
+                | BinaryOp::AndAssign
+                | BinaryOp::OrAssign
+                | BinaryOp::XorAssign
+                | BinaryOp::ShlAssign
+                | BinaryOp::ShrAssign => {
                     if !node.children.is_empty() {
                         if Self::is_member_access(&node.children[0]) {
                             return true;
@@ -3610,14 +4323,22 @@ impl AstCodeGen {
 
     /// Extract member assignments from a constructor body.
     /// Looks for patterns like `this->field = value;` or `field = value;`
-    fn extract_member_assignments(node: &ClangNode, initializers: &mut Vec<(String, String)>, codegen: &AstCodeGen) {
+    fn extract_member_assignments(
+        node: &ClangNode,
+        initializers: &mut Vec<(String, String)>,
+        codegen: &AstCodeGen,
+    ) {
         for child in &node.children {
             // Look for ExprStmt containing BinaryOperator with Assign
             if let ClangNodeKind::ExprStmt = &child.kind {
                 if !child.children.is_empty() {
                     Self::extract_assignment(&child.children[0], initializers, codegen);
                 }
-            } else if let ClangNodeKind::BinaryOperator { op: BinaryOp::Assign, .. } = &child.kind {
+            } else if let ClangNodeKind::BinaryOperator {
+                op: BinaryOp::Assign,
+                ..
+            } = &child.kind
+            {
                 Self::extract_assignment(child, initializers, codegen);
             }
             // Recursively check compound statements
@@ -3628,8 +4349,16 @@ impl AstCodeGen {
     }
 
     /// Extract a single member assignment from a BinaryOperator node.
-    fn extract_assignment(node: &ClangNode, initializers: &mut Vec<(String, String)>, codegen: &AstCodeGen) {
-        if let ClangNodeKind::BinaryOperator { op: BinaryOp::Assign, .. } = &node.kind {
+    fn extract_assignment(
+        node: &ClangNode,
+        initializers: &mut Vec<(String, String)>,
+        codegen: &AstCodeGen,
+    ) {
+        if let ClangNodeKind::BinaryOperator {
+            op: BinaryOp::Assign,
+            ..
+        } = &node.kind
+        {
             if node.children.len() >= 2 {
                 // Get member name from left side
                 if let Some(member_name) = Self::get_member_name(&node.children[0]) {
@@ -3702,7 +4431,9 @@ impl AstCodeGen {
     /// Check if an expression is *this
     fn expr_is_this(node: &ClangNode) -> bool {
         match &node.kind {
-            ClangNodeKind::UnaryOperator { op: UnaryOp::Deref, .. } => {
+            ClangNodeKind::UnaryOperator {
+                op: UnaryOp::Deref, ..
+            } => {
                 // *this pattern
                 if !node.children.is_empty() {
                     if let ClangNodeKind::CXXThisExpr { .. } = &node.children[0].kind {
@@ -3751,7 +4482,10 @@ impl AstCodeGen {
                 }
                 false
             }
-            ClangNodeKind::BinaryOperator { op: BinaryOp::Assign, .. } => {
+            ClangNodeKind::BinaryOperator {
+                op: BinaryOp::Assign,
+                ..
+            } => {
                 if node.children.len() >= 2 {
                     // Check if left side is a member access (instance field)
                     if let Some(_name) = Self::get_member_name(&node.children[0]) {
@@ -3845,13 +4579,13 @@ impl AstCodeGen {
                     // Skip type references and function references
                     match &child.kind {
                         ClangNodeKind::Unknown(s) if s == "TypeRef" => continue,
-                        ClangNodeKind::DeclRefExpr { .. } |
-                        ClangNodeKind::IntegerLiteral { .. } |
-                        ClangNodeKind::FloatingLiteral { .. } |
-                        ClangNodeKind::BoolLiteral(_) |
-                        ClangNodeKind::ImplicitCastExpr { .. } |
-                        ClangNodeKind::BinaryOperator { .. } |
-                        ClangNodeKind::UnaryOperator { .. } => {
+                        ClangNodeKind::DeclRefExpr { .. }
+                        | ClangNodeKind::IntegerLiteral { .. }
+                        | ClangNodeKind::FloatingLiteral { .. }
+                        | ClangNodeKind::BoolLiteral(_)
+                        | ClangNodeKind::ImplicitCastExpr { .. }
+                        | ClangNodeKind::BinaryOperator { .. }
+                        | ClangNodeKind::UnaryOperator { .. } => {
                             args.push(self.expr_to_string(child));
                         }
                         _ => {
@@ -3880,7 +4614,9 @@ impl AstCodeGen {
     /// Check if a node is a pointer dereference (possibly wrapped in casts).
     fn is_pointer_deref(node: &ClangNode) -> bool {
         match &node.kind {
-            ClangNodeKind::UnaryOperator { op: UnaryOp::Deref, .. } => true,
+            ClangNodeKind::UnaryOperator {
+                op: UnaryOp::Deref, ..
+            } => true,
             ClangNodeKind::ImplicitCastExpr { .. } => {
                 !node.children.is_empty() && Self::is_pointer_deref(&node.children[0])
             }
@@ -3941,7 +4677,12 @@ impl AstCodeGen {
     fn is_static_member_access(&self, node: &ClangNode) -> bool {
         match &node.kind {
             ClangNodeKind::MemberExpr { is_static, .. } => *is_static,
-            ClangNodeKind::DeclRefExpr { ty, namespace_path, name, .. } => {
+            ClangNodeKind::DeclRefExpr {
+                ty,
+                namespace_path,
+                name,
+                ..
+            } => {
                 // Static members accessed via Class::member have namespace_path with class name
                 if !namespace_path.is_empty() && !matches!(ty, CppType::Function { .. }) {
                     return true;
@@ -3949,7 +4690,10 @@ impl AstCodeGen {
                 // Also check if this is a static member of the current class (accessed without Class:: prefix)
                 if namespace_path.is_empty() && !matches!(ty, CppType::Function { .. }) {
                     if let Some(ref current_class) = self.current_class {
-                        if self.static_members.contains_key(&(current_class.clone(), name.clone())) {
+                        if self
+                            .static_members
+                            .contains_key(&(current_class.clone(), name.clone()))
+                        {
                             return true;
                         }
                     }
@@ -3988,9 +4732,7 @@ impl AstCodeGen {
     /// Check if an expression is a pointer variable (parameter or local with pointer type).
     fn is_ptr_var_expr(&self, node: &ClangNode) -> bool {
         match &node.kind {
-            ClangNodeKind::DeclRefExpr { name, .. } => {
-                self.ptr_vars.contains(name)
-            }
+            ClangNodeKind::DeclRefExpr { name, .. } => self.ptr_vars.contains(name),
             ClangNodeKind::ImplicitCastExpr { .. } | ClangNodeKind::Unknown(_) => {
                 // Look through casts and unknown wrappers
                 !node.children.is_empty() && self.is_ptr_var_expr(&node.children[0])
@@ -4005,9 +4747,7 @@ impl AstCodeGen {
     /// Check if an expression node refers to a global variable (needs unsafe access).
     fn is_global_var_expr(&self, node: &ClangNode) -> bool {
         match &node.kind {
-            ClangNodeKind::DeclRefExpr { name, .. } => {
-                self.global_vars.contains(name)
-            }
+            ClangNodeKind::DeclRefExpr { name, .. } => self.global_vars.contains(name),
             ClangNodeKind::ImplicitCastExpr { .. } | ClangNodeKind::Unknown(_) => {
                 // Look through casts and unknown wrappers
                 !node.children.is_empty() && self.is_global_var_expr(&node.children[0])
@@ -4122,7 +4862,8 @@ impl AstCodeGen {
     /// Extract the class name from a type, handling const qualifiers, references, and pointers.
     /// For example, "const Point" -> "Point", Reference { pointee: Named("Point") } -> "Point"
     fn extract_class_name(ty: &Option<CppType>) -> Option<String> {
-        ty.as_ref().and_then(|t| Self::extract_class_name_from_type(t))
+        ty.as_ref()
+            .and_then(|t| Self::extract_class_name_from_type(t))
     }
 
     /// Helper to extract class name from a CppType.
@@ -4149,23 +4890,35 @@ impl AstCodeGen {
             current_class
         };
 
-        if let Some(vbases) = self.virtual_bases.get(current_class).or_else(|| self.virtual_bases.get(current_class_unqual)) {
+        if let Some(vbases) = self
+            .virtual_bases
+            .get(current_class)
+            .or_else(|| self.virtual_bases.get(current_class_unqual))
+        {
             if vbases.iter().any(|b| b == declaring_class) {
                 return BaseAccess::VirtualPtr(self.virtual_base_field_name(declaring_class));
             }
         }
 
         // Try both qualified and unqualified names for class_bases lookup
-        let base_classes = self.class_bases.get(current_class)
+        let base_classes = self
+            .class_bases
+            .get(current_class)
             .or_else(|| self.class_bases.get(current_class_unqual));
         if let Some(base_classes) = base_classes {
             let mut non_virtual_idx = 0;
             for base in base_classes {
                 if base.name == declaring_class {
                     if base.is_virtual {
-                        return BaseAccess::VirtualPtr(self.virtual_base_field_name(declaring_class));
+                        return BaseAccess::VirtualPtr(
+                            self.virtual_base_field_name(declaring_class),
+                        );
                     }
-                    let field = if non_virtual_idx == 0 { "__base".to_string() } else { format!("__base{}", non_virtual_idx) };
+                    let field = if non_virtual_idx == 0 {
+                        "__base".to_string()
+                    } else {
+                        format!("__base{}", non_virtual_idx)
+                    };
                     return BaseAccess::DirectField(field);
                 }
                 if !base.is_virtual {
@@ -4187,7 +4940,11 @@ impl AstCodeGen {
                                 non_virtual_base_idx += 1;
                             }
                         }
-                        let first_base = if non_virtual_base_idx == 0 { "__base".to_string() } else { format!("__base{}", non_virtual_base_idx) };
+                        let first_base = if non_virtual_base_idx == 0 {
+                            "__base".to_string()
+                        } else {
+                            format!("__base{}", non_virtual_base_idx)
+                        };
                         return BaseAccess::FieldChain(format!("{}.__base", first_base));
                     }
                 }
@@ -4234,7 +4991,10 @@ impl AstCodeGen {
 
     /// Check if a MemberExpr (possibly wrapped) is a virtual base method call.
     /// Returns Some((base_expr, vbase_field, method_name)) if it is.
-    fn get_virtual_base_method_call_info(&self, node: &ClangNode) -> Option<(String, String, String)> {
+    fn get_virtual_base_method_call_info(
+        &self,
+        node: &ClangNode,
+    ) -> Option<(String, String, String)> {
         let member_node = match &node.kind {
             ClangNodeKind::MemberExpr { .. } => node,
             ClangNodeKind::ImplicitCastExpr { .. } | ClangNodeKind::Unknown(_) => {
@@ -4246,7 +5006,13 @@ impl AstCodeGen {
             _ => return None,
         };
 
-        if let ClangNodeKind::MemberExpr { member_name, declaring_class, is_static, .. } = &member_node.kind {
+        if let ClangNodeKind::MemberExpr {
+            member_name,
+            declaring_class,
+            is_static,
+            ..
+        } = &member_node.kind
+        {
             // Only care about non-static members
             if *is_static {
                 return None;
@@ -4289,8 +5055,11 @@ impl AstCodeGen {
     /// Uses const-compatible initialization for use in static variables.
     fn default_value_for_type(ty: &CppType) -> String {
         match ty {
-            CppType::Int { .. } | CppType::Long { .. } | CppType::Short { .. } |
-            CppType::Char { .. } | CppType::LongLong { .. } => "0".to_string(),
+            CppType::Int { .. }
+            | CppType::Long { .. }
+            | CppType::Short { .. }
+            | CppType::Char { .. }
+            | CppType::LongLong { .. } => "0".to_string(),
             CppType::Float => "0.0f32".to_string(),
             CppType::Double => "0.0f64".to_string(),
             CppType::Bool => "false".to_string(),
@@ -4304,8 +5073,9 @@ impl AstCodeGen {
                 }
             }
             // For named types (structs) and references, use zeroed memory which is const-compatible
-            CppType::Named(_) | CppType::Reference { .. } =>
-                "unsafe { std::mem::zeroed() }".to_string(),
+            CppType::Named(_) | CppType::Reference { .. } => {
+                "unsafe { std::mem::zeroed() }".to_string()
+            }
             _ => "unsafe { std::mem::zeroed() }".to_string(),
         }
     }
@@ -4334,7 +5104,11 @@ impl AstCodeGen {
                     } else if node.children.len() == 3 {
                         // Binary operator: left is before, right is after
                         let left = if i > 0 { i - 1 } else { 0 };
-                        let right = if i + 1 < node.children.len() { i + 1 } else { i };
+                        let right = if i + 1 < node.children.len() {
+                            i + 1
+                        } else {
+                            i
+                        };
                         return Some((op_name, left, Some(right)));
                     } else if node.children.len() == 2 {
                         // Unary operator
@@ -4354,7 +5128,12 @@ impl AstCodeGen {
         if !node.children.is_empty() {
             // The first child should be the MemberExpr for the destructor
             let child = &node.children[0];
-            if let ClangNodeKind::MemberExpr { member_name, is_arrow, .. } = &child.kind {
+            if let ClangNodeKind::MemberExpr {
+                member_name,
+                is_arrow,
+                ..
+            } = &child.kind
+            {
                 if member_name.starts_with('~') {
                     // This is an explicit destructor call
                     // Get the object/pointer expression from the MemberExpr's child
@@ -4377,7 +5156,8 @@ impl AstCodeGen {
                 }
             }
             // Also check through wrapper nodes (UnexposedExpr, ImplicitCastExpr)
-            if let ClangNodeKind::Unknown(_) | ClangNodeKind::ImplicitCastExpr { .. } = &child.kind {
+            if let ClangNodeKind::Unknown(_) | ClangNodeKind::ImplicitCastExpr { .. } = &child.kind
+            {
                 if !child.children.is_empty() {
                     return self.get_explicit_destructor_call_inner(&child.children[0]);
                 }
@@ -4388,7 +5168,12 @@ impl AstCodeGen {
 
     /// Helper for get_explicit_destructor_call that checks inner nodes.
     fn get_explicit_destructor_call_inner(&self, node: &ClangNode) -> Option<String> {
-        if let ClangNodeKind::MemberExpr { member_name, is_arrow, .. } = &node.kind {
+        if let ClangNodeKind::MemberExpr {
+            member_name,
+            is_arrow,
+            ..
+        } = &node.kind
+        {
             if member_name.starts_with('~') {
                 if !node.children.is_empty() {
                     if *is_arrow {
@@ -4411,7 +5196,9 @@ impl AstCodeGen {
     /// Returns the pointer expression if so.
     fn get_deref_pointer(node: &ClangNode) -> Option<&ClangNode> {
         match &node.kind {
-            ClangNodeKind::UnaryOperator { op: UnaryOp::Deref, .. } => {
+            ClangNodeKind::UnaryOperator {
+                op: UnaryOp::Deref, ..
+            } => {
                 // *ptr - return the ptr
                 if !node.children.is_empty() {
                     return Some(&node.children[0]);
@@ -4456,7 +5243,7 @@ impl AstCodeGen {
     fn strip_some_wrapper(s: &str) -> String {
         if s.starts_with("Some(") && s.ends_with(")") {
             // Extract inner part
-            s[5..s.len()-1].to_string()
+            s[5..s.len() - 1].to_string()
         } else {
             s.to_string()
         }
@@ -4471,7 +5258,9 @@ impl AstCodeGen {
             }
             ClangNodeKind::Unknown(_) | ClangNodeKind::ImplicitCastExpr { .. } => {
                 // Look through wrapper nodes (but not FunctionToPointerDecay)
-                node.children.iter().any(|c| Self::is_function_pointer_variable(c))
+                node.children
+                    .iter()
+                    .any(|c| Self::is_function_pointer_variable(c))
             }
             _ => false,
         }
@@ -4524,7 +5313,11 @@ impl AstCodeGen {
     /// Returns the stream type if it is.
     fn get_io_stream_type(node: &ClangNode) -> Option<&'static str> {
         match &node.kind {
-            ClangNodeKind::DeclRefExpr { name, namespace_path, .. } => {
+            ClangNodeKind::DeclRefExpr {
+                name,
+                namespace_path,
+                ..
+            } => {
                 let is_std = namespace_path.len() == 1 && namespace_path[0] == "std";
                 if is_std || namespace_path.is_empty() {
                     match name.as_str() {
@@ -4564,7 +5357,11 @@ impl AstCodeGen {
     /// Check if an expression is std::endl or std::flush.
     fn is_stream_manipulator(node: &ClangNode) -> Option<&'static str> {
         match &node.kind {
-            ClangNodeKind::DeclRefExpr { name, namespace_path, .. } => {
+            ClangNodeKind::DeclRefExpr {
+                name,
+                namespace_path,
+                ..
+            } => {
                 let is_std = namespace_path.len() == 1 && namespace_path[0] == "std";
                 if is_std || namespace_path.is_empty() {
                     match name.as_str() {
@@ -4612,13 +5409,17 @@ impl AstCodeGen {
                 if let Some(right_idx) = right_idx_opt {
                     if left_idx < node.children.len() && right_idx < node.children.len() {
                         // First check if left operand is directly a stream
-                        if let Some(stream_type) = Self::get_io_stream_type(&node.children[left_idx]) {
+                        if let Some(stream_type) =
+                            Self::get_io_stream_type(&node.children[left_idx])
+                        {
                             // Base case: stream << arg
                             return Some((stream_type, vec![&node.children[right_idx]]));
                         }
                         // Recursive case: (stream << ...) << arg
                         // Check if left operand is another operator<< on a stream
-                        if let Some((stream_type, mut args)) = self.collect_stream_output_args(&node.children[left_idx]) {
+                        if let Some((stream_type, mut args)) =
+                            self.collect_stream_output_args(&node.children[left_idx])
+                        {
                             args.push(&node.children[right_idx]);
                             return Some((stream_type, args));
                         }
@@ -4643,7 +5444,8 @@ impl AstCodeGen {
         });
 
         // Filter out endl/flush manipulators, collect format args
-        let format_args: Vec<String> = args.iter()
+        let format_args: Vec<String> = args
+            .iter()
             .filter(|arg| Self::is_stream_manipulator(arg).is_none())
             .map(|arg| self.expr_to_string(arg))
             .collect();
@@ -4660,9 +5462,15 @@ impl AstCodeGen {
             let format_str = vec!["{}"; format_args.len()].join("");
             let args_str = format_args.join(", ");
             if has_newline {
-                format!("writeln!({}, \"{}\", {}).unwrap()", stream_expr, format_str, args_str)
+                format!(
+                    "writeln!({}, \"{}\", {}).unwrap()",
+                    stream_expr, format_str, args_str
+                )
             } else {
-                format!("write!({}, \"{}\", {}).unwrap()", stream_expr, format_str, args_str)
+                format!(
+                    "write!({}, \"{}\", {}).unwrap()",
+                    stream_expr, format_str, args_str
+                )
             }
         }
     }
@@ -4680,14 +5488,18 @@ impl AstCodeGen {
                 if let Some(right_idx) = right_idx_opt {
                     if left_idx < node.children.len() && right_idx < node.children.len() {
                         // First check if left operand is directly a stream
-                        if let Some(stream_type) = Self::get_io_stream_type(&node.children[left_idx]) {
+                        if let Some(stream_type) =
+                            Self::get_io_stream_type(&node.children[left_idx])
+                        {
                             if stream_type == "stdin" {
                                 // Base case: stream >> arg
                                 return Some((stream_type, vec![&node.children[right_idx]]));
                             }
                         }
                         // Recursive case: (stream >> ...) >> arg
-                        if let Some((stream_type, mut args)) = self.collect_stream_input_args(&node.children[left_idx]) {
+                        if let Some((stream_type, mut args)) =
+                            self.collect_stream_input_args(&node.children[left_idx])
+                        {
                             args.push(&node.children[right_idx]);
                             return Some((stream_type, args));
                         }
@@ -4702,35 +5514,58 @@ impl AstCodeGen {
     fn generate_stream_read(&self, args: &[&ClangNode]) -> String {
         // Generate code that reads a line from stdin and parses it into the variables
         // For chained reads like cin >> x >> y, we read one line and split by whitespace
-        let var_reads: Vec<String> = args.iter().map(|arg| {
-            let var_name = self.expr_to_string(arg);
-            let var_type = Self::get_expr_type(arg);
+        let var_reads: Vec<String> = args
+            .iter()
+            .map(|arg| {
+                let var_name = self.expr_to_string(arg);
+                let var_type = Self::get_expr_type(arg);
 
-            // Generate appropriate parse call based on type
-            let parse_expr = match var_type {
-                Some(CppType::Int { signed: true }) => "__parts.next().unwrap().parse::<i32>().unwrap()".to_string(),
-                Some(CppType::Int { signed: false }) => "__parts.next().unwrap().parse::<u32>().unwrap()".to_string(),
-                Some(CppType::Long { signed: true }) | Some(CppType::LongLong { signed: true }) => {
-                    "__parts.next().unwrap().parse::<i64>().unwrap()".to_string()
-                }
-                Some(CppType::Long { signed: false }) | Some(CppType::LongLong { signed: false }) => {
-                    "__parts.next().unwrap().parse::<u64>().unwrap()".to_string()
-                }
-                Some(CppType::Short { signed: true }) => "__parts.next().unwrap().parse::<i16>().unwrap()".to_string(),
-                Some(CppType::Short { signed: false }) => "__parts.next().unwrap().parse::<u16>().unwrap()".to_string(),
-                Some(CppType::Float) => "__parts.next().unwrap().parse::<f32>().unwrap()".to_string(),
-                Some(CppType::Double) => "__parts.next().unwrap().parse::<f64>().unwrap()".to_string(),
-                Some(CppType::Char { signed: true }) => "__parts.next().unwrap().chars().next().unwrap() as i8".to_string(),
-                Some(CppType::Char { signed: false }) => "__parts.next().unwrap().chars().next().unwrap() as u8".to_string(),
-                Some(CppType::Bool) => "__parts.next().unwrap().parse::<bool>().unwrap()".to_string(),
-                Some(CppType::Named(ref name)) if name == "std::string" || name == "string" => {
-                    "__parts.next().unwrap().to_string()".to_string()
-                }
-                _ => "__parts.next().unwrap().to_string()".to_string(),
-            };
+                // Generate appropriate parse call based on type
+                let parse_expr = match var_type {
+                    Some(CppType::Int { signed: true }) => {
+                        "__parts.next().unwrap().parse::<i32>().unwrap()".to_string()
+                    }
+                    Some(CppType::Int { signed: false }) => {
+                        "__parts.next().unwrap().parse::<u32>().unwrap()".to_string()
+                    }
+                    Some(CppType::Long { signed: true })
+                    | Some(CppType::LongLong { signed: true }) => {
+                        "__parts.next().unwrap().parse::<i64>().unwrap()".to_string()
+                    }
+                    Some(CppType::Long { signed: false })
+                    | Some(CppType::LongLong { signed: false }) => {
+                        "__parts.next().unwrap().parse::<u64>().unwrap()".to_string()
+                    }
+                    Some(CppType::Short { signed: true }) => {
+                        "__parts.next().unwrap().parse::<i16>().unwrap()".to_string()
+                    }
+                    Some(CppType::Short { signed: false }) => {
+                        "__parts.next().unwrap().parse::<u16>().unwrap()".to_string()
+                    }
+                    Some(CppType::Float) => {
+                        "__parts.next().unwrap().parse::<f32>().unwrap()".to_string()
+                    }
+                    Some(CppType::Double) => {
+                        "__parts.next().unwrap().parse::<f64>().unwrap()".to_string()
+                    }
+                    Some(CppType::Char { signed: true }) => {
+                        "__parts.next().unwrap().chars().next().unwrap() as i8".to_string()
+                    }
+                    Some(CppType::Char { signed: false }) => {
+                        "__parts.next().unwrap().chars().next().unwrap() as u8".to_string()
+                    }
+                    Some(CppType::Bool) => {
+                        "__parts.next().unwrap().parse::<bool>().unwrap()".to_string()
+                    }
+                    Some(CppType::Named(ref name)) if name == "std::string" || name == "string" => {
+                        "__parts.next().unwrap().to_string()".to_string()
+                    }
+                    _ => "__parts.next().unwrap().to_string()".to_string(),
+                };
 
-            format!("{} = {}", var_name, parse_expr)
-        }).collect();
+                format!("{} = {}", var_name, parse_expr)
+            })
+            .collect();
 
         // Generate the block that reads, splits, and parses
         format!(
@@ -4752,10 +5587,22 @@ impl AstCodeGen {
         self.current_class = Some(struct_name.to_string());
 
         match &node.kind {
-            ClangNodeKind::CXXMethodDecl { name, return_type, params, is_static, .. } => {
+            ClangNodeKind::CXXMethodDecl {
+                name,
+                return_type,
+                params,
+                is_static,
+                ..
+            } => {
                 // Check if method modifies self or returns a mutable reference
                 let modifies_self = Self::method_modifies_self(node);
-                let returns_mut_ref = matches!(return_type, CppType::Reference { is_const: false, .. });
+                let returns_mut_ref = matches!(
+                    return_type,
+                    CppType::Reference {
+                        is_const: false,
+                        ..
+                    }
+                );
                 // Iterator operators always modify self (increment/decrement)
                 let is_iterator_mutating_op = matches!(name.as_str(), "operator++" | "operator--");
                 let is_mutable_method = modifies_self || returns_mut_ref || is_iterator_mutating_op;
@@ -4763,11 +5610,16 @@ impl AstCodeGen {
                 let self_param = if *is_static {
                     "".to_string()
                 } else {
-                    if is_mutable_method { "&mut self, ".to_string() } else { "&self, ".to_string() }
+                    if is_mutable_method {
+                        "&mut self, ".to_string()
+                    } else {
+                        "&self, ".to_string()
+                    }
                 };
                 // Deduplicate parameter names (C++ allows unnamed params, Rust doesn't)
                 let mut param_name_counts: HashMap<String, usize> = HashMap::new();
-                let params_str = params.iter()
+                let params_str = params
+                    .iter()
                     .map(|(n, t)| {
                         let mut param_name = sanitize_identifier(n);
                         // If this parameter name has been seen before, add a suffix
@@ -4784,23 +5636,32 @@ impl AstCodeGen {
                 // Determine return type, fixing c_void placeholders for methods returning *this
                 let rust_return_type = return_type.to_rust_type_str();
                 // Check if this is an iterator operator that should return Self
-                let is_iterator_value_return_op = matches!(name.as_str(),
-                    "operator++" | "operator--" | "_M_const_cast"
-                );
+                let is_iterator_value_return_op =
+                    matches!(name.as_str(), "operator++" | "operator--" | "_M_const_cast");
                 // Compound assignment operators should return &mut Self
-                let is_iterator_ref_return_op = matches!(name.as_str(),
-                    "operator+=" | "operator-=" | "operator*=" | "operator/=" |
-                    "operator%=" | "operator&=" | "operator|=" | "operator^=" |
-                    "operator<<=" | "operator>>="
+                let is_iterator_ref_return_op = matches!(
+                    name.as_str(),
+                    "operator+="
+                        | "operator-="
+                        | "operator*="
+                        | "operator/="
+                        | "operator%="
+                        | "operator&="
+                        | "operator|="
+                        | "operator^="
+                        | "operator<<="
+                        | "operator>>="
                 );
                 let ret_str = if *return_type == CppType::Void {
                     String::new()
                 } else if (rust_return_type.contains("c_void") || rust_return_type == "*mut ()")
-                          && is_iterator_ref_return_op {
+                    && is_iterator_ref_return_op
+                {
                     // Compound assignment operators return &mut Self
                     " -> &mut Self".to_string()
                 } else if (rust_return_type.contains("c_void") || rust_return_type == "*mut ()")
-                          && (Self::method_returns_this_only(node) || is_iterator_value_return_op) {
+                    && (Self::method_returns_this_only(node) || is_iterator_value_return_op)
+                {
                     // Method returns *this or is an iterator operator - use Self
                     // Post-increment (params.len() == 1) returns by value
                     // Pre-increment (params.len() == 0) returns by mutable reference
@@ -4834,7 +5695,10 @@ impl AstCodeGen {
                 };
 
                 // Handle method overloading by appending suffix for duplicates
-                let count = self.current_struct_methods.entry(base_method_name.clone()).or_insert(0);
+                let count = self
+                    .current_struct_methods
+                    .entry(base_method_name.clone())
+                    .or_insert(0);
                 let method_name = if *count == 0 {
                     *count += 1;
                     base_method_name
@@ -4843,8 +5707,10 @@ impl AstCodeGen {
                     format!("{}_{}", base_method_name, *count - 1)
                 };
 
-                self.writeln(&format!("pub fn {}({}{}){} {{",
-                    method_name, self_param, params_str, ret_str));
+                self.writeln(&format!(
+                    "pub fn {}({}{}){} {{",
+                    method_name, self_param, params_str, ret_str
+                ));
                 self.indent += 1;
 
                 // Track return type for reference return handling
@@ -4868,7 +5734,10 @@ impl AstCodeGen {
                 let base_fn_name = format!("new_{}", params.len());
 
                 // Handle constructor overloading (same param count, different types)
-                let count = self.current_struct_methods.entry(base_fn_name.clone()).or_insert(0);
+                let count = self
+                    .current_struct_methods
+                    .entry(base_fn_name.clone())
+                    .or_insert(0);
                 let fn_name = if *count == 0 {
                     *count += 1;
                     base_fn_name.clone()
@@ -4888,7 +5757,8 @@ impl AstCodeGen {
                 // Deduplicate parameter names (C++ allows unnamed params, Rust doesn't)
                 let mut param_name_counts: HashMap<String, usize> = HashMap::new();
                 let mut deduped_params: Vec<String> = Vec::new();
-                let params_str = params.iter()
+                let params_str = params
+                    .iter()
                     .map(|(n, t)| {
                         let mut param_name = sanitize_identifier(n);
                         let count = param_name_counts.entry(param_name.clone()).or_insert(0);
@@ -4915,7 +5785,9 @@ impl AstCodeGen {
                 let mut ctor_compound_stmt: Option<usize> = None;
 
                 // Get base classes for current class to determine field names
-                let base_classes = self.current_class.as_ref()
+                let base_classes = self
+                    .current_class
+                    .as_ref()
                     .and_then(|c| self.class_bases.get(c))
                     .cloned()
                     .unwrap_or_default();
@@ -4941,27 +5813,36 @@ impl AstCodeGen {
                             // Convert C++ type name to Rust struct name
                             // Strip namespace prefix to match struct definition naming
                             // (struct _Bit_iterator_base is defined without std:: prefix)
-                            let base_class_unqual = if let Some(last_colon_pos) = base_class_cpp.rfind("::") {
-                                &base_class_cpp[last_colon_pos + 2..]
-                            } else {
-                                base_class_cpp
-                            };
+                            let base_class_unqual =
+                                if let Some(last_colon_pos) = base_class_cpp.rfind("::") {
+                                    &base_class_cpp[last_colon_pos + 2..]
+                                } else {
+                                    base_class_cpp
+                                };
                             let base_class = sanitize_identifier(base_class_unqual);
                             // Next sibling should be constructor call
                             if i + 1 < node.children.len() {
                                 i += 1;
                                 // Check if next is a CallExpr
-                                if matches!(&node.children[i].kind, ClangNodeKind::CallExpr { .. }) {
+                                if matches!(&node.children[i].kind, ClangNodeKind::CallExpr { .. })
+                                {
                                     // Extract constructor arguments
                                     let args = self.extract_constructor_args(&node.children[i]);
 
                                     // Look up constructor signature to correct 0 -> null_mut() for pointer params
                                     let ctor_name_lookup = format!("new_{}", args.len());
-                                    let corrected_args: Vec<String> = if let Some(ctors) = self.constructor_signatures.get(&base_class) {
+                                    let corrected_args: Vec<String> = if let Some(ctors) =
+                                        self.constructor_signatures.get(&base_class)
+                                    {
                                         // Find the matching constructor by name
-                                        if let Some((_, param_types)) = ctors.iter().find(|(name, _)| *name == ctor_name_lookup) {
-                                            args.iter().zip(param_types.iter())
-                                                .map(|(arg, ty)| correct_initializer_for_type(arg, ty))
+                                        if let Some((_, param_types)) =
+                                            ctors.iter().find(|(name, _)| *name == ctor_name_lookup)
+                                        {
+                                            args.iter()
+                                                .zip(param_types.iter())
+                                                .map(|(arg, ty)| {
+                                                    correct_initializer_for_type(arg, ty)
+                                                })
                                                 .collect()
                                         } else {
                                             args.clone()
@@ -4970,7 +5851,12 @@ impl AstCodeGen {
                                         args.clone()
                                     };
 
-                                    let ctor_call = format!("{}::new_{}({})", base_class, args.len(), corrected_args.join(", "));
+                                    let ctor_call = format!(
+                                        "{}::new_{}({})",
+                                        base_class,
+                                        args.len(),
+                                        corrected_args.join(", ")
+                                    );
 
                                     // Find the index of this base class to determine field name
                                     let mut non_virtual_idx = 0;
@@ -4989,26 +5875,46 @@ impl AstCodeGen {
                                         if info.is_virtual {
                                             virtual_base_inits.push((info.name, ctor_call));
                                         } else {
-                                            let base_has_vbases = self.class_has_virtual_bases(&info.name);
+                                            let base_has_vbases =
+                                                self.class_has_virtual_bases(&info.name);
                                             let ctor_name = if base_has_vbases {
-                                                format!("{}::__new_without_vbases_{}", info.name, corrected_args.len())
+                                                format!(
+                                                    "{}::__new_without_vbases_{}",
+                                                    info.name,
+                                                    corrected_args.len()
+                                                )
                                             } else {
-                                                format!("{}::new_{}", info.name, corrected_args.len())
+                                                format!(
+                                                    "{}::new_{}",
+                                                    info.name,
+                                                    corrected_args.len()
+                                                )
                                             };
-                                            let ctor_call = format!("{}({})", ctor_name, corrected_args.join(", "));
-                                            let field_name = if non_virtual_idx == 0 { "__base".to_string() } else { format!("__base{}", non_virtual_idx) };
+                                            let ctor_call = format!(
+                                                "{}({})",
+                                                ctor_name,
+                                                corrected_args.join(", ")
+                                            );
+                                            let field_name = if non_virtual_idx == 0 {
+                                                "__base".to_string()
+                                            } else {
+                                                format!("__base{}", non_virtual_idx)
+                                            };
                                             base_inits.push((field_name, ctor_call));
                                         }
                                     } else {
                                         // Check if this is a transitive virtual base (not a direct base)
-                                        let is_transitive_vbase = self.current_class.as_ref()
+                                        let is_transitive_vbase = self
+                                            .current_class
+                                            .as_ref()
                                             .and_then(|c| self.virtual_bases.get(c))
                                             .map(|vbases| vbases.iter().any(|vb| *vb == base_class))
                                             .unwrap_or(false);
 
                                         if is_transitive_vbase {
                                             // This is a virtual base initializer (e.g., A(v) in D::D() : A(v), B(v), C(v))
-                                            virtual_base_inits.push((base_class.to_string(), ctor_call));
+                                            virtual_base_inits
+                                                .push((base_class.to_string(), ctor_call));
                                         } else {
                                             // Fallback to __base for direct non-virtual bases not found in class_bases
                                             base_inits.push(("__base".to_string(), ctor_call));
@@ -5019,7 +5925,11 @@ impl AstCodeGen {
                         }
                     } else if let ClangNodeKind::CompoundStmt = &node.children[i].kind {
                         // Look for assignments in constructor body
-                        Self::extract_member_assignments(&node.children[i], &mut initializers, self);
+                        Self::extract_member_assignments(
+                            &node.children[i],
+                            &mut initializers,
+                            self,
+                        );
                         // Store compound stmt for later - non-member statements will be generated after Self {} literal
                         ctor_compound_stmt = Some(i);
                     }
@@ -5030,18 +5940,26 @@ impl AstCodeGen {
 
                 if class_has_vbases {
                     // Internal constructor that does not allocate virtual bases
-                    self.writeln(&format!("pub(crate) fn {}({}) -> Self {{", internal_name, params_str));
+                    self.writeln(&format!(
+                        "pub(crate) fn {}({}) -> Self {{",
+                        internal_name, params_str
+                    ));
                     self.indent += 1;
                     self.writeln("Self {");
                     self.indent += 1;
 
-                    let mut initialized_vbase: std::collections::HashSet<String> = std::collections::HashSet::new();
+                    let mut initialized_vbase: std::collections::HashSet<String> =
+                        std::collections::HashSet::new();
 
                     for (field_name, base_call) in &base_inits {
                         self.writeln(&format!("{}: {},", field_name, base_call));
                         initialized_vbase.insert(field_name.clone());
                     }
-                    let vbases_internal = self.virtual_bases.get(struct_name).cloned().unwrap_or_default();
+                    let vbases_internal = self
+                        .virtual_bases
+                        .get(struct_name)
+                        .cloned()
+                        .unwrap_or_default();
                     for vb in &vbases_internal {
                         let field = self.virtual_base_field_name(vb);
                         let storage = self.virtual_base_storage_field_name(vb);
@@ -5051,11 +5969,16 @@ impl AstCodeGen {
                         initialized_vbase.insert(storage);
                     }
                     // Get field info for type-aware initialization
-                    let all_fields_vbase = self.class_fields.get(struct_name).cloned().unwrap_or_default();
+                    let all_fields_vbase = self
+                        .class_fields
+                        .get(struct_name)
+                        .cloned()
+                        .unwrap_or_default();
                     for (field, value) in &initializers {
                         let sanitized = sanitize_identifier(field);
                         // Correct initializer value based on field type (e.g., 0 -> null_mut() for pointers)
-                        let corrected = all_fields_vbase.iter()
+                        let corrected = all_fields_vbase
+                            .iter()
                             .find(|(name, _)| name == &sanitized)
                             .map(|(_, ty)| correct_initializer_for_type(value, ty))
                             .unwrap_or_else(|| value.clone());
@@ -5080,11 +6003,20 @@ impl AstCodeGen {
                     // Public constructor that allocates virtual bases
                     self.writeln(&format!("pub fn {}({}) -> Self {{", fn_name, params_str));
                     self.indent += 1;
-                    self.writeln(&format!("let mut __self = Self::{}({});", internal_name, params_names));
+                    self.writeln(&format!(
+                        "let mut __self = Self::{}({});",
+                        internal_name, params_names
+                    ));
 
-                    let vbases_public = self.virtual_bases.get(struct_name).cloned().unwrap_or_default();
+                    let vbases_public = self
+                        .virtual_bases
+                        .get(struct_name)
+                        .cloned()
+                        .unwrap_or_default();
                     for vb in &vbases_public {
-                        let ctor = if let Some((_, call)) = virtual_base_inits.iter().find(|(name, _)| name == vb) {
+                        let ctor = if let Some((_, call)) =
+                            virtual_base_inits.iter().find(|(name, _)| name == vb)
+                        {
                             call.clone()
                         } else {
                             format!("{}::new_0()", vb)
@@ -5093,7 +6025,10 @@ impl AstCodeGen {
                         let vb_storage = self.virtual_base_storage_field_name(vb);
                         let temp_name = format!("__vb_{}", vb_field.trim_start_matches("__vbase_"));
                         self.writeln(&format!("let mut {} = Box::new({});", temp_name, ctor));
-                        self.writeln(&format!("let {}_ptr = {}.as_mut() as *mut {};", temp_name, temp_name, vb));
+                        self.writeln(&format!(
+                            "let {}_ptr = {}.as_mut() as *mut {};",
+                            temp_name, temp_name, vb
+                        ));
                         self.writeln(&format!("__self.{} = {}_ptr;", vb_field, temp_name));
                         self.writeln(&format!("__self.{} = Some({});", vb_storage, temp_name));
                     }
@@ -5103,11 +6038,22 @@ impl AstCodeGen {
                     for base in &base_classes {
                         if !base.is_virtual {
                             if self.class_has_virtual_bases(&base.name) {
-                                let base_field = if non_virtual_idx == 0 { "__base".to_string() } else { format!("__base{}", non_virtual_idx) };
-                                let base_vbases = self.virtual_bases.get(&base.name).cloned().unwrap_or_default();
+                                let base_field = if non_virtual_idx == 0 {
+                                    "__base".to_string()
+                                } else {
+                                    format!("__base{}", non_virtual_idx)
+                                };
+                                let base_vbases = self
+                                    .virtual_bases
+                                    .get(&base.name)
+                                    .cloned()
+                                    .unwrap_or_default();
                                 for vb in &base_vbases {
                                     let vb_field = self.virtual_base_field_name(vb);
-                                    self.writeln(&format!("__self.{}.{} = __self.{};", base_field, vb_field, vb_field));
+                                    self.writeln(&format!(
+                                        "__self.{}.{} = __self.{};",
+                                        base_field, vb_field, vb_field
+                                    ));
                                 }
                             }
                             non_virtual_idx += 1;
@@ -5136,7 +6082,8 @@ impl AstCodeGen {
                     self.indent += 1;
 
                     // Collect initialized field names
-                    let mut initialized: std::collections::HashSet<String> = std::collections::HashSet::new();
+                    let mut initialized: std::collections::HashSet<String> =
+                        std::collections::HashSet::new();
 
                     // Generate base class initializers
                     for (field_name, base_call) in &base_inits {
@@ -5144,12 +6091,17 @@ impl AstCodeGen {
                         initialized.insert(field_name.clone());
                     }
                     // Get field info for type-aware initialization
-                    let all_fields = self.class_fields.get(struct_name).cloned().unwrap_or_default();
+                    let all_fields = self
+                        .class_fields
+                        .get(struct_name)
+                        .cloned()
+                        .unwrap_or_default();
                     // Generate field initializers
                     for (field, value) in &initializers {
                         let sanitized = sanitize_identifier(field);
                         // Correct initializer value based on field type (e.g., 0 -> null_mut() for pointers)
-                        let corrected = all_fields.iter()
+                        let corrected = all_fields
+                            .iter()
                             .find(|(name, _)| name == &sanitized)
                             .map(|(_, ty)| correct_initializer_for_type(value, ty))
                             .unwrap_or_else(|| value.clone());
@@ -5250,7 +6202,9 @@ impl AstCodeGen {
                         let init = if has_real_init {
                             let init_node = initializer.unwrap();
                             // Special case: function pointer initialized with nullptr → None
-                            if Self::is_function_pointer_type(ty) && Self::is_nullptr_literal(init_node) {
+                            if Self::is_function_pointer_type(ty)
+                                && Self::is_nullptr_literal(init_node)
+                            {
                                 " = None".to_string()
                             } else {
                                 // Skip type suffixes for literals when we have explicit type annotation
@@ -5269,11 +6223,14 @@ impl AstCodeGen {
                                     let enum_name = Self::get_variant_enum_name(ty).unwrap();
                                     // Find the actual value being passed to the variant constructor
                                     // (navigate through Unknown/CallExpr wrappers)
-                                    let value_node = Self::find_variant_init_value(init_node).unwrap_or(init_node);
+                                    let value_node = Self::find_variant_init_value(init_node)
+                                        .unwrap_or(init_node);
                                     let value_expr = self.expr_to_string(value_node);
                                     // Try to determine the initializer type
                                     if let Some(init_type) = Self::get_expr_type(value_node) {
-                                        if let Some(idx) = Self::find_variant_index(&variant_args, &init_type) {
+                                        if let Some(idx) =
+                                            Self::find_variant_index(&variant_args, &init_type)
+                                        {
                                             format!(" = {}::V{}({})", enum_name, idx, value_expr)
                                         } else {
                                             // Couldn't match type to variant, use V0 as fallback
@@ -5289,11 +6246,27 @@ impl AstCodeGen {
                                     let rust_type = ty.to_rust_type_str();
                                     // Only generate constructor for actual struct types, not primitives
                                     // that might have been mapped from C++ types
-                                    let is_primitive = matches!(rust_type.as_str(),
-                                        "usize" | "isize" | "i8" | "i16" | "i32" | "i64" | "i128" |
-                                        "u8" | "u16" | "u32" | "u64" | "u128" | "f32" | "f64" |
-                                        "bool" | "()" | "char"
-                                    ) || rust_type.starts_with('*') || rust_type.starts_with('&');
+                                    let is_primitive = matches!(
+                                        rust_type.as_str(),
+                                        "usize"
+                                            | "isize"
+                                            | "i8"
+                                            | "i16"
+                                            | "i32"
+                                            | "i64"
+                                            | "i128"
+                                            | "u8"
+                                            | "u16"
+                                            | "u32"
+                                            | "u64"
+                                            | "u128"
+                                            | "f32"
+                                            | "f64"
+                                            | "bool"
+                                            | "()"
+                                            | "char"
+                                    ) || rust_type.starts_with('*')
+                                        || rust_type.starts_with('&');
                                     if expr == "0" && !is_primitive {
                                         // Use unsafe zeroed for template types (contain __)
                                         // since they may not have new_0 or Default impl
@@ -5333,8 +6306,13 @@ impl AstCodeGen {
                             (rust_type, init)
                         };
 
-                        self.writeln(&format!("let {}{}: {}{};",
-                            mut_kw, sanitize_identifier(name), final_type, final_init));
+                        self.writeln(&format!(
+                            "let {}{}: {}{};",
+                            mut_kw,
+                            sanitize_identifier(name),
+                            final_type,
+                            final_init
+                        ));
                     }
                 }
             }
@@ -5348,21 +6326,27 @@ impl AstCodeGen {
                     let expr = self.expr_to_string(&node.children[0]);
                     self.skip_literal_suffix = prev_skip;
                     // Check if we need to add &mut for reference return types
-                    let expr = if let Some(CppType::Reference { is_const, .. }) = &self.current_return_type {
+                    let expr = if let Some(CppType::Reference { is_const, .. }) =
+                        &self.current_return_type
+                    {
                         // Don't add & or &mut if returning 'self' (from *this in C++)
                         // because Rust's &mut self already provides the reference
                         if expr == "self" || expr == "__self" {
                             expr
-                        } else if expr.contains(".op_assign(") || expr.contains(".op_add_assign(") ||
-                                  expr.contains(".op_sub_assign(") || expr.contains(".op_mul_assign(") ||
-                                  expr.contains(".op_div_assign(") || expr.contains(".op_rem_assign(") {
+                        } else if expr.contains(".op_assign(")
+                            || expr.contains(".op_add_assign(")
+                            || expr.contains(".op_sub_assign(")
+                            || expr.contains(".op_mul_assign(")
+                            || expr.contains(".op_div_assign(")
+                            || expr.contains(".op_rem_assign(")
+                        {
                             // Assignment operator overloads already return &mut Self
                             // Don't add another &mut
                             expr
                         } else if expr.starts_with("unsafe { ") && expr.ends_with(" }") {
                             // If expression is an unsafe block like "unsafe { *ptr }",
                             // put the & or &mut inside: "unsafe { &mut *ptr }"
-                            let inner = &expr[9..expr.len()-2]; // Extract content between "unsafe { " and " }"
+                            let inner = &expr[9..expr.len() - 2]; // Extract content between "unsafe { " and " }"
                             let prefix = if *is_const { "&" } else { "&mut " };
                             format!("unsafe {{ {}{} }}", prefix, inner)
                         } else if *is_const {
@@ -5371,7 +6355,8 @@ impl AstCodeGen {
                             format!("&mut {}", expr)
                         }
                     } else if (expr == "self" || expr == "__self")
-                              && Self::expr_is_this(&node.children[0]) {
+                        && Self::expr_is_this(&node.children[0])
+                    {
                         // Returning *this by value - need to clone since self is a reference
                         format!("{}.clone()", expr)
                     } else {
@@ -5443,7 +6428,9 @@ impl AstCodeGen {
 
                 if let Some(body) = try_body {
                     // Generate: match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| { ... }))
-                    self.writeln("match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {");
+                    self.writeln(
+                        "match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {",
+                    );
                     self.indent += 1;
                     self.generate_block_contents(&body.children, &CppType::Void);
                     self.indent -= 1;
@@ -5589,15 +6576,23 @@ impl AstCodeGen {
                         // Case children: the value literal, then the body statements
                         // Body can be inside the CaseStmt as children after the literal
                         for (i, case_child) in child.children.iter().enumerate() {
-                            if i == 0 && matches!(&case_child.kind, ClangNodeKind::IntegerLiteral { .. }) {
+                            if i == 0
+                                && matches!(&case_child.kind, ClangNodeKind::IntegerLiteral { .. })
+                            {
                                 continue; // Skip the case value literal
                             }
                             // Check for nested CaseStmt (fallthrough)
-                            if let ClangNodeKind::CaseStmt { value: nested_val } = &case_child.kind {
+                            if let ClangNodeKind::CaseStmt { value: nested_val } = &case_child.kind
+                            {
                                 current_values.push(*nested_val);
                                 // Process nested case's children
                                 for (j, nested_child) in case_child.children.iter().enumerate() {
-                                    if j == 0 && matches!(&nested_child.kind, ClangNodeKind::IntegerLiteral { .. }) {
+                                    if j == 0
+                                        && matches!(
+                                            &nested_child.kind,
+                                            ClangNodeKind::IntegerLiteral { .. }
+                                        )
+                                    {
                                         continue;
                                     }
                                     case_body.push(nested_child);
@@ -5633,7 +6628,9 @@ impl AstCodeGen {
         // Note: We add _ => {} only if no DefaultStmt was found
         let has_default = node.children.get(1).map_or(false, |c| {
             if let ClangNodeKind::CompoundStmt = &c.kind {
-                c.children.iter().any(|ch| matches!(&ch.kind, ClangNodeKind::DefaultStmt))
+                c.children
+                    .iter()
+                    .any(|ch| matches!(&ch.kind, ClangNodeKind::DefaultStmt))
             } else {
                 false
             }
@@ -5648,7 +6645,8 @@ impl AstCodeGen {
 
     /// Emit a match arm for one or more case values.
     fn emit_match_arm(&mut self, values: &[i128], body: &[&ClangNode]) {
-        let pattern = values.iter()
+        let pattern = values
+            .iter()
             .map(|v| v.to_string())
             .collect::<Vec<_>>()
             .join(" | ");
@@ -5760,10 +6758,12 @@ impl AstCodeGen {
 
             // Note: Rust for loops don't support type annotations, so we omit var_type
             let _ = var_type; // Silence unused warning
-            self.writeln(&format!("for {} in {}{} {{",
+            self.writeln(&format!(
+                "for {} in {}{} {{",
                 sanitize_identifier(var_name),
                 sanitize_identifier(&range_name),
-                iter_suffix));
+                iter_suffix
+            ));
             self.indent += 1;
 
             // Generate body
@@ -5917,8 +6917,12 @@ impl AstCodeGen {
                         }
                         UnaryOp::PreInc => format!("{{ {} += 1; {} }}", operand, operand),
                         UnaryOp::PreDec => format!("{{ {} -= 1; {} }}", operand, operand),
-                        UnaryOp::PostInc => format!("{{ let __v = {}; {} += 1; __v }}", operand, operand),
-                        UnaryOp::PostDec => format!("{{ let __v = {}; {} -= 1; __v }}", operand, operand),
+                        UnaryOp::PostInc => {
+                            format!("{{ let __v = {}; {} += 1; __v }}", operand, operand)
+                        }
+                        UnaryOp::PostDec => {
+                            format!("{{ let __v = {}; {} -= 1; __v }}", operand, operand)
+                        }
                     }
                 } else {
                     "/* unary op error */".to_string()
@@ -5941,7 +6945,9 @@ impl AstCodeGen {
                                 format!("{} as {}", inner, rust_type)
                             }
                         }
-                        CastKind::FloatingCast | CastKind::IntegralToFloating | CastKind::FloatingToIntegral => {
+                        CastKind::FloatingCast
+                        | CastKind::IntegralToFloating
+                        | CastKind::FloatingToIntegral => {
                             // Need explicit cast for floating conversions
                             let rust_type = ty.to_rust_type_str();
                             if needs_parens {
@@ -5963,7 +6969,12 @@ impl AstCodeGen {
                     "/* cast error */".to_string()
                 }
             }
-            ClangNodeKind::DeclRefExpr { name, namespace_path, ty, .. } => {
+            ClangNodeKind::DeclRefExpr {
+                name,
+                namespace_path,
+                ty,
+                ..
+            } => {
                 if name == "this" {
                     "self".to_string()
                 } else {
@@ -5985,12 +6996,16 @@ impl AstCodeGen {
                     if !namespace_path.is_empty() && !matches!(ty, CppType::Function { .. }) {
                         let class_name = &namespace_path[namespace_path.len() - 1];
                         // Try to find the global name from static_members
-                        if let Some(global_name) = self.static_members.get(&(class_name.clone(), name.clone())) {
+                        if let Some(global_name) =
+                            self.static_members.get(&(class_name.clone(), name.clone()))
+                        {
                             return global_name.clone();
                         }
                         // Fallback: generate from convention
-                        let global_name = format!("{}_{}", class_name.to_uppercase(), ident.to_uppercase());
-                        let is_static_member = self.static_members.values().any(|g| g == &global_name);
+                        let global_name =
+                            format!("{}_{}", class_name.to_uppercase(), ident.to_uppercase());
+                        let is_static_member =
+                            self.static_members.values().any(|g| g == &global_name);
                         if is_static_member {
                             return global_name;
                         }
@@ -5998,7 +7013,10 @@ impl AstCodeGen {
                     // Check if this is a static member of the current class (accessed without Class:: prefix)
                     if namespace_path.is_empty() && !matches!(ty, CppType::Function { .. }) {
                         if let Some(ref current_class) = self.current_class {
-                            if let Some(global_name) = self.static_members.get(&(current_class.clone(), name.clone())) {
+                            if let Some(global_name) = self
+                                .static_members
+                                .get(&(current_class.clone(), name.clone()))
+                            {
                                 return global_name.clone();
                             }
                         }
@@ -6026,7 +7044,11 @@ impl AstCodeGen {
                 };
                 format!("{}{}", value, suffix)
             }
-            ClangNodeKind::EvaluatedExpr { int_value, float_value, ty } => {
+            ClangNodeKind::EvaluatedExpr {
+                int_value,
+                float_value,
+                ty,
+            } => {
                 // Evaluated constant expression (e.g., default argument)
                 if let Some(val) = int_value {
                     let suffix = match ty {
@@ -6070,15 +7092,28 @@ impl AstCodeGen {
                     "/* array subscript error */".to_string()
                 }
             }
-            ClangNodeKind::MemberExpr { member_name, is_static, is_arrow, declaring_class, .. } => {
+            ClangNodeKind::MemberExpr {
+                member_name,
+                is_static,
+                is_arrow,
+                declaring_class,
+                ..
+            } => {
                 // For static member access, return the global name without unsafe wrapper
                 if *is_static {
                     if let Some(class_name) = declaring_class {
-                        if let Some(global_name) = self.static_members.get(&(class_name.clone(), member_name.clone())) {
+                        if let Some(global_name) = self
+                            .static_members
+                            .get(&(class_name.clone(), member_name.clone()))
+                        {
                             return global_name.clone();
                         }
                         // Fallback: generate from convention
-                        return format!("{}_{}", class_name.to_uppercase(), sanitize_identifier(member_name).to_uppercase());
+                        return format!(
+                            "{}_{}",
+                            class_name.to_uppercase(),
+                            sanitize_identifier(member_name).to_uppercase()
+                        );
                     }
                 }
                 // Non-static members: generate raw without unsafe wrapper
@@ -6167,7 +7202,11 @@ impl AstCodeGen {
                     format!("{}{}", value, suffix)
                 }
             }
-            ClangNodeKind::EvaluatedExpr { int_value, float_value, ty } => {
+            ClangNodeKind::EvaluatedExpr {
+                int_value,
+                float_value,
+                ty,
+            } => {
                 // Evaluated constant expression (e.g., default argument)
                 if let Some(val) = int_value {
                     if self.skip_literal_suffix {
@@ -6203,7 +7242,11 @@ impl AstCodeGen {
             }
             ClangNodeKind::BoolLiteral(b) => b.to_string(),
             ClangNodeKind::NullPtrLiteral => "std::ptr::null_mut()".to_string(),
-            ClangNodeKind::CXXNewExpr { ty, is_array, is_placement } => {
+            ClangNodeKind::CXXNewExpr {
+                ty,
+                is_array,
+                is_placement,
+            } => {
                 if *is_placement && *is_array {
                     // Array placement new: new (ptr) T[n] → construct n elements at ptr
                     // Children typically: [placement_ptr, size_expr, CXXConstructExpr or InitListExpr]
@@ -6266,7 +7309,10 @@ impl AstCodeGen {
                         let init = self.expr_to_string(&node.children[0]);
                         ("/* missing placement ptr */".to_string(), init)
                     } else {
-                        ("/* missing placement ptr */".to_string(), default_value_for_type(ty))
+                        (
+                            "/* missing placement ptr */".to_string(),
+                            default_value_for_type(ty),
+                        )
                     };
 
                     // Generate: cast ptr to target type, verify alignment, write constructor value, return ptr
@@ -6318,7 +7364,10 @@ impl AstCodeGen {
                         let elem_type_str = elem_type
                             .map(|t| t.to_rust_type_str())
                             .unwrap_or_else(|| "u8".to_string());
-                        format!("unsafe {{ fragile_delete_array::<{}>({}) }}", elem_type_str, ptr)
+                        format!(
+                            "unsafe {{ fragile_delete_array::<{}>({}) }}",
+                            elem_type_str, ptr
+                        )
                     } else {
                         "/* delete[] error: no pointer */".to_string()
                     }
@@ -6335,9 +7384,18 @@ impl AstCodeGen {
                 // "hello" -> b"hello\0".as_ptr() as *const i8
                 format!("b\"{}\\0\".as_ptr() as *const i8", s.escape_default())
             }
-            ClangNodeKind::DeclRefExpr { name, namespace_path, ty, .. } => {
+            ClangNodeKind::DeclRefExpr {
+                name,
+                namespace_path,
+                ty,
+                ..
+            } => {
                 if name == "this" {
-                    if self.use_ctor_self { "__self".to_string() } else { "self".to_string() }
+                    if self.use_ctor_self {
+                        "__self".to_string()
+                    } else {
+                        "self".to_string()
+                    }
                 } else {
                     // Check for standard I/O streams (std::cout, std::cerr, std::cin)
                     // These should be mapped to Rust's std::io functions
@@ -6357,14 +7415,18 @@ impl AstCodeGen {
                     if !namespace_path.is_empty() && !matches!(ty, CppType::Function { .. }) {
                         // Check if the last component is a class name with a static member
                         let class_name = &namespace_path[namespace_path.len() - 1];
-                        if let Some(global_name) = self.static_members.get(&(class_name.clone(), name.clone())) {
+                        if let Some(global_name) =
+                            self.static_members.get(&(class_name.clone(), name.clone()))
+                        {
                             return format!("unsafe {{ {} }}", global_name);
                         }
                         // Try fallback: generate from convention if it looks like a static member
                         // (class name followed by member name, no function type)
-                        let global_name = format!("{}_{}", class_name.to_uppercase(), ident.to_uppercase());
+                        let global_name =
+                            format!("{}_{}", class_name.to_uppercase(), ident.to_uppercase());
                         // Check if this global exists in our static_members for any class
-                        let is_static_member = self.static_members.values().any(|g| g == &global_name);
+                        let is_static_member =
+                            self.static_members.values().any(|g| g == &global_name);
                         if is_static_member {
                             return format!("unsafe {{ {} }}", global_name);
                         }
@@ -6373,7 +7435,10 @@ impl AstCodeGen {
                     // Check if this is a static member of the current class (accessed without Class:: prefix)
                     if namespace_path.is_empty() && !matches!(ty, CppType::Function { .. }) {
                         if let Some(ref current_class) = self.current_class {
-                            if let Some(global_name) = self.static_members.get(&(current_class.clone(), name.clone())) {
+                            if let Some(global_name) = self
+                                .static_members
+                                .get(&(current_class.clone(), name.clone()))
+                            {
                                 return format!("unsafe {{ {} }}", global_name);
                             }
                         }
@@ -6405,7 +7470,11 @@ impl AstCodeGen {
                 }
             }
             ClangNodeKind::CXXThisExpr { .. } => {
-                if self.use_ctor_self { "__self".to_string() } else { "self".to_string() }
+                if self.use_ctor_self {
+                    "__self".to_string()
+                } else {
+                    "self".to_string()
+                }
             }
             ClangNodeKind::BinaryOperator { op, .. } => {
                 if node.children.len() >= 2 {
@@ -6432,18 +7501,29 @@ impl AstCodeGen {
                     let left_is_deref = Self::is_pointer_deref(&node.children[0]);
                     let left_is_ptr_subscript = self.is_pointer_subscript(&node.children[0]);
                     let left_is_static_member = self.is_static_member_access(&node.children[0]);
-                    let left_is_global_subscript = self.is_global_array_subscript(&node.children[0]);
+                    let left_is_global_subscript =
+                        self.is_global_array_subscript(&node.children[0]);
                     let left_is_global_var = self.is_global_var_expr(&node.children[0]);
                     let left_is_arrow = Self::is_arrow_member_access(&node.children[0]);
-                    let needs_unsafe = left_is_deref || left_is_ptr_subscript || left_is_static_member || left_is_global_subscript || left_is_global_var || left_is_arrow;
+                    let needs_unsafe = left_is_deref
+                        || left_is_ptr_subscript
+                        || left_is_static_member
+                        || left_is_global_subscript
+                        || left_is_global_var
+                        || left_is_arrow;
 
                     // Check if left side is a pointer type for += / -= (need .add() / .sub())
                     let left_type = Self::get_expr_type(&node.children[0]);
                     let left_is_pointer = matches!(left_type, Some(CppType::Pointer { .. }));
 
                     // Handle function pointer comparison with nullptr: use .is_none() / .is_some()
-                    let left_is_fn_ptr = left_type.as_ref().map_or(false, |t| Self::is_function_pointer_type(t));
-                    if left_is_fn_ptr && matches!(op, BinaryOp::Eq | BinaryOp::Ne) && Self::is_nullptr_literal(&node.children[1]) {
+                    let left_is_fn_ptr = left_type
+                        .as_ref()
+                        .map_or(false, |t| Self::is_function_pointer_type(t));
+                    if left_is_fn_ptr
+                        && matches!(op, BinaryOp::Eq | BinaryOp::Ne)
+                        && Self::is_nullptr_literal(&node.children[1])
+                    {
                         let left = self.expr_to_string(&node.children[0]);
                         return if matches!(op, BinaryOp::Eq) {
                             format!("{}.is_none()", left)
@@ -6466,41 +7546,90 @@ impl AstCodeGen {
                     if left_is_pointer && matches!(op, BinaryOp::AddAssign | BinaryOp::SubAssign) {
                         let left = self.expr_to_string(&node.children[0]);
                         let right = self.expr_to_string(&node.children[1]);
-                        let method = if matches!(op, BinaryOp::AddAssign) { "add" } else { "sub" };
+                        let method = if matches!(op, BinaryOp::AddAssign) {
+                            "add"
+                        } else {
+                            "sub"
+                        };
                         // Wrap complex expressions in parens before casting to usize
                         // ptr.add() is unsafe, so wrap in unsafe block
                         let right_needs_parens = right.contains(' ') || right.contains("as ");
                         if right_needs_parens {
-                            format!("unsafe {{ {} = {}.{}(({}) as usize) }}", left, left, method, right)
+                            format!(
+                                "unsafe {{ {} = {}.{}(({}) as usize) }}",
+                                left, left, method, right
+                            )
                         } else {
-                            format!("unsafe {{ {} = {}.{}({} as usize) }}", left, left, method, right)
+                            format!(
+                                "unsafe {{ {} = {}.{}({} as usize) }}",
+                                left, left, method, right
+                            )
                         }
-                    } else if matches!(op, BinaryOp::Assign | BinaryOp::AddAssign | BinaryOp::SubAssign |
-                                   BinaryOp::MulAssign | BinaryOp::DivAssign |
-                                   BinaryOp::RemAssign | BinaryOp::AndAssign |
-                                   BinaryOp::OrAssign | BinaryOp::XorAssign |
-                                   BinaryOp::ShlAssign | BinaryOp::ShrAssign) && needs_unsafe {
+                    } else if matches!(
+                        op,
+                        BinaryOp::Assign
+                            | BinaryOp::AddAssign
+                            | BinaryOp::SubAssign
+                            | BinaryOp::MulAssign
+                            | BinaryOp::DivAssign
+                            | BinaryOp::RemAssign
+                            | BinaryOp::AndAssign
+                            | BinaryOp::OrAssign
+                            | BinaryOp::XorAssign
+                            | BinaryOp::ShlAssign
+                            | BinaryOp::ShrAssign
+                    ) && needs_unsafe
+                    {
                         // For pointer dereference, subscript, or static member on left side, wrap entire assignment in unsafe
                         // Strip literal suffix on RHS - Rust infers type from LHS
                         let left_raw = self.expr_to_string_raw(&node.children[0]);
-                        let right_raw = strip_literal_suffix(&self.expr_to_string_raw(&node.children[1]));
+                        let right_raw =
+                            strip_literal_suffix(&self.expr_to_string_raw(&node.children[1]));
                         format!("unsafe {{ {} {} {} }}", left_raw, op_str, right_raw)
-                    } else if matches!(op, BinaryOp::Assign | BinaryOp::AddAssign | BinaryOp::SubAssign |
-                                   BinaryOp::MulAssign | BinaryOp::DivAssign |
-                                   BinaryOp::RemAssign | BinaryOp::AndAssign |
-                                   BinaryOp::OrAssign | BinaryOp::XorAssign |
-                                   BinaryOp::ShlAssign | BinaryOp::ShrAssign) {
+                    } else if matches!(
+                        op,
+                        BinaryOp::Assign
+                            | BinaryOp::AddAssign
+                            | BinaryOp::SubAssign
+                            | BinaryOp::MulAssign
+                            | BinaryOp::DivAssign
+                            | BinaryOp::RemAssign
+                            | BinaryOp::AndAssign
+                            | BinaryOp::OrAssign
+                            | BinaryOp::XorAssign
+                            | BinaryOp::ShlAssign
+                            | BinaryOp::ShrAssign
+                    ) {
                         // For assignment operators, strip literal suffix on RHS - Rust infers from LHS
                         let left = self.expr_to_string(&node.children[0]);
                         let right = strip_literal_suffix(&self.expr_to_string(&node.children[1]));
                         format!("{} {} {}", left, op_str, right)
-                    } else if matches!(op, BinaryOp::Eq | BinaryOp::Ne | BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge) {
+                    } else if matches!(
+                        op,
+                        BinaryOp::Eq
+                            | BinaryOp::Ne
+                            | BinaryOp::Lt
+                            | BinaryOp::Le
+                            | BinaryOp::Gt
+                            | BinaryOp::Ge
+                    ) {
                         // For comparison operators, strip literal suffixes - Rust infers compatible types
                         let left = strip_literal_suffix(&self.expr_to_string(&node.children[0]));
                         let right = strip_literal_suffix(&self.expr_to_string(&node.children[1]));
                         format!("{} {} {}", left, op_str, right)
-                    } else if matches!(op, BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Rem |
-                                       BinaryOp::And | BinaryOp::Or | BinaryOp::Xor | BinaryOp::Shl | BinaryOp::Shr) {
+                    } else if matches!(
+                        op,
+                        BinaryOp::Add
+                            | BinaryOp::Sub
+                            | BinaryOp::Mul
+                            | BinaryOp::Div
+                            | BinaryOp::Rem
+                            | BinaryOp::And
+                            | BinaryOp::Or
+                            | BinaryOp::Xor
+                            | BinaryOp::Shl
+                            | BinaryOp::Shr
+                    ) {
                         // For arithmetic/bitwise operators, strip literal suffixes to let Rust infer types
                         // This handles cases like `isize / 64i32` -> `isize / 64`
                         let left = strip_literal_suffix(&self.expr_to_string(&node.children[0]));
@@ -6544,7 +7673,7 @@ impl AstCodeGen {
                                 format!("(({}) == 0)", operand)
                             }
                         }
-                        UnaryOp::Not => format!("!{}", operand),  // bitwise not ~ in C++
+                        UnaryOp::Not => format!("!{}", operand), // bitwise not ~ in C++
                         UnaryOp::AddrOf => {
                             // Check if this is a pointer to a polymorphic class
                             if let CppType::Pointer { pointee, is_const } = ty {
@@ -6583,20 +7712,44 @@ impl AstCodeGen {
                             let is_pointer = matches!(ty, CppType::Pointer { .. });
                             // For global variables, wrap entire operation in unsafe
                             if is_global {
-                                let raw_name = self.get_raw_var_name(&node.children[0]).unwrap_or(operand.clone());
+                                let raw_name = self
+                                    .get_raw_var_name(&node.children[0])
+                                    .unwrap_or(operand.clone());
                                 if is_pointer {
-                                    let method = if matches!(op, UnaryOp::PreInc) { "add" } else { "sub" };
-                                    format!("unsafe {{ {} = {}.{}(1); {} }}", raw_name, raw_name, method, raw_name)
+                                    let method = if matches!(op, UnaryOp::PreInc) {
+                                        "add"
+                                    } else {
+                                        "sub"
+                                    };
+                                    format!(
+                                        "unsafe {{ {} = {}.{}(1); {} }}",
+                                        raw_name, raw_name, method, raw_name
+                                    )
                                 } else {
-                                    let op_str = if matches!(op, UnaryOp::PreInc) { "+=" } else { "-=" };
+                                    let op_str = if matches!(op, UnaryOp::PreInc) {
+                                        "+="
+                                    } else {
+                                        "-="
+                                    };
                                     format!("unsafe {{ {} {} 1; {} }}", raw_name, op_str, raw_name)
                                 }
                             } else if is_pointer {
                                 // Pointer arithmetic with .add/.sub is unsafe
-                                let method = if matches!(op, UnaryOp::PreInc) { "add" } else { "sub" };
-                                format!("unsafe {{ {} = {}.{}(1); {} }}", operand, operand, method, operand)
+                                let method = if matches!(op, UnaryOp::PreInc) {
+                                    "add"
+                                } else {
+                                    "sub"
+                                };
+                                format!(
+                                    "unsafe {{ {} = {}.{}(1); {} }}",
+                                    operand, operand, method, operand
+                                )
                             } else {
-                                let op_str = if matches!(op, UnaryOp::PreInc) { "+=" } else { "-=" };
+                                let op_str = if matches!(op, UnaryOp::PreInc) {
+                                    "+="
+                                } else {
+                                    "-="
+                                };
                                 format!("{{ {} {} 1; {} }}", operand, op_str, operand)
                             }
                         }
@@ -6604,21 +7757,51 @@ impl AstCodeGen {
                             let is_pointer = matches!(ty, CppType::Pointer { .. });
                             // For global variables, wrap entire operation in unsafe
                             if is_global {
-                                let raw_name = self.get_raw_var_name(&node.children[0]).unwrap_or(operand.clone());
+                                let raw_name = self
+                                    .get_raw_var_name(&node.children[0])
+                                    .unwrap_or(operand.clone());
                                 if is_pointer {
-                                    let method = if matches!(op, UnaryOp::PostInc) { "add" } else { "sub" };
-                                    format!("unsafe {{ let __v = {}; {} = {}.{}(1); __v }}", raw_name, raw_name, raw_name, method)
+                                    let method = if matches!(op, UnaryOp::PostInc) {
+                                        "add"
+                                    } else {
+                                        "sub"
+                                    };
+                                    format!(
+                                        "unsafe {{ let __v = {}; {} = {}.{}(1); __v }}",
+                                        raw_name, raw_name, raw_name, method
+                                    )
                                 } else {
-                                    let op_str = if matches!(op, UnaryOp::PostInc) { "+=" } else { "-=" };
-                                    format!("unsafe {{ let __v = {}; {} {} 1; __v }}", raw_name, raw_name, op_str)
+                                    let op_str = if matches!(op, UnaryOp::PostInc) {
+                                        "+="
+                                    } else {
+                                        "-="
+                                    };
+                                    format!(
+                                        "unsafe {{ let __v = {}; {} {} 1; __v }}",
+                                        raw_name, raw_name, op_str
+                                    )
                                 }
                             } else if is_pointer {
                                 // Pointer arithmetic with .add/.sub is unsafe
-                                let method = if matches!(op, UnaryOp::PostInc) { "add" } else { "sub" };
-                                format!("unsafe {{ let __v = {}; {} = {}.{}(1); __v }}", operand, operand, operand, method)
+                                let method = if matches!(op, UnaryOp::PostInc) {
+                                    "add"
+                                } else {
+                                    "sub"
+                                };
+                                format!(
+                                    "unsafe {{ let __v = {}; {} = {}.{}(1); __v }}",
+                                    operand, operand, operand, method
+                                )
                             } else {
-                                let op_str = if matches!(op, UnaryOp::PostInc) { "+=" } else { "-=" };
-                                format!("{{ let __v = {}; {} {} 1; __v }}", operand, operand, op_str)
+                                let op_str = if matches!(op, UnaryOp::PostInc) {
+                                    "+="
+                                } else {
+                                    "-="
+                                };
+                                format!(
+                                    "{{ let __v = {}; {} {} 1; __v }}",
+                                    operand, operand, op_str
+                                )
                             }
                         }
                     }
@@ -6628,8 +7811,11 @@ impl AstCodeGen {
             }
             ClangNodeKind::CallExpr { ty } => {
                 // Check if this is a std::get call on a variant
-                if let Some((variant_arg, variant_type, return_type)) = Self::is_std_get_call(node) {
-                    if let Some(idx) = Self::get_variant_index_from_return_type(&variant_type, return_type) {
+                if let Some((variant_arg, variant_type, return_type)) = Self::is_std_get_call(node)
+                {
+                    if let Some(idx) =
+                        Self::get_variant_index_from_return_type(&variant_type, return_type)
+                    {
                         if let Some(enum_name) = Self::get_variant_enum_name(&variant_type) {
                             let variant_expr = self.expr_to_string(variant_arg);
                             // Generate match expression to extract the variant value
@@ -6658,7 +7844,8 @@ impl AstCodeGen {
                 }
 
                 // Check if this is a std::views range adaptor call (filter, transform, take, drop, reverse)
-                if let Some((adaptor, range_node, arg_node)) = Self::is_std_views_adaptor_call(node) {
+                if let Some((adaptor, range_node, arg_node)) = Self::is_std_views_adaptor_call(node)
+                {
                     let range_expr = self.expr_to_string(range_node);
                     match adaptor {
                         "rev" => {
@@ -6669,7 +7856,10 @@ impl AstCodeGen {
                             // take/drop take a count argument
                             if let Some(arg) = arg_node {
                                 let count_expr = self.expr_to_string(arg);
-                                return format!("{}.iter().{}({})", range_expr, adaptor, count_expr);
+                                return format!(
+                                    "{}.iter().{}({})",
+                                    range_expr, adaptor, count_expr
+                                );
                             }
                         }
                         "filter" | "map" | "take_while" | "skip_while" => {
@@ -6684,7 +7874,8 @@ impl AstCodeGen {
                 }
 
                 // Check if this is a std::ranges algorithm call (for_each, find, sort, copy)
-                if let Some((algo, range_node, arg_node)) = Self::is_std_ranges_algorithm_call(node) {
+                if let Some((algo, range_node, arg_node)) = Self::is_std_ranges_algorithm_call(node)
+                {
                     let range_expr = self.expr_to_string(range_node);
                     match algo {
                         "for_each" => {
@@ -6727,7 +7918,10 @@ impl AstCodeGen {
                         "count" => {
                             if let Some(arg) = arg_node {
                                 let pred_expr = self.expr_to_string(arg);
-                                return format!("{}.iter().filter({}).count()", range_expr, pred_expr);
+                                return format!(
+                                    "{}.iter().filter({}).count()",
+                                    range_expr, pred_expr
+                                );
                             } else {
                                 return format!("{}.iter().count()", range_expr);
                             }
@@ -6752,7 +7946,9 @@ impl AstCodeGen {
                             if name.contains("lambda at ") {
                                 // This is a closure call - generate simple function call syntax
                                 let callee = self.expr_to_string(&node.children[left_idx]);
-                                let args: Vec<String> = node.children.iter()
+                                let args: Vec<String> = node
+                                    .children
+                                    .iter()
                                     .enumerate()
                                     .filter(|(i, c)| {
                                         // Skip the callee and the operator() reference
@@ -6767,24 +7963,32 @@ impl AstCodeGen {
                 }
 
                 // Check if this is an operator overload call (e.g., a + b)
-                if let Some((op_name, left_idx, right_idx_opt)) = Self::get_operator_call_info(node) {
+                if let Some((op_name, left_idx, right_idx_opt)) = Self::get_operator_call_info(node)
+                {
                     // Special handling for global operator new/delete
                     // These are not method calls but global allocation functions
                     // For operator new/delete, find the actual argument (not the operator reference)
                     if op_name == "operator new" || op_name == "operator new[]" {
                         // ::operator new(size) -> fragile_runtime::fragile_malloc(size)
                         // Find the size argument - it's the child that's not the function reference
-                        let size_arg = node.children.iter()
+                        let size_arg = node
+                            .children
+                            .iter()
                             .filter(|c| !Self::is_function_reference(c))
                             .next()
                             .map(|c| self.expr_to_string(c))
                             .unwrap_or_else(|| "0".to_string());
-                        return format!("unsafe {{ crate::fragile_runtime::fragile_malloc({}) }}", size_arg);
+                        return format!(
+                            "unsafe {{ crate::fragile_runtime::fragile_malloc({}) }}",
+                            size_arg
+                        );
                     }
                     if op_name == "operator delete" || op_name == "operator delete[]" {
                         // ::operator delete(ptr) -> fragile_runtime::fragile_free(ptr)
                         // Find the pointer argument - it's the child that's not the function reference
-                        let ptr_arg = node.children.iter()
+                        let ptr_arg = node
+                            .children
+                            .iter()
                             .filter(|c| !Self::is_function_reference(c))
                             .next()
                             .map(|c| self.expr_to_string(c))
@@ -6799,11 +8003,11 @@ impl AstCodeGen {
                     if op_name == "operator()" {
                         // Function call operator: callee.op_call(args...)
                         // Collect all children except the callee and the operator() reference
-                        let args: Vec<String> = node.children.iter()
+                        let args: Vec<String> = node
+                            .children
+                            .iter()
                             .enumerate()
-                            .filter(|(i, c)| {
-                                *i != left_idx && !Self::is_function_reference(c)
-                            })
+                            .filter(|(i, c)| *i != left_idx && !Self::is_function_reference(c))
                             .map(|(_, c)| self.expr_to_string(c))
                             .collect();
                         format!("{}.{}({})", left_operand, method_name, args.join(", "))
@@ -6831,12 +8035,21 @@ impl AstCodeGen {
 
                         // Special case: type_info comparison (typeid == typeid)
                         // Use native Rust == / != since std::any::TypeId supports it directly
-                        let left_is_typeid = matches!(&node.children[left_idx].kind, ClangNodeKind::TypeidExpr { .. })
-                            || Self::contains_typeid_expr(&node.children[left_idx]);
-                        let right_is_typeid = matches!(&node.children[right_idx].kind, ClangNodeKind::TypeidExpr { .. })
-                            || Self::contains_typeid_expr(&node.children[right_idx]);
+                        let left_is_typeid =
+                            matches!(
+                                &node.children[left_idx].kind,
+                                ClangNodeKind::TypeidExpr { .. }
+                            ) || Self::contains_typeid_expr(&node.children[left_idx]);
+                        let right_is_typeid =
+                            matches!(
+                                &node.children[right_idx].kind,
+                                ClangNodeKind::TypeidExpr { .. }
+                            ) || Self::contains_typeid_expr(&node.children[right_idx]);
 
-                        if left_is_typeid && right_is_typeid && (op_name == "operator==" || op_name == "operator!=") {
+                        if left_is_typeid
+                            && right_is_typeid
+                            && (op_name == "operator==" || op_name == "operator!=")
+                        {
                             let rust_op = if op_name == "operator==" { "==" } else { "!=" };
                             return format!("{} {} {}", left_operand, rust_op, right_operand);
                         }
@@ -6847,14 +8060,28 @@ impl AstCodeGen {
                         let needs_ref = match &right_type {
                             Some(CppType::Named(name)) => {
                                 // These are typedefs to primitive types - pass by value
-                                !matches!(name.as_str(),
-                                    "ptrdiff_t" | "std::ptrdiff_t" | "ssize_t" |
-                                    "size_t" | "std::size_t" |
-                                    "intptr_t" | "std::intptr_t" |
-                                    "uintptr_t" | "std::uintptr_t" |
-                                    "difference_type" | "size_type" |
-                                    "int8_t" | "int16_t" | "int32_t" | "int64_t" |
-                                    "uint8_t" | "uint16_t" | "uint32_t" | "uint64_t")
+                                !matches!(
+                                    name.as_str(),
+                                    "ptrdiff_t"
+                                        | "std::ptrdiff_t"
+                                        | "ssize_t"
+                                        | "size_t"
+                                        | "std::size_t"
+                                        | "intptr_t"
+                                        | "std::intptr_t"
+                                        | "uintptr_t"
+                                        | "std::uintptr_t"
+                                        | "difference_type"
+                                        | "size_type"
+                                        | "int8_t"
+                                        | "int16_t"
+                                        | "int32_t"
+                                        | "int64_t"
+                                        | "uint8_t"
+                                        | "uint16_t"
+                                        | "uint32_t"
+                                        | "uint64_t"
+                                )
                             }
                             _ => false,
                         };
@@ -6873,9 +8100,8 @@ impl AstCodeGen {
 
                     // Check if this is a function call (not a constructor)
                     // A function call has a DeclRefExpr child with Function type
-                    let is_function_call = node.children.iter().any(|c| {
-                        Self::is_function_reference(c)
-                    });
+                    let is_function_call =
+                        node.children.iter().any(|c| Self::is_function_reference(c));
 
                     if is_function_call && !node.children.is_empty() {
                         // Regular function call that returns a struct
@@ -6883,14 +8109,17 @@ impl AstCodeGen {
                         // Strip Some() wrapper if present - callee shouldn't be wrapped
                         // (FunctionToPointerDecay on callee is just a C++ technicality)
                         let func = Self::strip_some_wrapper(&func);
-                        let args: Vec<String> = node.children[1..].iter()
+                        let args: Vec<String> = node.children[1..]
+                            .iter()
                             .map(|c| self.expr_to_string(c))
                             .collect();
                         format!("{}({})", func, args.join(", "))
                     } else {
                         // Constructor call: all children are arguments (but skip TypeRef nodes)
                         // First, filter to get only argument nodes
-                        let arg_nodes: Vec<&ClangNode> = node.children.iter()
+                        let arg_nodes: Vec<&ClangNode> = node
+                            .children
+                            .iter()
                             .filter(|c| {
                                 // Skip TypeRef nodes (they're type references, not arguments)
                                 if let ClangNodeKind::Unknown(s) = &c.kind {
@@ -6906,7 +8135,9 @@ impl AstCodeGen {
                         let is_copy_ctor = arg_nodes.len() == 1 && {
                             let arg_type = Self::get_expr_type(arg_nodes[0]);
                             let arg_class = Self::extract_class_name(&arg_type);
-                            arg_class.map(|name| name == *cpp_struct_name).unwrap_or(false)
+                            arg_class
+                                .map(|name| name == *cpp_struct_name)
+                                .unwrap_or(false)
                         };
 
                         if is_copy_ctor {
@@ -6917,9 +8148,8 @@ impl AstCodeGen {
                             format!("{}.clone()", arg_str)
                         } else {
                             // Regular constructor - convert args and call new_N
-                            let args: Vec<String> = arg_nodes.iter()
-                                .map(|c| self.expr_to_string(c))
-                                .collect();
+                            let args: Vec<String> =
+                                arg_nodes.iter().map(|c| self.expr_to_string(c)).collect();
                             let num_args = args.len();
 
                             // Check if the type maps to a pointer, primitive, or non-struct type
@@ -6929,10 +8159,20 @@ impl AstCodeGen {
                                 || struct_name == "std::ffi::c_void"
                                 || struct_name == "()"
                                 || struct_name == "bool"
-                                || struct_name == "i8" || struct_name == "i16" || struct_name == "i32" || struct_name == "i64" || struct_name == "i128"
-                                || struct_name == "u8" || struct_name == "u16" || struct_name == "u32" || struct_name == "u64" || struct_name == "u128"
-                                || struct_name == "f32" || struct_name == "f64"
-                                || struct_name == "isize" || struct_name == "usize"
+                                || struct_name == "i8"
+                                || struct_name == "i16"
+                                || struct_name == "i32"
+                                || struct_name == "i64"
+                                || struct_name == "i128"
+                                || struct_name == "u8"
+                                || struct_name == "u16"
+                                || struct_name == "u32"
+                                || struct_name == "u64"
+                                || struct_name == "u128"
+                                || struct_name == "f32"
+                                || struct_name == "f64"
+                                || struct_name == "isize"
+                                || struct_name == "usize"
                                 || struct_name == "char";
 
                             if is_non_struct {
@@ -6954,11 +8194,20 @@ impl AstCodeGen {
                     }
                 } else if !node.children.is_empty() {
                     // Check if this is a virtual base method call
-                    if let Some((base, vbase_field, method)) = self.get_virtual_base_method_call_info(&node.children[0]) {
-                        let args: Vec<String> = node.children[1..].iter()
+                    if let Some((base, vbase_field, method)) =
+                        self.get_virtual_base_method_call_info(&node.children[0])
+                    {
+                        let args: Vec<String> = node.children[1..]
+                            .iter()
                             .map(|c| self.expr_to_string(c))
                             .collect();
-                        return format!("unsafe {{ (*{}.{}).{}({}) }}", base, vbase_field, method, args.join(", "));
+                        return format!(
+                            "unsafe {{ (*{}.{}).{}({}) }}",
+                            base,
+                            vbase_field,
+                            method,
+                            args.join(", ")
+                        );
                     }
 
                     // Regular function call: first child is the function reference, rest are arguments
@@ -6974,7 +8223,8 @@ impl AstCodeGen {
                     // Try to get function parameter types to handle reference parameters
                     let param_types = Self::get_function_param_types(&node.children[0]);
 
-                    let args: Vec<String> = node.children[1..].iter()
+                    let args: Vec<String> = node.children[1..]
+                        .iter()
                         .enumerate()
                         .map(|(i, c)| {
                             // Check if this parameter expects specific handling
@@ -6996,9 +8246,11 @@ impl AstCodeGen {
                                     // Handle pointer parameters with array arguments
                                     // Also handle unsized array parameters (which are really pointers)
                                     if matches!(&types[i], CppType::Pointer { .. })
-                                        || matches!(&types[i], CppType::Array { size: None, .. }) {
+                                        || matches!(&types[i], CppType::Array { size: None, .. })
+                                    {
                                         let arg_type = Self::get_expr_type(c);
-                                        let is_array = matches!(arg_type, Some(CppType::Array { .. }));
+                                        let is_array =
+                                            matches!(arg_type, Some(CppType::Array { .. }));
                                         if is_array {
                                             // Array to pointer decay
                                             let arg_str = self.expr_to_string(c);
@@ -7016,7 +8268,9 @@ impl AstCodeGen {
                         .collect();
 
                     // Check if this is a compiler builtin function call
-                    if let Some((rust_code, needs_unsafe)) = Self::map_builtin_function(&func, &args) {
+                    if let Some((rust_code, needs_unsafe)) =
+                        Self::map_builtin_function(&func, &args)
+                    {
                         return if needs_unsafe {
                             format!("unsafe {{ {} }}", rust_code)
                         } else {
@@ -7034,7 +8288,7 @@ impl AstCodeGen {
                     // Check if the function expression is wrapped in unsafe (from arrow member access)
                     // If so, put the function call inside the unsafe block
                     if func.starts_with("unsafe { ") && func.ends_with(" }") {
-                        let inner = &func[9..func.len()-2]; // Extract "(*...).method" from "unsafe { (*...).method }"
+                        let inner = &func[9..func.len() - 2]; // Extract "(*...).method" from "unsafe { (*...).method }"
                         format!("unsafe {{ {}({}) }}", inner, args.join(", "))
                     } else if is_fn_ptr_call {
                         // Function pointer call: need to unwrap the Option<fn(...)>
@@ -7046,18 +8300,31 @@ impl AstCodeGen {
                     "/* call error */".to_string()
                 }
             }
-            ClangNodeKind::MemberExpr { member_name, is_arrow, declaring_class, is_static, .. } => {
+            ClangNodeKind::MemberExpr {
+                member_name,
+                is_arrow,
+                declaring_class,
+                is_static,
+                ..
+            } => {
                 // Check for static member access first
                 if *is_static {
                     // Look up the global variable name for this static member
                     if let Some(class_name) = declaring_class {
-                        if let Some(global_name) = self.static_members.get(&(class_name.clone(), member_name.clone())) {
+                        if let Some(global_name) = self
+                            .static_members
+                            .get(&(class_name.clone(), member_name.clone()))
+                        {
                             return format!("unsafe {{ {} }}", global_name);
                         }
                     }
                     // Fallback: generate global name from convention
                     if let Some(class_name) = declaring_class {
-                        let global_name = format!("{}_{}", class_name.to_uppercase(), sanitize_identifier(member_name).to_uppercase());
+                        let global_name = format!(
+                            "{}_{}",
+                            class_name.to_uppercase(),
+                            sanitize_identifier(member_name).to_uppercase()
+                        );
                         return format!("unsafe {{ {} }}", global_name);
                     }
                 }
@@ -7071,9 +8338,11 @@ impl AstCodeGen {
 
                     // Determine if we need base access and get the correct base field name
                     // Skip base access for anonymous struct members (they are flattened into parent)
-                    let (needs_base_access, base_access) = if let Some(decl_class) = declaring_class {
+                    let (needs_base_access, base_access) = if let Some(decl_class) = declaring_class
+                    {
                         // Anonymous struct members are flattened - access directly
-                        if decl_class.starts_with("(anonymous") || decl_class.starts_with("__anon_") {
+                        if decl_class.starts_with("(anonymous") || decl_class.starts_with("__anon_")
+                        {
                             (false, BaseAccess::DirectField(String::new()))
                         } else {
                             let base_class_name = Self::extract_class_name(&base_type);
@@ -7170,34 +8439,40 @@ impl AstCodeGen {
                     // Implicit this - check if member is inherited
                     let member = sanitize_identifier(member_name);
                     let self_name = if self.use_ctor_self { "__self" } else { "self" };
-                    let (needs_base_access, base_access) = if let (Some(current), Some(decl_class)) = (&self.current_class, declaring_class) {
-                        // Anonymous struct members are flattened - access directly
-                        if decl_class.starts_with("(anonymous") || decl_class.starts_with("__anon_") {
-                            (false, BaseAccess::DirectField(String::new()))
-                        } else {
-                            // Strip namespace prefix from BOTH sides for comparison
-                            // (e.g., std::_Bit_reference -> _Bit_reference)
-                            let current_unqual = if let Some(pos) = current.rfind("::") {
-                                &current[pos + 2..]
-                            } else {
-                                current.as_str()
-                            };
-                            let decl_class_unqual = if let Some(pos) = decl_class.rfind("::") {
-                                &decl_class[pos + 2..]
-                            } else {
-                                decl_class.as_str()
-                            };
-                            // Compare unqualified names
-                            if current_unqual != decl_class_unqual {
-                                let access = self.get_base_access_for_class(current, decl_class);
-                                (true, access)
-                            } else {
+                    let (needs_base_access, base_access) =
+                        if let (Some(current), Some(decl_class)) =
+                            (&self.current_class, declaring_class)
+                        {
+                            // Anonymous struct members are flattened - access directly
+                            if decl_class.starts_with("(anonymous")
+                                || decl_class.starts_with("__anon_")
+                            {
                                 (false, BaseAccess::DirectField(String::new()))
+                            } else {
+                                // Strip namespace prefix from BOTH sides for comparison
+                                // (e.g., std::_Bit_reference -> _Bit_reference)
+                                let current_unqual = if let Some(pos) = current.rfind("::") {
+                                    &current[pos + 2..]
+                                } else {
+                                    current.as_str()
+                                };
+                                let decl_class_unqual = if let Some(pos) = decl_class.rfind("::") {
+                                    &decl_class[pos + 2..]
+                                } else {
+                                    decl_class.as_str()
+                                };
+                                // Compare unqualified names
+                                if current_unqual != decl_class_unqual {
+                                    let access =
+                                        self.get_base_access_for_class(current, decl_class);
+                                    (true, access)
+                                } else {
+                                    (false, BaseAccess::DirectField(String::new()))
+                                }
                             }
-                        }
-                    } else {
-                        (false, BaseAccess::DirectField(String::new()))
-                    };
+                        } else {
+                            (false, BaseAccess::DirectField(String::new()))
+                        };
                     if needs_base_access {
                         match base_access {
                             BaseAccess::VirtualPtr(field) => {
@@ -7232,7 +8507,8 @@ impl AstCodeGen {
 
                     if is_global_array {
                         // For global arrays, get raw name and put indexing inside unsafe
-                        let raw_name = self.get_raw_var_name(&node.children[0])
+                        let raw_name = self
+                            .get_raw_var_name(&node.children[0])
                             .unwrap_or_else(|| self.expr_to_string(&node.children[0]));
                         format!("unsafe {{ {}[{} as usize] }}", raw_name, idx)
                     } else if is_pointer {
@@ -7283,7 +8559,9 @@ impl AstCodeGen {
                                 format!("{} as {}", inner, rust_type)
                             }
                         }
-                        CastKind::FloatingCast | CastKind::IntegralToFloating | CastKind::FloatingToIntegral => {
+                        CastKind::FloatingCast
+                        | CastKind::IntegralToFloating
+                        | CastKind::FloatingToIntegral => {
                             // Need explicit cast for floating conversions
                             let rust_type = ty.to_rust_type_str();
                             if needs_parens {
@@ -7372,9 +8650,12 @@ impl AstCodeGen {
 
                     for child in &node.children {
                         // Check if child is UnexposedExpr wrapper with MemberRef designator
-                        if matches!(&child.kind, ClangNodeKind::Unknown(s) if s == "UnexposedExpr") {
+                        if matches!(&child.kind, ClangNodeKind::Unknown(s) if s == "UnexposedExpr")
+                        {
                             if child.children.len() >= 2 {
-                                if let ClangNodeKind::MemberRef { name: field_name } = &child.children[0].kind {
+                                if let ClangNodeKind::MemberRef { name: field_name } =
+                                    &child.children[0].kind
+                                {
                                     // This is a designated initializer
                                     has_designators = true;
                                     // The value is the second child (or beyond)
@@ -7391,14 +8672,16 @@ impl AstCodeGen {
 
                     if has_designators {
                         // All values have field names from designators
-                        let inits: Vec<String> = field_values.iter()
+                        let inits: Vec<String> = field_values
+                            .iter()
                             .map(|(f, v)| format!("{}: {}", f, v))
                             .collect();
                         format!("{} {{ {} }}", name, inits.join(", "))
                     } else {
                         // Try to get field names for this struct (positional)
                         if let Some(struct_fields) = self.class_fields.get(name) {
-                            let inits: Vec<String> = field_values.iter()
+                            let inits: Vec<String> = field_values
+                                .iter()
                                 .enumerate()
                                 .map(|(i, (_, v))| {
                                     if i < struct_fields.len() {
@@ -7411,13 +8694,16 @@ impl AstCodeGen {
                             format!("{} {{ {} }}", name, inits.join(", "))
                         } else {
                             // Fallback: can't determine field names
-                            let values: Vec<String> = field_values.into_iter().map(|(_, v)| v).collect();
+                            let values: Vec<String> =
+                                field_values.into_iter().map(|(_, v)| v).collect();
                             format!("{} {{ {} }}", name, values.join(", "))
                         }
                     }
                 } else if matches!(ty, CppType::Array { .. }) {
                     // Array type - use array literal syntax
-                    let elems: Vec<String> = node.children.iter()
+                    let elems: Vec<String> = node
+                        .children
+                        .iter()
                         .map(|c| self.expr_to_string(c))
                         .collect();
                     format!("[{}]", elems.join(", "))
@@ -7426,32 +8712,42 @@ impl AstCodeGen {
                     self.expr_to_string(&node.children[0])
                 } else {
                     // Multiple elements for non-array type - shouldn't happen but use tuple
-                    let elems: Vec<String> = node.children.iter()
+                    let elems: Vec<String> = node
+                        .children
+                        .iter()
                         .map(|c| self.expr_to_string(c))
                         .collect();
                     format!("({})", elems.join(", "))
                 }
             }
-            ClangNodeKind::LambdaExpr { params, return_type, capture_default, captures } => {
+            ClangNodeKind::LambdaExpr {
+                params,
+                return_type,
+                capture_default,
+                captures,
+            } => {
                 // Generate Rust closure
                 // C++: [captures](params) -> ret { body }
                 // Rust: |params| -> ret { body } or move |params| { body }
                 use crate::ast::CaptureDefault;
 
                 // Determine if we need 'move' keyword
-                let needs_move = *capture_default == CaptureDefault::ByCopy ||
-                    captures.iter().any(|(_, by_ref)| !*by_ref);
+                let needs_move = *capture_default == CaptureDefault::ByCopy
+                    || captures.iter().any(|(_, by_ref)| !*by_ref);
 
                 // Generate parameter list with deduplication
                 let mut param_name_counts: HashMap<String, usize> = HashMap::new();
-                let params_str = params.iter()
+                let params_str = params
+                    .iter()
                     .map(|(name, ty)| {
                         let mut param_name = sanitize_identifier(name);
                         let count = param_name_counts.entry(param_name.clone()).or_insert(0);
                         if *count > 0 {
                             param_name = format!("{}_{}", param_name, *count);
                         }
-                        *param_name_counts.get_mut(&sanitize_identifier(name)).unwrap() += 1;
+                        *param_name_counts
+                            .get_mut(&sanitize_identifier(name))
+                            .unwrap() += 1;
                         format!("{}: {}", param_name, ty.to_rust_type_str())
                     })
                     .collect::<Vec<_>>()
@@ -7465,7 +8761,9 @@ impl AstCodeGen {
                 };
 
                 // Find the body (CompoundStmt child)
-                let body = node.children.iter()
+                let body = node
+                    .children
+                    .iter()
                     .find(|c| matches!(&c.kind, ClangNodeKind::CompoundStmt));
 
                 let body_str = if let Some(body_node) = body {
@@ -7475,17 +8773,27 @@ impl AstCodeGen {
                             if !body_node.children[0].children.is_empty() {
                                 // Single return with expression - Rust closure can omit return
                                 return if needs_move {
-                                    format!("move |{}|{} {}", params_str, ret_str,
-                                        self.expr_to_string(&body_node.children[0].children[0]))
+                                    format!(
+                                        "move |{}|{} {}",
+                                        params_str,
+                                        ret_str,
+                                        self.expr_to_string(&body_node.children[0].children[0])
+                                    )
                                 } else {
-                                    format!("|{}|{} {}", params_str, ret_str,
-                                        self.expr_to_string(&body_node.children[0].children[0]))
+                                    format!(
+                                        "|{}|{} {}",
+                                        params_str,
+                                        ret_str,
+                                        self.expr_to_string(&body_node.children[0].children[0])
+                                    )
                                 };
                             }
                         }
                     }
                     // Multi-statement body - generate block
-                    let stmts: Vec<String> = body_node.children.iter()
+                    let stmts: Vec<String> = body_node
+                        .children
+                        .iter()
                         .map(|stmt| self.lambda_stmt_to_string(stmt))
                         .collect();
                     format!("{{ {} }}", stmts.join(" "))
@@ -7519,18 +8827,32 @@ impl AstCodeGen {
                 }
             }
             // C++ RTTI expressions
-            ClangNodeKind::TypeidExpr { is_type_operand, operand_ty, .. } => {
+            ClangNodeKind::TypeidExpr {
+                is_type_operand,
+                operand_ty,
+                ..
+            } => {
                 // typeid(expr) or typeid(Type) → std::any::TypeId::of::<T>()
                 if *is_type_operand {
                     // typeid(Type) → TypeId::of::<RustType>()
-                    format!("std::any::TypeId::of::<{}>()", operand_ty.to_rust_type_str())
+                    format!(
+                        "std::any::TypeId::of::<{}>()",
+                        operand_ty.to_rust_type_str()
+                    )
                 } else if !node.children.is_empty() {
                     // typeid(expr) → for polymorphic types, we'd need runtime RTTI
                     // For now, use the static type from the operand
                     let expr = self.expr_to_string(&node.children[0]);
-                    format!("/* typeid({}) */ std::any::TypeId::of::<{}>()", expr, operand_ty.to_rust_type_str())
+                    format!(
+                        "/* typeid({}) */ std::any::TypeId::of::<{}>()",
+                        expr,
+                        operand_ty.to_rust_type_str()
+                    )
                 } else {
-                    format!("std::any::TypeId::of::<{}>()", operand_ty.to_rust_type_str())
+                    format!(
+                        "std::any::TypeId::of::<{}>()",
+                        operand_ty.to_rust_type_str()
+                    )
                 }
             }
             ClangNodeKind::DynamicCastExpr { target_ty } => {
@@ -7542,22 +8864,31 @@ impl AstCodeGen {
                     let target_str = target_ty.to_rust_type_str();
 
                     match target_ty {
-                        CppType::Reference { referent, is_const, .. } => {
+                        CppType::Reference {
+                            referent, is_const, ..
+                        } => {
                             // Reference dynamic_cast - throws on failure
                             // In Rust, we panic (equivalent to std::bad_cast)
                             let inner_type = referent.to_rust_type_str();
                             // For reference casts, if the cast fails we must panic
                             // This is wrapped in an unsafe block and uses transmute for now
-                            format!("unsafe {{ *(({} as *const _ as *const {}) as *{} {}) }}",
-                                    expr, inner_type, if *is_const { "const" } else { "mut" }, inner_type)
+                            format!(
+                                "unsafe {{ *(({} as *const _ as *const {}) as *{} {}) }}",
+                                expr,
+                                inner_type,
+                                if *is_const { "const" } else { "mut" },
+                                inner_type
+                            )
                         }
                         CppType::Pointer { pointee, is_const } => {
                             // Pointer dynamic_cast - returns null on failure
                             // Generate a safe cast that checks at runtime (placeholder for RTTI)
                             let inner_type = pointee.to_rust_type_str();
                             let ptr_prefix = if *is_const { "*const" } else { "*mut" };
-                            format!("/* dynamic_cast: returns null on failure */ {} as {} {}",
-                                    expr, ptr_prefix, inner_type)
+                            format!(
+                                "/* dynamic_cast: returns null on failure */ {} as {} {}",
+                                expr, ptr_prefix, inner_type
+                            )
                         }
                         _ => {
                             // Fallback for unexpected types
@@ -7565,7 +8896,10 @@ impl AstCodeGen {
                         }
                     }
                 } else {
-                    format!("/* dynamic_cast to {} without operand */", target_ty.to_rust_type_str())
+                    format!(
+                        "/* dynamic_cast to {} without operand */",
+                        target_ty.to_rust_type_str()
+                    )
                 }
             }
             // C++20 Coroutine expressions
@@ -7651,11 +8985,27 @@ impl AstCodeGen {
                             // In that case, generate a constructor call instead
                             if let CppType::Named(_) = ty {
                                 // Only generate constructor for actual struct types, not primitives
-                                let is_primitive = matches!(rust_type.as_str(),
-                                    "usize" | "isize" | "i8" | "i16" | "i32" | "i64" | "i128" |
-                                    "u8" | "u16" | "u32" | "u64" | "u128" | "f32" | "f64" |
-                                    "bool" | "()" | "char"
-                                ) || rust_type.starts_with('*') || rust_type.starts_with('&');
+                                let is_primitive = matches!(
+                                    rust_type.as_str(),
+                                    "usize"
+                                        | "isize"
+                                        | "i8"
+                                        | "i16"
+                                        | "i32"
+                                        | "i64"
+                                        | "i128"
+                                        | "u8"
+                                        | "u16"
+                                        | "u32"
+                                        | "u64"
+                                        | "u128"
+                                        | "f32"
+                                        | "f64"
+                                        | "bool"
+                                        | "()"
+                                        | "char"
+                                ) || rust_type.starts_with('*')
+                                    || rust_type.starts_with('&');
                                 if expr == "0" && !is_primitive {
                                     // Use unsafe zeroed for template types (contain __)
                                     if rust_type.contains("__") {
@@ -7672,8 +9022,12 @@ impl AstCodeGen {
                         } else {
                             String::new()
                         };
-                        return format!("let mut {}: {}{};",
-                            sanitize_identifier(name), rust_type, init);
+                        return format!(
+                            "let mut {}: {}{};",
+                            sanitize_identifier(name),
+                            rust_type,
+                            init
+                        );
                     }
                 }
                 "/* decl error */".to_string()
@@ -7776,17 +9130,28 @@ fn sanitize_identifier(name: &str) -> String {
     };
 
     // Replace invalid characters
-    result = result.replace("::", "_")
-        .replace('<', "_").replace('>', "_")
-        .replace(' ', "").replace('%', "_")
-        .replace('=', "_").replace('&', "_")
-        .replace('|', "_").replace('!', "_")
-        .replace('*', "_").replace('/', "_")
-        .replace('+', "_").replace('-', "_")
-        .replace('[', "_").replace(']', "_")
-        .replace('(', "_").replace(')', "_")
-        .replace(',', "_").replace(';', "_")
-        .replace('.', "_").replace(':', "_");
+    result = result
+        .replace("::", "_")
+        .replace('<', "_")
+        .replace('>', "_")
+        .replace(' ', "")
+        .replace('%', "_")
+        .replace('=', "_")
+        .replace('&', "_")
+        .replace('|', "_")
+        .replace('!', "_")
+        .replace('*', "_")
+        .replace('/', "_")
+        .replace('+', "_")
+        .replace('-', "_")
+        .replace('[', "_")
+        .replace(']', "_")
+        .replace('(', "_")
+        .replace(')', "_")
+        .replace(',', "_")
+        .replace(';', "_")
+        .replace('.', "_")
+        .replace(':', "_");
 
     // Handle keywords
     if RUST_KEYWORDS.contains(&result.as_str()) {
@@ -7823,11 +9188,11 @@ fn binop_to_string(op: &BinaryOp) -> &'static str {
         BinaryOp::Mul => "*",
         BinaryOp::Div => "/",
         BinaryOp::Rem => "%",
-        BinaryOp::And => "&",      // Bitwise AND
-        BinaryOp::Or => "|",       // Bitwise OR
-        BinaryOp::Xor => "^",      // Bitwise XOR
-        BinaryOp::LAnd => "&&",    // Logical AND
-        BinaryOp::LOr => "||",     // Logical OR
+        BinaryOp::And => "&",   // Bitwise AND
+        BinaryOp::Or => "|",    // Bitwise OR
+        BinaryOp::Xor => "^",   // Bitwise XOR
+        BinaryOp::LAnd => "&&", // Logical AND
+        BinaryOp::LOr => "||",  // Logical OR
         BinaryOp::Shl => "<<",
         BinaryOp::Shr => ">>",
         BinaryOp::Eq => "==",
@@ -7848,7 +9213,7 @@ fn binop_to_string(op: &BinaryOp) -> &'static str {
         BinaryOp::OrAssign => "|=",
         BinaryOp::XorAssign => "^=",
         BinaryOp::Comma => ",",
-        BinaryOp::Spaceship => "cmp",  // Handled specially - placeholder
+        BinaryOp::Spaceship => "cmp", // Handled specially - placeholder
     }
 }
 
@@ -7857,8 +9222,11 @@ fn default_value_for_type(ty: &CppType) -> String {
     match ty {
         CppType::Void => "()".to_string(),
         CppType::Bool => "false".to_string(),
-        CppType::Char { .. } | CppType::Short { .. } |
-        CppType::Int { .. } | CppType::Long { .. } | CppType::LongLong { .. } => "0".to_string(),
+        CppType::Char { .. }
+        | CppType::Short { .. }
+        | CppType::Int { .. }
+        | CppType::Long { .. }
+        | CppType::LongLong { .. } => "0".to_string(),
         CppType::Float => "0.0f32".to_string(),
         CppType::Double => "0.0f64".to_string(),
         CppType::Pointer { .. } => "std::ptr::null_mut()".to_string(),
@@ -7929,16 +9297,22 @@ mod tests {
                                 ty: CppType::Int { signed: true },
                             },
                             vec![
-                                make_node(ClangNodeKind::DeclRefExpr {
-                                    name: "a".to_string(),
-                                    ty: CppType::Int { signed: true },
-                                    namespace_path: vec![],
-                                }, vec![]),
-                                make_node(ClangNodeKind::DeclRefExpr {
-                                    name: "b".to_string(),
-                                    ty: CppType::Int { signed: true },
-                                    namespace_path: vec![],
-                                }, vec![]),
+                                make_node(
+                                    ClangNodeKind::DeclRefExpr {
+                                        name: "a".to_string(),
+                                        ty: CppType::Int { signed: true },
+                                        namespace_path: vec![],
+                                    },
+                                    vec![],
+                                ),
+                                make_node(
+                                    ClangNodeKind::DeclRefExpr {
+                                        name: "b".to_string(),
+                                        ty: CppType::Int { signed: true },
+                                        namespace_path: vec![],
+                                    },
+                                    vec![],
+                                ),
                             ],
                         )],
                     )],
@@ -7976,37 +9350,54 @@ mod tests {
                         ClangNodeKind::IfStmt,
                         vec![
                             // Condition: a > b
-                            make_node(ClangNodeKind::BinaryOperator {
-                                op: BinaryOp::Gt,
-                                ty: CppType::Bool,
-                            }, vec![
-                                make_node(ClangNodeKind::DeclRefExpr {
-                                    name: "a".to_string(),
-                                    ty: CppType::Int { signed: true },
-                                    namespace_path: vec![],
-                                }, vec![]),
-                                make_node(ClangNodeKind::DeclRefExpr {
-                                    name: "b".to_string(),
-                                    ty: CppType::Int { signed: true },
-                                    namespace_path: vec![],
-                                }, vec![]),
-                            ]),
+                            make_node(
+                                ClangNodeKind::BinaryOperator {
+                                    op: BinaryOp::Gt,
+                                    ty: CppType::Bool,
+                                },
+                                vec![
+                                    make_node(
+                                        ClangNodeKind::DeclRefExpr {
+                                            name: "a".to_string(),
+                                            ty: CppType::Int { signed: true },
+                                            namespace_path: vec![],
+                                        },
+                                        vec![],
+                                    ),
+                                    make_node(
+                                        ClangNodeKind::DeclRefExpr {
+                                            name: "b".to_string(),
+                                            ty: CppType::Int { signed: true },
+                                            namespace_path: vec![],
+                                        },
+                                        vec![],
+                                    ),
+                                ],
+                            ),
                             // Then: return a
-                            make_node(ClangNodeKind::ReturnStmt, vec![
-                                make_node(ClangNodeKind::DeclRefExpr {
-                                    name: "a".to_string(),
-                                    ty: CppType::Int { signed: true },
-                                    namespace_path: vec![],
-                                }, vec![]),
-                            ]),
+                            make_node(
+                                ClangNodeKind::ReturnStmt,
+                                vec![make_node(
+                                    ClangNodeKind::DeclRefExpr {
+                                        name: "a".to_string(),
+                                        ty: CppType::Int { signed: true },
+                                        namespace_path: vec![],
+                                    },
+                                    vec![],
+                                )],
+                            ),
                             // Else: return b
-                            make_node(ClangNodeKind::ReturnStmt, vec![
-                                make_node(ClangNodeKind::DeclRefExpr {
-                                    name: "b".to_string(),
-                                    ty: CppType::Int { signed: true },
-                                    namespace_path: vec![],
-                                }, vec![]),
-                            ]),
+                            make_node(
+                                ClangNodeKind::ReturnStmt,
+                                vec![make_node(
+                                    ClangNodeKind::DeclRefExpr {
+                                        name: "b".to_string(),
+                                        ty: CppType::Int { signed: true },
+                                        namespace_path: vec![],
+                                    },
+                                    vec![],
+                                )],
+                            ),
                         ],
                     )],
                 )],
@@ -8047,9 +9438,14 @@ mod tests {
                 vec![make_node(
                     ClangNodeKind::CompoundStmt,
                     vec![make_node(
-                        ClangNodeKind::CoreturnStmt { value_ty: Some(CppType::Int { signed: true }) },
+                        ClangNodeKind::CoreturnStmt {
+                            value_ty: Some(CppType::Int { signed: true }),
+                        },
                         vec![make_node(
-                            ClangNodeKind::IntegerLiteral { value: 42, cpp_type: Some(CppType::Int { signed: true }) },
+                            ClangNodeKind::IntegerLiteral {
+                                value: 42,
+                                cpp_type: Some(CppType::Int { signed: true }),
+                            },
                             vec![],
                         )],
                     )],
@@ -8059,9 +9455,17 @@ mod tests {
 
         let code = AstCodeGen::new().generate(&ast);
         // Should generate async fn with i32 return type (not Task<int>)
-        assert!(code.contains("pub async fn compute() -> i32"), "Expected 'pub async fn compute() -> i32', got:\n{}", code);
+        assert!(
+            code.contains("pub async fn compute() -> i32"),
+            "Expected 'pub async fn compute() -> i32', got:\n{}",
+            code
+        );
         // Should have coroutine comment
-        assert!(code.contains("/// Coroutine: async (Task<int>)"), "Expected coroutine comment, got:\n{}", code);
+        assert!(
+            code.contains("/// Coroutine: async (Task<int>)"),
+            "Expected coroutine comment, got:\n{}",
+            code
+        );
     }
 
     #[test]
@@ -8097,7 +9501,10 @@ mod tests {
                                 result_ty: CppType::Void,
                             },
                             vec![make_node(
-                                ClangNodeKind::IntegerLiteral { value: 1, cpp_type: Some(CppType::Int { signed: true }) },
+                                ClangNodeKind::IntegerLiteral {
+                                    value: 1,
+                                    cpp_type: Some(CppType::Int { signed: true }),
+                                },
                                 vec![],
                             )],
                         ),
@@ -8107,7 +9514,10 @@ mod tests {
                                 result_ty: CppType::Void,
                             },
                             vec![make_node(
-                                ClangNodeKind::IntegerLiteral { value: 2, cpp_type: Some(CppType::Int { signed: true }) },
+                                ClangNodeKind::IntegerLiteral {
+                                    value: 2,
+                                    cpp_type: Some(CppType::Int { signed: true }),
+                                },
                                 vec![],
                             )],
                         ),
@@ -8118,24 +9528,72 @@ mod tests {
 
         let code = AstCodeGen::new().generate(&ast);
         // Generators should NOT be async
-        assert!(!code.contains("async fn range"), "Generator should not be async, got:\n{}", code);
+        assert!(
+            !code.contains("async fn range"),
+            "Generator should not be async, got:\n{}",
+            code
+        );
         // Should return impl Iterator<Item=i32>
-        assert!(code.contains("impl Iterator<Item=i32>"), "Expected 'impl Iterator<Item=i32>', got:\n{}", code);
+        assert!(
+            code.contains("impl Iterator<Item=i32>"),
+            "Expected 'impl Iterator<Item=i32>', got:\n{}",
+            code
+        );
         // Should have coroutine comment
-        assert!(code.contains("/// Coroutine: generator (Generator<int>)"), "Expected coroutine comment, got:\n{}", code);
+        assert!(
+            code.contains("/// Coroutine: generator (Generator<int>)"),
+            "Expected coroutine comment, got:\n{}",
+            code
+        );
         // Should generate state machine struct
-        assert!(code.contains("pub struct RangeGenerator"), "Expected 'pub struct RangeGenerator', got:\n{}", code);
-        assert!(code.contains("__state: i32"), "Expected '__state: i32' field, got:\n{}", code);
+        assert!(
+            code.contains("pub struct RangeGenerator"),
+            "Expected 'pub struct RangeGenerator', got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("__state: i32"),
+            "Expected '__state: i32' field, got:\n{}",
+            code
+        );
         // Should implement Iterator
-        assert!(code.contains("impl Iterator for RangeGenerator"), "Expected Iterator impl, got:\n{}", code);
-        assert!(code.contains("type Item = i32"), "Expected 'type Item = i32', got:\n{}", code);
-        assert!(code.contains("fn next(&mut self)"), "Expected 'fn next(&mut self)', got:\n{}", code);
+        assert!(
+            code.contains("impl Iterator for RangeGenerator"),
+            "Expected Iterator impl, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("type Item = i32"),
+            "Expected 'type Item = i32', got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("fn next(&mut self)"),
+            "Expected 'fn next(&mut self)', got:\n{}",
+            code
+        );
         // Should have state machine match arms
-        assert!(code.contains("match self.__state"), "Expected match on __state, got:\n{}", code);
-        assert!(code.contains("Some(1i32)"), "Expected 'Some(1i32)' for first yield, got:\n{}", code);
-        assert!(code.contains("Some(2i32)"), "Expected 'Some(2i32)' for second yield, got:\n{}", code);
+        assert!(
+            code.contains("match self.__state"),
+            "Expected match on __state, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("Some(1i32)"),
+            "Expected 'Some(1i32)' for first yield, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("Some(2i32)"),
+            "Expected 'Some(2i32)' for second yield, got:\n{}",
+            code
+        );
         // Function should return generator instance
-        assert!(code.contains("RangeGenerator { __state: 0 }"), "Expected generator instance creation, got:\n{}", code);
+        assert!(
+            code.contains("RangeGenerator { __state: 0 }"),
+            "Expected generator instance creation, got:\n{}",
+            code
+        );
     }
 
     #[test]
@@ -8162,18 +9620,23 @@ mod tests {
                     is_coroutine: true,
                     coroutine_info: Some(coroutine_info),
                 },
-                vec![make_node(
-                    ClangNodeKind::CompoundStmt,
-                    vec![],
-                )],
+                vec![make_node(ClangNodeKind::CompoundStmt, vec![])],
             )],
         );
 
         let code = AstCodeGen::new().generate(&ast);
         // Should fallback to using the original return type
-        assert!(code.contains("CustomCoroutine"), "Expected 'CustomCoroutine' in return type, got:\n{}", code);
+        assert!(
+            code.contains("CustomCoroutine"),
+            "Expected 'CustomCoroutine' in return type, got:\n{}",
+            code
+        );
         // Should have coroutine comment
-        assert!(code.contains("/// Coroutine: custom"), "Expected coroutine comment, got:\n{}", code);
+        assert!(
+            code.contains("/// Coroutine: custom"),
+            "Expected coroutine comment, got:\n{}",
+            code
+        );
     }
 
     #[test]
@@ -8198,7 +9661,10 @@ mod tests {
                     vec![make_node(
                         ClangNodeKind::ReturnStmt,
                         vec![make_node(
-                            ClangNodeKind::IntegerLiteral { value: 0, cpp_type: Some(CppType::Int { signed: true }) },
+                            ClangNodeKind::IntegerLiteral {
+                                value: 0,
+                                cpp_type: Some(CppType::Int { signed: true }),
+                            },
                             vec![],
                         )],
                     )],
@@ -8208,9 +9674,17 @@ mod tests {
 
         let code = AstCodeGen::new().generate(&ast);
         // Should NOT be async
-        assert!(!code.contains("async fn regular"), "Regular function should not be async, got:\n{}", code);
+        assert!(
+            !code.contains("async fn regular"),
+            "Regular function should not be async, got:\n{}",
+            code
+        );
         // Should be just a regular pub fn
-        assert!(code.contains("pub fn regular() -> i32"), "Expected 'pub fn regular() -> i32', got:\n{}", code);
+        assert!(
+            code.contains("pub fn regular() -> i32"),
+            "Expected 'pub fn regular() -> i32', got:\n{}",
+            code
+        );
     }
 
     #[test]
@@ -8223,9 +9697,13 @@ mod tests {
                     name: "my_printf".to_string(),
                     mangled_name: "my_printf".to_string(),
                     return_type: CppType::Int { signed: true },
-                    params: vec![
-                        ("fmt".to_string(), CppType::Pointer { pointee: Box::new(CppType::Char { signed: true }), is_const: true }),
-                    ],
+                    params: vec![(
+                        "fmt".to_string(),
+                        CppType::Pointer {
+                            pointee: Box::new(CppType::Char { signed: true }),
+                            is_const: true,
+                        },
+                    )],
                     is_definition: true,
                     is_variadic: true,
                     is_noexcept: false,
@@ -8237,7 +9715,10 @@ mod tests {
                     vec![make_node(
                         ClangNodeKind::ReturnStmt,
                         vec![make_node(
-                            ClangNodeKind::IntegerLiteral { value: 0, cpp_type: Some(CppType::Int { signed: true }) },
+                            ClangNodeKind::IntegerLiteral {
+                                value: 0,
+                                cpp_type: Some(CppType::Int { signed: true }),
+                            },
                             vec![],
                         )],
                     )],
@@ -8247,10 +9728,21 @@ mod tests {
 
         let code = AstCodeGen::new().generate(&ast);
         // Should have extern "C" and variadic signature
-        assert!(code.contains("extern \"C\""), "Variadic function should have extern \"C\", got:\n{}", code);
-        assert!(code.contains("..."), "Variadic function should have ... in signature, got:\n{}", code);
-        assert!(code.contains("pub extern \"C\" fn my_printf(fmt: *const i8, ...)"),
-            "Expected 'pub extern \"C\" fn my_printf(fmt: *const i8, ...)', got:\n{}", code);
+        assert!(
+            code.contains("extern \"C\""),
+            "Variadic function should have extern \"C\", got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("..."),
+            "Variadic function should have ... in signature, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("pub extern \"C\" fn my_printf(fmt: *const i8, ...)"),
+            "Expected 'pub extern \"C\" fn my_printf(fmt: *const i8, ...)', got:\n{}",
+            code
+        );
     }
 
     #[test]
@@ -8305,18 +9797,58 @@ mod tests {
 
         let code = AstCodeGen::new().generate(&ast);
         // Total bits = 3 + 5 + 8 = 16, should be packed into u16
-        assert!(code.contains("_bitfield_0: u16"), "Expected bit field storage '_bitfield_0: u16', got:\n{}", code);
+        assert!(
+            code.contains("_bitfield_0: u16"),
+            "Expected bit field storage '_bitfield_0: u16', got:\n{}",
+            code
+        );
         // Should NOT have individual fields a, b, c
-        assert!(!code.contains("pub a:"), "Should not have individual 'a' field, got:\n{}", code);
-        assert!(!code.contains("pub b:"), "Should not have individual 'b' field, got:\n{}", code);
-        assert!(!code.contains("pub c:"), "Should not have individual 'c' field, got:\n{}", code);
+        assert!(
+            !code.contains("pub a:"),
+            "Should not have individual 'a' field, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("pub b:"),
+            "Should not have individual 'b' field, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("pub c:"),
+            "Should not have individual 'c' field, got:\n{}",
+            code
+        );
         // Should have getter/setter for each bit field
-        assert!(code.contains("pub fn a(&self)"), "Expected getter 'fn a(&self)', got:\n{}", code);
-        assert!(code.contains("pub fn set_a(&mut self"), "Expected setter 'fn set_a(&mut self)', got:\n{}", code);
-        assert!(code.contains("pub fn b(&self)"), "Expected getter 'fn b(&self)', got:\n{}", code);
-        assert!(code.contains("pub fn set_b(&mut self"), "Expected setter 'fn set_b(&mut self)', got:\n{}", code);
-        assert!(code.contains("pub fn c(&self)"), "Expected getter 'fn c(&self)', got:\n{}", code);
-        assert!(code.contains("pub fn set_c(&mut self"), "Expected setter 'fn set_c(&mut self)', got:\n{}", code);
+        assert!(
+            code.contains("pub fn a(&self)"),
+            "Expected getter 'fn a(&self)', got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("pub fn set_a(&mut self"),
+            "Expected setter 'fn set_a(&mut self)', got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("pub fn b(&self)"),
+            "Expected getter 'fn b(&self)', got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("pub fn set_b(&mut self"),
+            "Expected setter 'fn set_b(&mut self)', got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("pub fn c(&self)"),
+            "Expected getter 'fn c(&self)', got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("pub fn set_c(&mut self"),
+            "Expected setter 'fn set_c(&mut self)', got:\n{}",
+            code
+        );
     }
 
     #[test]
@@ -8382,10 +9914,22 @@ mod tests {
 
         let code = AstCodeGen::new().generate(&ast);
         // Bit fields should be packed into u8 (4 + 4 = 8 bits)
-        assert!(code.contains("_bitfield_0: u8"), "Expected bit field storage '_bitfield_0: u8', got:\n{}", code);
+        assert!(
+            code.contains("_bitfield_0: u8"),
+            "Expected bit field storage '_bitfield_0: u8', got:\n{}",
+            code
+        );
         // Regular fields should still exist
-        assert!(code.contains("pub x: i32"), "Expected regular field 'x: i32', got:\n{}", code);
-        assert!(code.contains("pub y: i32"), "Expected regular field 'y: i32', got:\n{}", code);
+        assert!(
+            code.contains("pub x: i32"),
+            "Expected regular field 'x: i32', got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("pub y: i32"),
+            "Expected regular field 'y: i32', got:\n{}",
+            code
+        );
     }
 
     #[test]
@@ -8440,8 +9984,20 @@ mod tests {
 
         let code = AstCodeGen::new().generate(&ast);
         // Should have two bit field groups
-        assert!(code.contains("_bitfield_0: u8"), "Expected first bit field storage '_bitfield_0: u8', got:\n{}", code);
-        assert!(code.contains("_bitfield_1: u8"), "Expected second bit field storage '_bitfield_1: u8', got:\n{}", code);
-        assert!(code.contains("pub x: i32"), "Expected regular field 'x: i32', got:\n{}", code);
+        assert!(
+            code.contains("_bitfield_0: u8"),
+            "Expected first bit field storage '_bitfield_0: u8', got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("_bitfield_1: u8"),
+            "Expected second bit field storage '_bitfield_1: u8', got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("pub x: i32"),
+            "Expected regular field 'x: i32', got:\n{}",
+            code
+        );
     }
 }

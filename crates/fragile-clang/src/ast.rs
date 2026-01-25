@@ -170,10 +170,7 @@ pub enum ClangNodeKind {
         is_pack: bool,
     },
     /// Parameter declaration
-    ParmVarDecl {
-        name: String,
-        ty: CppType,
-    },
+    ParmVarDecl { name: String, ty: CppType },
     /// Variable declaration
     VarDecl {
         name: String,
@@ -243,9 +240,7 @@ pub enum ClangNodeKind {
         access: AccessSpecifier,
     },
     /// Member reference (e.g., in member initializer lists)
-    MemberRef {
-        name: String,
-    },
+    MemberRef { name: String },
     /// Friend declaration
     FriendDecl {
         /// Friend class name (if friend class)
@@ -306,7 +301,6 @@ pub enum ClangNodeKind {
     },
 
     // C++20 Modules
-
     /// Module import declaration (e.g., `import foo;` or `import <header>;`)
     ModuleImportDecl {
         /// Module name (e.g., "std.core" or "foo.bar")
@@ -392,19 +386,11 @@ pub enum ClangNodeKind {
         namespace_path: Vec<String>,
     },
     /// Binary operator
-    BinaryOperator {
-        op: BinaryOp,
-        ty: CppType,
-    },
+    BinaryOperator { op: BinaryOp, ty: CppType },
     /// Unary operator
-    UnaryOperator {
-        op: UnaryOp,
-        ty: CppType,
-    },
+    UnaryOperator { op: UnaryOp, ty: CppType },
     /// Function call
-    CallExpr {
-        ty: CppType,
-    },
+    CallExpr { ty: CppType },
     /// Member access (a.b or a->b)
     MemberExpr {
         member_name: String,
@@ -416,27 +402,15 @@ pub enum ClangNodeKind {
         is_static: bool,
     },
     /// Array subscript (a[i])
-    ArraySubscriptExpr {
-        ty: CppType,
-    },
+    ArraySubscriptExpr { ty: CppType },
     /// Cast expression
-    CastExpr {
-        cast_kind: CastKind,
-        ty: CppType,
-    },
+    CastExpr { cast_kind: CastKind, ty: CppType },
     /// Conditional operator (a ? b : c)
-    ConditionalOperator {
-        ty: CppType,
-    },
+    ConditionalOperator { ty: CppType },
     /// Parenthesized expression
-    ParenExpr {
-        ty: CppType,
-    },
+    ParenExpr { ty: CppType },
     /// Implicit cast (inserted by compiler)
-    ImplicitCastExpr {
-        cast_kind: CastKind,
-        ty: CppType,
-    },
+    ImplicitCastExpr { cast_kind: CastKind, ty: CppType },
 
     /// Initialization list expression (e.g., {1, 2, 3})
     /// Used for aggregate initialization of structs/arrays.
@@ -464,7 +438,6 @@ pub enum ClangNodeKind {
     },
 
     // C++20 Concepts
-
     /// Concept definition (e.g., template<typename T> concept Integral = ...)
     ConceptDecl {
         /// Name of the concept
@@ -492,7 +465,6 @@ pub enum ClangNodeKind {
     },
 
     // C++20 Coroutines
-
     /// co_await expression (C++20 coroutine)
     /// Suspends execution until the awaitable is ready.
     CoawaitExpr {
@@ -519,7 +491,6 @@ pub enum ClangNodeKind {
     },
 
     // C++ Exception Handling
-
     /// try statement with catch handlers
     TryStmt,
 
@@ -548,7 +519,6 @@ pub enum ClangNodeKind {
     },
 
     // C++ RTTI (Run-Time Type Information)
-
     /// typeid expression (returns std::type_info const&)
     TypeidExpr {
         /// Type of the result (std::type_info const&)

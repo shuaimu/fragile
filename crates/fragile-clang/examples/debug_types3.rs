@@ -8,8 +8,10 @@ fn main() {
         T identity(T x) { return x; }
     "#;
 
-    let ast = parser.parse_string(source, "template.cpp").expect("Failed to parse");
-    
+    let ast = parser
+        .parse_string(source, "template.cpp")
+        .expect("Failed to parse");
+
     // Print all function template children to see params
     fn visit(node: &fragile_clang::ClangNode, depth: usize) {
         let indent = "  ".repeat(depth);
@@ -18,7 +20,7 @@ fn main() {
             visit(child, depth + 1);
         }
     }
-    
+
     for child in &ast.translation_unit.children {
         if let fragile_clang::ClangNodeKind::FunctionTemplateDecl { .. } = &child.kind {
             visit(child, 0);

@@ -1,4 +1,4 @@
-use fragile_clang::{ClangParser};
+use fragile_clang::ClangParser;
 
 fn main() {
     let parser = ClangParser::new().expect("Failed to create parser");
@@ -8,7 +8,9 @@ fn main() {
         T identity(T x) { return x; }
     "#;
 
-    let ast = parser.parse_string(source, "template.cpp").expect("Failed to parse");
+    let ast = parser
+        .parse_string(source, "template.cpp")
+        .expect("Failed to parse");
 
     fn print_ast(node: &fragile_clang::ClangNode, indent: usize) {
         let prefix = "  ".repeat(indent);

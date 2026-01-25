@@ -1,4 +1,4 @@
-use fragile_clang::{ClangParser, ClangNode};
+use fragile_clang::{ClangNode, ClangParser};
 
 fn main() {
     let parser = ClangParser::new().expect("Failed to create parser");
@@ -13,7 +13,9 @@ fn main() {
         int identity<int>(int x) { return x + 1; }
     "#;
 
-    let ast = parser.parse_string(source, "spec.cpp").expect("Failed to parse");
+    let ast = parser
+        .parse_string(source, "spec.cpp")
+        .expect("Failed to parse");
 
     // Print AST structure
     fn visit(node: &ClangNode, depth: usize) {

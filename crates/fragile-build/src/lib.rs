@@ -21,12 +21,12 @@
 //! std = "c++23"
 //! ```
 
-mod config;
 mod compile_commands;
+mod config;
 mod error;
 
-pub use config::{BuildConfig, TargetConfig, TargetType};
 pub use compile_commands::{CompileCommand, CompileCommands};
+pub use config::{BuildConfig, TargetConfig, TargetType};
 pub use error::{BuildError, Result};
 
 #[cfg(test)]

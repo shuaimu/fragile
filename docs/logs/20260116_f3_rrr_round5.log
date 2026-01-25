@@ -1,0 +1,92 @@
+warning: field `current_function` is never read
+  --> crates/fragile-clang/src/convert.rs:17:5
+   |
+15 | pub struct MirConverter {
+   |            ------------ field in this struct
+16 |     /// Current function being converted
+17 |     current_function: Option<FunctionBuilder>,
+   |     ^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` on by default
+
+warning: method `build_coroutine` is never used
+   --> crates/fragile-clang/src/convert.rs:121:8
+    |
+44  | impl FunctionBuilder {
+    | -------------------- method in this implementation
+...
+121 |     fn build_coroutine(self) -> MirBody {
+    |        ^^^^^^^^^^^^^^^
+
+warning: `fragile-clang` (lib) generated 2 warnings
+warning: unused import: `CppFunction`
+ --> crates/fragile-rustc-driver/src/queries.rs:3:21
+  |
+3 | use fragile_clang::{CppFunction, CppModule, MirBody};
+  |                     ^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` on by default
+
+warning: unused import: `fragile_clang::CppModule`
+  --> crates/fragile-rustc-driver/src/lib.rs:74:5
+   |
+74 | use fragile_clang::CppModule;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: `fragile-rustc-driver` (lib) generated 2 warnings (run `cargo fix --lib -p fragile-rustc-driver` to apply 2 suggestions)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running `target/debug/examples/test_rrr_files`
+
+=== Testing vendor/mako/src/rrr/base/basetypes.cpp ===
+SUCCESS: 22 functions parsed
+
+=== Testing vendor/mako/src/rrr/base/debugging.cpp ===
+SUCCESS: 23 functions parsed
+
+=== Testing vendor/mako/src/rrr/base/logging.cpp ===
+SUCCESS: 27 functions parsed
+
+=== Testing vendor/mako/src/rrr/base/misc.cpp ===
+SUCCESS: 27 functions parsed
+
+=== Testing vendor/mako/src/rrr/base/strop.cpp ===
+SUCCESS: 33 functions parsed
+
+=== Testing vendor/mako/src/rrr/base/threading.cpp ===
+SUCCESS: 26 functions parsed
+
+=== Testing vendor/mako/src/rrr/base/unittest.cpp ===
+SUCCESS: 26 functions parsed
+
+=== Testing vendor/mako/src/rrr/misc/alock.cpp ===
+SUCCESS: 4640 functions parsed
+
+=== Testing vendor/mako/src/rrr/misc/recorder.cpp ===
+SUCCESS: 53 functions parsed
+
+=== Testing vendor/mako/src/rrr/rpc/client.cpp ===
+SUCCESS: 4671 functions parsed
+
+=== Testing vendor/mako/src/rrr/rpc/utils.cpp ===
+SUCCESS: 29 functions parsed
+
+=== Testing vendor/mako/src/rrr/reactor/epoll_wrapper.cc ===
+SUCCESS: 26 functions parsed
+
+=== Testing vendor/mako/src/rrr/reactor/event.cc ===
+SUCCESS: 4640 functions parsed
+
+=== Testing vendor/mako/src/rrr/reactor/fiber_impl.cc ===
+SUCCESS: 4640 functions parsed
+
+=== Testing vendor/mako/src/rrr/reactor/quorum_event.cc ===
+Clang errors in user code:
+/home/shuai/workspace/fragile/vendor/mako/src/rrr/reactor/quorum_event.cc:55:3: cannot initialize object parameter of type 'rrr::Event' with an expression of type 'janus::QuorumEvent'
+/home/shuai/workspace/fragile/vendor/mako/src/rrr/reactor/quorum_event.cc:64:3: cannot initialize object parameter of type 'rrr::Event' with an expression of type 'janus::QuorumEvent'
+
+=== Testing vendor/mako/src/rrr/reactor/reactor.cc ===
+SUCCESS: 4640 functions parsed
+
+=== Summary ===
+Success: 15
+Failed: 1

@@ -192,14 +192,20 @@ pub extern "C" fn fragile_rt_catch() -> CppException {
         EXCEPTION_STATE.with(|state| {
             let mut state = state.borrow_mut();
             state.unwinding = false;
-            state.current_exception.take().unwrap_or(CppException::null())
+            state
+                .current_exception
+                .take()
+                .unwrap_or(CppException::null())
         })
     }
 
     #[cfg(not(feature = "std"))]
     unsafe {
         EXCEPTION_STATE.unwinding = false;
-        EXCEPTION_STATE.current_exception.take().unwrap_or(CppException::null())
+        EXCEPTION_STATE
+            .current_exception
+            .take()
+            .unwrap_or(CppException::null())
     }
 }
 
@@ -210,9 +216,8 @@ pub extern "C" fn fragile_rt_catch() -> CppException {
 pub extern "C" fn fragile_rt_rethrow() -> ! {
     #[cfg(feature = "std")]
     {
-        let has_exception = EXCEPTION_STATE.with(|state| {
-            state.borrow().current_exception.is_some()
-        });
+        let has_exception =
+            EXCEPTION_STATE.with(|state| state.borrow().current_exception.is_some());
 
         if has_exception {
             panic!("C++ exception rethrown");
@@ -236,7 +241,9 @@ pub extern "C" fn fragile_rt_current_exception() -> *const CppException {
     {
         EXCEPTION_STATE.with(|state| {
             let state = state.borrow();
-            state.current_exception.as_ref()
+            state
+                .current_exception
+                .as_ref()
                 .map(|ex| ex as *const CppException)
                 .unwrap_or(core::ptr::null())
         })
@@ -244,7 +251,9 @@ pub extern "C" fn fragile_rt_current_exception() -> *const CppException {
 
     #[cfg(not(feature = "std"))]
     unsafe {
-        EXCEPTION_STATE.current_exception.as_ref()
+        EXCEPTION_STATE
+            .current_exception
+            .as_ref()
             .map(|ex| ex as *const CppException)
             .unwrap_or(core::ptr::null())
     }

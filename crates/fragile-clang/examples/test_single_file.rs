@@ -1,6 +1,6 @@
 use fragile_clang::ClangParser;
-use std::path::Path;
 use std::env;
+use std::path::Path;
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -22,7 +22,8 @@ fn main() {
     let mako_mako_path = project_root.join("vendor/mako/src/mako");
     let rusty_cpp_path = project_root.join("vendor/mako/third-party/rusty-cpp/include");
     let sto_path = project_root.join("vendor/mako/src/mako/benchmarks/sto");
-    let masstree_beta_path = project_root.join("vendor/mako/third-party/erpc/third_party/masstree-beta");
+    let masstree_beta_path =
+        project_root.join("vendor/mako/third-party/erpc/third_party/masstree-beta");
     let erpc_path = project_root.join("vendor/mako/third-party/erpc/src");
 
     let mut system_include_paths = vec![];
@@ -61,7 +62,7 @@ fn main() {
     let defines = vec![
         r#"CONFIG_H="mako/masstree/config.h""#.to_string(),
         "WORDS_BIGENDIAN_SET=1".to_string(),
-        "HAVE_EXECINFO_H=1".to_string(),  // Enable execinfo.h inclusion before config.h is parsed
+        "HAVE_EXECINFO_H=1".to_string(), // Enable execinfo.h inclusion before config.h is parsed
     ];
 
     let parser = ClangParser::with_paths_and_defines(include_paths, system_include_paths, defines)
@@ -74,7 +75,10 @@ fn main() {
     match parser.parse_file(&path) {
         Ok(ast) => {
             println!("Parse successful!");
-            println!("Translation unit children: {}", ast.translation_unit.children.len());
+            println!(
+                "Translation unit children: {}",
+                ast.translation_unit.children.len()
+            );
         }
         Err(e) => {
             println!("Parse error:\n{}", e);

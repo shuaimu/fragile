@@ -1,0 +1,246 @@
+warning: unused import: `ClangNodeKind`
+ --> crates/fragile-clang/examples/debug_specialization.rs:1:45
+  |
+1 | use fragile_clang::{ClangParser, ClangNode, ClangNodeKind};
+  |                                             ^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` on by default
+
+   Compiling fragile-clang v0.1.0 (/home/shuai/workspace/fragile/crates/fragile-clang)
+warning: `fragile-clang` (example "debug_specialization") generated 1 warning (run `cargo fix --example "debug_specialization"` to apply 1 suggestion)
+error[E0599]: no method named `add_define` found for struct `ClangParser` in the current scope
+    --> crates/fragile-clang/tests/integration_test.rs:9861:12
+     |
+9861 |     parser.add_define("CONFIG_H", "\"masstree/config.h\"");
+     |            ^^^^^^^^^^ method not found in `ClangParser`
+
+error[E0599]: no method named `add_define` found for struct `ClangParser` in the current scope
+    --> crates/fragile-clang/tests/integration_test.rs:9862:12
+     |
+9862 |     parser.add_define("HAVE_EXECINFO_H", "1");
+     |            ^^^^^^^^^^ method not found in `ClangParser`
+
+error[E0599]: no method named `add_define` found for struct `ClangParser` in the current scope
+    --> crates/fragile-clang/tests/integration_test.rs:9929:12
+     |
+9929 |     parser.add_define("CONFIG_H", "\"masstree/config.h\"");
+     |            ^^^^^^^^^^ method not found in `ClangParser`
+
+error[E0599]: no method named `add_define` found for struct `ClangParser` in the current scope
+    --> crates/fragile-clang/tests/integration_test.rs:9930:12
+     |
+9930 |     parser.add_define("HAVE_EXECINFO_H", "1");
+     |            ^^^^^^^^^^ method not found in `ClangParser`
+
+error[E0599]: no method named `add_define` found for struct `ClangParser` in the current scope
+    --> crates/fragile-clang/tests/integration_test.rs:9996:12
+     |
+9996 |     parser.add_define("CONFIG_H", "\"masstree/config.h\"");
+     |            ^^^^^^^^^^ method not found in `ClangParser`
+
+error[E0599]: no method named `add_define` found for struct `ClangParser` in the current scope
+    --> crates/fragile-clang/tests/integration_test.rs:9997:12
+     |
+9997 |     parser.add_define("HAVE_EXECINFO_H", "1");
+     |            ^^^^^^^^^^ method not found in `ClangParser`
+
+error[E0599]: no method named `add_define` found for struct `ClangParser` in the current scope
+     --> crates/fragile-clang/tests/integration_test.rs:10057:12
+      |
+10057 |     parser.add_define("HAVE_EXECINFO_H", "1");
+      |            ^^^^^^^^^^ method not found in `ClangParser`
+
+error[E0599]: no method named `add_define` found for struct `ClangParser` in the current scope
+     --> crates/fragile-clang/tests/integration_test.rs:10117:12
+      |
+10117 |     parser.add_define("HAVE_EXECINFO_H", "1");
+      |            ^^^^^^^^^^ method not found in `ClangParser`
+
+error[E0599]: no method named `add_define` found for struct `ClangParser` in the current scope
+     --> crates/fragile-clang/tests/integration_test.rs:10177:12
+      |
+10177 |     parser.add_define("HAVE_EXECINFO_H", "1");
+      |            ^^^^^^^^^^ method not found in `ClangParser`
+
+error[E0599]: no method named `add_define` found for struct `ClangParser` in the current scope
+     --> crates/fragile-clang/tests/integration_test.rs:10237:12
+      |
+10237 |     parser.add_define("HAVE_EXECINFO_H", "1");
+      |            ^^^^^^^^^^ method not found in `ClangParser`
+
+error[E0599]: no method named `add_define` found for struct `ClangParser` in the current scope
+     --> crates/fragile-clang/tests/integration_test.rs:10297:12
+      |
+10297 |     parser.add_define("HAVE_EXECINFO_H", "1");
+      |            ^^^^^^^^^^ method not found in `ClangParser`
+
+error[E0599]: no method named `add_define` found for struct `ClangParser` in the current scope
+     --> crates/fragile-clang/tests/integration_test.rs:10357:12
+      |
+10357 |     parser.add_define("HAVE_EXECINFO_H", "1");
+      |            ^^^^^^^^^^ method not found in `ClangParser`
+
+error[E0599]: no method named `add_define` found for struct `ClangParser` in the current scope
+     --> crates/fragile-clang/tests/integration_test.rs:10417:12
+      |
+10417 |     parser.add_define("HAVE_EXECINFO_H", "1");
+      |            ^^^^^^^^^^ method not found in `ClangParser`
+
+error[E0599]: no method named `add_define` found for struct `ClangParser` in the current scope
+     --> crates/fragile-clang/tests/integration_test.rs:10477:12
+      |
+10477 |     parser.add_define("HAVE_EXECINFO_H", "1");
+      |            ^^^^^^^^^^ method not found in `ClangParser`
+
+error[E0599]: no method named `add_define` found for struct `ClangParser` in the current scope
+     --> crates/fragile-clang/tests/integration_test.rs:10537:12
+      |
+10537 |     parser.add_define("HAVE_EXECINFO_H", "1");
+      |            ^^^^^^^^^^ method not found in `ClangParser`
+
+error[E0599]: no method named `add_define` found for struct `ClangParser` in the current scope
+     --> crates/fragile-clang/tests/integration_test.rs:10597:12
+      |
+10597 |     parser.add_define("HAVE_EXECINFO_H", "1");
+      |            ^^^^^^^^^^ method not found in `ClangParser`
+
+error[E0599]: no method named `add_define` found for struct `ClangParser` in the current scope
+     --> crates/fragile-clang/tests/integration_test.rs:10657:12
+      |
+10657 |     parser.add_define("HAVE_EXECINFO_H", "1");
+      |            ^^^^^^^^^^ method not found in `ClangParser`
+
+error[E0599]: no method named `add_define` found for struct `ClangParser` in the current scope
+     --> crates/fragile-clang/tests/integration_test.rs:10717:12
+      |
+10717 |     parser.add_define("HAVE_EXECINFO_H", "1");
+      |            ^^^^^^^^^^ method not found in `ClangParser`
+
+error[E0599]: no method named `add_define` found for struct `ClangParser` in the current scope
+     --> crates/fragile-clang/tests/integration_test.rs:10777:12
+      |
+10777 |     parser.add_define("HAVE_EXECINFO_H", "1");
+      |            ^^^^^^^^^^ method not found in `ClangParser`
+
+error[E0599]: no method named `add_define` found for struct `ClangParser` in the current scope
+     --> crates/fragile-clang/tests/integration_test.rs:10837:12
+      |
+10837 |     parser.add_define("HAVE_EXECINFO_H", "1");
+      |            ^^^^^^^^^^ method not found in `ClangParser`
+
+error[E0599]: no method named `add_define` found for struct `ClangParser` in the current scope
+     --> crates/fragile-clang/tests/integration_test.rs:10897:12
+      |
+10897 |     parser.add_define("HAVE_EXECINFO_H", "1");
+      |            ^^^^^^^^^^ method not found in `ClangParser`
+
+error[E0599]: no method named `add_define` found for struct `ClangParser` in the current scope
+     --> crates/fragile-clang/tests/integration_test.rs:10957:12
+      |
+10957 |     parser.add_define("HAVE_EXECINFO_H", "1");
+      |            ^^^^^^^^^^ method not found in `ClangParser`
+
+error[E0599]: no method named `add_define` found for struct `ClangParser` in the current scope
+     --> crates/fragile-clang/tests/integration_test.rs:11017:12
+      |
+11017 |     parser.add_define("HAVE_EXECINFO_H", "1");
+      |            ^^^^^^^^^^ method not found in `ClangParser`
+
+error[E0599]: no method named `add_define` found for struct `ClangParser` in the current scope
+     --> crates/fragile-clang/tests/integration_test.rs:11077:12
+      |
+11077 |     parser.add_define("HAVE_EXECINFO_H", "1");
+      |            ^^^^^^^^^^ method not found in `ClangParser`
+
+error[E0599]: no method named `add_define` found for struct `ClangParser` in the current scope
+     --> crates/fragile-clang/tests/integration_test.rs:11201:12
+      |
+11201 |     parser.add_define("CONFIG_H", "\"masstree/config.h\"");
+      |            ^^^^^^^^^^ method not found in `ClangParser`
+
+error[E0599]: no method named `add_define` found for struct `ClangParser` in the current scope
+     --> crates/fragile-clang/tests/integration_test.rs:11202:12
+      |
+11202 |     parser.add_define("HAVE_EXECINFO_H", "1");
+      |            ^^^^^^^^^^ method not found in `ClangParser`
+
+error[E0599]: no method named `add_define` found for struct `ClangParser` in the current scope
+     --> crates/fragile-clang/tests/integration_test.rs:11324:12
+      |
+11324 |     parser.add_define("CONFIG_H", "\"masstree/config.h\"");
+      |            ^^^^^^^^^^ method not found in `ClangParser`
+
+error[E0599]: no method named `add_define` found for struct `ClangParser` in the current scope
+     --> crates/fragile-clang/tests/integration_test.rs:11325:12
+      |
+11325 |     parser.add_define("HAVE_EXECINFO_H", "1");
+      |            ^^^^^^^^^^ method not found in `ClangParser`
+
+error[E0599]: no method named `add_define` found for struct `ClangParser` in the current scope
+     --> crates/fragile-clang/tests/integration_test.rs:11393:12
+      |
+11393 |     parser.add_define("CONFIG_H", "\"masstree/config.h\"");
+      |            ^^^^^^^^^^ method not found in `ClangParser`
+
+error[E0599]: no method named `add_define` found for struct `ClangParser` in the current scope
+     --> crates/fragile-clang/tests/integration_test.rs:11394:12
+      |
+11394 |     parser.add_define("HAVE_EXECINFO_H", "1");
+      |            ^^^^^^^^^^ method not found in `ClangParser`
+
+error[E0599]: no method named `add_define` found for struct `ClangParser` in the current scope
+     --> crates/fragile-clang/tests/integration_test.rs:11462:12
+      |
+11462 |     parser.add_define("CONFIG_H", "\"masstree/config.h\"");
+      |            ^^^^^^^^^^ method not found in `ClangParser`
+
+error[E0599]: no method named `add_define` found for struct `ClangParser` in the current scope
+     --> crates/fragile-clang/tests/integration_test.rs:11463:12
+      |
+11463 |     parser.add_define("HAVE_EXECINFO_H", "1");
+      |            ^^^^^^^^^^ method not found in `ClangParser`
+
+error[E0599]: no method named `add_define` found for struct `ClangParser` in the current scope
+     --> crates/fragile-clang/tests/integration_test.rs:11531:12
+      |
+11531 |     parser.add_define("CONFIG_H", "\"masstree/config.h\"");
+      |            ^^^^^^^^^^ method not found in `ClangParser`
+
+error[E0599]: no method named `add_define` found for struct `ClangParser` in the current scope
+     --> crates/fragile-clang/tests/integration_test.rs:11532:12
+      |
+11532 |     parser.add_define("HAVE_EXECINFO_H", "1");
+      |            ^^^^^^^^^^ method not found in `ClangParser`
+
+error[E0599]: no method named `add_define` found for struct `ClangParser` in the current scope
+     --> crates/fragile-clang/tests/integration_test.rs:11600:12
+      |
+11600 |     parser.add_define("CONFIG_H", "\"masstree/config.h\"");
+      |            ^^^^^^^^^^ method not found in `ClangParser`
+
+error[E0599]: no method named `add_define` found for struct `ClangParser` in the current scope
+     --> crates/fragile-clang/tests/integration_test.rs:11601:12
+      |
+11601 |     parser.add_define("HAVE_EXECINFO_H", "1");
+      |            ^^^^^^^^^^ method not found in `ClangParser`
+
+error[E0599]: no method named `add_define` found for struct `ClangParser` in the current scope
+     --> crates/fragile-clang/tests/integration_test.rs:11669:12
+      |
+11669 |     parser.add_define("CONFIG_H", "\"masstree/config.h\"");
+      |            ^^^^^^^^^^ method not found in `ClangParser`
+
+error[E0599]: no method named `add_define` found for struct `ClangParser` in the current scope
+     --> crates/fragile-clang/tests/integration_test.rs:11670:12
+      |
+11670 |     parser.add_define("HAVE_EXECINFO_H", "1");
+      |            ^^^^^^^^^^ method not found in `ClangParser`
+
+error[E0599]: no method named `add_define` found for struct `ClangParser` in the current scope
+     --> crates/fragile-clang/tests/integration_test.rs:11728:12
+      |
+11728 |     parser.add_define("HAVE_EXECINFO_H", "1");
+      |            ^^^^^^^^^^ method not found in `ClangParser`
+
+For more information about this error, try `rustc --explain E0599`.
+error: could not compile `fragile-clang` (test "integration_test") due to 39 previous errors

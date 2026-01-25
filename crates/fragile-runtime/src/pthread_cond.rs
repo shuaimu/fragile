@@ -157,8 +157,8 @@ pub extern "C" fn fragile_pthread_cond_wait(
         // Since we're using a spinlock-based mutex, we just unlock/relock around the wait.
 
         // Get access to the mutex's atomic bool
-        use crate::pthread_mutex::fragile_pthread_mutex_unlock;
         use crate::pthread_mutex::fragile_pthread_mutex_lock;
+        use crate::pthread_mutex::fragile_pthread_mutex_unlock;
 
         // Unlock the external mutex
         fragile_pthread_mutex_unlock(mutex);
@@ -214,8 +214,8 @@ pub extern "C" fn fragile_pthread_cond_timedwait(
         let target = Duration::new((*abstime).tv_sec as u64, (*abstime).tv_nsec as u32);
         let timeout = target.saturating_sub(now);
 
-        use crate::pthread_mutex::fragile_pthread_mutex_unlock;
         use crate::pthread_mutex::fragile_pthread_mutex_lock;
+        use crate::pthread_mutex::fragile_pthread_mutex_unlock;
 
         // Unlock the external mutex
         fragile_pthread_mutex_unlock(mutex);
@@ -231,8 +231,8 @@ pub extern "C" fn fragile_pthread_cond_timedwait(
 
         match result {
             Ok((_, timeout_result)) if timeout_result.timed_out() => 110, // ETIMEDOUT
-            Ok(_) => 0, // Success
-            Err(_) => 1, // Error (mutex poisoned)
+            Ok(_) => 0,                                                   // Success
+            Err(_) => 1,                                                  // Error (mutex poisoned)
         }
     }
 }
@@ -308,16 +308,19 @@ pub extern "C" fn fragile_pthread_condattr_init(attr: *mut fragile_pthread_conda
 
 /// Destroy condition variable attributes.
 #[no_mangle]
-pub extern "C" fn fragile_pthread_condattr_destroy(_attr: *mut fragile_pthread_condattr_t) -> c_int {
+pub extern "C" fn fragile_pthread_condattr_destroy(
+    _attr: *mut fragile_pthread_condattr_t,
+) -> c_int {
     0 // Nothing to clean up
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pthread_mutex::{fragile_pthread_mutex_init, fragile_pthread_mutex_destroy,
-                               fragile_pthread_mutex_lock, fragile_pthread_mutex_unlock,
-                               fragile_pthread_mutex_t};
+    use crate::pthread_mutex::{
+        fragile_pthread_mutex_destroy, fragile_pthread_mutex_init, fragile_pthread_mutex_lock,
+        fragile_pthread_mutex_t, fragile_pthread_mutex_unlock,
+    };
 
     #[test]
     fn test_cond_init_destroy() {
@@ -357,9 +360,9 @@ mod tests {
 
     #[test]
     fn test_cond_signal_wait() {
+        use std::sync::atomic::{AtomicBool, Ordering};
         use std::sync::Arc;
         use std::thread;
-        use std::sync::atomic::{AtomicBool, Ordering};
 
         // Allocate on heap and share via raw pointers
         let mutex_box = Box::new(fragile_pthread_mutex_t::new());

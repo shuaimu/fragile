@@ -39,7 +39,10 @@ impl ClangParser {
     /// Create a new Clang parser with both regular and system include paths.
     /// System paths use -isystem and are searched for angle-bracket includes (<...>).
     /// Regular paths use -I and are searched for quoted includes ("...").
-    pub fn with_paths(include_paths: Vec<String>, system_include_paths: Vec<String>) -> Result<Self> {
+    pub fn with_paths(
+        include_paths: Vec<String>,
+        system_include_paths: Vec<String>,
+    ) -> Result<Self> {
         Self::with_paths_and_defines(include_paths, system_include_paths, Vec::new())
     }
 
@@ -50,7 +53,12 @@ impl ClangParser {
         system_include_paths: Vec<String>,
         defines: Vec<String>,
     ) -> Result<Self> {
-        Self::with_paths_defines_and_ignored_errors(include_paths, system_include_paths, defines, Vec::new())
+        Self::with_paths_defines_and_ignored_errors(
+            include_paths,
+            system_include_paths,
+            defines,
+            Vec::new(),
+        )
     }
 
     /// Create a new Clang parser with include paths, preprocessor defines, and error patterns to ignore.
@@ -61,7 +69,13 @@ impl ClangParser {
         defines: Vec<String>,
         ignored_error_patterns: Vec<String>,
     ) -> Result<Self> {
-        Self::with_full_options(include_paths, system_include_paths, defines, ignored_error_patterns, false)
+        Self::with_full_options(
+            include_paths,
+            system_include_paths,
+            defines,
+            ignored_error_patterns,
+            false,
+        )
     }
 
     /// Create a new Clang parser with all options including libc++ support.
@@ -241,33 +255,31 @@ impl ClangParser {
     /// 2. Current working directory
     /// 3. Executable's parent directories
     pub fn with_vendored_libcxx() -> Result<Self> {
-        let vendored_path = Self::detect_vendored_libcxx_path()
-            .ok_or_else(|| miette!(
+        let vendored_path = Self::detect_vendored_libcxx_path().ok_or_else(|| {
+            miette!(
                 "Vendored libc++ not found. Expected at vendor/llvm-project/libcxx/include/\n\
                  Set FRAGILE_ROOT environment variable or run from the fragile project root."
-            ))?;
+            )
+        })?;
 
         let system_paths = vec![vendored_path];
         // Add defines for libc++ compatibility
-        let defines = vec![
-            "_LIBCPP_HAS_NO_PRAGMA_SYSTEM_HEADER".to_string(),
-        ];
+        let defines = vec!["_LIBCPP_HAS_NO_PRAGMA_SYSTEM_HEADER".to_string()];
 
         Self::with_full_options(Vec::new(), system_paths, defines, Vec::new(), true)
     }
 
     /// Create a Clang parser with vendored libc++ and custom include paths.
     pub fn with_vendored_libcxx_and_paths(include_paths: Vec<String>) -> Result<Self> {
-        let vendored_path = Self::detect_vendored_libcxx_path()
-            .ok_or_else(|| miette!(
+        let vendored_path = Self::detect_vendored_libcxx_path().ok_or_else(|| {
+            miette!(
                 "Vendored libc++ not found. Expected at vendor/llvm-project/libcxx/include/\n\
                  Set FRAGILE_ROOT environment variable or run from the fragile project root."
-            ))?;
+            )
+        })?;
 
         let system_paths = vec![vendored_path];
-        let defines = vec![
-            "_LIBCPP_HAS_NO_PRAGMA_SYSTEM_HEADER".to_string(),
-        ];
+        let defines = vec!["_LIBCPP_HAS_NO_PRAGMA_SYSTEM_HEADER".to_string()];
 
         Self::with_full_options(include_paths, system_paths, defines, Vec::new(), true)
     }
@@ -320,8 +332,8 @@ impl ClangParser {
     /// Parse a C++ source file into a Clang AST.
     pub fn parse_file(&self, path: &Path) -> Result<ClangAst> {
         let path_str = path.to_string_lossy();
-        let c_path = CString::new(path_str.as_ref())
-            .map_err(|_| miette!("Invalid path: {}", path_str))?;
+        let c_path =
+            CString::new(path_str.as_ref()).map_err(|_| miette!("Invalid path: {}", path_str))?;
 
         // Compiler arguments including include paths
         let args = self.build_compiler_args();
@@ -381,16 +393,17 @@ impl ClangParser {
                     };
 
                     // Check if this error is from a system header
-                    let is_system_header = clang_sys::clang_Location_isInSystemHeader(location) != 0;
+                    let is_system_header =
+                        clang_sys::clang_Location_isInSystemHeader(location) != 0;
 
                     // Check if this error matches any ignored pattern
-                    let is_ignored = self.ignored_error_patterns.iter().any(|pattern| msg.contains(pattern));
+                    let is_ignored = self
+                        .ignored_error_patterns
+                        .iter()
+                        .any(|pattern| msg.contains(pattern));
 
                     if !is_system_header && !is_ignored {
-                        user_errors.push(format!(
-                            "{}:{}:{}: {}",
-                            file_name, line, column, msg
-                        ));
+                        user_errors.push(format!("{}:{}:{}: {}", file_name, line, column, msg));
                     }
                 }
                 clang_sys::clang_disposeDiagnostic(diag);
@@ -694,7 +707,9 @@ impl ClangParser {
                     if !name.is_empty() {
                         path.push(name);
                     }
-                } else if kind == clang_sys::CXCursor_ClassDecl || kind == clang_sys::CXCursor_StructDecl {
+                } else if kind == clang_sys::CXCursor_ClassDecl
+                    || kind == clang_sys::CXCursor_StructDecl
+                {
                     // For static members/methods, include the class name for qualified access
                     // Check if the referenced item is static
                     let ref_kind = clang_sys::clang_getCursorKind(referenced);
@@ -743,7 +758,8 @@ impl ClangParser {
                     let name = cursor_spelling(cursor);
                     let mangled_name = cursor_mangled_name(cursor);
                     let cursor_type = clang_sys::clang_getCursorType(cursor);
-                    let return_type = self.convert_type(clang_sys::clang_getResultType(cursor_type));
+                    let return_type =
+                        self.convert_type(clang_sys::clang_getResultType(cursor_type));
                     let num_args = clang_sys::clang_Cursor_getNumArguments(cursor);
 
                     let mut params = Vec::new();
@@ -786,7 +802,8 @@ impl ClangParser {
                 // CXCursor_FunctionTemplate = 30
                 30 => {
                     let name = cursor_spelling(cursor);
-                    let (template_params, parameter_pack_indices) = self.get_template_type_params_with_packs(cursor);
+                    let (template_params, parameter_pack_indices) =
+                        self.get_template_type_params_with_packs(cursor);
 
                     // Get the templated function's type info
                     // Use template-aware type conversion to detect template parameters
@@ -821,14 +838,16 @@ impl ClangParser {
                 // CXCursor_ClassTemplate = 31
                 31 => {
                     let name = cursor_spelling(cursor);
-                    let (template_params, parameter_pack_indices) = self.get_template_type_params_with_packs(cursor);
+                    let (template_params, parameter_pack_indices) =
+                        self.get_template_type_params_with_packs(cursor);
 
                     // Determine if this is a class or struct by checking the templated decl
                     // The spelling includes "class" or "struct" prefix
                     let cursor_type = clang_sys::clang_getCursorType(cursor);
                     let type_spelling = clang_sys::clang_getTypeSpelling(cursor_type);
                     let type_name = cx_string_to_string(type_spelling);
-                    let is_class = type_name.starts_with("class ") || !type_name.starts_with("struct ");
+                    let is_class =
+                        type_name.starts_with("class ") || !type_name.starts_with("struct ");
 
                     // Extract requires clause if present (C++20)
                     let requires_clause = self.get_requires_clause(cursor);
@@ -845,7 +864,8 @@ impl ClangParser {
                 // CXCursor_ClassTemplatePartialSpecialization = 32
                 32 => {
                     let name = cursor_spelling(cursor);
-                    let (template_params, parameter_pack_indices) = self.get_template_type_params_with_packs(cursor);
+                    let (template_params, parameter_pack_indices) =
+                        self.get_template_type_params_with_packs(cursor);
 
                     // Get the specialization arguments
                     let specialization_args = self.get_template_specialization_args(cursor);
@@ -854,7 +874,8 @@ impl ClangParser {
                     let cursor_type = clang_sys::clang_getCursorType(cursor);
                     let type_spelling = clang_sys::clang_getTypeSpelling(cursor_type);
                     let type_name = cx_string_to_string(type_spelling);
-                    let is_class = type_name.starts_with("class ") || !type_name.starts_with("struct ");
+                    let is_class =
+                        type_name.starts_with("class ") || !type_name.starts_with("struct ");
 
                     ClangNodeKind::ClassTemplatePartialSpecDecl {
                         name,
@@ -901,7 +922,13 @@ impl ClangParser {
                     if is_class_member && is_static {
                         // Static data member - treat as a static field (never a bit field)
                         let access = self.get_access_specifier(cursor);
-                        ClangNodeKind::FieldDecl { name, ty, access, is_static: true, bit_field_width: None }
+                        ClangNodeKind::FieldDecl {
+                            name,
+                            ty,
+                            access,
+                            is_static: true,
+                            bit_field_width: None,
+                        }
                     } else {
                         // Regular variable declaration
                         let has_init = false; // Will be determined by children
@@ -924,8 +951,11 @@ impl ClangParser {
                     // Otherwise fall back to cursor spelling
                     let name = if type_name.contains('<') && type_name.contains('>') {
                         // Strip "struct " or "class " prefix if present
-                        type_name.strip_prefix("struct ").unwrap_or(&type_name)
-                            .strip_prefix("class ").unwrap_or(&type_name)
+                        type_name
+                            .strip_prefix("struct ")
+                            .unwrap_or(&type_name)
+                            .strip_prefix("class ")
+                            .unwrap_or(&type_name)
                             .to_string()
                     } else {
                         spelling
@@ -994,7 +1024,13 @@ impl ClangParser {
                         None
                     };
                     // Regular field declarations are never static
-                    ClangNodeKind::FieldDecl { name, ty, access, is_static: false, bit_field_width }
+                    ClangNodeKind::FieldDecl {
+                        name,
+                        ty,
+                        access,
+                        is_static: false,
+                        bit_field_width,
+                    }
                 }
 
                 clang_sys::CXCursor_EnumDecl => {
@@ -1002,20 +1038,29 @@ impl ClangParser {
                     // Check if it's a scoped enum (enum class)
                     let is_scoped = clang_sys::clang_EnumDecl_isScoped(cursor) != 0;
                     // Get underlying type
-                    let underlying_type = self.convert_type(clang_sys::clang_getEnumDeclIntegerType(cursor));
-                    ClangNodeKind::EnumDecl { name, is_scoped, underlying_type }
+                    let underlying_type =
+                        self.convert_type(clang_sys::clang_getEnumDeclIntegerType(cursor));
+                    ClangNodeKind::EnumDecl {
+                        name,
+                        is_scoped,
+                        underlying_type,
+                    }
                 }
 
                 clang_sys::CXCursor_EnumConstantDecl => {
                     let name = cursor_spelling(cursor);
                     let value = clang_sys::clang_getEnumConstantDeclValue(cursor);
-                    ClangNodeKind::EnumConstantDecl { name, value: Some(value) }
+                    ClangNodeKind::EnumConstantDecl {
+                        name,
+                        value: Some(value),
+                    }
                 }
 
                 clang_sys::CXCursor_CXXMethod => {
                     let name = cursor_spelling(cursor);
                     let cursor_type = clang_sys::clang_getCursorType(cursor);
-                    let return_type = self.convert_type(clang_sys::clang_getResultType(cursor_type));
+                    let return_type =
+                        self.convert_type(clang_sys::clang_getResultType(cursor_type));
                     let params = self.extract_params(cursor);
                     let is_definition = clang_sys::clang_isCursorDefinition(cursor) != 0;
                     let is_static = clang_sys::clang_CXXMethod_isStatic(cursor) != 0;
@@ -1041,7 +1086,8 @@ impl ClangParser {
                 clang_sys::CXCursor_ConversionFunction => {
                     let name = cursor_spelling(cursor);
                     let cursor_type = clang_sys::clang_getCursorType(cursor);
-                    let return_type = self.convert_type(clang_sys::clang_getResultType(cursor_type));
+                    let return_type =
+                        self.convert_type(clang_sys::clang_getResultType(cursor_type));
                     let params = self.extract_params(cursor);
                     let is_definition = clang_sys::clang_isCursorDefinition(cursor) != 0;
                     let is_static = false; // Conversion operators are never static
@@ -1098,9 +1144,7 @@ impl ClangParser {
                 // CXCursor_LinkageSpec = 23 (extern "C" { ... })
                 // This is a language linkage specification that wraps declarations.
                 // We treat it as a container and recurse into it to find the actual declarations.
-                clang_sys::CXCursor_LinkageSpec => {
-                    ClangNodeKind::LinkageSpecDecl
-                }
+                clang_sys::CXCursor_LinkageSpec => ClangNodeKind::LinkageSpecDecl,
 
                 clang_sys::CXCursor_UsingDirective => {
                     // For UsingDirective, the child nodes contain a NamespaceRef
@@ -1119,7 +1163,10 @@ impl ClangParser {
                 clang_sys::CXCursor_TypeAliasDecl => {
                     let name = cursor_spelling(cursor);
                     let underlying_type = self.get_typedef_underlying_type(cursor);
-                    ClangNodeKind::TypeAliasDecl { name, underlying_type }
+                    ClangNodeKind::TypeAliasDecl {
+                        name,
+                        underlying_type,
+                    }
                 }
 
                 // CXCursor_TypedefDecl = 20 (typedef Y X;)
@@ -1132,7 +1179,10 @@ impl ClangParser {
                         ClangNodeKind::Unknown("implicit_typedef".to_string())
                     } else {
                         let underlying_type = self.get_typedef_underlying_type(cursor);
-                        ClangNodeKind::TypedefDecl { name, underlying_type }
+                        ClangNodeKind::TypedefDecl {
+                            name,
+                            underlying_type,
+                        }
                     }
                 }
 
@@ -1140,7 +1190,8 @@ impl ClangParser {
                 601 => {
                     let name = cursor_spelling(cursor);
                     let template_params = self.get_template_type_params(cursor);
-                    let underlying_type = self.get_type_alias_template_underlying_type(cursor, &template_params);
+                    let underlying_type =
+                        self.get_type_alias_template_underlying_type(cursor, &template_params);
                     ClangNodeKind::TypeAliasTemplateDecl {
                         name,
                         template_params,
@@ -1169,7 +1220,10 @@ impl ClangParser {
                 clang_sys::CXCursor_FriendDecl => {
                     // Friend declaration - examine children to determine type
                     let (friend_class, friend_function) = self.get_friend_info(cursor);
-                    ClangNodeKind::FriendDecl { friend_class, friend_function }
+                    ClangNodeKind::FriendDecl {
+                        friend_class,
+                        friend_function,
+                    }
                 }
 
                 clang_sys::CXCursor_CXXBaseSpecifier => {
@@ -1177,7 +1231,11 @@ impl ClangParser {
                     let base_type = self.convert_type(clang_sys::clang_getCursorType(cursor));
                     let access = self.get_access_specifier(cursor);
                     let is_virtual = clang_sys::clang_isVirtualBase(cursor) != 0;
-                    ClangNodeKind::CXXBaseSpecifier { base_type, access, is_virtual }
+                    ClangNodeKind::CXXBaseSpecifier {
+                        base_type,
+                        access,
+                        is_virtual,
+                    }
                 }
 
                 // Statements
@@ -1267,9 +1325,8 @@ impl ClangParser {
                         _parent: clang_sys::CXCursor,
                         data: clang_sys::CXClientData,
                     ) -> clang_sys::CXChildVisitResult {
-                        let (kind_ptr, cursor_ptr) = unsafe {
-                            &mut *(data as *mut (i32, clang_sys::CXCursor))
-                        };
+                        let (kind_ptr, cursor_ptr) =
+                            unsafe { &mut *(data as *mut (i32, clang_sys::CXCursor)) };
                         *kind_ptr = unsafe { clang_sys::clang_getCursorKind(c) };
                         *cursor_ptr = c;
                         clang_sys::CXChildVisit_Break
@@ -1278,7 +1335,8 @@ impl ClangParser {
                     clang_sys::clang_visitChildren(
                         cursor,
                         find_first_child,
-                        &mut child_data as *mut (i32, clang_sys::CXCursor) as clang_sys::CXClientData,
+                        &mut child_data as *mut (i32, clang_sys::CXCursor)
+                            as clang_sys::CXClientData,
                     );
                     first_child_kind = child_data.0;
                     first_child_cursor = child_data.1;
@@ -1288,14 +1346,20 @@ impl ClangParser {
                         if first_child_kind != clang_sys::CXCursor_TypeRef {
                             is_type_operand = false;
                             // Get the type of the expression being evaluated
-                            operand_ty = self.convert_type(clang_sys::clang_getCursorType(first_child_cursor));
+                            operand_ty = self
+                                .convert_type(clang_sys::clang_getCursorType(first_child_cursor));
                         } else {
                             // TypeRef child - get the referenced type
-                            operand_ty = self.convert_type(clang_sys::clang_getCursorType(first_child_cursor));
+                            operand_ty = self
+                                .convert_type(clang_sys::clang_getCursorType(first_child_cursor));
                         }
                     }
 
-                    ClangNodeKind::TypeidExpr { result_ty, is_type_operand, operand_ty }
+                    ClangNodeKind::TypeidExpr {
+                        result_ty,
+                        is_type_operand,
+                        operand_ty,
+                    }
                 }
 
                 clang_sys::CXCursor_CXXDynamicCastExpr => {
@@ -1393,7 +1457,11 @@ impl ClangParser {
                     let is_array = self.check_new_is_array(cursor);
                     // Check if this is placement new by tokenizing the source
                     let is_placement = self.check_new_is_placement(cursor);
-                    ClangNodeKind::CXXNewExpr { ty, is_array, is_placement }
+                    ClangNodeKind::CXXNewExpr {
+                        ty,
+                        is_array,
+                        is_placement,
+                    }
                 }
 
                 clang_sys::CXCursor_CXXDeleteExpr => {
@@ -1421,8 +1489,11 @@ impl ClangParser {
                         // Fallback: use cursor spelling (may include quotes)
                         let spelling = cursor_spelling(cursor);
                         // Remove surrounding quotes if present
-                        if spelling.starts_with('"') && spelling.ends_with('"') && spelling.len() >= 2 {
-                            spelling[1..spelling.len()-1].to_string()
+                        if spelling.starts_with('"')
+                            && spelling.ends_with('"')
+                            && spelling.len() >= 2
+                        {
+                            spelling[1..spelling.len() - 1].to_string()
                         } else {
                             spelling
                         }
@@ -1434,7 +1505,11 @@ impl ClangParser {
                     let name = cursor_spelling(cursor);
                     let ty = self.convert_type(clang_sys::clang_getCursorType(cursor));
                     let namespace_path = self.get_namespace_path(cursor);
-                    ClangNodeKind::DeclRefExpr { name, ty, namespace_path }
+                    ClangNodeKind::DeclRefExpr {
+                        name,
+                        ty,
+                        namespace_path,
+                    }
                 }
 
                 clang_sys::CXCursor_BinaryOperator => {
@@ -1490,8 +1565,7 @@ impl ClangParser {
                     ClangNodeKind::ParenExpr { ty }
                 }
 
-                clang_sys::CXCursor_CStyleCastExpr
-                | clang_sys::CXCursor_CXXFunctionalCastExpr => {
+                clang_sys::CXCursor_CStyleCastExpr | clang_sys::CXCursor_CXXFunctionalCastExpr => {
                     let ty = self.convert_type(clang_sys::clang_getCursorType(cursor));
                     ClangNodeKind::CastExpr {
                         cast_kind: CastKind::Other,
@@ -1568,7 +1642,8 @@ impl ClangParser {
 
                 // CXCursor_ConceptSpecializationExpr = 602
                 602 => {
-                    let (concept_name, template_args) = self.get_concept_specialization_info(cursor);
+                    let (concept_name, template_args) =
+                        self.get_concept_specialization_info(cursor);
 
                     ClangNodeKind::ConceptSpecializationExpr {
                         concept_name,
@@ -1579,7 +1654,8 @@ impl ClangParser {
                 // C++11 Lambda expressions
                 // CXCursor_LambdaExpr = 144
                 144 => {
-                    let (params, return_type, capture_default, captures) = self.parse_lambda_info(cursor);
+                    let (params, return_type, capture_default, captures) =
+                        self.parse_lambda_info(cursor);
                     ClangNodeKind::LambdaExpr {
                         params,
                         return_type,
@@ -1667,10 +1743,10 @@ impl ClangParser {
 
                     // Check if this is a header unit import (import <header>)
                     // Header units typically have file paths or start with <
-                    let is_header_unit = module_name.starts_with('<') ||
-                        module_name.ends_with(".h") ||
-                        module_name.ends_with(".hpp") ||
-                        module_name.contains('/');
+                    let is_header_unit = module_name.starts_with('<')
+                        || module_name.ends_with(".h")
+                        || module_name.ends_with(".hpp")
+                        || module_name.contains('/');
 
                     ClangNodeKind::ModuleImportDecl {
                         module_name,
@@ -1958,7 +2034,15 @@ impl ClangParser {
 
     /// Parse lambda expression information.
     /// Returns (params, return_type, capture_default, captures).
-    fn parse_lambda_info(&self, cursor: clang_sys::CXCursor) -> (Vec<(String, CppType)>, CppType, CaptureDefault, Vec<(String, bool)>) {
+    fn parse_lambda_info(
+        &self,
+        cursor: clang_sys::CXCursor,
+    ) -> (
+        Vec<(String, CppType)>,
+        CppType,
+        CaptureDefault,
+        Vec<(String, bool)>,
+    ) {
         unsafe {
             let mut params = Vec::new();
             let mut return_type = CppType::Void;
@@ -2093,8 +2177,11 @@ impl ClangParser {
                 data: clang_sys::CXClientData,
             ) -> clang_sys::CXChildVisitResult {
                 unsafe {
-                    let (var_name, var_type, parser): &mut (&mut String, &mut CppType, &ClangParser) =
-                        &mut *(data as *mut _);
+                    let (var_name, var_type, parser): &mut (
+                        &mut String,
+                        &mut CppType,
+                        &ClangParser,
+                    ) = &mut *(data as *mut _);
 
                     let kind = clang_sys::clang_getCursorKind(child);
 
@@ -2104,7 +2191,8 @@ impl ClangParser {
                         // Skip internal variables like __range1, __begin1, __end1
                         if !name.starts_with("__") {
                             **var_name = name;
-                            **var_type = (*parser).convert_type(clang_sys::clang_getCursorType(child));
+                            **var_type =
+                                (*parser).convert_type(clang_sys::clang_getCursorType(child));
                             return clang_sys::CXChildVisit_Break;
                         }
                     }
@@ -2160,7 +2248,10 @@ impl ClangParser {
                     let result_ty = self.convert_type(clang_sys::clang_getCursorType(cursor));
                     // For value type, examine the child expression
                     let value_ty = self.get_coroutine_operand_type(cursor);
-                    Some(ClangNodeKind::CoyieldExpr { value_ty, result_ty })
+                    Some(ClangNodeKind::CoyieldExpr {
+                        value_ty,
+                        result_ty,
+                    })
                 }
                 _ => None,
             };
@@ -2596,65 +2687,75 @@ impl ClangParser {
                     // Check if the types differ and need a cast
                     // Helper function to check if a named type is a size type
                     fn is_size_type(name: &str) -> bool {
-                        matches!(name,
-                            "ptrdiff_t" | "std::ptrdiff_t" | "ssize_t" |
-                            "size_t" | "std::size_t" |
-                            "intptr_t" | "std::intptr_t" |
-                            "uintptr_t" | "std::uintptr_t" |
-                            "difference_type" | "size_type")
+                        matches!(
+                            name,
+                            "ptrdiff_t"
+                                | "std::ptrdiff_t"
+                                | "ssize_t"
+                                | "size_t"
+                                | "std::size_t"
+                                | "intptr_t"
+                                | "std::intptr_t"
+                                | "uintptr_t"
+                                | "std::uintptr_t"
+                                | "difference_type"
+                                | "size_type"
+                        )
                     }
 
                     let needs_cast = match (&expr_type, &child_type) {
                         // Integral to integral (char to int, short to long, etc.)
-                        (CppType::Int { .. }, CppType::Char { .. }) |
-                        (CppType::Int { .. }, CppType::Short { .. }) |
-                        (CppType::Long { .. }, CppType::Int { .. }) |
-                        (CppType::Long { .. }, CppType::Short { .. }) |
-                        (CppType::Long { .. }, CppType::Char { .. }) |
-                        (CppType::LongLong { .. }, CppType::Int { .. }) |
-                        (CppType::LongLong { .. }, CppType::Long { .. }) => {
+                        (CppType::Int { .. }, CppType::Char { .. })
+                        | (CppType::Int { .. }, CppType::Short { .. })
+                        | (CppType::Long { .. }, CppType::Int { .. })
+                        | (CppType::Long { .. }, CppType::Short { .. })
+                        | (CppType::Long { .. }, CppType::Char { .. })
+                        | (CppType::LongLong { .. }, CppType::Int { .. })
+                        | (CppType::LongLong { .. }, CppType::Long { .. }) => {
                             Some(CastKind::IntegralCast)
                         }
                         // Named size types (ptrdiff_t, size_t) from integral
-                        (CppType::Named(name), CppType::Int { .. }) |
-                        (CppType::Named(name), CppType::Short { .. }) |
-                        (CppType::Named(name), CppType::Char { .. }) |
-                        (CppType::Named(name), CppType::Long { .. }) |
-                        (CppType::Named(name), CppType::LongLong { .. })
-                            if is_size_type(name) => {
+                        (CppType::Named(name), CppType::Int { .. })
+                        | (CppType::Named(name), CppType::Short { .. })
+                        | (CppType::Named(name), CppType::Char { .. })
+                        | (CppType::Named(name), CppType::Long { .. })
+                        | (CppType::Named(name), CppType::LongLong { .. })
+                            if is_size_type(name) =>
+                        {
                             Some(CastKind::IntegralCast)
                         }
                         // Integral to named size types
-                        (CppType::Long { .. }, CppType::Named(name)) |
-                        (CppType::Int { .. }, CppType::Named(name)) |
-                        (CppType::LongLong { .. }, CppType::Named(name))
-                            if is_size_type(name) => {
+                        (CppType::Long { .. }, CppType::Named(name))
+                        | (CppType::Int { .. }, CppType::Named(name))
+                        | (CppType::LongLong { .. }, CppType::Named(name))
+                            if is_size_type(name) =>
+                        {
                             Some(CastKind::IntegralCast)
                         }
                         // Floating to floating
-                        (CppType::Double, CppType::Float) |
-                        (CppType::Float, CppType::Double) => {
+                        (CppType::Double, CppType::Float) | (CppType::Float, CppType::Double) => {
                             Some(CastKind::FloatingCast)
                         }
                         // Integral to floating
-                        (CppType::Float, CppType::Int { .. }) |
-                        (CppType::Float, CppType::Long { .. }) |
-                        (CppType::Float, CppType::Char { .. }) |
-                        (CppType::Double, CppType::Int { .. }) |
-                        (CppType::Double, CppType::Long { .. }) |
-                        (CppType::Double, CppType::Char { .. }) => {
+                        (CppType::Float, CppType::Int { .. })
+                        | (CppType::Float, CppType::Long { .. })
+                        | (CppType::Float, CppType::Char { .. })
+                        | (CppType::Double, CppType::Int { .. })
+                        | (CppType::Double, CppType::Long { .. })
+                        | (CppType::Double, CppType::Char { .. }) => {
                             Some(CastKind::IntegralToFloating)
                         }
                         // Floating to integral
-                        (CppType::Int { .. }, CppType::Float) |
-                        (CppType::Int { .. }, CppType::Double) |
-                        (CppType::Long { .. }, CppType::Float) |
-                        (CppType::Long { .. }, CppType::Double) => {
+                        (CppType::Int { .. }, CppType::Float)
+                        | (CppType::Int { .. }, CppType::Double)
+                        | (CppType::Long { .. }, CppType::Float)
+                        | (CppType::Long { .. }, CppType::Double) => {
                             Some(CastKind::FloatingToIntegral)
                         }
                         // Function to pointer (function pointer initialization/assignment)
                         (CppType::Pointer { pointee, .. }, CppType::Function { .. })
-                            if matches!(pointee.as_ref(), CppType::Function { .. }) => {
+                            if matches!(pointee.as_ref(), CppType::Function { .. }) =>
+                        {
                             Some(CastKind::FunctionToPointerDecay)
                         }
                         _ => None,
@@ -2982,7 +3083,11 @@ impl ClangParser {
                 }
             }
 
-            clang_sys::clang_visitChildren(cursor, namespace_visitor, namespace_path_ptr as clang_sys::CXClientData);
+            clang_sys::clang_visitChildren(
+                cursor,
+                namespace_visitor,
+                namespace_path_ptr as clang_sys::CXClientData,
+            );
 
             namespace_path
         }
@@ -3084,7 +3189,11 @@ impl ClangParser {
                 }
             }
 
-            clang_sys::clang_visitChildren(cursor, attr_visitor, info_ptr as clang_sys::CXClientData);
+            clang_sys::clang_visitChildren(
+                cursor,
+                attr_visitor,
+                info_ptr as clang_sys::CXClientData,
+            );
 
             (info.is_override, info.is_final)
         }
@@ -3109,7 +3218,9 @@ impl ClangParser {
                     let pointee = clang_sys::clang_getPointeeType(ty);
                     let is_const = clang_sys::clang_isConstQualifiedType(pointee) != 0;
                     return CppType::Pointer {
-                        pointee: Box::new(self.convert_type_with_template_ctx(pointee, template_params)),
+                        pointee: Box::new(
+                            self.convert_type_with_template_ctx(pointee, template_params),
+                        ),
                         is_const,
                     };
                 }
@@ -3119,7 +3230,9 @@ impl ClangParser {
                     let is_const = clang_sys::clang_isConstQualifiedType(referent) != 0;
                     let is_rvalue = kind == clang_sys::CXType_RValueReference;
                     return CppType::Reference {
-                        referent: Box::new(self.convert_type_with_template_ctx(referent, template_params)),
+                        referent: Box::new(
+                            self.convert_type_with_template_ctx(referent, template_params),
+                        ),
                         is_const,
                         is_rvalue,
                     };
@@ -3129,7 +3242,9 @@ impl ClangParser {
                     let element = clang_sys::clang_getArrayElementType(ty);
                     let size = clang_sys::clang_getArraySize(ty) as usize;
                     return CppType::Array {
-                        element: Box::new(self.convert_type_with_template_ctx(element, template_params)),
+                        element: Box::new(
+                            self.convert_type_with_template_ctx(element, template_params),
+                        ),
                         size: Some(size),
                     };
                 }
@@ -3137,7 +3252,9 @@ impl ClangParser {
                 clang_sys::CXType_IncompleteArray => {
                     let element = clang_sys::clang_getArrayElementType(ty);
                     return CppType::Array {
-                        element: Box::new(self.convert_type_with_template_ctx(element, template_params)),
+                        element: Box::new(
+                            self.convert_type_with_template_ctx(element, template_params),
+                        ),
                         size: None,
                     };
                 }
@@ -3167,18 +3284,16 @@ impl ClangParser {
             if base_name.starts_with("type-parameter-") {
                 let parts: Vec<_> = base_name["type-parameter-".len()..].split('-').collect();
                 if parts.len() == 2 {
-                    if let (Ok(depth), Ok(index)) = (parts[0].parse::<u32>(), parts[1].parse::<u32>()) {
+                    if let (Ok(depth), Ok(index)) =
+                        (parts[0].parse::<u32>(), parts[1].parse::<u32>())
+                    {
                         // Map the index to the template parameter name
                         let name = if (index as usize) < template_params.len() {
                             template_params[index as usize].clone()
                         } else {
                             base_name.clone()
                         };
-                        return CppType::TemplateParam {
-                            name,
-                            depth,
-                            index,
-                        };
+                        return CppType::TemplateParam { name, depth, index };
                     }
                 }
             }
@@ -3189,7 +3304,9 @@ impl ClangParser {
             if is_dependent {
                 // For now, store dependent types with their full spelling
                 // A more sophisticated approach would parse and reconstruct the type
-                CppType::DependentType { spelling: type_name }
+                CppType::DependentType {
+                    spelling: type_name,
+                }
             } else {
                 self.convert_type(ty)
             }
@@ -3264,7 +3381,10 @@ impl ClangParser {
     ///
     /// Note: We need to tokenize each template type parameter's extent to detect "..."
     /// because libclang doesn't expose isParameterPack() in its C API.
-    fn get_template_type_params_with_packs(&self, cursor: clang_sys::CXCursor) -> (Vec<String>, Vec<usize>) {
+    fn get_template_type_params_with_packs(
+        &self,
+        cursor: clang_sys::CXCursor,
+    ) -> (Vec<String>, Vec<usize>) {
         unsafe {
             // Get the translation unit for tokenization
             let tu = clang_sys::clang_Cursor_getTranslationUnit(cursor);
@@ -3301,12 +3421,18 @@ impl ClangParser {
                             let mut tokens: *mut clang_sys::CXToken = ptr::null_mut();
                             let mut num_tokens: u32 = 0;
 
-                            clang_sys::clang_tokenize(info.tu, extent, &mut tokens, &mut num_tokens);
+                            clang_sys::clang_tokenize(
+                                info.tu,
+                                extent,
+                                &mut tokens,
+                                &mut num_tokens,
+                            );
 
                             let mut is_pack = false;
                             for i in 0..num_tokens {
                                 let token = *tokens.add(i as usize);
-                                let token_spelling = clang_sys::clang_getTokenSpelling(info.tu, token);
+                                let token_spelling =
+                                    clang_sys::clang_getTokenSpelling(info.tu, token);
                                 let token_str = cx_string_to_string(token_spelling);
                                 if token_str == "..." {
                                     is_pack = true;
@@ -3329,7 +3455,11 @@ impl ClangParser {
                 }
             }
 
-            clang_sys::clang_visitChildren(cursor, param_visitor, info_ptr as clang_sys::CXClientData);
+            clang_sys::clang_visitChildren(
+                cursor,
+                param_visitor,
+                info_ptr as clang_sys::CXClientData,
+            );
 
             (info.names, info.pack_indices)
         }
@@ -3354,7 +3484,8 @@ impl ClangParser {
             // Extract each template argument
             let mut args = Vec::new();
             for i in 0..num_args {
-                let arg_type = clang_sys::clang_Type_getTemplateArgumentAsType(cursor_type, i as u32);
+                let arg_type =
+                    clang_sys::clang_Type_getTemplateArgumentAsType(cursor_type, i as u32);
                 // Use template-aware conversion to detect template parameter references
                 let cpp_type = self.convert_type_with_template_ctx(arg_type, &template_params);
                 args.push(cpp_type);
@@ -3427,7 +3558,11 @@ impl ClangParser {
                 }
             }
 
-            clang_sys::clang_visitChildren(cursor, friend_visitor, info_ptr as clang_sys::CXClientData);
+            clang_sys::clang_visitChildren(
+                cursor,
+                friend_visitor,
+                info_ptr as clang_sys::CXClientData,
+            );
 
             (info.friend_class, info.friend_function)
         }
@@ -3490,7 +3625,11 @@ impl ClangParser {
                 }
             }
 
-            clang_sys::clang_visitChildren(cursor, requires_visitor, info_ptr as clang_sys::CXClientData);
+            clang_sys::clang_visitChildren(
+                cursor,
+                requires_visitor,
+                info_ptr as clang_sys::CXClientData,
+            );
 
             info.constraint
         }
@@ -3564,7 +3703,11 @@ impl ClangParser {
                 }
             }
 
-            clang_sys::clang_visitChildren(cursor, param_visitor, data_ptr as clang_sys::CXClientData);
+            clang_sys::clang_visitChildren(
+                cursor,
+                param_visitor,
+                data_ptr as clang_sys::CXClientData,
+            );
 
             data.params
         }
@@ -3631,7 +3774,9 @@ impl ClangParser {
                         } else if token_strs.first().map(|s| s.as_str()) == Some("{") {
                             // Compound requirement
                             let is_noexcept = token_strs.contains(&"noexcept".to_string());
-                            let return_constraint = if let Some(arrow_pos) = token_strs.iter().position(|t| t == "->") {
+                            let return_constraint = if let Some(arrow_pos) =
+                                token_strs.iter().position(|t| t == "->")
+                            {
                                 Some(token_strs[arrow_pos + 1..].join(" "))
                             } else {
                                 None
@@ -3656,14 +3801,21 @@ impl ClangParser {
                 }
             }
 
-            clang_sys::clang_visitChildren(cursor, req_visitor, data_ptr as clang_sys::CXClientData);
+            clang_sys::clang_visitChildren(
+                cursor,
+                req_visitor,
+                data_ptr as clang_sys::CXClientData,
+            );
 
             data.requirements
         }
     }
 
     /// Get concept specialization information (concept name and template arguments).
-    fn get_concept_specialization_info(&self, cursor: clang_sys::CXCursor) -> (String, Vec<CppType>) {
+    fn get_concept_specialization_info(
+        &self,
+        cursor: clang_sys::CXCursor,
+    ) -> (String, Vec<CppType>) {
         unsafe {
             // Get the concept name from the cursor spelling
             let concept_name = cursor_spelling(cursor);
@@ -3675,7 +3827,8 @@ impl ClangParser {
             let mut template_args = Vec::new();
             if num_args > 0 {
                 for i in 0..num_args {
-                    let arg_type = clang_sys::clang_Type_getTemplateArgumentAsType(cursor_type, i as u32);
+                    let arg_type =
+                        clang_sys::clang_Type_getTemplateArgumentAsType(cursor_type, i as u32);
                     template_args.push(self.convert_type(arg_type));
                 }
             }
@@ -3731,10 +3884,9 @@ impl ClangParser {
                         let typedef_type = clang_sys::clang_getTypedefDeclUnderlyingType(child);
                         let parser = &*info.parser;
                         let template_params = &*info.template_params;
-                        info.underlying_type = Some(parser.convert_type_with_template_ctx(
-                            typedef_type,
-                            template_params,
-                        ));
+                        info.underlying_type = Some(
+                            parser.convert_type_with_template_ctx(typedef_type, template_params),
+                        );
                         return clang_sys::CXChildVisit_Break;
                     }
 
@@ -3742,7 +3894,11 @@ impl ClangParser {
                 }
             }
 
-            clang_sys::clang_visitChildren(cursor, alias_visitor, info_ptr as clang_sys::CXClientData);
+            clang_sys::clang_visitChildren(
+                cursor,
+                alias_visitor,
+                info_ptr as clang_sys::CXClientData,
+            );
 
             info.underlying_type.unwrap_or(CppType::Void)
         }
@@ -3857,7 +4013,9 @@ mod tests {
         // Namespace should have a function child
         assert!(!ns.children.is_empty());
         match &ns.children[0].kind {
-            ClangNodeKind::FunctionDecl { name, mangled_name, .. } => {
+            ClangNodeKind::FunctionDecl {
+                name, mangled_name, ..
+            } => {
                 assert_eq!(name, "bar");
                 // C++ mangling: namespace foo, function bar() -> _ZN3foo3barEv
                 assert_eq!(mangled_name, "_ZN3foo3barEv", "Expected C++ mangled name");
@@ -3883,10 +4041,16 @@ mod tests {
 
         // Find the function declaration
         for child in &ast.translation_unit.children {
-            if let ClangNodeKind::FunctionDecl { name, mangled_name, .. } = &child.kind {
+            if let ClangNodeKind::FunctionDecl {
+                name, mangled_name, ..
+            } = &child.kind
+            {
                 assert_eq!(name, "add_cpp");
                 // C++ mangling: add_cpp(int, int) -> _Z7add_cppii
-                assert_eq!(mangled_name, "_Z7add_cppii", "Expected C++ mangled name for add_cpp(int, int)");
+                assert_eq!(
+                    mangled_name, "_Z7add_cppii",
+                    "Expected C++ mangled name for add_cpp(int, int)"
+                );
                 return;
             }
         }
@@ -3938,9 +4102,11 @@ mod tests {
         assert!(ast.translation_unit.children.len() >= 2);
 
         // Find the using directive
-        let using_dir = ast.translation_unit.children.iter().find(|c| {
-            matches!(&c.kind, ClangNodeKind::UsingDirective { .. })
-        });
+        let using_dir = ast
+            .translation_unit
+            .children
+            .iter()
+            .find(|c| matches!(&c.kind, ClangNodeKind::UsingDirective { .. }));
 
         assert!(using_dir.is_some(), "Expected UsingDirective");
         match &using_dir.unwrap().kind {
@@ -3969,9 +4135,11 @@ mod tests {
             .unwrap();
 
         // Find the using directive
-        let using_dir = ast.translation_unit.children.iter().find(|c| {
-            matches!(&c.kind, ClangNodeKind::UsingDirective { .. })
-        });
+        let using_dir = ast
+            .translation_unit
+            .children
+            .iter()
+            .find(|c| matches!(&c.kind, ClangNodeKind::UsingDirective { .. }));
 
         assert!(using_dir.is_some(), "Expected UsingDirective");
         match &using_dir.unwrap().kind {
@@ -4000,33 +4168,44 @@ mod tests {
             .unwrap();
 
         // Find the class
-        let class = ast.translation_unit.children.iter().find(|c| {
-            matches!(&c.kind, ClangNodeKind::RecordDecl { name, .. } if name == "Test")
-        });
+        let class =
+            ast.translation_unit.children.iter().find(
+                |c| matches!(&c.kind, ClangNodeKind::RecordDecl { name, .. } if name == "Test"),
+            );
         assert!(class.is_some(), "Expected Test class");
         let class = class.unwrap();
 
         // Find the constructor
-        let ctor = class.children.iter().find(|c| {
-            matches!(&c.kind, ClangNodeKind::ConstructorDecl { .. })
-        });
+        let ctor = class
+            .children
+            .iter()
+            .find(|c| matches!(&c.kind, ClangNodeKind::ConstructorDecl { .. }));
         assert!(ctor.is_some(), "Expected constructor");
         let ctor = ctor.unwrap();
 
         // Should have MemberRef nodes for x and y
-        let member_refs: Vec<_> = ctor.children.iter().filter(|c| {
-            matches!(&c.kind, ClangNodeKind::MemberRef { .. })
-        }).collect();
-        assert_eq!(member_refs.len(), 2, "Expected 2 MemberRef nodes for x and y");
+        let member_refs: Vec<_> = ctor
+            .children
+            .iter()
+            .filter(|c| matches!(&c.kind, ClangNodeKind::MemberRef { .. }))
+            .collect();
+        assert_eq!(
+            member_refs.len(),
+            2,
+            "Expected 2 MemberRef nodes for x and y"
+        );
 
         // Verify the member names
-        let member_names: Vec<String> = member_refs.iter().filter_map(|c| {
-            if let ClangNodeKind::MemberRef { name } = &c.kind {
-                Some(name.clone())
-            } else {
-                None
-            }
-        }).collect();
+        let member_names: Vec<String> = member_refs
+            .iter()
+            .filter_map(|c| {
+                if let ClangNodeKind::MemberRef { name } = &c.kind {
+                    Some(name.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
         assert!(member_names.contains(&"x".to_string()));
         assert!(member_names.contains(&"y".to_string()));
     }
@@ -4420,7 +4599,12 @@ mod tests {
                 let (param_name, param_type) = &params[0];
                 assert_eq!(param_name, "x");
                 // Check that param_type is CppType::Reference
-                if let CppType::Reference { is_const, is_rvalue, .. } = param_type {
+                if let CppType::Reference {
+                    is_const,
+                    is_rvalue,
+                    ..
+                } = param_type
+                {
                     assert!(!is_const, "Expected non-const reference");
                     assert!(!is_rvalue, "Expected lvalue reference (not rvalue)");
                 } else {
@@ -4454,7 +4638,12 @@ mod tests {
                 let (param_name, param_type) = &params[0];
                 assert_eq!(param_name, "x");
                 // Check that param_type is CppType::Reference with is_const=true
-                if let CppType::Reference { is_const, is_rvalue, .. } = param_type {
+                if let CppType::Reference {
+                    is_const,
+                    is_rvalue,
+                    ..
+                } = param_type
+                {
                     assert!(is_const, "Expected const reference");
                     assert!(!is_rvalue, "Expected lvalue reference (not rvalue)");
                 } else {
@@ -4488,7 +4677,12 @@ mod tests {
                 let (param_name, param_type) = &params[0];
                 assert_eq!(param_name, "x");
                 // Check that param_type is CppType::Reference with is_rvalue=true
-                if let CppType::Reference { is_const, is_rvalue, .. } = param_type {
+                if let CppType::Reference {
+                    is_const,
+                    is_rvalue,
+                    ..
+                } = param_type
+                {
                     assert!(!is_const, "Expected non-const rvalue reference");
                     assert!(is_rvalue, "Expected rvalue reference (T&&)");
                 } else {
@@ -4510,7 +4704,11 @@ mod tests {
             is_header_unit: false,
         });
 
-        if let ClangNodeKind::ModuleImportDecl { module_name, is_header_unit } = &node.kind {
+        if let ClangNodeKind::ModuleImportDecl {
+            module_name,
+            is_header_unit,
+        } = &node.kind
+        {
             assert_eq!(module_name, "std.core");
             assert!(!is_header_unit);
         } else {
@@ -4523,7 +4721,11 @@ mod tests {
             is_header_unit: true,
         });
 
-        if let ClangNodeKind::ModuleImportDecl { module_name, is_header_unit } = &header_node.kind {
+        if let ClangNodeKind::ModuleImportDecl {
+            module_name,
+            is_header_unit,
+        } = &header_node.kind
+        {
             assert_eq!(module_name, "<iostream>");
             assert!(is_header_unit);
         } else {

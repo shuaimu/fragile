@@ -198,7 +198,12 @@ impl CppType {
             CppType::Double => "f64".to_string(),
             CppType::Pointer { pointee, is_const } => {
                 // Special case: function pointers use Option<fn(...)> syntax in Rust
-                if let CppType::Function { return_type, params, is_variadic } = pointee.as_ref() {
+                if let CppType::Function {
+                    return_type,
+                    params,
+                    is_variadic,
+                } = pointee.as_ref()
+                {
                     let params_str: Vec<_> = params.iter().map(|p| p.to_rust_type_str()).collect();
                     let params_joined = if *is_variadic {
                         format!("{}, ...", params_str.join(", "))
@@ -207,14 +212,22 @@ impl CppType {
                     };
                     // Use Option to handle nullable function pointers
                     // Note: We don't use extern "C" since transpiled functions use Rust calling convention
-                    format!("Option<fn({}) -> {}>", params_joined, return_type.to_rust_type_str())
+                    format!(
+                        "Option<fn({}) -> {}>",
+                        params_joined,
+                        return_type.to_rust_type_str()
+                    )
                 } else {
                     // Regular pointer - respect const
                     let ptr_type = if *is_const { "*const" } else { "*mut" };
                     format!("{} {}", ptr_type, pointee.to_rust_type_str())
                 }
             }
-            CppType::Reference { referent, is_const, is_rvalue: _ } => {
+            CppType::Reference {
+                referent,
+                is_const,
+                is_rvalue: _,
+            } => {
                 // C++ references map to Rust references for transpilation
                 let ref_type = if *is_const { "&" } else { "&mut " };
                 format!("{}{}", ref_type, referent.to_rust_type_str())
@@ -235,12 +248,18 @@ impl CppType {
                 // Handle special C++ types that don't map directly to Rust
                 match normalized_name {
                     "float" => "f32".to_string(),
-                    "double" | "long double" => "f64".to_string(),  // Rust doesn't have long double
+                    "double" | "long double" => "f64".to_string(), // Rust doesn't have long double
                     "bool" => "bool".to_string(),
-                    "long long" | "long long int" | "long_long" | "long_long_int" => "i64".to_string(),
-                    "unsigned long long" | "unsigned long long int" | "unsigned_long_long" | "unsigned_long_long_int" => "u64".to_string(),
+                    "long long" | "long long int" | "long_long" | "long_long_int" => {
+                        "i64".to_string()
+                    }
+                    "unsigned long long"
+                    | "unsigned long long int"
+                    | "unsigned_long_long"
+                    | "unsigned_long_long_int" => "u64".to_string(),
                     "long" | "long int" | "long_int" => "i64".to_string(),
-                    "unsigned long" | "unsigned long int" | "unsigned_long" | "unsigned_long_int" => "u64".to_string(),
+                    "unsigned long" | "unsigned long int" | "unsigned_long"
+                    | "unsigned_long_int" => "u64".to_string(),
                     "int" => "i32".to_string(),
                     "unsigned" | "unsigned int" => "u32".to_string(),
                     "short" | "short int" => "i16".to_string(),
@@ -270,13 +289,15 @@ impl CppType {
                     "__int128" | "__int128_t" => "i128".to_string(),
                     "unsigned __int128" | "__uint128_t" => "u128".to_string(),
                     // C variadic function support
-                    "va_list" | "__builtin_va_list" | "__va_list_tag" | "struct __va_list_tag" =>
-                        "std::ffi::VaList".to_string(),
+                    "va_list" | "__builtin_va_list" | "__va_list_tag" | "struct __va_list_tag" => {
+                        "std::ffi::VaList".to_string()
+                    }
                     // C standard I/O
-                    "FILE" | "struct _IO_FILE" => "std::ffi::c_void".to_string(),  // Opaque file handle
+                    "FILE" | "struct _IO_FILE" => "std::ffi::c_void".to_string(), // Opaque file handle
                     // nullptr_t type
-                    "std::nullptr_t" | "nullptr_t" | "decltype(nullptr)" =>
-                        "*mut std::ffi::c_void".to_string(),
+                    "std::nullptr_t" | "nullptr_t" | "decltype(nullptr)" => {
+                        "*mut std::ffi::c_void".to_string()
+                    }
                     // Common STL member type aliases used across container types
                     // These are typedefs like vector<T>::size_type that appear in template code
                     "size_type" => "usize".to_string(),
@@ -287,21 +308,33 @@ impl CppType {
                     "pointer" | "const_pointer" => "*mut std::ffi::c_void".to_string(),
                     // STL iterator types - use raw pointers as placeholder
                     "iterator" | "const_iterator" => "*mut std::ffi::c_void".to_string(),
-                    "reverse_iterator" | "const_reverse_iterator" => "*mut std::ffi::c_void".to_string(),
+                    "reverse_iterator" | "const_reverse_iterator" => {
+                        "*mut std::ffi::c_void".to_string()
+                    }
                     // Allocator types
                     "allocator_type" => "std::ffi::c_void".to_string(),
                     // Common template parameter names that appear unresolved
-                    "_Tp" | "_CharT" | "_Traits" | "_Allocator" | "_Alloc" => "std::ffi::c_void".to_string(),
-                    "_Pointer" | "_Iter" | "_Iterator" | "_Size" | "_Ep" => "std::ffi::c_void".to_string(),
-                    "_Rp" | "_Ip" | "_Container" | "_BaseT" | "_It" => "std::ffi::c_void".to_string(),
-                    "_Gen" | "_Func" | "_Rollback" | "_StorageAlloc" => "std::ffi::c_void".to_string(),
-                    "_ControlBlockAlloc" | "_ControlBlockAllocator" => "std::ffi::c_void".to_string(),
-                    "_Sp" | "_Dp" | "_Up" | "_Yp" => "std::ffi::c_void".to_string(),  // Smart pointer params
+                    "_Tp" | "_CharT" | "_Traits" | "_Allocator" | "_Alloc" => {
+                        "std::ffi::c_void".to_string()
+                    }
+                    "_Pointer" | "_Iter" | "_Iterator" | "_Size" | "_Ep" => {
+                        "std::ffi::c_void".to_string()
+                    }
+                    "_Rp" | "_Ip" | "_Container" | "_BaseT" | "_It" => {
+                        "std::ffi::c_void".to_string()
+                    }
+                    "_Gen" | "_Func" | "_Rollback" | "_StorageAlloc" => {
+                        "std::ffi::c_void".to_string()
+                    }
+                    "_ControlBlockAlloc" | "_ControlBlockAllocator" => {
+                        "std::ffi::c_void".to_string()
+                    }
+                    "_Sp" | "_Dp" | "_Up" | "_Yp" => "std::ffi::c_void".to_string(), // Smart pointer params
                     // libstdc++ bit vector internal types
-                    "_Bit_type" => "u64".to_string(),  // Typically unsigned long
-                    "_Tp_alloc_type" | "_Bit_alloc_type" => "std::ffi::c_void".to_string(),  // Allocator type alias
+                    "_Bit_type" => "u64".to_string(), // Typically unsigned long
+                    "_Tp_alloc_type" | "_Bit_alloc_type" => "std::ffi::c_void".to_string(), // Allocator type alias
                     // Smart pointer internal types
-                    "_Sp___rep" => "std::ffi::c_void".to_string(),  // shared_ptr refcount
+                    "_Sp___rep" => "std::ffi::c_void".to_string(), // shared_ptr refcount
                     // Dependent types from templates
                     "_dependent_type" => "std::ffi::c_void".to_string(),
                     // libstdc++ comparison category types
@@ -311,8 +344,10 @@ impl CppType {
                     "__proxy" | "__value_type" => "std::ffi::c_void".to_string(),
                     "std___libcpp_refstring" => "std::ffi::c_void".to_string(),
                     // Stream types
-                    "__stream_type" | "ostream_type" | "istream_type" => "std::ffi::c_void".to_string(),
-                    "fmtflags" => "u32".to_string(),  // ios_base::fmtflags is an integer type
+                    "__stream_type" | "ostream_type" | "istream_type" => {
+                        "std::ffi::c_void".to_string()
+                    }
+                    "fmtflags" => "u32".to_string(), // ios_base::fmtflags is an integer type
                     // Optional type
                     "nullopt_t" => "()".to_string(),
                     // Time value types
@@ -328,7 +363,7 @@ impl CppType {
                     "__alloc_traits_difference_type" => "isize".to_string(),
                     // libc++ internal types
                     "__syscall_slong_t" | "__syscall_ulong_t" => "i64".to_string(),
-                    "__type_name_t" => "*const i8".to_string(),  // RTTI type name pointer
+                    "__type_name_t" => "*const i8".to_string(), // RTTI type name pointer
                     // Boolean type traits used for tag dispatching
                     "true_type" | "std::true_type" => "bool".to_string(),
                     "false_type" | "std::false_type" => "bool".to_string(),
@@ -339,7 +374,7 @@ impl CppType {
                     "bad_alloc" | "std::bad_alloc" => "std::ffi::c_void".to_string(),
                     "exception" | "std::exception" => "std::ffi::c_void".to_string(),
                     // Time and stream types
-                    "timespec" => "i64".to_string(),  // Simplify to i64 timestamp
+                    "timespec" => "i64".to_string(), // Simplify to i64 timestamp
                     "streambuf_type" | "char_type" => "std::ffi::c_void".to_string(),
                     "memory_resource" => "std::ffi::c_void".to_string(),
                     // More template parameter placeholders
@@ -350,7 +385,9 @@ impl CppType {
                     _ => {
                         // Map std::vector<T> instantiations to the base template struct
                         // The transpiler generates a single `vector__Tp___Alloc` struct
-                        if normalized_name.starts_with("std::vector<") || normalized_name.starts_with("vector<") {
+                        if normalized_name.starts_with("std::vector<")
+                            || normalized_name.starts_with("vector<")
+                        {
                             return "vector__Tp___Alloc".to_string();
                         }
                         // Map std::_Bit_iterator to _Bit_iterator (strip std:: prefix)
@@ -379,7 +416,7 @@ impl CppType {
                         // Handle lambda types - use inference placeholder
                         // Lambda types look like "(lambda at /path/file.cpp:line:col)"
                         if name.starts_with("(lambda at ") || name.contains("lambda at ") {
-                            return "_".to_string();  // Let Rust infer the closure type
+                            return "_".to_string(); // Let Rust infer the closure type
                         }
                         // Handle auto type (C++11) - use Rust type inference
                         if name == "auto" {
@@ -388,7 +425,9 @@ impl CppType {
                         // Handle Clang template parameter placeholders like type-parameter-0-0
                         // These are unresolved template parameters from template definitions
                         // Note: Use normalized_name to handle const-qualified types
-                        if normalized_name.starts_with("type-parameter-") || normalized_name.starts_with("type_parameter_") {
+                        if normalized_name.starts_with("type-parameter-")
+                            || normalized_name.starts_with("type_parameter_")
+                        {
                             return "std::ffi::c_void".to_string();
                         }
                         // Handle complex conditional types from libc++ template metaprogramming
@@ -397,12 +436,15 @@ impl CppType {
                         if normalized_name.starts_with("__conditional_t")
                             || normalized_name.starts_with("_If<")  // Original template form
                             || normalized_name.starts_with("_If_")  // Sanitized form
-                            || normalized_name.contains("__conditional_t")  // Also catch it in middle
+                            || normalized_name.contains("__conditional_t")
+                        // Also catch it in middle
                         {
                             return "std::ffi::c_void".to_string();
                         }
                         // Handle typename-prefixed dependent types
-                        if normalized_name.starts_with("typename") || normalized_name.starts_with("typename_") {
+                        if normalized_name.starts_with("typename")
+                            || normalized_name.starts_with("typename_")
+                        {
                             return "std::ffi::c_void".to_string();
                         }
                         // Handle libc++ variant implementation detail types
@@ -414,9 +456,13 @@ impl CppType {
                             return "std::ffi::c_void".to_string();
                         }
                         // Handle type trait result types (add_pointer_t, make_unsigned_t, etc.)
-                        if normalized_name.starts_with("add_pointer_t") || normalized_name.starts_with("make_unsigned_t")
-                            || normalized_name.starts_with("sentinel_t") || normalized_name.starts_with("iterator_t")
-                            || normalized_name.starts_with("__insert_iterator") || normalized_name.starts_with("__impl_") {
+                        if normalized_name.starts_with("add_pointer_t")
+                            || normalized_name.starts_with("make_unsigned_t")
+                            || normalized_name.starts_with("sentinel_t")
+                            || normalized_name.starts_with("iterator_t")
+                            || normalized_name.starts_with("__insert_iterator")
+                            || normalized_name.starts_with("__impl_")
+                        {
                             return "std::ffi::c_void".to_string();
                         }
                         // Strip C++ qualifiers that aren't valid in Rust type names
@@ -426,7 +472,7 @@ impl CppType {
                             .trim_start_matches("struct ")
                             .trim_start_matches("class ")
                             .trim_start_matches("enum ")
-                            .trim_end();  // Remove trailing whitespace
+                            .trim_end(); // Remove trailing whitespace
 
                         // Strip inline namespace versioning used by libc++ (e.g., std::__1:: -> std::)
                         // libc++ uses __1, __2, etc. as ABI versioning namespaces
@@ -442,7 +488,7 @@ impl CppType {
                                 "long" => "u64".to_string(),
                                 "short" => "u16".to_string(),
                                 "char" => "u8".to_string(),
-                                _ => cleaned.clone()
+                                _ => cleaned.clone(),
                             }
                         } else if cleaned.starts_with("signed ") {
                             match cleaned.trim_start_matches("signed ") {
@@ -450,7 +496,7 @@ impl CppType {
                                 "long" => "i64".to_string(),
                                 "short" => "i16".to_string(),
                                 "char" => "i8".to_string(),
-                                _ => cleaned.clone()
+                                _ => cleaned.clone(),
                             }
                         } else {
                             cleaned
@@ -467,9 +513,14 @@ impl CppType {
                             if let Some(close_bracket) = rest.find(']') {
                                 let size = &rest[..close_bracket].trim();
                                 // Only convert to array syntax if size is non-empty (looks like actual array)
-                                if !size.is_empty() && element_type.chars().all(|c| c.is_alphanumeric() || c == '_') {
+                                if !size.is_empty()
+                                    && element_type
+                                        .chars()
+                                        .all(|c| c.is_alphanumeric() || c == '_')
+                                {
                                     // Recursively convert the element type and size
-                                    let elem_rust = CppType::Named(element_type.to_string()).to_rust_type_str();
+                                    let elem_rust =
+                                        CppType::Named(element_type.to_string()).to_rust_type_str();
                                     let size_rust = size.replace("-", "_").replace(".", "_");
                                     return format!("[{}; {}]", elem_rust, size_rust);
                                 }
@@ -483,36 +534,45 @@ impl CppType {
                         // e.g., std::vector<int> -> std_vector_int
                         // e.g., type-parameter-0-0 -> type_parameter_0_0
                         // Note: replace "::" first, then single ":" for line:col references
-                        cleaned.replace("::", "_")
-                            .replace(":", "_")  // Single colon in file line:col references
-                            .replace("<", "_")  // Convert template open bracket
-                            .replace(">", "")   // Remove template close bracket
-                            .replace(",", "_")  // Handle multiple template params
-                            .replace(" *", "")  // Remove trailing pointer indicators
+                        cleaned
+                            .replace("::", "_")
+                            .replace(":", "_") // Single colon in file line:col references
+                            .replace("<", "_") // Convert template open bracket
+                            .replace(">", "") // Remove template close bracket
+                            .replace(",", "_") // Handle multiple template params
+                            .replace(" *", "") // Remove trailing pointer indicators
                             .replace("*", "")
-                            .replace("&&", "_")  // C++ rvalue reference in type names
-                            .replace("&", "_")   // C++ reference in type names
-                            .replace("[]", "_Arr")  // Array type notation (e.g., T[] -> T_Arr)
-                            .replace("[", "_")  // Expression grouping
-                            .replace("]", "_")  // Expression grouping
+                            .replace("&&", "_") // C++ rvalue reference in type names
+                            .replace("&", "_") // C++ reference in type names
+                            .replace("[]", "_Arr") // Array type notation (e.g., T[] -> T_Arr)
+                            .replace("[", "_") // Expression grouping
+                            .replace("]", "_") // Expression grouping
                             .replace(" ", "_")
-                            .replace("-", "_")  // Clang uses dashes in template param names
-                            .replace(".", "_")  // Variadic pack expansion uses ...
-                            .replace("+", "_")  // Template expressions (Index + 1)
-                            .replace("(", "_")  // Expression grouping
+                            .replace("-", "_") // Clang uses dashes in template param names
+                            .replace(".", "_") // Variadic pack expansion uses ...
+                            .replace("+", "_") // Template expressions (Index + 1)
+                            .replace("(", "_") // Expression grouping
                             .replace(")", "_")
-                            .replace("/", "_")  // File paths in anonymous union names from system headers
+                            .replace("/", "_") // File paths in anonymous union names from system headers
                     }
                 }
             }
-            CppType::Function { return_type, params, is_variadic } => {
+            CppType::Function {
+                return_type,
+                params,
+                is_variadic,
+            } => {
                 let params_str: Vec<_> = params.iter().map(|p| p.to_rust_type_str()).collect();
                 let params_joined = if *is_variadic {
                     format!("{}, ...", params_str.join(", "))
                 } else {
                     params_str.join(", ")
                 };
-                format!("extern \"C\" fn({}) -> {}", params_joined, return_type.to_rust_type_str())
+                format!(
+                    "extern \"C\" fn({}) -> {}",
+                    params_joined,
+                    return_type.to_rust_type_str()
+                )
             }
             CppType::TemplateParam { name, .. } => {
                 // Template parameters are represented by their name
@@ -535,7 +595,9 @@ impl CppType {
     /// Check if this type is or contains template parameters.
     pub fn is_dependent(&self) -> bool {
         match self {
-            CppType::TemplateParam { .. } | CppType::DependentType { .. } | CppType::ParameterPack { .. } => true,
+            CppType::TemplateParam { .. }
+            | CppType::DependentType { .. }
+            | CppType::ParameterPack { .. } => true,
             CppType::Pointer { pointee, .. } => pointee.is_dependent(),
             CppType::Reference { referent, .. } => referent.is_dependent(),
             CppType::Array { element, .. } => element.is_dependent(),
@@ -583,11 +645,15 @@ impl CppType {
     /// let subst = HashMap::from([("T".to_string(), CppType::Int { signed: true })]);
     /// let result = ty.substitute(&subst); // int*
     /// ```
-    pub fn substitute(&self, substitutions: &std::collections::HashMap<String, CppType>) -> CppType {
+    pub fn substitute(
+        &self,
+        substitutions: &std::collections::HashMap<String, CppType>,
+    ) -> CppType {
         match self {
-            CppType::TemplateParam { name, .. } => {
-                substitutions.get(name).cloned().unwrap_or_else(|| self.clone())
-            }
+            CppType::TemplateParam { name, .. } => substitutions
+                .get(name)
+                .cloned()
+                .unwrap_or_else(|| self.clone()),
             CppType::DependentType { spelling } => {
                 // Try to find a template param in the spelling and substitute
                 // This is a simplified approach
@@ -601,7 +667,10 @@ impl CppType {
                 // Parameter packs require special expansion logic.
                 // For now, if a single type is provided, use it directly.
                 // Full pack expansion is more complex and handled elsewhere.
-                substitutions.get(name).cloned().unwrap_or_else(|| self.clone())
+                substitutions
+                    .get(name)
+                    .cloned()
+                    .unwrap_or_else(|| self.clone())
             }
             CppType::Pointer { pointee, is_const } => CppType::Pointer {
                 pointee: Box::new(pointee.substitute(substitutions)),
@@ -743,7 +812,7 @@ impl CppType {
                 is_pointer: false,
                 is_reference: false,
                 // Named types need lookup to determine properties
-                is_trivially_copyable: false, // Conservative default
+                is_trivially_copyable: false,     // Conservative default
                 is_trivially_destructible: false, // Conservative default
             }),
 
@@ -782,7 +851,8 @@ impl CppType {
 
     /// Check if this is an arithmetic type (integral or floating point).
     pub fn is_arithmetic(&self) -> Option<bool> {
-        self.properties().map(|p| p.is_integral || p.is_floating_point)
+        self.properties()
+            .map(|p| p.is_integral || p.is_floating_point)
     }
 
     /// Get the bit width of this type.
@@ -1098,7 +1168,8 @@ mod tests {
             "std_unique_ptr_int"
         );
         assert_eq!(
-            CppType::Named("std::unique_ptr<int, std::default_delete<int>>".to_string()).to_rust_type_str(),
+            CppType::Named("std::unique_ptr<int, std::default_delete<int>>".to_string())
+                .to_rust_type_str(),
             "std_unique_ptr_int__std_default_delete_int"
         );
         assert_eq!(
@@ -1285,16 +1356,10 @@ mod tests {
     #[test]
     fn test_parse_template_args() {
         // Basic arguments
-        assert_eq!(
-            parse_template_args("int, double"),
-            vec!["int", "double"]
-        );
+        assert_eq!(parse_template_args("int, double"), vec!["int", "double"]);
 
         // Single argument
-        assert_eq!(
-            parse_template_args("int"),
-            vec!["int"]
-        );
+        assert_eq!(parse_template_args("int"), vec!["int"]);
 
         // With nested templates
         assert_eq!(
@@ -1315,9 +1380,6 @@ mod tests {
         );
 
         // Empty
-        assert_eq!(
-            parse_template_args(""),
-            Vec::<String>::new()
-        );
+        assert_eq!(parse_template_args(""), Vec::<String>::new());
     }
 }

@@ -1,4 +1,4 @@
-use fragile_clang::{ClangParser, ClangNode, ClangNodeKind};
+use fragile_clang::{ClangNode, ClangNodeKind, ClangParser};
 use std::path::Path;
 
 fn count_nodes(node: &ClangNode, depth: usize, max_depth: usize) {
@@ -9,27 +9,68 @@ fn count_nodes(node: &ClangNode, depth: usize, max_depth: usize) {
     let indent = "  ".repeat(depth);
     match &node.kind {
         ClangNodeKind::TranslationUnit => {
-            println!("{indent}TranslationUnit (children: {})", node.children.len());
+            println!(
+                "{indent}TranslationUnit (children: {})",
+                node.children.len()
+            );
         }
-        ClangNodeKind::FunctionDecl { name, mangled_name, return_type, params, is_definition, .. } => {
+        ClangNodeKind::FunctionDecl {
+            name,
+            mangled_name,
+            return_type,
+            params,
+            is_definition,
+            ..
+        } => {
             println!("{indent}FunctionDecl: {name} (mangled: {mangled_name:?})");
-            println!("{indent}  return: {return_type:?}, params: {}", params.len());
+            println!(
+                "{indent}  return: {return_type:?}, params: {}",
+                params.len()
+            );
             println!("{indent}  is_definition: {is_definition}");
         }
-        ClangNodeKind::FunctionTemplateDecl { name, template_params, .. } => {
-            println!("{indent}FunctionTemplateDecl: {}<{}>", name, template_params.join(", "));
+        ClangNodeKind::FunctionTemplateDecl {
+            name,
+            template_params,
+            ..
+        } => {
+            println!(
+                "{indent}FunctionTemplateDecl: {}<{}>",
+                name,
+                template_params.join(", ")
+            );
         }
-        ClangNodeKind::RecordDecl { name, is_class, is_definition, fields } => {
+        ClangNodeKind::RecordDecl {
+            name,
+            is_class,
+            is_definition,
+            fields,
+        } => {
             let kind = if *is_class { "class" } else { "struct" };
-            let def_marker = if *is_definition { " (definition)" } else { " (forward decl)" };
+            let def_marker = if *is_definition {
+                " (definition)"
+            } else {
+                " (forward decl)"
+            };
             println!("{indent}RecordDecl ({kind}): {name}{def_marker}");
             println!("{indent}  fields: {}", fields.len());
         }
-        ClangNodeKind::ClassTemplateDecl { name, template_params, .. } => {
-            println!("{indent}ClassTemplateDecl: {}<{}>", name, template_params.join(", "));
+        ClangNodeKind::ClassTemplateDecl {
+            name,
+            template_params,
+            ..
+        } => {
+            println!(
+                "{indent}ClassTemplateDecl: {}<{}>",
+                name,
+                template_params.join(", ")
+            );
         }
         ClangNodeKind::NamespaceDecl { name } => {
-            println!("{indent}NamespaceDecl: {}", name.as_deref().unwrap_or("(anonymous)"));
+            println!(
+                "{indent}NamespaceDecl: {}",
+                name.as_deref().unwrap_or("(anonymous)")
+            );
         }
         ClangNodeKind::Unknown(kind) => {
             if depth <= 2 {

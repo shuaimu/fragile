@@ -73,7 +73,10 @@ fn main() {{
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("Compilation failed:\n{}\n\nSource:\n{}", stderr, full_code));
+        return Err(format!(
+            "Compilation failed:\n{}\n\nSource:\n{}",
+            stderr, full_code
+        ));
     }
 
     Ok(exe_path)
@@ -171,11 +174,7 @@ fn run_grammar_test(source: &str, filename: &str, main_fn: &str, expected: i32) 
 fn test_01_arithmetic() {
     let source = include_str!("../../../tests/cpp/grammar/01_arithmetic.cpp");
     let result = run_grammar_test(source, "01_arithmetic.cpp", "test_arithmetic", 42);
-    assert!(
-        result.compile_ok,
-        "Compilation failed: {:?}",
-        result.error
-    );
+    assert!(result.compile_ok, "Compilation failed: {:?}", result.error);
     assert_eq!(
         result.actual,
         Some(result.expected),
@@ -188,28 +187,16 @@ fn test_01_arithmetic() {
 fn test_02_comparisons() {
     let source = include_str!("../../../tests/cpp/grammar/02_comparisons.cpp");
     let result = run_grammar_test(source, "02_comparisons.cpp", "test_comparisons", 7);
-    assert!(
-        result.compile_ok,
-        "Compilation failed: {:?}",
-        result.error
-    );
+    assert!(result.compile_ok, "Compilation failed: {:?}", result.error);
     // Note: the test returns 7, not 6 (due to the != check)
-    assert!(
-        result.actual.is_some(),
-        "Wrong result: {:?}",
-        result.error
-    );
+    assert!(result.actual.is_some(), "Wrong result: {:?}", result.error);
 }
 
 #[test]
 fn test_03_logical() {
     let source = include_str!("../../../tests/cpp/grammar/03_logical.cpp");
     let result = run_grammar_test(source, "03_logical.cpp", "test_logical", 3);
-    assert!(
-        result.compile_ok,
-        "Compilation failed: {:?}",
-        result.error
-    );
+    assert!(result.compile_ok, "Compilation failed: {:?}", result.error);
     assert_eq!(
         result.actual,
         Some(result.expected),
@@ -222,11 +209,7 @@ fn test_03_logical() {
 fn test_04_bitwise() {
     let source = include_str!("../../../tests/cpp/grammar/04_bitwise.cpp");
     let result = run_grammar_test(source, "04_bitwise.cpp", "test_bitwise", 42);
-    assert!(
-        result.compile_ok,
-        "Compilation failed: {:?}",
-        result.error
-    );
+    assert!(result.compile_ok, "Compilation failed: {:?}", result.error);
     assert_eq!(
         result.actual,
         Some(result.expected),
@@ -239,11 +222,7 @@ fn test_04_bitwise() {
 fn test_05_if_else() {
     let source = include_str!("../../../tests/cpp/grammar/05_if_else.cpp");
     let result = run_grammar_test(source, "05_if_else.cpp", "test_if_else_main", 42);
-    assert!(
-        result.compile_ok,
-        "Compilation failed: {:?}",
-        result.error
-    );
+    assert!(result.compile_ok, "Compilation failed: {:?}", result.error);
     assert_eq!(
         result.actual,
         Some(result.expected),
@@ -256,11 +235,7 @@ fn test_05_if_else() {
 fn test_06_while_loop() {
     let source = include_str!("../../../tests/cpp/grammar/06_while_loop.cpp");
     let result = run_grammar_test(source, "06_while_loop.cpp", "test_while_loop", 45);
-    assert!(
-        result.compile_ok,
-        "Compilation failed: {:?}",
-        result.error
-    );
+    assert!(result.compile_ok, "Compilation failed: {:?}", result.error);
     assert_eq!(
         result.actual,
         Some(result.expected),
@@ -273,11 +248,7 @@ fn test_06_while_loop() {
 fn test_07_for_loop() {
     let source = include_str!("../../../tests/cpp/grammar/07_for_loop.cpp");
     let result = run_grammar_test(source, "07_for_loop.cpp", "test_for_loop", 55);
-    assert!(
-        result.compile_ok,
-        "Compilation failed: {:?}",
-        result.error
-    );
+    assert!(result.compile_ok, "Compilation failed: {:?}", result.error);
     assert_eq!(
         result.actual,
         Some(result.expected),
@@ -290,11 +261,7 @@ fn test_07_for_loop() {
 fn test_08_nested_loops() {
     let source = include_str!("../../../tests/cpp/grammar/08_nested_loops.cpp");
     let result = run_grammar_test(source, "08_nested_loops.cpp", "test_nested_loops", 36);
-    assert!(
-        result.compile_ok,
-        "Compilation failed: {:?}",
-        result.error
-    );
+    assert!(result.compile_ok, "Compilation failed: {:?}", result.error);
     assert_eq!(
         result.actual,
         Some(result.expected),
@@ -307,11 +274,7 @@ fn test_08_nested_loops() {
 fn test_09_break_continue() {
     let source = include_str!("../../../tests/cpp/grammar/09_break_continue.cpp");
     let result = run_grammar_test(source, "09_break_continue.cpp", "test_break_continue", 40);
-    assert!(
-        result.compile_ok,
-        "Compilation failed: {:?}",
-        result.error
-    );
+    assert!(result.compile_ok, "Compilation failed: {:?}", result.error);
     assert_eq!(
         result.actual,
         Some(result.expected),
@@ -324,11 +287,7 @@ fn test_09_break_continue() {
 fn test_10_functions() {
     let source = include_str!("../../../tests/cpp/grammar/10_functions.cpp");
     let result = run_grammar_test(source, "10_functions.cpp", "test_functions", 42);
-    assert!(
-        result.compile_ok,
-        "Compilation failed: {:?}",
-        result.error
-    );
+    assert!(result.compile_ok, "Compilation failed: {:?}", result.error);
     assert_eq!(
         result.actual,
         Some(result.expected),
@@ -341,11 +300,7 @@ fn test_10_functions() {
 fn test_11_recursion() {
     let source = include_str!("../../../tests/cpp/grammar/11_recursion.cpp");
     let result = run_grammar_test(source, "11_recursion.cpp", "test_recursion", 175);
-    assert!(
-        result.compile_ok,
-        "Compilation failed: {:?}",
-        result.error
-    );
+    assert!(result.compile_ok, "Compilation failed: {:?}", result.error);
     assert_eq!(
         result.actual,
         Some(result.expected),
@@ -358,11 +313,7 @@ fn test_11_recursion() {
 fn test_12_struct_basic() {
     let source = include_str!("../../../tests/cpp/grammar/12_struct_basic.cpp");
     let result = run_grammar_test(source, "12_struct_basic.cpp", "test_struct_basic", 42);
-    assert!(
-        result.compile_ok,
-        "Compilation failed: {:?}",
-        result.error
-    );
+    assert!(result.compile_ok, "Compilation failed: {:?}", result.error);
     assert_eq!(
         result.actual,
         Some(result.expected),
@@ -375,11 +326,7 @@ fn test_12_struct_basic() {
 fn test_13_struct_methods() {
     let source = include_str!("../../../tests/cpp/grammar/13_struct_methods.cpp");
     let result = run_grammar_test(source, "13_struct_methods.cpp", "test_struct_methods", 42);
-    assert!(
-        result.compile_ok,
-        "Compilation failed: {:?}",
-        result.error
-    );
+    assert!(result.compile_ok, "Compilation failed: {:?}", result.error);
     assert_eq!(
         result.actual,
         Some(result.expected),
@@ -391,29 +338,22 @@ fn test_13_struct_methods() {
 #[test]
 fn test_14_struct_constructor() {
     let source = include_str!("../../../tests/cpp/grammar/14_struct_constructor.cpp");
-    let result = run_grammar_test(source, "14_struct_constructor.cpp", "test_struct_constructor", 44);
-    assert!(
-        result.compile_ok,
-        "Compilation failed: {:?}",
-        result.error
+    let result = run_grammar_test(
+        source,
+        "14_struct_constructor.cpp",
+        "test_struct_constructor",
+        44,
     );
+    assert!(result.compile_ok, "Compilation failed: {:?}", result.error);
     // Expected is 44 (2 + 42), not 42
-    assert!(
-        result.actual.is_some(),
-        "Run failed: {:?}",
-        result.error
-    );
+    assert!(result.actual.is_some(), "Run failed: {:?}", result.error);
 }
 
 #[test]
 fn test_15_pointers() {
     let source = include_str!("../../../tests/cpp/grammar/15_pointers.cpp");
     let result = run_grammar_test(source, "15_pointers.cpp", "test_pointers", 42);
-    assert!(
-        result.compile_ok,
-        "Compilation failed: {:?}",
-        result.error
-    );
+    assert!(result.compile_ok, "Compilation failed: {:?}", result.error);
     assert_eq!(
         result.actual,
         Some(result.expected),
@@ -426,11 +366,7 @@ fn test_15_pointers() {
 fn test_16_references() {
     let source = include_str!("../../../tests/cpp/grammar/16_references.cpp");
     let result = run_grammar_test(source, "16_references.cpp", "test_references", 42);
-    assert!(
-        result.compile_ok,
-        "Compilation failed: {:?}",
-        result.error
-    );
+    assert!(result.compile_ok, "Compilation failed: {:?}", result.error);
     assert_eq!(
         result.actual,
         Some(result.expected),
@@ -443,11 +379,7 @@ fn test_16_references() {
 fn test_17_arrays() {
     let source = include_str!("../../../tests/cpp/grammar/17_arrays.cpp");
     let result = run_grammar_test(source, "17_arrays.cpp", "test_arrays", 42);
-    assert!(
-        result.compile_ok,
-        "Compilation failed: {:?}",
-        result.error
-    );
+    assert!(result.compile_ok, "Compilation failed: {:?}", result.error);
     assert_eq!(
         result.actual,
         Some(result.expected),
@@ -460,11 +392,7 @@ fn test_17_arrays() {
 fn test_18_ternary() {
     let source = include_str!("../../../tests/cpp/grammar/18_ternary.cpp");
     let result = run_grammar_test(source, "18_ternary.cpp", "test_ternary", 42);
-    assert!(
-        result.compile_ok,
-        "Compilation failed: {:?}",
-        result.error
-    );
+    assert!(result.compile_ok, "Compilation failed: {:?}", result.error);
     assert_eq!(
         result.actual,
         Some(result.expected),
@@ -477,11 +405,7 @@ fn test_18_ternary() {
 fn test_19_do_while() {
     let source = include_str!("../../../tests/cpp/grammar/19_do_while.cpp");
     let result = run_grammar_test(source, "19_do_while.cpp", "test_do_while", 42);
-    assert!(
-        result.compile_ok,
-        "Compilation failed: {:?}",
-        result.error
-    );
+    assert!(result.compile_ok, "Compilation failed: {:?}", result.error);
     assert_eq!(
         result.actual,
         Some(result.expected),
@@ -494,11 +418,7 @@ fn test_19_do_while() {
 fn test_20_nested_struct() {
     let source = include_str!("../../../tests/cpp/grammar/20_nested_struct.cpp");
     let result = run_grammar_test(source, "20_nested_struct.cpp", "test_nested_struct", 42);
-    assert!(
-        result.compile_ok,
-        "Compilation failed: {:?}",
-        result.error
-    );
+    assert!(result.compile_ok, "Compilation failed: {:?}", result.error);
     assert_eq!(
         result.actual,
         Some(result.expected),

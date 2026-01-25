@@ -351,8 +351,7 @@ libs = ["pthread", "numa"]
                 defines: vec![],
                 cflags: vec![],
             },
-            targets: vec![TargetConfig::executable("main")
-                .with_includes(&["src/include"])],
+            targets: vec![TargetConfig::executable("main").with_includes(&["src/include"])],
         };
 
         let target = &config.targets[0];

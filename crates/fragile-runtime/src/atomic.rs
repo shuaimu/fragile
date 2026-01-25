@@ -567,7 +567,10 @@ pub extern "C" fn fragile_atomic_fetch_xor_64(ptr: *mut u64, value: u64, order: 
 
 /// Atomic load for pointer values.
 #[no_mangle]
-pub extern "C" fn fragile_atomic_load_ptr(ptr: *const *mut std::ffi::c_void, order: i32) -> *mut std::ffi::c_void {
+pub extern "C" fn fragile_atomic_load_ptr(
+    ptr: *const *mut std::ffi::c_void,
+    order: i32,
+) -> *mut std::ffi::c_void {
     unsafe {
         let atomic = &*(ptr as *const std::sync::atomic::AtomicPtr<std::ffi::c_void>);
         atomic.load(to_ordering(order))
@@ -576,7 +579,11 @@ pub extern "C" fn fragile_atomic_load_ptr(ptr: *const *mut std::ffi::c_void, ord
 
 /// Atomic store for pointer values.
 #[no_mangle]
-pub extern "C" fn fragile_atomic_store_ptr(ptr: *mut *mut std::ffi::c_void, value: *mut std::ffi::c_void, order: i32) {
+pub extern "C" fn fragile_atomic_store_ptr(
+    ptr: *mut *mut std::ffi::c_void,
+    value: *mut std::ffi::c_void,
+    order: i32,
+) {
     unsafe {
         let atomic = &*(ptr as *const std::sync::atomic::AtomicPtr<std::ffi::c_void>);
         atomic.store(value, to_ordering(order));
@@ -585,7 +592,11 @@ pub extern "C" fn fragile_atomic_store_ptr(ptr: *mut *mut std::ffi::c_void, valu
 
 /// Atomic exchange for pointer values.
 #[no_mangle]
-pub extern "C" fn fragile_atomic_exchange_ptr(ptr: *mut *mut std::ffi::c_void, value: *mut std::ffi::c_void, order: i32) -> *mut std::ffi::c_void {
+pub extern "C" fn fragile_atomic_exchange_ptr(
+    ptr: *mut *mut std::ffi::c_void,
+    value: *mut std::ffi::c_void,
+    order: i32,
+) -> *mut std::ffi::c_void {
     unsafe {
         let atomic = &*(ptr as *const std::sync::atomic::AtomicPtr<std::ffi::c_void>);
         atomic.swap(value, to_ordering(order))
@@ -738,13 +749,8 @@ mod tests {
 
         // Should fail - expected doesn't match
         expected = 42; // wrong expected value
-        let result = fragile_atomic_compare_exchange_strong_32(
-            &mut value,
-            &mut expected,
-            200,
-            5,
-            5,
-        );
+        let result =
+            fragile_atomic_compare_exchange_strong_32(&mut value, &mut expected, 200, 5, 5);
         assert_eq!(result, 0);
         assert_eq!(expected, 100); // expected updated to actual value
     }

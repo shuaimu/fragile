@@ -144,10 +144,23 @@ pub unsafe extern "C" fn fopen(filename: *const c_char, mode: *const c_char) -> 
 
     for ch in mode.chars() {
         match ch {
-            'r' => { has_read = true; }
-            'w' => { has_write = true; truncate = true; create = true; }
-            'a' => { has_append = true; has_write = true; create = true; }
-            '+' => { has_read = true; has_write = true; }
+            'r' => {
+                has_read = true;
+            }
+            'w' => {
+                has_write = true;
+                truncate = true;
+                create = true;
+            }
+            'a' => {
+                has_append = true;
+                has_write = true;
+                create = true;
+            }
+            '+' => {
+                has_read = true;
+                has_write = true;
+            }
             'b' => { /* binary mode - no effect on Unix */ }
             'x' => { /* exclusive create - handled separately */ }
             _ => {}
@@ -233,12 +246,16 @@ pub unsafe extern "C" fn fread(
         };
         match result {
             Ok(0) => {
-                file_struct.eof.store(true, core::sync::atomic::Ordering::SeqCst);
+                file_struct
+                    .eof
+                    .store(true, core::sync::atomic::Ordering::SeqCst);
                 0
             }
             Ok(bytes_read) => bytes_read / size,
             Err(_) => {
-                file_struct.error.store(true, core::sync::atomic::Ordering::SeqCst);
+                file_struct
+                    .error
+                    .store(true, core::sync::atomic::Ordering::SeqCst);
                 0
             }
         }
@@ -277,7 +294,9 @@ pub unsafe extern "C" fn fwrite(
         match result {
             Ok(bytes_written) => bytes_written / size,
             Err(_) => {
-                file_struct.error.store(true, core::sync::atomic::Ordering::SeqCst);
+                file_struct
+                    .error
+                    .store(true, core::sync::atomic::Ordering::SeqCst);
                 0
             }
         }
@@ -310,14 +329,18 @@ pub unsafe extern "C" fn fseeko(stream: *mut FILE, offset: off_t, whence: c_int)
     let file_struct = &*stream;
 
     // Clear EOF flag on seek
-    file_struct.eof.store(false, core::sync::atomic::Ordering::SeqCst);
+    file_struct
+        .eof
+        .store(false, core::sync::atomic::Ordering::SeqCst);
     // Clear ungetc buffer on seek
-    file_struct.ungetc_buf.store(-1, core::sync::atomic::Ordering::SeqCst);
+    file_struct
+        .ungetc_buf
+        .store(-1, core::sync::atomic::Ordering::SeqCst);
 
     let seek_from = match whence {
-        0 => SeekFrom::Start(offset as u64),      // SEEK_SET
-        1 => SeekFrom::Current(offset),            // SEEK_CUR
-        2 => SeekFrom::End(offset),                // SEEK_END
+        0 => SeekFrom::Start(offset as u64), // SEEK_SET
+        1 => SeekFrom::Current(offset),      // SEEK_CUR
+        2 => SeekFrom::End(offset),          // SEEK_END
         _ => return -1,
     };
 
@@ -330,7 +353,9 @@ pub unsafe extern "C" fn fseeko(stream: *mut FILE, offset: off_t, whence: c_int)
         match result {
             Ok(_) => 0,
             Err(_) => {
-                file_struct.error.store(true, core::sync::atomic::Ordering::SeqCst);
+                file_struct
+                    .error
+                    .store(true, core::sync::atomic::Ordering::SeqCst);
                 -1
             }
         }
@@ -371,7 +396,9 @@ pub unsafe extern "C" fn ftello(stream: *mut FILE) -> off_t {
         match result {
             Ok(pos) => pos as off_t,
             Err(_) => {
-                file_struct.error.store(true, core::sync::atomic::Ordering::SeqCst);
+                file_struct
+                    .error
+                    .store(true, core::sync::atomic::Ordering::SeqCst);
                 -1
             }
         }
@@ -406,7 +433,9 @@ pub unsafe extern "C" fn fflush(stream: *mut FILE) -> c_int {
         match result {
             Ok(_) => 0,
             Err(_) => {
-                file_struct.error.store(true, core::sync::atomic::Ordering::SeqCst);
+                file_struct
+                    .error
+                    .store(true, core::sync::atomic::Ordering::SeqCst);
                 EOF
             }
         }
@@ -462,8 +491,12 @@ pub unsafe extern "C" fn clearerr(stream: *mut FILE) {
         return;
     }
     let file_struct = &*stream;
-    file_struct.error.store(false, core::sync::atomic::Ordering::SeqCst);
-    file_struct.eof.store(false, core::sync::atomic::Ordering::SeqCst);
+    file_struct
+        .error
+        .store(false, core::sync::atomic::Ordering::SeqCst);
+    file_struct
+        .eof
+        .store(false, core::sync::atomic::Ordering::SeqCst);
 }
 
 /// Get file number (descriptor).
@@ -498,7 +531,9 @@ pub unsafe extern "C" fn fgetc(stream: *mut FILE) -> c_int {
     let file_struct = &*stream;
 
     // Check ungetc buffer first
-    let ungetc_val = file_struct.ungetc_buf.swap(-1, core::sync::atomic::Ordering::SeqCst);
+    let ungetc_val = file_struct
+        .ungetc_buf
+        .swap(-1, core::sync::atomic::Ordering::SeqCst);
     if ungetc_val >= 0 {
         return ungetc_val;
     }
@@ -512,12 +547,16 @@ pub unsafe extern "C" fn fgetc(stream: *mut FILE) -> c_int {
         };
         match result {
             Ok(0) => {
-                file_struct.eof.store(true, core::sync::atomic::Ordering::SeqCst);
+                file_struct
+                    .eof
+                    .store(true, core::sync::atomic::Ordering::SeqCst);
                 EOF
             }
             Ok(_) => byte[0] as c_int,
             Err(_) => {
-                file_struct.error.store(true, core::sync::atomic::Ordering::SeqCst);
+                file_struct
+                    .error
+                    .store(true, core::sync::atomic::Ordering::SeqCst);
                 EOF
             }
         }
@@ -566,7 +605,9 @@ pub unsafe extern "C" fn fputc(c: c_int, stream: *mut FILE) -> c_int {
         match result {
             Ok(1) => c as u8 as c_int,
             _ => {
-                file_struct.error.store(true, core::sync::atomic::Ordering::SeqCst);
+                file_struct
+                    .error
+                    .store(true, core::sync::atomic::Ordering::SeqCst);
                 EOF
             }
         }
@@ -605,7 +646,9 @@ pub unsafe extern "C" fn ungetc(c: c_int, stream: *mut FILE) -> c_int {
     let file_struct = &*stream;
 
     // Clear EOF flag
-    file_struct.eof.store(false, core::sync::atomic::Ordering::SeqCst);
+    file_struct
+        .eof
+        .store(false, core::sync::atomic::Ordering::SeqCst);
 
     // Try to store in ungetc buffer (only one char guaranteed)
     let prev = file_struct.ungetc_buf.compare_exchange(
@@ -647,7 +690,9 @@ pub unsafe extern "C" fn fputs(s: *const c_char, stream: *mut FILE) -> c_int {
         match result {
             Ok(_) => 0,
             Err(_) => {
-                file_struct.error.store(true, core::sync::atomic::Ordering::SeqCst);
+                file_struct
+                    .error
+                    .store(true, core::sync::atomic::Ordering::SeqCst);
                 EOF
             }
         }
