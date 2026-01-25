@@ -52,14 +52,45 @@ const RUST_KEYWORDS: &[&str] = &[
     "override", "priv", "try", "typeof", "unsized", "virtual", "yield",
 ];
 
-/// Information about a virtual method for trait generation.
-#[derive(Clone)]
-struct VirtualMethodInfo {
+/// Information about a virtual method for vtable generation.
+/// This represents a single entry in a C++ vtable.
+#[derive(Clone, Debug)]
+struct VTableEntry {
+    /// Method name (e.g., "what", "~exception")
     name: String,
+    /// Return type of the method
     return_type: CppType,
+    /// Parameters (excluding implicit this/self)
     params: Vec<(String, CppType)>,
-    #[allow(dead_code)] // Reserved for future use (const vs mutable self)
+    /// True if method is const (affects self mutability)
     is_const: bool,
+    /// True if method is pure virtual (= 0)
+    is_pure_virtual: bool,
+    /// Class where this method was originally declared (for override tracking)
+    declaring_class: String,
+    /// Index in the vtable (assigned during vtable construction)
+    vtable_index: usize,
+}
+
+/// Backward compatibility alias for existing code
+type VirtualMethodInfo = VTableEntry;
+
+/// Complete vtable information for a polymorphic C++ class.
+/// This includes both inherited and declared virtual methods.
+#[derive(Clone, Debug)]
+struct ClassVTableInfo {
+    /// Class name this vtable is for
+    class_name: String,
+    /// All vtable entries (inherited + declared), in vtable order
+    entries: Vec<VTableEntry>,
+    /// Direct polymorphic base class name (for single inheritance chain)
+    /// For multiple inheritance, see secondary_vtables
+    base_class: Option<String>,
+    /// True if class is abstract (has any pure virtual methods)
+    is_abstract: bool,
+    /// Secondary vtables for multiple inheritance (base class -> vtable entries)
+    /// These are separate vtables for non-primary polymorphic bases
+    secondary_vtables: Vec<(String, Vec<VTableEntry>)>,
 }
 
 #[derive(Clone)]
@@ -139,6 +170,12 @@ pub struct AstCodeGen {
     virtual_bases: HashMap<String, Vec<String>>,
     /// Map from class name to its virtual methods
     virtual_methods: HashMap<String, Vec<VirtualMethodInfo>>,
+    /// Complete vtable information per polymorphic class
+    /// Built during analysis phase, used during code generation
+    vtables: HashMap<String, ClassVTableInfo>,
+    /// Track which methods are overridden in derived classes
+    /// Key: (class_name, method_name), Value: original declaring class
+    method_overrides: HashMap<(String, String), String>,
     /// Map from (class_name, member_name) to global variable name for static members
     static_members: HashMap<(String, String), String>,
     /// Track global variable names (require unsafe access)
@@ -204,6 +241,8 @@ impl AstCodeGen {
             class_bases: HashMap::new(),
             virtual_bases: HashMap::new(),
             virtual_methods: HashMap::new(),
+            vtables: HashMap::new(),
+            method_overrides: HashMap::new(),
             static_members: HashMap::new(),
             global_vars: HashSet::new(),
             current_namespace: Vec::new(),
@@ -326,14 +365,18 @@ impl AstCodeGen {
                     return_type,
                     params,
                     is_virtual,
+                    is_pure_virtual,
                     ..
                 } => {
                     if *is_virtual {
-                        virtual_methods.push(VirtualMethodInfo {
+                        virtual_methods.push(VTableEntry {
                             name: name.clone(),
                             return_type: return_type.clone(),
                             params: params.clone(),
-                            is_const: false, // TODO: track const-ness
+                            is_const: false, // TODO: Parse const from method qualifiers when available
+                            is_pure_virtual: *is_pure_virtual,
+                            declaring_class: class_name.to_string(),
+                            vtable_index: virtual_methods.len(), // Will be updated during full vtable construction
                         });
                     }
                 }

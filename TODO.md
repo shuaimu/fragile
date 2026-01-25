@@ -494,7 +494,8 @@ The current approach in `crates/fragile-clang/src/types.rs:183-580` has special-
   - [x] **22.14.4** Update tests expecting `Box`/`Arc`/`Weak` to expect pass-through types ✅
 
 - [ ] **22.15** Add new E2E tests for STL usage
-  - [ ] **22.15.1** Test `std::vector` operations (push_back, iterator, etc.)
+  - [x] **22.15.1** Test `std::vector` operations (push_back, iterator, etc.) ✅ 2026-01-25
+    - Covered by Task 23.8: push_back, size, iterator, reserve, resize, capacity all working
   - [ ] **22.15.2** Test `std::string` operations
   - [ ] **22.15.3** Test `std::map`/`std::unordered_map` operations
   - [ ] **22.15.4** Test smart pointer usage
@@ -971,11 +972,11 @@ fn call_what(e: *const exception) -> *const i8 {
 
 ### Implementation Plan
 
-- [ ] **25.1** Design vtable data structures
-  - [ ] **25.1.1** Define VTableEntry struct (method name, return type, param types, is_pure_virtual)
-  - [ ] **25.1.2** Define ClassVTable struct (class name, entries, base class vtable if any)
-  - [ ] **25.1.3** Track inheritance hierarchy (class → direct bases, class → all virtual methods)
-  - [ ] **25.1.4** Handle multiple inheritance (multiple vtable pointers)
+- [x] **25.1** Design vtable data structures ✅ 2026-01-25
+  - [x] **25.1.1** Define VTableEntry struct (method name, return type, param types, is_pure_virtual)
+  - [x] **25.1.2** Define ClassVTableInfo struct (class name, entries, base class, is_abstract, secondary_vtables)
+  - [x] **25.1.3** Add vtables and method_overrides HashMaps to AstCodeGen
+  - [x] **25.1.4** Handle multiple inheritance (secondary_vtables field in ClassVTableInfo)
 
 - [ ] **25.2** Parse virtual method information
   - [ ] **25.2.1** Collect all virtual methods from class and bases (merge overrides)
