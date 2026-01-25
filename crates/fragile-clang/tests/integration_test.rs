@@ -4939,3 +4939,140 @@ fn test_e2e_stack() {
         "Stack with array storage should work correctly"
     );
 }
+
+/// E2E test: 2x2 Matrix with operator overloading
+/// Tests: 2D array access, operator overloading, static factory methods
+#[test]
+fn test_e2e_matrix2x2() {
+    let source = r#"
+        class Matrix2x2 {
+            float m[2][2];
+        public:
+            // Default constructor (identity matrix)
+            Matrix2x2() {
+                m[0][0] = 1; m[0][1] = 0;
+                m[1][0] = 0; m[1][1] = 1;
+            }
+
+            // Constructor with values
+            Matrix2x2(float a00, float a01, float a10, float a11) {
+                m[0][0] = a00; m[0][1] = a01;
+                m[1][0] = a10; m[1][1] = a11;
+            }
+
+            // Static factory: zero matrix
+            static Matrix2x2 zero() {
+                return Matrix2x2(0, 0, 0, 0);
+            }
+
+            // Element access (getter only - setter would require fixing const detection)
+            float get(int row, int col) const { return m[row][col]; }
+
+            // Matrix addition
+            Matrix2x2 operator+(const Matrix2x2& other) const {
+                return Matrix2x2(
+                    m[0][0] + other.m[0][0], m[0][1] + other.m[0][1],
+                    m[1][0] + other.m[1][0], m[1][1] + other.m[1][1]
+                );
+            }
+
+            // Matrix multiplication (single overload to avoid overload resolution issues)
+            Matrix2x2 operator*(const Matrix2x2& other) const {
+                return Matrix2x2(
+                    m[0][0] * other.m[0][0] + m[0][1] * other.m[1][0],
+                    m[0][0] * other.m[0][1] + m[0][1] * other.m[1][1],
+                    m[1][0] * other.m[0][0] + m[1][1] * other.m[1][0],
+                    m[1][0] * other.m[0][1] + m[1][1] * other.m[1][1]
+                );
+            }
+
+            // Scalar multiplication via named method (avoids overload resolution)
+            Matrix2x2 scale(float s) const {
+                return Matrix2x2(
+                    m[0][0] * s, m[0][1] * s,
+                    m[1][0] * s, m[1][1] * s
+                );
+            }
+
+            // Equality
+            bool operator==(const Matrix2x2& other) const {
+                return m[0][0] == other.m[0][0] && m[0][1] == other.m[0][1] &&
+                       m[1][0] == other.m[1][0] && m[1][1] == other.m[1][1];
+            }
+
+            bool operator!=(const Matrix2x2& other) const {
+                return !(*this == other);
+            }
+
+            // Determinant
+            float det() const {
+                return m[0][0] * m[1][1] - m[0][1] * m[1][0];
+            }
+
+            // Trace
+            float trace() const {
+                return m[0][0] + m[1][1];
+            }
+        };
+
+        int main() {
+            // Test default constructor (identity)
+            Matrix2x2 identity;
+            if (identity.get(0, 0) != 1 || identity.get(0, 1) != 0) return 1;
+            if (identity.get(1, 0) != 0 || identity.get(1, 1) != 1) return 2;
+
+            // Test parameterized constructor
+            Matrix2x2 a(1, 2, 3, 4);
+            if (a.get(0, 0) != 1 || a.get(0, 1) != 2) return 3;
+            if (a.get(1, 0) != 3 || a.get(1, 1) != 4) return 4;
+
+            // Test static factory
+            Matrix2x2 z = Matrix2x2::zero();
+            if (z.get(0, 0) != 0 || z.get(1, 1) != 0) return 5;
+
+            // Test addition
+            Matrix2x2 b(5, 6, 7, 8);
+            Matrix2x2 sum = a + b;  // [6,8; 10,12]
+            if (sum.get(0, 0) != 6 || sum.get(0, 1) != 8) return 6;
+            if (sum.get(1, 0) != 10 || sum.get(1, 1) != 12) return 7;
+
+            // Test matrix multiplication: identity * a = a
+            Matrix2x2 prod = identity * a;
+            if (prod != a) return 8;
+
+            // Test matrix multiplication: a * b
+            // [1,2] * [5,6] = [1*5+2*7, 1*6+2*8] = [19, 22]
+            // [3,4]   [7,8]   [3*5+4*7, 3*6+4*8]   [43, 50]
+            Matrix2x2 ab = a * b;
+            if (ab.get(0, 0) != 19 || ab.get(0, 1) != 22) return 9;
+            if (ab.get(1, 0) != 43 || ab.get(1, 1) != 50) return 10;
+
+            // Test scalar multiplication (via named method)
+            Matrix2x2 scaled = a.scale(2);  // [2,4; 6,8]
+            if (scaled.get(0, 0) != 2 || scaled.get(1, 1) != 8) return 11;
+
+            // Test equality
+            Matrix2x2 a_copy(1, 2, 3, 4);
+            if (a != a_copy) return 12;
+            if (a == b) return 13;
+
+            // Test determinant: det([1,2; 3,4]) = 1*4 - 2*3 = -2
+            float d = a.det();
+            if (d != -2) return 14;
+
+            // Test trace: trace([1,2; 3,4]) = 1 + 4 = 5
+            float t = a.trace();
+            if (t != 5) return 15;
+
+            return 0;  // Success
+        }
+    "#;
+
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_matrix2x2.cpp").expect("E2E test failed");
+
+    assert_eq!(
+        exit_code, 0,
+        "Matrix2x2 with operator overloading should work correctly"
+    );
+}

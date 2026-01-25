@@ -9853,8 +9853,18 @@ impl AstCodeGen {
                         // For pointer dereference, subscript, or static member on left side, wrap entire assignment in unsafe
                         // Strip literal suffix on RHS - Rust infers type from LHS
                         let left_raw = self.expr_to_string_raw(&node.children[0]);
-                        let right_raw =
+                        let right_str =
                             strip_literal_suffix(&self.expr_to_string_raw(&node.children[1]));
+
+                        // Check if left side is float type and right side is integer literal
+                        let left_type = Self::get_expr_type(&node.children[0]);
+                        let left_is_float = matches!(left_type, Some(CppType::Float | CppType::Double));
+                        let right_raw = if left_is_float && is_integer_literal_str(&right_str) {
+                            int_literal_to_float(&right_str)
+                        } else {
+                            right_str
+                        };
+
                         format!("unsafe {{ {} {} {} }}", left_raw, op_str, right_raw)
                     } else if matches!(
                         op,
@@ -9872,7 +9882,18 @@ impl AstCodeGen {
                     ) {
                         // For assignment operators, strip literal suffix on RHS - Rust infers from LHS
                         let left = self.expr_to_string(&node.children[0]);
-                        let right = strip_literal_suffix(&self.expr_to_string(&node.children[1]));
+                        let right_str = strip_literal_suffix(&self.expr_to_string(&node.children[1]));
+
+                        // Check if left side is float type and right side is integer literal
+                        // Rust requires float literals (e.g., 1.0) when assigning to float
+                        let left_type = Self::get_expr_type(&node.children[0]);
+                        let left_is_float = matches!(left_type, Some(CppType::Float | CppType::Double));
+                        let right = if left_is_float && is_integer_literal_str(&right_str) {
+                            int_literal_to_float(&right_str)
+                        } else {
+                            right_str
+                        };
+
                         format!("{} {} {}", left, op_str, right)
                     } else if matches!(
                         op,
