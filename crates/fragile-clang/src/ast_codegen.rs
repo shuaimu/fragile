@@ -4151,6 +4151,11 @@ impl AstCodeGen {
         self.writeln("pub fn strtold(_s: *const i8, _endptr: *mut *mut i8) -> f64 { 0.0 }");
         self.writeln("");
 
+        // glibc internal variable stubs
+        self.writeln("// glibc internal variable stubs");
+        self.writeln("pub static __libc_single_threaded: i8 = 0;");
+        self.writeln("");
+
         // fragile_runtime stub for memory allocation
         self.writeln("// fragile_runtime stub for memory allocation");
         self.writeln("pub mod fragile_runtime {");
