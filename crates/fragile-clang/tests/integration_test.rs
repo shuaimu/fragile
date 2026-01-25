@@ -4846,3 +4846,96 @@ fn test_e2e_vector2d() {
         "Vec2 class with operator overloading should work correctly"
     );
 }
+
+/// E2E test: Stack (array-based) with push/pop operations
+/// Tests: array indexing, bounds checking, copy semantics
+#[test]
+fn test_e2e_stack() {
+    let source = r#"
+        // Fixed-size stack (non-template for simplicity)
+        class IntStack {
+            static const int CAPACITY = 10;
+            int data[10];
+            int top;
+        public:
+            IntStack() : top(-1) {}
+
+            bool empty() const { return top < 0; }
+            bool full() const { return top >= CAPACITY - 1; }
+            int size() const { return top + 1; }
+
+            bool push(int value) {
+                if (full()) return false;
+                data[++top] = value;
+                return true;
+            }
+
+            bool pop(int* out) {
+                if (empty()) return false;
+                *out = data[top--];
+                return true;
+            }
+
+            int peek() const {
+                return data[top];
+            }
+        };
+
+        int main() {
+            IntStack s;
+
+            // Test empty stack
+            if (!s.empty()) return 1;
+            if (s.size() != 0) return 2;
+
+            // Test push
+            if (!s.push(10)) return 3;
+            if (s.empty()) return 4;
+            if (s.size() != 1) return 5;
+            if (s.peek() != 10) return 6;
+
+            // Test multiple pushes
+            if (!s.push(20)) return 7;
+            if (!s.push(30)) return 8;
+            if (s.size() != 3) return 9;
+            if (s.peek() != 30) return 10;
+
+            // Test pop
+            int val;
+            if (!s.pop(&val)) return 11;
+            if (val != 30) return 12;
+            if (s.size() != 2) return 13;
+
+            // Pop remaining
+            if (!s.pop(&val)) return 14;
+            if (val != 20) return 15;
+            if (!s.pop(&val)) return 16;
+            if (val != 10) return 17;
+
+            // Stack should be empty
+            if (!s.empty()) return 18;
+
+            // Pop from empty should fail
+            if (s.pop(&val)) return 19;
+
+            // Fill up to test full()
+            for (int i = 0; i < 10; i++) {
+                if (!s.push(i * 2)) return 20;
+            }
+            if (!s.full()) return 21;
+
+            // Push to full should fail
+            if (s.push(100)) return 22;
+
+            return 0;  // Success
+        }
+    "#;
+
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_stack.cpp").expect("E2E test failed");
+
+    assert_eq!(
+        exit_code, 0,
+        "Stack with array storage should work correctly"
+    );
+}
