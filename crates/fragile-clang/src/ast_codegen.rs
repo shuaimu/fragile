@@ -1690,6 +1690,14 @@ impl AstCodeGen {
             self.ptr_vars.clear();
             self.arr_vars.clear();
 
+            // Track reference parameters - they are converted to pointers in Rust,
+            // so accesses need to be dereferenced (handled by ref_vars tracking)
+            for (param_name, param_ty) in &template_info.params {
+                if matches!(param_ty, CppType::Reference { .. }) {
+                    self.ref_vars.insert(param_name.clone());
+                }
+            }
+
             // Generate the body statements with type substitution
             self.generate_fn_template_body(body, &subst_map);
 
@@ -1749,6 +1757,12 @@ impl AstCodeGen {
                         if let Some(init_node) = init_expr {
                             let init = self.expr_to_string(init_node);
                             let init = self.substitute_type_in_expr(&init, subst_map);
+                            // Wrap in unsafe if the initializer dereferences a pointer
+                            let init = if Self::needs_unsafe_wrapper(&init) {
+                                format!("unsafe {{ {} }}", init)
+                            } else {
+                                init
+                            };
                             self.writeln(&format!("let mut {}: {} = {};", var_name, rust_ty, init));
                         } else {
                             // No initializer, need a default value
@@ -1775,10 +1789,42 @@ impl AstCodeGen {
                 let expr = self.expr_to_string(node);
                 let expr = self.substitute_type_in_expr(&expr, subst_map);
                 if !expr.is_empty() && expr != "()" {
-                    self.writeln(&format!("{};", expr));
+                    // Wrap in unsafe if the expression dereferences a pointer
+                    if Self::needs_unsafe_wrapper(&expr) {
+                        self.writeln(&format!("unsafe {{ {} }};", expr));
+                    } else {
+                        self.writeln(&format!("{};", expr));
+                    }
                 }
             }
         }
+    }
+
+    /// Check if an expression needs to be wrapped in an unsafe block.
+    /// This is true if the expression contains a raw pointer dereference that isn't already unsafe.
+    fn needs_unsafe_wrapper(expr: &str) -> bool {
+        // If it already starts with "unsafe {", no need to wrap
+        if expr.trim_start().starts_with("unsafe {") {
+            return false;
+        }
+        // Check for dereference patterns: *varname (not in string literals)
+        // Simple heuristic: contains '*' followed by an identifier char, and not inside quotes
+        let bytes = expr.as_bytes();
+        let mut in_string = false;
+        let mut i = 0;
+        while i < bytes.len() {
+            if bytes[i] == b'"' || bytes[i] == b'\'' {
+                in_string = !in_string;
+            } else if !in_string && bytes[i] == b'*' && i + 1 < bytes.len() {
+                let next = bytes[i + 1];
+                // Check if this looks like a pointer dereference (followed by identifier)
+                if next.is_ascii_alphabetic() || next == b'_' {
+                    return true;
+                }
+            }
+            i += 1;
+        }
+        false
     }
 
     /// Substitute template type names in an expression string.

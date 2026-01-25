@@ -1307,6 +1307,41 @@ fn test_e2e_function_template_pointer_params() {
     );
 }
 
+/// Test function template with reference parameters.
+/// Verifies that templates like swap(T& a, T& b) extract T correctly.
+#[test]
+fn test_e2e_function_template_reference_params() {
+    let source = r#"
+        template<typename T>
+        void swap_ref(T& a, T& b) {
+            T tmp = a;
+            a = b;
+            b = tmp;
+        }
+
+        int main() {
+            // Test 1: swap two integers via references
+            int x = 50, y = 150;
+            swap_ref(x, y);
+            if (x != 150 || y != 50) return 1;
+
+            // Test 2: swap again to verify
+            swap_ref(x, y);
+            if (x != 50 || y != 150) return 2;
+
+            return 0;  // All tests passed
+        }
+    "#;
+
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_function_template_ref.cpp").expect("E2E test failed");
+
+    assert_eq!(
+        exit_code, 0,
+        "function template with reference parameters should work correctly"
+    );
+}
+
 /// Test function returning struct (rvalue handling).
 #[test]
 fn test_e2e_function_returning_struct() {
