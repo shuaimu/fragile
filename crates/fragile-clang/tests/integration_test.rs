@@ -5732,10 +5732,7 @@ fn test_e2e_quicksort() {
     let (exit_code, _stdout, _stderr) =
         transpile_compile_run(source, "e2e_quicksort.cpp").expect("E2E test failed");
 
-    assert_eq!(
-        exit_code, 0,
-        "QuickSort should sort arrays correctly"
-    );
+    assert_eq!(exit_code, 0, "QuickSort should sort arrays correctly");
 }
 
 /// E2E test: Doubly Linked List with bidirectional iteration
@@ -5981,10 +5978,7 @@ fn test_e2e_doubly_linked_list() {
     let (exit_code, _stdout, _stderr) =
         transpile_compile_run(source, "e2e_doubly_linked_list.cpp").expect("E2E test failed");
 
-    assert_eq!(
-        exit_code, 0,
-        "Doubly linked list should work correctly"
-    );
+    assert_eq!(exit_code, 0, "Doubly linked list should work correctly");
 }
 
 /// E2E test: Circular Buffer (Ring Buffer)
@@ -6169,10 +6163,7 @@ fn test_e2e_circular_buffer() {
     let (exit_code, _stdout, _stderr) =
         transpile_compile_run(source, "e2e_circular_buffer.cpp").expect("E2E test failed");
 
-    assert_eq!(
-        exit_code, 0,
-        "Circular buffer should work correctly"
-    );
+    assert_eq!(exit_code, 0, "Circular buffer should work correctly");
 }
 
 /// E2E test: Merge Sort (out-of-place)
@@ -6310,10 +6301,7 @@ fn test_e2e_merge_sort() {
     let (exit_code, _stdout, _stderr) =
         transpile_compile_run(source, "e2e_merge_sort.cpp").expect("E2E test failed");
 
-    assert_eq!(
-        exit_code, 0,
-        "Merge sort should sort arrays correctly"
-    );
+    assert_eq!(exit_code, 0, "Merge sort should sort arrays correctly");
 }
 
 /// E2E test: Expression Tree with polymorphic nodes
@@ -6480,10 +6468,7 @@ fn test_e2e_expression_tree() {
     let (exit_code, _stdout, _stderr) =
         transpile_compile_run(source, "e2e_expression_tree.cpp").expect("E2E test failed");
 
-    assert_eq!(
-        exit_code, 0,
-        "Expression tree should evaluate correctly"
-    );
+    assert_eq!(exit_code, 0, "Expression tree should evaluate correctly");
 }
 
 /// E2E test: Simple Object Pool
@@ -6683,10 +6668,7 @@ fn test_e2e_object_pool() {
     let (exit_code, _stdout, _stderr) =
         transpile_compile_run(source, "e2e_object_pool.cpp").expect("E2E test failed");
 
-    assert_eq!(
-        exit_code, 0,
-        "Object pool should work correctly"
-    );
+    assert_eq!(exit_code, 0, "Object pool should work correctly");
 }
 
 /// E2E test: Finite State Machine
@@ -6825,10 +6807,7 @@ fn test_e2e_state_machine() {
     let (exit_code, _stdout, _stderr) =
         transpile_compile_run(source, "e2e_state_machine.cpp").expect("E2E test failed");
 
-    assert_eq!(
-        exit_code, 0,
-        "State machine should work correctly"
-    );
+    assert_eq!(exit_code, 0, "State machine should work correctly");
 }
 
 /// E2E test: Simple Calculator with operator precedence
@@ -6936,10 +6915,7 @@ fn test_e2e_calculator() {
     let (exit_code, _stdout, _stderr) =
         transpile_compile_run(source, "e2e_calculator.cpp").expect("E2E test failed");
 
-    assert_eq!(
-        exit_code, 0,
-        "Calculator should work correctly"
-    );
+    assert_eq!(exit_code, 0, "Calculator should work correctly");
 }
 
 /// E2E test: Switch with const int and char literals
@@ -7253,10 +7229,7 @@ fn test_e2e_bit_manipulation() {
     let (exit_code, _stdout, _stderr) =
         transpile_compile_run(source, "e2e_bit_manipulation.cpp").expect("E2E test failed");
 
-    assert_eq!(
-        exit_code, 0,
-        "Bit manipulation should work correctly"
-    );
+    assert_eq!(exit_code, 0, "Bit manipulation should work correctly");
 }
 
 /// E2E test: 2D matrix operations
@@ -7418,10 +7391,7 @@ fn test_e2e_matrix_operations() {
     let (exit_code, _stdout, _stderr) =
         transpile_compile_run(source, "e2e_matrix_operations.cpp").expect("E2E test failed");
 
-    assert_eq!(
-        exit_code, 0,
-        "Matrix operations should work correctly"
-    );
+    assert_eq!(exit_code, 0, "Matrix operations should work correctly");
 }
 
 /// E2E test: String comparison utilities
@@ -7596,10 +7566,7 @@ fn test_e2e_string_utilities() {
     let (exit_code, _stdout, _stderr) =
         transpile_compile_run(source, "e2e_string_utilities.cpp").expect("E2E test failed");
 
-    assert_eq!(
-        exit_code, 0,
-        "String utilities should work correctly"
-    );
+    assert_eq!(exit_code, 0, "String utilities should work correctly");
 }
 
 /// E2E test: Command-line argument parsing pattern
@@ -7822,10 +7789,7 @@ fn test_e2e_cli_arg_parser() {
     let (exit_code, _stdout, _stderr) =
         transpile_compile_run(source, "e2e_cli_arg_parser.cpp").expect("E2E test failed");
 
-    assert_eq!(
-        exit_code, 0,
-        "CLI argument parser should work correctly"
-    );
+    assert_eq!(exit_code, 0, "CLI argument parser should work correctly");
 }
 
 /// E2E test: Simple assertion library pattern
@@ -8007,10 +7971,7 @@ fn test_e2e_assertion_library() {
     let (exit_code, _stdout, _stderr) =
         transpile_compile_run(source, "e2e_assertion_library.cpp").expect("E2E test failed");
 
-    assert_eq!(
-        exit_code, 0,
-        "Assertion library should work correctly"
-    );
+    assert_eq!(exit_code, 0, "Assertion library should work correctly");
 }
 
 /// E2E test: Ring buffer (circular queue) implementation
@@ -8152,10 +8113,7 @@ fn test_e2e_ring_buffer() {
     let (exit_code, _stdout, _stderr) =
         transpile_compile_run(source, "e2e_ring_buffer.cpp").expect("E2E test failed");
 
-    assert_eq!(
-        exit_code, 0,
-        "Ring buffer should work correctly"
-    );
+    assert_eq!(exit_code, 0, "Ring buffer should work correctly");
 }
 
 /// E2E test: LRU Cache pattern
@@ -8339,10 +8297,7 @@ fn test_e2e_lru_cache() {
     let (exit_code, _stdout, _stderr) =
         transpile_compile_run(source, "e2e_lru_cache.cpp").expect("E2E test failed");
 
-    assert_eq!(
-        exit_code, 0,
-        "LRU cache should work correctly"
-    );
+    assert_eq!(exit_code, 0, "LRU cache should work correctly");
 }
 
 /// E2E test: Tokenizer/Lexer pattern
@@ -8538,10 +8493,7 @@ fn test_e2e_tokenizer() {
     let (exit_code, _stdout, _stderr) =
         transpile_compile_run(source, "e2e_tokenizer.cpp").expect("E2E test failed");
 
-    assert_eq!(
-        exit_code, 0,
-        "Tokenizer should work correctly"
-    );
+    assert_eq!(exit_code, 0, "Tokenizer should work correctly");
 }
 
 /// E2E test: Prime number generation
@@ -8831,10 +8783,7 @@ fn test_e2e_recursive_algorithms() {
     let (exit_code, _stdout, _stderr) =
         transpile_compile_run(source, "e2e_recursive_algorithms.cpp").expect("E2E test failed");
 
-    assert_eq!(
-        exit_code, 0,
-        "Recursive algorithms should work correctly"
-    );
+    assert_eq!(exit_code, 0, "Recursive algorithms should work correctly");
 }
 
 /// E2E test: Union-Find (Disjoint Set) data structure
@@ -10544,8 +10493,7 @@ fn test_e2e_abstract_class_inherited_method() {
     "#;
 
     let (exit_code, _stdout, _stderr) =
-        transpile_compile_run(source, "e2e_abstract_class_inherited.cpp")
-            .expect("E2E test failed");
+        transpile_compile_run(source, "e2e_abstract_class_inherited.cpp").expect("E2E test failed");
 
     assert_eq!(
         exit_code, 0,

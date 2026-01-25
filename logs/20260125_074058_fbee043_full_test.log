@@ -1,0 +1,310 @@
+
+running 12 tests
+test compile_commands::tests::test_get_opt_level ... ok
+test compile_commands::tests::test_get_other_flags ... ok
+test compile_commands::tests::test_find_command ... ok
+test compile_commands::tests::test_has_debug_info ... ok
+test compile_commands::tests::test_get_warning_flags ... ok
+test compile_commands::tests::test_parse_compile_commands ... ok
+test config::tests::test_get_includes ... ok
+test config::tests::test_get_lib_paths ... ok
+test config::tests::test_circular_deps_detection ... ok
+test tests::test_basic_config ... ok
+test config::tests::test_parse_config ... ok
+test config::tests::test_get_link_deps ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 42 tests
+test ast_codegen::tests::test_async_coroutine_with_task_return ... ok
+test ast_codegen::tests::test_variadic_function ... ok
+test ast_codegen::tests::test_simple_function ... ok
+test ast_codegen::tests::test_coroutine_without_value_type ... ok
+test ast_codegen::tests::test_bit_field_mixed_with_regular ... ok
+test ast_codegen::tests::test_non_coroutine_function ... ok
+test ast_codegen::tests::test_bit_field_multiple_groups ... ok
+test ast_codegen::tests::test_if_statement ... ok
+test parse::tests::test_module_import_decl_variant ... ok
+test ast_codegen::tests::test_generator_coroutine_with_value_type ... ok
+test ast_codegen::tests::test_bit_field_packing ... ok
+test types::tests::test_bit_width_no_fixed_width ... ok
+test types::tests::test_bit_width_primitive_types ... ok
+test types::tests::test_inline_namespace_stripping ... ok
+test parse::tests::test_parse_simple_function ... ok
+test types::tests::test_bit_width_pointer_and_reference ... ok
+test types::tests::test_is_signed_integer_types ... ok
+test parse::tests::test_float_literal_type_double ... ok
+test types::tests::test_parse_template_args ... ok
+test parse::tests::test_parse_namespace ... ok
+test parse::tests::test_integer_literal_type_unsigned_long ... ok
+test types::tests::test_smart_pointer_type_mappings ... ok
+test parse::tests::test_parse_lvalue_reference_parameter ... ok
+test types::tests::test_std_array_type_mapping ... ok
+test parse::tests::test_integer_literal_type_long ... ok
+test types::tests::test_std_span_type_mapping ... ok
+test parse::tests::test_parse_rvalue_reference_parameter ... ok
+test types::tests::test_std_variant_type_mapping ... ok
+test types::tests::test_stream_type_mappings ... ok
+test parse::tests::test_mangled_name_for_simple_function ... ok
+test parse::tests::test_float_literal_type_float ... ok
+test parse::tests::test_bool_literal_true ... ok
+test parse::tests::test_parse_constructor_with_initializer_list ... ok
+test parse::tests::test_integer_literal_type_int ... ok
+test parse::tests::test_bool_literal_false ... ok
+test parse::tests::test_parse_const_lvalue_reference_parameter ... ok
+test parse::tests::test_integer_literal_type_unsigned ... ok
+test parse::tests::test_parse_anonymous_namespace ... ok
+test parse::tests::test_string_literal_empty ... ok
+test parse::tests::test_parse_using_nested_namespace ... ok
+test parse::tests::test_string_literal ... ok
+test parse::tests::test_parse_using_namespace ... ok
+
+test result: ok. 42 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+
+running 20 tests
+test test_14_struct_constructor ... ok
+test test_15_pointers ... ok
+test test_09_break_continue ... ok
+test test_12_struct_basic ... ok
+test test_03_logical ... ok
+test test_10_functions ... ok
+test test_08_nested_loops ... ok
+test test_07_for_loop ... ok
+test test_11_recursion ... ok
+test test_02_comparisons ... ok
+test test_18_ternary ... ok
+test test_19_do_while ... ok
+test test_17_arrays ... ok
+test test_01_arithmetic ... ok
+test test_04_bitwise ... ok
+test test_13_struct_methods ... ok
+test test_20_nested_struct ... ok
+test test_05_if_else ... ok
+test test_16_references ... ok
+test test_06_while_loop ... ok
+
+test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.33s
+
+
+running 130 tests
+test test_control_flow ... ok
+test test_debug_array_init_ast ... ok
+test test_e2e_lru_cache ... ignored
+test test_e2e_assignment_operators ... ok
+test test_e2e_const_methods ... ok
+test test_e2e_destructor ... ok
+test test_e2e_ctor_body_stmts ... ok
+test test_e2e_designated_initializers ... ok
+test test_e2e_anonymous_struct ... ok
+test test_e2e_comma_operator ... ok
+test test_e2e_function_template_reference_params ... ok
+test test_e2e_array_new_delete ... ok
+test test_e2e_function_template_pointer_params ... ok
+test test_e2e_functor ... ok
+test test_e2e_arrow_operator ... ok
+test test_e2e_abstract_class_inherited_method ... ok
+test test_e2e_circular_buffer ... ok
+test test_e2e_enum_class ... ok
+test test_e2e_copy_constructor ... ok
+test test_e2e_dynamic_dispatch ... ok
+test test_e2e_casts ... ok
+test test_e2e_function_pointers ... ok
+test test_e2e_function_template_multiple_params ... ok
+test test_e2e_anonymous_namespace ... ok
+test test_e2e_bitset_operations ... ok
+test test_e2e_event_queue ... ok
+test test_e2e_doubly_linked_list ... ok
+test test_e2e_function_returning_struct ... ok
+test test_e2e_linked_list ... ok
+test test_e2e_deref_operator ... ok
+test test_e2e_std_get ... ignored
+test test_e2e_factorial ... ok
+test test_e2e_inheritance ... ok
+test test_e2e_deep_inheritance ... ok
+test test_e2e_std_visit ... ignored
+test test_e2e_anonymous_union ... ok
+test test_e2e_for_loop ... ok
+test test_e2e_lambda_basic ... ok
+test test_e2e_arrays ... ok
+test test_e2e_exception_handling ... ok
+test test_e2e_binary_search_tree ... ok
+test test_e2e_bit_manipulation ... ok
+test test_e2e_tokenizer ... ignored
+test test_e2e_trie ... ignored
+test test_e2e_cli_arg_parser ... ok
+test test_e2e_default_params ... ok
+test test_e2e_integer_parsing ... ok
+test test_e2e_lambda_captures ... ok
+test test_e2e_increment_decrement ... ok
+test test_e2e_base_constructor ... ok
+test test_e2e_heapsort ... ok
+test test_e2e_global_array ... ok
+test test_e2e_matrix2x2 ... ok
+test test_e2e_matrix_operations ... ok
+test test_e2e_expression_evaluator ... ok
+test test_e2e_function_template ... ok
+test test_e2e_global_var ... ok
+test test_e2e_merge_sort ... ok
+test test_generate_stubs ... ok
+test test_generate_rust_code ... ok
+test test_end_to_end ... ok
+test test_e2e_deref_postinc ... ok
+test test_e2e_calculator ... ok
+test test_namespace_function ... ok
+test test_e2e_multiple_inheritance ... ok
+test test_libcxx_cstddef_transpilation ... ok
+test test_e2e_min_heap ... ok
+test test_e2e_access_specifiers ... ok
+test test_e2e_constructor ... ok
+test test_parse_add_function ... ok
+test test_e2e_interval_ops ... ok
+test test_while_loop ... ok
+test test_libcxx_cstdint_transpilation ... ok
+test test_e2e_assertion_library ... ok
+test test_e2e_function_ptr_callbacks ... ok
+test test_operator_new_delete_mapping ... ok
+test test_libcxx_initializer_list_transpilation ... ok
+test test_e2e_dynamic_cast ... ok
+test test_e2e_insertion_sort ... ok
+test test_runtime_function_name_mapping ... ok
+test test_libcxx_type_traits_transpilation ... ok
+test test_e2e_generic_lambda ... ok
+test test_e2e_expression_tree ... ok
+test test_e2e_runtime_pthread ... ok
+test test_e2e_runtime_file_io ... ok
+test test_e2e_smart_ptr_stub ... ok
+test test_e2e_operator_overloading ... ok
+test test_e2e_nullptr ... ok
+test test_e2e_namespace_path_resolution ... ok
+test test_e2e_references ... ok
+test test_e2e_quicksort ... ok
+test test_e2e_std_unordered_map_stub ... ok
+test test_e2e_pointers ... ok
+test test_e2e_namespaces ... ok
+test test_e2e_nested_control ... ok
+test test_e2e_new_delete ... ok
+test test_e2e_recursive_algorithms ... ok
+test test_e2e_object_pool ... ok
+test test_e2e_point_2d ... ok
+test test_e2e_std_string_stub ... ok
+test test_e2e_sizeof_alignof ... ok
+test test_e2e_switch ... ok
+test test_e2e_static_members ... ok
+test test_e2e_range_for ... ok
+test test_e2e_subscript_operator ... ok
+test test_e2e_string_literals_and_char_casts ... ok
+test test_e2e_prime_sieve ... ok
+test test_e2e_simple_add ... ok
+test test_e2e_ring_buffer ... ok
+test test_e2e_state_machine ... ok
+test test_e2e_stl_algorithm_stub ... ok
+test test_e2e_selection_sort ... ok
+test test_e2e_string_pattern_matching ... ok
+test test_e2e_stack ... ok
+test test_e2e_vector2d ... ok
+test test_e2e_typedef ... ok
+test test_e2e_struct_methods ... ok
+test test_e2e_union_find ... ok
+test test_e2e_switch_const_and_char ... ok
+test test_e2e_while_loop ... ok
+test test_e2e_simple_graph ... ok
+test test_libcxx_cstddef_compilation ... ok
+test test_e2e_simple_hash_table ... ok
+test test_e2e_virtual_diamond ... ok
+test test_e2e_vtable_rtti ... ok
+test test_e2e_virtual_override ... ok
+test test_e2e_string_utilities ... ok
+test test_libcxx_vector_transpilation ... ok
+test test_libcxx_iostream_transpilation ... ok
+test test_libcxx_thread_transpilation ... ok
+
+test result: ok. 125 passed; 0 failed; 5 ignored; 0 measured; 0 filtered out; finished in 8.07s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 48 tests
+test atomic::tests::test_atomic_32_compare_exchange ... ok
+test atomic::tests::test_atomic_32_exchange ... ok
+test atomic::tests::test_atomic_32_fetch_sub ... ok
+test atomic::tests::test_atomic_64_operations ... ok
+test atomic::tests::test_atomic_bitwise ... ok
+test atomic::tests::test_atomic_32_fetch_add ... ok
+test atomic::tests::test_atomic_ptr ... ok
+test atomic::tests::test_atomic_bool ... ok
+test atomic::tests::test_atomic_32_load_store ... ok
+test atomic::tests::test_memory_fence ... ok
+test atomic::tests::test_memory_orderings ... ok
+test memory::tests::test_calloc ... ok
+test memory::tests::test_free_null ... ok
+test memory::tests::test_malloc_free ... ok
+test memory::tests::test_realloc ... ok
+test memory::tests::test_malloc_zero_size ... ok
+test atomic::tests::test_multithread_atomic ... ok
+test pthread::tests::test_pthread_attr ... ok
+test pthread::tests::test_pthread_self ... ok
+test pthread_cond::tests::test_cond_init_destroy ... ok
+test pthread_cond::tests::test_condattr ... ok
+test pthread_mutex::tests::test_mutex_init_destroy ... ok
+test pthread::tests::test_pthread_create_join ... ok
+test pthread_mutex::tests::test_mutex_trylock ... ok
+test pthread_mutex::tests::test_mutex_lock_unlock ... ok
+test pthread_cond::tests::test_cond_signal_no_waiters ... ok
+test pthread_mutex::tests::test_mutexattr ... ok
+test pthread_rwlock::tests::test_rwlock_init_destroy ... ok
+test pthread_rwlock::tests::test_rwlock_multiple_readers ... ok
+test pthread_rwlock::tests::test_rwlock_rdlock_unlock ... ok
+test pthread_rwlock::tests::test_rwlock_tryrdlock ... ok
+test pthread_rwlock::tests::test_rwlock_writer_excludes_readers ... ok
+test pthread_rwlock::tests::test_rwlock_trywrlock ... ok
+test pthread_rwlock::tests::test_rwlock_wrlock_unlock ... ok
+test pthread_mutex::tests::test_mutex_multithread ... ok
+test rtti::tests::test_before ... ok
+test rtti::tests::test_hash_code ... ok
+test rtti::tests::test_type_info_of ... ok
+test pthread_rwlock::tests::test_rwlockattr ... ok
+test rtti::tests::test_name ... ok
+test stdio::tests::test_fopen_fclose ... ok
+test stdio::tests::test_standard_streams ... ok
+test stdio::tests::test_fputc_fgetc ... ok
+test stdio::tests::test_fseek_ftell ... ok
+test stdio::tests::test_fwrite_fread ... ok
+test stdio::tests::test_ungetc ... ok
+test stdio::tests::test_fputs_fgets ... ok
+test pthread_cond::tests::test_cond_signal_wait ... ok
+
+test result: ok. 48 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 3 tests
+test crates/fragile-clang/src/lib.rs - transpile_cpp_to_rust (line 37) ... ignored
+test crates/fragile-clang/src/types.rs - types::CppType::substitute (line 706) ... ignored
+test crates/fragile-clang/src/types.rs - types::parse_template_args (line 18) ... ignored
+
+test result: ok. 0 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

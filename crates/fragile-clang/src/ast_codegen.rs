@@ -796,10 +796,7 @@ impl AstCodeGen {
             let method_name = sanitize_identifier(&entry.name);
 
             // Handle overloaded methods by adding suffix for duplicates
-            let wrapper_key = format!(
-                "{}_vtable_{}",
-                sanitized_class, base_method_name_for_fn
-            );
+            let wrapper_key = format!("{}_vtable_{}", sanitized_class, base_method_name_for_fn);
             let count = wrapper_counts.entry(wrapper_key.clone()).or_insert(0);
             let method_name_for_fn = if *count == 0 {
                 *count += 1;
@@ -1761,7 +1758,8 @@ impl AstCodeGen {
                 || param_str.contains("_CharT")  // Skip unresolved template params
                 || param_str.contains("__va_list_tag")  // Skip variadic internal types
                 || param_str.contains("int (")  // Skip C-style function pointer: int (*)(...)
-                || param_str.contains("void (")  // Skip C-style function pointer: void (*)(...)
+                || param_str.contains("void (")
+            // Skip C-style function pointer: void (*)(...)
             {
                 // C-style function pointer syntax like void (*)(void *) can't be parsed by Rust
                 return;
@@ -1777,7 +1775,8 @@ impl AstCodeGen {
             || ret_type.contains("_CharT")
             || ret_type.contains("__va_list_tag")
             || ret_type.contains("__gnu_cxx::")  // Skip GCC extension types
-            || ret_type.contains("__enable_if")  // Skip SFINAE return types
+            || ret_type.contains("__enable_if")
+        // Skip SFINAE return types
         {
             return;
         }
@@ -3910,8 +3909,7 @@ impl AstCodeGen {
         // System/pthread type stubs for libc++ threading support
         // Mark as generated to prevent duplicate struct definitions
         self.writeln("// System type stubs for libc++ threading");
-        self.generated_structs
-            .insert("__locale_struct".to_string());
+        self.generated_structs.insert("__locale_struct".to_string());
         self.generated_structs
             .insert("pthread_mutexattr_t".to_string());
         self.writeln("pub type __locale_struct = std::ffi::c_void;");
@@ -3932,13 +3930,15 @@ impl AstCodeGen {
         // Template placeholder type aliases for uninstantiated templates
         self.writeln("// Template placeholder stubs for uninstantiated template types");
         self.writeln("pub type basic_string__CharT___Traits___Allocator = std::ffi::c_void;");
-        self.writeln("pub type basic_string_view_type_parameter_0_0__type_parameter_0_1 = std::ffi::c_void;");
+        self.writeln(
+            "pub type basic_string_view_type_parameter_0_0__type_parameter_0_1 = std::ffi::c_void;",
+        );
         self.writeln("pub type basic_string_type_parameter_0_0__char_traits_type_parameter_0_0__allocator_type_parameter_0_0 = std::ffi::c_void;");
         self.writeln("pub type basic_string_type_parameter_0_1__char_traits_type_parameter_0_1__type_parameter_0_2 = std::ffi::c_void;");
         self.writeln("pub type initializer_list_type_parameter_0_0 = std::ffi::c_void;");
         self.writeln("pub type optional__Tp = std::ffi::c_void;");
         self.writeln("pub type string_type = std::ffi::c_void;");
-        self.writeln("pub type std_locale = std::ffi::c_void;");  // Stub - will be generated from iostream
+        self.writeln("pub type std_locale = std::ffi::c_void;"); // Stub - will be generated from iostream
         self.writeln("");
 
         // Iterator wrapper type stubs (skipped from generation but referenced)
@@ -3975,8 +3975,12 @@ impl AstCodeGen {
         // Template instantiation placeholders (for libstdc++ basic_string template)
         self.writeln("// libstdc++ template placeholders");
         self.writeln("pub type basic_string__CharT___Traits___Alloc = std::ffi::c_void;");
-        self.writeln("pub type basic_streambuf_type_parameter_0_0__type_parameter_0_1 = std::ffi::c_void;");
-        self.writeln("pub type basic_ios_type_parameter_0_0__type_parameter_0_1 = std::ffi::c_void;");
+        self.writeln(
+            "pub type basic_streambuf_type_parameter_0_0__type_parameter_0_1 = std::ffi::c_void;",
+        );
+        self.writeln(
+            "pub type basic_ios_type_parameter_0_0__type_parameter_0_1 = std::ffi::c_void;",
+        );
         self.writeln("pub type __normal_iterator_typename___alloc_traits_type_parameter_0_2__typename_type_parameter_0_2_value_type_const_pointer__basic_string__CharT___Traits___Alloc = std::ffi::c_void;");
         self.writeln("pub type __normal_iterator_typename___alloc_traits_type_parameter_0_2__typename_type_parameter_0_2_value_type_pointer__basic_string__CharT___Traits___Alloc = std::ffi::c_void;");
         self.writeln("pub type reverse_iterator___normal_iterator_typename___alloc_traits_type_parameter_0_2__typename_type_parameter_0_2_value_type_const_pointer__basic_string__CharT___Traits___Alloc = std::ffi::c_void;");
@@ -4028,7 +4032,9 @@ impl AstCodeGen {
 
         // More type stubs for libstdc++
         self.writeln("// More libstdc++ type stubs");
-        self.writeln("pub type basic_ostream_type_parameter_0_0__type_parameter_0_1 = std::ffi::c_void;");
+        self.writeln(
+            "pub type basic_ostream_type_parameter_0_0__type_parameter_0_1 = std::ffi::c_void;",
+        );
         self.writeln("pub type memory_resource = std::ffi::c_void;");
         self.writeln("");
 
@@ -5203,7 +5209,11 @@ impl AstCodeGen {
                 }
                 *param_name_counts.get_mut(&sanitize_identifier(n)).unwrap() += 1;
                 // Add `mut` if this parameter is assigned to in the body
-                let mut_prefix = if assigned_params.contains(n) { "mut " } else { "" };
+                let mut_prefix = if assigned_params.contains(n) {
+                    "mut "
+                } else {
+                    ""
+                };
                 format!("{}{}: {}", mut_prefix, param_name, type_str)
             })
             .collect::<Vec<_>>()
@@ -5249,7 +5259,7 @@ impl AstCodeGen {
             let struct_name = format!("{}Generator", to_pascal_case(&func_name));
             self.writeln(&format!(
                 "pub fn {}({}){} {{",
-                func_name,  // Already sanitized above
+                func_name, // Already sanitized above
                 params_str,
                 ret_str
             ));
@@ -5283,7 +5293,7 @@ impl AstCodeGen {
                 "pub {}{}fn {}({}){} {{",
                 async_keyword,
                 extern_c,
-                func_name,  // Already sanitized above
+                func_name, // Already sanitized above
                 params_with_variadic,
                 ret_str
             ));
@@ -5617,7 +5627,11 @@ impl AstCodeGen {
                 if *is_static {
                     return false;
                 }
-                if let CppType::Array { element, size: Some(n) } = ty {
+                if let CppType::Array {
+                    element,
+                    size: Some(n),
+                } = ty
+                {
                     if *n > 32 {
                         // Check if element type is non-primitive (needs manual Default impl)
                         !matches!(
@@ -8194,7 +8208,11 @@ impl AstCodeGen {
                         }
                         *param_name_counts.get_mut(&sanitize_identifier(n)).unwrap() += 1;
                         // Add `mut` if this parameter is assigned to in the body
-                        let mut_prefix = if assigned_params.contains(n) { "mut " } else { "" };
+                        let mut_prefix = if assigned_params.contains(n) {
+                            "mut "
+                        } else {
+                            ""
+                        };
                         format!("{}{}: {}", mut_prefix, param_name, t.to_rust_type_str())
                     })
                     .collect::<Vec<_>>()
@@ -8841,7 +8859,8 @@ impl AstCodeGen {
                                 self.skip_literal_suffix = false;
                                 // If expression is unsupported or errored, fall back to default
                                 // Common error patterns: "unsupported", "/* call error */"
-                                if expr.contains("unsupported") || expr.contains("/* call error */") {
+                                if expr.contains("unsupported") || expr.contains("/* call error */")
+                                {
                                     format!(" = {}", default_value_for_type(ty))
                                 } else if is_ref {
                                     // Reference initialization: add &mut or & prefix
@@ -10485,7 +10504,8 @@ impl AstCodeGen {
 
                         // Check if left side is float type and right side is integer literal
                         let left_type = Self::get_expr_type(&node.children[0]);
-                        let left_is_float = matches!(left_type, Some(CppType::Float | CppType::Double));
+                        let left_is_float =
+                            matches!(left_type, Some(CppType::Float | CppType::Double));
                         let right_raw = if left_is_float && is_integer_literal_str(&right_str) {
                             int_literal_to_float(&right_str)
                         } else {
@@ -10509,12 +10529,14 @@ impl AstCodeGen {
                     ) {
                         // For assignment operators, strip literal suffix on RHS - Rust infers from LHS
                         let left = self.expr_to_string(&node.children[0]);
-                        let right_str = strip_literal_suffix(&self.expr_to_string(&node.children[1]));
+                        let right_str =
+                            strip_literal_suffix(&self.expr_to_string(&node.children[1]));
 
                         // Check if left side is float type and right side is integer literal
                         // Rust requires float literals (e.g., 1.0) when assigning to float
                         let left_type = Self::get_expr_type(&node.children[0]);
-                        let left_is_float = matches!(left_type, Some(CppType::Float | CppType::Double));
+                        let left_is_float =
+                            matches!(left_type, Some(CppType::Float | CppType::Double));
                         let right = if left_is_float && is_integer_literal_str(&right_str) {
                             int_literal_to_float(&right_str)
                         } else {
@@ -10532,15 +10554,19 @@ impl AstCodeGen {
                             | BinaryOp::Ge
                     ) {
                         // For comparison operators, strip literal suffixes - Rust infers compatible types
-                        let left_str = strip_literal_suffix(&self.expr_to_string(&node.children[0]));
-                        let right_str = strip_literal_suffix(&self.expr_to_string(&node.children[1]));
+                        let left_str =
+                            strip_literal_suffix(&self.expr_to_string(&node.children[0]));
+                        let right_str =
+                            strip_literal_suffix(&self.expr_to_string(&node.children[1]));
 
                         // Check if one side is float and the other is an integer literal
                         // Rust requires float literals (e.g., 0.0) when comparing with floats
                         let left_type = Self::get_expr_type(&node.children[0]);
                         let right_type = Self::get_expr_type(&node.children[1]);
-                        let left_is_float = matches!(left_type, Some(CppType::Float | CppType::Double));
-                        let right_is_float = matches!(right_type, Some(CppType::Float | CppType::Double));
+                        let left_is_float =
+                            matches!(left_type, Some(CppType::Float | CppType::Double));
+                        let right_is_float =
+                            matches!(right_type, Some(CppType::Float | CppType::Double));
 
                         let left = if right_is_float && is_integer_literal_str(&left_str) {
                             int_literal_to_float(&left_str)
@@ -10570,14 +10596,18 @@ impl AstCodeGen {
                             | BinaryOp::Rem
                     ) {
                         // For arithmetic operators, strip literal suffixes and handle float/int mixing
-                        let left_str = strip_literal_suffix(&self.expr_to_string(&node.children[0]));
-                        let right_str = strip_literal_suffix(&self.expr_to_string(&node.children[1]));
+                        let left_str =
+                            strip_literal_suffix(&self.expr_to_string(&node.children[0]));
+                        let right_str =
+                            strip_literal_suffix(&self.expr_to_string(&node.children[1]));
 
                         // Check if one side is float and the other is an integer literal
                         let left_type = Self::get_expr_type(&node.children[0]);
                         let right_type = Self::get_expr_type(&node.children[1]);
-                        let left_is_float = matches!(left_type, Some(CppType::Float | CppType::Double));
-                        let right_is_float = matches!(right_type, Some(CppType::Float | CppType::Double));
+                        let left_is_float =
+                            matches!(left_type, Some(CppType::Float | CppType::Double));
+                        let right_is_float =
+                            matches!(right_type, Some(CppType::Float | CppType::Double));
 
                         let left = if right_is_float && is_integer_literal_str(&left_str) {
                             int_literal_to_float(&left_str)
@@ -10654,15 +10684,22 @@ impl AstCodeGen {
                             if let ClangNodeKind::ArraySubscriptExpr { .. } = &child.kind {
                                 if child.children.len() >= 2 {
                                     let arr_type = Self::get_expr_type(&child.children[0]);
-                                    let is_pointer = matches!(arr_type, Some(CppType::Pointer { .. }))
-                                        || matches!(arr_type, Some(CppType::Array { size: None, .. }))
-                                        || self.is_ptr_var_expr(&child.children[0]);
+                                    let is_pointer =
+                                        matches!(arr_type, Some(CppType::Pointer { .. }))
+                                            || matches!(
+                                                arr_type,
+                                                Some(CppType::Array { size: None, .. })
+                                            )
+                                            || self.is_ptr_var_expr(&child.children[0]);
 
                                     if is_pointer {
                                         let arr = self.expr_to_string(&child.children[0]);
                                         let idx = self.expr_to_string(&child.children[1]);
                                         // Pointer arithmetic requires unsafe block
-                                        return format!("unsafe {{ {}.add(({}) as usize) }}", arr, idx);
+                                        return format!(
+                                            "unsafe {{ {}.add(({}) as usize) }}",
+                                            arr, idx
+                                        );
                                     }
                                 }
                             }
@@ -11486,7 +11523,8 @@ impl AstCodeGen {
                                 // Strip namespace prefix and template arguments from BOTH sides for comparison
                                 // (e.g., std::ctype<char> -> ctype, std::_Bit_reference -> _Bit_reference)
                                 let name_base = Self::strip_namespace_and_template(&name);
-                                let decl_class_base = Self::strip_namespace_and_template(decl_class);
+                                let decl_class_base =
+                                    Self::strip_namespace_and_template(decl_class);
                                 // Compare base names (without namespaces or template args)
                                 if name_base != decl_class_base {
                                     // Need base access - get correct field for MI support
@@ -11566,8 +11604,7 @@ impl AstCodeGen {
                         // E.g., `cache->entries[i].valid` should become:
                         // `unsafe { (*(*cache).entries.add(i as usize)).valid }`
                         // NOT: `unsafe { *unsafe { (*cache).entries }.add(i) }.valid`
-                        let base_has_ptr_subscript =
-                            self.is_pointer_subscript(&node.children[0]);
+                        let base_has_ptr_subscript = self.is_pointer_subscript(&node.children[0]);
                         if base_has_ptr_subscript && !is_type_ref {
                             let base_raw = self.expr_to_string_raw(&node.children[0]);
                             // If base_raw starts with *, parenthesize it for correct precedence
@@ -11597,7 +11634,8 @@ impl AstCodeGen {
                                 // Strip namespace prefix and template arguments from BOTH sides for comparison
                                 // (e.g., std::ctype<char> -> ctype, std::_Bit_reference -> _Bit_reference)
                                 let current_base = Self::strip_namespace_and_template(current);
-                                let decl_class_base = Self::strip_namespace_and_template(decl_class);
+                                let decl_class_base =
+                                    Self::strip_namespace_and_template(decl_class);
                                 // Compare base names (without namespaces or template args)
                                 if current_base != decl_class_base {
                                     let access =
@@ -12598,7 +12636,7 @@ fn sanitize_type_for_fn_name(ty: &str) -> String {
         .replace(';', "_")
         .replace('(', "_")
         .replace(')', "_")
-        .replace('"', "_")  // Handle quotes in extern "C" linkage specifiers
+        .replace('"', "_") // Handle quotes in extern "C" linkage specifiers
 }
 
 /// Get default value for a type.
