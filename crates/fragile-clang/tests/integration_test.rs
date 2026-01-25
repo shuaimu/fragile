@@ -5737,3 +5737,581 @@ fn test_e2e_quicksort() {
         "QuickSort should sort arrays correctly"
     );
 }
+
+/// E2E test: Doubly Linked List with bidirectional iteration
+/// Tests: two pointers per node, forward/backward traversal, insertion at both ends
+#[test]
+fn test_e2e_doubly_linked_list() {
+    let source = r#"
+        // Doubly Linked List implementation
+        // Tests bidirectional pointers, insertion, deletion, traversal
+
+        struct DLLNode {
+            int data;
+            DLLNode* prev;
+            DLLNode* next;
+        };
+
+        struct DoublyLinkedList {
+            DLLNode* head;
+            DLLNode* tail;
+            int size_;
+
+            void init() {
+                head = nullptr;
+                tail = nullptr;
+                size_ = 0;
+            }
+
+            void push_front(int val) {
+                DLLNode* node = new DLLNode;
+                node->data = val;
+                node->prev = nullptr;
+                node->next = head;
+
+                if (head) {
+                    head->prev = node;
+                } else {
+                    tail = node;
+                }
+                head = node;
+                size_++;
+            }
+
+            void push_back(int val) {
+                DLLNode* node = new DLLNode;
+                node->data = val;
+                node->next = nullptr;
+                node->prev = tail;
+
+                if (tail) {
+                    tail->next = node;
+                } else {
+                    head = node;
+                }
+                tail = node;
+                size_++;
+            }
+
+            int pop_front() {
+                if (!head) return -1;
+                DLLNode* node = head;
+                int val = node->data;
+                head = head->next;
+                if (head) {
+                    head->prev = nullptr;
+                } else {
+                    tail = nullptr;
+                }
+                delete node;
+                size_--;
+                return val;
+            }
+
+            int pop_back() {
+                if (!tail) return -1;
+                DLLNode* node = tail;
+                int val = node->data;
+                tail = tail->prev;
+                if (tail) {
+                    tail->next = nullptr;
+                } else {
+                    head = nullptr;
+                }
+                delete node;
+                size_--;
+                return val;
+            }
+
+            int front() const {
+                return head ? head->data : -1;
+            }
+
+            int back() const {
+                return tail ? tail->data : -1;
+            }
+
+            int size() const {
+                return size_;
+            }
+
+            bool empty() const {
+                return size_ == 0;
+            }
+
+            // Check consistency: forward count == backward count == size_
+            bool isConsistent() const {
+                int forwardCount = 0;
+                DLLNode* curr = head;
+                while (curr) {
+                    forwardCount++;
+                    curr = curr->next;
+                }
+
+                int backwardCount = 0;
+                curr = tail;
+                while (curr) {
+                    backwardCount++;
+                    curr = curr->prev;
+                }
+
+                return forwardCount == size_ && backwardCount == size_;
+            }
+
+            // Sum all elements traversing forward
+            int sumForward() const {
+                int sum = 0;
+                DLLNode* curr = head;
+                while (curr) {
+                    sum += curr->data;
+                    curr = curr->next;
+                }
+                return sum;
+            }
+
+            // Sum all elements traversing backward
+            int sumBackward() const {
+                int sum = 0;
+                DLLNode* curr = tail;
+                while (curr) {
+                    sum += curr->data;
+                    curr = curr->prev;
+                }
+                return sum;
+            }
+
+            void clear() {
+                while (head) {
+                    DLLNode* next = head->next;
+                    delete head;
+                    head = next;
+                }
+                tail = nullptr;
+                size_ = 0;
+            }
+        };
+
+        int main() {
+            DoublyLinkedList list;
+            list.init();
+
+            // Test 1: Empty list
+            if (!list.empty()) return 1;
+            if (list.size() != 0) return 2;
+            if (!list.isConsistent()) return 3;
+
+            // Test 2: Push back
+            list.push_back(1);
+            list.push_back(2);
+            list.push_back(3);
+            if (list.size() != 3) return 4;
+            if (list.front() != 1) return 5;
+            if (list.back() != 3) return 6;
+            if (!list.isConsistent()) return 7;
+
+            // Test 3: Forward and backward sums should match
+            if (list.sumForward() != 6) return 8;
+            if (list.sumBackward() != 6) return 9;
+
+            // Test 4: Push front
+            list.push_front(0);
+            list.push_front(-1);
+            if (list.size() != 5) return 10;
+            if (list.front() != -1) return 11;
+            if (list.back() != 3) return 12;
+            if (!list.isConsistent()) return 13;
+
+            // Test 5: Pop front
+            int val = list.pop_front();
+            if (val != -1) return 14;
+            if (list.front() != 0) return 15;
+            if (list.size() != 4) return 16;
+            if (!list.isConsistent()) return 17;
+
+            // Test 6: Pop back
+            val = list.pop_back();
+            if (val != 3) return 18;
+            if (list.back() != 2) return 19;
+            if (list.size() != 3) return 20;
+            if (!list.isConsistent()) return 21;
+
+            // Test 7: Interleaved operations
+            list.push_front(10);
+            list.push_back(20);
+            // List: 10, 0, 1, 2, 20
+            if (list.size() != 5) return 22;
+            if (list.sumForward() != 33) return 23;
+            if (list.sumBackward() != 33) return 24;
+            if (!list.isConsistent()) return 25;
+
+            // Test 8: Pop until one element
+            list.pop_front();  // 0, 1, 2, 20
+            list.pop_front();  // 1, 2, 20
+            list.pop_back();   // 1, 2
+            list.pop_back();   // 1
+            if (list.size() != 1) return 26;
+            if (list.front() != 1) return 27;
+            if (list.back() != 1) return 28;
+            if (!list.isConsistent()) return 29;
+
+            // Test 9: Pop last element
+            val = list.pop_front();
+            if (val != 1) return 30;
+            if (!list.empty()) return 31;
+            if (list.front() != -1) return 32;  // -1 indicates empty
+            if (list.back() != -1) return 33;
+            if (!list.isConsistent()) return 34;
+
+            // Test 10: Operations on empty list
+            if (list.pop_front() != -1) return 35;
+            if (list.pop_back() != -1) return 36;
+
+            // Test 11: Rebuild list and clear
+            list.push_back(5);
+            list.push_back(10);
+            list.push_back(15);
+            list.clear();
+            if (!list.empty()) return 37;
+            if (!list.isConsistent()) return 38;
+
+            return 0;  // Success
+        }
+    "#;
+
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_doubly_linked_list.cpp").expect("E2E test failed");
+
+    assert_eq!(
+        exit_code, 0,
+        "Doubly linked list should work correctly"
+    );
+}
+
+/// E2E test: Circular Buffer (Ring Buffer)
+/// Tests: modular arithmetic, wrap-around, fixed-size arrays, overwrite behavior
+#[test]
+fn test_e2e_circular_buffer() {
+    let source = r#"
+        // Circular Buffer (Ring Buffer) implementation
+        // Tests modular indexing, wrap-around, full/empty detection
+
+        struct CircularBuffer {
+            int data[8];  // Fixed capacity of 8
+            int head;     // Index of first element
+            int tail;     // Index of next write position
+            int count;    // Number of elements
+
+            void init() {
+                head = 0;
+                tail = 0;
+                count = 0;
+            }
+
+            int capacity() const {
+                return 8;
+            }
+
+            int size() const {
+                return count;
+            }
+
+            bool empty() const {
+                return count == 0;
+            }
+
+            bool full() const {
+                return count == 8;
+            }
+
+            // Add element (overwrites oldest if full)
+            void push(int val) {
+                data[tail] = val;
+                tail = (tail + 1) % 8;
+                if (count < 8) {
+                    count++;
+                } else {
+                    // Overwriting oldest element, move head
+                    head = (head + 1) % 8;
+                }
+            }
+
+            // Remove and return oldest element
+            int pop() {
+                if (count == 0) return -1;
+                int val = data[head];
+                head = (head + 1) % 8;
+                count--;
+                return val;
+            }
+
+            // Peek at oldest element without removing
+            int peek() const {
+                if (count == 0) return -1;
+                return data[head];
+            }
+
+            // Peek at newest element
+            int peekBack() const {
+                if (count == 0) return -1;
+                int idx = (tail - 1 + 8) % 8;
+                return data[idx];
+            }
+
+            // Get element at logical index (0 = oldest)
+            int at(int idx) const {
+                if (idx < 0 || idx >= count) return -1;
+                int realIdx = (head + idx) % 8;
+                return data[realIdx];
+            }
+
+            // Sum all elements
+            int sum() const {
+                int total = 0;
+                for (int i = 0; i < count; i++) {
+                    total += at(i);
+                }
+                return total;
+            }
+
+            void clear() {
+                head = 0;
+                tail = 0;
+                count = 0;
+            }
+        };
+
+        int main() {
+            CircularBuffer buf;
+            buf.init();
+
+            // Test 1: Empty buffer
+            if (!buf.empty()) return 1;
+            if (buf.size() != 0) return 2;
+            if (buf.capacity() != 8) return 3;
+            if (buf.pop() != -1) return 4;
+
+            // Test 2: Push some elements
+            buf.push(1);
+            buf.push(2);
+            buf.push(3);
+            if (buf.size() != 3) return 5;
+            if (buf.peek() != 1) return 6;
+            if (buf.peekBack() != 3) return 7;
+
+            // Test 3: Pop elements
+            if (buf.pop() != 1) return 8;
+            if (buf.pop() != 2) return 9;
+            if (buf.size() != 1) return 10;
+            if (buf.peek() != 3) return 11;
+
+            // Test 4: Fill the buffer
+            buf.clear();
+            for (int i = 0; i < 8; i++) {
+                buf.push(i * 10);
+            }
+            if (!buf.full()) return 12;
+            if (buf.size() != 8) return 13;
+            if (buf.peek() != 0) return 14;
+            if (buf.peekBack() != 70) return 15;
+
+            // Test 5: Overwrite behavior
+            buf.push(80);  // Should overwrite oldest (0)
+            if (buf.size() != 8) return 16;
+            if (buf.peek() != 10) return 17;  // 0 was overwritten
+            if (buf.peekBack() != 80) return 18;
+
+            buf.push(90);  // Overwrite 10
+            buf.push(100); // Overwrite 20
+            if (buf.peek() != 30) return 19;
+            if (buf.peekBack() != 100) return 20;
+
+            // Test 6: Random access with at()
+            // Buffer now: 30, 40, 50, 60, 70, 80, 90, 100
+            if (buf.at(0) != 30) return 21;
+            if (buf.at(7) != 100) return 22;
+            if (buf.at(4) != 70) return 23;
+            if (buf.at(-1) != -1) return 24;
+            if (buf.at(8) != -1) return 25;
+
+            // Test 7: Sum of elements
+            // 30 + 40 + 50 + 60 + 70 + 80 + 90 + 100 = 520
+            if (buf.sum() != 520) return 26;
+
+            // Test 8: Pop all and verify order
+            if (buf.pop() != 30) return 27;
+            if (buf.pop() != 40) return 28;
+            if (buf.pop() != 50) return 29;
+            if (buf.pop() != 60) return 30;
+            if (buf.pop() != 70) return 31;
+            if (buf.pop() != 80) return 32;
+            if (buf.pop() != 90) return 33;
+            if (buf.pop() != 100) return 34;
+            if (!buf.empty()) return 35;
+
+            // Test 9: Wrap around with interleaved push/pop
+            buf.push(1);
+            buf.push(2);
+            buf.pop();
+            buf.push(3);
+            buf.push(4);
+            buf.pop();
+            buf.push(5);
+            // Should have: 3, 4, 5
+            if (buf.size() != 3) return 36;
+            if (buf.peek() != 3) return 37;
+            if (buf.peekBack() != 5) return 38;
+            if (buf.sum() != 12) return 39;
+
+            return 0;  // Success
+        }
+    "#;
+
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_circular_buffer.cpp").expect("E2E test failed");
+
+    assert_eq!(
+        exit_code, 0,
+        "Circular buffer should work correctly"
+    );
+}
+
+/// E2E test: Merge Sort (out-of-place)
+/// Tests: recursion, temporary array allocation, divide and conquer, pointer arithmetic
+#[test]
+fn test_e2e_merge_sort() {
+    let source = r#"
+        // Merge Sort implementation
+        // Tests recursion, array copying, merge operation
+
+        void merge(int* arr, int left, int mid, int right, int* temp) {
+            int i = left;
+            int j = mid + 1;
+            int k = left;
+
+            // Merge the two halves into temp
+            while (i <= mid && j <= right) {
+                if (arr[i] <= arr[j]) {
+                    temp[k] = arr[i];
+                    i++;
+                } else {
+                    temp[k] = arr[j];
+                    j++;
+                }
+                k++;
+            }
+
+            // Copy remaining elements from left half
+            while (i <= mid) {
+                temp[k] = arr[i];
+                i++;
+                k++;
+            }
+
+            // Copy remaining elements from right half
+            while (j <= right) {
+                temp[k] = arr[j];
+                j++;
+                k++;
+            }
+
+            // Copy back to original array
+            for (int x = left; x <= right; x++) {
+                arr[x] = temp[x];
+            }
+        }
+
+        void mergeSort(int* arr, int left, int right, int* temp) {
+            if (left < right) {
+                int mid = left + (right - left) / 2;
+                mergeSort(arr, left, mid, temp);
+                mergeSort(arr, mid + 1, right, temp);
+                merge(arr, left, mid, right, temp);
+            }
+        }
+
+        bool isSorted(int* arr, int n) {
+            for (int i = 0; i < n - 1; i++) {
+                if (arr[i] > arr[i + 1]) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        int main() {
+            // Test 1: Basic unsorted array
+            int arr1[5] = {5, 2, 8, 1, 9};
+            int temp1[5];
+            mergeSort(&arr1[0], 0, 4, &temp1[0]);
+            if (!isSorted(&arr1[0], 5)) return 1;
+            if (arr1[0] != 1 || arr1[4] != 9) return 2;
+
+            // Test 2: Already sorted
+            int arr2[4] = {1, 2, 3, 4};
+            int temp2[4];
+            mergeSort(&arr2[0], 0, 3, &temp2[0]);
+            if (!isSorted(&arr2[0], 4)) return 3;
+
+            // Test 3: Reverse sorted
+            int arr3[4] = {4, 3, 2, 1};
+            int temp3[4];
+            mergeSort(&arr3[0], 0, 3, &temp3[0]);
+            if (!isSorted(&arr3[0], 4)) return 4;
+            if (arr3[0] != 1 || arr3[3] != 4) return 5;
+
+            // Test 4: All same elements
+            int arr4[5] = {7, 7, 7, 7, 7};
+            int temp4[5];
+            mergeSort(&arr4[0], 0, 4, &temp4[0]);
+            for (int i = 0; i < 5; i++) {
+                if (arr4[i] != 7) return 6;
+            }
+
+            // Test 5: Two elements
+            int arr5[2] = {10, 5};
+            int temp5[2];
+            mergeSort(&arr5[0], 0, 1, &temp5[0]);
+            if (arr5[0] != 5 || arr5[1] != 10) return 7;
+
+            // Test 6: Single element
+            int arr6[1] = {42};
+            int temp6[1];
+            mergeSort(&arr6[0], 0, 0, &temp6[0]);
+            if (arr6[0] != 42) return 8;
+
+            // Test 7: Larger array with duplicates
+            int arr7[10] = {3, 1, 4, 1, 5, 9, 2, 6, 5, 3};
+            int temp7[10];
+            mergeSort(&arr7[0], 0, 9, &temp7[0]);
+            if (!isSorted(&arr7[0], 10)) return 9;
+            if (arr7[0] != 1 || arr7[9] != 9) return 10;
+
+            // Test 8: Negative numbers
+            int arr8[5] = {-3, 5, -1, 0, 2};
+            int temp8[5];
+            mergeSort(&arr8[0], 0, 4, &temp8[0]);
+            if (!isSorted(&arr8[0], 5)) return 11;
+            if (arr8[0] != -3 || arr8[4] != 5) return 12;
+
+            // Test 9: Stability check (first occurrence of 1 should be before second)
+            // Can't directly test stability without object identity, but verify sorted
+            int arr9[6] = {2, 1, 3, 1, 4, 1};
+            int temp9[6];
+            mergeSort(&arr9[0], 0, 5, &temp9[0]);
+            if (!isSorted(&arr9[0], 6)) return 13;
+            // Check: 1, 1, 1, 2, 3, 4
+            if (arr9[0] != 1 || arr9[1] != 1 || arr9[2] != 1) return 14;
+            if (arr9[3] != 2 || arr9[4] != 3 || arr9[5] != 4) return 15;
+
+            return 0;  // Success
+        }
+    "#;
+
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_merge_sort.cpp").expect("E2E test failed");
+
+    assert_eq!(
+        exit_code, 0,
+        "Merge sort should sort arrays correctly"
+    );
+}

@@ -14,11 +14,11 @@ We just convert the fully-resolved AST to equivalent Rust code.
 ## Current Status
 
 **Grammar Tests**: 20/20 passing
-**E2E Tests**: 95/95 passing (2 ignored due to STL header limitations)
+**E2E Tests**: 99/99 passing (2 ignored due to STL header limitations)
 **libc++ Transpilation Tests**: 8/8 passing (cstddef, cstdint, type_traits, initializer_list, vector, cstddef_compilation, iostream, thread)
 **Runtime Linking Tests**: 2/2 passing (FILE I/O, pthread)
 **Runtime Function Mapping Tests**: 1/1 passing
-**Total Tests**: 214 passing
+**Total Tests**: 218 passing
 
 **Working**:
 - Simple functions with control flow (if/else, while, for, do-while, switch, recursion)
@@ -895,6 +895,12 @@ Test against actual open-source C++ projects.
     - [x] Hash Table: pointer arrays, linked list chaining, hashing, insert/get/remove
     - [x] Min-Heap: array-based heap, complex indexing, heapify operations
     - [x] Graph: adjacency list, BFS/DFS traversal, path finding, cycle handling
+    - [x] QuickSort: recursive sorting, partition, swap, pointer arithmetic
+    - [x] Doubly Linked List: bidirectional pointers, push/pop from both ends, traversal
+    - [x] Circular Buffer: modular indexing, wrap-around, overwrite behavior
+    - [x] Merge Sort: divide and conquer, out-of-place merge, temporary arrays
+    - Fixed: Address-of pointer subscript (&arr[i] → arr.add(i as usize))
+    - Fixed: Array initialization prefers InitListExpr over array size literal
     - Fixed: Logical NOT (!ptr) on pointers → ptr.is_null()
     - Fixed: Float/int comparison (convert int literals to float when comparing)
     - Fixed: Float/int assignment (convert int literals to float when assigning)
