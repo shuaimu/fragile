@@ -4388,8 +4388,11 @@ impl AstCodeGen {
             )
         };
 
+        // Variadic extern "C" functions require unsafe in Rust
+        let unsafe_keyword = if is_variadic { "unsafe " } else { "" };
         self.writeln(&format!(
-            "pub extern \"C\" fn {}({}){} {{",
+            "pub {}extern \"C\" fn {}({}){} {{",
+            unsafe_keyword,
             sanitize_identifier(name),
             params_with_variadic,
             ret_str
@@ -5268,9 +5271,9 @@ impl AstCodeGen {
                 params_str
             };
 
-            // Variadic functions require extern "C" linkage
+            // Variadic functions require extern "C" linkage and unsafe keyword
             let (async_keyword, extern_c) = if is_variadic {
-                ("", "extern \"C\" ")
+                ("", "unsafe extern \"C\" ")
             } else if is_async {
                 ("async ", "")
             } else {
@@ -13121,10 +13124,11 @@ mod tests {
         );
 
         let code = AstCodeGen::new().generate(&ast);
-        // Should have extern "C" and variadic signature
+        // Should have unsafe extern "C" and variadic signature
+        // Rust requires unsafe for variadic extern "C" functions
         assert!(
-            code.contains("extern \"C\""),
-            "Variadic function should have extern \"C\", got:\n{}",
+            code.contains("unsafe extern \"C\""),
+            "Variadic function should have unsafe extern \"C\", got:\n{}",
             code
         );
         assert!(
@@ -13133,8 +13137,8 @@ mod tests {
             code
         );
         assert!(
-            code.contains("pub extern \"C\" fn my_printf(fmt: *const i8, ...)"),
-            "Expected 'pub extern \"C\" fn my_printf(fmt: *const i8, ...)', got:\n{}",
+            code.contains("pub unsafe extern \"C\" fn my_printf(fmt: *const i8, ...)"),
+            "Expected 'pub unsafe extern \"C\" fn my_printf(fmt: *const i8, ...)', got:\n{}",
             code
         );
     }
