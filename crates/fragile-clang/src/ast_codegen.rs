@@ -9054,6 +9054,14 @@ impl AstCodeGen {
                     {
                         // Returning *this by value - need to clone since self is a reference
                         format!("{}.clone()", expr)
+                    } else if expr == "0"
+                        && matches!(
+                            self.current_return_type,
+                            Some(CppType::Pointer { .. })
+                        )
+                    {
+                        // In C++, returning 0 or NULL for a pointer type means return null pointer
+                        "std::ptr::null()".to_string()
                     } else {
                         expr
                     };
