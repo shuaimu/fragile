@@ -2056,15 +2056,16 @@ impl AstCodeGen {
             "__builtin_is_constant_evaluated" => Some(("false".to_string(), false)),
 
             // Memory operations - map to std::ptr functions
+            // Note: C's memcpy/memmove/memset return the destination pointer
             "__builtin_memcpy" => {
-                // __builtin_memcpy(dst, src, n) -> std::ptr::copy_nonoverlapping(src, dst, n)
+                // __builtin_memcpy(dst, src, n) -> { copy_nonoverlapping(src, dst, n); dst }
                 if args.len() >= 3 {
                     // Note: memcpy copies n bytes, copy_nonoverlapping copies n elements
                     // We cast to u8 pointers to copy bytes, and count to usize
                     Some((
                         format!(
-                            "std::ptr::copy_nonoverlapping({} as *const u8, {} as *mut u8, ({}) as usize)",
-                            args[1], args[0], args[2]
+                            "{{ let __dst = {}; std::ptr::copy_nonoverlapping({} as *const u8, __dst as *mut u8, ({}) as usize); __dst }}",
+                            args[0], args[1], args[2]
                         ),
                         true,
                     ))
@@ -2073,12 +2074,12 @@ impl AstCodeGen {
                 }
             }
             "__builtin_memmove" => {
-                // __builtin_memmove(dst, src, n) -> std::ptr::copy(src, dst, n)
+                // __builtin_memmove(dst, src, n) -> { copy(src, dst, n); dst }
                 if args.len() >= 3 {
                     Some((
                         format!(
-                            "std::ptr::copy({} as *const u8, {} as *mut u8, ({}) as usize)",
-                            args[1], args[0], args[2]
+                            "{{ let __dst = {}; std::ptr::copy({} as *const u8, __dst as *mut u8, ({}) as usize); __dst }}",
+                            args[0], args[1], args[2]
                         ),
                         true,
                     ))
@@ -2087,11 +2088,11 @@ impl AstCodeGen {
                 }
             }
             "__builtin_memset" => {
-                // __builtin_memset(dst, val, n) -> std::ptr::write_bytes(dst, val, n)
+                // __builtin_memset(dst, val, n) -> { write_bytes(dst, val, n); dst }
                 if args.len() >= 3 {
                     Some((
                         format!(
-                            "std::ptr::write_bytes({} as *mut u8, ({}) as u8, ({}) as usize)",
+                            "{{ let __dst = {}; std::ptr::write_bytes(__dst as *mut u8, ({}) as u8, ({}) as usize); __dst }}",
                             args[0], args[1], args[2]
                         ),
                         true,
