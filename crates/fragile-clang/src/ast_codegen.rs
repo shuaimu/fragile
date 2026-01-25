@@ -4152,6 +4152,75 @@ impl AstCodeGen {
         self.writeln("pub type __gthread_cond_t = usize;");
         self.writeln("pub type _Words = std::ffi::c_void;");
         self.writeln("pub type _Alloc_hider = std::ffi::c_void;");
+        self.writeln("pub type pthread_mutex_t = usize;");
+        self.writeln("");
+
+        // Missing template parameter types (for libc++ iostream)
+        self.writeln("// Missing template parameter type stubs");
+        self.writeln("pub type std_exception = std::ffi::c_void;");
+        self.writeln("pub type std___format_spec___type = u32;");
+        self.writeln("pub type std___format___arg_t = u32;");
+        self.writeln("pub type std_float_round_style = i32;");
+        self.writeln("pub type std_float_denorm_style = i32;");
+        self.writeln("pub type std_errc = i32;");
+        self.writeln("pub type std_io_errc = i32;");
+        self.writeln("pub type std_type_info = std::ffi::c_void;");
+        self.writeln("pub type std__OrdResult = i32;");
+        self.writeln("pub type std___element_count = u64;");
+        self.writeln("pub type std___variant_detail__Trait = u32;");
+        self.writeln("pub type std_ios_base_seekdir = i32;");
+        self.writeln("pub type string_view = std::ffi::c_void;");
+        self.writeln("pub type wstring_view = std::ffi::c_void;");
+        self.writeln("pub type allocator_char = std::ffi::c_void;");
+        self.writeln("pub type codecvt_char16_t__char__mbstate_t = std::ffi::c_void;");
+        self.writeln("pub type codecvt_char32_t__char__mbstate_t = std::ffi::c_void;");
+        self.writeln("");
+
+        // More template parameter placeholders
+        self.writeln("// Template parameter placeholders");
+        self.writeln("pub type _State = std::ffi::c_void;");
+        self.writeln("pub type _Key = std::ffi::c_void;");
+        self.writeln("pub type _Hash = std::ffi::c_void;");
+        self.writeln("pub type _Pred = std::ffi::c_void;");
+        self.writeln("pub type _Elem = std::ffi::c_void;");
+        self.writeln("pub type _Codecvt = std::ffi::c_void;");
+        self.writeln("pub type __iterator = std::ffi::c_void;");
+        self.writeln("pub type __imp = std::ffi::c_void;");
+        self.writeln("pub type __secret_tag = std::ffi::c_void;");
+        self.writeln("pub type __advance = std::ffi::c_void;");
+        self.writeln("pub type _HashIterator = std::ffi::c_void;");
+        self.writeln("pub type auto = std::ffi::c_void;");
+        self.writeln("pub type __bitset_0__0 = std::ffi::c_void;");
+        self.writeln("pub type __formatter_char_wchar_t = std::ffi::c_void;");
+        self.writeln("");
+
+        // Format and unicode related types
+        self.writeln("// Format and unicode type stubs");
+        self.writeln("pub type std___indic_conjunct_break___property = u32;");
+        self.writeln("pub type std___unicode___consume_result__unnamed_enum_at__home_shuai_workspace_fragile_vendor_llvm_project_libcxx_include___format_unicode_h_48_3_ = u32;");
+        self.writeln("pub type std___format_spec___sign = u32;");
+        self.writeln("pub type std_basic_format_parse_context__Indexing = u32;");
+        self.writeln("");
+
+        // Pointer and iterator types
+        self.writeln("// Pointer and iterator types");
+        self.writeln("pub type __add_pointer_const_type_parameter_0_0_ = *const std::ffi::c_void;");
+        self.writeln("pub type __add_pointer_type_parameter_0_0_ = *mut std::ffi::c_void;");
+        self.writeln("pub type __bit_iterator_type_parameter_0_0__true__0 = std::ffi::c_void;");
+        self.writeln("pub type __bit_iterator_type_parameter_0_0__false__0 = std::ffi::c_void;");
+        self.writeln("pub type array__Tp___Size = std::ffi::c_void;");
+        self.writeln("pub type tuple_type_parameter_0_0_____ = std::ffi::c_void;");
+        self.writeln("pub type basic_string_view_type_parameter_0_0__char_traits_type_parameter_0_0 = std::ffi::c_void;");
+        self.writeln("pub type basic_format_arg_type_parameter_0_0 = std::ffi::c_void;");
+        self.writeln("pub type allocator_type_parameter_0_0 = std::ffi::c_void;");
+        self.writeln("pub type allocator_traits_type_parameter_0_0 = std::ffi::c_void;");
+        self.writeln("pub type __basic_format_arg_value_type_parameter_0_0 = std::ffi::c_void;");
+        self.writeln("pub type __output_buffer_type_parameter_0_0 = std::ffi::c_void;");
+        self.writeln("pub type _SentinelValueFill_type_parameter_0_1 = std::ffi::c_void;");
+        self.writeln("pub type __compressed_pair_padding_type_parameter_0_2____is_reference_or_unpadded_object__Alloc = std::ffi::c_void;");
+        self.writeln("pub type basic_string_char__std_char_traits_char__type_parameter_0_3 = std::ffi::c_void;");
+        self.writeln("pub type __tuple_impl___make_integer_seq_std___integer_sequence__unsigned_long__sizeof_____Args___type_parameter_0_0___ = std::ffi::c_void;");
+        self.writeln("pub type __make_unsigned_typename_conditional___is_primary_template_iterator_traits_remove_cvref_t__Ip_value__incrementable_traits___remove_cvref_type_parameter_0_0___iterator_traits___remove_cvref_type_parameter_0_0__type_difference_type_ = std::ffi::c_void;");
         self.writeln("");
 
         // char_traits module stub (libstdc++ uses std::char_traits)
