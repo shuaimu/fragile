@@ -841,7 +841,7 @@ Get `std::cout` working end-to-end.
     }
     ```
     - **Status**: Transpilation succeeds (128K chars → 23K LOC Rust)
-    - **Progress**: Compilation errors reduced: 65 → 1200 → 19 → 15 → 5 → 2581 (vendored) → 2256 → 2184 → 700 → 651 (libstdc++) ✅ 2026-01-25
+    - **Progress**: Compilation errors reduced: 65 → 1200 → 19 → 15 → 5 → 2581 (vendored) → 2256 → 2184 → 700 → 651 → 642 (libstdc++) ✅ 2026-01-25
     - Many fixes applied:
       - Skip variadic template instantiations (&&..., ...)
       - Skip decltype return types
@@ -866,7 +866,10 @@ Get `std::cout` working end-to-end.
       - Added exception type and vtable stub ✅ 2026-01-25
       - Skip vtable struct generation if already defined in stubs ✅ 2026-01-25
       - Fixed array initialization in function template instantiation ✅ 2026-01-25
-    - **Remaining errors**: ~651 (libstdc++) - mostly complex template issues:
+      - Fixed template specialization member access comparison ✅ 2026-01-25
+        - Strip template arguments when comparing class names (e.g., ctype<char> → ctype)
+        - Fixes incorrect self.__base._M_widen_ok → self._M_widen_ok for direct members
+    - **Remaining errors**: ~642 (libstdc++) - mostly complex template issues:
       - Type mismatches (165): u32/i32 mixing in binary operations
       - _unnamed values (26): unresolved template placeholders
       - Dereference errors (32): scalar types incorrectly dereferenced
