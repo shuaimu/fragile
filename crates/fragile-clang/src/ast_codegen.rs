@@ -4795,7 +4795,11 @@ impl AstCodeGen {
                 if node.children.is_empty() {
                     self.writeln("return;");
                 } else {
+                    // Skip literal suffixes - Rust will infer type from return type
+                    let prev_skip = self.skip_literal_suffix;
+                    self.skip_literal_suffix = true;
                     let expr = self.expr_to_string(&node.children[0]);
+                    self.skip_literal_suffix = prev_skip;
                     // Check if we need to add &mut for reference return types
                     let expr = if let Some(CppType::Reference { is_const, .. }) = &self.current_return_type {
                         // Don't add & or &mut if returning 'self' (from *this in C++)
