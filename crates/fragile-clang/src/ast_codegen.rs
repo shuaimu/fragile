@@ -687,10 +687,27 @@ impl AstCodeGen {
             // Use the declaring class's wrapper for the function pointer.
             // If this class overrides the method, declaring_class == class_name.
             // If inherited without override, declaring_class is the parent that defined it.
-            let declaring_class = sanitize_identifier(&entry.declaring_class);
+            // BUT: if declaring class is abstract, we need to use the current class's wrapper
+            // since abstract classes don't generate wrapper functions.
+            let wrapper_class = if entry.declaring_class != *class_name {
+                // Check if declaring class is abstract
+                let declaring_is_abstract = self
+                    .vtables
+                    .get(&entry.declaring_class)
+                    .map(|v| v.is_abstract)
+                    .unwrap_or(false);
+                if declaring_is_abstract {
+                    // Use current class since abstract classes don't have wrappers
+                    sanitize_identifier(class_name)
+                } else {
+                    sanitize_identifier(&entry.declaring_class)
+                }
+            } else {
+                sanitize_identifier(&entry.declaring_class)
+            };
             self.writeln(&format!(
                 "{}: {}_vtable_{},",
-                method_name, declaring_class, method_name_for_fn
+                method_name, wrapper_class, method_name_for_fn
             ));
         }
 
@@ -719,11 +736,31 @@ impl AstCodeGen {
 
         // Generate wrapper for each virtual method that this class declares/overrides
         for entry in &vtable_info.entries {
-            // Skip inherited methods that aren't overridden in this class
-            // Those will use the declaring class's wrapper
+            // Skip inherited methods that aren't overridden in this class,
+            // UNLESS the declaring class is abstract (then we need to generate wrapper here)
             if entry.declaring_class != *class_name {
-                continue;
+                // Check if declaring class is abstract
+                let declaring_is_abstract = self
+                    .vtables
+                    .get(&entry.declaring_class)
+                    .map(|v| v.is_abstract)
+                    .unwrap_or(false);
+                if !declaring_is_abstract {
+                    // Skip - the non-abstract declaring class will have the wrapper
+                    continue;
+                }
+                // Fall through to generate wrapper for inherited method from abstract class
             }
+            // Check if this is an inherited method from an abstract class
+            let is_inherited_from_abstract = if entry.declaring_class != *class_name {
+                self.vtables
+                    .get(&entry.declaring_class)
+                    .map(|v| v.is_abstract)
+                    .unwrap_or(false)
+            } else {
+                false
+            };
+
             // For composite function names, use sanitize_identifier_for_composite
             // to avoid r# prefixes in function names like Class_vtable_type
             let method_name_for_fn = sanitize_identifier_for_composite(&entry.name);
@@ -812,10 +849,19 @@ impl AstCodeGen {
                     if entry.is_const { "const" } else { "mut" },
                     sanitized_class
                 ));
-                if args.is_empty() {
-                    self.writeln(&format!("(*derived).{}()", method_name));
+                if is_inherited_from_abstract {
+                    // Method is inherited from abstract base - call through __base
+                    if args.is_empty() {
+                        self.writeln(&format!("(*derived).__base.{}()", method_name));
+                    } else {
+                        self.writeln(&format!("(*derived).__base.{}({})", method_name, args));
+                    }
                 } else {
-                    self.writeln(&format!("(*derived).{}({})", method_name, args));
+                    if args.is_empty() {
+                        self.writeln(&format!("(*derived).{}()", method_name));
+                    } else {
+                        self.writeln(&format!("(*derived).{}({})", method_name, args));
+                    }
                 }
             }
 
