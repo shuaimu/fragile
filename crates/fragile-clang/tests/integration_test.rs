@@ -2462,32 +2462,39 @@ fn test_libcxx_vector_transpilation() {
         }
     "#;
 
-    let (success, rust_code, errors) = transpile_with_vendored_libcxx(source, "test_vector.cpp");
+    let (transpile_ok, rust_code, transpile_errors, compile_ok, compile_errors) =
+        transpile_and_compile_with_vendored_libcxx(source, "test_vector.cpp");
 
-    // Log results for diagnostic purposes
     println!("=== libc++ vector transpilation test ===");
-    println!("Transpilation success: {}", success);
-    if !errors.is_empty() {
-        println!("Errors:\n{}", errors);
+    println!("Transpilation success: {}", transpile_ok);
+    println!("Generated Rust code length: {} chars", rust_code.len());
+    println!("Compilation success: {}", compile_ok);
+
+    if !transpile_errors.is_empty() {
+        println!("Transpilation errors:\n{}", transpile_errors);
     }
-    if !rust_code.is_empty() {
-        // Only print first 2000 chars to avoid overwhelming output
-        let preview = if rust_code.len() > 2000 {
+
+    if !compile_ok && !compile_errors.is_empty() {
+        // Count errors
+        let error_count = compile_errors.matches("error[E").count();
+        println!("Compilation errors: {} total", error_count);
+        // Show first 5000 chars of errors
+        let preview = if compile_errors.len() > 5000 {
             format!(
                 "{}...\n[truncated, {} more chars]",
-                &rust_code[..2000],
-                rust_code.len() - 2000
+                &compile_errors[..5000],
+                compile_errors.len() - 5000
             )
         } else {
-            rust_code.clone()
+            compile_errors.clone()
         };
-        println!("Generated Rust code:\n{}", preview);
+        println!("Compile errors:\n{}", preview);
     }
 
     // For now, we just check that the transpiler doesn't crash
     // Later tests will verify the code compiles and runs
     assert!(
-        success || !errors.is_empty(),
+        transpile_ok || !transpile_errors.is_empty(),
         "Should either succeed or report errors, not crash"
     );
 }
