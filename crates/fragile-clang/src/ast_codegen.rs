@@ -90,6 +90,7 @@ struct ClassVTableInfo {
     is_abstract: bool,
     /// Secondary vtables for multiple inheritance (base class -> vtable entries)
     /// These are separate vtables for non-primary polymorphic bases
+    #[allow(dead_code)]
     secondary_vtables: Vec<(String, Vec<VTableEntry>)>,
 }
 
@@ -773,22 +774,6 @@ impl AstCodeGen {
             }
         }
         visiting.remove(class_name);
-    }
-
-    /// Find the root polymorphic ancestor of a class.
-    /// The root is the first polymorphic class in the hierarchy (has no polymorphic bases).
-    /// Returns the class name itself if it's already the root.
-    fn find_root_polymorphic_ancestor(&self, class_name: &str) -> String {
-        if let Some(bases) = self.class_bases.get(class_name) {
-            for base in bases {
-                if self.polymorphic_classes.contains(&base.name) {
-                    // This base is polymorphic, recurse to find its root
-                    return self.find_root_polymorphic_ancestor(&base.name);
-                }
-            }
-        }
-        // No polymorphic base found, this is the root
-        class_name.to_string()
     }
 
     fn virtual_base_field_name(&self, base_name: &str) -> String {
