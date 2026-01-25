@@ -6673,11 +6673,21 @@ impl AstCodeGen {
                             format!("{} {{ {} }}", name, values.join(", "))
                         }
                     }
-                } else {
+                } else if matches!(ty, CppType::Array { .. }) {
+                    // Array type - use array literal syntax
                     let elems: Vec<String> = node.children.iter()
                         .map(|c| self.expr_to_string(c))
                         .collect();
                     format!("[{}]", elems.join(", "))
+                } else if node.children.len() == 1 {
+                    // Single-element init list for scalar type - just use the element
+                    self.expr_to_string(&node.children[0])
+                } else {
+                    // Multiple elements for non-array type - shouldn't happen but use tuple
+                    let elems: Vec<String> = node.children.iter()
+                        .map(|c| self.expr_to_string(c))
+                        .collect();
+                    format!("({})", elems.join(", "))
                 }
             }
             ClangNodeKind::LambdaExpr { params, return_type, capture_default, captures } => {
