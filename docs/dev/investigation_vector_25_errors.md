@@ -53,7 +53,11 @@ All headers share the same root causes. The iostream header has more errors beca
 ### 6. While Loop Syntax (1 error - shared)
 - Complex post-increment expression in while condition generates invalid Rust
 - `while { { let __v = __ptr; __ptr += 1; __v } += 1; ... }`
-- This pattern appears in `__to_address()` helper in libc++
+- This pattern appears in `__non_unique_impl::__hash()` in libc++ typeinfo
+- **Original C++**: `while (unsigned char __c = static_cast<unsigned char>(*__ptr++)) { ... }`
+- The AST structure is complex: DeclStmt with VarDecl containing ImplicitCastExpr→UnaryOp→UnaryOp
+- Added basic DeclStmt handling in generate_while_stmt, but the libc++ case has nested casts
+- **Status**: Partially fixed for simple cases; complex cases still produce invalid code
 
 ### 7. ASAN Annotation Types (iostream: 3)
 - `__asan_annotation_type`, `__asan_annotation_place`

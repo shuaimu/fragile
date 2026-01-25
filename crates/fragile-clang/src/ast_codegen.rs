@@ -6492,9 +6492,54 @@ impl AstCodeGen {
     fn generate_while_stmt(&mut self, node: &ClangNode) {
         // Children: condition, body
         if node.children.len() >= 2 {
-            let cond = self.expr_to_string(&node.children[0]);
+            let cond_node = &node.children[0];
+
+            // Check if the condition is a DeclStmt (variable declaration in while condition)
+            // Example: while (unsigned char __c = *__ptr++) { ... }
+            // This needs special handling: loop { let __c = *__ptr++; if __c == 0 { break; } ... }
+            if let ClangNodeKind::DeclStmt = &cond_node.kind {
+                if let Some(var_child) = cond_node.children.first() {
+                    if let ClangNodeKind::VarDecl { name, ty, .. } = &var_child.kind {
+                        let var_name = sanitize_identifier(name);
+                        let rust_type = ty.to_rust_type_str();
+                        let init = if !var_child.children.is_empty() {
+                            self.expr_to_string(&var_child.children[0])
+                        } else {
+                            "Default::default()".to_string()
+                        };
+
+                        // Generate loop with declaration and break check
+                        self.writeln("loop {");
+                        self.indent += 1;
+
+                        // Declare the variable
+                        self.writeln(&format!("let {}: {} = {};", var_name, rust_type, init));
+
+                        // Generate break condition based on type
+                        // For integer types: check if zero
+                        // For pointers: check if null
+                        // For bool: check if false
+                        let break_cond = match ty {
+                            CppType::Pointer { .. } => format!("if {}.is_null() {{ break; }}", var_name),
+                            CppType::Bool => format!("if !{} {{ break; }}", var_name),
+                            _ => format!("if {} == 0 {{ break; }}", var_name),
+                        };
+                        self.writeln(&break_cond);
+
+                        // Generate body
+                        self.generate_stmt(&node.children[1], false);
+
+                        self.indent -= 1;
+                        self.writeln("}");
+                        return;
+                    }
+                }
+            }
+
+            // Standard while loop without declaration in condition
+            let cond = self.expr_to_string(cond_node);
             // In C++, pointers can be used in boolean context (non-null = true)
-            let cond_type = Self::get_expr_type(&node.children[0]);
+            let cond_type = Self::get_expr_type(cond_node);
             let cond = if matches!(cond_type, Some(CppType::Pointer { .. })) {
                 format!("!{}.is_null()", cond)
             } else {
