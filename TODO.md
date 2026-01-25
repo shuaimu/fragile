@@ -614,7 +614,7 @@ libc++ containers need working `operator new`/`operator delete`.
 
 Get `std::vector<int>` working end-to-end.
 
-- [ ] **23.8** std::vector E2E milestone - IN PROGRESS
+- [ ] **23.8** std::vector E2E milestone - BLOCKED (23 errors remain)
   - [x] **23.8.1** Transpile simple vector usage ✅ 2026-01-24 - Transpilation succeeds
     ```cpp
     #include <vector>
@@ -752,8 +752,8 @@ Get `std::vector<int>` working end-to-end.
       - to_rust_type_str_for_field() converts &T → *const T, &mut T → *mut T
       - Applied to struct generation, union generation, and template instantiations
     - Fixed: Hash function loop variable name conflict (byte → b) ✅ 2026-01-24
-    - **Progress**: Errors reduced from 2091 → 25 (98.8% reduction) ✅ 2026-01-24
-    - Remaining 25 errors:
+    - **Progress**: Errors reduced from 2091 → 23 (98.9% reduction) ✅ 2026-01-24
+    - Remaining 23 errors (documented in docs/dev/investigation_vector_25_errors.md):
       - Template array size (3) - _Size, _PaddingSize not resolved
       - Invalid while syntax (1) - incorrect post-increment expression in loop
       - Missing traits (7) - bad_allocTrait, logic_errorTrait, runtime_errorTrait
