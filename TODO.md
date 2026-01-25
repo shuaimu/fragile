@@ -924,6 +924,19 @@ Get `std::cout` working end-to-end.
       - Fixed: Skip != 0 conversion for builtins that already return bool (__builtin_isfinite, etc.) (610→598) ✅ 2026-01-25
       - Fixed: Added atomic wait/notify stub functions for std::atomic_flag (598→592) ✅ 2026-01-25
       - Fixed: Added __hermite_u32 math stub function ✅ 2026-01-25
+      - Added: f32/f64 builtins (__builtin_huge_valf, __builtin_nanf, __builtin_expf, etc. - 76 functions) ✅ 2026-01-25
+      - Added: Atomic types (atomic_signed_char, atomic_unsigned_*, etc.) ✅ 2026-01-25
+      - Added: Format context stubs (basic_format_parse_context_*, basic_format_args_*) ✅ 2026-01-25
+      - Added: Thread/time stubs (sched_yield, nanosleep, timespec, __errno_location) ✅ 2026-01-25
+      - Added: Wide char builtins (__builtin_wcslen, __builtin_wmemcmp) ✅ 2026-01-25
+      - Added: Format spec constants (__binary_lower_case, __decimal, etc.) ✅ 2026-01-25
+    - **Remaining errors at 485**: mostly code generation issues requiring deeper fixes:
+      - E0308 (313): Type mismatches (usize/u64, f32/f64, i32/u32, pointer/reference)
+      - E0061 (47): Wrong number of arguments (function overloading issues)
+      - E0560 (21): Struct has no field (vtable virtual method generation)
+      - E0599 (20): No method found (op_bitor on primitives, wrapping_neg on f64)
+      - E0277 (17): Trait not satisfied (Default/Clone derives)
+      - E0133 (14): Unsafe blocks needed for pthread runtime calls
   - [ ] **23.9.2** Fix iostream static initialization (global cout/cin/cerr objects) - BLOCKED
     - libc++ uses `__start_std_streams` section for initialization
     - May need to generate Rust static initialization code
