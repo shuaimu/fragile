@@ -1609,10 +1609,28 @@ impl AstCodeGen {
         self.writeln("");
 
 
-        // Additional template placeholder stubs - only for types that aren't generated from C++ code
-        // These are referenced but never defined in the transpiled code
+        // Additional template placeholder stubs - only for abstract types that aren't generated from C++ code
+        // These are abstract type placeholders, NOT template instantiations
+        // NOTE: Do NOT add stubs for template instantiation names like std_vector_int or std__Bit_iterator
+        // Those names should map to their actual generated types via types.rs mappings
         self.writeln("// Additional template placeholder stubs");
-        for name in &["_dependent_type", "_Elt", "_Tag", "_Sink", "_Res", "_Ptr", "__size_type"] {
+        for name in &["_dependent_type", "_Elt", "_Tag", "_Sink", "_Res", "_Ptr", "__size_type",
+                     "integral_constant__Tp____v",
+                     "__cv_selector__Unqualified___IsConst___IsVol",
+                     "_Maybe_unary_or_binary_function__Res___Class___ArgTypes___",
+                     "__detected_or_t_ptrdiff_t____diff_t___Ptr",
+                     "__detected_or_t_false_type__std___allocator_traits_base___pocca___Alloc",
+                     "__detected_or_t_false_type__std___allocator_traits_base___pocs___Alloc",
+                     "__strictest_alignment__Types___", "_Tuple_impl_0___Elements___",
+                     "std___detail___range_iter_t__Container",
+                     "__detail___clamp_iter_cat_typename___traits_type_iterator_category__random_access_iterator_tag",
+                     "integral_constant_size_t__sizeof_____ArgTypes_",
+                     // STL iterator base types (used as empty base classes)
+                     "std_iterator_std_random_access_iterator_tag__bool",
+                     // Smart pointer internal types
+                     "_Sp___rep",
+                     // Bit vector implementation types
+                     "_Bit_pointer", "_Bvector_impl"] {
             // Don't add to generated_structs to avoid conflict with C++ definitions
             self.writeln("#[repr(C)]");
             self.writeln("#[derive(Default, Copy, Clone)]");
@@ -3878,9 +3896,14 @@ impl AstCodeGen {
                     }
                 }
             }
+            // Has base classes but declaring_class wasn't found - fallback to __base
+            return BaseAccess::DirectField("__base".to_string());
         }
 
-        BaseAccess::DirectField("__base".to_string())
+        // No base class info for current_class - this means it's a template or stub type
+        // that wasn't fully parsed. Return empty access to indicate no base field needed.
+        // The calling code should check for empty field names and skip base access.
+        BaseAccess::DirectField(String::new())
     }
 
     /// Get function parameter types from a function reference node.
@@ -4926,6 +4949,28 @@ impl AstCodeGen {
                                     } else {
                                         // Couldn't determine init type, use V0 as fallback
                                         format!(" = {}::V0({})", enum_name, value_expr)
+                                    }
+                                } else if let CppType::Named(_) = ty {
+                                    // Check if this is a Named type with "0" initializer,
+                                    // which indicates a CXXConstructExpr that couldn't be parsed
+                                    let rust_type = ty.to_rust_type_str();
+                                    // Only generate constructor for actual struct types, not primitives
+                                    // that might have been mapped from C++ types
+                                    let is_primitive = matches!(rust_type.as_str(),
+                                        "usize" | "isize" | "i8" | "i16" | "i32" | "i64" | "i128" |
+                                        "u8" | "u16" | "u32" | "u64" | "u128" | "f32" | "f64" |
+                                        "bool" | "()" | "char"
+                                    ) || rust_type.starts_with('*') || rust_type.starts_with('&');
+                                    if expr == "0" && !is_primitive {
+                                        // Use unsafe zeroed for template types (contain __)
+                                        // since they may not have new_0 or Default impl
+                                        if rust_type.contains("__") {
+                                            format!(" = unsafe {{ std::mem::zeroed() }}")
+                                        } else {
+                                            format!(" = {}::new_0()", rust_type)
+                                        }
+                                    } else {
+                                        format!(" = {}", expr)
                                     }
                                 } else {
                                     format!(" = {}", expr)
@@ -6692,8 +6737,13 @@ impl AstCodeGen {
                                     format!("unsafe {{ (*(*{}).{}).{} }}", base, field, member)
                                 }
                                 BaseAccess::DirectField(field) | BaseAccess::FieldChain(field) => {
-                                    // Dereferencing raw pointers requires unsafe
-                                    format!("unsafe {{ (*{}).{}.{} }}", base, field, member)
+                                    // If field is empty, this is a template/stub type without base class info
+                                    if field.is_empty() {
+                                        format!("unsafe {{ (*{}).{} }}", base, member)
+                                    } else {
+                                        // Dereferencing raw pointers requires unsafe
+                                        format!("unsafe {{ (*{}).{}.{} }}", base, field, member)
+                                    }
                                 }
                             }
                         } else {
@@ -6707,7 +6757,13 @@ impl AstCodeGen {
                                     format!("unsafe {{ (*{}.{}).{} }}", base, field, member)
                                 }
                                 BaseAccess::DirectField(field) | BaseAccess::FieldChain(field) => {
-                                    format!("{}.{}.{}", base, field, member)
+                                    // If field is empty, this is a template/stub type without base class info
+                                    // Just access the member directly
+                                    if field.is_empty() {
+                                        format!("{}.{}", base, member)
+                                    } else {
+                                        format!("{}.{}.{}", base, field, member)
+                                    }
                                 }
                             }
                         } else {
@@ -6752,7 +6808,12 @@ impl AstCodeGen {
                                 format!("unsafe {{ (*{}.{}).{} }}", self_name, field, member)
                             }
                             BaseAccess::DirectField(field) | BaseAccess::FieldChain(field) => {
-                                format!("{}.{}.{}", self_name, field, member)
+                                // If field is empty, this is a template/stub type without base class info
+                                if field.is_empty() {
+                                    format!("{}.{}", self_name, member)
+                                } else {
+                                    format!("{}.{}.{}", self_name, field, member)
+                                }
                             }
                         }
                     } else {
@@ -7186,13 +7247,37 @@ impl AstCodeGen {
                 // Variable declaration - simplified handling
                 for child in &node.children {
                     if let ClangNodeKind::VarDecl { name, ty, .. } = &child.kind {
+                        let rust_type = ty.to_rust_type_str();
                         let init = if !child.children.is_empty() {
-                            format!(" = {}", self.expr_to_string(&child.children[0]))
+                            let expr = self.expr_to_string(&child.children[0]);
+                            // Check if this is a Named type with "0" initializer, which indicates
+                            // a CXXConstructExpr that couldn't be parsed properly
+                            // In that case, generate a constructor call instead
+                            if let CppType::Named(_) = ty {
+                                // Only generate constructor for actual struct types, not primitives
+                                let is_primitive = matches!(rust_type.as_str(),
+                                    "usize" | "isize" | "i8" | "i16" | "i32" | "i64" | "i128" |
+                                    "u8" | "u16" | "u32" | "u64" | "u128" | "f32" | "f64" |
+                                    "bool" | "()" | "char"
+                                ) || rust_type.starts_with('*') || rust_type.starts_with('&');
+                                if expr == "0" && !is_primitive {
+                                    // Use unsafe zeroed for template types (contain __)
+                                    if rust_type.contains("__") {
+                                        format!(" = unsafe {{ std::mem::zeroed() }}")
+                                    } else {
+                                        format!(" = {}::new_0()", rust_type)
+                                    }
+                                } else {
+                                    format!(" = {}", expr)
+                                }
+                            } else {
+                                format!(" = {}", expr)
+                            }
                         } else {
                             String::new()
                         };
                         return format!("let mut {}: {}{};",
-                            sanitize_identifier(name), ty.to_rust_type_str(), init);
+                            sanitize_identifier(name), rust_type, init);
                     }
                 }
                 "/* decl error */".to_string()

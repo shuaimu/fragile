@@ -698,11 +698,24 @@ Get `std::vector<int>` working end-to-end.
       - __bool_constant_true/false, __hash_base_size_t__* for all primitive types
     - Fixed: Add numeric traits and template placeholder stubs ✅ 2026-01-24
       - __numeric_traits_floating_*, _dependent_type, _Elt, etc.
-    - **Progress**: Errors reduced from 2091 to 65 (96.9% reduction) ✅ 2026-01-24
-    - Remaining 65 errors:
-      - Type mismatches (21) - mostly u32+isize arithmetic, template placeholders
-      - Missing types - complex template instantiation aliases
-      - Missing fragile_runtime crate reference
+    - Fixed: Skip dependent type global variables/enums (template placeholders) ✅ 2026-01-24
+      - Types like `_dependent_type` and `integral_constant__Tp____v` are template parameters
+      - These should not become global const/enum declarations which shadow function params
+    - Fixed: Map std::vector<T> to vector__Tp___Alloc template struct ✅ 2026-01-24
+      - Type mappings in types.rs recognize `std::vector<...>` patterns
+      - Also maps std::_Bit_iterator → _Bit_iterator (strip namespace prefix)
+    - Fixed: Empty base field access for template/stub types ✅ 2026-01-24
+      - get_base_access_for_class() returns empty string when no base class info
+      - MemberExpr handlers skip base field access when field name is empty
+    - Fixed: CXXConstructExpr initialization for template types ✅ 2026-01-24
+      - Use `unsafe { std::mem::zeroed() }` for default constructors on template types
+      - Replaces "0" placeholder that occurred when CXXConstructExpr wasn't parsed
+    - **Progress**: Errors reduced from 2091 to 57 (97.3% reduction) ✅ 2026-01-24
+    - Remaining 57 errors:
+      - Type mismatches (25) - mostly u32+isize arithmetic
+      - Field access errors on _Bit_iterator (14) - base class field access issues
+      - Missing modules (3) - numeric_limits, fragile_runtime
+      - Other (15) - assorted issues
   - [ ] **23.8.3** Execute and verify exit code - BLOCKED on 23.8.2
   - [ ] **23.8.4** Add iteration test: `for (int x : v) { ... }` - BLOCKED
   - [ ] **23.8.5** Add resize/reserve/capacity tests - BLOCKED
