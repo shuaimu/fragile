@@ -7029,11 +7029,28 @@ impl AstCodeGen {
         let kind = if is_class { "class" } else { "struct" };
         self.writeln(&format!("/// C++ {} `{}`", kind, name));
         self.writeln("#[repr(C)]");
+        // Check if any field contains c_void (which doesn't impl Default or Clone)
+        let has_c_void_field = children.iter().any(|child| {
+            if let ClangNodeKind::FieldDecl { ty, is_static, .. } = &child.kind {
+                if *is_static {
+                    return false;
+                }
+                let type_str = ty.to_rust_type_str();
+                type_str == "std::ffi::c_void" || type_str.ends_with("c_void")
+            } else {
+                false
+            }
+        });
+
         // Derive Clone for trivially copyable types (no explicit copy ctor)
         // For types with explicit copy ctor, we generate Clone impl separately
-        // Skip Default derive if struct has fields that don't impl Default (large arrays, c_void)
-        if has_non_default_field {
-            // Can't derive Default - the struct needs a manual Default impl
+        // Skip Default/Clone derive if struct has c_void fields (c_void doesn't impl either)
+        // Skip Default derive if struct has large arrays (Default only impl'd up to [T; 32])
+        if has_c_void_field {
+            // c_void doesn't implement Default or Clone - don't derive either
+            // The struct needs manual Default impl (if needed) generated below
+        } else if has_non_default_field {
+            // Has large array but no c_void - can derive Clone but not Default
             if has_explicit_copy_ctor {
                 // Neither Default nor Clone can be derived
             } else {
