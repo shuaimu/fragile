@@ -840,10 +840,12 @@ Get `std::cout` working end-to-end.
         return 0;
     }
     ```
-    - **Status**: Transpilation succeeds (128K chars)
+    - **Status**: Transpilation succeeds (128K chars → 23K LOC Rust)
     - **Progress**: Errors reduced from 65 to ~1200 ✅ 2026-01-25
     - Many STL types still need stubs (basic_string, error_code, locale, etc.)
     - Fixed: Cast precedence, literal operators, static member names, trait names
+    - Fixed: Added vendored libc++ config files (__config_site, __assertion_handler) ✅ 2026-01-25
+    - Fixed: CLI --use-vendored-libcxx now works correctly ✅ 2026-01-25
   - [ ] **23.9.2** Fix iostream static initialization (global cout/cin/cerr objects) - BLOCKED
     - libc++ uses `__start_std_streams` section for initialization
     - May need to generate Rust static initialization code
