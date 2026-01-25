@@ -5584,3 +5584,156 @@ fn test_e2e_simple_graph() {
         "Graph with adjacency list should work correctly"
     );
 }
+
+/// Debug test to print AST structure for array init
+#[test]
+fn test_debug_array_init_ast() {
+    use fragile_clang::{ClangNode, ClangNodeKind, ClangParser};
+
+    let source = r#"
+int main() {
+    int arr[5] = {5, 2, 8, 1, 9};
+    return arr[0];
+}
+"#;
+
+    fn print_ast(node: &ClangNode, indent: usize) {
+        let prefix = " ".repeat(indent);
+        println!("{}{:?}", prefix, node.kind);
+        for child in &node.children {
+            print_ast(child, indent + 2);
+        }
+    }
+
+    let parser = ClangParser::new().unwrap();
+    let ast_result = parser.parse_string(source, "test.cpp").unwrap();
+
+    // Find the VarDecl for arr
+    fn find_vardecl<'a>(node: &'a ClangNode, name: &str) -> Option<&'a ClangNode> {
+        match &node.kind {
+            ClangNodeKind::VarDecl { name: n, .. } if n == name => Some(node),
+            _ => {
+                for child in &node.children {
+                    if let Some(found) = find_vardecl(child, name) {
+                        return Some(found);
+                    }
+                }
+                None
+            }
+        }
+    }
+
+    if let Some(vardecl) = find_vardecl(&ast_result.translation_unit, "arr") {
+        println!("=== VarDecl for arr ===");
+        print_ast(vardecl, 0);
+    } else {
+        println!("VarDecl for arr not found");
+    }
+}
+
+/// E2E test: QuickSort with partition and recursion
+/// Tests: recursive functions, array manipulation, swap, comparison
+#[test]
+fn test_e2e_quicksort() {
+    let source = r#"
+        // QuickSort implementation
+        // Tests recursive functions, array manipulation, and partition logic
+
+        void swap(int* a, int* b) {
+            int temp = *a;
+            *a = *b;
+            *b = temp;
+        }
+
+        // Partition using last element as pivot
+        int partition(int* arr, int low, int high) {
+            int pivot = arr[high];
+            int i = low - 1;
+
+            for (int j = low; j < high; j++) {
+                if (arr[j] <= pivot) {
+                    i++;
+                    swap(&arr[i], &arr[j]);
+                }
+            }
+            swap(&arr[i + 1], &arr[high]);
+            return i + 1;
+        }
+
+        void quicksort(int* arr, int low, int high) {
+            if (low < high) {
+                int pi = partition(arr, low, high);
+                quicksort(arr, low, pi - 1);
+                quicksort(arr, pi + 1, high);
+            }
+        }
+
+        // Helper to check if array is sorted
+        bool isSorted(int* arr, int n) {
+            for (int i = 0; i < n - 1; i++) {
+                if (arr[i] > arr[i + 1]) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        int main() {
+            // Test 1: Simple array
+            int arr1[5] = {5, 2, 8, 1, 9};
+            quicksort(arr1, 0, 4);
+            if (!isSorted(arr1, 5)) return 1;
+            if (arr1[0] != 1 || arr1[4] != 9) return 2;
+
+            // Test 2: Already sorted
+            int arr2[4] = {1, 2, 3, 4};
+            quicksort(arr2, 0, 3);
+            if (!isSorted(arr2, 4)) return 3;
+
+            // Test 3: Reverse sorted
+            int arr3[4] = {4, 3, 2, 1};
+            quicksort(arr3, 0, 3);
+            if (!isSorted(arr3, 4)) return 4;
+            if (arr3[0] != 1 || arr3[3] != 4) return 5;
+
+            // Test 4: All same elements
+            int arr4[5] = {7, 7, 7, 7, 7};
+            quicksort(arr4, 0, 4);
+            for (int i = 0; i < 5; i++) {
+                if (arr4[i] != 7) return 6;
+            }
+
+            // Test 5: Two elements
+            int arr5[2] = {10, 5};
+            quicksort(arr5, 0, 1);
+            if (arr5[0] != 5 || arr5[1] != 10) return 7;
+
+            // Test 6: Single element (edge case)
+            int arr6[1] = {42};
+            quicksort(arr6, 0, 0);
+            if (arr6[0] != 42) return 8;
+
+            // Test 7: Larger array with duplicates
+            int arr7[10] = {3, 1, 4, 1, 5, 9, 2, 6, 5, 3};
+            quicksort(arr7, 0, 9);
+            if (!isSorted(arr7, 10)) return 9;
+            if (arr7[0] != 1 || arr7[9] != 9) return 10;
+
+            // Test 8: Negative numbers
+            int arr8[5] = {-3, 5, -1, 0, 2};
+            quicksort(arr8, 0, 4);
+            if (!isSorted(arr8, 5)) return 11;
+            if (arr8[0] != -3 || arr8[4] != 5) return 12;
+
+            return 0;  // Success
+        }
+    "#;
+
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_quicksort.cpp").expect("E2E test failed");
+
+    assert_eq!(
+        exit_code, 0,
+        "QuickSort should sort arrays correctly"
+    );
+}

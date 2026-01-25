@@ -8270,25 +8270,32 @@ impl AstCodeGen {
 
                         // Find the actual initializer, skipping reference nodes and type nodes
                         // ParmVarDecl nodes appear in function pointer VarDecls to describe parameter types
-                        let initializer = child.children.iter().find(|c| {
-                            !matches!(&c.kind, ClangNodeKind::Unknown(s) if s == "TypeRef")
-                                && !matches!(&c.kind, ClangNodeKind::Unknown(s) if s.contains("Type"))
-                                && !matches!(&c.kind, ClangNodeKind::Unknown(s) if s == "NamespaceRef")
-                                && !matches!(&c.kind, ClangNodeKind::Unknown(s) if s == "TemplateRef")
-                                && !matches!(&c.kind, ClangNodeKind::ParmVarDecl { .. })
-                        });
+                        // For arrays, prefer InitListExpr over IntegerLiteral (which is the array size)
+                        let initializer = if is_array {
+                            // For arrays, look specifically for InitListExpr
+                            child.children.iter().find(|c| {
+                                matches!(&c.kind, ClangNodeKind::InitListExpr { .. })
+                            }).or_else(|| {
+                                // Fall back to other expressions (CXXConstructExpr, etc.)
+                                child.children.iter().find(|c| {
+                                    !matches!(&c.kind, ClangNodeKind::Unknown(s) if s == "TypeRef")
+                                        && !matches!(&c.kind, ClangNodeKind::Unknown(s) if s.contains("Type"))
+                                        && !matches!(&c.kind, ClangNodeKind::IntegerLiteral { .. }) // Skip array size literal
+                                        && !matches!(&c.kind, ClangNodeKind::ParmVarDecl { .. })
+                                })
+                            })
+                        } else {
+                            child.children.iter().find(|c| {
+                                !matches!(&c.kind, ClangNodeKind::Unknown(s) if s == "TypeRef")
+                                    && !matches!(&c.kind, ClangNodeKind::Unknown(s) if s.contains("Type"))
+                                    && !matches!(&c.kind, ClangNodeKind::Unknown(s) if s == "NamespaceRef")
+                                    && !matches!(&c.kind, ClangNodeKind::Unknown(s) if s == "TemplateRef")
+                                    && !matches!(&c.kind, ClangNodeKind::ParmVarDecl { .. })
+                            })
+                        };
 
                         // Check if we have a real initializer
-                        let has_real_init = if let Some(init_node) = &initializer {
-                            // For arrays with just an integer literal child, it might be the array size
-                            if is_array {
-                                !matches!(&init_node.kind, ClangNodeKind::IntegerLiteral { .. })
-                            } else {
-                                true
-                            }
-                        } else {
-                            false
-                        };
+                        let has_real_init = initializer.is_some();
 
                         let init = if has_real_init {
                             let init_node = initializer.unwrap();
@@ -10060,6 +10067,27 @@ impl AstCodeGen {
                         }
                         UnaryOp::Not => format!("!{}", operand), // bitwise not ~ in C++
                         UnaryOp::AddrOf => {
+                            // Check if child is an ArraySubscriptExpr with a pointer base
+                            // In C++, &arr[i] where arr is a pointer is equivalent to arr + i
+                            // We can generate arr.add(i as usize) directly instead of
+                            // &mut unsafe { *arr.add(i as usize) } as *mut T
+                            let child = &node.children[0];
+                            if let ClangNodeKind::ArraySubscriptExpr { .. } = &child.kind {
+                                if child.children.len() >= 2 {
+                                    let arr_type = Self::get_expr_type(&child.children[0]);
+                                    let is_pointer = matches!(arr_type, Some(CppType::Pointer { .. }))
+                                        || matches!(arr_type, Some(CppType::Array { size: None, .. }))
+                                        || self.is_ptr_var_expr(&child.children[0]);
+
+                                    if is_pointer {
+                                        let arr = self.expr_to_string(&child.children[0]);
+                                        let idx = self.expr_to_string(&child.children[1]);
+                                        // Pointer arithmetic requires unsafe block
+                                        return format!("unsafe {{ {}.add(({}) as usize) }}", arr, idx);
+                                    }
+                                }
+                            }
+
                             // Check if this is a pointer to a polymorphic class
                             if let CppType::Pointer { pointee, is_const } = ty {
                                 if let CppType::Named(class_name) = pointee.as_ref() {
