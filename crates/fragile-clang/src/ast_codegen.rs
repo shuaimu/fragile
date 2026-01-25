@@ -3639,6 +3639,8 @@ impl AstCodeGen {
                     if let ClangNodeKind::CXXThisExpr { .. } = &node.children[0].kind {
                         return true;
                     }
+                    // Also check through implicit casts
+                    return Self::expr_is_this(&node.children[0]);
                 }
                 false
             }
@@ -3648,6 +3650,20 @@ impl AstCodeGen {
             }
             ClangNodeKind::ImplicitCastExpr { .. } => {
                 // Check through casts
+                if !node.children.is_empty() {
+                    return Self::expr_is_this(&node.children[0]);
+                }
+                false
+            }
+            ClangNodeKind::CallExpr { .. } => {
+                // Copy constructor call or other call with *this as argument
+                if !node.children.is_empty() {
+                    return Self::expr_is_this(&node.children[0]);
+                }
+                false
+            }
+            ClangNodeKind::Unknown(_) => {
+                // Handle unknown wrapper nodes (like MaterializeTemporaryExpr, ExprWithCleanups)
                 if !node.children.is_empty() {
                     return Self::expr_is_this(&node.children[0]);
                 }
@@ -4671,7 +4687,9 @@ impl AstCodeGen {
                 // Check if method modifies self or returns a mutable reference
                 let modifies_self = Self::method_modifies_self(node);
                 let returns_mut_ref = matches!(return_type, CppType::Reference { is_const: false, .. });
-                let is_mutable_method = modifies_self || returns_mut_ref;
+                // Iterator operators always modify self (increment/decrement)
+                let is_iterator_mutating_op = matches!(name.as_str(), "operator++" | "operator--");
+                let is_mutable_method = modifies_self || returns_mut_ref || is_iterator_mutating_op;
 
                 let self_param = if *is_static {
                     "".to_string()
@@ -4696,13 +4714,18 @@ impl AstCodeGen {
 
                 // Determine return type, fixing c_void placeholders for methods returning *this
                 let rust_return_type = return_type.to_rust_type_str();
+                // Check if this is an iterator operator that should return Self
+                let is_iterator_self_return_op = matches!(name.as_str(),
+                    "operator++" | "operator--" | "_M_const_cast"
+                );
                 let ret_str = if *return_type == CppType::Void {
                     String::new()
                 } else if (rust_return_type.contains("c_void") || rust_return_type == "*mut ()")
-                          && Self::method_returns_this_only(node) {
-                    // Method returns *this but return type is a c_void placeholder
-                    // Use Self instead of the placeholder type
-                    if returns_mut_ref || is_mutable_method {
+                          && (Self::method_returns_this_only(node) || is_iterator_self_return_op) {
+                    // Method returns *this or is an iterator operator - use Self
+                    // Post-increment (params.len() == 1) returns by value
+                    // Pre-increment (params.len() == 0) returns by mutable reference
+                    if params.is_empty() && (returns_mut_ref || is_mutable_method) {
                         " -> &mut Self".to_string()
                     } else {
                         " -> Self".to_string()
@@ -5218,8 +5241,21 @@ impl AstCodeGen {
 
                         // References don't need mut keyword
                         let mut_kw = if is_ref { "" } else { "mut " };
+
+                        // Fix c_void placeholder types for variables initialized with self/*this
+                        let rust_type = ty.to_rust_type_str();
+                        let (final_type, final_init) = if rust_type.contains("c_void")
+                            && has_real_init
+                            && Self::expr_is_this(initializer.unwrap())
+                        {
+                            // Variable is initialized with *this, use Self and clone
+                            ("Self".to_string(), " = self.clone()".to_string())
+                        } else {
+                            (rust_type, init)
+                        };
+
                         self.writeln(&format!("let {}{}: {}{};",
-                            mut_kw, sanitize_identifier(name), ty.to_rust_type_str(), init));
+                            mut_kw, sanitize_identifier(name), final_type, final_init));
                     }
                 }
             }
