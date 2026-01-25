@@ -14,11 +14,11 @@ We just convert the fully-resolved AST to equivalent Rust code.
 ## Current Status
 
 **Grammar Tests**: 20/20 passing
-**E2E Tests**: 110/110 passing (2 ignored due to STL header limitations)
+**E2E Tests**: 111/111 passing (4 ignored: 2 STL header limitations, 2 struct array/assignment limitations)
 **libc++ Transpilation Tests**: 8/8 passing (cstddef, cstdint, type_traits, initializer_list, vector, cstddef_compilation, iostream, thread)
 **Runtime Linking Tests**: 2/2 passing (FILE I/O, pthread)
 **Runtime Function Mapping Tests**: 1/1 passing
-**Total Tests**: 229 passing
+**Total Tests**: 230 passing
 
 **Working**:
 - Simple functions with control flow (if/else, while, for, do-while, switch, recursion)
@@ -910,6 +910,9 @@ Test against actual open-source C++ projects.
     - [x] String utilities: C-style strings, comparison, prefix/suffix checks, case conversion
     - [x] CLI argument parser: argc/argv patterns, option parsing, flag detection
     - [x] Assertion library: boolean assertions, test organization, result counting
+    - [x] Ring buffer: circular queue, modular arithmetic, wrap-around indexing
+    - [ ] LRU cache: key-value pairs, eviction logic (ignored - struct array init)
+    - [ ] Tokenizer: char classification, state machine (ignored - struct return assignment)
     - Fixed: Address-of pointer subscript (&arr[i] → arr.add(i as usize))
     - Fixed: Switch case with const int/char values (evaluate DeclRefExpr, CharacterLiteral)
     - Fixed: Array initialization prefers InitListExpr over array size literal

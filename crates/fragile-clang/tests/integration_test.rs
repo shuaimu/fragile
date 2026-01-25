@@ -8012,3 +8012,538 @@ fn test_e2e_assertion_library() {
         "Assertion library should work correctly"
     );
 }
+
+/// E2E test: Ring buffer (circular queue) implementation
+/// Tests: modular arithmetic, wrap-around indexing, full/empty detection
+/// Note: Uses pointer-to-data instead of embedded array due to transpiler limitations
+#[test]
+fn test_e2e_ring_buffer() {
+    let source = r#"
+        // Ring buffer implementation - fixed-size circular queue
+        // Uses separate data array and pointer due to transpiler limitation with member arrays
+
+        struct RingBuffer {
+            int* data;
+            int head;
+            int tail;
+            int count;
+            int capacity;
+        };
+
+        void rbInit(RingBuffer* rb, int* dataPtr) {
+            rb->data = dataPtr;
+            rb->head = 0;
+            rb->tail = 0;
+            rb->count = 0;
+            rb->capacity = 16;
+        }
+
+        bool rbIsEmpty(RingBuffer* rb) {
+            return rb->count == 0;
+        }
+
+        bool rbIsFull(RingBuffer* rb) {
+            return rb->count == rb->capacity;
+        }
+
+        int rbSize(RingBuffer* rb) {
+            return rb->count;
+        }
+
+        bool rbPush(RingBuffer* rb, int value) {
+            if (rbIsFull(rb)) return false;
+            rb->data[rb->tail] = value;
+            rb->tail = (rb->tail + 1) % rb->capacity;
+            rb->count = rb->count + 1;
+            return true;
+        }
+
+        bool rbPop(RingBuffer* rb, int* value) {
+            if (rbIsEmpty(rb)) return false;
+            *value = rb->data[rb->head];
+            rb->head = (rb->head + 1) % rb->capacity;
+            rb->count = rb->count - 1;
+            return true;
+        }
+
+        bool rbPeek(RingBuffer* rb, int* value) {
+            if (rbIsEmpty(rb)) return false;
+            *value = rb->data[rb->head];
+            return true;
+        }
+
+        void rbClear(RingBuffer* rb) {
+            rb->head = 0;
+            rb->tail = 0;
+            rb->count = 0;
+        }
+
+        // Get element at position (0 = head)
+        bool rbAt(RingBuffer* rb, int pos, int* value) {
+            if (pos < 0 || pos >= rb->count) return false;
+            int index = (rb->head + pos) % rb->capacity;
+            *value = rb->data[index];
+            return true;
+        }
+
+        int main() {
+            int data[16];  // Local storage
+            RingBuffer rb;
+            rbInit(&rb, &data[0]);
+            int val;
+
+            // Test 1: Empty buffer
+            if (!rbIsEmpty(&rb)) return 1;
+            if (rbIsFull(&rb)) return 2;
+            if (rbSize(&rb) != 0) return 3;
+            if (rbPop(&rb, &val)) return 4;
+            if (rbPeek(&rb, &val)) return 5;
+
+            // Test 2: Single element
+            if (!rbPush(&rb, 42)) return 6;
+            if (rbIsEmpty(&rb)) return 7;
+            if (rbSize(&rb) != 1) return 8;
+            if (!rbPeek(&rb, &val) || val != 42) return 9;
+            if (!rbPop(&rb, &val) || val != 42) return 10;
+            if (!rbIsEmpty(&rb)) return 11;
+
+            // Test 3: Multiple elements (FIFO order)
+            for (int i = 1; i <= 5; i++) {
+                if (!rbPush(&rb, i * 10)) return 12;
+            }
+            if (rbSize(&rb) != 5) return 13;
+            for (int i = 1; i <= 5; i++) {
+                if (!rbPop(&rb, &val) || val != i * 10) return 14;
+            }
+            if (!rbIsEmpty(&rb)) return 15;
+
+            // Test 4: Wrap-around behavior
+            rbClear(&rb);
+            // Fill mostly, then drain, then fill again to force wrap
+            for (int i = 0; i < 10; i++) rbPush(&rb, i);
+            for (int i = 0; i < 8; i++) rbPop(&rb, &val);
+            // Now head is at 8, add more to wrap around
+            for (int i = 100; i < 110; i++) rbPush(&rb, i);
+            // Should have: [8, 9, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109]
+            if (rbSize(&rb) != 12) return 16;
+            if (!rbPop(&rb, &val) || val != 8) return 17;
+            if (!rbPop(&rb, &val) || val != 9) return 18;
+            if (!rbPop(&rb, &val) || val != 100) return 19;
+
+            // Test 5: Full buffer
+            rbClear(&rb);
+            for (int i = 0; i < 16; i++) {
+                if (!rbPush(&rb, i)) return 20;
+            }
+            if (!rbIsFull(&rb)) return 21;
+            if (rbPush(&rb, 999)) return 22;  // Should fail
+
+            // Test 6: Random access
+            if (!rbAt(&rb, 0, &val) || val != 0) return 23;
+            if (!rbAt(&rb, 5, &val) || val != 5) return 24;
+            if (!rbAt(&rb, 15, &val) || val != 15) return 25;
+            if (rbAt(&rb, 16, &val)) return 26;   // Out of bounds
+            if (rbAt(&rb, -1, &val)) return 27;   // Negative
+
+            return 0;  // Success
+        }
+    "#;
+
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_ring_buffer.cpp").expect("E2E test failed");
+
+    assert_eq!(
+        exit_code, 0,
+        "Ring buffer should work correctly"
+    );
+}
+
+/// E2E test: LRU Cache pattern
+/// Tests: struct with pointer to entries, key-value pairs, eviction logic
+/// Note: Ignored - requires local struct array initialization which isn't supported yet
+#[test]
+#[ignore]
+fn test_e2e_lru_cache() {
+    let source = r#"
+        // Simple LRU (Least Recently Used) Cache implementation
+        // Uses pointer to entry array due to transpiler limitation with member arrays
+
+        struct CacheEntry {
+            int key;
+            int value;
+            int accessTime;
+            bool valid;
+        };
+
+        struct LRUCache {
+            CacheEntry* entries;
+            int currentTime;
+            int size;
+            int capacity;
+        };
+
+        void cacheInit(LRUCache* cache, CacheEntry* entryStorage) {
+            cache->entries = entryStorage;
+            cache->currentTime = 0;
+            cache->size = 0;
+            cache->capacity = 8;
+            for (int i = 0; i < 8; i++) {
+                cache->entries[i].valid = false;
+            }
+        }
+
+        // Find entry by key, returns index or -1
+        int cacheFindKey(LRUCache* cache, int key) {
+            for (int i = 0; i < cache->capacity; i++) {
+                if (cache->entries[i].valid && cache->entries[i].key == key) {
+                    return i;
+                }
+            }
+            return -1;
+        }
+
+        // Find least recently used entry
+        int cacheFindLRU(LRUCache* cache) {
+            int lruIndex = -1;
+            int minTime = 2147483647;  // INT_MAX
+            for (int i = 0; i < cache->capacity; i++) {
+                if (cache->entries[i].valid && cache->entries[i].accessTime < minTime) {
+                    minTime = cache->entries[i].accessTime;
+                    lruIndex = i;
+                }
+            }
+            return lruIndex;
+        }
+
+        // Find empty slot
+        int cacheFindEmpty(LRUCache* cache) {
+            for (int i = 0; i < cache->capacity; i++) {
+                if (!cache->entries[i].valid) {
+                    return i;
+                }
+            }
+            return -1;
+        }
+
+        // Get value for key, returns true if found
+        bool cacheGet(LRUCache* cache, int key, int* value) {
+            int idx = cacheFindKey(cache, key);
+            if (idx < 0) return false;
+
+            cache->currentTime = cache->currentTime + 1;
+            cache->entries[idx].accessTime = cache->currentTime;
+            *value = cache->entries[idx].value;
+            return true;
+        }
+
+        // Put key-value pair, evicts LRU if full
+        void cachePut(LRUCache* cache, int key, int value) {
+            cache->currentTime = cache->currentTime + 1;
+
+            // Check if key already exists
+            int idx = cacheFindKey(cache, key);
+            if (idx >= 0) {
+                cache->entries[idx].value = value;
+                cache->entries[idx].accessTime = cache->currentTime;
+                return;
+            }
+
+            // Find empty slot or evict LRU
+            idx = cacheFindEmpty(cache);
+            if (idx < 0) {
+                idx = cacheFindLRU(cache);
+            } else {
+                cache->size = cache->size + 1;
+            }
+
+            cache->entries[idx].key = key;
+            cache->entries[idx].value = value;
+            cache->entries[idx].accessTime = cache->currentTime;
+            cache->entries[idx].valid = true;
+        }
+
+        // Remove entry by key
+        bool cacheRemove(LRUCache* cache, int key) {
+            int idx = cacheFindKey(cache, key);
+            if (idx < 0) return false;
+            cache->entries[idx].valid = false;
+            cache->size = cache->size - 1;
+            return true;
+        }
+
+        int cacheSize(LRUCache* cache) {
+            return cache->size;
+        }
+
+        void cacheReset(LRUCache* cache) {
+            cache->currentTime = 0;
+            cache->size = 0;
+            for (int i = 0; i < cache->capacity; i++) {
+                cache->entries[i].valid = false;
+            }
+        }
+
+        int main() {
+            CacheEntry storage[8];  // Local storage
+            LRUCache cache;
+            cacheInit(&cache, &storage[0]);
+            int val;
+
+            // Test 1: Empty cache
+            if (cacheSize(&cache) != 0) return 1;
+            if (cacheGet(&cache, 1, &val)) return 2;
+
+            // Test 2: Put and get
+            cachePut(&cache, 1, 100);
+            if (cacheSize(&cache) != 1) return 3;
+            if (!cacheGet(&cache, 1, &val) || val != 100) return 4;
+
+            // Test 3: Multiple entries
+            cachePut(&cache, 2, 200);
+            cachePut(&cache, 3, 300);
+            if (cacheSize(&cache) != 3) return 5;
+            if (!cacheGet(&cache, 2, &val) || val != 200) return 6;
+            if (!cacheGet(&cache, 3, &val) || val != 300) return 7;
+
+            // Test 4: Update existing key
+            cachePut(&cache, 1, 111);
+            if (cacheSize(&cache) != 3) return 8;  // Size unchanged
+            if (!cacheGet(&cache, 1, &val) || val != 111) return 9;
+
+            // Test 5: Remove
+            if (!cacheRemove(&cache, 2)) return 10;
+            if (cacheSize(&cache) != 2) return 11;
+            if (cacheGet(&cache, 2, &val)) return 12;
+
+            // Test 6: LRU eviction
+            cacheReset(&cache);  // Reset
+            // Fill cache
+            for (int i = 0; i < 8; i++) {
+                cachePut(&cache, i, i * 10);
+            }
+            if (cacheSize(&cache) != 8) return 13;
+
+            // Access some keys to update their access time
+            cacheGet(&cache, 0, &val);  // 0 is now most recently used
+            cacheGet(&cache, 7, &val);  // 7 is now most recently used
+
+            // Add new key, should evict LRU (key 1, since 0 and 7 were accessed)
+            cachePut(&cache, 100, 1000);
+            if (cacheGet(&cache, 1, &val)) return 14;  // Key 1 should be evicted
+            if (!cacheGet(&cache, 100, &val) || val != 1000) return 15;
+            if (!cacheGet(&cache, 0, &val)) return 16;  // Key 0 still there
+            if (!cacheGet(&cache, 7, &val)) return 17;  // Key 7 still there
+
+            return 0;  // Success
+        }
+    "#;
+
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_lru_cache.cpp").expect("E2E test failed");
+
+    assert_eq!(
+        exit_code, 0,
+        "LRU cache should work correctly"
+    );
+}
+
+/// E2E test: Tokenizer/Lexer pattern
+/// Tests: character classification, state machine, string parsing
+/// Note: Ignored - requires struct return assignment (op_assign) which isn't supported yet
+#[test]
+#[ignore]
+fn test_e2e_tokenizer() {
+    let source = r#"
+        // Simple tokenizer/lexer for arithmetic expressions
+        // Demonstrates character classification and state machine patterns
+
+        // Token types
+        const int TOK_NUMBER = 1;
+        const int TOK_PLUS = 2;
+        const int TOK_MINUS = 3;
+        const int TOK_STAR = 4;
+        const int TOK_SLASH = 5;
+        const int TOK_LPAREN = 6;
+        const int TOK_RPAREN = 7;
+        const int TOK_EOF = 8;
+        const int TOK_ERROR = 9;
+
+        struct Token {
+            int type;
+            int value;  // For numbers
+        };
+
+        struct Tokenizer {
+            const char* input;
+            int pos;
+        };
+
+        void tokInit(Tokenizer* tok, const char* input) {
+            tok->input = input;
+            tok->pos = 0;
+        }
+
+        char tokPeek(Tokenizer* tok) {
+            return tok->input[tok->pos];
+        }
+
+        char tokAdvance(Tokenizer* tok) {
+            char c = tok->input[tok->pos];
+            if (c != '\0') tok->pos = tok->pos + 1;
+            return c;
+        }
+
+        bool isDigit(char c) {
+            return c >= '0' && c <= '9';
+        }
+
+        bool isWhitespace(char c) {
+            return c == ' ' || c == '\t' || c == '\n' || c == '\r';
+        }
+
+        void skipWhitespace(Tokenizer* tok) {
+            while (isWhitespace(tokPeek(tok))) {
+                tokAdvance(tok);
+            }
+        }
+
+        int parseNumber(Tokenizer* tok) {
+            int result = 0;
+            while (isDigit(tokPeek(tok))) {
+                result = result * 10 + (tokAdvance(tok) - '0');
+            }
+            return result;
+        }
+
+        Token tokNext(Tokenizer* tok) {
+            Token t;
+            t.value = 0;
+
+            skipWhitespace(tok);
+            char c = tokPeek(tok);
+
+            if (c == '\0') {
+                t.type = TOK_EOF;
+                return t;
+            }
+
+            if (isDigit(c)) {
+                t.type = TOK_NUMBER;
+                t.value = parseNumber(tok);
+                return t;
+            }
+
+            tokAdvance(tok);
+
+            if (c == '+') { t.type = TOK_PLUS; }
+            else if (c == '-') { t.type = TOK_MINUS; }
+            else if (c == '*') { t.type = TOK_STAR; }
+            else if (c == '/') { t.type = TOK_SLASH; }
+            else if (c == '(') { t.type = TOK_LPAREN; }
+            else if (c == ')') { t.type = TOK_RPAREN; }
+            else { t.type = TOK_ERROR; }
+
+            return t;
+        }
+
+        // Count tokens in expression
+        int countTokens(const char* expr) {
+            Tokenizer tok;
+            tokInit(&tok, expr);
+            int count = 0;
+            while (true) {
+                Token t = tokNext(&tok);
+                if (t.type == TOK_EOF) break;
+                if (t.type == TOK_ERROR) return -1;
+                count = count + 1;
+            }
+            return count;
+        }
+
+        // Simple expression evaluator (no precedence, left to right)
+        int evalSimple(const char* expr) {
+            Tokenizer tok;
+            tokInit(&tok, expr);
+
+            Token t = tokNext(&tok);
+            if (t.type != TOK_NUMBER) return 0;
+            int result = t.value;
+
+            while (true) {
+                Token op = tokNext(&tok);
+                if (op.type == TOK_EOF) break;
+
+                Token num = tokNext(&tok);
+                if (num.type != TOK_NUMBER) return 0;
+
+                if (op.type == TOK_PLUS) result = result + num.value;
+                else if (op.type == TOK_MINUS) result = result - num.value;
+                else if (op.type == TOK_STAR) result = result * num.value;
+                else if (op.type == TOK_SLASH && num.value != 0) result = result / num.value;
+            }
+
+            return result;
+        }
+
+        int main() {
+            Tokenizer tok;
+            Token t;
+
+            // Test 1: Empty string
+            tokInit(&tok, "");
+            t = tokNext(&tok);
+            if (t.type != TOK_EOF) return 1;
+
+            // Test 2: Single number
+            tokInit(&tok, "42");
+            t = tokNext(&tok);
+            if (t.type != TOK_NUMBER || t.value != 42) return 2;
+            t = tokNext(&tok);
+            if (t.type != TOK_EOF) return 3;
+
+            // Test 3: Multi-digit number
+            tokInit(&tok, "12345");
+            t = tokNext(&tok);
+            if (t.type != TOK_NUMBER || t.value != 12345) return 4;
+
+            // Test 4: Operators
+            tokInit(&tok, "+-*/()");
+            t = tokNext(&tok); if (t.type != TOK_PLUS) return 5;
+            t = tokNext(&tok); if (t.type != TOK_MINUS) return 6;
+            t = tokNext(&tok); if (t.type != TOK_STAR) return 7;
+            t = tokNext(&tok); if (t.type != TOK_SLASH) return 8;
+            t = tokNext(&tok); if (t.type != TOK_LPAREN) return 9;
+            t = tokNext(&tok); if (t.type != TOK_RPAREN) return 10;
+
+            // Test 5: Whitespace handling
+            tokInit(&tok, "  10  +  20  ");
+            t = tokNext(&tok); if (t.type != TOK_NUMBER || t.value != 10) return 11;
+            t = tokNext(&tok); if (t.type != TOK_PLUS) return 12;
+            t = tokNext(&tok); if (t.type != TOK_NUMBER || t.value != 20) return 13;
+
+            // Test 6: Token counting
+            if (countTokens("1 + 2") != 3) return 14;
+            if (countTokens("1 + 2 * 3") != 5) return 15;
+            if (countTokens("(1 + 2) * 3") != 7) return 16;
+            if (countTokens("") != 0) return 17;
+
+            // Test 7: Simple evaluation
+            if (evalSimple("5") != 5) return 18;
+            if (evalSimple("10 + 5") != 15) return 19;
+            if (evalSimple("10 - 3") != 7) return 20;
+            if (evalSimple("4 * 3") != 12) return 21;
+            if (evalSimple("12 / 4") != 3) return 22;
+            if (evalSimple("2 + 3 * 4") != 20) return 23;  // Left to right: (2+3)*4
+
+            return 0;  // Success
+        }
+    "#;
+
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_tokenizer.cpp").expect("E2E test failed");
+
+    assert_eq!(
+        exit_code, 0,
+        "Tokenizer should work correctly"
+    );
+}
