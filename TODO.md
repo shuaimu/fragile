@@ -841,14 +841,16 @@ Get `std::cout` working end-to-end.
     }
     ```
     - **Status**: Transpilation succeeds (128K chars → 23K LOC Rust)
-    - **Progress**: Compilation errors reduced from 65 → ~1200 → 19 ✅ 2026-01-25
+    - **Progress**: Compilation errors reduced from 65 → ~1200 → 19 → 15 ✅ 2026-01-25
     - Many fixes applied:
       - Skip variadic template instantiations (&&..., ...)
       - Skip decltype return types
       - Skip unresolved template parameters (_Tp, _Args)
       - Skip C-style function pointer syntax in template args
       - Improved pointer increment/decrement (use ptr.add(1) instead of += 1)
-    - **Remaining 19 errors**: Post-increment expression handling in complex expressions
+      - Fixed cast followed by method call precedence (x as T.method() → (x as T).method())
+      - Fixed const/volatile in struct initialization type names
+    - **Remaining 15 errors**: Post-increment expression handling in complex expressions
       - Pattern like `*ptr++` generates incorrect compound assignment `{...} += 1`
       - Root cause: Complex interaction between UnexposedExpr wrappers and post-increment
       - This is a pre-existing bug requiring separate investigation
