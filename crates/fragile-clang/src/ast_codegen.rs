@@ -1904,7 +1904,25 @@ impl AstCodeGen {
         // Check if generated function contains broken patterns that can't compile
         // _dependent_type::new_N() calls are template-dependent constructors that aren't resolved
         let generated = &self.output[output_start..];
-        if generated.contains("_dependent_type::new_")
+
+        // Check if the function body is essentially empty (only has `{\n}` or just whitespace)
+        // This happens when constexpr conditions were skipped but the function needs a return value
+        let has_return_type = !ret_str.is_empty();
+        let body_is_empty = {
+            // Find the opening brace of the function body
+            if let Some(brace_pos) = generated.rfind(" {\n") {
+                let body = &generated[brace_pos + 3..];
+                // Strip the closing brace and check if only whitespace remains
+                body.trim_end().trim_end_matches('}').trim().is_empty()
+            } else {
+                false
+            }
+        };
+
+        if body_is_empty && has_return_type {
+            // Function body is empty but needs to return something - rollback
+            self.output.truncate(output_start);
+        } else if generated.contains("_dependent_type::new_")
             || generated.contains("_unnamed)")  // Unresolved value in function call
             || generated.contains("_unnamed,")  // Unresolved value in function call
             || generated.contains("-> std::ffi::c_void")  // Returns void type (placeholder)
