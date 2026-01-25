@@ -1397,9 +1397,7 @@ impl AstCodeGen {
     /// Returns (visitor_node, variant_nodes_with_types) if it is.
     /// visitor_node is the first argument (the callable).
     /// variant_nodes_with_types is a vec of (node, variant_type) for each variant argument.
-    fn is_std_visit_call(
-        node: &ClangNode,
-    ) -> Option<(&ClangNode, Vec<(&ClangNode, CppType)>)> {
+    fn is_std_visit_call(node: &ClangNode) -> Option<(&ClangNode, Vec<(&ClangNode, CppType)>)> {
         if let ClangNodeKind::CallExpr { .. } = &node.kind {
             // Look for the callee - it may be directly a DeclRefExpr or wrapped in ImplicitCastExpr
             let callee = node.children.first()?;
@@ -4256,10 +4254,9 @@ impl AstCodeGen {
         } = &node.kind
         {
             // Left side of assignment - check if it's a member expression
-            if !node.children.is_empty()
-                && Self::is_member_access(&node.children[0]) {
-                    return true;
-                }
+            if !node.children.is_empty() && Self::is_member_access(&node.children[0]) {
+                return true;
+            }
         }
         // Also check compound assignment operators
         if let ClangNodeKind::BinaryOperator { op, .. } = &node.kind {
@@ -4274,10 +4271,9 @@ impl AstCodeGen {
                 | BinaryOp::XorAssign
                 | BinaryOp::ShlAssign
                 | BinaryOp::ShrAssign => {
-                    if !node.children.is_empty()
-                        && Self::is_member_access(&node.children[0]) {
-                            return true;
-                        }
+                    if !node.children.is_empty() && Self::is_member_access(&node.children[0]) {
+                        return true;
+                    }
                 }
                 _ => {}
             }
@@ -4286,10 +4282,9 @@ impl AstCodeGen {
         if let ClangNodeKind::UnaryOperator { op, .. } = &node.kind {
             match op {
                 UnaryOp::PreInc | UnaryOp::PostInc | UnaryOp::PreDec | UnaryOp::PostDec => {
-                    if !node.children.is_empty()
-                        && Self::is_member_access(&node.children[0]) {
-                            return true;
-                        }
+                    if !node.children.is_empty() && Self::is_member_access(&node.children[0]) {
+                        return true;
+                    }
                 }
                 _ => {}
             }
@@ -4856,8 +4851,7 @@ impl AstCodeGen {
     /// Extract the class name from a type, handling const qualifiers, references, and pointers.
     /// For example, "const Point" -> "Point", Reference { pointee: Named("Point") } -> "Point"
     fn extract_class_name(ty: &Option<CppType>) -> Option<String> {
-        ty.as_ref()
-            .and_then(Self::extract_class_name_from_type)
+        ty.as_ref().and_then(Self::extract_class_name_from_type)
     }
 
     /// Helper to extract class name from a CppType.
@@ -5168,19 +5162,18 @@ impl AstCodeGen {
             ..
         } = &node.kind
         {
-            if member_name.starts_with('~')
-                && !node.children.is_empty() {
-                    if *is_arrow {
-                        let obj_expr = self.expr_to_string(&node.children[0]);
-                        return Some(obj_expr);
-                    } else {
-                        if let Some(ptr_expr) = Self::get_deref_pointer(&node.children[0]) {
-                            return Some(self.expr_to_string(ptr_expr));
-                        }
-                        let obj_expr = self.expr_to_string(&node.children[0]);
-                        return Some(format!("&mut {}", obj_expr));
+            if member_name.starts_with('~') && !node.children.is_empty() {
+                if *is_arrow {
+                    let obj_expr = self.expr_to_string(&node.children[0]);
+                    return Some(obj_expr);
+                } else {
+                    if let Some(ptr_expr) = Self::get_deref_pointer(&node.children[0]) {
+                        return Some(self.expr_to_string(ptr_expr));
                     }
+                    let obj_expr = self.expr_to_string(&node.children[0]);
+                    return Some(format!("&mut {}", obj_expr));
                 }
+            }
         }
         None
     }
@@ -5251,9 +5244,7 @@ impl AstCodeGen {
             }
             ClangNodeKind::Unknown(_) | ClangNodeKind::ImplicitCastExpr { .. } => {
                 // Look through wrapper nodes (but not FunctionToPointerDecay)
-                node.children
-                    .iter()
-                    .any(Self::is_function_pointer_variable)
+                node.children.iter().any(Self::is_function_pointer_variable)
             }
             _ => false,
         }
@@ -5336,9 +5327,11 @@ impl AstCodeGen {
                 // A chained operator<< also returns an ostream - check if this is one
                 if let Some((op_name, left_idx, _)) = Self::get_operator_call_info(node) {
                     if (op_name == "operator<<" || op_name == "operator>>")
-                        && !node.children.is_empty() && left_idx < node.children.len() {
-                            return Self::get_io_stream_type(&node.children[left_idx]);
-                        }
+                        && !node.children.is_empty()
+                        && left_idx < node.children.len()
+                    {
+                        return Self::get_io_stream_type(&node.children[left_idx]);
+                    }
                 }
                 None
             }
@@ -5431,9 +5424,9 @@ impl AstCodeGen {
         };
 
         // Check if the last argument is std::endl
-        let has_newline = args.last().is_some_and(|arg| {
-            Self::is_stream_manipulator(arg) == Some("newline")
-        });
+        let has_newline = args
+            .last()
+            .is_some_and(|arg| Self::is_stream_manipulator(arg) == Some("newline"));
 
         // Filter out endl/flush manipulators, collect format args
         let format_args: Vec<String> = args
@@ -7963,7 +7956,8 @@ impl AstCodeGen {
                         // Find the size argument - it's the child that's not the function reference
                         let size_arg = node
                             .children
-                            .iter().find(|c| !Self::is_function_reference(c))
+                            .iter()
+                            .find(|c| !Self::is_function_reference(c))
                             .map(|c| self.expr_to_string(c))
                             .unwrap_or_else(|| "0".to_string());
                         return format!(
@@ -7976,7 +7970,8 @@ impl AstCodeGen {
                         // Find the pointer argument - it's the child that's not the function reference
                         let ptr_arg = node
                             .children
-                            .iter().find(|c| !Self::is_function_reference(c))
+                            .iter()
+                            .find(|c| !Self::is_function_reference(c))
                             .map(|c| self.expr_to_string(c))
                             .unwrap_or_else(|| "std::ptr::null_mut()".to_string());
                         return format!("unsafe {{ crate::fragile_runtime::fragile_free({} as *mut std::ffi::c_void) }}", ptr_arg);
@@ -8086,8 +8081,7 @@ impl AstCodeGen {
 
                     // Check if this is a function call (not a constructor)
                     // A function call has a DeclRefExpr child with Function type
-                    let is_function_call =
-                        node.children.iter().any(Self::is_function_reference);
+                    let is_function_call = node.children.iter().any(Self::is_function_reference);
 
                     if is_function_call && !node.children.is_empty() {
                         // Regular function call that returns a struct
@@ -8635,18 +8629,19 @@ impl AstCodeGen {
                     for child in &node.children {
                         // Check if child is UnexposedExpr wrapper with MemberRef designator
                         if matches!(&child.kind, ClangNodeKind::Unknown(s) if s == "UnexposedExpr")
-                            && child.children.len() >= 2 {
-                                if let ClangNodeKind::MemberRef { name: field_name } =
-                                    &child.children[0].kind
-                                {
-                                    // This is a designated initializer
-                                    has_designators = true;
-                                    // The value is the second child (or beyond)
-                                    let value = self.expr_to_string(&child.children[1]);
-                                    field_values.push((field_name.clone(), value));
-                                    continue;
-                                }
+                            && child.children.len() >= 2
+                        {
+                            if let ClangNodeKind::MemberRef { name: field_name } =
+                                &child.children[0].kind
+                            {
+                                // This is a designated initializer
+                                has_designators = true;
+                                // The value is the second child (or beyond)
+                                let value = self.expr_to_string(&child.children[1]);
+                                field_values.push((field_name.clone(), value));
+                                continue;
                             }
+                        }
                         // Non-designated: just get the value
                         let value = self.expr_to_string(child);
                         field_values.push((String::new(), value));
@@ -9116,7 +9111,12 @@ fn sanitize_identifier(name: &str) -> String {
         .replace("::", "_")
         .replace(['<', '>'], "_")
         .replace(' ', "")
-        .replace(['%', '=', '&', '|', '!', '*', '/', '+', '-', '[', ']', '(', ')', ',', ';', '.', ':'], "_");
+        .replace(
+            [
+                '%', '=', '&', '|', '!', '*', '/', '+', '-', '[', ']', '(', ')', ',', ';', '.', ':',
+            ],
+            "_",
+        );
 
     // Handle keywords
     if RUST_KEYWORDS.contains(&result.as_str()) {
