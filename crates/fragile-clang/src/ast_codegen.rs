@@ -3173,6 +3173,11 @@ impl AstCodeGen {
         self.writeln("pub fn new_1(v: i32) -> Self { Self { value: v as i8 } }");
         self.indent -= 1;
         self.writeln("}");
+        // Type alias for libc++'s _CmpUnspecifiedParam - structurally identical to __cmp_cat___unspec
+        // Mark as generated struct to suppress struct generation from C++ code
+        self.writeln("pub type _CmpUnspecifiedParam = __cmp_cat___unspec;");
+        self.generated_structs
+            .insert("_CmpUnspecifiedParam".to_string());
         self.writeln("");
 
         // partial_ordering - C++20 comparison result type
@@ -3203,6 +3208,8 @@ impl AstCodeGen {
         self.writeln(
             "pub fn op_ge(&self, _other: &__cmp_cat___unspec) -> bool { self._M_value >= 0 }",
         );
+        // Note: _CmpUnspecifiedParam is generated from C++ code and needs to be usable interchangeably
+        // with __cmp_cat___unspec. We define a type alias below.
         self.indent -= 1;
         self.writeln("}");
         self.writeln("pub static PARTIAL_ORDERING_LESS: partial_ordering = partial_ordering { _M_value: -1 };");
