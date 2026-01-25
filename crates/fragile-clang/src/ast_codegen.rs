@@ -3784,8 +3784,10 @@ impl AstCodeGen {
                 ..
             } = &child.kind
             {
-                let sanitized_field = sanitize_identifier(field_name);
-                let sanitized_struct = sanitize_identifier(name);
+                // Use sanitize_static_member_name for uppercase global names
+                // to avoid r# prefix issues with keywords like "in"
+                let sanitized_field = sanitize_static_member_name(field_name);
+                let sanitized_struct = sanitize_static_member_name(name);
                 let rust_ty = ty.to_rust_type_str();
                 let global_name = format!(
                     "{}_{}",
@@ -4405,9 +4407,11 @@ impl AstCodeGen {
 
     /// Generate a trait for a polymorphic class.
     fn generate_trait_for_class(&mut self, name: &str, methods: &[VirtualMethodInfo]) {
+        // Sanitize the class name for use in trait names (handles :: and other invalid chars)
+        let sanitized_name = sanitize_identifier(name);
         self.writeln("");
         self.writeln(&format!("/// Trait for polymorphic dispatch of `{}`", name));
-        self.writeln(&format!("pub trait {}Trait {{", name));
+        self.writeln(&format!("pub trait {}Trait {{", sanitized_name));
         self.indent += 1;
 
         for method in methods {
@@ -4457,8 +4461,11 @@ impl AstCodeGen {
         children: &[ClangNode],
         base_access: Option<BaseAccess>,
     ) {
+        // Sanitize names for use in impl block
+        let sanitized_trait_class = sanitize_identifier(trait_class);
+        let sanitized_class_name = sanitize_identifier(class_name);
         self.writeln("");
-        self.writeln(&format!("impl {}Trait for {} {{", trait_class, class_name));
+        self.writeln(&format!("impl {}Trait for {} {{", sanitized_trait_class, sanitized_class_name));
         self.indent += 1;
 
         for method in methods {
@@ -7460,8 +7467,12 @@ impl AstCodeGen {
                             return global_name.clone();
                         }
                         // Fallback: generate from convention
-                        let global_name =
-                            format!("{}_{}", class_name.to_uppercase(), ident.to_uppercase());
+                        // Use sanitize_static_member_name to avoid r# prefix issues with uppercase names
+                        let global_name = format!(
+                            "{}_{}",
+                            class_name.to_uppercase(),
+                            sanitize_static_member_name(name).to_uppercase()
+                        );
                         let is_static_member =
                             self.static_members.values().any(|g| g == &global_name);
                         if is_static_member {
@@ -7570,7 +7581,7 @@ impl AstCodeGen {
                         return format!(
                             "{}_{}",
                             class_name.to_uppercase(),
-                            sanitize_identifier(member_name).to_uppercase()
+                            sanitize_static_member_name(member_name).to_uppercase()
                         );
                     }
                 }
@@ -7880,8 +7891,12 @@ impl AstCodeGen {
                         }
                         // Try fallback: generate from convention if it looks like a static member
                         // (class name followed by member name, no function type)
-                        let global_name =
-                            format!("{}_{}", class_name.to_uppercase(), ident.to_uppercase());
+                        // Use sanitize_static_member_name to avoid r# prefix issues with uppercase names
+                        let global_name = format!(
+                            "{}_{}",
+                            class_name.to_uppercase(),
+                            sanitize_static_member_name(name).to_uppercase()
+                        );
                         // Check if this global exists in our static_members for any class
                         let is_static_member =
                             self.static_members.values().any(|g| g == &global_name);
@@ -8074,6 +8089,13 @@ impl AstCodeGen {
                         // For comparison operators, strip literal suffixes - Rust infers compatible types
                         let left = strip_literal_suffix(&self.expr_to_string(&node.children[0]));
                         let right = strip_literal_suffix(&self.expr_to_string(&node.children[1]));
+                        // Wrap left operand in parens if it ends with "as TYPE" to prevent
+                        // < being interpreted as generic arguments (e.g., `x as i32 < y`)
+                        let left = if left.contains(" as ") && !left.starts_with('(') {
+                            format!("({})", left)
+                        } else {
+                            left
+                        };
                         format!("{} {} {}", left, op_str, right)
                     } else if matches!(
                         op,
@@ -8778,7 +8800,7 @@ impl AstCodeGen {
                         let global_name = format!(
                             "{}_{}",
                             class_name.to_uppercase(),
-                            sanitize_identifier(member_name).to_uppercase()
+                            sanitize_static_member_name(member_name).to_uppercase()
                         );
                         return format!("unsafe {{ {} }}", global_name);
                     }
@@ -9596,9 +9618,17 @@ fn sanitize_identifier(name: &str) -> String {
             "operator double" => "op_double".to_string(),
             "operator float" => "op_float".to_string(),
             _ => {
-                // Handle other conversion operators like "operator SomeType"
-                if let Some(type_part) = name.strip_prefix("operator ") {
-                    // Skip "operator "
+                // Handle user-defined literal operators like operator""sv
+                // These generate invalid Rust identifiers with quotes
+                if name.contains("\"\"") {
+                    // Extract suffix after quotes: operator""sv -> op_literal_sv
+                    if let Some(suffix) = name.strip_prefix("operator\"\"") {
+                        format!("op_literal_{}", sanitize_identifier(suffix.trim()))
+                    } else {
+                        "op_literal".to_string()
+                    }
+                } else if let Some(type_part) = name.strip_prefix("operator ") {
+                    // Handle other conversion operators like "operator SomeType"
                     format!("op_{}", sanitize_identifier(type_part))
                 } else {
                     name.replace("operator", "op_")
@@ -9617,6 +9647,7 @@ fn sanitize_identifier(name: &str) -> String {
         .replace(
             [
                 '%', '=', '&', '|', '!', '*', '/', '+', '-', '[', ']', '(', ')', ',', ';', '.', ':',
+                '^', '~', '"', '\'', '#', '@', '$', '?', '\\',
             ],
             "_",
         );
@@ -9625,6 +9656,33 @@ fn sanitize_identifier(name: &str) -> String {
     if RUST_KEYWORDS.contains(&result.as_str()) {
         result = format!("r#{}", result);
     }
+
+    // Handle empty names
+    if result.is_empty() {
+        result = "_unnamed".to_string();
+    }
+
+    result
+}
+
+/// Sanitize identifier for use in static member names (CLASS_MEMBER format).
+/// Unlike sanitize_identifier, this doesn't apply r# prefix since the result
+/// will be uppercased and combined with a class name prefix.
+fn sanitize_static_member_name(name: &str) -> String {
+    let mut result = name.to_string();
+
+    // Replace invalid characters
+    result = result
+        .replace("::", "_")
+        .replace(['<', '>'], "_")
+        .replace(' ', "")
+        .replace(
+            [
+                '%', '=', '&', '|', '!', '*', '/', '+', '-', '[', ']', '(', ')', ',', ';', '.', ':',
+                '^', '~', '"', '\'', '#', '@', '$', '?', '\\',
+            ],
+            "_",
+        );
 
     // Handle empty names
     if result.is_empty() {
