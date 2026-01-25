@@ -10466,3 +10466,96 @@ fn test_e2e_interval_ops() {
 
     assert_eq!(exit_code, 0, "Interval operations should work correctly");
 }
+
+/// Test abstract class with inherited method through concrete derived class.
+/// When Circle inherits draw() from abstract Shape without overriding it,
+/// the vtable wrapper must call through __base to access the inherited method.
+#[test]
+fn test_e2e_abstract_class_inherited_method() {
+    let source = r#"
+        // Abstract base class
+        class Shape {
+        public:
+            virtual double area() = 0;  // Pure virtual
+
+            // Non-pure virtual with default implementation
+            virtual int draw() {
+                return 100;  // Default implementation
+            }
+
+            virtual ~Shape() {}
+        };
+
+        // Circle inherits draw() without overriding
+        class Circle : public Shape {
+            double radius;
+        public:
+            Circle(double r) : radius(r) {}
+
+            // Only override area(), inherit draw()
+            double area() override {
+                return radius * radius * 3;  // Simplified pi
+            }
+        };
+
+        // Square overrides both
+        class Square : public Shape {
+            double side;
+        public:
+            Square(double s) : side(s) {}
+
+            double area() override {
+                return side * side;
+            }
+
+            int draw() override {
+                return 200;  // Override
+            }
+        };
+
+        int main() {
+            Circle c(2.0);  // area = 4*3 = 12
+            Square s(3.0);  // area = 9
+
+            // Test direct calls
+            if (c.area() < 11 || c.area() > 13) return 1;
+            if (s.area() < 8 || s.area() > 10) return 2;
+
+            // Test inherited draw() through Circle
+            if (c.draw() != 100) return 3;
+
+            // Test overridden draw() through Square
+            if (s.draw() != 200) return 4;
+
+            // Test polymorphic calls through base pointer
+            Shape* shapes[2];
+            shapes[0] = &c;
+            shapes[1] = &s;
+
+            // Polymorphic area()
+            double a0 = shapes[0]->area();
+            double a1 = shapes[1]->area();
+            if (a0 < 11 || a0 > 13) return 5;
+            if (a1 < 8 || a1 > 10) return 6;
+
+            // Polymorphic draw() - THIS IS THE KEY TEST
+            // shapes[0] is Circle which inherits draw() from abstract Shape
+            // shapes[1] is Square which overrides draw()
+            int d0 = shapes[0]->draw();
+            int d1 = shapes[1]->draw();
+            if (d0 != 100) return 7;  // Circle inherits default draw()
+            if (d1 != 200) return 8;  // Square overrides draw()
+
+            return 0;  // Success
+        }
+    "#;
+
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_abstract_class_inherited.cpp")
+            .expect("E2E test failed");
+
+    assert_eq!(
+        exit_code, 0,
+        "Abstract class with inherited method should work correctly"
+    );
+}
