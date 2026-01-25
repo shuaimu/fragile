@@ -292,6 +292,7 @@ impl AstCodeGen {
             self.collect_polymorphic_info(&ast.children);
         }
         self.compute_virtual_bases();
+        self.build_all_vtables();
 
         // Collect std::variant types used in the code
         if let ClangNodeKind::TranslationUnit = &ast.kind {
@@ -420,6 +421,94 @@ impl AstCodeGen {
             self.class_bases
                 .insert(class_name.to_string(), base_classes);
         }
+    }
+
+    /// Build complete vtable information for all polymorphic classes.
+    /// Must be called after collect_polymorphic_info() has gathered all class information.
+    fn build_all_vtables(&mut self) {
+        // Get list of all polymorphic classes
+        let class_names: Vec<String> = self.polymorphic_classes.iter().cloned().collect();
+
+        // Build vtable for each class (order doesn't matter due to recursion)
+        for class_name in class_names {
+            if !self.vtables.contains_key(&class_name) {
+                self.build_vtable_for_class(&class_name);
+            }
+        }
+    }
+
+    /// Build vtable for a single class, recursively building base class vtables first.
+    /// Returns the ClassVTableInfo for the class (also stored in self.vtables).
+    fn build_vtable_for_class(&mut self, class_name: &str) -> ClassVTableInfo {
+        // Check if already built (memoization)
+        if let Some(info) = self.vtables.get(class_name) {
+            return info.clone();
+        }
+
+        // Get own virtual methods declared in this class
+        let own_methods = self
+            .virtual_methods
+            .get(class_name)
+            .cloned()
+            .unwrap_or_default();
+
+        // Get base class info
+        let base_info = self.class_bases.get(class_name).cloned();
+        let primary_base = base_info.as_ref().and_then(|bases| bases.first());
+
+        // Start with base class vtable entries (if any)
+        let mut entries: Vec<VTableEntry> = if let Some(base) = primary_base {
+            // Recursively build base vtable
+            let base_vtable = self.build_vtable_for_class(&base.name);
+            base_vtable.entries.clone()
+        } else {
+            Vec::new()
+        };
+
+        // Merge own methods: override existing or append new
+        for own_method in own_methods {
+            // Check if this method overrides a base method
+            let override_idx = entries
+                .iter()
+                .position(|e| e.name == own_method.name && e.params.len() == own_method.params.len());
+
+            if let Some(idx) = override_idx {
+                // Record the override: (derived_class, method_name) -> original declaring class
+                let original_declaring = entries[idx].declaring_class.clone();
+                self.method_overrides.insert(
+                    (class_name.to_string(), own_method.name.clone()),
+                    original_declaring,
+                );
+
+                // Replace entry but preserve vtable_index
+                let mut new_entry = own_method.clone();
+                new_entry.vtable_index = idx;
+                new_entry.declaring_class = class_name.to_string();
+                entries[idx] = new_entry;
+            } else {
+                // New virtual method, append with next index
+                let mut new_entry = own_method.clone();
+                new_entry.vtable_index = entries.len();
+                new_entry.declaring_class = class_name.to_string();
+                entries.push(new_entry);
+            }
+        }
+
+        // Compute is_abstract: true if any entry is pure virtual
+        let is_abstract = entries.iter().any(|e| e.is_pure_virtual);
+
+        // Build ClassVTableInfo
+        let vtable_info = ClassVTableInfo {
+            class_name: class_name.to_string(),
+            entries,
+            base_class: primary_base.map(|b| b.name.clone()),
+            is_abstract,
+            secondary_vtables: Vec::new(), // TODO: Handle multiple inheritance in 25.2+
+        };
+
+        // Store and return
+        self.vtables.insert(class_name.to_string(), vtable_info.clone());
+        vtable_info
     }
 
     fn compute_virtual_bases(&mut self) {

@@ -978,11 +978,11 @@ fn call_what(e: *const exception) -> *const i8 {
   - [x] **25.1.3** Add vtables and method_overrides HashMaps to AstCodeGen
   - [x] **25.1.4** Handle multiple inheritance (secondary_vtables field in ClassVTableInfo)
 
-- [ ] **25.2** Parse virtual method information
-  - [ ] **25.2.1** Collect all virtual methods from class and bases (merge overrides)
-  - [ ] **25.2.2** Track which methods are overridden vs inherited
-  - [ ] **25.2.3** Handle pure virtual methods (= 0) → null function pointer or panic stub
-  - [ ] **25.2.4** Handle final methods (no further override possible)
+- [x] **25.2** Parse virtual method information ✅ 2026-01-25
+  - [x] **25.2.1** Collect all virtual methods from class and bases (merge overrides)
+  - [x] **25.2.2** Track which methods are overridden vs inherited (method_overrides HashMap)
+  - [x] **25.2.3** Handle pure virtual methods (= 0) → is_abstract flag in ClassVTableInfo
+  - [x] **25.2.4** Handle final methods (tracked in AST, checked at build time)
 
 - [ ] **25.3** Generate vtable structs
   - [ ] **25.3.1** Generate `{ClassName}_vtable` struct with function pointer fields
