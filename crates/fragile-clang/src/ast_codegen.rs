@@ -1715,6 +1715,10 @@ impl AstCodeGen {
                 || param_str.contains("_Args")
                 || param_str.contains("type_parameter_")
                 || param_str.contains("(*)")
+                || param_str.contains("_CharT")  // Skip unresolved template params
+                || param_str.contains("__va_list_tag")  // Skip variadic internal types
+                || param_str.contains("int (")  // Skip C-style function pointer: int (*)(...)
+                || param_str.contains("void (")  // Skip C-style function pointer: void (*)(...)
             {
                 // C-style function pointer syntax like void (*)(void *) can't be parsed by Rust
                 return;
@@ -1727,6 +1731,10 @@ impl AstCodeGen {
             || ret_type.contains("_Args")
             || ret_type.contains("type_parameter_")
             || ret_type.contains("(*)")
+            || ret_type.contains("_CharT")
+            || ret_type.contains("__va_list_tag")
+            || ret_type.contains("__gnu_cxx::")  // Skip GCC extension types
+            || ret_type.contains("__enable_if")  // Skip SFINAE return types
         {
             return;
         }
@@ -1755,6 +1763,9 @@ impl AstCodeGen {
             param_strs.push(format!("{}: {}", pname, rust_ty));
         }
 
+        // Sanitize the mangled name - it may contain `extern "C"` and other invalid characters
+        let sanitized_mangled_name = sanitize_identifier(mangled_name);
+
         self.writeln(&format!(
             "/// Function template instantiation: {}",
             template_name
@@ -1766,7 +1777,7 @@ impl AstCodeGen {
         self.writeln(&format!("#[inline]"));
         self.writeln(&format!(
             "pub fn {}({}){} {{",
-            mangled_name,
+            sanitized_mangled_name,
             param_strs.join(", "),
             ret_str
         ));
@@ -12137,6 +12148,7 @@ fn sanitize_type_for_fn_name(ty: &str) -> String {
         .replace(';', "_")
         .replace('(', "_")
         .replace(')', "_")
+        .replace('"', "_")  // Handle quotes in extern "C" linkage specifiers
 }
 
 /// Get default value for a type.
