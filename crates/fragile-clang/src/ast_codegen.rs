@@ -6815,6 +6815,19 @@ impl AstCodeGen {
                         self.writeln(&format!("{}: {},", field_name, base_call));
                         initialized_vbase.insert(field_name.clone());
                     }
+
+                    // Initialize vtable pointer for ROOT polymorphic classes
+                    if let Some(vtable_info) = self.vtables.get(struct_name).cloned() {
+                        if vtable_info.base_class.is_none() {
+                            let sanitized = sanitize_identifier(struct_name);
+                            self.writeln(&format!(
+                                "__vtable: &{}_VTABLE,",
+                                sanitized.to_uppercase()
+                            ));
+                            initialized_vbase.insert("__vtable".to_string());
+                        }
+                    }
+
                     let vbases_internal = self
                         .virtual_bases
                         .get(struct_name)
@@ -6930,10 +6943,18 @@ impl AstCodeGen {
                         .map(|idx| Self::has_non_member_ctor_stmts(&node.children[idx]))
                         .unwrap_or(false);
 
+                    // Check if this is a derived polymorphic class that needs vtable set after construction
+                    let is_derived_polymorphic = self.vtables.get(struct_name)
+                        .map(|v| v.base_class.is_some())
+                        .unwrap_or(false);
+
+                    // Use __self pattern if we need to do post-construction work
+                    let needs_self_pattern = has_non_member_stmts || is_derived_polymorphic;
+
                     self.writeln(&format!("pub fn {}({}) -> Self {{", fn_name, params_str));
                     self.indent += 1;
 
-                    if has_non_member_stmts {
+                    if needs_self_pattern {
                         // Need to run statements after construction, so use let + return pattern
                         self.writeln("let mut __self = Self {");
                     } else {
@@ -6950,6 +6971,21 @@ impl AstCodeGen {
                         self.writeln(&format!("{}: {},", field_name, base_call));
                         initialized.insert(field_name.clone());
                     }
+
+                    // Initialize vtable pointer for ROOT polymorphic classes
+                    // (Derived classes get vtable pointer through __base)
+                    if let Some(vtable_info) = self.vtables.get(struct_name).cloned() {
+                        if vtable_info.base_class.is_none() {
+                            // This is a root polymorphic class - set vtable pointer
+                            let sanitized = sanitize_identifier(struct_name);
+                            self.writeln(&format!(
+                                "__vtable: &{}_VTABLE,",
+                                sanitized.to_uppercase()
+                            ));
+                            initialized.insert("__vtable".to_string());
+                        }
+                    }
+
                     // Get field info for type-aware initialization
                     let all_fields = self
                         .class_fields
@@ -6980,8 +7016,21 @@ impl AstCodeGen {
 
                     self.indent -= 1;
 
-                    if has_non_member_stmts {
+                    if needs_self_pattern {
                         self.writeln("};");
+
+                        // Set vtable pointer for derived polymorphic classes
+                        // The base constructor set base's vtable, we need to override it
+                        if is_derived_polymorphic {
+                            let sanitized = sanitize_identifier(struct_name);
+                            // Find the path to __vtable through inheritance chain
+                            // For single inheritance, it's just __base.__vtable
+                            self.writeln(&format!(
+                                "__self.__base.__vtable = &{}_VTABLE;",
+                                sanitized.to_uppercase()
+                            ));
+                        }
+
                         // Generate non-member statements with __self context
                         self.use_ctor_self = true;
                         if let Some(idx) = ctor_compound_stmt {

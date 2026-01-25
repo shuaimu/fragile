@@ -1000,10 +1000,10 @@ fn call_what(e: *const exception) -> *const i8 {
   - [x] **25.5.2** Generate vtable wrapper functions that call actual methods
   - [x] **25.5.3** Skip abstract classes (is_abstract flag from ClassVTableInfo)
 
-- [ ] **25.6** Update constructors
-  - [ ] **25.6.1** Set vtable pointer in constructor: `self.__vtable = &{CLASS}_VTABLE`
-  - [ ] **25.6.2** For derived classes, set after base constructor call
-  - [ ] **25.6.3** Handle virtual base classes (shared vtable pointer)
+- [x] **25.6** Update constructors ✅ 2026-01-25
+  - [x] **25.6.1** Set vtable pointer in constructor: `__vtable: &{CLASS}_VTABLE` for root classes
+  - [x] **25.6.2** For derived classes, set after base constructor: `__self.__base.__vtable = &{CLASS}_VTABLE`
+  - [ ] **25.6.3** Handle virtual base classes (shared vtable pointer) (future)
 
 - [ ] **25.7** Generate virtual call dispatch
   - [ ] **25.7.1** Virtual method call `obj.method()` → `((*obj.__vtable).method)(obj, args...)`
