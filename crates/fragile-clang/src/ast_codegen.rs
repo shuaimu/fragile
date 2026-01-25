@@ -5165,7 +5165,7 @@ impl AstCodeGen {
         self.writeln("// Atomic fence functions");
         self.writeln("#[inline] pub fn __c11_atomic_thread_fence(_order: i32) { std::sync::atomic::fence(std::sync::atomic::Ordering::SeqCst); }");
         self.writeln("#[inline] pub fn __c11_atomic_signal_fence(_order: i32) { std::sync::atomic::fence(std::sync::atomic::Ordering::SeqCst); }");
-        self.writeln("#[inline] pub fn __atomic_always_lock_free(_size: u64, _ptr: *const std::ffi::c_void) -> bool { true }");
+        self.writeln("#[inline] pub const fn __atomic_always_lock_free(_size: u64, _ptr: *const std::ffi::c_void) -> bool { true }");
         self.writeln("");
 
         // Thread and time functions
