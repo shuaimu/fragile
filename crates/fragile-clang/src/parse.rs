@@ -2594,6 +2594,16 @@ impl ClangParser {
             if info.count == 1 {
                 if let Some(child_type) = info.child_ty {
                     // Check if the types differ and need a cast
+                    // Helper function to check if a named type is a size type
+                    fn is_size_type(name: &str) -> bool {
+                        matches!(name,
+                            "ptrdiff_t" | "std::ptrdiff_t" | "ssize_t" |
+                            "size_t" | "std::size_t" |
+                            "intptr_t" | "std::intptr_t" |
+                            "uintptr_t" | "std::uintptr_t" |
+                            "difference_type" | "size_type")
+                    }
+
                     let needs_cast = match (&expr_type, &child_type) {
                         // Integral to integral (char to int, short to long, etc.)
                         (CppType::Int { .. }, CppType::Char { .. }) |
@@ -2603,6 +2613,22 @@ impl ClangParser {
                         (CppType::Long { .. }, CppType::Char { .. }) |
                         (CppType::LongLong { .. }, CppType::Int { .. }) |
                         (CppType::LongLong { .. }, CppType::Long { .. }) => {
+                            Some(CastKind::IntegralCast)
+                        }
+                        // Named size types (ptrdiff_t, size_t) from integral
+                        (CppType::Named(name), CppType::Int { .. }) |
+                        (CppType::Named(name), CppType::Short { .. }) |
+                        (CppType::Named(name), CppType::Char { .. }) |
+                        (CppType::Named(name), CppType::Long { .. }) |
+                        (CppType::Named(name), CppType::LongLong { .. })
+                            if is_size_type(name) => {
+                            Some(CastKind::IntegralCast)
+                        }
+                        // Integral to named size types
+                        (CppType::Long { .. }, CppType::Named(name)) |
+                        (CppType::Int { .. }, CppType::Named(name)) |
+                        (CppType::LongLong { .. }, CppType::Named(name))
+                            if is_size_type(name) => {
                             Some(CastKind::IntegralCast)
                         }
                         // Floating to floating

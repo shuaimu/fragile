@@ -1638,6 +1638,33 @@ impl AstCodeGen {
             self.writeln(&format!("pub struct {};", name));
         }
         self.writeln("");
+
+        // Hash function stubs for libstdc++ hash implementation
+        self.writeln("// Hash function stubs for libstdc++");
+        self.writeln("#[inline]");
+        self.writeln("pub fn _Hash_bytes(_ptr: *const (), _len: usize, _seed: usize) -> usize {");
+        self.indent += 1;
+        self.writeln("// Simple FNV-1a hash stub");
+        self.writeln("let mut hash: usize = 14695981039346656037;");
+        self.writeln("let slice = unsafe { std::slice::from_raw_parts(_ptr as *const u8, _len) };");
+        self.writeln("for byte in slice {");
+        self.indent += 1;
+        self.writeln("hash ^= *byte as usize;");
+        self.writeln("hash = hash.wrapping_mul(1099511628211);");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("hash ^ _seed");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("");
+        self.writeln("#[inline]");
+        self.writeln("pub fn _Fnv_hash_bytes(_ptr: *const (), _len: usize, _seed: usize) -> usize {");
+        self.indent += 1;
+        self.writeln("// FNV-1a hash");
+        self.writeln("_Hash_bytes(_ptr, _len, _seed)");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("");
     }
 
     /// Generate Rust enum definitions for all collected std::variant types.
@@ -3054,9 +3081,25 @@ impl AstCodeGen {
         }
         self.generated_structs.insert(rust_name.clone());
 
+        // Check if any field contains c_void (requires ManuallyDrop, which breaks Copy)
+        let has_cvoid_field = children.iter().any(|child| {
+            if let ClangNodeKind::FieldDecl { ty, is_static, .. } = &child.kind {
+                if *is_static {
+                    return false;
+                }
+                let type_str = ty.to_rust_type_str();
+                type_str == "std::ffi::c_void" || type_str.contains("c_void")
+            } else {
+                false
+            }
+        });
+
         self.writeln(&format!("/// C++ union `{}`", name));
         self.writeln("#[repr(C)]");
-        self.writeln("#[derive(Copy, Clone)]");
+        // Can't derive Copy/Clone if any field needs ManuallyDrop (c_void doesn't impl Copy/Clone)
+        if !has_cvoid_field {
+            self.writeln("#[derive(Copy, Clone)]");
+        }
         self.writeln(&format!("pub union {} {{", rust_name));
         self.indent += 1;
 
@@ -3100,6 +3143,27 @@ impl AstCodeGen {
         self.indent -= 1;
         self.writeln("}");
         self.writeln("");
+
+        // Generate Clone impl if we have c_void fields (can't derive it)
+        if has_cvoid_field {
+            self.writeln(&format!("impl Clone for {} {{", rust_name));
+            self.indent += 1;
+            self.writeln("fn clone(&self) -> Self {");
+            self.indent += 1;
+            // Use unsafe memcpy to clone the union bytes
+            self.writeln("unsafe {");
+            self.indent += 1;
+            self.writeln("let mut copy: Self = std::mem::zeroed();");
+            self.writeln("std::ptr::copy_nonoverlapping(self, &mut copy, 1);");
+            self.writeln("copy");
+            self.indent -= 1;
+            self.writeln("}");
+            self.indent -= 1;
+            self.writeln("}");
+            self.indent -= 1;
+            self.writeln("}");
+            self.writeln("");
+        }
     }
 
     /// Generate a type alias for typedef or using declarations.
@@ -6144,12 +6208,28 @@ impl AstCodeGen {
                         };
                     }
 
+                    // Handle pointer subtraction: ptr1 - ptr2 -> unsafe { ptr1.offset_from(ptr2) }
+                    // Returns isize (number of elements between pointers)
+                    let right_type = Self::get_expr_type(&node.children[1]);
+                    let right_is_pointer = matches!(right_type, Some(CppType::Pointer { .. }));
+                    if left_is_pointer && right_is_pointer && matches!(op, BinaryOp::Sub) {
+                        let left = self.expr_to_string(&node.children[0]);
+                        let right = self.expr_to_string(&node.children[1]);
+                        return format!("unsafe {{ {}.offset_from({}) }}", left, right);
+                    }
+
                     // Handle pointer arithmetic specially
                     if left_is_pointer && matches!(op, BinaryOp::AddAssign | BinaryOp::SubAssign) {
                         let left = self.expr_to_string(&node.children[0]);
                         let right = self.expr_to_string(&node.children[1]);
                         let method = if matches!(op, BinaryOp::AddAssign) { "add" } else { "sub" };
-                        format!("{} = {}.{}({} as usize)", left, left, method, right)
+                        // Wrap complex expressions in parens before casting to usize
+                        let right_needs_parens = right.contains(' ') || right.contains("as ");
+                        if right_needs_parens {
+                            format!("{} = {}.{}(({}) as usize)", left, left, method, right)
+                        } else {
+                            format!("{} = {}.{}({} as usize)", left, left, method, right)
+                        }
                     } else if matches!(op, BinaryOp::Assign | BinaryOp::AddAssign | BinaryOp::SubAssign |
                                    BinaryOp::MulAssign | BinaryOp::DivAssign |
                                    BinaryOp::RemAssign | BinaryOp::AndAssign |
@@ -6171,6 +6251,13 @@ impl AstCodeGen {
                         format!("{} {} {}", left, op_str, right)
                     } else if matches!(op, BinaryOp::Eq | BinaryOp::Ne | BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge) {
                         // For comparison operators, strip literal suffixes - Rust infers compatible types
+                        let left = strip_literal_suffix(&self.expr_to_string(&node.children[0]));
+                        let right = strip_literal_suffix(&self.expr_to_string(&node.children[1]));
+                        format!("{} {} {}", left, op_str, right)
+                    } else if matches!(op, BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Rem |
+                                       BinaryOp::And | BinaryOp::Or | BinaryOp::Xor | BinaryOp::Shl | BinaryOp::Shr) {
+                        // For arithmetic/bitwise operators, strip literal suffixes to let Rust infer types
+                        // This handles cases like `isize / 64i32` -> `isize / 64`
                         let left = strip_literal_suffix(&self.expr_to_string(&node.children[0]));
                         let right = strip_literal_suffix(&self.expr_to_string(&node.children[1]));
                         format!("{} {} {}", left, op_str, right)
