@@ -4641,8 +4641,11 @@ impl AstCodeGen {
         self.writeln("pub mod _V2 {");
         self.indent += 1;
         self.writeln("use super::error_category;");
-        // error_category functions return a reference to a static category object
-        // Return &'static error_category to match the struct type we defined
+        // error_category functions - return &'static error_category
+        // The generated code may have patterns like:
+        // - generic_category() - used directly (needs &error_category)
+        // - &generic_category() as *const T - needs pointer (should just use result directly)
+        // We return a reference that can be converted to pointer via `as *const _`
         self.writeln("static GENERIC_CATEGORY: error_category = error_category;");
         self.writeln("static SYSTEM_CATEGORY: error_category = error_category;");
         self.writeln("");
