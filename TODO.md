@@ -14,11 +14,11 @@ We just convert the fully-resolved AST to equivalent Rust code.
 ## Current Status
 
 **Grammar Tests**: 20/20 passing
-**E2E Tests**: 101/101 passing (2 ignored due to STL header limitations)
+**E2E Tests**: 103/103 passing (2 ignored due to STL header limitations)
 **libc++ Transpilation Tests**: 8/8 passing (cstddef, cstdint, type_traits, initializer_list, vector, cstddef_compilation, iostream, thread)
 **Runtime Linking Tests**: 2/2 passing (FILE I/O, pthread)
 **Runtime Function Mapping Tests**: 1/1 passing
-**Total Tests**: 220 passing
+**Total Tests**: 222 passing
 
 **Working**:
 - Simple functions with control flow (if/else, while, for, do-while, switch, recursion)
@@ -901,6 +901,8 @@ Test against actual open-source C++ projects.
     - [x] Merge Sort: divide and conquer, out-of-place merge, temporary arrays
     - [x] Expression Tree: polymorphic nodes, virtual evaluate(), inheritance hierarchy
     - [x] Object Pool: fixed-size allocation, reuse patterns, index management
+    - [x] State Machine: state transitions, event handling, switch statements
+    - [x] Calculator: operator precedence, if-else chains, function composition
     - Fixed: Address-of pointer subscript (&arr[i] → arr.add(i as usize))
     - Fixed: Array initialization prefers InitListExpr over array size literal
     - Fixed: Logical NOT (!ptr) on pointers → ptr.is_null()

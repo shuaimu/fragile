@@ -6688,3 +6688,256 @@ fn test_e2e_object_pool() {
         "Object pool should work correctly"
     );
 }
+
+/// E2E test: Finite State Machine
+/// Tests: enum-like state management, switch statements, transition logic
+#[test]
+fn test_e2e_state_machine() {
+    let source = r#"
+        // Simple Finite State Machine for a traffic light
+        // Tests: state transitions, switch logic, condition handling
+        // Using integer literals directly since const case labels have issues
+
+        struct TrafficLight {
+            int currentState;  // 0=red, 1=yellow, 2=green
+            int transitionCount;
+            bool emergencyMode;
+
+            void init() {
+                currentState = 0;  // red
+                transitionCount = 0;
+                emergencyMode = false;
+            }
+
+            int getState() const {
+                return currentState;
+            }
+
+            bool isEmergency() const {
+                return emergencyMode;
+            }
+
+            int getTransitions() const {
+                return transitionCount;
+            }
+
+            void handleEvent(int event) {
+                if (event == 2) {  // reset
+                    currentState = 0;  // red
+                    emergencyMode = false;
+                    transitionCount++;
+                    return;
+                }
+
+                if (event == 1) {  // emergency
+                    emergencyMode = true;
+                    currentState = 1;  // yellow
+                    transitionCount++;
+                    return;
+                }
+
+                if (emergencyMode) {
+                    return;
+                }
+
+                // Normal timer transition (event == 0)
+                switch (currentState) {
+                    case 0:  // red -> green
+                        currentState = 2;
+                        break;
+                    case 2:  // green -> yellow
+                        currentState = 1;
+                        break;
+                    case 1:  // yellow -> red
+                        currentState = 0;
+                        break;
+                }
+                transitionCount++;
+            }
+
+            // Simulate multiple timer events
+            void advance(int count) {
+                for (int i = 0; i < count; i++) {
+                    handleEvent(0);  // timer event
+                }
+            }
+        };
+
+        int main() {
+            TrafficLight light;
+            light.init();
+
+            // Test 1: Initial state is red (0)
+            if (light.getState() != 0) return 1;
+            if (light.getTransitions() != 0) return 2;
+
+            // Test 2: Timer -> red to green (0 -> 2)
+            light.handleEvent(0);  // timer
+            if (light.getState() != 2) return 3;
+            if (light.getTransitions() != 1) return 4;
+
+            // Test 3: Timer -> green to yellow (2 -> 1)
+            light.handleEvent(0);  // timer
+            if (light.getState() != 1) return 5;
+
+            // Test 4: Timer -> yellow to red (1 -> 0)
+            light.handleEvent(0);  // timer
+            if (light.getState() != 0) return 6;
+
+            // Test 5: Full cycle
+            int initialTransitions = light.getTransitions();
+            light.advance(3);  // One full cycle
+            if (light.getState() != 0) return 7;
+            if (light.getTransitions() != initialTransitions + 3) return 8;
+
+            // Test 6: Emergency mode
+            light.init();
+            light.advance(1);  // Go to green
+            light.handleEvent(1);  // emergency
+            if (light.getState() != 1) return 9;  // yellow
+            if (!light.isEmergency()) return 10;
+
+            // Test 7: Timer ignored during emergency
+            int beforeTransitions = light.getTransitions();
+            light.handleEvent(0);  // timer
+            if (light.getState() != 1) return 11;  // still yellow
+            if (light.getTransitions() != beforeTransitions) return 12;
+
+            // Test 8: Reset clears emergency
+            light.handleEvent(2);  // reset
+            if (light.getState() != 0) return 13;  // red
+            if (light.isEmergency()) return 14;
+
+            // Test 9: Normal operation after reset
+            light.handleEvent(0);  // timer
+            if (light.getState() != 2) return 15;  // green
+
+            // Test 10: Multiple cycles
+            light.init();
+            light.advance(9);  // 3 full cycles
+            if (light.getState() != 0) return 16;  // red
+            if (light.getTransitions() != 9) return 17;
+
+            return 0;  // Success
+        }
+    "#;
+
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_state_machine.cpp").expect("E2E test failed");
+
+    assert_eq!(
+        exit_code, 0,
+        "State machine should work correctly"
+    );
+}
+
+/// E2E test: Simple Calculator with operator precedence
+/// Tests: if-else chains, arithmetic operations, multiple functions
+#[test]
+fn test_e2e_calculator() {
+    let source = r#"
+        // Simple arithmetic expression calculator
+        // Supports operators: 0=add, 1=sub, 2=mul, 3=div
+        // Using int ops since switch on char literal has issues
+
+        int calculate(int a, int op, int b) {
+            if (op == 0) return a + b;      // add
+            if (op == 1) return a - b;      // sub
+            if (op == 2) return a * b;      // mul
+            if (op == 3) {                  // div
+                if (b == 0) return 0;
+                return a / b;
+            }
+            return 0;
+        }
+
+        // Check if operator is valid (0-3)
+        bool isValidOp(int op) {
+            return op >= 0 && op <= 3;
+        }
+
+        // Get operator precedence (higher = binds tighter)
+        // add/sub = 1, mul/div = 2
+        int precedence(int op) {
+            if (op == 0 || op == 1) return 1;  // add, sub
+            if (op == 2 || op == 3) return 2;  // mul, div
+            return 0;
+        }
+
+        // Evaluate a op1 b op2 c with precedence
+        int evaluateThree(int a, int op1, int b, int op2, int c) {
+            if (precedence(op2) > precedence(op1)) {
+                // Evaluate right side first
+                int right = calculate(b, op2, c);
+                return calculate(a, op1, right);
+            } else {
+                // Evaluate left side first
+                int left = calculate(a, op1, b);
+                return calculate(left, op2, c);
+            }
+        }
+
+        int main() {
+            // Test 1: Basic addition (3 + 5 = 8)
+            if (calculate(3, 0, 5) != 8) return 1;
+
+            // Test 2: Basic subtraction (10 - 4 = 6)
+            if (calculate(10, 1, 4) != 6) return 2;
+
+            // Test 3: Basic multiplication (6 * 7 = 42)
+            if (calculate(6, 2, 7) != 42) return 3;
+
+            // Test 4: Basic division (20 / 4 = 5)
+            if (calculate(20, 3, 4) != 5) return 4;
+
+            // Test 5: Division by zero
+            if (calculate(10, 3, 0) != 0) return 5;
+
+            // Test 6: Negative result (3 - 10 = -7)
+            if (calculate(3, 1, 10) != -7) return 6;
+
+            // Test 7: Operator validation
+            if (!isValidOp(0)) return 7;
+            if (!isValidOp(1)) return 8;
+            if (!isValidOp(2)) return 9;
+            if (!isValidOp(3)) return 10;
+            if (isValidOp(5)) return 11;
+
+            // Test 8: Precedence
+            if (precedence(2) <= precedence(0)) return 12;  // mul > add
+            if (precedence(3) <= precedence(1)) return 13;  // div > sub
+            if (precedence(0) != precedence(1)) return 14;  // add == sub
+            if (precedence(2) != precedence(3)) return 15;  // mul == div
+
+            // Test 9: Three operand with precedence
+            // 2 + 3 * 4 = 2 + 12 = 14 (not 5 * 4 = 20)
+            if (evaluateThree(2, 0, 3, 2, 4) != 14) return 16;
+
+            // Test 10: Three operand, same precedence
+            // 10 - 4 + 2 = 6 + 2 = 8 (left to right)
+            if (evaluateThree(10, 1, 4, 0, 2) != 8) return 17;
+
+            // Test 11: Multiplication then addition
+            // 3 * 4 + 2 = 12 + 2 = 14
+            if (evaluateThree(3, 2, 4, 0, 2) != 14) return 18;
+
+            // Test 12: Division with subtraction
+            // 20 / 4 - 3 = 5 - 3 = 2
+            if (evaluateThree(20, 3, 4, 1, 3) != 2) return 19;
+
+            // Test 13: Complex expression
+            // 5 + 6 / 2 = 5 + 3 = 8
+            if (evaluateThree(5, 0, 6, 3, 2) != 8) return 20;
+
+            return 0;  // Success
+        }
+    "#;
+
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_calculator.cpp").expect("E2E test failed");
+
+    assert_eq!(
+        exit_code, 0,
+        "Calculator should work correctly"
+    );
+}
