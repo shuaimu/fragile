@@ -1596,6 +1596,29 @@ impl AstCodeGen {
             self.writeln(&format!("pub struct {};", name));
         }
         self.writeln("");
+
+        // Numeric traits stubs - used as base classes for numeric_limits
+        self.writeln("// Numeric traits stubs");
+        for ty in &["float", "double", "long_double"] {
+            let name = format!("__numeric_traits_floating_{}", ty);
+            self.generated_structs.insert(name.clone());
+            self.writeln("#[repr(C)]");
+            self.writeln("#[derive(Default, Copy, Clone)]");
+            self.writeln(&format!("pub struct {};", name));
+        }
+        self.writeln("");
+
+
+        // Additional template placeholder stubs - only for types that aren't generated from C++ code
+        // These are referenced but never defined in the transpiled code
+        self.writeln("// Additional template placeholder stubs");
+        for name in &["_dependent_type", "_Elt", "_Tag", "_Sink", "_Res", "_Ptr", "__size_type"] {
+            // Don't add to generated_structs to avoid conflict with C++ definitions
+            self.writeln("#[repr(C)]");
+            self.writeln("#[derive(Default, Copy, Clone)]");
+            self.writeln(&format!("pub struct {};", name));
+        }
+        self.writeln("");
     }
 
     /// Generate Rust enum definitions for all collected std::variant types.
