@@ -213,6 +213,9 @@ pub struct AstCodeGen {
     static_members: HashMap<(String, String), String>,
     /// Track global variable names (require unsafe access)
     global_vars: HashSet<String>,
+    /// Map from original variable name to prefixed global variable name
+    /// This is needed to resolve DeclRefExpr references to globals with __gv_ prefix
+    global_var_mapping: HashMap<String, String>,
     /// Current namespace path during code generation (for relative path computation)
     current_namespace: Vec<String>,
     /// When true, use __self instead of self for this expressions
@@ -298,6 +301,7 @@ impl AstCodeGen {
             method_overrides: HashMap::new(),
             static_members: HashMap::new(),
             global_vars: HashSet::new(),
+            global_var_mapping: HashMap::new(),
             current_namespace: Vec::new(),
             use_ctor_self: false,
             current_return_type: None,
@@ -6043,7 +6047,11 @@ impl AstCodeGen {
         children: &[ClangNode],
     ) {
         // Sanitize the name to handle special characters and keywords
-        let safe_name = sanitize_identifier(name);
+        let base_name = sanitize_identifier(name);
+
+        // Prefix global variables with __gv_ to prevent parameter shadowing
+        // Rust doesn't allow function parameters to shadow statics, so we need unique names
+        let safe_name = format!("__gv_{}", base_name);
 
         // Skip if already generated (handles duplicates from template instantiation)
         if self.global_vars.contains(&safe_name) {
@@ -6061,7 +6069,10 @@ impl AstCodeGen {
             return;
         }
         // Track this as a global variable (needs unsafe access and deduplication)
+        // Store the mapping from original name to prefixed name for reference resolution
         self.global_vars.insert(safe_name.clone());
+        self.global_var_mapping
+            .insert(base_name.clone(), safe_name.clone());
         self.writeln(&format!("/// C++ global variable `{}`", name));
 
         // Get initial value if present
@@ -6792,7 +6803,10 @@ impl AstCodeGen {
     /// Check if an expression node refers to a global variable (needs unsafe access).
     fn is_global_var_expr(&self, node: &ClangNode) -> bool {
         match &node.kind {
-            ClangNodeKind::DeclRefExpr { name, .. } => self.global_vars.contains(name),
+            ClangNodeKind::DeclRefExpr { name, .. } => {
+                let sanitized = sanitize_identifier(name);
+                self.global_var_mapping.contains_key(&sanitized)
+            }
             ClangNodeKind::ImplicitCastExpr { .. } | ClangNodeKind::Unknown(_) => {
                 // Look through casts and unknown wrappers
                 !node.children.is_empty() && self.is_global_var_expr(&node.children[0])
@@ -6802,9 +6816,18 @@ impl AstCodeGen {
     }
 
     /// Get the raw variable name from a DeclRefExpr (unwrapping casts).
+    /// If the variable is a global variable, returns the prefixed name (__gv_...).
     fn get_raw_var_name(&self, node: &ClangNode) -> Option<String> {
         match &node.kind {
-            ClangNodeKind::DeclRefExpr { name, .. } => Some(sanitize_identifier(name)),
+            ClangNodeKind::DeclRefExpr { name, .. } => {
+                let sanitized = sanitize_identifier(name);
+                // Check if this is a global variable and return the prefixed name
+                if let Some(prefixed) = self.global_var_mapping.get(&sanitized) {
+                    Some(prefixed.clone())
+                } else {
+                    Some(sanitized)
+                }
+            }
             ClangNodeKind::ImplicitCastExpr { .. } | ClangNodeKind::Unknown(_) => {
                 if !node.children.is_empty() {
                     self.get_raw_var_name(&node.children[0])
@@ -9452,8 +9475,9 @@ impl AstCodeGen {
                     }
 
                     // Check if this is a global variable (already in unsafe context, no wrapper needed)
-                    if self.global_vars.contains(name) {
-                        return ident;
+                    // Global variables are prefixed with __gv_ to avoid parameter shadowing
+                    if let Some(prefixed_name) = self.global_var_mapping.get(&ident) {
+                        return prefixed_name.clone();
                     }
 
                     ident
@@ -9880,8 +9904,9 @@ impl AstCodeGen {
                     }
 
                     // Check if this is a global variable (needs unsafe access)
-                    if self.global_vars.contains(name) {
-                        return format!("unsafe {{ {} }}", ident);
+                    // Global variables are prefixed with __gv_ to avoid parameter shadowing
+                    if let Some(prefixed_name) = self.global_var_mapping.get(&ident) {
+                        return format!("unsafe {{ {} }}", prefixed_name);
                     }
 
                     // Check if this is a function template instantiation call
