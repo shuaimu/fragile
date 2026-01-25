@@ -5076,3 +5076,168 @@ fn test_e2e_matrix2x2() {
         "Matrix2x2 with operator overloading should work correctly"
     );
 }
+
+/// E2E test: Simple hash table with chaining
+/// Tests: pointer arrays, linked list nodes, hashing, templates
+#[test]
+fn test_e2e_simple_hash_table() {
+    let source = r#"
+        // Simple hash table entry (linked list node for chaining)
+        struct Entry {
+            int key;
+            int value;
+            Entry* next;
+
+            Entry(int k, int v) : key(k), value(v), next(nullptr) {}
+        };
+
+        // Simple hash table with fixed size and chaining
+        class IntHashTable {
+            static const int SIZE = 16;
+            Entry* buckets[16];
+            int count;
+
+            int hash(int key) const {
+                // Simple modulo hash
+                int h = key % SIZE;
+                return h < 0 ? h + SIZE : h;
+            }
+        public:
+            IntHashTable() : count(0) {
+                for (int i = 0; i < SIZE; i++) {
+                    buckets[i] = nullptr;
+                }
+            }
+
+            ~IntHashTable() {
+                for (int i = 0; i < SIZE; i++) {
+                    Entry* e = buckets[i];
+                    while (e != nullptr) {
+                        Entry* next = e->next;
+                        delete e;
+                        e = next;
+                    }
+                }
+            }
+
+            int size() const { return count; }
+            bool empty() const { return count == 0; }
+
+            void insert(int key, int value) {
+                int idx = hash(key);
+                // Check if key exists, update value
+                Entry* e = buckets[idx];
+                while (e != nullptr) {
+                    if (e->key == key) {
+                        e->value = value;
+                        return;
+                    }
+                    e = e->next;
+                }
+                // Key not found, insert new entry
+                Entry* newEntry = new Entry(key, value);
+                newEntry->next = buckets[idx];
+                buckets[idx] = newEntry;
+                count++;
+            }
+
+            bool contains(int key) const {
+                int idx = hash(key);
+                Entry* e = buckets[idx];
+                while (e != nullptr) {
+                    if (e->key == key) return true;
+                    e = e->next;
+                }
+                return false;
+            }
+
+            int get(int key) const {
+                int idx = hash(key);
+                Entry* e = buckets[idx];
+                while (e != nullptr) {
+                    if (e->key == key) return e->value;
+                    e = e->next;
+                }
+                return -1;  // Not found
+            }
+
+            bool remove(int key) {
+                int idx = hash(key);
+                Entry* prev = nullptr;
+                Entry* e = buckets[idx];
+                while (e != nullptr) {
+                    if (e->key == key) {
+                        if (prev != nullptr) {
+                            prev->next = e->next;
+                        } else {
+                            buckets[idx] = e->next;
+                        }
+                        delete e;
+                        count--;
+                        return true;
+                    }
+                    prev = e;
+                    e = e->next;
+                }
+                return false;
+            }
+        };
+
+        int main() {
+            IntHashTable ht;
+
+            // Test empty table
+            if (!ht.empty()) return 1;
+            if (ht.size() != 0) return 2;
+            if (ht.contains(42)) return 3;
+
+            // Test insert and get
+            ht.insert(10, 100);
+            if (ht.empty()) return 4;
+            if (ht.size() != 1) return 5;
+            if (!ht.contains(10)) return 6;
+            if (ht.get(10) != 100) return 7;
+
+            // Test multiple inserts
+            ht.insert(20, 200);
+            ht.insert(30, 300);
+            if (ht.size() != 3) return 8;
+            if (ht.get(20) != 200) return 9;
+            if (ht.get(30) != 300) return 10;
+
+            // Test collision (keys that hash to same bucket)
+            ht.insert(26, 260);  // 26 % 16 = 10, same bucket as 10
+            if (ht.size() != 4) return 11;
+            if (ht.get(10) != 100) return 12;  // Original still there
+            if (ht.get(26) != 260) return 13;  // New one also there
+
+            // Test update existing key
+            ht.insert(10, 101);
+            if (ht.size() != 4) return 14;  // Size unchanged
+            if (ht.get(10) != 101) return 15;  // Value updated
+
+            // Test remove
+            if (!ht.remove(20)) return 16;
+            if (ht.size() != 3) return 17;
+            if (ht.contains(20)) return 18;
+
+            // Test remove non-existent
+            if (ht.remove(999)) return 19;
+
+            // Test negative key
+            ht.insert(-5, 500);
+            if (!ht.contains(-5)) return 20;
+            if (ht.get(-5) != 500) return 21;
+
+            return 0;  // Success
+        }
+    "#;
+
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_simple_hash_table.cpp").expect("E2E test failed");
+
+    assert_eq!(
+        exit_code, 0,
+        "Simple hash table with chaining should work correctly"
+    );
+}

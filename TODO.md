@@ -14,11 +14,11 @@ We just convert the fully-resolved AST to equivalent Rust code.
 ## Current Status
 
 **Grammar Tests**: 20/20 passing
-**E2E Tests**: 91/91 passing (2 ignored due to STL header limitations)
+**E2E Tests**: 92/92 passing (2 ignored due to STL header limitations)
 **libc++ Transpilation Tests**: 8/8 passing (cstddef, cstdint, type_traits, initializer_list, vector, cstddef_compilation, iostream, thread)
 **Runtime Linking Tests**: 2/2 passing (FILE I/O, pthread)
 **Runtime Function Mapping Tests**: 1/1 passing
-**Total Tests**: 210 passing
+**Total Tests**: 211 passing
 
 **Working**:
 - Simple functions with control flow (if/else, while, for, do-while, switch, recursion)
@@ -892,6 +892,7 @@ Test against actual open-source C++ projects.
     - [x] Vec2 class: operator overloading (+, -, *, ==, !=, +=), static factory methods
     - [x] Stack: array-based storage, push/pop operations, bounds checking
     - [x] Matrix2x2: 2D array access, operator overloading (+, *), static factory, det/trace
+    - [x] Hash Table: pointer arrays, linked list chaining, hashing, insert/get/remove
     - Fixed: Logical NOT (!ptr) on pointers → ptr.is_null()
     - Fixed: Float/int comparison (convert int literals to float when comparing)
     - Fixed: Float/int assignment (convert int literals to float when assigning)
