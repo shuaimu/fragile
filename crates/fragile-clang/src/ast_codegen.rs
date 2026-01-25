@@ -5607,12 +5607,53 @@ impl AstCodeGen {
             )
         });
 
+        // Check if there's any field that would prevent deriving Default:
+        // - Arrays larger than 32 elements with non-primitive types (Rust's Default only up to [T; 32])
+        let has_large_array_field = children.iter().any(|child| {
+            if let ClangNodeKind::FieldDecl { ty, is_static, .. } = &child.kind {
+                if *is_static {
+                    return false;
+                }
+                if let CppType::Array { element, size: Some(n) } = ty {
+                    if *n > 32 {
+                        // Check if element type is non-primitive (needs manual Default impl)
+                        !matches!(
+                            element.as_ref(),
+                            CppType::Bool
+                                | CppType::Char { .. }
+                                | CppType::Short { .. }
+                                | CppType::Int { .. }
+                                | CppType::Long { .. }
+                                | CppType::LongLong { .. }
+                                | CppType::Float
+                                | CppType::Double
+                                | CppType::Pointer { .. }
+                        )
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                }
+            } else {
+                false
+            }
+        });
+
         let kind = if is_class { "class" } else { "struct" };
         self.writeln(&format!("/// C++ {} `{}`", kind, name));
         self.writeln("#[repr(C)]");
         // Derive Clone for trivially copyable types (no explicit copy ctor)
         // For types with explicit copy ctor, we generate Clone impl separately
-        if has_explicit_copy_ctor {
+        // Skip Default derive if struct has large array of non-primitives (Default only works up to [T; 32])
+        if has_large_array_field {
+            // Can't derive Default - the struct needs a custom constructor
+            if has_explicit_copy_ctor {
+                // Neither Default nor Clone can be derived
+            } else {
+                self.writeln("#[derive(Clone)]");
+            }
+        } else if has_explicit_copy_ctor {
             self.writeln("#[derive(Default)]");
         } else {
             self.writeln("#[derive(Default, Clone)]");
@@ -7501,9 +7542,26 @@ impl AstCodeGen {
             CppType::Bool => "false".to_string(),
             CppType::Pointer { .. } => "std::ptr::null_mut()".to_string(),
             CppType::Array { element, size } => {
-                let elem_default = Self::default_value_for_type(element);
+                // For arrays of non-primitive types, use zeroed() for the whole array
+                // since [zeroed(); N] requires Copy but zeroed() for [T; N] works directly
                 if let Some(n) = size {
-                    format!("[{}; {}]", elem_default, n)
+                    match element.as_ref() {
+                        CppType::Int { .. }
+                        | CppType::Long { .. }
+                        | CppType::Short { .. }
+                        | CppType::Char { .. }
+                        | CppType::LongLong { .. } => {
+                            format!("[0; {}]", n)
+                        }
+                        CppType::Float => format!("[0.0f32; {}]", n),
+                        CppType::Double => format!("[0.0f64; {}]", n),
+                        CppType::Bool => format!("[false; {}]", n),
+                        CppType::Pointer { .. } => {
+                            format!("[std::ptr::null_mut(); {}]", n)
+                        }
+                        // For struct arrays and other non-Copy types, zero the entire array
+                        _ => "unsafe { std::mem::zeroed() }".to_string(),
+                    }
                 } else {
                     "[]".to_string()
                 }
@@ -12481,16 +12539,29 @@ fn default_value_for_type(ty: &CppType) -> String {
         CppType::Double => "0.0f64".to_string(),
         CppType::Pointer { .. } => "std::ptr::null_mut()".to_string(),
         CppType::Reference { .. } => "std::ptr::null_mut()".to_string(),
-        CppType::Named(_) => "Default::default()".to_string(),
+        CppType::Named(_) => "unsafe { std::mem::zeroed() }".to_string(),
         CppType::Array { element, size } => {
-            let elem_default = default_value_for_type(element);
+            // For arrays of non-primitive types, use zeroed() for the whole array
+            // since [elem_default; N] requires Copy but zeroed() for [T; N] works directly
             if let Some(n) = size {
-                format!("[{}; {}]", elem_default, n)
+                match element.as_ref() {
+                    CppType::Char { .. }
+                    | CppType::Short { .. }
+                    | CppType::Int { .. }
+                    | CppType::Long { .. }
+                    | CppType::LongLong { .. } => format!("[0; {}]", n),
+                    CppType::Float => format!("[0.0f32; {}]", n),
+                    CppType::Double => format!("[0.0f64; {}]", n),
+                    CppType::Bool => format!("[false; {}]", n),
+                    CppType::Pointer { .. } => format!("[std::ptr::null_mut(); {}]", n),
+                    // For struct arrays and other non-Copy types, zero the entire array
+                    _ => "unsafe { std::mem::zeroed() }".to_string(),
+                }
             } else {
-                "Default::default()".to_string()
+                "unsafe { std::mem::zeroed() }".to_string()
             }
         }
-        _ => "Default::default()".to_string(),
+        _ => "unsafe { std::mem::zeroed() }".to_string(),
     }
 }
 

@@ -945,8 +945,10 @@ Test against actual open-source C++ projects.
     - [x] CLI argument parser: argc/argv patterns, option parsing, flag detection
     - [x] Assertion library: boolean assertions, test organization, result counting
     - [x] Ring buffer: circular queue, modular arithmetic, wrap-around indexing
-    - [ ] LRU cache: key-value pairs, eviction logic (ignored - struct array init)
-    - [ ] Tokenizer: char classification, state machine (ignored - struct return assignment)
+    - [x] LRU cache: key-value pairs, struct array initialization ✅ 2026-01-25
+      - Fixed: Large array default initialization uses zeroed() instead of Default::default()
+      - Fixed: Skip #[derive(Default)] for structs with large arrays of non-primitives
+    - [ ] Tokenizer: char classification, state machine (ignored - enum comparison with literals)
     - Fixed: Address-of pointer subscript (&arr[i] → arr.add(i as usize))
     - Fixed: Switch case with const int/char values (evaluate DeclRefExpr, CharacterLiteral)
     - Fixed: Array initialization prefers InitListExpr over array size literal
