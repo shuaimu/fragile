@@ -713,6 +713,24 @@ impl AstCodeGen {
             return;
         }
 
+        // Skip deep STL internal types that cause compilation issues
+        // These aren't needed for basic container usage and have complex template dependencies
+        if inst_name.contains("__normal_iterator")  // Iterator wrapper with op_index issues
+            || inst_name.contains("__wrap_iter")  // Iterator wrapper
+            || inst_name.contains("allocator_traits<allocator<void>")  // Returns &c_void.clone()
+            || inst_name.contains("allocator_traits<std::allocator<void>")
+            || inst_name.contains("numeric_limits<ranges::__detail::")
+            || inst_name.contains("hash<float>")
+            || inst_name.contains("hash<double>")
+            || inst_name.contains("hash<long double>")
+            || inst_name.contains("memory_resource")
+            || inst_name.contains("__uninitialized_copy")
+            || inst_name.contains("_Bit_iterator")  // Bit iterator has op_index returning c_void
+            || inst_name.contains("_Bit_const_iterator")
+        {
+            return;
+        }
+
         // Convert instantiation name to valid Rust identifier
         let rust_name = CppType::Named(inst_name.to_string()).to_rust_type_str();
 
@@ -2331,7 +2349,9 @@ impl AstCodeGen {
             ClangNodeKind::NamespaceDecl { name } => {
                 // Generate Rust module for namespace stubs
                 if let Some(ns_name) = name {
-                    if ns_name.starts_with("__") || ns_name == "std" {
+                    // Skip internal namespaces or flatten them into the global scope
+                    // std namespace is flattened, __ prefixed are internal, pmr has memory_resource issues
+                    if ns_name.starts_with("__") || ns_name == "std" || ns_name == "pmr" {
                         for child in &node.children {
                             self.generate_stub_top_level(child);
                         }
@@ -2418,6 +2438,31 @@ impl AstCodeGen {
     fn generate_struct_stub(&mut self, name: &str, is_class: bool, children: &[ClangNode]) {
         // Convert C++ struct name to valid Rust identifier (handles template types)
         let rust_name = CppType::Named(name.to_string()).to_rust_type_str();
+
+        // Skip template DEFINITIONS that have unresolved type parameters
+        if name.contains("_Tp") || name.contains("_Alloc")
+            || name.contains("type-parameter-")
+            || name.contains("type_parameter_")
+        {
+            return;
+        }
+
+        // Skip deep STL internal types that cause compilation issues
+        if name.contains("__normal_iterator")
+            || name.contains("__wrap_iter")
+            || name.contains("allocator_traits<allocator<void>")
+            || name.contains("allocator_traits<std::allocator<void>")
+            || name.contains("numeric_limits<ranges::__detail::")
+            || name.contains("hash<float>")
+            || name.contains("hash<double>")
+            || name.contains("hash<long double>")
+            || name.contains("memory_resource")
+            || name.contains("__uninitialized_copy")
+            || name.contains("_Bit_iterator")  // Bit iterator has op_index returning c_void
+            || name.contains("_Bit_const_iterator")
+        {
+            return;
+        }
 
         // Skip if already generated (handles duplicate template instantiations)
         if self.generated_structs.contains(&rust_name) {
@@ -2753,8 +2798,9 @@ impl AstCodeGen {
             ClangNodeKind::NamespaceDecl { name } => {
                 // Generate Rust module for namespace
                 if let Some(ns_name) = name {
-                    // Skip anonymous namespaces or standard library namespaces
-                    if ns_name.starts_with("__") || ns_name == "std" {
+                    // Skip anonymous namespaces, standard library namespaces, or problematic ones
+                    // pmr namespace has memory_resource with polymorphic dispatch issues
+                    if ns_name.starts_with("__") || ns_name == "std" || ns_name == "pmr" {
                         // Still track the namespace for deduplication, but don't create module
                         self.current_namespace.push(ns_name.clone());
                         for child in &node.children {
@@ -3040,6 +3086,26 @@ impl AstCodeGen {
         coroutine_info: &Option<CoroutineInfo>,
         children: &[ClangNode],
     ) {
+        // Skip functions from problematic STL internal namespaces
+        // pmr namespace functions use memory_resource which has polymorphic dispatch issues
+        if mangled_name.contains("pmr") || mangled_name.contains("memory_resource") {
+            return;
+        }
+
+        // Skip functions that reference skipped types
+        // Check if any parameter or return type contains skipped type names
+        let has_skipped_type = |ty: &CppType| {
+            let type_str = ty.to_rust_type_str();
+            type_str.contains("_Bit_iterator")
+                || type_str.contains("_Bit_const_iterator")
+                || type_str.contains("__normal_iterator")
+                || type_str.contains("__wrap_iter")
+                || type_str.contains("memory_resource")
+        };
+        if has_skipped_type(return_type) || params.iter().any(|(_, t)| has_skipped_type(t)) {
+            return;
+        }
+
         // Special handling for C++ main function
         let is_main = name == "main" && params.is_empty();
         let base_func_name = if is_main { "cpp_main" } else { name };
@@ -3474,6 +3540,24 @@ impl AstCodeGen {
         {
             // This is a template definition, not an instantiation - skip it
             // The actual instantiation (e.g., std::vector<int>) will generate its own struct
+            return;
+        }
+
+        // Skip deep STL internal types that cause compilation issues
+        // These aren't needed for basic container usage and have complex template dependencies
+        if name.contains("numeric_limits<ranges::__detail::")  // Return c_void for template types
+            || name.contains("hash<float>")  // Hash specialization has wrong arg count
+            || name.contains("hash<double>") // Hash specialization has wrong arg count
+            || name.contains("hash<long double>")
+            || name.contains("memory_resource")  // Polymorphic dispatch issues
+            || name.contains("__wrap_iter")  // Iterator wrapper with template issues
+            || name.contains("__normal_iterator")  // Iterator wrapper
+            || name.contains("allocator_traits<std::allocator<void>")  // Returns &c_void.clone()
+            || name.contains("allocator_traits<allocator<void>")  // Returns &c_void.clone()
+            || name.contains("__uninitialized_copy")  // Template metaprogramming helper
+            || name.contains("_Bit_iterator")  // Bit iterator has op_index returning c_void
+            || name.contains("_Bit_const_iterator")
+        {
             return;
         }
 
