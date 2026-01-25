@@ -617,6 +617,8 @@ impl ClangParser {
     }
 
     /// Check if a member reference expression uses arrow (->) or dot (.) access.
+    /// We need to find the operator immediately before the member name, not any arrow
+    /// anywhere in the expression (e.g., `c->data[idx].val` should return false for the .val part).
     fn is_arrow_access(&self, cursor: clang_sys::CXCursor) -> bool {
         unsafe {
             let tu = clang_sys::clang_Cursor_getTranslationUnit(cursor);
@@ -626,15 +628,27 @@ impl ClangParser {
 
             clang_sys::clang_tokenize(tu, extent, &mut tokens, &mut num_tokens);
 
+            // Get the member name to find which operator precedes it
+            let member_name = cursor_spelling(cursor);
+
             let mut is_arrow = false;
+            let mut prev_token = String::new();
+
+            // We need to find the token immediately before the member name
+            // For `c->data[idx].val`, tokens are: c -> data [ idx ] . val
+            // We want to check the token before "val" which is "."
+            // For `c->data`, tokens are: c -> data
+            // We want to check the token before "data" which is "->"
             for i in 0..num_tokens {
                 let token = *tokens.add(i as usize);
                 let spelling = clang_sys::clang_getTokenSpelling(tu, token);
                 let token_str = cx_string_to_string(spelling);
-                if token_str == "->" {
-                    is_arrow = true;
+
+                if token_str == member_name && (prev_token == "->" || prev_token == ".") {
+                    is_arrow = prev_token == "->";
                     break;
                 }
+                prev_token = token_str;
             }
 
             if !tokens.is_null() {

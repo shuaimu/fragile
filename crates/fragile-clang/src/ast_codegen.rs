@@ -7038,6 +7038,17 @@ impl AstCodeGen {
             ClangNodeKind::ImplicitCastExpr { .. } => {
                 !node.children.is_empty() && self.is_pointer_subscript(&node.children[0])
             }
+            // Also look through MemberExpr - e.g., `c->data[idx].val` where we need to
+            // detect the pointer subscript `c->data[idx]` in the base of `.val`
+            ClangNodeKind::MemberExpr { is_arrow, .. } => {
+                if *is_arrow {
+                    // Arrow access itself involves pointer dereference, but check base too
+                    !node.children.is_empty() && self.is_pointer_subscript(&node.children[0])
+                } else {
+                    // For dot access like `.val`, check if the base involves pointer subscript
+                    !node.children.is_empty() && self.is_pointer_subscript(&node.children[0])
+                }
+            }
             _ => false,
         }
     }
@@ -9945,7 +9956,17 @@ impl AstCodeGen {
                         // Arrow access without unsafe wrapper (caller handles unsafe)
                         format!("(*{}).{}", base, member)
                     } else {
-                        format!("{}.{}", base, member)
+                        // For dot access, if base starts with '*' (dereference), we need
+                        // to parenthesize it to get correct precedence.
+                        // In Rust, `.` has higher precedence than `*`, so `*x.y` means `*(x.y)`.
+                        // We want `(*x).y` instead, so wrap in parens when base starts with `*`.
+                        // E.g., `*ptr.add(i).field` should be `(*ptr.add(i)).field`
+                        // Also handles `*(*c).data.add(i).field` -> `(*(*c).data.add(i)).field`
+                        if base.starts_with('*') {
+                            format!("({}).{}", base, member)
+                        } else {
+                            format!("{}.{}", base, member)
+                        }
                     }
                 } else {
                     // Implicit this - no children means this->member
@@ -11536,7 +11557,25 @@ impl AstCodeGen {
                             }
                         }
                     } else {
-                        format!("{}.{}", base, member)
+                        // Check if base involves pointer subscript - if so, we need to use
+                        // raw access and wrap in unsafe to avoid nested unsafe blocks and
+                        // move-out-of-raw-pointer issues.
+                        // E.g., `cache->entries[i].valid` should become:
+                        // `unsafe { (*(*cache).entries.add(i as usize)).valid }`
+                        // NOT: `unsafe { *unsafe { (*cache).entries }.add(i) }.valid`
+                        let base_has_ptr_subscript =
+                            self.is_pointer_subscript(&node.children[0]);
+                        if base_has_ptr_subscript && !is_type_ref {
+                            let base_raw = self.expr_to_string_raw(&node.children[0]);
+                            // If base_raw starts with *, parenthesize it for correct precedence
+                            if base_raw.starts_with('*') {
+                                format!("unsafe {{ ({}).{} }}", base_raw, member)
+                            } else {
+                                format!("unsafe {{ {}.{} }}", base_raw, member)
+                            }
+                        } else {
+                            format!("{}.{}", base, member)
+                        }
                     }
                 } else {
                     // Implicit this - check if member is inherited

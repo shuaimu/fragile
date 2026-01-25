@@ -8160,9 +8160,7 @@ fn test_e2e_ring_buffer() {
 
 /// E2E test: LRU Cache pattern
 /// Tests: struct with pointer to entries, key-value pairs, eviction logic
-/// Note: Ignored - requires local struct array initialization which isn't supported yet
 #[test]
-#[ignore]
 fn test_e2e_lru_cache() {
     let source = r#"
         // Simple LRU (Least Recently Used) Cache implementation
