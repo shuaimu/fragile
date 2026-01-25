@@ -775,10 +775,17 @@ Get `std::vector<int>` working end-to-end.
     - Fixed: Template array size resolution (_Size, _PaddingSize) in substitute_template_type ✅ 2026-01-24
     - Fixed: _unnamed placeholder handling (zeroed() for Named types, skip in statements) ✅ 2026-01-24
     - Fixed: While loop with VarDecl condition now generates proper loop structure ✅ 2026-01-24
-    - Remaining 8 errors (documented in docs/dev/investigation_vector_25_errors.md):
-      - Missing traits (7) - bad_allocTrait, logic_errorTrait (4), runtime_errorTrait (2)
-        (requires generating traits for intermediate polymorphic classes)
-      - Invalid expression syntax (1) - complex post-increment in initializer
+    - Fixed: Trait generation for polymorphic class hierarchies ✅ 2026-01-25
+      - Added find_root_polymorphic_ancestor() to trace up inheritance
+      - Derived classes now implement ROOT class's trait (not immediate parent's trait)
+      - Fixed 8 missing trait errors: bad_allocTrait, logic_errorTrait (4), runtime_errorTrait (3)
+    - **Current state**: 69 compilation errors (8 trait errors → 0, exposed 69 pre-existing errors)
+    - Remaining errors (documented in docs/dev/investigation_vector_25_errors.md):
+      - Duplicate _unnamed definitions (20) - bit field accessor name conflicts
+      - Missing exception constructors (14) - logic_error::new_1, runtime_error::new_1
+      - Type inference issues (9) - lambda return type placeholders
+      - Type casting issues (4) - std::byte operations
+      - Other errors (22) - pointer arithmetic, type comparisons, etc.
   - [ ] **23.8.3** Execute and verify exit code - BLOCKED on 23.8.2
   - [ ] **23.8.4** Add iteration test: `for (int x : v) { ... }` - BLOCKED
   - [ ] **23.8.5** Add resize/reserve/capacity tests - BLOCKED
@@ -873,6 +880,160 @@ Test against actual open-source C++ projects.
 | Phase 5 | High | Phase 2, 3 (+ static init) |
 | Phase 6 | Medium | Phase 2 |
 | Phase 7 | Variable | All previous phases |
+
+---
+
+## 25. Replace Rust Traits with Explicit VTables (Priority: Critical)
+
+**Goal**: Replace the current trait-based polymorphism with explicit vtable structs, matching how C++ actually implements virtual dispatch (and how C++ → C transpilers work).
+
+**Problem with Current Approach**:
+The current implementation generates Rust traits for polymorphic C++ classes:
+```rust
+pub trait exceptionTrait {
+    fn what(&self) -> *const i8;
+}
+impl exceptionTrait for bad_alloc { ... }
+impl exceptionTrait for logic_error { ... }
+```
+
+This breaks for intermediate polymorphic classes (classes that both inherit and are inherited from):
+- `exception` is a root class → `exceptionTrait` is generated ✅
+- `bad_alloc` inherits from `exception` but is also a base for `bad_array_new_length`
+- `bad_allocTrait` is NOT generated (because `bad_alloc` has a base) ❌
+- `impl bad_allocTrait for bad_array_new_length` fails ❌
+
+**New Approach**: Explicit vtables (like C++ → C transpilers)
+
+Instead of traits, generate explicit vtable structs with function pointers:
+
+```rust
+// VTable struct for exception class
+#[repr(C)]
+pub struct exception_vtable {
+    pub what: unsafe fn(*const exception) -> *const i8,
+    pub __destructor: unsafe fn(*mut exception),
+}
+
+// Class with embedded vtable pointer
+#[repr(C)]
+pub struct exception {
+    pub __vtable: *const exception_vtable,
+    // ... other fields
+}
+
+// Derived class embeds base
+#[repr(C)]
+pub struct bad_alloc {
+    pub __base: exception,  // Contains vtable pointer
+    // ... other fields
+}
+
+// Static vtable for bad_alloc (overrides what())
+static BAD_ALLOC_VTABLE: exception_vtable = exception_vtable {
+    what: bad_alloc_what,
+    __destructor: bad_alloc_destructor,
+};
+
+// Constructor sets vtable pointer
+impl bad_alloc {
+    pub fn new_0() -> Self {
+        let mut obj = Self { __base: exception::new_0() };
+        obj.__base.__vtable = &BAD_ALLOC_VTABLE;
+        obj
+    }
+}
+
+// Virtual call through vtable
+fn call_what(e: *const exception) -> *const i8 {
+    unsafe { ((*(*e).__vtable).what)(e) }
+}
+```
+
+### Implementation Plan
+
+- [ ] **25.1** Design vtable data structures
+  - [ ] **25.1.1** Define VTableEntry struct (method name, return type, param types, is_pure_virtual)
+  - [ ] **25.1.2** Define ClassVTable struct (class name, entries, base class vtable if any)
+  - [ ] **25.1.3** Track inheritance hierarchy (class → direct bases, class → all virtual methods)
+  - [ ] **25.1.4** Handle multiple inheritance (multiple vtable pointers)
+
+- [ ] **25.2** Parse virtual method information
+  - [ ] **25.2.1** Collect all virtual methods from class and bases (merge overrides)
+  - [ ] **25.2.2** Track which methods are overridden vs inherited
+  - [ ] **25.2.3** Handle pure virtual methods (= 0) → null function pointer or panic stub
+  - [ ] **25.2.4** Handle final methods (no further override possible)
+
+- [ ] **25.3** Generate vtable structs
+  - [ ] **25.3.1** Generate `{ClassName}_vtable` struct with function pointer fields
+  - [ ] **25.3.2** Each virtual method → `fn(*const/mut Self, args...) -> ReturnType`
+  - [ ] **25.3.3** Add `__destructor` entry for destructor (always virtual if class has virtual methods)
+  - [ ] **25.3.4** Handle covariant return types (derived returns Derived*, base returns Base*)
+
+- [ ] **25.4** Add vtable pointer to classes
+  - [ ] **25.4.1** Add `__vtable: *const {ClassName}_vtable` as first field in polymorphic classes
+  - [ ] **25.4.2** For derived classes, vtable pointer is in `__base` (no duplicate pointer)
+  - [ ] **25.4.3** Multiple inheritance: add separate vtable pointers for each polymorphic base
+
+- [ ] **25.5** Generate static vtable instances
+  - [ ] **25.5.1** For each concrete class, generate `static {CLASS}_VTABLE: {Base}_vtable = ...`
+  - [ ] **25.5.2** Fill in function pointers (own implementation or inherited)
+  - [ ] **25.5.3** Handle abstract classes (no static vtable, or vtable with panic stubs)
+
+- [ ] **25.6** Update constructors
+  - [ ] **25.6.1** Set vtable pointer in constructor: `self.__vtable = &{CLASS}_VTABLE`
+  - [ ] **25.6.2** For derived classes, set after base constructor call
+  - [ ] **25.6.3** Handle virtual base classes (shared vtable pointer)
+
+- [ ] **25.7** Generate virtual call dispatch
+  - [ ] **25.7.1** Virtual method call `obj.method()` → `((*obj.__vtable).method)(obj, args...)`
+  - [ ] **25.7.2** Handle method calls through base pointer (cast as needed)
+  - [ ] **25.7.3** Non-virtual calls remain direct: `obj.method()` → `Class::method(&obj, args...)`
+
+- [ ] **25.8** Remove trait-based code
+  - [ ] **25.8.1** Remove `generate_trait_for_class()` function
+  - [ ] **25.8.2** Remove `generate_trait_impl()` function
+  - [ ] **25.8.3** Remove `{ClassName}Trait` generation
+  - [ ] **25.8.4** Update `virtual_methods` HashMap usage
+
+- [ ] **25.9** Update dynamic_cast
+  - [ ] **25.9.1** dynamic_cast needs RTTI info in vtable (type_info pointer)
+  - [ ] **25.9.2** Add `__type_info: *const type_info` to vtable struct
+  - [ ] **25.9.3** Implement runtime type check by walking vtable type_info chain
+
+- [ ] **25.10** Testing
+  - [ ] **25.10.1** Update existing E2E tests for virtual methods
+  - [ ] **25.10.2** Add test for deep inheritance hierarchy (A → B → C → D)
+  - [ ] **25.10.3** Add test for multiple inheritance with virtuals
+  - [ ] **25.10.4** Verify libc++ exception hierarchy compiles (bad_alloc, logic_error, etc.)
+
+### Why This is Better
+
+1. **Matches C++ semantics exactly** - vtables are how C++ actually works
+2. **No trait generation complexity** - no need to figure out which classes need traits
+3. **Works for all inheritance patterns** - single, multiple, virtual, diamond
+4. **Like C++ → C transpilers** - proven approach (e.g., CFront, Comeau)
+5. **Fixes the 7 missing trait errors** - no more `bad_allocTrait` etc.
+
+### Example: Exception Hierarchy
+
+```
+C++ Hierarchy:              Generated Rust:
+──────────────              ───────────────
+exception                   struct exception { __vtable: *const exception_vtable, ... }
+  ├─ bad_alloc             struct bad_alloc { __base: exception }
+  │   └─ bad_array_new_length   struct bad_array_new_length { __base: bad_alloc }
+  ├─ logic_error           struct logic_error { __base: exception }
+  │   ├─ domain_error      struct domain_error { __base: logic_error }
+  │   └─ out_of_range      struct out_of_range { __base: logic_error }
+  └─ runtime_error         struct runtime_error { __base: exception }
+      └─ range_error       struct range_error { __base: runtime_error }
+
+// All use the SAME vtable type (exception_vtable) since they all
+// inherit from exception and don't add new virtual methods.
+// Each class has its own static vtable instance with appropriate
+// function pointers for what() and destructor.
+```
 
 ---
 
