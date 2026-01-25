@@ -10637,14 +10637,27 @@ impl AstCodeGen {
                             }
                             _ => false,
                         };
-                        if needs_ref {
-                            format!("{}.{}(&{})", left_operand, method_name, right_operand)
+                        // Parenthesize left operand if it contains a cast (to avoid Rust precedence issues)
+                        // e.g., `x as T.method()` is parsed as `x as (T.method())` in Rust
+                        let left_paren = if left_operand.contains(" as ") {
+                            format!("({})", left_operand)
                         } else {
-                            format!("{}.{}({})", left_operand, method_name, right_operand)
+                            left_operand.clone()
+                        };
+                        if needs_ref {
+                            format!("{}.{}(&{})", left_paren, method_name, right_operand)
+                        } else {
+                            format!("{}.{}({})", left_paren, method_name, right_operand)
                         }
                     } else {
                         // Other unary operators: operand.op_X()
-                        format!("{}.{}()", left_operand, method_name)
+                        // Parenthesize if it contains a cast
+                        let left_paren = if left_operand.contains(" as ") {
+                            format!("({})", left_operand)
+                        } else {
+                            left_operand.clone()
+                        };
+                        format!("{}.{}()", left_paren, method_name)
                     }
                 } else if let CppType::Named(cpp_struct_name) = ty {
                     // Convert C++ type name to valid Rust identifier
