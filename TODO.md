@@ -841,7 +841,7 @@ Get `std::cout` working end-to-end.
     }
     ```
     - **Status**: Transpilation succeeds (128K chars → 23K LOC Rust)
-    - **Progress**: Compilation errors reduced: 65 → 1200 → 19 → 15 → 5 → 2581 (vendored) → 2256 → 2184 → 700 → 651 → 642 → 554 → 536 → 502 → 499 → 491 (libstdc++) ✅ 2026-01-25
+    - **Progress**: Compilation errors reduced: 65 → ... → 491 → 476 → 457 → 452 → 442 → 438 (libstdc++) ✅ 2026-01-25
     - Many fixes applied:
       - Skip variadic template instantiations (&&..., ...)
       - Skip decltype return types
