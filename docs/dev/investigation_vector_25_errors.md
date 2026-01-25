@@ -1,16 +1,16 @@
 # Investigation: STL Transpilation Remaining Errors
 
 **Date**: 2026-01-24
-**Status**: Trait errors fixed, underlying compilation errors exposed
+**Status**: Significant progress, 16 compilation errors remaining
 
 ## Summary
 
-After reducing vector errors from 2091 to 8 (99.6% reduction), the remaining errors were primarily architectural issues (trait generation for intermediate polymorphic classes) and one complex expression pattern.
+After reducing vector errors from 2091 to 8 (99.6% reduction), then exposing and fixing underlying errors, we're now at 16 compilation errors.
 
 ### Error Counts by Header
-| Header | Transpilation | Compilation Errors (before) | After trait fix |
-|--------|---------------|----------------------------|-----------------|
-| `<vector>` | ✅ Success | 8 errors | 69 errors (hidden errors exposed) |
+| Header | Transpilation | Errors (start) | Current |
+|--------|---------------|----------------|---------|
+| `<vector>` | ✅ Success | 8 → 69 (exposed) | 16 errors |
 | `<iostream>` | ✅ Success | ~60 errors | TBD |
 | `<thread>` | ✅ Success | ~35 errors | TBD |
 
@@ -26,6 +26,19 @@ After reducing vector errors from 2091 to 8 (99.6% reduction), the remaining err
   - Added `find_root_polymorphic_ancestor()` to trace up inheritance hierarchy
   - Derived classes now implement ROOT class's trait, not immediate parent's trait
   - Fixed 8 missing trait errors (bad_allocTrait, logic_errorTrait x4, runtime_errorTrait x3)
+- **Fixed duplicate anonymous bit field accessors** ✅ 2026-01-25:
+  - Added counter to generate unique names `_unnamed_1`, `_unnamed_2`, etc.
+  - Fixed 20 duplicate definition errors
+- **Added exception class stub constructors** ✅ 2026-01-25:
+  - `logic_error::new_1`, `runtime_error::new_1` for string/const char* arguments
+  - Fixed 7 missing constructor errors
+- **Fixed placeholder `_` return types** ✅ 2026-01-25:
+  - Extended `sanitize_return_type()` to all code generation paths
+  - Template methods, coroutines, operators, trait implementations
+  - Fixed 9 placeholder errors
+- **Fixed duplicate value_type type alias** ✅ 2026-01-25:
+  - Register stub types in `generated_aliases` to prevent duplicates
+  - Fixed 1 error
 
 ## Trait Fix Details ✅ 2026-01-25
 
@@ -60,46 +73,47 @@ exception          ← ROOT, generates exceptionTrait
 - 8 trait errors → 0 trait errors ✅
 - Exposed 69 pre-existing errors that were blocked by trait errors
 
-## Remaining Error Categories (69 errors)
+## Remaining Error Categories (16 errors)
 
-### 1. Duplicate Method Definitions (20 errors)
-- `duplicate definitions with name _unnamed` (10)
-- `duplicate definitions with name set__unnamed` (10)
-- From bit field accessor generation conflicts
+### 1. Mismatched Types (11 errors)
+- Template type parameters resolved to `c_void` placeholder incorrectly
+- `numeric_limits::min()`, `numeric_limits::max()` returning wrong types
+- Iterator `operator[]` returning value instead of reference
+- `select_on_container_copy_construction` clone return type issue
 
-### 2. Type Inference Issues (9 errors)
-- `placeholder _ not allowed within types on item signatures for return types`
-- Lambda/closure return type inference
+### 2. Argument Count Errors (2 errors)
+- `_Hash_impl::hash()` called with 1 argument instead of 3
+- float/double hash specializations need different call patterns
 
-### 3. Missing Constructors (14 errors)
-- `no function or associated item named new_1 found for struct logic_error` (8)
-- `no function or associated item named new_1 found for struct runtime_error` (6)
-- Exception classes missing one-argument constructors
+### 3. Non-primitive Cast Errors (2 errors)
+- `0 as _Sp___rep` - integer cast to struct type
+- numeric_limits max() implementation issues
 
-### 4. Type Casting Issues (4 errors)
-- `non-primitive cast: i32 as byte`
-- std::byte operators
+### 4. Missing Method (1 error)
+- `is_equal` method not found for `&c_void`
+- Type info comparison needs method stub
 
-### 5. Pointer Arithmetic (3 errors)
-- `binary assignment operation += cannot be applied to type *const i8`
-- Missing unsafe blocks or wrong pointer type
+## Analysis
 
-### 6. Other (19 errors)
-- Module resolution, binary operations on custom types, type info comparisons
+The remaining 16 errors are fundamentally about template type resolution:
+- Template type parameters being substituted with `c_void` placeholder
+- Specialized template functions not generating correct argument patterns
+- Type coercion between templates and concrete types
+
+These require deeper changes to the template instantiation system.
 
 ## Next Steps
 
-1. **Fix duplicate _unnamed definitions** (Priority: High)
-   - Bit field accessor names need deduplication per struct
+1. **Template Type Resolution** (Priority: High)
+   - Improve type parameter substitution in template specializations
+   - Track original template types through specialization process
 
-2. **Add exception class constructors** (Priority: High)
-   - `logic_error::new_1`, `runtime_error::new_1` not generated
+2. **Hash Function Specializations** (Priority: Medium)
+   - Add special handling for float/double hash implementations
+   - These need different calling patterns than pointer-based hashing
 
-3. **Fix type inference for lambdas** (Priority: Medium)
-   - Return type placeholders in generated code
-
-4. **Fix std::byte operations** (Priority: Low)
-   - Either add operator methods or use different approach
+3. **Type Info Method Stubs** (Priority: Low)
+   - Add `is_equal` method stub to type info classes
 
 ## Files Modified
 
