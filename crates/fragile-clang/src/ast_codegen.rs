@@ -5107,25 +5107,29 @@ impl AstCodeGen {
         self.writeln("#[inline] pub fn sizeof___<T>() -> u64 { std::mem::size_of::<T>() as u64 }");
         self.writeln("");
 
-        // min/max function variants
+        // min/max function variants and constants
         self.writeln("// min/max function variants");
         self.writeln("#[inline] pub fn min_bool(a: bool, b: bool) -> bool { a && b }");
         self.writeln("#[inline] pub fn max_f32(a: f32, b: f32) -> f32 { a.max(b) }");
         self.writeln("");
 
-        // Hypot and lerp variants (2-arg versions)
+        // Hypot and lerp variants (2-arg and 3-arg versions)
         self.writeln("// Hypot and lerp variants");
         self.writeln("#[inline] pub fn __hypot_f32(x: f32, y: f32) -> f32 { x.hypot(y) }");
+        self.writeln("#[inline] pub fn __hypot_f32_3(x: f32, y: f32, z: f32) -> f32 { (x*x + y*y + z*z).sqrt() }");
         self.writeln("#[inline] pub fn __lerp_f32(a: f32, b: f32, t: f32) -> f32 { a + t * (b - a) }");
         self.writeln("");
 
-        // Memory search functions
+        // Memory search functions (3-arg and 4-arg overloads)
         self.writeln("// Memory search functions");
         self.writeln("#[inline] pub fn __constexpr_memchr_i8_i8(s: *const i8, c: i8, n: u64) -> *const i8 { unsafe { for i in 0..n as usize { if *s.add(i) == c { return s.add(i); } } std::ptr::null() } }");
         self.writeln("#[inline] pub fn __constexpr_memchr_u8_u8(s: *const u8, c: u8, n: u64) -> *const u8 { unsafe { for i in 0..n as usize { if *s.add(i) == c { return s.add(i); } } std::ptr::null() } }");
         self.writeln("#[inline] pub fn fill_n_char_u64_i8(dest: *mut i8, n: u64, c: i8) -> *mut i8 { unsafe { for i in 0..n as usize { *dest.add(i) = c; } dest.add(n as usize) } }");
         self.writeln("#[inline] pub fn __find_ptr_mut_u16_ptr_mut_u16_u16(first: *mut u16, last: *mut u16, val: u16) -> *mut u16 { unsafe { let mut p = first; while p != last { if *p == val { return p; } p = p.add(1); } last } }");
         self.writeln("#[inline] pub fn __find_ptr_mut_u32_ptr_mut_u32_u32(first: *mut u32, last: *mut u32, val: u32) -> *mut u32 { unsafe { let mut p = first; while p != last { if *p == val { return p; } p = p.add(1); } last } }");
+        // 4-arg overloads with projection
+        self.writeln("#[inline] pub fn __find_ptr_mut_u16_ptr_mut_u16_u16_4(first: *mut u16, last: *mut u16, val: u16, _proj: &mut std::ffi::c_void) -> *const u16 { unsafe { let mut p = first; while p != last { if *p == val { return p; } p = p.add(1); } last } }");
+        self.writeln("#[inline] pub fn __find_ptr_mut_u32_ptr_mut_u32_u32_4(first: *mut u32, last: *mut u32, val: u32, _proj: &mut std::ffi::c_void) -> *const u32 { unsafe { let mut p = first; while p != last { if *p == val { return p; } p = p.add(1); } last } }");
         self.writeln("");
 
         // Atomic fence and lock functions
