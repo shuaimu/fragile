@@ -2119,11 +2119,11 @@ impl AstCodeGen {
                 }
             }
             "__builtin_strlen" => {
-                // __builtin_strlen(s) -> strlen equivalent
+                // __builtin_strlen(s) -> strlen equivalent (returns u64 for size_t)
                 if !args.is_empty() {
                     Some((
                         format!(
-                            "{{ let mut __len = 0usize; let mut __p = {} as *const u8; \
+                            "{{ let mut __len = 0u64; let mut __p = {} as *const u8; \
                          while *__p != 0 {{ __len += 1; __p = __p.add(1); }} __len }}",
                             args[0]
                         ),
@@ -4033,14 +4033,14 @@ impl AstCodeGen {
         self.writeln("// char_traits module stub");
         self.writeln("pub mod char_traits {");
         self.indent += 1;
-        self.writeln("pub fn length(_s: *const i8) -> usize { unsafe { std::ffi::CStr::from_ptr(_s).to_bytes().len() } }");
-        self.writeln("pub fn copy(_dest: *mut i8, _src: *const i8, _n: usize) -> *mut i8 { unsafe { std::ptr::copy_nonoverlapping(_src, _dest, _n); _dest } }");
-        self.writeln("pub fn compare(_s1: *const i8, _s2: *const i8, _n: usize) -> i32 {");
+        self.writeln("pub fn length(_s: *const i8) -> u64 { unsafe { std::ffi::CStr::from_ptr(_s).to_bytes().len() as u64 } }");
+        self.writeln("pub fn copy(_dest: *mut i8, _src: *const i8, _n: u64) -> *mut i8 { unsafe { std::ptr::copy_nonoverlapping(_src, _dest, _n as usize); _dest } }");
+        self.writeln("pub fn compare(_s1: *const i8, _s2: *const i8, _n: u64) -> i32 {");
         self.indent += 1;
         self.writeln("// Simple byte-by-byte comparison");
         self.writeln("unsafe {");
         self.indent += 1;
-        self.writeln("for i in 0.._n {");
+        self.writeln("for i in 0.._n as usize {");
         self.indent += 1;
         self.writeln("let a = *_s1.add(i) as i32;");
         self.writeln("let b = *_s2.add(i) as i32;");
