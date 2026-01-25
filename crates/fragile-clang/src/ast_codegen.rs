@@ -7293,10 +7293,30 @@ impl AstCodeGen {
                         CastKind::IntegralCast => {
                             // Need explicit cast for integral conversions
                             let rust_type = ty.to_rust_type_str();
-                            if needs_parens {
-                                format!("({}) as {}", inner, rust_type)
+                            // Check if this is a cast to a non-primitive type (struct)
+                            // Non-primitive types can't use `as` for conversion
+                            let is_primitive = matches!(ty,
+                                CppType::Int { .. } | CppType::Short { .. } |
+                                CppType::Long { .. } | CppType::LongLong { .. } |
+                                CppType::Char { .. } | CppType::Float | CppType::Double |
+                                CppType::Bool | CppType::Pointer { .. }
+                            ) || rust_type.starts_with("i") || rust_type.starts_with("u") ||
+                                rust_type.starts_with("f") || rust_type == "bool" ||
+                                rust_type.starts_with("*");
+                            // Check if inner is a zero literal (possibly with type suffix)
+                            let is_zero_literal = inner == "0" || inner.starts_with("0i") || inner.starts_with("0u");
+                            if !is_primitive && is_zero_literal {
+                                // Casting 0 to a struct type - use zeroed() instead
+                                format!("unsafe {{ std::mem::zeroed::<{}>() }}", rust_type)
+                            } else if is_primitive {
+                                if needs_parens {
+                                    format!("({}) as {}", inner, rust_type)
+                                } else {
+                                    format!("{} as {}", inner, rust_type)
+                                }
                             } else {
-                                format!("{} as {}", inner, rust_type)
+                                // Non-zero to non-primitive - can't do proper cast, use zeroed
+                                format!("unsafe {{ std::mem::zeroed::<{}>() }}", rust_type)
                             }
                         }
                         CastKind::FloatingCast
@@ -8902,10 +8922,30 @@ impl AstCodeGen {
                         CastKind::IntegralCast => {
                             // Need explicit cast for integral conversions
                             let rust_type = ty.to_rust_type_str();
-                            if needs_parens {
-                                format!("({}) as {}", inner, rust_type)
+                            // Check if this is a cast to a non-primitive type (struct)
+                            // Non-primitive types can't use `as` for conversion
+                            let is_primitive = matches!(ty,
+                                CppType::Int { .. } | CppType::Short { .. } |
+                                CppType::Long { .. } | CppType::LongLong { .. } |
+                                CppType::Char { .. } | CppType::Float | CppType::Double |
+                                CppType::Bool | CppType::Pointer { .. }
+                            ) || rust_type.starts_with("i") || rust_type.starts_with("u") ||
+                                rust_type.starts_with("f") || rust_type == "bool" ||
+                                rust_type.starts_with("*");
+                            // Check if inner is a zero literal (possibly with type suffix)
+                            let is_zero_literal = inner == "0" || inner.starts_with("0i") || inner.starts_with("0u");
+                            if !is_primitive && is_zero_literal {
+                                // Casting 0 to a struct type - use zeroed() instead
+                                format!("unsafe {{ std::mem::zeroed::<{}>() }}", rust_type)
+                            } else if is_primitive {
+                                if needs_parens {
+                                    format!("({}) as {}", inner, rust_type)
+                                } else {
+                                    format!("{} as {}", inner, rust_type)
+                                }
                             } else {
-                                format!("{} as {}", inner, rust_type)
+                                // Non-zero to non-primitive - can't do proper cast, use zeroed
+                                format!("unsafe {{ std::mem::zeroed::<{}>() }}", rust_type)
                             }
                         }
                         CastKind::FloatingCast
