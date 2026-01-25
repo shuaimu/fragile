@@ -690,10 +690,14 @@ Get `std::vector<int>` working end-to-end.
       - C++ allows -bool, Rust does not; convert to !bool
     - Fixed: Add parentheses around binary expressions in implicit casts ✅ 2026-01-24
       - Rust's `as` binds tighter than arithmetic ops; wrap binary exprs in parens
-    - **Progress**: Errors reduced from 2091 to 91 (95.6% reduction) ✅ 2026-01-24
-    - Remaining 91 errors:
-      - Type mismatches (iterator/reference types, u32+isize arithmetic)
-      - Missing types (template instantiation aliases like __strictest_alignment__Types___)
+    - Fixed: Wrap pointer inc/dec in unsafe blocks ✅ 2026-01-24
+      - `.add(1)` and `.sub(1)` are unsafe even for local pointers
+    - Fixed: Wrap c_void union fields in ManuallyDrop ✅ 2026-01-24
+      - c_void doesn't impl Copy, so unions need ManuallyDrop wrapper
+    - **Progress**: Errors reduced from 2091 to 88 (95.8% reduction) ✅ 2026-01-24
+    - Remaining 88 errors:
+      - Type mismatches (21) - mostly u32+isize arithmetic, template placeholders
+      - Missing types (many) - template instantiation aliases
       - Missing fragile_runtime crate reference
   - [ ] **23.8.3** Execute and verify exit code - BLOCKED on 23.8.2
   - [ ] **23.8.4** Add iteration test: `for (int x : v) { ... }` - BLOCKED
