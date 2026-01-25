@@ -6433,6 +6433,11 @@ impl AstCodeGen {
             return;
         }
 
+        // Skip C variadic functions (with ... parameter) - these require unstable Rust features
+        if is_variadic {
+            return;
+        }
+
         // Skip functions with decltype return types (can't be expressed in Rust)
         let return_type_str = return_type.to_rust_type_str();
         if return_type_str.contains("decltype") {
@@ -15780,8 +15785,8 @@ mod tests {
     }
 
     #[test]
-    fn test_variadic_function() {
-        // Test that a variadic function gets extern "C" and ... in signature
+    fn test_variadic_function_skipped() {
+        // Test that C variadic functions are skipped (require unstable Rust features)
         let ast = make_node(
             ClangNodeKind::TranslationUnit,
             vec![make_node(
@@ -15819,21 +15824,11 @@ mod tests {
         );
 
         let code = AstCodeGen::new().generate(&ast);
-        // Should have unsafe extern "C" and variadic signature
-        // Rust requires unsafe for variadic extern "C" functions
+        // Variadic functions should be skipped (not generated) because they require
+        // unstable Rust features (c_variadic). The function body should not appear.
         assert!(
-            code.contains("unsafe extern \"C\""),
-            "Variadic function should have unsafe extern \"C\", got:\n{}",
-            code
-        );
-        assert!(
-            code.contains("..."),
-            "Variadic function should have ... in signature, got:\n{}",
-            code
-        );
-        assert!(
-            code.contains("pub unsafe extern \"C\" fn my_printf(fmt: *const i8, ...)"),
-            "Expected 'pub unsafe extern \"C\" fn my_printf(fmt: *const i8, ...)', got:\n{}",
+            !code.contains("fn my_printf"),
+            "Variadic function should be skipped, but found in generated code:\n{}",
             code
         );
     }
