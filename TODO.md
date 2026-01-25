@@ -752,15 +752,15 @@ Get `std::vector<int>` working end-to-end.
       - to_rust_type_str_for_field() converts &T → *const T, &mut T → *mut T
       - Applied to struct generation, union generation, and template instantiations
     - Fixed: Hash function loop variable name conflict (byte → b) ✅ 2026-01-24
-    - **Progress**: Errors reduced from 2091 → 11 (99.5% reduction) ✅ 2026-01-24
+    - **Progress**: Errors reduced from 2091 → 9 (99.6% reduction) ✅ 2026-01-24
     - Added type/function stubs: value_type, std___libcpp_refstring, __impl___type_name_t,
       union stub, __hash, __string_to_type_name, _LIBCPP_ABI_NAMESPACE functions ✅ 2026-01-24
     - Fixed: Template array size resolution (_Size, _PaddingSize) in substitute_template_type ✅ 2026-01-24
-    - Remaining 11 errors (documented in docs/dev/investigation_vector_25_errors.md):
+    - Fixed: _unnamed placeholder handling (zeroed() for Named types, skip in statements) ✅ 2026-01-24
+    - Remaining 9 errors (documented in docs/dev/investigation_vector_25_errors.md):
       - Missing traits (7) - bad_allocTrait, logic_errorTrait (4), runtime_errorTrait (2)
         (requires generating traits for intermediate polymorphic classes)
       - Invalid while syntax / __c (2) - incorrect post-increment expression in loop
-      - Template values (2) - _unnamed not found
   - [ ] **23.8.3** Execute and verify exit code - BLOCKED on 23.8.2
   - [ ] **23.8.4** Add iteration test: `for (int x : v) { ... }` - BLOCKED
   - [ ] **23.8.5** Add resize/reserve/capacity tests - BLOCKED

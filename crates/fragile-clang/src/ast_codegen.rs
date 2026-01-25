@@ -6346,10 +6346,12 @@ impl AstCodeGen {
                                             | "char"
                                     ) || rust_type.starts_with('*')
                                         || rust_type.starts_with('&');
-                                    if expr == "0" && !is_primitive {
-                                        // Use unsafe zeroed for template types (contain __)
-                                        // since they may not have new_0 or Default impl
-                                        if rust_type.contains("__") {
+                                    if (expr == "0" || expr == "_unnamed") && !is_primitive {
+                                        // Use unsafe zeroed for:
+                                        // - "0" placeholder from unresolved CXXConstructExpr
+                                        // - "_unnamed" placeholder from unresolved expression
+                                        // - template types (contain __) since they may not have new_0 or Default impl
+                                        if rust_type.contains("__") || expr == "_unnamed" {
                                             " = unsafe { std::mem::zeroed() }".to_string()
                                         } else {
                                             format!(" = {}::new_0()", rust_type)
@@ -6542,7 +6544,10 @@ impl AstCodeGen {
             _ => {
                 // For expressions at statement level
                 let expr = self.expr_to_string(node);
-                if is_tail_expr {
+                // Skip "_unnamed" placeholder expressions (from unresolved AST nodes)
+                if expr == "_unnamed" {
+                    self.writeln("// unresolved expression");
+                } else if is_tail_expr {
                     self.writeln(&expr);
                 } else if !expr.is_empty() {
                     self.writeln(&format!("{};", expr));

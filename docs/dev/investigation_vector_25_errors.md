@@ -5,12 +5,12 @@
 
 ## Summary
 
-After reducing vector errors from 2091 to 11 (99.5% reduction), the remaining errors are primarily architectural issues (trait generation for intermediate polymorphic classes).
+After reducing vector errors from 2091 to 9 (99.6% reduction), the remaining errors are primarily architectural issues (trait generation for intermediate polymorphic classes) and complex while loop patterns.
 
 ### Error Counts by Header
 | Header | Transpilation | Compilation Errors |
 |--------|---------------|-------------------|
-| `<vector>` | ✅ Success | 11 errors |
+| `<vector>` | ✅ Success | 9 errors |
 | `<iostream>` | ✅ Success | ~60 errors |
 | `<thread>` | ✅ Success | ~35 errors |
 
@@ -20,6 +20,7 @@ After reducing vector errors from 2091 to 11 (99.5% reduction), the remaining er
 - Added function stubs: `__hash`, `__string_to_type_name`
 - Added `_LIBCPP_ABI_NAMESPACE` module with `__libcpp_is_constant_evaluated`, `swap`, `move`
 - Fixed template array size resolution: `_Size`, `_PaddingSize` now substituted correctly (3 errors fixed)
+- Fixed `_unnamed` placeholder handling: use zeroed() for Named types, skip in statements (2 errors fixed)
 
 All headers share the same root causes. The iostream header has more errors because it includes more STL internals (format, hash, containers for buffering, etc.).
 
