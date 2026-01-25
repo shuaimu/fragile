@@ -626,7 +626,7 @@ Get `std::vector<int>` working end-to-end.
     }
     ```
   - [ ] **23.8.2** Compile transpiled code with rustc + fragile-runtime - IN PROGRESS
-    - **Progress**: Errors reduced 2091 → 109 (94.8% reduction) ✅ 2026-01-24
+    - **Progress**: Errors reduced 2091 → 106 (94.9% reduction) ✅ 2026-01-24
     - Fixed: super:: path computation now accounts for flattened namespaces (std, __)
     - Fixed: Method overloading deduplication within struct impl blocks (23.8.3)
     - Fixed: Constructor overloading with same param count but different types
@@ -656,10 +656,13 @@ Get `std::vector<int>` working end-to-end.
     - Fixed: Non-struct type constructor calls (pointer/primitive types) → pass through ✅ 2026-01-24
     - Fixed: Derive Clone for structs without explicit copy constructor ✅ 2026-01-24
     - Fixed: Skip union generation if name conflicts with type alias ✅ 2026-01-24
-    - Remaining 109 errors:
-      - 22 mismatched types (integer type coercion issues)
+    - Fixed: Base class TypeRef namespace prefix stripping (std::X → X) ✅ 2026-01-24
+    - Fixed: find_fragile_runtime_path to check release builds ✅ 2026-01-24
+    - Remaining 106 errors:
+      - 23 mismatched types (integer literal/return type issues)
       - Missing types (template instantiation types, dependent types)
-      - Missing methods on bit vector types (op_bool, op_eq, op_add, etc.)
+      - Missing methods (op_bool, op_eq, op_add, is_equal)
+      - __base field access on non-inheriting types
   - [ ] **23.8.3** Execute and verify exit code - BLOCKED on 23.8.2
   - [ ] **23.8.4** Add iteration test: `for (int x : v) { ... }` - BLOCKED
   - [ ] **23.8.5** Add resize/reserve/capacity tests - BLOCKED
