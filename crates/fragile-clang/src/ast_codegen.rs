@@ -4085,6 +4085,34 @@ impl AstCodeGen {
         self.writeln("pub type _Cp = std::ffi::c_void;");
         self.writeln("");
 
+        // Grapheme cluster property constants (libc++ __extended_grapheme_custer_property_boundary)
+        self.writeln("// Grapheme cluster property constants");
+        self.writeln("pub const __none: u32 = 16;");
+        self.writeln("pub const __Extend: u32 = 1;");
+        self.writeln("pub const __Extended_Pictographic: u32 = 2;");
+        self.writeln("pub const __ZWJ: u32 = 3;");
+        self.writeln("pub const __Consonant: u32 = 4;");
+        self.writeln("pub const __V: u32 = 5;");
+        self.writeln("pub const __T: u32 = 6;");
+        self.writeln("pub const __Regional_Indicator: u32 = 7;");
+        self.writeln("pub const __LF: u32 = 8;");
+        self.writeln("pub const __CR: u32 = 9;");
+        self.writeln("pub const __L: u32 = 10;");
+        self.writeln("pub const __LV: u32 = 11;");
+        self.writeln("pub const __LVT: u32 = 12;");
+        self.writeln("pub const __default: u32 = 0;");
+        self.writeln("pub const __GB9c_indic_conjunct_break: u32 = 13;");
+        self.writeln("pub const __GB12_GB13_regional_indicator: u32 = 14;");
+        self.writeln("pub const __GB11_emoji: u32 = 15;");
+        self.writeln("");
+
+        // Format/consume result constants
+        self.writeln("// Format result constants");
+        self.writeln("pub const __consume_result_error: i32 = -1;");
+        self.writeln("pub const __continue_poll: i32 = 0;");
+        self.writeln("pub const __ambiguous: i32 = 1;");
+        self.writeln("");
+
         // iostream base type stubs (libstdc++ uses different names than libc++)
         self.writeln("// iostream base type stubs");
         self.writeln("pub type std__Ios_Fmtflags = u32;");
