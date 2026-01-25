@@ -11376,6 +11376,13 @@ impl AstCodeGen {
             ClangNodeKind::InitListExpr { ty } => {
                 // Aggregate initialization
                 if let CppType::Named(name) = ty {
+                    // Strip const/volatile qualifiers from the type name
+                    // C++ allows "const Struct { ... }" for constexpr, but Rust doesn't
+                    let struct_name = name
+                        .trim_start_matches("const ")
+                        .trim_start_matches("volatile ")
+                        .trim();
+
                     // Check if this is designated initialization (children have MemberRef)
                     // Designated: { .x = 10, .y = 20 } produces UnexposedExpr(MemberRef, value)
                     // Non-designated: { 10, 20 } produces IntegerLiteral directly
@@ -11409,10 +11416,15 @@ impl AstCodeGen {
                             .iter()
                             .map(|(f, v)| format!("{}: {}", f, v))
                             .collect();
-                        format!("{} {{ {} }}", name, inits.join(", "))
+                        format!("{} {{ {} }}", struct_name, inits.join(", "))
                     } else {
                         // Try to get field names for this struct (positional)
-                        if let Some(struct_fields) = self.class_fields.get(name) {
+                        // Try both original name and stripped name for lookup
+                        let struct_fields_opt = self
+                            .class_fields
+                            .get(name)
+                            .or_else(|| self.class_fields.get(struct_name));
+                        if let Some(struct_fields) = struct_fields_opt {
                             let inits: Vec<String> = field_values
                                 .iter()
                                 .enumerate()
@@ -11424,12 +11436,12 @@ impl AstCodeGen {
                                     }
                                 })
                                 .collect();
-                            format!("{} {{ {} }}", name, inits.join(", "))
+                            format!("{} {{ {} }}", struct_name, inits.join(", "))
                         } else {
                             // Fallback: can't determine field names
                             let values: Vec<String> =
                                 field_values.into_iter().map(|(_, v)| v).collect();
-                            format!("{} {{ {} }}", name, values.join(", "))
+                            format!("{} {{ {} }}", struct_name, values.join(", "))
                         }
                     }
                 } else if matches!(ty, CppType::Array { .. }) {
