@@ -2021,6 +2021,48 @@ impl AstCodeGen {
         self.indent -= 1;
         self.writeln("}");
         self.writeln("");
+        // Implement IntoIterator for range-based for loops
+        self.writeln("impl IntoIterator for std_vector_int {");
+        self.indent += 1;
+        self.writeln("type Item = i32;");
+        self.writeln("type IntoIter = std_vector_int_iter;");
+        self.writeln("fn into_iter(self) -> Self::IntoIter {");
+        self.indent += 1;
+        self.writeln("std_vector_int_iter { vec: self, index: 0 }");
+        self.indent -= 1;
+        self.writeln("}");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("");
+        // Iterator struct
+        self.writeln("pub struct std_vector_int_iter {");
+        self.indent += 1;
+        self.writeln("vec: std_vector_int,");
+        self.writeln("index: usize,");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("");
+        self.writeln("impl Iterator for std_vector_int_iter {");
+        self.indent += 1;
+        self.writeln("type Item = i32;");
+        self.writeln("fn next(&mut self) -> Option<Self::Item> {");
+        self.indent += 1;
+        self.writeln("if self.index < self.vec._size {");
+        self.indent += 1;
+        self.writeln("let val = unsafe { *self.vec._data.add(self.index) };");
+        self.writeln("self.index += 1;");
+        self.writeln("Some(val)");
+        self.indent -= 1;
+        self.writeln("} else {");
+        self.indent += 1;
+        self.writeln("None");
+        self.indent -= 1;
+        self.writeln("}");
+        self.indent -= 1;
+        self.writeln("}");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("");
         self.generated_structs.insert("std_vector_int".to_string());
 
         // Template placeholder types that appear in libc++ code

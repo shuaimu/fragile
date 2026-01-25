@@ -800,8 +800,11 @@ Get `std::vector<int>` working end-to-end.
   - [x] **23.8.3** Execute and verify exit code ✅ 2026-01-25
     - Binary compiled successfully with rustc
     - Exit code 0 indicates v.size() == 2 as expected
-  - [ ] **23.8.4** Add iteration test: `for (int x : v) { ... }`
-  - [ ] **23.8.5** Add resize/reserve/capacity tests - BLOCKED
+  - [x] **23.8.4** Add iteration test: `for (int x : v) { ... }` ✅ 2026-01-25
+    - Added IntoIterator impl for std_vector_int stub
+    - Created std_vector_int_iter iterator struct
+    - Test: `sum += x` over vector {1, 2, 3} returns sum == 6 correctly
+  - [ ] **23.8.5** Add resize/reserve/capacity tests
 
   **Identifier sanitization fixes completed**: ✅ 2026-01-24
   - Fixed keyword escaping in type aliases (e.g., "type" -> "r#type")
