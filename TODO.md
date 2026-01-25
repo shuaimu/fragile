@@ -494,7 +494,7 @@ The current approach in `crates/fragile-clang/src/types.rs:183-580` has special-
   - [x] **22.14.3** Update tests expecting `HashMap`/`BTreeMap` to expect pass-through types ✅
   - [x] **22.14.4** Update tests expecting `Box`/`Arc`/`Weak` to expect pass-through types ✅
 
-- [ ] **22.15** Add new E2E tests for STL usage
+- [x] **22.15** Add new E2E tests for STL usage ✅ [26:01:25]
   - [x] **22.15.1** Test `std::vector` operations (push_back, iterator, etc.) ✅ 2026-01-25
     - Covered by Task 23.8: push_back, size, iterator, reserve, resize, capacity all working
   - [x] **22.15.2** Test `std::string` operations ✅ [26:01:25, 16:45] [docs/dev/plan_22_15_2_std_string_test.md]
