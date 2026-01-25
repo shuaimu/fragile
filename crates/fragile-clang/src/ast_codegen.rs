@@ -2513,10 +2513,22 @@ impl AstCodeGen {
         }
         self.generated_structs.insert(rust_name.clone());
 
+        // Check if there's an explicit copy constructor - if so, we'll generate Clone impl later
+        // Otherwise, derive Clone along with Default
+        let has_explicit_copy_ctor = children.iter().any(|child| {
+            matches!(&child.kind, ClangNodeKind::ConstructorDecl { ctor_kind: ConstructorKind::Copy, is_definition: true, .. })
+        });
+
         let kind = if is_class { "class" } else { "struct" };
         self.writeln(&format!("/// C++ {} `{}`", kind, name));
         self.writeln("#[repr(C)]");
-        self.writeln("#[derive(Default)]");
+        // Derive Clone for trivially copyable types (no explicit copy ctor)
+        // For types with explicit copy ctor, we generate Clone impl separately
+        if has_explicit_copy_ctor {
+            self.writeln("#[derive(Default)]");
+        } else {
+            self.writeln("#[derive(Default, Clone)]");
+        }
         self.writeln(&format!("pub struct {} {{", rust_name));
         self.indent += 1;
 
@@ -2733,22 +2745,20 @@ impl AstCodeGen {
             }
         }
 
-        // Generate Clone impl if there's a copy constructor
-        for child in children {
-            if let ClangNodeKind::ConstructorDecl { ctor_kind: ConstructorKind::Copy, is_definition: true, .. } = &child.kind {
-                self.writeln("");
-                self.writeln(&format!("impl Clone for {} {{", rust_name));
-                self.indent += 1;
-                self.writeln("fn clone(&self) -> Self {");
-                self.indent += 1;
-                // Copy constructor is always new_1 (takes one argument: const T&)
-                self.writeln("Self::new_1(self)");
-                self.indent -= 1;
-                self.writeln("}");
-                self.indent -= 1;
-                self.writeln("}");
-                break; // Only one copy constructor per class
-            }
+        // Generate Clone impl if there's an explicit copy constructor
+        // (otherwise Clone is derived via #[derive(Default, Clone)] above)
+        if has_explicit_copy_ctor {
+            self.writeln("");
+            self.writeln(&format!("impl Clone for {} {{", rust_name));
+            self.indent += 1;
+            self.writeln("fn clone(&self) -> Self {");
+            self.indent += 1;
+            // Copy constructor is always new_1 (takes one argument: const T&)
+            self.writeln("Self::new_1(self)");
+            self.indent -= 1;
+            self.writeln("}");
+            self.indent -= 1;
+            self.writeln("}");
         }
 
         // Generate trait for polymorphic base classes
@@ -6204,8 +6214,9 @@ impl AstCodeGen {
                         };
 
                         if is_copy_ctor {
-                            // For copy constructor, use .clone() since structs may not be Copy
-                            // This maps to the Clone impl which calls new_1(self)
+                            // For copy constructor (T(x) where x:T), use .clone() since
+                            // all generated structs derive Clone (either implicitly via derive
+                            // or explicitly via Clone impl that calls new_1)
                             let arg_str = self.expr_to_string(arg_nodes[0]);
                             format!("{}.clone()", arg_str)
                         } else {
