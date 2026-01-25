@@ -3890,6 +3890,70 @@ impl AstCodeGen {
         self.writeln("pub type _Cp = std::ffi::c_void;");
         self.writeln("");
 
+        // iostream base type stubs (libstdc++ uses different names than libc++)
+        self.writeln("// iostream base type stubs");
+        self.writeln("pub type std__Ios_Fmtflags = u32;");
+        self.writeln("pub type std__Ios_Openmode = u32;");
+        self.writeln("pub type std__Ios_Iostate = u32;");
+        self.writeln("pub type std__Ios_Seekdir = i32;");
+        self.writeln("pub type __gthread_mutex_t = usize;");
+        self.writeln("pub type error_category = std::ffi::c_void;");
+        self.writeln("pub type __ctype_abstract_base_wchar_t_ = std::ffi::c_void;");
+        self.writeln("pub type _OI = std::ffi::c_void;");
+        self.writeln("");
+
+        // Template instantiation placeholders (for libstdc++ basic_string template)
+        self.writeln("// libstdc++ template placeholders");
+        self.writeln("pub type basic_string__CharT___Traits___Alloc = std::ffi::c_void;");
+        self.writeln("pub type basic_streambuf_type_parameter_0_0__type_parameter_0_1 = std::ffi::c_void;");
+        self.writeln("pub type basic_ios_type_parameter_0_0__type_parameter_0_1 = std::ffi::c_void;");
+        self.writeln("pub type __normal_iterator_typename___alloc_traits_type_parameter_0_2__typename_type_parameter_0_2_value_type_const_pointer__basic_string__CharT___Traits___Alloc = std::ffi::c_void;");
+        self.writeln("pub type __normal_iterator_typename___alloc_traits_type_parameter_0_2__typename_type_parameter_0_2_value_type_pointer__basic_string__CharT___Traits___Alloc = std::ffi::c_void;");
+        self.writeln("pub type reverse_iterator___normal_iterator_typename___alloc_traits_type_parameter_0_2__typename_type_parameter_0_2_value_type_const_pointer__basic_string__CharT___Traits___Alloc = std::ffi::c_void;");
+        self.writeln("pub type reverse_iterator___normal_iterator_typename___alloc_traits_type_parameter_0_2__typename_type_parameter_0_2_value_type_pointer__basic_string__CharT___Traits___Alloc = std::ffi::c_void;");
+        self.writeln("");
+
+        // More system type stubs
+        self.writeln("// More system type stubs");
+        self.writeln("pub type __gthread_recursive_mutex_t = usize;");
+        self.writeln("pub type __gthread_cond_t = usize;");
+        self.writeln("pub type _Words = std::ffi::c_void;");
+        self.writeln("pub type _Alloc_hider = std::ffi::c_void;");
+        self.writeln("");
+
+        // char_traits module stub (libstdc++ uses std::char_traits)
+        self.writeln("// char_traits module stub");
+        self.writeln("pub mod char_traits {");
+        self.indent += 1;
+        self.writeln("pub fn length(_s: *const i8) -> usize { unsafe { std::ffi::CStr::from_ptr(_s).to_bytes().len() } }");
+        self.writeln("pub fn copy(_dest: *mut i8, _src: *const i8, _n: usize) -> *mut i8 { unsafe { std::ptr::copy_nonoverlapping(_src, _dest, _n); _dest } }");
+        self.writeln("pub fn compare(_s1: *const i8, _s2: *const i8, _n: usize) -> i32 {");
+        self.indent += 1;
+        self.writeln("// Simple byte-by-byte comparison");
+        self.writeln("unsafe {");
+        self.indent += 1;
+        self.writeln("for i in 0.._n {");
+        self.indent += 1;
+        self.writeln("let a = *_s1.add(i) as i32;");
+        self.writeln("let b = *_s2.add(i) as i32;");
+        self.writeln("if a != b { return a - b; }");
+        self.indent -= 1;
+        self.writeln("}");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("0");
+        self.indent -= 1;
+        self.writeln("}");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("");
+
+        // Builtin function stubs
+        self.writeln("// Builtin function stubs");
+        self.writeln("#[inline]");
+        self.writeln("pub fn __builtin_addressof<T>(x: &T) -> *const T { x as *const T }");
+        self.writeln("");
+
         // fragile_runtime stub for memory allocation
         self.writeln("// fragile_runtime stub for memory allocation");
         self.writeln("pub mod fragile_runtime {");
