@@ -1965,6 +1965,239 @@ fn main() {
     );
 }
 
+/// Test STL algorithm stub operations directly in generated Rust code.
+/// This verifies the algorithm stubs (std::sort, std::find, etc.) in the preamble work correctly.
+#[test]
+fn test_e2e_stl_algorithm_stub() {
+    use std::fs;
+    use std::process::Command;
+
+    // Write Rust code that directly uses the STL algorithm stubs
+    let rust_code = r#"
+#![allow(dead_code)]
+#![allow(unused_variables)]
+#![allow(unused_mut)]
+
+// STL algorithm stubs (same as generated in preamble)
+
+/// std::sort(first, last) - sorts range [first, last) in ascending order
+pub fn std_sort_int(first: *mut i32, last: *mut i32) {
+    if first.is_null() || last.is_null() { return; }
+    let len = unsafe { last.offset_from(first) as usize };
+    if len == 0 { return; }
+    let slice = unsafe { std::slice::from_raw_parts_mut(first, len) };
+    slice.sort();
+}
+
+/// std::find(first, last, value) - returns iterator to first match or last
+pub fn std_find_int(first: *const i32, last: *const i32, value: i32) -> *const i32 {
+    if first.is_null() || last.is_null() { return last; }
+    let len = unsafe { last.offset_from(first) as usize };
+    if len == 0 { return last; }
+    let slice = unsafe { std::slice::from_raw_parts(first, len) };
+    match slice.iter().position(|&x| x == value) {
+        Some(idx) => unsafe { first.add(idx) },
+        None => last,
+    }
+}
+
+/// std::count(first, last, value) - counts occurrences of value in range
+pub fn std_count_int(first: *const i32, last: *const i32, value: i32) -> usize {
+    if first.is_null() || last.is_null() { return 0; }
+    let len = unsafe { last.offset_from(first) as usize };
+    if len == 0 { return 0; }
+    let slice = unsafe { std::slice::from_raw_parts(first, len) };
+    slice.iter().filter(|&&x| x == value).count()
+}
+
+/// std::copy(first, last, dest) - copies range to dest, returns end of dest
+pub fn std_copy_int(first: *const i32, last: *const i32, dest: *mut i32) -> *mut i32 {
+    if first.is_null() || last.is_null() || dest.is_null() { return dest; }
+    let len = unsafe { last.offset_from(first) as usize };
+    if len == 0 { return dest; }
+    unsafe { std::ptr::copy_nonoverlapping(first, dest, len); }
+    unsafe { dest.add(len) }
+}
+
+/// std::fill(first, last, value) - fills range with value
+pub fn std_fill_int(first: *mut i32, last: *mut i32, value: i32) {
+    if first.is_null() || last.is_null() { return; }
+    let len = unsafe { last.offset_from(first) as usize };
+    if len == 0 { return; }
+    let slice = unsafe { std::slice::from_raw_parts_mut(first, len) };
+    for elem in slice.iter_mut() { *elem = value; }
+}
+
+/// std::reverse(first, last) - reverses range in place
+pub fn std_reverse_int(first: *mut i32, last: *mut i32) {
+    if first.is_null() || last.is_null() { return; }
+    let len = unsafe { last.offset_from(first) as usize };
+    if len == 0 { return; }
+    let slice = unsafe { std::slice::from_raw_parts_mut(first, len) };
+    slice.reverse();
+}
+
+fn main() {
+    // ========== std_sort tests ==========
+
+    // Test 1: Sort empty range (no-op)
+    std_sort_int(std::ptr::null_mut(), std::ptr::null_mut());
+    // No crash = success
+
+    // Test 2: Sort single element
+    let mut single = [42i32];
+    std_sort_int(single.as_mut_ptr(), unsafe { single.as_mut_ptr().add(1) });
+    if single[0] != 42 { std::process::exit(1); }
+
+    // Test 3: Sort already sorted array
+    let mut sorted = [1i32, 2, 3, 4, 5];
+    std_sort_int(sorted.as_mut_ptr(), unsafe { sorted.as_mut_ptr().add(5) });
+    if sorted != [1, 2, 3, 4, 5] { std::process::exit(2); }
+
+    // Test 4: Sort reverse-sorted array
+    let mut reverse = [5i32, 4, 3, 2, 1];
+    std_sort_int(reverse.as_mut_ptr(), unsafe { reverse.as_mut_ptr().add(5) });
+    if reverse != [1, 2, 3, 4, 5] { std::process::exit(3); }
+
+    // Test 5: Sort random order array
+    let mut random = [3i32, 1, 4, 1, 5, 9, 2, 6];
+    std_sort_int(random.as_mut_ptr(), unsafe { random.as_mut_ptr().add(8) });
+    if random != [1, 1, 2, 3, 4, 5, 6, 9] { std::process::exit(4); }
+
+    // ========== std_find tests ==========
+
+    // Test 6: Find in empty range
+    let empty: [i32; 0] = [];
+    let result = std_find_int(empty.as_ptr(), empty.as_ptr(), 42);
+    if result != empty.as_ptr() { std::process::exit(5); }
+
+    // Test 7: Find existing element
+    let arr = [10i32, 20, 30, 40, 50];
+    let result = std_find_int(arr.as_ptr(), unsafe { arr.as_ptr().add(5) }, 30);
+    if result != unsafe { arr.as_ptr().add(2) } { std::process::exit(6); }
+
+    // Test 8: Find non-existing element (returns end)
+    let result = std_find_int(arr.as_ptr(), unsafe { arr.as_ptr().add(5) }, 99);
+    if result != unsafe { arr.as_ptr().add(5) } { std::process::exit(7); }
+
+    // Test 9: Find first of duplicates
+    let dups = [1i32, 2, 3, 2, 4, 2];
+    let result = std_find_int(dups.as_ptr(), unsafe { dups.as_ptr().add(6) }, 2);
+    if result != unsafe { dups.as_ptr().add(1) } { std::process::exit(8); }
+
+    // ========== std_count tests ==========
+
+    // Test 10: Count in empty range
+    let count = std_count_int(empty.as_ptr(), empty.as_ptr(), 42);
+    if count != 0 { std::process::exit(9); }
+
+    // Test 11: Count non-existing value
+    let count = std_count_int(arr.as_ptr(), unsafe { arr.as_ptr().add(5) }, 99);
+    if count != 0 { std::process::exit(10); }
+
+    // Test 12: Count single occurrence
+    let count = std_count_int(arr.as_ptr(), unsafe { arr.as_ptr().add(5) }, 30);
+    if count != 1 { std::process::exit(11); }
+
+    // Test 13: Count multiple occurrences
+    let count = std_count_int(dups.as_ptr(), unsafe { dups.as_ptr().add(6) }, 2);
+    if count != 3 { std::process::exit(12); }
+
+    // ========== std_copy tests ==========
+
+    // Test 14: Copy empty range
+    let mut dest: [i32; 5] = [0; 5];
+    let end = std_copy_int(empty.as_ptr(), empty.as_ptr(), dest.as_mut_ptr());
+    if end != dest.as_mut_ptr() { std::process::exit(13); }
+
+    // Test 15: Copy to separate buffer
+    let src = [1i32, 2, 3, 4, 5];
+    let end = std_copy_int(src.as_ptr(), unsafe { src.as_ptr().add(5) }, dest.as_mut_ptr());
+    if end != unsafe { dest.as_mut_ptr().add(5) } { std::process::exit(14); }
+    if dest != [1, 2, 3, 4, 5] { std::process::exit(15); }
+
+    // Test 16: Verify original unchanged
+    if src != [1, 2, 3, 4, 5] { std::process::exit(16); }
+
+    // ========== std_fill tests ==========
+
+    // Test 17: Fill empty range (no-op)
+    std_fill_int(std::ptr::null_mut(), std::ptr::null_mut(), 99);
+    // No crash = success
+
+    // Test 18: Fill with value
+    let mut fill_arr = [0i32; 5];
+    std_fill_int(fill_arr.as_mut_ptr(), unsafe { fill_arr.as_mut_ptr().add(5) }, 42);
+    if fill_arr != [42, 42, 42, 42, 42] { std::process::exit(17); }
+
+    // Test 19: Fill with zero
+    std_fill_int(fill_arr.as_mut_ptr(), unsafe { fill_arr.as_mut_ptr().add(5) }, 0);
+    if fill_arr != [0, 0, 0, 0, 0] { std::process::exit(18); }
+
+    // ========== std_reverse tests ==========
+
+    // Test 20: Reverse empty range (no-op)
+    std_reverse_int(std::ptr::null_mut(), std::ptr::null_mut());
+    // No crash = success
+
+    // Test 21: Reverse single element (no-op)
+    let mut single_rev = [42i32];
+    std_reverse_int(single_rev.as_mut_ptr(), unsafe { single_rev.as_mut_ptr().add(1) });
+    if single_rev[0] != 42 { std::process::exit(19); }
+
+    // Test 22: Reverse even length array
+    let mut even = [1i32, 2, 3, 4];
+    std_reverse_int(even.as_mut_ptr(), unsafe { even.as_mut_ptr().add(4) });
+    if even != [4, 3, 2, 1] { std::process::exit(20); }
+
+    // Test 23: Reverse odd length array
+    let mut odd = [1i32, 2, 3, 4, 5];
+    std_reverse_int(odd.as_mut_ptr(), unsafe { odd.as_mut_ptr().add(5) });
+    if odd != [5, 4, 3, 2, 1] { std::process::exit(21); }
+
+    std::process::exit(0);  // All tests passed
+}
+"#;
+
+    // Create temp directory
+    let temp_dir = std::env::temp_dir().join("fragile_e2e_tests");
+    fs::create_dir_all(&temp_dir).expect("Failed to create temp dir");
+
+    // Write Rust source
+    let rs_path = temp_dir.join("e2e_stl_algorithm_stub.rs");
+    fs::write(&rs_path, rust_code).expect("Failed to write Rust source");
+
+    // Compile with rustc
+    let binary_path = temp_dir.join("e2e_stl_algorithm_stub");
+    let compile_output = Command::new("rustc")
+        .arg(&rs_path)
+        .arg("-o")
+        .arg(&binary_path)
+        .arg("--edition=2021")
+        .output()
+        .expect("Failed to run rustc");
+
+    if !compile_output.status.success() {
+        panic!(
+            "rustc compilation failed:\nstdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&compile_output.stdout),
+            String::from_utf8_lossy(&compile_output.stderr)
+        );
+    }
+
+    // Run the binary
+    let run_output = Command::new(&binary_path)
+        .output()
+        .expect("Failed to run binary");
+
+    let exit_code = run_output.status.code().unwrap_or(-1);
+    assert_eq!(
+        exit_code, 0,
+        "STL algorithm stub operations should work correctly (exit code: {})",
+        exit_code
+    );
+}
+
 /// Test function returning struct (rvalue handling).
 #[test]
 fn test_e2e_function_returning_struct() {

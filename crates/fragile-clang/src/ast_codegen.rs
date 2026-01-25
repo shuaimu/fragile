@@ -3525,6 +3525,95 @@ impl AstCodeGen {
         self.generated_structs
             .insert("std_shared_ptr_int".to_string());
 
+        // STL algorithm stubs (std::sort, std::find, etc.)
+        self.writeln("// STL algorithm stubs");
+        self.writeln("");
+        // std::sort
+        self.writeln("/// std::sort(first, last) - sorts range [first, last) in ascending order");
+        self.writeln("pub fn std_sort_int(first: *mut i32, last: *mut i32) {");
+        self.indent += 1;
+        self.writeln("if first.is_null() || last.is_null() { return; }");
+        self.writeln("let len = unsafe { last.offset_from(first) as usize };");
+        self.writeln("if len == 0 { return; }");
+        self.writeln("let slice = unsafe { std::slice::from_raw_parts_mut(first, len) };");
+        self.writeln("slice.sort();");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("");
+        // std::find
+        self.writeln("/// std::find(first, last, value) - returns iterator to first match or last");
+        self.writeln(
+            "pub fn std_find_int(first: *const i32, last: *const i32, value: i32) -> *const i32 {",
+        );
+        self.indent += 1;
+        self.writeln("if first.is_null() || last.is_null() { return last; }");
+        self.writeln("let len = unsafe { last.offset_from(first) as usize };");
+        self.writeln("if len == 0 { return last; }");
+        self.writeln("let slice = unsafe { std::slice::from_raw_parts(first, len) };");
+        self.writeln("match slice.iter().position(|&x| x == value) {");
+        self.indent += 1;
+        self.writeln("Some(idx) => unsafe { first.add(idx) },");
+        self.writeln("None => last,");
+        self.indent -= 1;
+        self.writeln("}");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("");
+        // std::count
+        self.writeln("/// std::count(first, last, value) - counts occurrences of value in range");
+        self.writeln(
+            "pub fn std_count_int(first: *const i32, last: *const i32, value: i32) -> usize {",
+        );
+        self.indent += 1;
+        self.writeln("if first.is_null() || last.is_null() { return 0; }");
+        self.writeln("let len = unsafe { last.offset_from(first) as usize };");
+        self.writeln("if len == 0 { return 0; }");
+        self.writeln("let slice = unsafe { std::slice::from_raw_parts(first, len) };");
+        self.writeln("slice.iter().filter(|&&x| x == value).count()");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("");
+        // std::copy
+        self.writeln(
+            "/// std::copy(first, last, dest) - copies range to dest, returns end of dest",
+        );
+        self.writeln(
+            "pub fn std_copy_int(first: *const i32, last: *const i32, dest: *mut i32) -> *mut i32 {",
+        );
+        self.indent += 1;
+        self.writeln("if first.is_null() || last.is_null() || dest.is_null() { return dest; }");
+        self.writeln("let len = unsafe { last.offset_from(first) as usize };");
+        self.writeln("if len == 0 { return dest; }");
+        self.writeln("unsafe { std::ptr::copy_nonoverlapping(first, dest, len); }");
+        self.writeln("unsafe { dest.add(len) }");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("");
+        // std::fill
+        self.writeln("/// std::fill(first, last, value) - fills range with value");
+        self.writeln("pub fn std_fill_int(first: *mut i32, last: *mut i32, value: i32) {");
+        self.indent += 1;
+        self.writeln("if first.is_null() || last.is_null() { return; }");
+        self.writeln("let len = unsafe { last.offset_from(first) as usize };");
+        self.writeln("if len == 0 { return; }");
+        self.writeln("let slice = unsafe { std::slice::from_raw_parts_mut(first, len) };");
+        self.writeln("for elem in slice.iter_mut() { *elem = value; }");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("");
+        // std::reverse
+        self.writeln("/// std::reverse(first, last) - reverses range in place");
+        self.writeln("pub fn std_reverse_int(first: *mut i32, last: *mut i32) {");
+        self.indent += 1;
+        self.writeln("if first.is_null() || last.is_null() { return; }");
+        self.writeln("let len = unsafe { last.offset_from(first) as usize };");
+        self.writeln("if len == 0 { return; }");
+        self.writeln("let slice = unsafe { std::slice::from_raw_parts_mut(first, len) };");
+        self.writeln("slice.reverse();");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("");
+
         // Template placeholder types that appear in libc++ code
         // These are unresolved template parameters that we need stubs for
         for placeholder_type in [

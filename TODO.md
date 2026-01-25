@@ -14,11 +14,11 @@ We just convert the fully-resolved AST to equivalent Rust code.
 ## Current Status
 
 **Grammar Tests**: 20/20 passing
-**E2E Tests**: 84/84 passing (2 ignored due to STL header limitations)
+**E2E Tests**: 85/85 passing (2 ignored due to STL header limitations)
 **libc++ Transpilation Tests**: 8/8 passing (cstddef, cstdint, type_traits, initializer_list, vector, cstddef_compilation, iostream, thread)
 **Runtime Linking Tests**: 2/2 passing (FILE I/O, pthread)
 **Runtime Function Mapping Tests**: 1/1 passing
-**Total Tests**: 203 passing
+**Total Tests**: 204 passing
 
 **Working**:
 - Simple functions with control flow (if/else, while, for, do-while, switch, recursion)
@@ -507,7 +507,9 @@ The current approach in `crates/fragile-clang/src/types.rs:183-580` has special-
     - Added std_unique_ptr_int stub: new_0, new_1, get, op_deref, op_arrow, release, reset, Drop
     - Added std_shared_ptr_int stub: new_0, new_1, get, op_deref, use_count, reset, Clone, Drop
     - Added E2E test (test_e2e_smart_ptr_stub) validating both stubs (22 test cases)
-  - [ ] **22.15.5** Test STL algorithms (std::sort, std::find, etc.)
+  - [x] **22.15.5** Test STL algorithms (std::sort, std::find, etc.) ✅ [26:01:25]
+    - Added algorithm stubs: std_sort_int, std_find_int, std_count_int, std_copy_int, std_fill_int, std_reverse_int
+    - Added E2E test (test_e2e_stl_algorithm_stub) validating all algorithms (21 test cases)
 
 ---
 
