@@ -8826,6 +8826,12 @@ impl AstCodeGen {
                         | "std::_Ios_Fmtflags"
                         | "std::_Ios_Openmode"
                         | "std::_Ios_Iostate"
+                        // std::byte is a typedef to unsigned char
+                        | "byte"
+                        | "std::byte"
+                        // chars_format is an enum (but used like a primitive for bitwise ops)
+                        | "chars_format"
+                        | "std::chars_format"
                 )
             }
             _ => false,
