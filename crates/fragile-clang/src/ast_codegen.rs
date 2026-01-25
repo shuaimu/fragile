@@ -6547,6 +6547,49 @@ impl AstCodeGen {
             // If a struct has op_add_assign but no op_add, synthesize op_add
             self.generate_synthesized_arithmetic_operators();
 
+            // Add stub what() method for exception classes
+            // The what() method should be virtual, but we provide a stub for direct calls
+            let exception_classes = [
+                "exception",
+                "bad_exception",
+                "bad_typeid",
+                "bad_cast",
+                "bad_weak_ptr",
+                "bad_optional_access",
+                "logic_error",
+                "runtime_error",
+                "bad_alloc",
+                "bad_array_new_length",
+                "bad_function_call",
+                "bad_variant_access",
+                "domain_error",
+                "invalid_argument",
+                "length_error",
+                "out_of_range",
+                "range_error",
+                "overflow_error",
+                "underflow_error",
+                "system_error",
+                "failure",
+            ];
+            if exception_classes.contains(&name) {
+                let has_what = self
+                    .current_struct_methods
+                    .get("what")
+                    .copied()
+                    .unwrap_or(0)
+                    > 0;
+                if !has_what {
+                    self.writeln("");
+                    self.writeln("/// Returns exception message (stub)");
+                    self.writeln("pub fn what(&self) -> *const i8 {");
+                    self.indent += 1;
+                    self.writeln("b\"exception\\0\".as_ptr() as *const i8");
+                    self.indent -= 1;
+                    self.writeln("}");
+                }
+            }
+
             // Add stub constructors for exception classes that need string/const char* constructors
             // These are called by derived classes but may not have definitions in headers
             if name == "logic_error" || name == "runtime_error" {
