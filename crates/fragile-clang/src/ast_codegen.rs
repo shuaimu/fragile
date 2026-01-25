@@ -730,11 +730,44 @@ impl AstCodeGen {
     ) -> String {
         match ty {
             CppType::Named(name) => {
+                // Check for direct substitution first
                 if let Some(replacement) = subst_map.get(name) {
-                    replacement.clone()
-                } else {
-                    ty.to_rust_type_str()
+                    return replacement.clone();
                 }
+
+                // Handle array-like type names: e.g., "_Tp[_Size]"
+                // These come from dependent-sized arrays in template definitions
+                if let Some(bracket_idx) = name.find('[') {
+                    let element_type = &name[..bracket_idx];
+                    let rest = &name[bracket_idx + 1..];
+                    if let Some(close_bracket) = rest.find(']') {
+                        let size_str = rest[..close_bracket].trim();
+                        if !size_str.is_empty() {
+                            // Substitute element type
+                            let elem_rust = if let Some(repl) = subst_map.get(element_type) {
+                                repl.clone()
+                            } else {
+                                CppType::Named(element_type.to_string()).to_rust_type_str()
+                            };
+
+                            // Substitute size (could be a template parameter or numeric)
+                            let size_rust = if let Some(repl) = subst_map.get(size_str) {
+                                repl.clone()
+                            } else if size_str.chars().all(|c| c.is_ascii_digit()) {
+                                // Already a numeric size
+                                size_str.to_string()
+                            } else {
+                                // Unknown size parameter - use 0 as fallback
+                                // This handles cases like _PaddingSize that aren't substituted
+                                "0".to_string()
+                            };
+
+                            return format!("[{}; {}]", elem_rust, size_rust);
+                        }
+                    }
+                }
+
+                ty.to_rust_type_str()
             }
             CppType::Pointer { pointee, is_const } => {
                 let inner = self.substitute_template_type(pointee, subst_map);
