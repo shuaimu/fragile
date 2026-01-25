@@ -11816,7 +11816,17 @@ impl AstCodeGen {
                         }
                     }
 
-                    let inner = self.expr_to_string(&node.children[0]);
+                    // Find the actual expression child, skipping TypeRef nodes
+                    // CStyleCastExpr typically has [TypeRef, expression] or just [expression]
+                    let inner_node = node.children.iter().find(|c| {
+                        !matches!(&c.kind, ClangNodeKind::Unknown(s) if s.starts_with("TypeRef"))
+                    });
+                    let inner = if let Some(inner_child) = inner_node {
+                        self.expr_to_string(inner_child)
+                    } else {
+                        // Fallback to first child
+                        self.expr_to_string(&node.children[0])
+                    };
                     let rust_type = ty.to_rust_type_str();
                     match cast_kind {
                         CastKind::Static | CastKind::Reinterpret => {

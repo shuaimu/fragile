@@ -9557,13 +9557,10 @@ fn test_e2e_heapsort() {
 
 /// E2E test: Trie (prefix tree) data structure
 /// Tests: Insert, search, prefix search in a trie
-/// Note: Marked as ignored due to transpiler limitation with new[] dynamic size
 #[test]
-#[ignore]
 fn test_e2e_trie() {
     let source = r#"
         // Simple trie for lowercase ASCII strings
-        // NOTE: This test is ignored because new[variable_size] transpiles incorrectly
 
         struct TrieNode;  // Forward declare
 
