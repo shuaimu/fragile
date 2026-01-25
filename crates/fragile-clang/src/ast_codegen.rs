@@ -3000,7 +3000,15 @@ impl AstCodeGen {
                     sanitize_identifier(field_name)
                 };
                 let vis = access_to_visibility(*access);
-                self.writeln(&format!("{}{}: {},", vis, sanitized_name, ty.to_rust_type_str()));
+                let type_str = ty.to_rust_type_str();
+                // Wrap non-Copy types in ManuallyDrop for union compatibility
+                // c_void is used as placeholder for template types and doesn't impl Copy
+                let wrapped_type = if type_str == "std::ffi::c_void" || type_str.contains("c_void") {
+                    format!("std::mem::ManuallyDrop<{}>", type_str)
+                } else {
+                    type_str
+                };
+                self.writeln(&format!("{}{}: {},", vis, sanitized_name, wrapped_type));
                 fields.push((sanitized_name, ty.clone()));
             }
         }
