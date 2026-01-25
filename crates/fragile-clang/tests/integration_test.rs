@@ -7026,3 +7026,400 @@ fn test_e2e_switch_const_and_char() {
         "Switch with const int and char literals should work correctly"
     );
 }
+
+/// E2E test: Function pointers and callbacks (advanced)
+/// Tests: function pointer types, callback passing, binary search with comparator
+#[test]
+fn test_e2e_function_ptr_callbacks() {
+    let source = r#"
+        // Function pointers and callbacks
+        // Tests function pointer syntax, passing, and invocation
+
+        int add(int a, int b) { return a + b; }
+        int sub(int a, int b) { return a - b; }
+        int mul(int a, int b) { return a * b; }
+        int divv(int a, int b) { return b != 0 ? a / b : 0; }
+
+        // Higher-order function: apply an operation
+        int apply(int (*op)(int, int), int x, int y) {
+            return op(x, y);
+        }
+
+        // Function that returns result of two operations
+        int applyBoth(int (*op1)(int, int), int (*op2)(int, int), int a, int b, int c) {
+            return op1(a, op2(b, c));
+        }
+
+        // Binary search using comparison callback
+        int binarySearch(int* arr, int n, int target, int (*cmp)(int, int)) {
+            int lo = 0;
+            int hi = n - 1;
+            while (lo <= hi) {
+                int mid = lo + (hi - lo) / 2;
+                int result = cmp(arr[mid], target);
+                if (result == 0) return mid;
+                if (result < 0) lo = mid + 1;
+                else hi = mid - 1;
+            }
+            return -1;
+        }
+
+        int compare(int a, int b) {
+            if (a < b) return -1;
+            if (a > b) return 1;
+            return 0;
+        }
+
+        int main() {
+            // Test 1: Direct function pointer call
+            int (*fp)(int, int) = add;
+            if (fp(3, 5) != 8) return 1;
+
+            // Test 2: Reassign function pointer
+            fp = sub;
+            if (fp(10, 4) != 6) return 2;
+
+            // Test 3: Pass function pointer to higher-order function
+            if (apply(add, 2, 3) != 5) return 3;
+            if (apply(mul, 4, 5) != 20) return 4;
+            if (apply(divv, 20, 4) != 5) return 5;
+
+            // Test 4: Nested function pointer applications
+            // applyBoth(add, mul, 2, 3, 4) = add(2, mul(3, 4)) = add(2, 12) = 14
+            if (applyBoth(add, mul, 2, 3, 4) != 14) return 6;
+
+            // Test 5: Binary search with comparison callback
+            int arr[5] = {1, 3, 5, 7, 9};
+            if (binarySearch(&arr[0], 5, 5, compare) != 2) return 7;
+            if (binarySearch(&arr[0], 5, 1, compare) != 0) return 8;
+            if (binarySearch(&arr[0], 5, 9, compare) != 4) return 9;
+            if (binarySearch(&arr[0], 5, 4, compare) != -1) return 10;
+
+            // Test 6: Null function pointer check
+            int (*nullFp)(int, int) = nullptr;
+            if (nullFp != nullptr) return 11;
+
+            // Test 7: Function pointer comparison
+            int (*fp1)(int, int) = add;
+            int (*fp2)(int, int) = add;
+            int (*fp3)(int, int) = sub;
+            if (fp1 != fp2) return 12;  // Same function
+            if (fp1 == fp3) return 13;  // Different functions
+
+            return 0;  // Success
+        }
+    "#;
+
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_function_pointers.cpp").expect("E2E test failed");
+
+    assert_eq!(
+        exit_code, 0,
+        "Function pointers should work correctly"
+    );
+}
+
+/// E2E test: Bit manipulation operations
+/// Tests: bitwise AND/OR/XOR/NOT, shifts, bit counting
+/// Note: Using signed int instead of unsigned to avoid transpiler type issues
+/// Note: Using local variables for mutable state since function param mutability isn't yet supported
+#[test]
+fn test_e2e_bit_manipulation() {
+    let source = r#"
+        // Bit manipulation operations with signed int
+        // Tests bitwise operators and common bit manipulation patterns
+
+        // Count number of set bits (popcount) for values 0-255
+        // Uses local copy to avoid modifying parameter
+        int countBits(int num) {
+            int n = num;  // Local mutable copy
+            int count = 0;
+            while (n != 0) {
+                if ((n & 1) != 0) count++;
+                n = n >> 1;
+            }
+            return count;
+        }
+
+        // Check if power of 2 (for positive values)
+        bool isPowerOfTwo(int n) {
+            return n > 0 && (n & (n - 1)) == 0;
+        }
+
+        // Get bit at position (0-indexed from right)
+        bool getBit(int n, int pos) {
+            return ((n >> pos) & 1) != 0;
+        }
+
+        // Set bit at position
+        int setBit(int n, int pos) {
+            return n | (1 << pos);
+        }
+
+        // Clear bit at position
+        int clearBit(int n, int pos) {
+            return n & ~(1 << pos);
+        }
+
+        // Toggle bit at position
+        int toggleBit(int n, int pos) {
+            return n ^ (1 << pos);
+        }
+
+        // Find lowest set bit position (0-indexed, -1 if zero)
+        // Uses local copy to avoid modifying parameter
+        int lowestSetBit(int num) {
+            if (num == 0) return -1;
+            int n = num;  // Local mutable copy
+            int pos = 0;
+            while ((n & 1) == 0) {
+                n = n >> 1;
+                pos++;
+            }
+            return pos;
+        }
+
+        // Swap two values using XOR
+        void xorSwap(int* a, int* b) {
+            if (a != b) {
+                *a = *a ^ *b;
+                *b = *a ^ *b;
+                *a = *a ^ *b;
+            }
+        }
+
+        int main() {
+            // Test 1: Basic bitwise operations
+            if ((5 & 3) != 1) return 1;      // 101 & 011 = 001
+            if ((5 | 3) != 7) return 2;      // 101 | 011 = 111
+            if ((5 ^ 3) != 6) return 3;      // 101 ^ 011 = 110
+
+            // Test 2: Shift operations
+            if ((1 << 3) != 8) return 5;
+            if ((16 >> 2) != 4) return 6;
+            if ((128 >> 4) != 8) return 7;
+
+            // Test 3: Count bits
+            if (countBits(0) != 0) return 8;
+            if (countBits(1) != 1) return 9;
+            if (countBits(7) != 3) return 10;     // 111
+            if (countBits(255) != 8) return 11;   // 11111111
+            if (countBits(15) != 4) return 12;    // 1111
+
+            // Test 4: Power of 2 check
+            if (!isPowerOfTwo(1)) return 13;
+            if (!isPowerOfTwo(2)) return 14;
+            if (!isPowerOfTwo(4)) return 15;
+            if (!isPowerOfTwo(1024)) return 16;
+            if (isPowerOfTwo(0)) return 17;
+            if (isPowerOfTwo(3)) return 18;
+            if (isPowerOfTwo(6)) return 19;
+
+            // Test 5: Get/set/clear/toggle bits
+            if (!getBit(5, 0)) return 20;  // 5 = 101, bit 0 is set
+            if (getBit(5, 1)) return 21;   // bit 1 is not set
+            if (!getBit(5, 2)) return 22;  // bit 2 is set
+
+            if (setBit(5, 1) != 7) return 23;      // 101 | 010 = 111
+            if (clearBit(7, 1) != 5) return 24;    // 111 & ~010 = 101
+            if (toggleBit(5, 1) != 7) return 25;   // 101 ^ 010 = 111
+            if (toggleBit(7, 1) != 5) return 26;   // 111 ^ 010 = 101
+
+            // Test 6: Lowest set bit
+            if (lowestSetBit(0) != -1) return 27;
+            if (lowestSetBit(1) != 0) return 28;
+            if (lowestSetBit(8) != 3) return 29;     // 1000
+            if (lowestSetBit(12) != 2) return 30;    // 1100
+            if (lowestSetBit(128) != 7) return 31;
+
+            // Test 7: XOR swap
+            int x = 10;
+            int y = 20;
+            xorSwap(&x, &y);
+            if (x != 20) return 32;
+            if (y != 10) return 33;
+
+            // Test 8: More complex bit patterns
+            int mask = (1 << 4) - 1;  // 0xF = 15
+            if (mask != 15) return 34;
+
+            int extract = (0xABCD >> 4) & mask;  // Extract nibble
+            if (extract != 12) return 35;  // 0xC = 12
+
+            return 0;  // Success
+        }
+    "#;
+
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_bit_manipulation.cpp").expect("E2E test failed");
+
+    assert_eq!(
+        exit_code, 0,
+        "Bit manipulation should work correctly"
+    );
+}
+
+/// E2E test: 2D matrix operations
+/// Tests: 2D arrays, nested loops, matrix algorithms
+#[test]
+fn test_e2e_matrix_operations() {
+    let source = r#"
+        // 2D Matrix operations
+        // Tests nested arrays, matrix math, and transformations
+
+        // Matrix represented as 1D array (row-major order)
+        // For 3x3: index = row * 3 + col
+
+        void matrixInit(int* mat, int rows, int cols, int val) {
+            for (int i = 0; i < rows * cols; i++) {
+                mat[i] = val;
+            }
+        }
+
+        int matrixGet(int* mat, int cols, int row, int col) {
+            return mat[row * cols + col];
+        }
+
+        void matrixSet(int* mat, int cols, int row, int col, int val) {
+            mat[row * cols + col] = val;
+        }
+
+        // Matrix addition (same dimensions)
+        void matrixAdd(int* a, int* b, int* result, int rows, int cols) {
+            for (int i = 0; i < rows * cols; i++) {
+                result[i] = a[i] + b[i];
+            }
+        }
+
+        // Scalar multiplication
+        void matrixScale(int* mat, int* result, int rows, int cols, int scalar) {
+            for (int i = 0; i < rows * cols; i++) {
+                result[i] = mat[i] * scalar;
+            }
+        }
+
+        // Transpose a matrix (swap rows and cols)
+        void matrixTranspose(int* mat, int* result, int rows, int cols) {
+            for (int r = 0; r < rows; r++) {
+                for (int c = 0; c < cols; c++) {
+                    result[c * rows + r] = mat[r * cols + c];
+                }
+            }
+        }
+
+        // Matrix multiplication (a[m x n] * b[n x p] = result[m x p])
+        void matrixMultiply(int* a, int* b, int* result, int m, int n, int p) {
+            for (int i = 0; i < m; i++) {
+                for (int j = 0; j < p; j++) {
+                    int sum = 0;
+                    for (int k = 0; k < n; k++) {
+                        sum += a[i * n + k] * b[k * p + j];
+                    }
+                    result[i * p + j] = sum;
+                }
+            }
+        }
+
+        // Sum all elements
+        int matrixSum(int* mat, int rows, int cols) {
+            int sum = 0;
+            for (int i = 0; i < rows * cols; i++) {
+                sum += mat[i];
+            }
+            return sum;
+        }
+
+        // Check if two matrices are equal
+        bool matrixEqual(int* a, int* b, int rows, int cols) {
+            for (int i = 0; i < rows * cols; i++) {
+                if (a[i] != b[i]) return false;
+            }
+            return true;
+        }
+
+        int main() {
+            // Test 1: Initialize and get/set
+            int mat1[9];
+            matrixInit(&mat1[0], 3, 3, 0);
+            matrixSet(&mat1[0], 3, 0, 0, 1);
+            matrixSet(&mat1[0], 3, 1, 1, 2);
+            matrixSet(&mat1[0], 3, 2, 2, 3);
+            if (matrixGet(&mat1[0], 3, 0, 0) != 1) return 1;
+            if (matrixGet(&mat1[0], 3, 1, 1) != 2) return 2;
+            if (matrixGet(&mat1[0], 3, 2, 2) != 3) return 3;
+
+            // Test 2: Matrix addition
+            int a[4] = {1, 2, 3, 4};  // 2x2
+            int b[4] = {5, 6, 7, 8};
+            int sum[4];
+            matrixAdd(&a[0], &b[0], &sum[0], 2, 2);
+            if (sum[0] != 6) return 4;   // 1+5
+            if (sum[1] != 8) return 5;   // 2+6
+            if (sum[2] != 10) return 6;  // 3+7
+            if (sum[3] != 12) return 7;  // 4+8
+
+            // Test 3: Scalar multiplication
+            int scaled[4];
+            matrixScale(&a[0], &scaled[0], 2, 2, 3);
+            if (scaled[0] != 3) return 8;
+            if (scaled[1] != 6) return 9;
+            if (scaled[2] != 9) return 10;
+            if (scaled[3] != 12) return 11;
+
+            // Test 4: Transpose
+            // [1 2]    [1 3]
+            // [3 4] -> [2 4]
+            int trans[4];
+            matrixTranspose(&a[0], &trans[0], 2, 2);
+            if (trans[0] != 1) return 12;
+            if (trans[1] != 3) return 13;
+            if (trans[2] != 2) return 14;
+            if (trans[3] != 4) return 15;
+
+            // Test 5: Non-square transpose (2x3 -> 3x2)
+            int rect[6] = {1, 2, 3, 4, 5, 6};  // 2x3
+            int rectT[6];
+            matrixTranspose(&rect[0], &rectT[0], 2, 3);
+            // Original:  [1 2 3]    Transposed: [1 4]
+            //            [4 5 6]                [2 5]
+            //                                   [3 6]
+            if (matrixGet(&rectT[0], 2, 0, 0) != 1) return 16;
+            if (matrixGet(&rectT[0], 2, 0, 1) != 4) return 17;
+            if (matrixGet(&rectT[0], 2, 1, 0) != 2) return 18;
+            if (matrixGet(&rectT[0], 2, 2, 1) != 6) return 19;
+
+            // Test 6: Matrix multiplication
+            // [1 2]   [5 6]   [19 22]
+            // [3 4] * [7 8] = [43 50]
+            int product[4];
+            matrixMultiply(&a[0], &b[0], &product[0], 2, 2, 2);
+            if (product[0] != 19) return 20;  // 1*5 + 2*7
+            if (product[1] != 22) return 21;  // 1*6 + 2*8
+            if (product[2] != 43) return 22;  // 3*5 + 4*7
+            if (product[3] != 50) return 23;  // 3*6 + 4*8
+
+            // Test 7: Sum and equality
+            if (matrixSum(&a[0], 2, 2) != 10) return 24;  // 1+2+3+4
+            if (matrixEqual(&a[0], &b[0], 2, 2)) return 25;
+            int aCopy[4] = {1, 2, 3, 4};
+            if (!matrixEqual(&a[0], &aCopy[0], 2, 2)) return 26;
+
+            // Test 8: Identity matrix multiplication
+            // I * A = A
+            int identity[4] = {1, 0, 0, 1};
+            int result[4];
+            matrixMultiply(&identity[0], &a[0], &result[0], 2, 2, 2);
+            if (!matrixEqual(&result[0], &a[0], 2, 2)) return 27;
+
+            return 0;  // Success
+        }
+    "#;
+
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_matrix_operations.cpp").expect("E2E test failed");
+
+    assert_eq!(
+        exit_code, 0,
+        "Matrix operations should work correctly"
+    );
+}
