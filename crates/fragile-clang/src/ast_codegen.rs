@@ -328,6 +328,9 @@ impl AstCodeGen {
         // Generate struct definitions for template instantiations
         self.generate_template_instantiations();
 
+        // Generate vtable structs for polymorphic classes
+        self.generate_all_vtable_structs();
+
         // Second pass: generate code
         if let ClangNodeKind::TranslationUnit = &ast.kind {
             for child in &ast.children {
@@ -509,6 +512,19 @@ impl AstCodeGen {
         // Store and return
         self.vtables.insert(class_name.to_string(), vtable_info.clone());
         vtable_info
+    }
+
+    /// Generate vtable structs for all polymorphic classes.
+    fn generate_all_vtable_structs(&mut self) {
+        // Only generate vtable for ROOT polymorphic classes (those without polymorphic bases)
+        // Derived classes use the base class's vtable type
+        let vtable_infos: Vec<_> = self.vtables.values().cloned().collect();
+        for vtable_info in vtable_infos {
+            // Only generate if this is a root polymorphic class (no polymorphic base)
+            if vtable_info.base_class.is_none() {
+                self.generate_vtable_struct(&vtable_info.class_name, &vtable_info);
+            }
+        }
     }
 
     fn compute_virtual_bases(&mut self) {
@@ -4658,6 +4674,66 @@ impl AstCodeGen {
                 ));
             }
         }
+
+        self.indent -= 1;
+        self.writeln("}");
+    }
+
+    /// Generate a vtable struct for a polymorphic class.
+    /// The vtable contains function pointers for all virtual methods.
+    fn generate_vtable_struct(&mut self, class_name: &str, vtable_info: &ClassVTableInfo) {
+        let sanitized_name = sanitize_identifier(class_name);
+        self.writeln("");
+        self.writeln(&format!(
+            "/// VTable for polymorphic class `{}`",
+            class_name
+        ));
+        self.writeln("#[repr(C)]");
+        self.writeln(&format!("pub struct {}_vtable {{", sanitized_name));
+        self.indent += 1;
+
+        // Generate function pointer field for each virtual method
+        for entry in &vtable_info.entries {
+            let method_name = sanitize_identifier(&entry.name);
+            let return_type = Self::sanitize_return_type(&entry.return_type.to_rust_type_str());
+
+            // Build parameter list: first param is self pointer, then explicit params
+            let self_ptr = if entry.is_const {
+                format!("*const {}", sanitized_name)
+            } else {
+                format!("*mut {}", sanitized_name)
+            };
+
+            let param_types: Vec<String> = entry
+                .params
+                .iter()
+                .map(|(_, ptype)| ptype.to_rust_type_str())
+                .collect();
+
+            let all_params = if param_types.is_empty() {
+                self_ptr
+            } else {
+                format!("{}, {}", self_ptr, param_types.join(", "))
+            };
+
+            if return_type == "()" {
+                self.writeln(&format!(
+                    "pub {}: unsafe fn({}),",
+                    method_name, all_params
+                ));
+            } else {
+                self.writeln(&format!(
+                    "pub {}: unsafe fn({}) -> {},",
+                    method_name, all_params, return_type
+                ));
+            }
+        }
+
+        // Add destructor entry (always present for polymorphic classes)
+        self.writeln(&format!(
+            "pub __destructor: unsafe fn(*mut {}),",
+            sanitized_name
+        ));
 
         self.indent -= 1;
         self.writeln("}");

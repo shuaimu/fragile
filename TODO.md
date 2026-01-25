@@ -984,11 +984,11 @@ fn call_what(e: *const exception) -> *const i8 {
   - [x] **25.2.3** Handle pure virtual methods (= 0) → is_abstract flag in ClassVTableInfo
   - [x] **25.2.4** Handle final methods (tracked in AST, checked at build time)
 
-- [ ] **25.3** Generate vtable structs
-  - [ ] **25.3.1** Generate `{ClassName}_vtable` struct with function pointer fields
-  - [ ] **25.3.2** Each virtual method → `fn(*const/mut Self, args...) -> ReturnType`
-  - [ ] **25.3.3** Add `__destructor` entry for destructor (always virtual if class has virtual methods)
-  - [ ] **25.3.4** Handle covariant return types (derived returns Derived*, base returns Base*)
+- [x] **25.3** Generate vtable structs ✅ 2026-01-25
+  - [x] **25.3.1** Generate `{ClassName}_vtable` struct with function pointer fields
+  - [x] **25.3.2** Each virtual method → `fn(*const/mut Self, args...) -> ReturnType`
+  - [x] **25.3.3** Add `__destructor` entry for destructor (always present for polymorphic classes)
+  - [x] **25.3.4** Handle covariant return types (use declaring class type in vtable)
 
 - [ ] **25.4** Add vtable pointer to classes
   - [ ] **25.4.1** Add `__vtable: *const {ClassName}_vtable` as first field in polymorphic classes
