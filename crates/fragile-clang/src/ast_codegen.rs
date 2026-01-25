@@ -1810,6 +1810,9 @@ impl AstCodeGen {
         // Sanitize the mangled name - it may contain `extern "C"` and other invalid characters
         let sanitized_mangled_name = sanitize_identifier(mangled_name);
 
+        // Save output position so we can rollback if the function contains broken patterns
+        let output_start = self.output.len();
+
         self.writeln(&format!(
             "/// Function template instantiation: {}",
             template_name
@@ -1861,6 +1864,19 @@ impl AstCodeGen {
         self.indent -= 1;
         self.writeln("}");
         self.writeln("");
+
+        // Check if generated function contains broken patterns that can't compile
+        // _dependent_type::new_N() calls are template-dependent constructors that aren't resolved
+        let generated = &self.output[output_start..];
+        if generated.contains("_dependent_type::new_")
+            || generated.contains("_unnamed)")  // Unresolved value in function call
+            || generated.contains("_unnamed,")  // Unresolved value in function call
+            || generated.contains("-> std::ffi::c_void")  // Returns void type (placeholder)
+            || generated.contains(": std::ffi::c_void)")  // Parameter is c_void placeholder
+        {
+            // Rollback - remove the generated function
+            self.output.truncate(output_start);
+        }
     }
 
     /// Generate the body of a function template instantiation with type substitution.
@@ -5142,6 +5158,18 @@ impl AstCodeGen {
             || return_type_str.contains("_Args")
             || return_type_str.contains("type_parameter_")
         {
+            return;
+        }
+
+        // Skip functions that return bare c_void (placeholder for unresolved types like std::string)
+        // Also skip functions with c_void parameters (except pointer/ref to c_void which is valid)
+        if return_type_str == "std::ffi::c_void" {
+            return;
+        }
+        if params.iter().any(|(_, t)| {
+            let ts = t.to_rust_type_str();
+            ts == "std::ffi::c_void"
+        }) {
             return;
         }
 
