@@ -4078,32 +4078,46 @@ impl AstCodeGen {
         self.writeln("");
 
         // char_traits module stub (libstdc++ uses std::char_traits)
+        // Use generic functions to support char, wchar_t, char8_t, char16_t, char32_t
         self.writeln("// char_traits module stub");
         self.writeln("pub mod char_traits {");
         self.indent += 1;
-        self.writeln("pub fn length(_s: *const i8) -> u64 { unsafe { std::ffi::CStr::from_ptr(_s).to_bytes().len() as u64 } }");
-        self.writeln("pub fn copy(_dest: *mut i8, _src: *const i8, _n: u64) -> *mut i8 { unsafe { std::ptr::copy_nonoverlapping(_src, _dest, _n as usize); _dest } }");
-        self.writeln("pub fn compare(_s1: *const i8, _s2: *const i8, _n: u64) -> i32 {");
+        // Generic length function - counts null-terminated string length
+        self.writeln("pub fn length<T: Copy + Default + PartialEq>(_s: *const T) -> u64 {");
         self.indent += 1;
-        self.writeln("// Simple byte-by-byte comparison");
+        self.writeln("unsafe {");
+        self.indent += 1;
+        self.writeln("let mut len = 0u64;");
+        self.writeln("let zero: T = Default::default();");
+        self.writeln("while *_s.add(len as usize) != zero { len += 1; }");
+        self.writeln("len");
+        self.indent -= 1;
+        self.writeln("}");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("pub fn copy<T: Copy>(_dest: *mut T, _src: *const T, _n: u64) -> *mut T { unsafe { std::ptr::copy_nonoverlapping(_src, _dest, _n as usize); _dest } }");
+        self.writeln("pub fn compare<T: Copy + Ord>(_s1: *const T, _s2: *const T, _n: u64) -> i32 {");
+        self.indent += 1;
         self.writeln("unsafe {");
         self.indent += 1;
         self.writeln("for i in 0.._n as usize {");
         self.indent += 1;
-        self.writeln("let a = *_s1.add(i) as i32;");
-        self.writeln("let b = *_s2.add(i) as i32;");
-        self.writeln("if a != b { return a - b; }");
-        self.indent -= 1;
-        self.writeln("}");
+        self.writeln("let a = *_s1.add(i);");
+        self.writeln("let b = *_s2.add(i);");
+        self.writeln("match a.cmp(&b) { std::cmp::Ordering::Less => return -1, std::cmp::Ordering::Greater => return 1, _ => {} }");
         self.indent -= 1;
         self.writeln("}");
         self.writeln("0");
         self.indent -= 1;
         self.writeln("}");
-        // Add eq, lt, and eq_int_type functions to char_traits
-        self.writeln("pub fn eq(_a: &i8, _b: &i8) -> bool { *_a == *_b }");
-        self.writeln("pub fn lt(_a: &i8, _b: &i8) -> bool { *_a < *_b }");
-        self.writeln("pub fn eq_int_type(_a: i32, _b: i32) -> bool { _a == _b }");
+        self.indent -= 1;
+        self.writeln("}");
+        // Generic eq, lt functions
+        self.writeln("pub fn eq<T: PartialEq>(_a: &T, _b: &T) -> bool { *_a == *_b }");
+        self.writeln("pub fn lt<T: PartialOrd>(_a: &T, _b: &T) -> bool { *_a < *_b }");
+        // eq_int_type is used for comparing int_type (the wider type for character comparisons)
+        // Make it generic to support different int types
+        self.writeln("pub fn eq_int_type<T: PartialEq>(_a: T, _b: T) -> bool { _a == _b }");
         self.writeln("pub fn to_char_type(_c: i32) -> i8 { _c as i8 }");
         self.writeln("pub fn to_int_type(_c: i8) -> i32 { _c as i32 }");
         self.writeln("pub fn eof() -> i32 { -1 }");
