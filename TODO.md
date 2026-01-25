@@ -932,12 +932,12 @@ Test against actual open-source C++ projects.
       - Remaining issues: cast-method call precedence, deep template instantiation
     - [x] fmt (format library, mostly header-only) - INVESTIGATED ✅ [26:01:25]
       - Transpilation: ✅ Succeeds (270KB headers → 13K LOC Rust)
-      - Compilation: ❌ Blocked by cast precedence issues (~724 errors)
-      - Similar issues to nlohmann/json:
-        - Cast followed by shift: `X as T << Y` needs `(X as T) << Y`
-        - Cast followed by indexing: `X as T[idx]` needs `(X as T)[idx]`
-        - Cast followed by method: `X as T.method()` needs `(X as T).method()`
-        - Unsafe blocks need parentheses before comparison operators
+      - Compilation: ❌ Blocked by cast precedence issues (~721 errors, down from 724)
+      - Fixed during investigation:
+        - Cast followed by indexing: `X as T[idx]` → `(X as T)[idx]` ✅
+        - Cast followed by method: `X as T.method()` → `(X as T).method()` ✅
+        - Unsafe blocks before comparison: `unsafe { X } > Y;` → `(unsafe { X } > Y);` ✅
+      - Remaining issues: complex bitwise AND + cast + shift patterns
       - Root cause: Rust's `as` cast has lower precedence than expected
   - [x] **23.11.2** Small projects (1K-5K LOC) - Partial ✅ [26:01:25]
     - [x] Binary Search Tree: recursive insert/search/traversal, tree structure
