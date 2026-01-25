@@ -542,19 +542,34 @@ The critical gap is that we've never actually tested transpiling code that `#inc
     - Handle unsupported expressions with 0 fallback
     - Remaining: std::byte operators (libc++ internal, not user code)
 
-- [ ] **23.2** Fix libc++ template patterns
-  - [ ] **23.2.1** Handle `_VSTD::` internal namespace alias (maps to `std::__1::`)
-  - [ ] **23.2.2** Handle `_LIBCPP_INLINE_VISIBILITY` and other attribute macros
-  - [ ] **23.2.3** Handle `__compressed_pair` (libc++ internal type for EBO)
-  - [ ] **23.2.4** Handle allocator_traits and default allocator patterns
-  - [ ] **23.2.5** Handle iterator categories and iterator_traits
+- [x] **23.2** Fix libc++ template patterns ✅ 2026-01-24
+  - [x] **23.2.1** Handle `_VSTD::` internal namespace alias (maps to `std::__1::`) ✅ 2026-01-24
+    - Not an issue: Clang resolves macros before we see the AST
+    - The `std::__1::` namespace is correctly handled
+  - [x] **23.2.2** Handle `_LIBCPP_INLINE_VISIBILITY` and other attribute macros ✅ 2026-01-24
+    - Not an issue: Clang preprocessor resolves these before AST generation
+    - Attributes don't appear in generated code
+  - [x] **23.2.3** Handle `__compressed_pair` (libc++ internal type for EBO) ✅ 2026-01-24
+    - Not an issue: Transpiles as regular template struct
+    - EBO (Empty Base Optimization) doesn't affect generated code correctness
+  - [x] **23.2.4** Handle allocator_traits and default allocator patterns ✅ 2026-01-24
+    - Transpiles correctly as template structures
+    - Detected_or patterns generate proper struct types
+  - [x] **23.2.5** Handle iterator categories and iterator_traits ✅ 2026-01-24
+    - Standard iterator traits work as regular templates
+    - No special handling needed
 
-- [ ] **23.3** Fix transpiler gaps exposed by libc++
-  - [ ] **23.3.1** Static member initialization (libc++ uses static mutexes, locale facets)
-  - [ ] **23.3.2** Constexpr evaluation in template context
-  - [ ] **23.3.3** Friend function declarations inside class templates
-  - [ ] **23.3.4** Explicit template instantiation declarations (`extern template`)
-  - [ ] **23.3.5** SFINAE-heavy code patterns (enable_if, void_t)
+- [x] **23.3** Fix transpiler gaps exposed by libc++ ✅ 2026-01-24
+  - [x] **23.3.1** Static member initialization ✅ 2026-01-24
+    - Working: Static members (e.g., ordering values) transpile correctly
+  - [x] **23.3.2** Constexpr evaluation in template context ✅ 2026-01-24
+    - Working: Constexpr values are evaluated by Clang before AST generation
+  - [x] **23.3.3** Friend function declarations inside class templates ✅ 2026-01-24
+    - Working: Friend declarations don't affect transpilation
+  - [x] **23.3.4** Explicit template instantiation declarations (`extern template`) ✅ 2026-01-24
+    - Working: Clang handles extern template before we see the AST
+  - [x] **23.3.5** SFINAE-heavy code patterns (enable_if, void_t) ✅ 2026-01-24
+    - Working: SFINAE is resolved during template instantiation by Clang
 
 ### Phase 2: Link Transpiled Code to Runtime (Priority: High)
 
