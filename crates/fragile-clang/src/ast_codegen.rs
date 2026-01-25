@@ -5133,7 +5133,7 @@ impl AstCodeGen {
 
         // sizeof pseudo-function
         self.writeln("// sizeof pseudo-function");
-        self.writeln("#[inline] pub fn sizeof___<T>() -> u64 { std::mem::size_of::<T>() as u64 }");
+        self.writeln("#[inline] pub fn sizeof___<T>() -> usize { std::mem::size_of::<T>() }");
         self.writeln("");
 
         // min/max function variants and constants
