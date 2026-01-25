@@ -841,7 +841,7 @@ Get `std::cout` working end-to-end.
     }
     ```
     - **Status**: Transpilation succeeds (128K chars → 23K LOC Rust)
-    - **Progress**: Compilation errors reduced: 65 → ... → 491 → 476 → 457 → 452 → 442 → 438 → 435 → 366 (libstdc++) ✅ 2026-01-25
+    - **Progress**: Compilation errors reduced: 65 → ... → 491 → 476 → 457 → 452 → 442 → 438 → 435 → 366 → 357 → 354 → 343 → 337 → 336 (libstdc++) ✅ 2026-01-25
     - Many fixes applied:
       - Skip variadic template instantiations (&&..., ...)
       - Skip decltype return types
@@ -883,6 +883,11 @@ Get `std::cout` working end-to-end.
     - Fixed: Cast precedence, literal operators, static member names, trait names
     - Fixed: Added vendored libc++ config files (__config_site, __assertion_handler) ✅ 2026-01-25
     - Fixed: CLI --use-vendored-libcxx now works correctly ✅ 2026-01-25
+    - Fixed: Assignment-as-return for reference return types (366→357) ✅ 2026-01-25
+    - Fixed: Skip type suffix for zero literals in generic contexts (357→354) ✅ 2026-01-25
+    - Fixed: Use native Rust operators for primitives in operator overload calls (354→343) ✅ 2026-01-25
+    - Fixed: Handle unary (!, -) and compound assignment (|=, &=) operators for primitives (343→337) ✅ 2026-01-25
+    - Fixed: Return type casts for conditional expressions with ConditionalOperator type handling (337→336) ✅ 2026-01-25
   - [ ] **23.9.2** Fix iostream static initialization (global cout/cin/cerr objects) - BLOCKED
     - libc++ uses `__start_std_streams` section for initialization
     - May need to generate Rust static initialization code
