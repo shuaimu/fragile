@@ -20,6 +20,28 @@ fn access_to_visibility(access: AccessSpecifier) -> &'static str {
     }
 }
 
+/// Strip numeric literal suffixes (i32, u64, f32, etc.) from a string.
+/// Used when Rust can infer the type from context.
+fn strip_literal_suffix(s: &str) -> String {
+    // Check for integer suffixes: i8, i16, i32, i64, i128, isize, u8, u16, u32, u64, u128, usize
+    // Check for float suffixes: f32, f64
+    let suffixes = [
+        "i128", "u128", "isize", "usize",  // longest first
+        "i64", "u64", "i32", "u32", "i16", "u16", "i8", "u8",
+        "f64", "f32",
+    ];
+    for suffix in suffixes {
+        if s.ends_with(suffix) {
+            let prefix = &s[..s.len() - suffix.len()];
+            // Make sure the prefix is a valid number (not ending with a letter)
+            if !prefix.is_empty() && prefix.chars().last().map_or(false, |c| c.is_ascii_digit()) {
+                return prefix.to_string();
+            }
+        }
+    }
+    s.to_string()
+}
+
 /// Rust reserved keywords that need raw identifier syntax.
 const RUST_KEYWORDS: &[&str] = &[
     "as", "async", "await", "break", "const", "continue", "crate", "dyn",
@@ -5926,9 +5948,24 @@ impl AstCodeGen {
                                    BinaryOp::OrAssign | BinaryOp::XorAssign |
                                    BinaryOp::ShlAssign | BinaryOp::ShrAssign) && needs_unsafe {
                         // For pointer dereference, subscript, or static member on left side, wrap entire assignment in unsafe
+                        // Strip literal suffix on RHS - Rust infers type from LHS
                         let left_raw = self.expr_to_string_raw(&node.children[0]);
-                        let right_raw = self.expr_to_string_raw(&node.children[1]);
+                        let right_raw = strip_literal_suffix(&self.expr_to_string_raw(&node.children[1]));
                         format!("unsafe {{ {} {} {} }}", left_raw, op_str, right_raw)
+                    } else if matches!(op, BinaryOp::Assign | BinaryOp::AddAssign | BinaryOp::SubAssign |
+                                   BinaryOp::MulAssign | BinaryOp::DivAssign |
+                                   BinaryOp::RemAssign | BinaryOp::AndAssign |
+                                   BinaryOp::OrAssign | BinaryOp::XorAssign |
+                                   BinaryOp::ShlAssign | BinaryOp::ShrAssign) {
+                        // For assignment operators, strip literal suffix on RHS - Rust infers from LHS
+                        let left = self.expr_to_string(&node.children[0]);
+                        let right = strip_literal_suffix(&self.expr_to_string(&node.children[1]));
+                        format!("{} {} {}", left, op_str, right)
+                    } else if matches!(op, BinaryOp::Eq | BinaryOp::Ne | BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge) {
+                        // For comparison operators, strip literal suffixes - Rust infers compatible types
+                        let left = strip_literal_suffix(&self.expr_to_string(&node.children[0]));
+                        let right = strip_literal_suffix(&self.expr_to_string(&node.children[1]));
+                        format!("{} {} {}", left, op_str, right)
                     } else {
                         let left = self.expr_to_string(&node.children[0]);
                         let right = self.expr_to_string(&node.children[1]);
