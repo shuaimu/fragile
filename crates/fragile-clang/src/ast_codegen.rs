@@ -6732,6 +6732,105 @@ impl AstCodeGen {
                 }
             }
 
+            // Add codecvt virtual method stubs
+            // These are protected virtual functions that need implementations
+            // Match both "codecvt_base" and "std::codecvt<...>" class names
+            if name.starts_with("codecvt") || name.starts_with("std::codecvt") {
+                self.writeln("");
+                self.writeln("/// Stub for do_out virtual method");
+                self.writeln("pub fn do_out(&self, _state: *mut std::ffi::c_void, _frm: *const i8, _frm_end: *const i8, _frm_nxt: *mut *const i8, _to: *mut i8, _to_end: *mut i8, _to_nxt: *mut *mut i8) -> i32 { 0 }");
+                self.writeln("");
+                self.writeln("/// Stub for do_in virtual method");
+                self.writeln("pub fn do_in(&self, _state: *mut std::ffi::c_void, _frm: *const i8, _frm_end: *const i8, _frm_nxt: *mut *const i8, _to: *mut i8, _to_end: *mut i8, _to_nxt: *mut *mut i8) -> i32 { 0 }");
+                self.writeln("");
+                self.writeln("/// Stub for do_unshift virtual method");
+                self.writeln("pub fn do_unshift(&self, _state: *mut std::ffi::c_void, _to: *mut i8, _to_end: *mut i8, _to_nxt: *mut *mut i8) -> i32 { 0 }");
+                self.writeln("");
+                self.writeln("/// Stub for do_encoding virtual method");
+                self.writeln("pub fn do_encoding(&self) -> i32 { 0 }");
+                self.writeln("");
+                self.writeln("/// Stub for do_always_noconv virtual method");
+                self.writeln("pub fn do_always_noconv(&self) -> bool { true }");
+                self.writeln("");
+                self.writeln("/// Stub for do_length virtual method");
+                self.writeln("pub fn do_length(&self, _state: *mut std::ffi::c_void, _frm: *const i8, _end: *const i8, _mx: u64) -> i32 { 0 }");
+                self.writeln("");
+                self.writeln("/// Stub for do_max_length virtual method");
+                self.writeln("pub fn do_max_length(&self) -> i32 { 1 }");
+            }
+
+            // Add ctype virtual method stubs
+            // Match both "ctype_base" and "std::ctype<...>" class names
+            if name.starts_with("ctype") || name.starts_with("std::ctype") {
+                self.writeln("");
+                self.writeln("/// Stub for do_is virtual method (single char)");
+                self.writeln("pub fn do_is(&self, _m: u32, _c: i32) -> bool { false }");
+                self.writeln("");
+                self.writeln("/// Stub for do_is virtual method (range)");
+                self.writeln("pub fn do_is_1(&self, _lo: *const i32, _hi: *const i32, _vec: *mut u32) -> *const i32 { _hi }");
+                self.writeln("");
+                self.writeln("/// Stub for do_scan_is virtual method");
+                self.writeln("pub fn do_scan_is(&self, _m: u32, _lo: *const i32, _hi: *const i32) -> *const i32 { _hi }");
+                self.writeln("");
+                self.writeln("/// Stub for do_scan_not virtual method");
+                self.writeln("pub fn do_scan_not(&self, _m: u32, _lo: *const i32, _hi: *const i32) -> *const i32 { _hi }");
+                self.writeln("");
+                self.writeln("/// Stub for do_toupper virtual method (single)");
+                self.writeln("pub fn do_toupper(&self, c: i32) -> i32 { c }");
+                self.writeln("");
+                self.writeln("/// Stub for do_toupper virtual method (range)");
+                self.writeln("pub fn do_toupper_1(&self, _lo: *mut i32, _hi: *const i32) -> *const i32 { _hi }");
+                self.writeln("");
+                self.writeln("/// Stub for do_tolower virtual method (single)");
+                self.writeln("pub fn do_tolower(&self, c: i32) -> i32 { c }");
+                self.writeln("");
+                self.writeln("/// Stub for do_tolower virtual method (range)");
+                self.writeln("pub fn do_tolower_1(&self, _lo: *mut i32, _hi: *const i32) -> *const i32 { _hi }");
+                self.writeln("");
+                self.writeln("/// Stub for do_widen virtual method (single)");
+                self.writeln("pub fn do_widen(&self, c: i8) -> i32 { c as i32 }");
+                self.writeln("");
+                self.writeln("/// Stub for do_widen virtual method (range)");
+                self.writeln("pub fn do_widen_1(&self, _lo: *const i8, _hi: *const i8, _dest: *mut i32) -> *const i8 { _hi }");
+                self.writeln("");
+                self.writeln("/// Stub for do_narrow virtual method (single)");
+                self.writeln("pub fn do_narrow(&self, c: i32, dfault: i8) -> i8 { if c >= 0 && c < 128 { c as i8 } else { dfault } }");
+                self.writeln("");
+                self.writeln("/// Stub for do_narrow virtual method (range)");
+                self.writeln("pub fn do_narrow_1(&self, _lo: *const i32, _hi: *const i32, _dfault: i8, _dest: *mut i8) -> *const i32 { _hi }");
+            }
+
+            // Add numpunct virtual method stubs
+            // Match both "numpunct" and "std::numpunct<...>" class names
+            if name.starts_with("numpunct") || name.starts_with("std::numpunct") {
+                self.writeln("");
+                self.writeln("/// Stub for do_decimal_point virtual method");
+                self.writeln("pub fn do_decimal_point(&self) -> i32 { '.' as i32 }");
+                self.writeln("");
+                self.writeln("/// Stub for do_thousands_sep virtual method");
+                self.writeln("pub fn do_thousands_sep(&self) -> i32 { ',' as i32 }");
+                self.writeln("");
+                self.writeln("/// Stub for do_grouping virtual method");
+                self.writeln("pub fn do_grouping(&self) -> std::ffi::c_void { unsafe { std::mem::zeroed() } }");
+                self.writeln("");
+                self.writeln("/// Stub for do_truename virtual method");
+                self.writeln("pub fn do_truename(&self) -> std::ffi::c_void { unsafe { std::mem::zeroed() } }");
+                self.writeln("");
+                self.writeln("/// Stub for do_falsename virtual method");
+                self.writeln("pub fn do_falsename(&self) -> std::ffi::c_void { unsafe { std::mem::zeroed() } }");
+            }
+
+            // Add collate virtual method stubs
+            // Match both "collate" and "std::collate<...>" class names
+            if name.starts_with("collate") || name.starts_with("std::collate") {
+                self.writeln("");
+                self.writeln("/// Stub for do_compare virtual method");
+                self.writeln("pub fn do_compare(&self, _lo1: *const i32, _hi1: *const i32, _lo2: *const i32, _hi2: *const i32) -> i32 { 0 }");
+                self.writeln("");
+                self.writeln("/// Stub for do_transform virtual method");
+                self.writeln("pub fn do_transform(&self, _lo: *const i32, _hi: *const i32) -> std::ffi::c_void { unsafe { std::mem::zeroed() } }");
+            }
+
             self.indent -= 1;
             self.writeln("}");
         }
