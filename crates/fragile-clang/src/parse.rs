@@ -2758,6 +2758,25 @@ impl ClangParser {
                         {
                             Some(CastKind::FunctionToPointerDecay)
                         }
+                        // Derived-to-base pointer cast (e.g., Dog* to Animal*)
+                        (CppType::Pointer { pointee: base_pointee, .. },
+                         CppType::Pointer { pointee: derived_pointee, .. })
+                            if matches!(base_pointee.as_ref(), CppType::Named(_))
+                                && matches!(derived_pointee.as_ref(), CppType::Named(_)) =>
+                        {
+                            // Check if base and derived are different class names
+                            if let (CppType::Named(base_name), CppType::Named(derived_name)) =
+                                (base_pointee.as_ref(), derived_pointee.as_ref()) {
+                                if base_name != derived_name {
+                                    // This is a derived-to-base cast
+                                    Some(CastKind::Other)
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            }
+                        }
                         _ => None,
                     };
 

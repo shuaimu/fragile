@@ -1808,6 +1808,142 @@ impl AstCodeGen {
         }
     }
 
+    /// Try to generate vtable dispatch for a virtual method call.
+    /// Returns Some(call_string) if this is a virtual method call through a polymorphic pointer.
+    /// Returns None if this is not a virtual method call.
+    fn try_generate_vtable_dispatch(&self, node: &ClangNode) -> Option<String> {
+        // Virtual method calls have a MemberExpr as first child with is_arrow=true
+        if node.children.is_empty() {
+            return None;
+        }
+
+        // Find the MemberExpr - it might be wrapped in ImplicitCastExpr
+        let member_expr = Self::find_member_expr(&node.children[0])?;
+
+        // Check if it's an arrow access (ptr->method)
+        let (member_name, is_arrow, _declaring_class) = match &member_expr.kind {
+            ClangNodeKind::MemberExpr {
+                member_name,
+                is_arrow,
+                declaring_class,
+                is_static,
+                ..
+            } => {
+                // Skip static methods
+                if *is_static {
+                    return None;
+                }
+                (member_name, *is_arrow, declaring_class.clone())
+            }
+            _ => return None,
+        };
+
+        // Must be arrow access (ptr->method)
+        if !is_arrow {
+            return None;
+        }
+
+        // Get the base expression type
+        if member_expr.children.is_empty() {
+            return None;
+        }
+        let base_type = Self::get_expr_type(&member_expr.children[0]);
+
+        // Check if base is a pointer to a polymorphic class
+        let class_name = if let Some(CppType::Pointer { pointee, .. }) = &base_type {
+            if let CppType::Named(name) = pointee.as_ref() {
+                if self.polymorphic_classes.contains(name) {
+                    name.clone()
+                } else {
+                    return None;
+                }
+            } else {
+                return None;
+            }
+        } else {
+            return None;
+        };
+
+        // Check if the method is in the vtable (is virtual)
+        let vtable_info = self.vtables.get(&class_name)?;
+        let sanitized_member = sanitize_identifier(member_name);
+        let is_virtual = vtable_info
+            .entries
+            .iter()
+            .any(|e| sanitize_identifier(&e.name) == sanitized_member);
+
+        if !is_virtual {
+            return None;
+        }
+
+        // This is a virtual method call - generate vtable dispatch
+        let base_expr = self.expr_to_string(&member_expr.children[0]);
+
+        // Find the root polymorphic class (the one with the vtable type)
+        let root_class = self.find_root_polymorphic_class(&class_name);
+
+        // Collect arguments (skip the first child which is the MemberExpr)
+        let args: Vec<String> = node.children[1..]
+            .iter()
+            .map(|c| self.expr_to_string(c))
+            .collect();
+
+        // Generate the vtable dispatch:
+        // unsafe { ((*(*base).__vtable).method)(base, args...) }
+        // For derived classes: unsafe { ((*(*base).__base.__vtable).method)(base, args...) }
+        let vtable_access = if class_name == root_class {
+            // Direct access to __vtable: (*base).__vtable
+            format!("(*{}).", base_expr)
+        } else {
+            // Need to access through inheritance chain
+            // Find path from class to root: (*base).__base.__vtable
+            let path = self.get_vtable_access_path(&class_name);
+            format!("(*{}){}.", base_expr, path)
+        };
+
+        let all_args = if args.is_empty() {
+            base_expr.clone()
+        } else {
+            format!("{}, {}", base_expr, args.join(", "))
+        };
+
+        Some(format!(
+            "unsafe {{ ((*{}__vtable).{})({}) }}",
+            vtable_access, sanitized_member, all_args
+        ))
+    }
+
+    /// Find MemberExpr node, looking through wrapper nodes like ImplicitCastExpr
+    fn find_member_expr(node: &ClangNode) -> Option<&ClangNode> {
+        match &node.kind {
+            ClangNodeKind::MemberExpr { .. } => Some(node),
+            ClangNodeKind::ImplicitCastExpr { .. } | ClangNodeKind::Unknown(_) => {
+                // Look inside wrapper
+                node.children.first().and_then(Self::find_member_expr)
+            }
+            _ => None,
+        }
+    }
+
+    /// Get the path to access __vtable from a derived class pointer
+    /// Returns something like ".__base" or ".__base.__base" for inheritance chains
+    fn get_vtable_access_path(&self, class_name: &str) -> String {
+        let mut path = String::new();
+        let mut current = class_name.to_string();
+
+        while let Some(vtable_info) = self.vtables.get(&current) {
+            if let Some(ref base) = vtable_info.base_class {
+                path.push_str(".__base");
+                current = base.clone();
+            } else {
+                // Reached root
+                break;
+            }
+        }
+
+        path
+    }
+
     /// Check if this is a std::get call on a variant.
     /// Returns (variant_arg_node, variant_type, return_type) if it is.
     fn is_std_get_call(node: &ClangNode) -> Option<(&ClangNode, CppType, &CppType)> {
@@ -4310,7 +4446,34 @@ impl AstCodeGen {
                 self.current_struct_methods.insert("new_0".to_string(), 1);
                 self.writeln("pub fn new_0() -> Self {");
                 self.indent += 1;
-                self.writeln("Default::default()");
+
+                // Check if this is a polymorphic class that needs vtable initialization
+                if let Some(vtable_info) = self.vtables.get(name).cloned() {
+                    let sanitized = sanitize_identifier(name);
+                    if vtable_info.base_class.is_none() {
+                        // Root polymorphic class - set vtable directly
+                        self.writeln("Self {");
+                        self.indent += 1;
+                        self.writeln(&format!(
+                            "__vtable: &{}_VTABLE,",
+                            sanitized.to_uppercase()
+                        ));
+                        self.writeln("..Default::default()");
+                        self.indent -= 1;
+                        self.writeln("}");
+                    } else {
+                        // Derived polymorphic class - set vtable through base
+                        self.writeln("let mut __self = Self::default();");
+                        self.writeln(&format!(
+                            "__self.__base.__vtable = &{}_VTABLE;",
+                            sanitized.to_uppercase()
+                        ));
+                        self.writeln("__self");
+                    }
+                } else {
+                    self.writeln("Default::default()");
+                }
+
                 self.indent -= 1;
                 self.writeln("}");
                 self.writeln("");
@@ -5099,19 +5262,20 @@ impl AstCodeGen {
         self.writeln("}");
     }
 
-    /// Convert a type to Rust, using trait objects for polymorphic pointers.
+    /// Convert a type to Rust for polymorphic pointers.
+    /// Uses raw pointers for vtable-based dispatch.
     fn convert_type_for_polymorphism(&self, ty: &CppType) -> String {
         match ty {
             CppType::Pointer { pointee, is_const } => {
                 // Check if pointee is a polymorphic class
                 if let CppType::Named(class_name) = pointee.as_ref() {
                     if self.polymorphic_classes.contains(class_name) {
-                        // Convert to trait object reference
-                        let trait_name = format!("{}Trait", class_name);
+                        // Use raw pointer for vtable-based dispatch
+                        let sanitized = sanitize_identifier(class_name);
                         return if *is_const {
-                            format!("&dyn {}", trait_name)
+                            format!("*const {}", sanitized)
                         } else {
-                            format!("&mut dyn {}", trait_name)
+                            format!("*mut {}", sanitized)
                         };
                     }
                 }
@@ -7913,11 +8077,12 @@ impl AstCodeGen {
                             if let CppType::Pointer { pointee, is_const } = ty {
                                 if let CppType::Named(class_name) = pointee.as_ref() {
                                     if self.polymorphic_classes.contains(class_name) {
-                                        // For polymorphic types, just return reference
+                                        // For polymorphic types, use raw pointer for vtable dispatch
+                                        let sanitized = sanitize_identifier(class_name);
                                         return if *is_const {
-                                            format!("&{}", operand)
+                                            format!("&{} as *const {}", operand, sanitized)
                                         } else {
-                                            format!("&mut {}", operand)
+                                            format!("&mut {} as *mut {}", operand, sanitized)
                                         };
                                     }
                                 }
@@ -7997,6 +8162,27 @@ impl AstCodeGen {
                             format!("Some({})", inner)
                         }
                         _ => {
+                            // Check for derived-to-base pointer cast for polymorphic types
+                            // This requires explicit cast in Rust since we use raw pointers
+                            if let CppType::Pointer { pointee, is_const } = ty {
+                                if let CppType::Named(target_class) = pointee.as_ref() {
+                                    if self.polymorphic_classes.contains(target_class) {
+                                        // Check if inner expression has a different pointer type
+                                        // Look for patterns like "... as *mut SomeClass" or "... as *const SomeClass"
+                                        let sanitized_target = sanitize_identifier(target_class);
+                                        let ptr_type = if *is_const {
+                                            format!("*const {}", sanitized_target)
+                                        } else {
+                                            format!("*mut {}", sanitized_target)
+                                        };
+                                        // If inner already ends with the target pointer type, no need to cast
+                                        if !inner.ends_with(&ptr_type) {
+                                            // Need to add the cast
+                                            return format!("{} as {}", inner, ptr_type);
+                                        }
+                                    }
+                                }
+                            }
                             // Most casts pass through (LValueToRValue, ArrayToPointerDecay, etc.)
                             inner
                         }
@@ -8730,11 +8916,12 @@ impl AstCodeGen {
                             if let CppType::Pointer { pointee, is_const } = ty {
                                 if let CppType::Named(class_name) = pointee.as_ref() {
                                     if self.polymorphic_classes.contains(class_name) {
-                                        // For polymorphic types, just return reference (no cast needed)
+                                        // For polymorphic types, use raw pointer for vtable dispatch
+                                        let sanitized = sanitize_identifier(class_name);
                                         return if *is_const {
-                                            format!("&{}", operand)
+                                            format!("&{} as *const {}", operand, sanitized)
                                         } else {
-                                            format!("&mut {}", operand)
+                                            format!("&mut {} as *mut {}", operand, sanitized)
                                         };
                                     }
                                 }
@@ -8861,6 +9048,12 @@ impl AstCodeGen {
                 }
             }
             ClangNodeKind::CallExpr { ty } => {
+                // Check if this is a virtual method call through a pointer to polymorphic class
+                // If so, generate vtable dispatch instead of trait-based dispatch
+                if let Some(vtable_call) = self.try_generate_vtable_dispatch(node) {
+                    return vtable_call;
+                }
+
                 // Check if this is a std::get call on a variant
                 if let Some((variant_arg, variant_type, return_type)) = Self::is_std_get_call(node)
                 {
@@ -9642,6 +9835,27 @@ impl AstCodeGen {
                             format!("Some({})", inner)
                         }
                         _ => {
+                            // Check for derived-to-base pointer cast for polymorphic types
+                            // This requires explicit cast in Rust since we use raw pointers
+                            if let CppType::Pointer { pointee, is_const } = ty {
+                                if let CppType::Named(target_class) = pointee.as_ref() {
+                                    if self.polymorphic_classes.contains(target_class) {
+                                        // Check if inner expression has a different pointer type
+                                        // Look for patterns like "... as *mut SomeClass" or "... as *const SomeClass"
+                                        let sanitized_target = sanitize_identifier(target_class);
+                                        let ptr_type = if *is_const {
+                                            format!("*const {}", sanitized_target)
+                                        } else {
+                                            format!("*mut {}", sanitized_target)
+                                        };
+                                        // If inner already ends with the target pointer type, no need to cast
+                                        if !inner.ends_with(&ptr_type) {
+                                            // Need to add the cast
+                                            return format!("{} as {}", inner, ptr_type);
+                                        }
+                                    }
+                                }
+                            }
                             // Most casts pass through (LValueToRValue, ArrayToPointerDecay, etc.)
                             inner
                         }
