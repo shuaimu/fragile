@@ -626,7 +626,7 @@ Get `std::vector<int>` working end-to-end.
     }
     ```
   - [ ] **23.8.2** Compile transpiled code with rustc + fragile-runtime - IN PROGRESS
-    - **Progress**: Errors reduced 2091 → 117 (94.4% reduction) ✅ 2026-01-24
+    - **Progress**: Errors reduced 2091 → 109 (94.8% reduction) ✅ 2026-01-24
     - Fixed: super:: path computation now accounts for flattened namespaces (std, __)
     - Fixed: Method overloading deduplication within struct impl blocks (23.8.3)
     - Fixed: Constructor overloading with same param count but different types
@@ -654,11 +654,12 @@ Get `std::vector<int>` working end-to-end.
     - Fixed: Unresolved _unnamed in global variable init → default value ✅ 2026-01-24
     - Fixed: Copy constructor detection → use .clone() instead of new_1(&arg) ✅ 2026-01-24
     - Fixed: Non-struct type constructor calls (pointer/primitive types) → pass through ✅ 2026-01-24
-    - Remaining 117 errors:
+    - Fixed: Derive Clone for structs without explicit copy constructor ✅ 2026-01-24
+    - Fixed: Skip union generation if name conflicts with type alias ✅ 2026-01-24
+    - Remaining 109 errors:
       - 22 mismatched types (integer type coercion issues)
       - Missing types (template instantiation types, dependent types)
       - Missing methods on bit vector types (op_bool, op_eq, op_add, etc.)
-      - E0117: trait impl for external types (c_void)
   - [ ] **23.8.3** Execute and verify exit code - BLOCKED on 23.8.2
   - [ ] **23.8.4** Add iteration test: `for (int x : v) { ... }` - BLOCKED
   - [ ] **23.8.5** Add resize/reserve/capacity tests - BLOCKED
