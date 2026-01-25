@@ -3944,6 +3944,29 @@ impl AstCodeGen {
         self.writeln("0");
         self.indent -= 1;
         self.writeln("}");
+        // Add eq, lt, and eq_int_type functions to char_traits
+        self.writeln("pub fn eq(_a: &i8, _b: &i8) -> bool { *_a == *_b }");
+        self.writeln("pub fn lt(_a: &i8, _b: &i8) -> bool { *_a < *_b }");
+        self.writeln("pub fn eq_int_type(_a: i32, _b: i32) -> bool { _a == _b }");
+        self.writeln("pub fn to_char_type(_c: i32) -> i8 { _c as i8 }");
+        self.writeln("pub fn to_int_type(_c: i8) -> i32 { _c as i32 }");
+        self.writeln("pub fn eof() -> i32 { -1 }");
+        self.writeln("pub fn not_eof(_c: i32) -> i32 { if _c == -1 { 0 } else { _c } }");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("");
+
+        // More type stubs for libstdc++
+        self.writeln("// More libstdc++ type stubs");
+        self.writeln("pub type basic_ostream_type_parameter_0_0__type_parameter_0_1 = std::ffi::c_void;");
+        self.writeln("pub type memory_resource = std::ffi::c_void;");
+        self.writeln("");
+
+        // _V2 module stub for libstdc++ categories
+        self.writeln("pub mod _V2 {");
+        self.indent += 1;
+        self.writeln("pub fn generic_category() -> () { }");
+        self.writeln("pub fn system_category() -> () { }");
         self.indent -= 1;
         self.writeln("}");
         self.writeln("");
