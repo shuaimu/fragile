@@ -10725,46 +10725,83 @@ impl AstCodeGen {
 
     /// Generate an if statement.
     fn generate_if_stmt(&mut self, node: &ClangNode) {
-        // Children: condition, then-branch, [else-branch]
+        // C++17 if-with-initializer has structure:
+        // if (init; cond) then else
+        // AST children: [init_decl], condition, then-branch, [else-branch]
+        // Standard if has: condition, then-branch, [else-branch]
         if node.children.len() >= 2 {
-            let cond = self.expr_to_string(&node.children[0]);
-            // In C++, pointers and integers can be used in boolean context
-            // Pointers: non-null = true; Integers: non-zero = true
-            // In Rust, we need explicit checks
-            let cond_type = Self::get_expr_type(&node.children[0]);
-            let cond = if matches!(cond_type, Some(CppType::Pointer { .. })) {
-                format!("!{}.is_null()", cond)
-            } else if matches!(
-                cond_type,
-                Some(CppType::Int { .. })
-                    | Some(CppType::Short { .. })
-                    | Some(CppType::Long { .. })
-                    | Some(CppType::LongLong { .. })
-                    | Some(CppType::Char { .. })
-            ) {
-                // Integer in boolean context: non-zero = true
-                format!("({}) != 0", cond)
+            // Check if first child is a DeclStmt (C++17 if-init)
+            let (has_init, cond_idx, then_idx) = if let ClangNodeKind::DeclStmt = &node.children[0].kind {
+                // C++17: if (init; cond) { ... }
+                (true, 1, 2)
+            } else if let ClangNodeKind::VarDecl { .. } = &node.children[0].kind {
+                // Alternative: VarDecl directly without DeclStmt wrapper
+                (true, 1, 2)
             } else {
-                cond
+                // Standard: if (cond) { ... }
+                (false, 0, 1)
             };
-            self.writeln(&format!("if {} {{", cond));
-            self.indent += 1;
-            self.generate_stmt(&node.children[1], false);
-            self.indent -= 1;
 
-            if node.children.len() > 2 {
-                // Check if else is another if (else if)
-                if let ClangNodeKind::IfStmt = &node.children[2].kind {
-                    self.write("} else ");
-                    self.generate_if_stmt(&node.children[2]);
-                    return;
-                }
-                self.writeln("} else {");
+            // Handle the initializer if present
+            if has_init && node.children.len() > then_idx {
+                // Generate the initializer as a let statement in an enclosing block
+                self.writeln("{");
                 self.indent += 1;
-                self.generate_stmt(&node.children[2], false);
-                self.indent -= 1;
+                self.generate_stmt(&node.children[0], false);
             }
-            self.writeln("}");
+
+            // Make sure we have enough children for condition and then-branch
+            if cond_idx < node.children.len() && then_idx < node.children.len() {
+                let cond = self.expr_to_string(&node.children[cond_idx]);
+                // In C++, pointers and integers can be used in boolean context
+                // Pointers: non-null = true; Integers: non-zero = true
+                // In Rust, we need explicit checks
+                let cond_type = Self::get_expr_type(&node.children[cond_idx]);
+                let cond = if matches!(cond_type, Some(CppType::Pointer { .. })) {
+                    format!("!{}.is_null()", cond)
+                } else if matches!(
+                    cond_type,
+                    Some(CppType::Int { .. })
+                        | Some(CppType::Short { .. })
+                        | Some(CppType::Long { .. })
+                        | Some(CppType::LongLong { .. })
+                        | Some(CppType::Char { .. })
+                ) {
+                    // Integer in boolean context: non-zero = true
+                    format!("({}) != 0", cond)
+                } else {
+                    cond
+                };
+                self.writeln(&format!("if {} {{", cond));
+                self.indent += 1;
+                self.generate_stmt(&node.children[then_idx], false);
+                self.indent -= 1;
+
+                let else_idx = then_idx + 1;
+                if node.children.len() > else_idx {
+                    // Check if else is another if (else if)
+                    if let ClangNodeKind::IfStmt = &node.children[else_idx].kind {
+                        self.write("} else ");
+                        self.generate_if_stmt(&node.children[else_idx]);
+                        if has_init {
+                            self.indent -= 1;
+                            self.writeln("}");
+                        }
+                        return;
+                    }
+                    self.writeln("} else {");
+                    self.indent += 1;
+                    self.generate_stmt(&node.children[else_idx], false);
+                    self.indent -= 1;
+                }
+                self.writeln("}");
+            }
+
+            // Close the enclosing block for if-init
+            if has_init && node.children.len() > then_idx {
+                self.indent -= 1;
+                self.writeln("}");
+            }
         }
     }
 
