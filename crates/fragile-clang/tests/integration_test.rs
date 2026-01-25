@@ -5241,3 +5241,155 @@ fn test_e2e_simple_hash_table() {
         "Simple hash table with chaining should work correctly"
     );
 }
+
+/// E2E test: Min-heap / priority queue
+/// Tests: array-based heap operations, complex indexing, swap operations
+#[test]
+fn test_e2e_min_heap() {
+    let source = r#"
+        class MinHeap {
+            static const int MAX_SIZE = 32;
+            int data[32];
+            int size_;
+
+            int parent(int i) const { return (i - 1) / 2; }
+            int left(int i) const { return 2 * i + 1; }
+            int right(int i) const { return 2 * i + 2; }
+
+            void swap(int i, int j) {
+                int temp = data[i];
+                data[i] = data[j];
+                data[j] = temp;
+            }
+
+            void heapifyUp(int i) {
+                while (i > 0 && data[parent(i)] > data[i]) {
+                    swap(i, parent(i));
+                    i = parent(i);
+                }
+            }
+
+            void heapifyDown(int i) {
+                int minIdx = i;
+                int l = left(i);
+                int r = right(i);
+
+                if (l < size_ && data[l] < data[minIdx]) {
+                    minIdx = l;
+                }
+                if (r < size_ && data[r] < data[minIdx]) {
+                    minIdx = r;
+                }
+
+                if (minIdx != i) {
+                    swap(i, minIdx);
+                    heapifyDown(minIdx);
+                }
+            }
+
+        public:
+            MinHeap() : size_(0) {}
+
+            int size() const { return size_; }
+            bool empty() const { return size_ == 0; }
+            bool full() const { return size_ >= MAX_SIZE; }
+
+            bool push(int value) {
+                if (full()) return false;
+                data[size_] = value;
+                heapifyUp(size_);
+                size_++;
+                return true;
+            }
+
+            int top() const {
+                return data[0];
+            }
+
+            bool pop() {
+                if (empty()) return false;
+                data[0] = data[size_ - 1];
+                size_--;
+                if (size_ > 0) {
+                    heapifyDown(0);
+                }
+                return true;
+            }
+        };
+
+        int main() {
+            MinHeap heap;
+
+            // Test empty heap
+            if (!heap.empty()) return 1;
+            if (heap.size() != 0) return 2;
+
+            // Test single element
+            if (!heap.push(42)) return 3;
+            if (heap.empty()) return 4;
+            if (heap.size() != 1) return 5;
+            if (heap.top() != 42) return 6;
+
+            // Test min property - insert in descending order
+            heap.pop();
+            heap.push(5);
+            heap.push(3);
+            heap.push(8);
+            heap.push(1);
+            heap.push(6);
+
+            // Min should be 1
+            if (heap.top() != 1) return 7;
+            if (heap.size() != 5) return 8;
+
+            // Pop should return elements in sorted order
+            int prev = heap.top();
+            heap.pop();
+
+            while (!heap.empty()) {
+                int curr = heap.top();
+                if (curr < prev) return 9;  // Should be increasing
+                prev = curr;
+                heap.pop();
+            }
+
+            // Test heap is empty after all pops
+            if (!heap.empty()) return 10;
+            if (heap.pop()) return 11;  // Pop on empty should fail
+
+            // Test with duplicates
+            heap.push(5);
+            heap.push(5);
+            heap.push(3);
+            heap.push(3);
+            if (heap.size() != 4) return 12;
+            if (heap.top() != 3) return 13;
+
+            // Verify all can be popped
+            for (int i = 0; i < 4; i++) {
+                if (!heap.pop()) return 14;
+            }
+            if (!heap.empty()) return 15;
+
+            // Test filling heap
+            for (int i = 0; i < 32; i++) {
+                if (!heap.push(i)) return 16;
+            }
+            if (!heap.full()) return 17;
+            if (heap.push(999)) return 18;  // Should fail when full
+
+            // Verify heap property maintained
+            if (heap.top() != 0) return 19;  // Min should be 0
+
+            return 0;  // Success
+        }
+    "#;
+
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_min_heap.cpp").expect("E2E test failed");
+
+    assert_eq!(
+        exit_code, 0,
+        "Min-heap priority queue should work correctly"
+    );
+}

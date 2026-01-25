@@ -1066,6 +1066,7 @@ impl ClangParser {
                     let is_static = clang_sys::clang_CXXMethod_isStatic(cursor) != 0;
                     let is_virtual = clang_sys::clang_CXXMethod_isVirtual(cursor) != 0;
                     let is_pure_virtual = clang_sys::clang_CXXMethod_isPureVirtual(cursor) != 0;
+                    let is_const = clang_sys::clang_CXXMethod_isConst(cursor) != 0;
                     let (is_override, is_final) = self.get_override_final_attrs(cursor);
                     let access = self.get_access_specifier(cursor);
                     ClangNodeKind::CXXMethodDecl {
@@ -1078,6 +1079,7 @@ impl ClangParser {
                         is_pure_virtual,
                         is_override,
                         is_final,
+                        is_const,
                         access,
                     }
                 }
@@ -1093,6 +1095,7 @@ impl ClangParser {
                     let is_static = false; // Conversion operators are never static
                     let is_virtual = clang_sys::clang_CXXMethod_isVirtual(cursor) != 0;
                     let is_pure_virtual = clang_sys::clang_CXXMethod_isPureVirtual(cursor) != 0;
+                    let is_const = clang_sys::clang_CXXMethod_isConst(cursor) != 0;
                     let (is_override, is_final) = self.get_override_final_attrs(cursor);
                     let access = self.get_access_specifier(cursor);
                     ClangNodeKind::CXXMethodDecl {
@@ -1105,6 +1108,7 @@ impl ClangParser {
                         is_pure_virtual,
                         is_override,
                         is_final,
+                        is_const,
                         access,
                     }
                 }

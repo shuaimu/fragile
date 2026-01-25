@@ -6143,68 +6143,81 @@ impl AstCodeGen {
         }
     }
 
-    /// Check if a method modifies self (has assignments to member fields).
-    fn method_modifies_self(node: &ClangNode) -> bool {
-        // Check if this node is an assignment to a member
-        if let ClangNodeKind::BinaryOperator {
-            op: BinaryOp::Assign,
-            ..
-        } = &node.kind
-        {
-            // Left side of assignment - check if it's a member expression
-            if !node.children.is_empty() && Self::is_member_access(&node.children[0]) {
-                return true;
-            }
-        }
-        // Also check compound assignment operators
+    /// Collect parameter names that are assigned to within a function/method body.
+    /// C++ allows modifying pass-by-value parameters, but Rust requires `mut`.
+    fn collect_assigned_params(node: &ClangNode, params: &[(String, CppType)]) -> HashSet<String> {
+        let param_names: HashSet<String> = params.iter().map(|(n, _)| n.clone()).collect();
+        let mut assigned = HashSet::new();
+        Self::find_param_assignments(node, &param_names, &mut assigned);
+        assigned
+    }
+
+    /// Recursively find assignments to parameters.
+    fn find_param_assignments(
+        node: &ClangNode,
+        param_names: &HashSet<String>,
+        assigned: &mut HashSet<String>,
+    ) {
+        // Check for assignment operators
         if let ClangNodeKind::BinaryOperator { op, .. } = &node.kind {
-            match op {
-                BinaryOp::AddAssign
-                | BinaryOp::SubAssign
-                | BinaryOp::MulAssign
-                | BinaryOp::DivAssign
-                | BinaryOp::RemAssign
-                | BinaryOp::AndAssign
-                | BinaryOp::OrAssign
-                | BinaryOp::XorAssign
-                | BinaryOp::ShlAssign
-                | BinaryOp::ShrAssign => {
-                    if !node.children.is_empty() && Self::is_member_access(&node.children[0]) {
-                        return true;
+            let is_assignment = matches!(
+                op,
+                BinaryOp::Assign
+                    | BinaryOp::AddAssign
+                    | BinaryOp::SubAssign
+                    | BinaryOp::MulAssign
+                    | BinaryOp::DivAssign
+                    | BinaryOp::RemAssign
+                    | BinaryOp::AndAssign
+                    | BinaryOp::OrAssign
+                    | BinaryOp::XorAssign
+                    | BinaryOp::ShlAssign
+                    | BinaryOp::ShrAssign
+            );
+            if is_assignment && !node.children.is_empty() {
+                // Check if left side is a DeclRefExpr to a parameter
+                if let Some(name) = Self::get_declref_name(&node.children[0]) {
+                    if param_names.contains(&name) {
+                        assigned.insert(name);
                     }
                 }
-                _ => {}
             }
         }
-        // Check for increment/decrement operators on member fields
+
+        // Check for increment/decrement operators
         if let ClangNodeKind::UnaryOperator { op, .. } = &node.kind {
             match op {
                 UnaryOp::PreInc | UnaryOp::PostInc | UnaryOp::PreDec | UnaryOp::PostDec => {
-                    if !node.children.is_empty() && Self::is_member_access(&node.children[0]) {
-                        return true;
+                    if !node.children.is_empty() {
+                        if let Some(name) = Self::get_declref_name(&node.children[0]) {
+                            if param_names.contains(&name) {
+                                assigned.insert(name);
+                            }
+                        }
                     }
                 }
                 _ => {}
             }
         }
-        // Recursively check children
+
+        // Recurse into children
         for child in &node.children {
-            if Self::method_modifies_self(child) {
-                return true;
-            }
+            Self::find_param_assignments(child, param_names, assigned);
         }
-        false
     }
 
-    /// Check if a node is a member access (directly or through implicit this).
-    fn is_member_access(node: &ClangNode) -> bool {
+    /// Get the name from a DeclRefExpr (possibly wrapped in casts).
+    fn get_declref_name(node: &ClangNode) -> Option<String> {
         match &node.kind {
-            ClangNodeKind::MemberExpr { .. } => true,
-            ClangNodeKind::ImplicitCastExpr { .. } => {
-                // Check through implicit casts
-                !node.children.is_empty() && Self::is_member_access(&node.children[0])
+            ClangNodeKind::DeclRefExpr { name, .. } => Some(name.clone()),
+            ClangNodeKind::ImplicitCastExpr { .. } | ClangNodeKind::Unknown(_) => {
+                if !node.children.is_empty() {
+                    Self::get_declref_name(&node.children[0])
+                } else {
+                    None
+                }
             }
-            _ => false,
+            _ => None,
         }
     }
 
@@ -6262,6 +6275,14 @@ impl AstCodeGen {
         match &node.kind {
             ClangNodeKind::MemberExpr { member_name, .. } => Some(member_name.clone()),
             ClangNodeKind::ImplicitCastExpr { .. } => {
+                if !node.children.is_empty() {
+                    Self::get_member_name(&node.children[0])
+                } else {
+                    None
+                }
+            }
+            ClangNodeKind::ArraySubscriptExpr { .. } => {
+                // For array subscript (e.g., data[i]), get member name from the base (data)
                 if !node.children.is_empty() {
                     Self::get_member_name(&node.children[0])
                 } else {
@@ -6395,6 +6416,14 @@ impl AstCodeGen {
                 !*is_static && node.children.is_empty()
             }
             ClangNodeKind::ImplicitCastExpr { .. } => {
+                if !node.children.is_empty() {
+                    Self::has_implicit_this_or_member(&node.children[0])
+                } else {
+                    false
+                }
+            }
+            ClangNodeKind::ArraySubscriptExpr { .. } => {
+                // For array subscript (e.g., data[i]), check the base (data)
                 if !node.children.is_empty() {
                     Self::has_implicit_this_or_member(&node.children[0])
                 } else {
@@ -7592,10 +7621,11 @@ impl AstCodeGen {
                 return_type,
                 params,
                 is_static,
+                is_const,
                 ..
             } => {
-                // Check if method modifies self or returns a mutable reference
-                let modifies_self = Self::method_modifies_self(node);
+                // If the C++ method is marked const, use &self
+                // Otherwise, use &mut self (non-const methods can potentially mutate)
                 let returns_mut_ref = matches!(
                     return_type,
                     CppType::Reference {
@@ -7605,7 +7635,8 @@ impl AstCodeGen {
                 );
                 // Iterator operators always modify self (increment/decrement)
                 let is_iterator_mutating_op = matches!(name.as_str(), "operator++" | "operator--");
-                let is_mutable_method = modifies_self || returns_mut_ref || is_iterator_mutating_op;
+                // Non-const methods should use &mut self
+                let is_mutable_method = !*is_const || returns_mut_ref || is_iterator_mutating_op;
 
                 let self_param = if *is_static {
                     "".to_string()
@@ -7614,6 +7645,11 @@ impl AstCodeGen {
                 } else {
                     "&self, ".to_string()
                 };
+
+                // Collect parameters that are assigned to within the method body
+                // C++ allows modifying by-value params, but Rust requires `mut`
+                let assigned_params = Self::collect_assigned_params(node, params);
+
                 // Deduplicate parameter names (C++ allows unnamed params, Rust doesn't)
                 let mut param_name_counts: HashMap<String, usize> = HashMap::new();
                 let params_str = params
@@ -7626,7 +7662,9 @@ impl AstCodeGen {
                             param_name = format!("{}_{}", param_name, *count);
                         }
                         *param_name_counts.get_mut(&sanitize_identifier(n)).unwrap() += 1;
-                        format!("{}: {}", param_name, t.to_rust_type_str())
+                        // Add `mut` if this parameter is assigned to in the body
+                        let mut_prefix = if assigned_params.contains(n) { "mut " } else { "" };
+                        format!("{}{}: {}", mut_prefix, param_name, t.to_rust_type_str())
                     })
                     .collect::<Vec<_>>()
                     .join(", ");
@@ -9302,10 +9340,12 @@ impl AstCodeGen {
                         || self.is_ptr_var_expr(&node.children[0]);
                     if is_pointer {
                         // Raw pointer indexing without unsafe wrapper
-                        format!("*{}.add({} as usize)", arr, idx)
+                        // Parenthesize idx to handle operator precedence (e.g., size_ - 1 as usize)
+                        format!("*{}.add(({}) as usize)", arr, idx)
                     } else {
                         // Array indexing
-                        format!("{}[{} as usize]", arr, idx)
+                        // Parenthesize idx to handle operator precedence (e.g., size_ - 1 as usize)
+                        format!("{}[({}) as usize]", arr, idx)
                     }
                 } else {
                     "/* array subscript error */".to_string()
@@ -10961,15 +11001,18 @@ impl AstCodeGen {
                         let raw_name = self
                             .get_raw_var_name(&node.children[0])
                             .unwrap_or_else(|| self.expr_to_string(&node.children[0]));
-                        format!("unsafe {{ {}[{} as usize] }}", raw_name, idx)
+                        // Parenthesize idx to handle operator precedence (e.g., size_ - 1 as usize)
+                        format!("unsafe {{ {}[({}) as usize] }}", raw_name, idx)
                     } else if is_pointer {
                         let arr = self.expr_to_string(&node.children[0]);
                         // Pointer indexing requires unsafe pointer arithmetic
-                        format!("unsafe {{ *{}.add({} as usize) }}", arr, idx)
+                        // Parenthesize idx to handle operator precedence (e.g., size_ - 1 as usize)
+                        format!("unsafe {{ *{}.add(({}) as usize) }}", arr, idx)
                     } else {
                         let arr = self.expr_to_string(&node.children[0]);
                         // Array indexing - cast index to usize
-                        format!("{}[{} as usize]", arr, idx)
+                        // Parenthesize idx to handle operator precedence (e.g., size_ - 1 as usize)
+                        format!("{}[({}) as usize]", arr, idx)
                     }
                 } else {
                     "/* array subscript error */".to_string()
