@@ -732,12 +732,22 @@ Get `std::vector<int>` working end-to-end.
     - Fixed: Wrap pointer add/sub compound assignment in unsafe ✅ 2026-01-24
       - `ptr += n` uses `.add()` which requires unsafe block
     - Added: numeric_limits and fragile_runtime stub modules ✅ 2026-01-24
-    - **Progress**: Errors reduced from 2091 to 31 (98.5% reduction) ✅ 2026-01-24
-    - Remaining 31 errors:
-      - Iterator type mismatches (20) - return `Self` vs placeholder `*mut c_void`
-      - Method resolution (3) - op_add, is_equal on placeholder types
-      - Module resolution (3) - numeric_limits namespace path
-      - Other (5) - assorted issues
+    - **Progress**: Errors reduced from 2091 to 16 (99.2% reduction) ✅ 2026-01-24
+    - Fixed: fragile_runtime paths use crate:: prefix for nested modules ✅ 2026-01-24
+    - Fixed: fragile_malloc returns *mut () for void pointer semantics ✅ 2026-01-24
+    - Fixed: Methods returning *this with c_void placeholder now use Self ✅ 2026-01-24
+    - Fixed: Iterator operators (++, --) always use &mut self ✅ 2026-01-24
+    - Fixed: Post-increment operators return Self, use self.clone() ✅ 2026-01-24
+    - Fixed: Variables initialized with *this use Self type with clone() ✅ 2026-01-24
+    - Fixed: Compound assignment operators (+=, -=) return &mut Self ✅ 2026-01-24
+    - Fixed: Return self by value adds .clone() automatically ✅ 2026-01-24
+    - Remaining 16 errors:
+      - Template instantiation (2) - push_back expects &c_void, got i32
+      - Hash function overload (2) - _Hash_impl::hash wrong arg count
+      - Iterator arithmetic (2) - missing op_add method on _Bit_iterator
+      - numeric_limits placeholders (8) - min/max/lowest return wrong types
+      - Method on placeholder (1) - is_equal on c_void
+      - Non-primitive cast (2) - integer as _Sp___rep
   - [ ] **23.8.3** Execute and verify exit code - BLOCKED on 23.8.2
   - [ ] **23.8.4** Add iteration test: `for (int x : v) { ... }` - BLOCKED
   - [ ] **23.8.5** Add resize/reserve/capacity tests - BLOCKED
@@ -826,6 +836,38 @@ Test against actual open-source C++ projects.
 | Phase 5 | High | Phase 2, 3 (+ static init) |
 | Phase 6 | Medium | Phase 2 |
 | Phase 7 | Variable | All previous phases |
+
+---
+
+## 24. CI/CD Fixes (Priority: High)
+
+**Goal**: Fix GitHub Actions CI to pass on main branch.
+
+**Current Issues**:
+1. CI references non-existent `fragile-rustc-driver` package
+2. Code formatting doesn't match `cargo fmt` style
+3. Clippy warnings (currently non-blocking but noisy)
+
+- [ ] **24.1** Fix CI workflow configuration
+  - [ ] **24.1.1** Remove `test-nightly` job that references non-existent `fragile-rustc-driver`
+    - File: `.github/workflows/ci.yml`
+    - The `fragile-rustc-driver` crate was removed; CI still tries to build it
+    - Either remove the job entirely or update to current crate structure
+  - [ ] **24.1.2** Simplify CI to just: build, test, clippy (optional), fmt (optional)
+
+- [ ] **24.2** Fix code formatting
+  - [ ] **24.2.1** Run `cargo fmt --all` to fix formatting across all crates
+  - [ ] **24.2.2** Affected files include:
+    - `crates/fragile-build/src/compile_commands.rs` (boolean chain formatting)
+    - `crates/fragile-clang/src/ast_codegen.rs` (various formatting)
+    - Other files as needed
+
+- [ ] **24.3** Address clippy warnings (optional, non-blocking)
+  - [ ] **24.3.1** Fix `thread_local` const initializer warnings in fragile-runtime
+  - [ ] **24.3.2** Add `# Safety` documentation to unsafe functions
+  - [ ] **24.3.3** Fix `map_or` simplification suggestions
+  - [ ] **24.3.4** Fix length comparison warnings (`len() >= 1` → `!is_empty()`)
+  - Note: CI has `continue-on-error: true` for clippy, so these are not blocking
 
 ### Why libc++ Over libstdc++
 
