@@ -631,7 +631,7 @@ libc++ containers need working `operator new`/`operator delete`.
 
 Get `std::vector<int>` working end-to-end.
 
-- [ ] **23.8** std::vector E2E milestone - BLOCKED (8 errors remain)
+- [ ] **23.8** std::vector E2E milestone - BLOCKED (16 errors remain after fix pass)
   - [x] **23.8.1** Transpile simple vector usage ✅ 2026-01-24 - Transpilation succeeds
     ```cpp
     #include <vector>
@@ -779,13 +779,20 @@ Get `std::vector<int>` working end-to-end.
       - Added find_root_polymorphic_ancestor() to trace up inheritance
       - Derived classes now implement ROOT class's trait (not immediate parent's trait)
       - Fixed 8 missing trait errors: bad_allocTrait, logic_errorTrait (4), runtime_errorTrait (3)
-    - **Current state**: 69 compilation errors (8 trait errors → 0, exposed 69 pre-existing errors)
-    - Remaining errors (documented in docs/dev/investigation_vector_25_errors.md):
-      - Duplicate _unnamed definitions (20) - bit field accessor name conflicts
-      - Missing exception constructors (14) - logic_error::new_1, runtime_error::new_1
-      - Type inference issues (9) - lambda return type placeholders
-      - Type casting issues (4) - std::byte operations
-      - Other errors (22) - pointer arithmetic, type comparisons, etc.
+    - Fixed: Duplicate anonymous bit field accessors (unique names _unnamed_1, _unnamed_2) ✅ 2026-01-25
+    - Fixed: Added stub constructors for libc++ exception classes ✅ 2026-01-25
+    - Fixed: Placeholder _ return types in all code generation paths ✅ 2026-01-25
+    - Fixed: Duplicate value_type type alias ✅ 2026-01-25
+    - **Current state**: 16 compilation errors (reduced from 69)
+    - **Root cause identified**: Template definitions vs instantiations
+      - Transpiler generates structs from template definitions (with _Tp, _Alloc)
+      - Should instead use template instantiations (with int, std::allocator<int>)
+      - See docs/dev/investigation_vector_25_errors.md for detailed analysis
+    - Remaining errors:
+      - Mismatched types (11) - template type parameters resolved to c_void
+      - Argument count (2) - _Hash_impl::hash() specialization issues
+      - Non-primitive cast (2) - numeric_limits implementation
+      - Missing method (1) - is_equal on type_info
   - [ ] **23.8.3** Execute and verify exit code - BLOCKED on 23.8.2
   - [ ] **23.8.4** Add iteration test: `for (int x : v) { ... }` - BLOCKED
   - [ ] **23.8.5** Add resize/reserve/capacity tests - BLOCKED
