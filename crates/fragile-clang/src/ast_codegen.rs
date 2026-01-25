@@ -11168,9 +11168,14 @@ impl AstCodeGen {
                         UnaryOp::Minus => {
                             // C++ allows -bool which converts bool to int then negates
                             // In Rust, we convert to logical NOT for boolean types
+                            // C++ also allows negating unsigned types (two's complement)
+                            // In Rust, we use .wrapping_neg() for unsigned types
                             let operand_ty = Self::get_expr_type(&node.children[0]);
                             if matches!(operand_ty, Some(CppType::Bool)) {
                                 format!("!{}", operand)
+                            } else if operand_ty.as_ref().map_or(false, |t| t.is_signed() == Some(false)) {
+                                // Unsigned type - use wrapping_neg for two's complement
+                                format!("({}).wrapping_neg()", operand)
                             } else {
                                 format!("-{}", operand)
                             }
@@ -12266,9 +12271,14 @@ impl AstCodeGen {
                         UnaryOp::Minus => {
                             // C++ allows -bool which converts bool to int then negates
                             // In Rust, we convert to logical NOT for boolean types
+                            // C++ also allows negating unsigned types (two's complement)
+                            // In Rust, we use .wrapping_neg() for unsigned types
                             let operand_ty = Self::get_expr_type(&node.children[0]);
                             if matches!(operand_ty, Some(CppType::Bool)) {
                                 format!("!{}", operand)
+                            } else if operand_ty.as_ref().map_or(false, |t| t.is_signed() == Some(false)) {
+                                // Unsigned type - use wrapping_neg for two's complement
+                                format!("({}).wrapping_neg()", operand)
                             } else {
                                 format!("-{}", operand)
                             }
