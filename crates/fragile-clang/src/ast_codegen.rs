@@ -10266,14 +10266,19 @@ impl AstCodeGen {
             } => {
                 // Evaluated constant expression (e.g., default argument)
                 if let Some(val) = int_value {
-                    let suffix = match ty {
-                        CppType::Int { signed: true } => "i32",
-                        CppType::Int { signed: false } => "u32",
-                        CppType::Long { signed: true } => "i64",
-                        CppType::Long { signed: false } => "u64",
-                        _ => "i32",
-                    };
-                    format!("{}{}", val, suffix)
+                    if *val == 0 {
+                        // For zero, skip suffix to allow type inference in generic contexts
+                        "0".to_string()
+                    } else {
+                        let suffix = match ty {
+                            CppType::Int { signed: true } => "i32",
+                            CppType::Int { signed: false } => "u32",
+                            CppType::Long { signed: true } => "i64",
+                            CppType::Long { signed: false } => "u64",
+                            _ => "i32",
+                        };
+                        format!("{}{}", val, suffix)
+                    }
                 } else if let Some(val) = float_value {
                     let suffix = match ty {
                         CppType::Float => "f32",
@@ -10396,6 +10401,10 @@ impl AstCodeGen {
             ClangNodeKind::IntegerLiteral { value, cpp_type } => {
                 if self.skip_literal_suffix {
                     value.to_string()
+                } else if *value == 0 {
+                    // For zero literals, skip the type suffix to allow Rust to infer
+                    // the type from context (especially important for generic functions)
+                    "0".to_string()
                 } else {
                     let suffix = match cpp_type {
                         Some(CppType::Int { signed: true }) => "i32",
@@ -10437,7 +10446,8 @@ impl AstCodeGen {
             } => {
                 // Evaluated constant expression (e.g., default argument)
                 if let Some(val) = int_value {
-                    if self.skip_literal_suffix {
+                    if self.skip_literal_suffix || *val == 0 {
+                        // For zero, skip suffix to allow type inference in generic contexts
                         val.to_string()
                     } else {
                         let suffix = match ty {
