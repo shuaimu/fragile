@@ -508,7 +508,7 @@ The current approach in `crates/fragile-clang/src/types.rs:183-580` has special-
 **Goal**: Compile a medium-size C++ project (~10K-50K LOC) that uses STL, I/O, and threading.
 
 **Current State**:
-- Core language: ~95% complete (62/62 E2E tests passing)
+- Core language: ~95% complete (77/77 E2E tests passing)
 - Runtime primitives: Complete (stdio, pthread, atomics, condition variables, rwlocks)
 - STL integration: **0% tested** (no E2E tests with actual libc++ code)
 
@@ -1018,7 +1018,7 @@ fn call_what(e: *const exception) -> *const i8 {
   - [x] **25.8.3** Remove `{ClassName}Trait` generation
   - [x] **25.8.4** Preserved `virtual_methods` HashMap for vtable construction
 
-- [~] **25.9** Update dynamic_cast (partial) ✅ 2026-01-25
+- [x] **25.9** Update dynamic_cast with RTTI ✅ 2026-01-25
   - [x] **25.9.1** Add RTTI fields to vtable struct ✅ 2026-01-25
     - `__type_id: u64` - FNV-1a hash of class name
     - `__base_count: usize` - Number of base class type IDs
@@ -1027,9 +1027,10 @@ fn call_what(e: *const exception) -> *const i8 {
     - `CLASS_TYPE_ID` constants with FNV-1a hash values
     - `CLASS_BASE_TYPE_IDS` arrays with inheritance chain
   - [x] **25.9.3** Add test_e2e_vtable_rtti to verify RTTI infrastructure ✅ 2026-01-25
-  - [ ] **25.9.4** Fix dynamic_cast expression parsing (source expr becomes 0)
-    - DynamicCastExpr child expression not being extracted correctly
-    - Deferred to future work
+  - [x] **25.9.4** Fix dynamic_cast expression parsing ✅ 2026-01-25
+    - Fixed: skip TypeRef children to find actual expression
+    - Fixed: use .__vtable directly for base pointer access
+    - Added test_e2e_dynamic_cast test
 
 - [x] **25.10** Testing ✅ 2026-01-25
   - [x] **25.10.1** Update existing E2E tests for virtual methods ✅ 2026-01-25

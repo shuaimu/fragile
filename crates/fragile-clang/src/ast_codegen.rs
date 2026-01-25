@@ -10042,7 +10042,14 @@ impl AstCodeGen {
                 // - dynamic_cast<T*>(expr) returns nullptr on failure
                 // - dynamic_cast<T&>(expr) throws std::bad_cast on failure
                 if !node.children.is_empty() {
-                    let expr = self.expr_to_string(&node.children[0]);
+                    // Find the expression child (skip TypeRef nodes)
+                    // DynamicCastExpr children: [TypeRef:TargetType, UnexposedExpr(actual expr)]
+                    let expr_node = node.children.iter().find(|child| {
+                        !matches!(&child.kind, ClangNodeKind::Unknown(s) if s.starts_with("TypeRef"))
+                    });
+                    let expr = expr_node
+                        .map(|n| self.expr_to_string(n))
+                        .unwrap_or_else(|| "()".to_string());
                     let target_str = target_ty.to_rust_type_str();
 
                     match target_ty {
@@ -10056,24 +10063,18 @@ impl AstCodeGen {
                             // Check if target is a polymorphic class
                             if self.polymorphic_classes.contains(&inner_type) {
                                 // Use RTTI to check type at runtime, panic on failure
-                                // Access vtable through the object's __vtable field
-                                let vtable_path = self.get_vtable_access_path(&inner_type);
-                                let vtable_access = if vtable_path.is_empty() {
-                                    ".__vtable".to_string()
-                                } else {
-                                    format!("{}.__vtable", vtable_path)
-                                };
+                                // Access vtable directly - for dynamic_cast, source is always a base
+                                // class pointer with __vtable at the root
                                 format!(
                                     "unsafe {{ \
                                         let __target_id = {}_TYPE_ID; \
-                                        let __vtable = (*{}){}; \
+                                        let __vtable = (*{}).__vtable; \
                                         let __found = (*__vtable).__base_type_ids.contains(&__target_id); \
                                         if !__found {{ panic!(\"std::bad_cast\"); }} \
                                         &*({} as *{} {}) \
                                     }}",
                                     sanitized_target.to_uppercase(),
                                     expr,
-                                    vtable_access,
                                     expr,
                                     if *is_const { "const" } else { "mut" },
                                     inner_type
@@ -10098,27 +10099,20 @@ impl AstCodeGen {
                             // Check if target is a polymorphic class
                             if self.polymorphic_classes.contains(&inner_type) {
                                 // Use RTTI to check type at runtime
-                                // Access vtable through the object's __vtable field
-                                // For root class, vtable_path is "", for derived classes it's ".__base" etc.
-                                let vtable_path = self.get_vtable_access_path(&inner_type);
-                                let vtable_access = if vtable_path.is_empty() {
-                                    ".__vtable".to_string()
-                                } else {
-                                    format!("{}.__vtable", vtable_path)
-                                };
+                                // Access vtable directly - for dynamic_cast, source is always a base
+                                // class pointer with __vtable at the root
                                 format!(
                                     "unsafe {{ \
                                         let __ptr = {}; \
                                         if __ptr.is_null() {{ std::ptr::null_mut() }} else {{ \
                                             let __target_id = {}_TYPE_ID; \
-                                            let __vtable = (*__ptr){}; \
+                                            let __vtable = (*__ptr).__vtable; \
                                             let __found = (*__vtable).__base_type_ids.contains(&__target_id); \
                                             if __found {{ __ptr as {} {} }} else {{ std::ptr::null_mut() }} \
                                         }} \
                                     }}",
                                     expr,
                                     sanitized_target.to_uppercase(),
-                                    vtable_access,
                                     ptr_prefix,
                                     inner_type
                                 )

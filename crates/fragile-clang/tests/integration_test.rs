@@ -1187,6 +1187,56 @@ fn test_e2e_vtable_rtti() {
     );
 }
 
+/// Test dynamic_cast with RTTI.
+/// Verifies that dynamic_cast correctly returns the pointer on success
+/// and nullptr on failure.
+#[test]
+fn test_e2e_dynamic_cast() {
+    let source = r#"
+        class Base {
+        public:
+            virtual int id() { return 1; }
+            virtual ~Base() {}
+        };
+
+        class Derived : public Base {
+        public:
+            int id() override { return 2; }
+        };
+
+        int main() {
+            Derived d;
+            Base b;
+
+            Base* pd = &d;  // Points to Derived
+            Base* pb = &b;  // Points to Base
+
+            // Test 1: dynamic_cast should succeed when actual type matches
+            Derived* d1 = dynamic_cast<Derived*>(pd);
+            if (d1 == nullptr) return 1;  // Should not be null
+
+            // Test 2: dynamic_cast should fail when actual type doesn't match
+            Derived* d2 = dynamic_cast<Derived*>(pb);
+            if (d2 != nullptr) return 3;  // Should be null
+
+            // Test 3: dynamic_cast on nullptr should return nullptr
+            Base* null_ptr = nullptr;
+            Derived* d3 = dynamic_cast<Derived*>(null_ptr);
+            if (d3 != nullptr) return 4;  // Should be null
+
+            return 0;  // All tests passed
+        }
+    "#;
+
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_dynamic_cast.cpp").expect("E2E test failed");
+
+    assert_eq!(
+        exit_code, 0,
+        "dynamic_cast should work correctly with RTTI"
+    );
+}
+
 /// Test function returning struct (rvalue handling).
 #[test]
 fn test_e2e_function_returning_struct() {
