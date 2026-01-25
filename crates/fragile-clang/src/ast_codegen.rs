@@ -6180,14 +6180,48 @@ impl AstCodeGen {
 
     /// Check if a node is a function pointer variable (not a direct function reference).
     /// Returns true if the node has type Pointer { pointee: Function { .. } }
+    /// or a Named type that is a typedef to a function pointer
     fn is_function_pointer_variable(node: &ClangNode) -> bool {
         match &node.kind {
             ClangNodeKind::DeclRefExpr { ty, .. } => {
-                matches!(ty, CppType::Pointer { pointee, .. } if matches!(pointee.as_ref(), CppType::Function { .. }))
+                Self::is_function_pointer_type_or_typedef(ty)
             }
             ClangNodeKind::Unknown(_) | ClangNodeKind::ImplicitCastExpr { .. } => {
                 // Look through wrapper nodes (but not FunctionToPointerDecay)
                 node.children.iter().any(Self::is_function_pointer_variable)
+            }
+            _ => false,
+        }
+    }
+
+    /// Check if a type is a function pointer or a typedef that resolves to one
+    fn is_function_pointer_type_or_typedef(ty: &CppType) -> bool {
+        match ty {
+            CppType::Pointer { pointee, .. } => matches!(pointee.as_ref(), CppType::Function { .. }),
+            CppType::Named(name) => {
+                // Check for common function pointer typedef patterns
+                // In C++, typedef void (*Handler)(int) creates a named type
+                // We also need to handle typedefs from our own generation
+                // where we generate Option<fn(...)> for function pointers
+                // These will typically be all uppercase or PascalCase names
+                // that aren't primitive types
+                !matches!(name.as_str(),
+                    "bool" | "char" | "int" | "long" | "short" | "float" | "double"
+                    | "i8" | "i16" | "i32" | "i64" | "i128"
+                    | "u8" | "u16" | "u32" | "u64" | "u128"
+                    | "f32" | "f64" | "isize" | "usize"
+                    | "size_t" | "ptrdiff_t" | "intptr_t" | "uintptr_t"
+                ) && (
+                    // Check if name ends with common function pointer typedef conventions
+                    name.ends_with("Fn") ||
+                    name.ends_with("Func") ||
+                    name.ends_with("Handler") ||
+                    name.ends_with("Callback") ||
+                    name.ends_with("Ptr") ||
+                    name.ends_with("Op") ||
+                    // Or is a PascalCase name that could be a function pointer typedef
+                    name.chars().next().map(|c| c.is_uppercase()).unwrap_or(false)
+                )
             }
             _ => false,
         }
@@ -7090,9 +7124,11 @@ impl AstCodeGen {
                         if is_derived_polymorphic {
                             let sanitized = sanitize_identifier(struct_name);
                             // Find the path to __vtable through inheritance chain
-                            // For single inheritance, it's just __base.__vtable
+                            // For deep inheritance, this could be __base.__base.__vtable etc.
+                            let vtable_path = self.compute_vtable_access_path(struct_name);
                             self.writeln(&format!(
-                                "__self.__base.__vtable = &{}_VTABLE;",
+                                "__self.{}.__vtable = &{}_VTABLE;",
+                                vtable_path,
                                 sanitized.to_uppercase()
                             ));
                         }
@@ -9473,7 +9509,58 @@ impl AstCodeGen {
                 }
 
                 if !node.children.is_empty() {
-                    let base = self.expr_to_string(&node.children[0]);
+                    // Check if the child is a TypeRef (qualified call like Base::foo())
+                    // In this case, use implicit "self" and access through base class
+                    let is_type_ref = matches!(
+                        &node.children[0].kind,
+                        ClangNodeKind::Unknown(s) if s.starts_with("TypeRef:")
+                    );
+                    // For qualified calls like Base::foo(), we need to access the base class member
+                    // Extract the base class name from TypeRef if present
+                    let qualified_base_class = if is_type_ref {
+                        if let ClangNodeKind::Unknown(s) = &node.children[0].kind {
+                            // Extract class name from "TypeRef:ClassName"
+                            s.strip_prefix("TypeRef:").map(|s| s.to_string())
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
+                    let base = if is_type_ref {
+                        // Qualified call: Base::foo() means call base class method on self
+                        // We need to access through __base field for inherited methods
+                        let self_name = if self.use_ctor_self {
+                            "__self".to_string()
+                        } else {
+                            "self".to_string()
+                        };
+                        // Get the base access path for the qualified class
+                        if let Some(ref qual_class) = qualified_base_class {
+                            // Look up the base class in current class's hierarchy
+                            if let Some(ref current_class) = self.current_class {
+                                let base_access = self.get_base_access_for_class(current_class, qual_class);
+                                match base_access {
+                                    BaseAccess::DirectField(field) if !field.is_empty() => {
+                                        format!("{}.{}", self_name, field)
+                                    }
+                                    BaseAccess::FieldChain(chain) if !chain.is_empty() => {
+                                        format!("{}.{}", self_name, chain)
+                                    }
+                                    BaseAccess::VirtualPtr(field) => {
+                                        format!("unsafe {{ (*{}.{}) }}", self_name, field)
+                                    }
+                                    _ => self_name
+                                }
+                            } else {
+                                self_name
+                            }
+                        } else {
+                            self_name
+                        }
+                    } else {
+                        self.expr_to_string(&node.children[0])
+                    };
                     // Check if this is accessing an inherited member
                     // Use get_original_expr_type to look through implicit casts (like UncheckedDerivedToBase)
                     // This ensures we get the actual object type, not the casted base class type
