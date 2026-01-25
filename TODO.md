@@ -774,10 +774,11 @@ Get `std::vector<int>` working end-to-end.
       union stub, __hash, __string_to_type_name, _LIBCPP_ABI_NAMESPACE functions ✅ 2026-01-24
     - Fixed: Template array size resolution (_Size, _PaddingSize) in substitute_template_type ✅ 2026-01-24
     - Fixed: _unnamed placeholder handling (zeroed() for Named types, skip in statements) ✅ 2026-01-24
-    - Remaining 9 errors (documented in docs/dev/investigation_vector_25_errors.md):
+    - Fixed: While loop with VarDecl condition now generates proper loop structure ✅ 2026-01-24
+    - Remaining 8 errors (documented in docs/dev/investigation_vector_25_errors.md):
       - Missing traits (7) - bad_allocTrait, logic_errorTrait (4), runtime_errorTrait (2)
         (requires generating traits for intermediate polymorphic classes)
-      - Invalid while syntax / __c (2) - incorrect post-increment expression in loop
+      - Invalid expression syntax (1) - complex post-increment in initializer
   - [ ] **23.8.3** Execute and verify exit code - BLOCKED on 23.8.2
   - [ ] **23.8.4** Add iteration test: `for (int x : v) { ... }` - BLOCKED
   - [ ] **23.8.5** Add resize/reserve/capacity tests - BLOCKED

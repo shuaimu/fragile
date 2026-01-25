@@ -5,12 +5,12 @@
 
 ## Summary
 
-After reducing vector errors from 2091 to 9 (99.6% reduction), the remaining errors are primarily architectural issues (trait generation for intermediate polymorphic classes) and complex while loop patterns.
+After reducing vector errors from 2091 to 8 (99.6% reduction), the remaining errors are primarily architectural issues (trait generation for intermediate polymorphic classes) and one complex expression pattern.
 
 ### Error Counts by Header
 | Header | Transpilation | Compilation Errors |
 |--------|---------------|-------------------|
-| `<vector>` | ✅ Success | 9 errors |
+| `<vector>` | ✅ Success | 8 errors |
 | `<iostream>` | ✅ Success | ~60 errors |
 | `<thread>` | ✅ Success | ~35 errors |
 
@@ -21,6 +21,7 @@ After reducing vector errors from 2091 to 9 (99.6% reduction), the remaining err
 - Added `_LIBCPP_ABI_NAMESPACE` module with `__libcpp_is_constant_evaluated`, `swap`, `move`
 - Fixed template array size resolution: `_Size`, `_PaddingSize` now substituted correctly (3 errors fixed)
 - Fixed `_unnamed` placeholder handling: use zeroed() for Named types, skip in statements (2 errors fixed)
+- Fixed while loop with VarDecl condition: generate proper loop with break check (1 error fixed)
 
 All headers share the same root causes. The iostream header has more errors because it includes more STL internals (format, hash, containers for buffering, etc.).
 
@@ -68,17 +69,16 @@ All headers share the same root causes. The iostream header has more errors beca
 - `__hash`, `__string_to_type_name`, `swap`, `__libcpp_is_constant_evaluated`
 - These are libc++ internal functions not being generated
 
-### 6. While Loop Syntax (2 errors)
+### 6. While Loop Syntax - PARTIALLY FIXED
 - Complex post-increment expression in while condition generates invalid Rust
-- `while { { let __v = __ptr; __ptr += 1; __v } += 1; ... }`
-- This pattern appears in `__non_unique_impl::__hash()` in libc++ typeinfo
 - **Original C++**: `while (unsigned char __c = static_cast<unsigned char>(*__ptr++)) { ... }`
-- The AST structure is complex: DeclStmt with VarDecl containing ImplicitCastExpr→UnaryOp→UnaryOp
-- Added basic DeclStmt handling in generate_while_stmt, but the libc++ case has nested casts
-- The condition node is not recognized as DeclStmt due to additional AST wrappers
-- Also causes `__c` not found error since variable is not declared in body scope
-- **Status**: Known limitation; affects only `__non_unique_impl::__hash()` function
-- **Workaround**: This function is part of RTTI comparison that can be stubbed out
+- The AST has VarDecl directly as child of WhileStmt (not wrapped in DeclStmt)
+- **Fixed**: Added handling for VarDecl condition - now generates `loop { let __c = ...; if __c == 0 { break; } ... }`
+- **Remaining issue**: The initializer expression is still malformed
+  - The post-increment `*__ptr++` wrapped in ImplicitCastExpr produces duplicate expansion
+  - Results in: `{ { let __v = __ptr; __ptr += 1; __v } += 1; ... }` (wrong)
+  - Should be: `unsafe { *{ let __v = __ptr; __ptr = __ptr.add(1); __v } }` (correct)
+- **Status**: Loop structure fixed (1 error), initializer expression needs work (1 error)
 
 ### 7. ASAN Annotation Types (iostream: 3)
 - `__asan_annotation_type`, `__asan_annotation_place`

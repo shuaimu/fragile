@@ -6607,17 +6607,74 @@ impl AstCodeGen {
         }
     }
 
+    /// Find a DeclStmt that might be wrapped in ImplicitCastExpr or Unknown nodes.
+    /// This is needed for while loop conditions like: while (int x = expr)
+    fn find_decl_stmt_in_condition(node: &ClangNode) -> Option<&ClangNode> {
+        match &node.kind {
+            ClangNodeKind::DeclStmt => Some(node),
+            ClangNodeKind::ImplicitCastExpr { .. }
+            | ClangNodeKind::Unknown(_)
+            | ClangNodeKind::ParenExpr { .. } => {
+                // Look through wrapper nodes
+                for child in &node.children {
+                    if let Some(decl) = Self::find_decl_stmt_in_condition(child) {
+                        return Some(decl);
+                    }
+                }
+                None
+            }
+            _ => None,
+        }
+    }
+
     /// Generate a while statement.
     fn generate_while_stmt(&mut self, node: &ClangNode) {
         // Children: condition, body
         if node.children.len() >= 2 {
             let cond_node = &node.children[0];
 
+            // Try to find a DeclStmt - it might be direct or wrapped in ImplicitCastExpr/ExprWithCleanups
+            let decl_stmt_node = Self::find_decl_stmt_in_condition(cond_node);
+
+            // Check if the condition is a VarDecl directly (no DeclStmt wrapper)
+            // This happens with: while (int x = expr) where the VarDecl is a direct child of WhileStmt
+            if let ClangNodeKind::VarDecl { name, ty, .. } = &cond_node.kind {
+                let var_name = sanitize_identifier(name);
+                let rust_type = ty.to_rust_type_str();
+                let init = if !cond_node.children.is_empty() {
+                    self.expr_to_string(&cond_node.children[0])
+                } else {
+                    "Default::default()".to_string()
+                };
+
+                // Generate loop with declaration and break check
+                self.writeln("loop {");
+                self.indent += 1;
+
+                // Declare the variable
+                self.writeln(&format!("let {}: {} = {};", var_name, rust_type, init));
+
+                // Generate break condition based on type
+                let break_cond = match ty {
+                    CppType::Pointer { .. } => format!("if {}.is_null() {{ break; }}", var_name),
+                    CppType::Bool => format!("if !{} {{ break; }}", var_name),
+                    _ => format!("if {} == 0 {{ break; }}", var_name),
+                };
+                self.writeln(&break_cond);
+
+                // Generate body
+                self.generate_stmt(&node.children[1], false);
+
+                self.indent -= 1;
+                self.writeln("}");
+                return;
+            }
+
             // Check if the condition is a DeclStmt (variable declaration in while condition)
             // Example: while (unsigned char __c = *__ptr++) { ... }
             // This needs special handling: loop { let __c = *__ptr++; if __c == 0 { break; } ... }
-            if let ClangNodeKind::DeclStmt = &cond_node.kind {
-                if let Some(var_child) = cond_node.children.first() {
+            if let Some(decl_node) = decl_stmt_node {
+                if let Some(var_child) = decl_node.children.first() {
                     if let ClangNodeKind::VarDecl { name, ty, .. } = &var_child.kind {
                         let var_name = sanitize_identifier(name);
                         let rust_type = ty.to_rust_type_str();
