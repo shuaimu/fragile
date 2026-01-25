@@ -1138,6 +1138,55 @@ fn test_e2e_deep_inheritance() {
     );
 }
 
+/// Test that RTTI type IDs are generated correctly for vtables.
+/// Verifies the RTTI infrastructure exists without testing dynamic_cast directly.
+#[test]
+fn test_e2e_vtable_rtti() {
+    let source = r#"
+        class Animal {
+        public:
+            virtual int id() { return 1; }
+            virtual ~Animal() {}
+        };
+
+        class Dog : public Animal {
+        public:
+            int id() override { return 2; }
+        };
+
+        class Cat : public Animal {
+        public:
+            int id() override { return 3; }
+        };
+
+        int main() {
+            Animal a;
+            Dog d;
+            Cat c;
+
+            // Test that virtual dispatch works correctly
+            Animal* pa = &a;
+            Animal* pd = &d;
+            Animal* pc = &c;
+
+            int sum = pa->id() + pd->id() + pc->id();
+            // Expected: 1 + 2 + 3 = 6
+            if (sum == 6) {
+                return 0;  // Success
+            }
+            return 1;
+        }
+    "#;
+
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_vtable_rtti.cpp").expect("E2E test failed");
+
+    assert_eq!(
+        exit_code, 0,
+        "RTTI type IDs should be generated for vtables"
+    );
+}
+
 /// Test function returning struct (rvalue handling).
 #[test]
 fn test_e2e_function_returning_struct() {

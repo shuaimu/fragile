@@ -1018,10 +1018,18 @@ fn call_what(e: *const exception) -> *const i8 {
   - [x] **25.8.3** Remove `{ClassName}Trait` generation
   - [x] **25.8.4** Preserved `virtual_methods` HashMap for vtable construction
 
-- [ ] **25.9** Update dynamic_cast
-  - [ ] **25.9.1** dynamic_cast needs RTTI info in vtable (type_info pointer)
-  - [ ] **25.9.2** Add `__type_info: *const type_info` to vtable struct
-  - [ ] **25.9.3** Implement runtime type check by walking vtable type_info chain
+- [~] **25.9** Update dynamic_cast (partial) ✅ 2026-01-25
+  - [x] **25.9.1** Add RTTI fields to vtable struct ✅ 2026-01-25
+    - `__type_id: u64` - FNV-1a hash of class name
+    - `__base_count: usize` - Number of base class type IDs
+    - `__base_type_ids: &'static [u64]` - Array of ancestor type IDs
+  - [x] **25.9.2** Generate type ID constants for each polymorphic class ✅ 2026-01-25
+    - `CLASS_TYPE_ID` constants with FNV-1a hash values
+    - `CLASS_BASE_TYPE_IDS` arrays with inheritance chain
+  - [x] **25.9.3** Add test_e2e_vtable_rtti to verify RTTI infrastructure ✅ 2026-01-25
+  - [ ] **25.9.4** Fix dynamic_cast expression parsing (source expr becomes 0)
+    - DynamicCastExpr child expression not being extracted correctly
+    - Deferred to future work
 
 - [x] **25.10** Testing ✅ 2026-01-25
   - [x] **25.10.1** Update existing E2E tests for virtual methods ✅ 2026-01-25

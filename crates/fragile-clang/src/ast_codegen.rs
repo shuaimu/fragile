@@ -52,6 +52,18 @@ const RUST_KEYWORDS: &[&str] = &[
     "override", "priv", "try", "typeof", "unsized", "virtual", "yield",
 ];
 
+/// Sanitize identifier for use in composite names (like function_method).
+/// Returns just the sanitized name without the r# prefix.
+fn sanitize_identifier_for_composite(name: &str) -> String {
+    let result = sanitize_identifier(name);
+    // Strip r# prefix if present - composite names like X_vtable_type are already valid
+    if result.starts_with("r#") {
+        result[2..].to_string()
+    } else {
+        result
+    }
+}
+
 /// Information about a virtual method for vtable generation.
 /// This represents a single entry in a C++ vtable.
 #[derive(Clone, Debug)]
@@ -552,6 +564,39 @@ impl AstCodeGen {
         let root_class = self.find_root_polymorphic_class(class_name);
         let sanitized_root = sanitize_identifier(&root_class);
 
+        // Get inheritance chain for RTTI
+        let inheritance_chain = self.get_inheritance_chain(class_name);
+        let base_count = inheritance_chain.len();
+
+        // Generate type ID constant
+        let type_id = Self::compute_type_id(class_name);
+        self.writeln("");
+        self.writeln(&format!(
+            "/// Type ID for `{}` (FNV-1a hash)",
+            class_name
+        ));
+        self.writeln(&format!(
+            "pub const {}_TYPE_ID: u64 = 0x{:016x};",
+            sanitized_class.to_uppercase(),
+            type_id
+        ));
+
+        // Generate base type IDs array
+        self.writeln(&format!(
+            "/// Base class type IDs for `{}` (derived to root)",
+            class_name
+        ));
+        let type_ids: Vec<String> = inheritance_chain
+            .iter()
+            .map(|name| format!("0x{:016x}", Self::compute_type_id(name)))
+            .collect();
+        self.writeln(&format!(
+            "pub static {}_BASE_TYPE_IDS: [u64; {}] = [{}];",
+            sanitized_class.to_uppercase(),
+            base_count,
+            type_ids.join(", ")
+        ));
+
         self.writeln("");
         self.writeln(&format!(
             "/// Static vtable for `{}`",
@@ -565,9 +610,22 @@ impl AstCodeGen {
         ));
         self.indent += 1;
 
+        // RTTI fields
+        self.writeln(&format!(
+            "__type_id: {}_TYPE_ID,",
+            sanitized_class.to_uppercase()
+        ));
+        self.writeln(&format!("__base_count: {},", base_count));
+        self.writeln(&format!(
+            "__base_type_ids: &{}_BASE_TYPE_IDS,",
+            sanitized_class.to_uppercase()
+        ));
+
         // Generate function pointer for each vtable entry
         for entry in &vtable_info.entries {
             let method_name = sanitize_identifier(&entry.name);
+            // For composite function names, strip r# prefix
+            let method_name_for_fn = sanitize_identifier_for_composite(&entry.name);
             // Use the declaring class's wrapper for the function pointer.
             // If this class overrides the method, declaring_class == class_name.
             // If inherited without override, declaring_class is the parent that defined it.
@@ -576,7 +634,7 @@ impl AstCodeGen {
                 "{}: {}_vtable_{},",
                 method_name,
                 declaring_class,
-                method_name
+                method_name_for_fn
             ));
         }
 
@@ -610,6 +668,9 @@ impl AstCodeGen {
             if entry.declaring_class != *class_name {
                 continue;
             }
+            // For composite function names, use sanitize_identifier_for_composite
+            // to avoid r# prefixes in function names like Class_vtable_type
+            let method_name_for_fn = sanitize_identifier_for_composite(&entry.name);
             let method_name = sanitize_identifier(&entry.name);
             let return_type = Self::sanitize_return_type(&entry.return_type.to_rust_type_str());
 
@@ -662,12 +723,12 @@ impl AstCodeGen {
             if return_type == "()" {
                 self.writeln(&format!(
                     "unsafe fn {}_vtable_{}({}) {{",
-                    sanitized_class, method_name, all_params
+                    sanitized_class, method_name_for_fn, all_params
                 ));
             } else {
                 self.writeln(&format!(
                     "unsafe fn {}_vtable_{}({}) -> {} {{",
-                    sanitized_class, method_name, all_params, return_type
+                    sanitized_class, method_name_for_fn, all_params, return_type
                 ));
             }
 
@@ -769,6 +830,36 @@ impl AstCodeGen {
         } else {
             path_parts.join(".")
         }
+    }
+
+    /// Compute a stable type ID hash for a class name.
+    /// Uses FNV-1a hash for consistency.
+    fn compute_type_id(class_name: &str) -> u64 {
+        // FNV-1a hash
+        let mut hash: u64 = 0xcbf29ce484222325;
+        for byte in class_name.bytes() {
+            hash ^= byte as u64;
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+        hash
+    }
+
+    /// Get the inheritance chain for a class (from derived to root base).
+    /// Returns list of class names: [self, parent, grandparent, ..., root]
+    fn get_inheritance_chain(&self, class_name: &str) -> Vec<String> {
+        let mut chain = vec![class_name.to_string()];
+        let mut current = class_name.to_string();
+
+        while let Some(vtable_info) = self.vtables.get(&current) {
+            if let Some(ref base) = vtable_info.base_class {
+                chain.push(base.clone());
+                current = base.clone();
+            } else {
+                break;
+            }
+        }
+
+        chain
     }
 
     fn compute_virtual_bases(&mut self) {
@@ -5017,6 +5108,14 @@ impl AstCodeGen {
         self.writeln("#[repr(C)]");
         self.writeln(&format!("pub struct {}_vtable {{", sanitized_name));
         self.indent += 1;
+
+        // RTTI fields for dynamic_cast support
+        self.writeln("/// Type ID (hash of class name) for runtime type checking");
+        self.writeln("pub __type_id: u64,");
+        self.writeln("/// Number of entries in __base_type_ids array");
+        self.writeln("pub __base_count: usize,");
+        self.writeln("/// Array of base class type IDs (includes self, ordered from derived to base)");
+        self.writeln("pub __base_type_ids: &'static [u64],");
 
         // Generate function pointer field for each virtual method
         for entry in &vtable_info.entries {
@@ -9950,28 +10049,86 @@ impl AstCodeGen {
                         CppType::Reference {
                             referent, is_const, ..
                         } => {
-                            // Reference dynamic_cast - throws on failure
-                            // In Rust, we panic (equivalent to std::bad_cast)
+                            // Reference dynamic_cast - throws on failure (std::bad_cast)
                             let inner_type = referent.to_rust_type_str();
-                            // For reference casts, if the cast fails we must panic
-                            // This is wrapped in an unsafe block and uses transmute for now
-                            format!(
-                                "unsafe {{ *(({} as *const _ as *const {}) as *{} {}) }}",
-                                expr,
-                                inner_type,
-                                if *is_const { "const" } else { "mut" },
-                                inner_type
-                            )
+                            let sanitized_target = sanitize_identifier(&inner_type);
+
+                            // Check if target is a polymorphic class
+                            if self.polymorphic_classes.contains(&inner_type) {
+                                // Use RTTI to check type at runtime, panic on failure
+                                // Access vtable through the object's __vtable field
+                                let vtable_path = self.get_vtable_access_path(&inner_type);
+                                let vtable_access = if vtable_path.is_empty() {
+                                    ".__vtable".to_string()
+                                } else {
+                                    format!("{}.__vtable", vtable_path)
+                                };
+                                format!(
+                                    "unsafe {{ \
+                                        let __target_id = {}_TYPE_ID; \
+                                        let __vtable = (*{}){}; \
+                                        let __found = (*__vtable).__base_type_ids.contains(&__target_id); \
+                                        if !__found {{ panic!(\"std::bad_cast\"); }} \
+                                        &*({} as *{} {}) \
+                                    }}",
+                                    sanitized_target.to_uppercase(),
+                                    expr,
+                                    vtable_access,
+                                    expr,
+                                    if *is_const { "const" } else { "mut" },
+                                    inner_type
+                                )
+                            } else {
+                                // Non-polymorphic, just do static cast
+                                format!(
+                                    "unsafe {{ *(({} as *const _ as *const {}) as *{} {}) }}",
+                                    expr,
+                                    inner_type,
+                                    if *is_const { "const" } else { "mut" },
+                                    inner_type
+                                )
+                            }
                         }
                         CppType::Pointer { pointee, is_const } => {
                             // Pointer dynamic_cast - returns null on failure
-                            // Generate a safe cast that checks at runtime (placeholder for RTTI)
                             let inner_type = pointee.to_rust_type_str();
                             let ptr_prefix = if *is_const { "*const" } else { "*mut" };
-                            format!(
-                                "/* dynamic_cast: returns null on failure */ {} as {} {}",
-                                expr, ptr_prefix, inner_type
-                            )
+                            let sanitized_target = sanitize_identifier(&inner_type);
+
+                            // Check if target is a polymorphic class
+                            if self.polymorphic_classes.contains(&inner_type) {
+                                // Use RTTI to check type at runtime
+                                // Access vtable through the object's __vtable field
+                                // For root class, vtable_path is "", for derived classes it's ".__base" etc.
+                                let vtable_path = self.get_vtable_access_path(&inner_type);
+                                let vtable_access = if vtable_path.is_empty() {
+                                    ".__vtable".to_string()
+                                } else {
+                                    format!("{}.__vtable", vtable_path)
+                                };
+                                format!(
+                                    "unsafe {{ \
+                                        let __ptr = {}; \
+                                        if __ptr.is_null() {{ std::ptr::null_mut() }} else {{ \
+                                            let __target_id = {}_TYPE_ID; \
+                                            let __vtable = (*__ptr){}; \
+                                            let __found = (*__vtable).__base_type_ids.contains(&__target_id); \
+                                            if __found {{ __ptr as {} {} }} else {{ std::ptr::null_mut() }} \
+                                        }} \
+                                    }}",
+                                    expr,
+                                    sanitized_target.to_uppercase(),
+                                    vtable_access,
+                                    ptr_prefix,
+                                    inner_type
+                                )
+                            } else {
+                                // Non-polymorphic, just do static cast
+                                format!(
+                                    "{} as {} {}",
+                                    expr, ptr_prefix, inner_type
+                                )
+                            }
                         }
                         _ => {
                             // Fallback for unexpected types
