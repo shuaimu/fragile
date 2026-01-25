@@ -842,7 +842,7 @@ Get `std::cout` working end-to-end.
     ```
     - **Status**: Transpilation succeeds (128K chars → 23K LOC Rust)
     - **Progress**: Compilation errors reduced (unique error codes): 65 → ... → 491 → 476 → 457 → 452 → 442 → 438 → 435 → 366 → 357 → 354 → 343 → 337 → 336 → 330 → 326 → 322 → 321 → 312 (libstdc++) ✅ 2026-01-25
-    - **Progress v2**: Total error count (incl. duplicate locations): 1225 → 1218 → 1214 → 1205 → 1201 → 1190 → 1169 → 1112 → 1063 → 1052 → 981 → 869 → 842 → 794 → 784 → 763 → 751 → 745 → 743 → 726 → 724 → 720 → 712 → 707 → 705 → 663 → 657 ✅ 2026-01-25
+    - **Progress v2**: Total error count (incl. duplicate locations): 1225 → 1218 → 1214 → 1205 → 1201 → 1190 → 1169 → 1112 → 1063 → 1052 → 981 → 869 → 842 → 794 → 784 → 763 → 751 → 745 → 743 → 726 → 724 → 720 → 712 → 707 → 705 → 663 → 657 → 651 → 648 → 645 → 632 ✅ 2026-01-25
       - Fixed cast-after-method parsing: wrap pointer casts in parentheses before .add()/.sub()
       - Added long double math builtins (__builtin_expl, __builtin_sqrtl, etc.) - 37 functions
       - Added __to_underlying_* stubs for enum-to-int conversion
@@ -896,6 +896,13 @@ Get `std::cout` working end-to-end.
       - Fixed: Skip functions with bare c_void return type or parameter ✅ 2026-01-25
       - Fixed: Builtin memory functions (memcpy, memmove, memset, memcmp) size parameter cast to usize ✅ 2026-01-25
       - Fixed: Dereference precedence for member access (*x.y → (*x).y) ✅ 2026-01-25
+      - Fixed: Added stub comparison operators for strong_ordering, weak_ordering ✅ 2026-01-25
+      - Fixed: Added stub op_eq for __thread_id ✅ 2026-01-25
+      - Fixed: Added error_category equivalent methods with c_void placeholders ✅ 2026-01-25
+      - Fixed: Added math stubs (__lerp_f64, __hypot_f64) and iostream_category ✅ 2026-01-25
+      - Fixed: Binary expression parenthesization when cast (a | b as u8 → (a | b) as u8) ✅ 2026-01-25
+        - Look through ImplicitCastExpr, CastExpr, and ParenExpr wrappers to detect BinaryOperator
+        - Added narrowing integral conversions (int→char, long→short) to ImplicitCastExpr detection
       - Fixed: Return 0 for pointer types -> std::ptr::null() ✅ 2026-01-25
       - Fixed: Add C library string conversion stubs (strtol, strtoul, etc.) ✅ 2026-01-25
     - Fixed: Cast precedence, literal operators, static member names, trait names
