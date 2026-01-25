@@ -1035,6 +1035,32 @@ impl ClangParser {
                     }
                 }
 
+                // Conversion functions (operator bool(), operator int(), etc.)
+                clang_sys::CXCursor_ConversionFunction => {
+                    let name = cursor_spelling(cursor);
+                    let cursor_type = clang_sys::clang_getCursorType(cursor);
+                    let return_type = self.convert_type(clang_sys::clang_getResultType(cursor_type));
+                    let params = self.extract_params(cursor);
+                    let is_definition = clang_sys::clang_isCursorDefinition(cursor) != 0;
+                    let is_static = false; // Conversion operators are never static
+                    let is_virtual = clang_sys::clang_CXXMethod_isVirtual(cursor) != 0;
+                    let is_pure_virtual = clang_sys::clang_CXXMethod_isPureVirtual(cursor) != 0;
+                    let (is_override, is_final) = self.get_override_final_attrs(cursor);
+                    let access = self.get_access_specifier(cursor);
+                    ClangNodeKind::CXXMethodDecl {
+                        name,
+                        return_type,
+                        params,
+                        is_definition,
+                        is_static,
+                        is_virtual,
+                        is_pure_virtual,
+                        is_override,
+                        is_final,
+                        access,
+                    }
+                }
+
                 clang_sys::CXCursor_Constructor => {
                     let class_name = self.get_parent_class_name(cursor);
                     let params = self.extract_params(cursor);

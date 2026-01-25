@@ -6391,7 +6391,20 @@ impl AstCodeGen {
                         } else {
                             let base_class_name = Self::extract_class_name(&base_type);
                             if let Some(name) = base_class_name {
-                                if name != *decl_class {
+                                // Strip namespace prefix from BOTH sides for comparison
+                                // (e.g., std::_Bit_reference -> _Bit_reference)
+                                let name_unqual = if let Some(pos) = name.rfind("::") {
+                                    &name[pos + 2..]
+                                } else {
+                                    name.as_str()
+                                };
+                                let decl_class_unqual = if let Some(pos) = decl_class.rfind("::") {
+                                    &decl_class[pos + 2..]
+                                } else {
+                                    decl_class.as_str()
+                                };
+                                // Compare unqualified names
+                                if name_unqual != decl_class_unqual {
                                     // Need base access - get correct field for MI support
                                     let access = self.get_base_access_for_class(&name, decl_class);
                                     (true, access)
@@ -6463,11 +6476,26 @@ impl AstCodeGen {
                         // Anonymous struct members are flattened - access directly
                         if decl_class.starts_with("(anonymous") || decl_class.starts_with("__anon_") {
                             (false, BaseAccess::DirectField(String::new()))
-                        } else if current != decl_class {
-                            let access = self.get_base_access_for_class(current, decl_class);
-                            (true, access)
                         } else {
-                            (false, BaseAccess::DirectField(String::new()))
+                            // Strip namespace prefix from BOTH sides for comparison
+                            // (e.g., std::_Bit_reference -> _Bit_reference)
+                            let current_unqual = if let Some(pos) = current.rfind("::") {
+                                &current[pos + 2..]
+                            } else {
+                                current.as_str()
+                            };
+                            let decl_class_unqual = if let Some(pos) = decl_class.rfind("::") {
+                                &decl_class[pos + 2..]
+                            } else {
+                                decl_class.as_str()
+                            };
+                            // Compare unqualified names
+                            if current_unqual != decl_class_unqual {
+                                let access = self.get_base_access_for_class(current, decl_class);
+                                (true, access)
+                            } else {
+                                (false, BaseAccess::DirectField(String::new()))
+                            }
                         }
                     } else {
                         (false, BaseAccess::DirectField(String::new()))
