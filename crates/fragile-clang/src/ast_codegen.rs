@@ -4715,13 +4715,23 @@ impl AstCodeGen {
                 // Determine return type, fixing c_void placeholders for methods returning *this
                 let rust_return_type = return_type.to_rust_type_str();
                 // Check if this is an iterator operator that should return Self
-                let is_iterator_self_return_op = matches!(name.as_str(),
+                let is_iterator_value_return_op = matches!(name.as_str(),
                     "operator++" | "operator--" | "_M_const_cast"
+                );
+                // Compound assignment operators should return &mut Self
+                let is_iterator_ref_return_op = matches!(name.as_str(),
+                    "operator+=" | "operator-=" | "operator*=" | "operator/=" |
+                    "operator%=" | "operator&=" | "operator|=" | "operator^=" |
+                    "operator<<=" | "operator>>="
                 );
                 let ret_str = if *return_type == CppType::Void {
                     String::new()
                 } else if (rust_return_type.contains("c_void") || rust_return_type == "*mut ()")
-                          && (Self::method_returns_this_only(node) || is_iterator_self_return_op) {
+                          && is_iterator_ref_return_op {
+                    // Compound assignment operators return &mut Self
+                    " -> &mut Self".to_string()
+                } else if (rust_return_type.contains("c_void") || rust_return_type == "*mut ()")
+                          && (Self::method_returns_this_only(node) || is_iterator_value_return_op) {
                     // Method returns *this or is an iterator operator - use Self
                     // Post-increment (params.len() == 1) returns by value
                     // Pre-increment (params.len() == 0) returns by mutable reference
@@ -5291,6 +5301,10 @@ impl AstCodeGen {
                         } else {
                             format!("&mut {}", expr)
                         }
+                    } else if (expr == "self" || expr == "__self")
+                              && Self::expr_is_this(&node.children[0]) {
+                        // Returning *this by value - need to clone since self is a reference
+                        format!("{}.clone()", expr)
                     } else {
                         expr
                     };
