@@ -5468,6 +5468,10 @@ impl AstCodeGen {
             ));
             self.indent += 1;
 
+            // Track return type for return statement handling
+            let old_return_type = self.current_return_type.take();
+            self.current_return_type = Some(return_type.clone());
+
             // Find the compound statement (function body)
             for child in children {
                 if let ClangNodeKind::CompoundStmt = &child.kind {
@@ -5475,6 +5479,7 @@ impl AstCodeGen {
                 }
             }
 
+            self.current_return_type = old_return_type;
             self.indent -= 1;
             self.writeln("}");
             self.writeln("");
@@ -9252,7 +9257,14 @@ impl AstCodeGen {
                             && !expr.contains(" as ")
                             && !is_comparison_expr;
 
-                        if needs_explicit_cast || needs_deref_cast {
+                        // Handle int-to-bool conversion (C++ truthy semantics)
+                        let ret_is_bool = ret_rust_type.as_ref().map_or(false, |t| t == "bool");
+                        let needs_int_to_bool = ret_is_bool && expr_is_int;
+
+                        if needs_int_to_bool {
+                            // Convert integer to bool: non-zero = true
+                            format!("({}) != 0", expr)
+                        } else if needs_explicit_cast || needs_deref_cast {
                             if let Some(rust_type) = ret_rust_type {
                                 format!("{} as {}", expr, rust_type)
                             } else {
