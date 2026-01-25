@@ -842,7 +842,7 @@ Get `std::cout` working end-to-end.
     ```
     - **Status**: Transpilation succeeds (128K chars → 23K LOC Rust)
     - **Progress**: Compilation errors reduced (unique error codes): 65 → ... → 491 → 476 → 457 → 452 → 442 → 438 → 435 → 366 → 357 → 354 → 343 → 337 → 336 → 330 → 326 → 322 → 321 → 312 (libstdc++) ✅ 2026-01-25
-    - **Progress v2**: Total error count (incl. duplicate locations): 1225 → 1218 → 1214 → 1205 → 1201 → 1190 → 1169 → 1112 → 1063 → 1052 → 981 → 869 → 842 → 794 → 784 → 763 → 751 → 745 → 743 → 726 → 724 → 720 → 712 → 707 → 705 → 663 → 657 → 651 → 648 → 645 → 632 → 626 ✅ 2026-01-25
+    - **Progress v2**: Total error count (incl. duplicate locations): 1225 → 1218 → 1214 → 1205 → 1201 → 1190 → 1169 → 1112 → 1063 → 1052 → 981 → 869 → 842 → 794 → 784 → 763 → 751 → 745 → 743 → 726 → 724 → 720 → 712 → 707 → 705 → 663 → 657 → 651 → 648 → 645 → 632 → 626 → 592 ✅ 2026-01-25
       - Fixed cast-after-method parsing: wrap pointer casts in parentheses before .add()/.sub()
       - Added long double math builtins (__builtin_expl, __builtin_sqrtl, etc.) - 37 functions
       - Added __to_underlying_* stubs for enum-to-int conversion
@@ -920,6 +920,10 @@ Get `std::cout` working end-to-end.
     - Fixed: Hash functions use u64 for size_t compatibility (326→322) ✅ 2026-01-25
     - Fixed: Added to_string function stubs (322→321) ✅ 2026-01-25
     - Fixed: Added type stubs (_StateT, _T1, _T2, __gthread_time_t, ctype_type_parameter_0_0) (321→312) ✅ 2026-01-25
+      - Fixed: Added ctype<char> specific virtual method stubs (i8-based) separate from ctype<wchar_t> (i32-based) (626→610) ✅ 2026-01-25
+      - Fixed: Skip != 0 conversion for builtins that already return bool (__builtin_isfinite, etc.) (610→598) ✅ 2026-01-25
+      - Fixed: Added atomic wait/notify stub functions for std::atomic_flag (598→592) ✅ 2026-01-25
+      - Fixed: Added __hermite_u32 math stub function ✅ 2026-01-25
   - [ ] **23.9.2** Fix iostream static initialization (global cout/cin/cerr objects) - BLOCKED
     - libc++ uses `__start_std_streams` section for initialization
     - May need to generate Rust static initialization code
