@@ -12779,6 +12779,7 @@ fn sanitize_type_for_fn_name(ty: &str) -> String {
         .replace("*const ", "ptr_const_")
         .replace('*', "ptr_")
         .replace("::", "_")
+        .replace("->", "_ret_") // Handle function return type arrow before stripping '>'
         .replace([' ', '<'], "_")
         .replace('>', "")
         .replace(',', "_")
