@@ -4394,6 +4394,32 @@ impl AstCodeGen {
         self.generated_structs.insert("__cxx_atomic_impl_bool".to_string());
         self.writeln("");
 
+        // Atomic operation stubs for __cxx_atomic_impl
+        // Use generic type parameter for memory_order since the enum is generated later
+        self.writeln("// Atomic operation stubs for libc++ atomics");
+        self.writeln("#[inline]");
+        self.writeln("pub fn __cxx_atomic_load___cxx_atomic_base_impl_bool<M>(_ptr: *const __cxx_atomic_impl_bool, _order: M) -> bool {");
+        self.indent += 1;
+        self.writeln("let _ = _order;");
+        self.writeln("unsafe { (*_ptr).__a_value }");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("#[inline]");
+        self.writeln("pub fn __cxx_atomic_store___cxx_atomic_base_impl_bool<M>(_ptr: *mut __cxx_atomic_impl_bool, _val: bool, _order: M) {");
+        self.indent += 1;
+        self.writeln("let _ = _order;");
+        self.writeln("unsafe { (*_ptr).__a_value = _val; }");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("#[inline]");
+        self.writeln("pub fn __cxx_atomic_exchange___cxx_atomic_base_impl_bool<M>(_ptr: *mut __cxx_atomic_impl_bool, _val: bool, _order: M) -> bool {");
+        self.indent += 1;
+        self.writeln("let _ = _order;");
+        self.writeln("unsafe { let old = (*_ptr).__a_value; (*_ptr).__a_value = _val; old }");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("");
+
         // char_traits module stub (libstdc++ uses std::char_traits)
         // Use generic functions to support char, wchar_t, char8_t, char16_t, char32_t
         self.writeln("// char_traits module stub");
@@ -4474,6 +4500,36 @@ impl AstCodeGen {
         self.writeln("pub fn construct_at_u16_ref_u16(_p: *const u16, _val: u16) -> *mut u16 { unsafe { let p = _p as *mut u16; *p = _val; p } }");
         self.writeln("#[inline]");
         self.writeln("pub fn construct_at_u32_ref_u32(_p: *const u32, _val: u32) -> *mut u32 { unsafe { let p = _p as *mut u32; *p = _val; p } }");
+        self.writeln("");
+
+        // STL algorithm stubs
+        self.writeln("// STL algorithm stubs");
+        self.writeln("#[inline]");
+        self.writeln("pub fn upper_bound_unsigned_int_unsigned_int(_first: *const u32, _last: *const u32, _val: u32) -> i64 {");
+        self.indent += 1;
+        self.writeln("// Binary search for upper bound");
+        self.writeln("unsafe {");
+        self.indent += 1;
+        self.writeln("let len = (_last as usize - _first as usize) / std::mem::size_of::<u32>();");
+        self.writeln("let mut lo = 0usize;");
+        self.writeln("let mut hi = len;");
+        self.writeln("while lo < hi {");
+        self.indent += 1;
+        self.writeln("let mid = lo + (hi - lo) / 2;");
+        self.writeln("if *_first.add(mid) <= _val { lo = mid + 1; } else { hi = mid; }");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("lo as i64");
+        self.indent -= 1;
+        self.writeln("}");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("");
+
+        // UTF-8 helper stubs
+        self.writeln("// UTF-8 encoding helper stubs");
+        self.writeln("#[inline]");
+        self.writeln("pub fn __is_continuation_char(_c: u8) -> bool { (_c & 0xC0) == 0x80 }");
         self.writeln("");
 
         // More type stubs for libstdc++
