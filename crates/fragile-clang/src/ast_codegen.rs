@@ -1703,6 +1703,33 @@ impl AstCodeGen {
 
         // Substitute types in return type and parameters
         let ret_type = self.substitute_template_type(&template_info.return_type, &subst_map);
+
+        // Skip functions with variadic template parameters (C++ parameter packs)
+        // These contain patterns like `_Tp &&...` or `_Args...` which can't be expressed in Rust
+        // Also skip functions with unresolved template parameters or C-style function pointer syntax
+        for (_, param_ty) in &template_info.params {
+            let param_str = self.substitute_template_type(param_ty, &subst_map);
+            if param_str.contains("&&...")
+                || param_str.contains("...")
+                || param_str.contains("_Tp")
+                || param_str.contains("_Args")
+                || param_str.contains("type_parameter_")
+                || param_str.contains("(*)")
+            {
+                // C-style function pointer syntax like void (*)(void *) can't be parsed by Rust
+                return;
+            }
+        }
+
+        // Skip functions with decltype return types or unresolved template parameters
+        if ret_type.contains("decltype")
+            || ret_type.contains("_Tp")
+            || ret_type.contains("_Args")
+            || ret_type.contains("type_parameter_")
+            || ret_type.contains("(*)")
+        {
+            return;
+        }
         let ret_str = if ret_type == "()" || ret_type.is_empty() || ret_type == "_" {
             String::new()
         } else {
@@ -4789,6 +4816,31 @@ impl AstCodeGen {
                 || type_str.contains("memory_resource")
         };
         if has_skipped_type(return_type) || params.iter().any(|(_, t)| has_skipped_type(t)) {
+            return;
+        }
+
+        // Skip functions with variadic template parameters (C++ parameter packs)
+        // These contain patterns like `_Tp &&...` or `_Args...` which can't be expressed in Rust
+        let has_variadic_pack = |ty: &CppType| {
+            let type_str = ty.to_rust_type_str();
+            type_str.contains("&&...") || type_str.contains("...")
+        };
+        if params.iter().any(|(_, t)| has_variadic_pack(t)) {
+            return;
+        }
+
+        // Skip functions with decltype return types (can't be expressed in Rust)
+        let return_type_str = return_type.to_rust_type_str();
+        if return_type_str.contains("decltype") {
+            return;
+        }
+
+        // Skip functions with unresolved template type parameters in return type
+        // These are template definitions that haven't been fully instantiated
+        if return_type_str.contains("_Tp")
+            || return_type_str.contains("_Args")
+            || return_type_str.contains("type_parameter_")
+        {
             return;
         }
 
@@ -9172,13 +9224,49 @@ impl AstCodeGen {
                                 format!("&{}", operand)
                             }
                         }
-                        UnaryOp::PreInc => format!("{{ {} += 1; {} }}", operand, operand),
-                        UnaryOp::PreDec => format!("{{ {} -= 1; {} }}", operand, operand),
+                        UnaryOp::PreInc => {
+                            // For pointer types, use .add(1)
+                            if matches!(ty, CppType::Pointer { .. }) {
+                                format!(
+                                    "{{ {} = unsafe {{ {}.add(1) }}; {} }}",
+                                    operand, operand, operand
+                                )
+                            } else {
+                                format!("{{ {} += 1; {} }}", operand, operand)
+                            }
+                        }
+                        UnaryOp::PreDec => {
+                            // For pointer types, use .sub(1)
+                            if matches!(ty, CppType::Pointer { .. }) {
+                                format!(
+                                    "{{ {} = unsafe {{ {}.sub(1) }}; {} }}",
+                                    operand, operand, operand
+                                )
+                            } else {
+                                format!("{{ {} -= 1; {} }}", operand, operand)
+                            }
+                        }
                         UnaryOp::PostInc => {
-                            format!("{{ let __v = {}; {} += 1; __v }}", operand, operand)
+                            // For pointer types, use .add(1)
+                            if matches!(ty, CppType::Pointer { .. }) {
+                                format!(
+                                    "{{ let __v = {}; {} = unsafe {{ {}.add(1) }}; __v }}",
+                                    operand, operand, operand
+                                )
+                            } else {
+                                format!("{{ let __v = {}; {} += 1; __v }}", operand, operand)
+                            }
                         }
                         UnaryOp::PostDec => {
-                            format!("{{ let __v = {}; {} -= 1; __v }}", operand, operand)
+                            // For pointer types, use .sub(1)
+                            if matches!(ty, CppType::Pointer { .. }) {
+                                format!(
+                                    "{{ let __v = {}; {} = unsafe {{ {}.sub(1) }}; __v }}",
+                                    operand, operand, operand
+                                )
+                            } else {
+                                format!("{{ let __v = {}; {} -= 1; __v }}", operand, operand)
+                            }
                         }
                     }
                 } else {
