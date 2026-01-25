@@ -1014,79 +1014,79 @@ impl AstCodeGen {
     fn map_runtime_function_name(func_name: &str) -> Option<&'static str> {
         match func_name {
             // pthread functions
-            "pthread_create" => Some("fragile_runtime::fragile_pthread_create"),
-            "pthread_join" => Some("fragile_runtime::fragile_pthread_join"),
-            "pthread_self" => Some("fragile_runtime::fragile_pthread_self"),
-            "pthread_equal" => Some("fragile_runtime::fragile_pthread_equal"),
-            "pthread_detach" => Some("fragile_runtime::fragile_pthread_detach"),
-            "pthread_exit" => Some("fragile_runtime::fragile_pthread_exit"),
-            "pthread_attr_init" => Some("fragile_runtime::fragile_pthread_attr_init"),
-            "pthread_attr_destroy" => Some("fragile_runtime::fragile_pthread_attr_destroy"),
-            "pthread_attr_setdetachstate" => Some("fragile_runtime::fragile_pthread_attr_setdetachstate"),
-            "pthread_attr_getdetachstate" => Some("fragile_runtime::fragile_pthread_attr_getdetachstate"),
+            "pthread_create" => Some("crate::fragile_runtime::fragile_pthread_create"),
+            "pthread_join" => Some("crate::fragile_runtime::fragile_pthread_join"),
+            "pthread_self" => Some("crate::fragile_runtime::fragile_pthread_self"),
+            "pthread_equal" => Some("crate::fragile_runtime::fragile_pthread_equal"),
+            "pthread_detach" => Some("crate::fragile_runtime::fragile_pthread_detach"),
+            "pthread_exit" => Some("crate::fragile_runtime::fragile_pthread_exit"),
+            "pthread_attr_init" => Some("crate::fragile_runtime::fragile_pthread_attr_init"),
+            "pthread_attr_destroy" => Some("crate::fragile_runtime::fragile_pthread_attr_destroy"),
+            "pthread_attr_setdetachstate" => Some("crate::fragile_runtime::fragile_pthread_attr_setdetachstate"),
+            "pthread_attr_getdetachstate" => Some("crate::fragile_runtime::fragile_pthread_attr_getdetachstate"),
 
             // pthread mutex functions
-            "pthread_mutex_init" => Some("fragile_runtime::fragile_pthread_mutex_init"),
-            "pthread_mutex_destroy" => Some("fragile_runtime::fragile_pthread_mutex_destroy"),
-            "pthread_mutex_lock" => Some("fragile_runtime::fragile_pthread_mutex_lock"),
-            "pthread_mutex_trylock" => Some("fragile_runtime::fragile_pthread_mutex_trylock"),
-            "pthread_mutex_unlock" => Some("fragile_runtime::fragile_pthread_mutex_unlock"),
-            "pthread_mutexattr_init" => Some("fragile_runtime::fragile_pthread_mutexattr_init"),
-            "pthread_mutexattr_destroy" => Some("fragile_runtime::fragile_pthread_mutexattr_destroy"),
-            "pthread_mutexattr_settype" => Some("fragile_runtime::fragile_pthread_mutexattr_settype"),
-            "pthread_mutexattr_gettype" => Some("fragile_runtime::fragile_pthread_mutexattr_gettype"),
+            "pthread_mutex_init" => Some("crate::fragile_runtime::fragile_pthread_mutex_init"),
+            "pthread_mutex_destroy" => Some("crate::fragile_runtime::fragile_pthread_mutex_destroy"),
+            "pthread_mutex_lock" => Some("crate::fragile_runtime::fragile_pthread_mutex_lock"),
+            "pthread_mutex_trylock" => Some("crate::fragile_runtime::fragile_pthread_mutex_trylock"),
+            "pthread_mutex_unlock" => Some("crate::fragile_runtime::fragile_pthread_mutex_unlock"),
+            "pthread_mutexattr_init" => Some("crate::fragile_runtime::fragile_pthread_mutexattr_init"),
+            "pthread_mutexattr_destroy" => Some("crate::fragile_runtime::fragile_pthread_mutexattr_destroy"),
+            "pthread_mutexattr_settype" => Some("crate::fragile_runtime::fragile_pthread_mutexattr_settype"),
+            "pthread_mutexattr_gettype" => Some("crate::fragile_runtime::fragile_pthread_mutexattr_gettype"),
 
             // pthread condition variable functions
-            "pthread_cond_init" => Some("fragile_runtime::fragile_pthread_cond_init"),
-            "pthread_cond_destroy" => Some("fragile_runtime::fragile_pthread_cond_destroy"),
-            "pthread_cond_wait" => Some("fragile_runtime::fragile_pthread_cond_wait"),
-            "pthread_cond_timedwait" => Some("fragile_runtime::fragile_pthread_cond_timedwait"),
-            "pthread_cond_signal" => Some("fragile_runtime::fragile_pthread_cond_signal"),
-            "pthread_cond_broadcast" => Some("fragile_runtime::fragile_pthread_cond_broadcast"),
-            "pthread_condattr_init" => Some("fragile_runtime::fragile_pthread_condattr_init"),
-            "pthread_condattr_destroy" => Some("fragile_runtime::fragile_pthread_condattr_destroy"),
+            "pthread_cond_init" => Some("crate::fragile_runtime::fragile_pthread_cond_init"),
+            "pthread_cond_destroy" => Some("crate::fragile_runtime::fragile_pthread_cond_destroy"),
+            "pthread_cond_wait" => Some("crate::fragile_runtime::fragile_pthread_cond_wait"),
+            "pthread_cond_timedwait" => Some("crate::fragile_runtime::fragile_pthread_cond_timedwait"),
+            "pthread_cond_signal" => Some("crate::fragile_runtime::fragile_pthread_cond_signal"),
+            "pthread_cond_broadcast" => Some("crate::fragile_runtime::fragile_pthread_cond_broadcast"),
+            "pthread_condattr_init" => Some("crate::fragile_runtime::fragile_pthread_condattr_init"),
+            "pthread_condattr_destroy" => Some("crate::fragile_runtime::fragile_pthread_condattr_destroy"),
 
             // pthread rwlock functions
-            "pthread_rwlock_init" => Some("fragile_runtime::fragile_pthread_rwlock_init"),
-            "pthread_rwlock_destroy" => Some("fragile_runtime::fragile_pthread_rwlock_destroy"),
-            "pthread_rwlock_rdlock" => Some("fragile_runtime::fragile_pthread_rwlock_rdlock"),
-            "pthread_rwlock_tryrdlock" => Some("fragile_runtime::fragile_pthread_rwlock_tryrdlock"),
-            "pthread_rwlock_wrlock" => Some("fragile_runtime::fragile_pthread_rwlock_wrlock"),
-            "pthread_rwlock_trywrlock" => Some("fragile_runtime::fragile_pthread_rwlock_trywrlock"),
-            "pthread_rwlock_unlock" => Some("fragile_runtime::fragile_pthread_rwlock_unlock"),
-            "pthread_rwlockattr_init" => Some("fragile_runtime::fragile_pthread_rwlockattr_init"),
-            "pthread_rwlockattr_destroy" => Some("fragile_runtime::fragile_pthread_rwlockattr_destroy"),
+            "pthread_rwlock_init" => Some("crate::fragile_runtime::fragile_pthread_rwlock_init"),
+            "pthread_rwlock_destroy" => Some("crate::fragile_runtime::fragile_pthread_rwlock_destroy"),
+            "pthread_rwlock_rdlock" => Some("crate::fragile_runtime::fragile_pthread_rwlock_rdlock"),
+            "pthread_rwlock_tryrdlock" => Some("crate::fragile_runtime::fragile_pthread_rwlock_tryrdlock"),
+            "pthread_rwlock_wrlock" => Some("crate::fragile_runtime::fragile_pthread_rwlock_wrlock"),
+            "pthread_rwlock_trywrlock" => Some("crate::fragile_runtime::fragile_pthread_rwlock_trywrlock"),
+            "pthread_rwlock_unlock" => Some("crate::fragile_runtime::fragile_pthread_rwlock_unlock"),
+            "pthread_rwlockattr_init" => Some("crate::fragile_runtime::fragile_pthread_rwlockattr_init"),
+            "pthread_rwlockattr_destroy" => Some("crate::fragile_runtime::fragile_pthread_rwlockattr_destroy"),
 
             // stdio functions
-            "fopen" => Some("fragile_runtime::fopen"),
-            "fclose" => Some("fragile_runtime::fclose"),
-            "fread" => Some("fragile_runtime::fread"),
-            "fwrite" => Some("fragile_runtime::fwrite"),
-            "fseek" => Some("fragile_runtime::fseek"),
-            "fseeko" => Some("fragile_runtime::fseeko"),
-            "ftell" => Some("fragile_runtime::ftell"),
-            "ftello" => Some("fragile_runtime::ftello"),
-            "fflush" => Some("fragile_runtime::fflush"),
-            "feof" => Some("fragile_runtime::feof"),
-            "ferror" => Some("fragile_runtime::ferror"),
-            "clearerr" => Some("fragile_runtime::clearerr"),
-            "fileno" => Some("fragile_runtime::fileno"),
-            "fgetc" => Some("fragile_runtime::fgetc"),
-            "getc" => Some("fragile_runtime::getc"),
-            "getchar" => Some("fragile_runtime::getchar"),
-            "fputc" => Some("fragile_runtime::fputc"),
-            "putc" => Some("fragile_runtime::putc"),
-            "putchar" => Some("fragile_runtime::putchar"),
-            "ungetc" => Some("fragile_runtime::ungetc"),
-            "fputs" => Some("fragile_runtime::fputs"),
-            "puts" => Some("fragile_runtime::puts"),
-            "fgets" => Some("fragile_runtime::fgets"),
+            "fopen" => Some("crate::fragile_runtime::fopen"),
+            "fclose" => Some("crate::fragile_runtime::fclose"),
+            "fread" => Some("crate::fragile_runtime::fread"),
+            "fwrite" => Some("crate::fragile_runtime::fwrite"),
+            "fseek" => Some("crate::fragile_runtime::fseek"),
+            "fseeko" => Some("crate::fragile_runtime::fseeko"),
+            "ftell" => Some("crate::fragile_runtime::ftell"),
+            "ftello" => Some("crate::fragile_runtime::ftello"),
+            "fflush" => Some("crate::fragile_runtime::fflush"),
+            "feof" => Some("crate::fragile_runtime::feof"),
+            "ferror" => Some("crate::fragile_runtime::ferror"),
+            "clearerr" => Some("crate::fragile_runtime::clearerr"),
+            "fileno" => Some("crate::fragile_runtime::fileno"),
+            "fgetc" => Some("crate::fragile_runtime::fgetc"),
+            "getc" => Some("crate::fragile_runtime::getc"),
+            "getchar" => Some("crate::fragile_runtime::getchar"),
+            "fputc" => Some("crate::fragile_runtime::fputc"),
+            "putc" => Some("crate::fragile_runtime::putc"),
+            "putchar" => Some("crate::fragile_runtime::putchar"),
+            "ungetc" => Some("crate::fragile_runtime::ungetc"),
+            "fputs" => Some("crate::fragile_runtime::fputs"),
+            "puts" => Some("crate::fragile_runtime::puts"),
+            "fgets" => Some("crate::fragile_runtime::fgets"),
 
             // C memory functions (used by libc++ allocator)
-            "malloc" => Some("fragile_runtime::fragile_malloc"),
-            "free" => Some("fragile_runtime::fragile_free"),
-            "realloc" => Some("fragile_runtime::fragile_realloc"),
-            "calloc" => Some("fragile_runtime::fragile_calloc"),
+            "malloc" => Some("crate::fragile_runtime::fragile_malloc"),
+            "free" => Some("crate::fragile_runtime::fragile_free"),
+            "realloc" => Some("crate::fragile_runtime::fragile_realloc"),
+            "calloc" => Some("crate::fragile_runtime::fragile_calloc"),
 
             _ => None,
         }
@@ -1683,10 +1683,10 @@ impl AstCodeGen {
         self.writeln("pub mod fragile_runtime {");
         self.indent += 1;
         self.writeln("#[inline]");
-        self.writeln("pub unsafe fn fragile_malloc(size: usize) -> *mut u8 {");
+        self.writeln("pub unsafe fn fragile_malloc(size: usize) -> *mut () {");
         self.indent += 1;
         self.writeln("let layout = std::alloc::Layout::from_size_align(size.max(1), std::mem::align_of::<usize>()).unwrap();");
-        self.writeln("std::alloc::alloc(layout)");
+        self.writeln("std::alloc::alloc(layout) as *mut ()");
         self.indent -= 1;
         self.writeln("}");
         self.writeln("#[inline]");
@@ -5157,6 +5157,12 @@ impl AstCodeGen {
                         // because Rust's &mut self already provides the reference
                         if expr == "self" || expr == "__self" {
                             expr
+                        } else if expr.contains(".op_assign(") || expr.contains(".op_add_assign(") ||
+                                  expr.contains(".op_sub_assign(") || expr.contains(".op_mul_assign(") ||
+                                  expr.contains(".op_div_assign(") || expr.contains(".op_rem_assign(") {
+                            // Assignment operator overloads already return &mut Self
+                            // Don't add another &mut
+                            expr
                         } else if expr.starts_with("unsafe { ") && expr.ends_with(" }") {
                             // If expression is an unsafe block like "unsafe { *ptr }",
                             // put the & or &mut inside: "unsafe { &mut *ptr }"
@@ -6573,7 +6579,7 @@ impl AstCodeGen {
                             .next()
                             .map(|c| self.expr_to_string(c))
                             .unwrap_or_else(|| "0".to_string());
-                        return format!("unsafe {{ fragile_runtime::fragile_malloc({}) }}", size_arg);
+                        return format!("unsafe {{ crate::fragile_runtime::fragile_malloc({}) }}", size_arg);
                     }
                     if op_name == "operator delete" || op_name == "operator delete[]" {
                         // ::operator delete(ptr) -> fragile_runtime::fragile_free(ptr)
@@ -6583,7 +6589,7 @@ impl AstCodeGen {
                             .next()
                             .map(|c| self.expr_to_string(c))
                             .unwrap_or_else(|| "std::ptr::null_mut()".to_string());
-                        return format!("unsafe {{ fragile_runtime::fragile_free({} as *mut std::ffi::c_void) }}", ptr_arg);
+                        return format!("unsafe {{ crate::fragile_runtime::fragile_free({} as *mut std::ffi::c_void) }}", ptr_arg);
                     }
 
                     // Convert operator name to method name (operator+ -> op_add)
