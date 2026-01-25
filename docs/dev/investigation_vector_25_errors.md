@@ -80,6 +80,11 @@ All headers share the same root causes. The iostream header has more errors beca
    - Modify `generate_struct` to generate traits for all polymorphic classes
    - Not just root classes (those without bases)
    - This will fix 6 errors (bad_allocTrait, logic_errorTrait x4, runtime_errorTrait)
+   - **Attempted**: Removed `is_base_class` check in trait generation
+   - **Result**: Increased errors from 23 to 83 due to:
+     - Duplicate method definitions in trait impls
+     - Complex inheritance hierarchies generating conflicting methods
+   - **Needs**: More sophisticated approach that tracks which methods are already implemented
 
 3. **Add libc++ type stubs** (Priority: Medium)
    - Add stubs in preamble for common missing types
