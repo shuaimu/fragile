@@ -1957,6 +1957,7 @@ impl AstCodeGen {
         // in STL containers. Use c_void as a placeholder.
         self.writeln("// Template type alias placeholder");
         self.writeln("pub type value_type = std::ffi::c_void;");
+        self.generated_aliases.insert("value_type".to_string());
         self.writeln("");
 
         // System header union types (from glibc headers)
