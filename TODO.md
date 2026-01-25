@@ -626,7 +626,7 @@ Get `std::vector<int>` working end-to-end.
     }
     ```
   - [ ] **23.8.2** Compile transpiled code with rustc + fragile-runtime - IN PROGRESS
-    - **Progress**: Errors reduced 2091 → 101 (95.2% reduction) ✅ 2026-01-24
+    - **Progress**: Errors reduced 2091 → 104 (95.0% reduction) ✅ 2026-01-24
     - Fixed: super:: path computation now accounts for flattened namespaces (std, __)
     - Fixed: Method overloading deduplication within struct impl blocks (23.8.3)
     - Fixed: Constructor overloading with same param count but different types
@@ -671,10 +671,16 @@ Get `std::vector<int>` working end-to-end.
       - Added `is_definition` field to RecordDecl to distinguish forward decls from definitions
       - Only generate structs for actual definitions, not forward declarations
       - Fixes _Bit_iterator and other iterators now generating with proper `__base` field
-    - Remaining 108 errors (up from 101 due to more code now being generated):
-      - 32 mismatched types (iterator/reference type mismatches, return type issues)
-      - Missing comparison methods on partial_ordering (op_eq, op_lt, op_le, op_gt, op_ge)
-      - Missing types: std__Bit_iterator, _Sp___rep, _dependent_type
+    - Fixed: Skip literal type suffixes in return statements ✅ 2026-01-24
+      - Rust infers return type from function signature
+    - Fixed: Pointer field initialization (0 → null_mut()) ✅ 2026-01-24
+      - correct_initializer_for_type() converts literal 0 to std::ptr::null_mut() for pointer fields
+    - **Progress**: Errors reduced from 2091 to 104 (95.0% reduction) ✅ 2026-01-24
+    - Remaining 104 errors:
+      - Type mismatches (iterator/reference types)
+      - Missing types (template instantiation aliases like __strictest_alignment__Types___)
+      - Missing comparison methods on partial_ordering
+      - Missing fragile_runtime crate reference
   - [ ] **23.8.3** Execute and verify exit code - BLOCKED on 23.8.2
   - [ ] **23.8.4** Add iteration test: `for (int x : v) { ... }` - BLOCKED
   - [ ] **23.8.5** Add resize/reserve/capacity tests - BLOCKED
