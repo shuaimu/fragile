@@ -4314,11 +4314,12 @@ impl AstCodeGen {
         self.writeln("pub type std___element_count = u64;");
         self.writeln("pub type std___variant_detail__Trait = u32;");
         self.writeln("pub type std_ios_base_seekdir = i32;");
-        self.writeln("pub type string_view = std::ffi::c_void;");
-        self.writeln("pub type wstring_view = std::ffi::c_void;");
-        self.writeln("pub type allocator_char = std::ffi::c_void;");
-        self.writeln("pub type codecvt_char16_t__char__mbstate_t = std::ffi::c_void;");
-        self.writeln("pub type codecvt_char32_t__char__mbstate_t = std::ffi::c_void;");
+        // Placeholder types that need Clone/Default (can't use c_void as base for structs)
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct string_view;");
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct wstring_view;");
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct allocator_char;");
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct codecvt_char16_t__char__mbstate_t;");
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct codecvt_char32_t__char__mbstate_t;");
         self.writeln("");
 
         // More template parameter placeholders
