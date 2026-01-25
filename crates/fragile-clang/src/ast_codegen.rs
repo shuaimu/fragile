@@ -4020,6 +4020,23 @@ impl AstCodeGen {
         self.writeln("    pub do_grouping: unsafe fn(*const locale_facet) -> std::ffi::c_void,");
         self.writeln("    pub do_truename: unsafe fn(*const locale_facet) -> std::ffi::c_void,");
         self.writeln("    pub do_falsename: unsafe fn(*const locale_facet) -> std::ffi::c_void,");
+        // ctype virtual methods
+        self.writeln("    pub do_toupper: unsafe fn(*const locale_facet, i32) -> i32,");
+        self.writeln("    pub do_toupper_1: unsafe fn(*const locale_facet, *mut i32, *const i32) -> *const i32,");
+        self.writeln("    pub do_tolower: unsafe fn(*const locale_facet, i32) -> i32,");
+        self.writeln("    pub do_tolower_1: unsafe fn(*const locale_facet, *mut i32, *const i32) -> *const i32,");
+        self.writeln("    pub do_widen: unsafe fn(*const locale_facet, i8) -> i32,");
+        self.writeln("    pub do_widen_1: unsafe fn(*const locale_facet, *const i8, *const i8, *mut i32) -> *const i8,");
+        self.writeln("    pub do_narrow: unsafe fn(*const locale_facet, i32, i8) -> i8,");
+        self.writeln("    pub do_narrow_1: unsafe fn(*const locale_facet, *const i32, *const i32, i8, *mut i8) -> *const i32,");
+        // ctype_wchar_t additional virtual methods
+        self.writeln("    pub do_is: unsafe fn(*const locale_facet, u32, i32) -> bool,");
+        self.writeln("    pub do_is_1: unsafe fn(*const locale_facet, *const i32, *const i32, *mut u32) -> *const i32,");
+        self.writeln("    pub do_scan_is: unsafe fn(*const locale_facet, u32, *const i32, *const i32) -> *const i32,");
+        self.writeln("    pub do_scan_not: unsafe fn(*const locale_facet, u32, *const i32, *const i32) -> *const i32,");
+        // collate virtual methods
+        self.writeln("    pub do_compare: unsafe fn(*const locale_facet, *const i32, *const i32, *const i32, *const i32) -> i32,");
+        self.writeln("    pub do_transform: unsafe fn(*const locale_facet, *const i32, *const i32) -> std::ffi::c_void,");
         self.writeln("}");
         self.writeln("#[repr(C)]");
         self.writeln("pub struct locale_facet {");
