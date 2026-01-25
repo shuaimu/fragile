@@ -10,3 +10,4 @@ Cargo.lock
 *.swp
 *.swo
 .apas
+test_iostream.long-type-*.txt
