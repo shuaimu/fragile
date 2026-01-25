@@ -7111,11 +7111,11 @@ fn test_e2e_function_ptr_callbacks() {
     "#;
 
     let (exit_code, _stdout, _stderr) =
-        transpile_compile_run(source, "e2e_function_pointers.cpp").expect("E2E test failed");
+        transpile_compile_run(source, "e2e_function_ptr_callbacks.cpp").expect("E2E test failed");
 
     assert_eq!(
         exit_code, 0,
-        "Function pointers should work correctly"
+        "Function pointer callbacks should work correctly"
     );
 }
 
@@ -8838,5 +8838,452 @@ fn test_e2e_recursive_algorithms() {
     assert_eq!(
         exit_code, 0,
         "Recursive algorithms should work correctly"
+    );
+}
+
+/// E2E test: Union-Find (Disjoint Set) data structure
+/// Tests: path compression, union by rank, connected components
+#[test]
+fn test_e2e_union_find() {
+    let source = r#"
+        // Union-Find with path compression and union by rank
+
+        struct UnionFind {
+            int* parent;
+            int* rank;
+            int size;
+        };
+
+        void ufInit(UnionFind* uf, int* parentBuf, int* rankBuf, int n) {
+            uf->parent = parentBuf;
+            uf->rank = rankBuf;
+            uf->size = n;
+            for (int i = 0; i < n; i++) {
+                parentBuf[i] = i;  // Each element is its own parent
+                rankBuf[i] = 0;    // Initial rank is 0
+            }
+        }
+
+        // Find with path compression
+        int ufFind(UnionFind* uf, int x) {
+            if (uf->parent[x] != x) {
+                uf->parent[x] = ufFind(uf, uf->parent[x]);  // Path compression
+            }
+            return uf->parent[x];
+        }
+
+        // Union by rank
+        void ufUnion(UnionFind* uf, int x, int y) {
+            int rootX = ufFind(uf, x);
+            int rootY = ufFind(uf, y);
+
+            if (rootX == rootY) return;  // Already in same set
+
+            // Union by rank
+            if (uf->rank[rootX] < uf->rank[rootY]) {
+                uf->parent[rootX] = rootY;
+            } else if (uf->rank[rootX] > uf->rank[rootY]) {
+                uf->parent[rootY] = rootX;
+            } else {
+                uf->parent[rootY] = rootX;
+                uf->rank[rootX] = uf->rank[rootX] + 1;
+            }
+        }
+
+        // Check if two elements are in the same set
+        bool ufConnected(UnionFind* uf, int x, int y) {
+            return ufFind(uf, x) == ufFind(uf, y);
+        }
+
+        // Count distinct sets
+        int ufCountSets(UnionFind* uf) {
+            int count = 0;
+            for (int i = 0; i < uf->size; i++) {
+                if (uf->parent[i] == i) count = count + 1;
+            }
+            return count;
+        }
+
+        int main() {
+            int parent[10];
+            int rank[10];
+            UnionFind uf;
+            ufInit(&uf, parent, rank, 10);
+
+            // Initially all elements are separate
+            if (ufCountSets(&uf) != 10) return 1;
+
+            // Union some elements
+            ufUnion(&uf, 0, 1);
+            if (!ufConnected(&uf, 0, 1)) return 2;
+            if (ufCountSets(&uf) != 9) return 3;
+
+            ufUnion(&uf, 2, 3);
+            if (!ufConnected(&uf, 2, 3)) return 4;
+            if (ufCountSets(&uf) != 8) return 5;
+
+            ufUnion(&uf, 0, 2);  // Merge two groups
+            if (!ufConnected(&uf, 0, 3)) return 6;
+            if (!ufConnected(&uf, 1, 2)) return 7;
+            if (ufCountSets(&uf) != 7) return 8;
+
+            // Check that unconnected elements are still separate
+            if (ufConnected(&uf, 0, 4)) return 9;
+            if (ufConnected(&uf, 5, 6)) return 10;
+
+            // Create a chain: 4-5-6-7-8-9
+            ufUnion(&uf, 4, 5);
+            ufUnion(&uf, 5, 6);
+            ufUnion(&uf, 6, 7);
+            ufUnion(&uf, 7, 8);
+            ufUnion(&uf, 8, 9);
+
+            if (!ufConnected(&uf, 4, 9)) return 11;
+            if (ufCountSets(&uf) != 2) return 12;  // {0,1,2,3} and {4,5,6,7,8,9}
+
+            // Merge everything
+            ufUnion(&uf, 0, 9);
+            if (ufCountSets(&uf) != 1) return 13;
+            if (!ufConnected(&uf, 0, 9)) return 14;
+
+            // Test path compression - find should flatten the tree
+            ufFind(&uf, 9);
+            ufFind(&uf, 8);
+            ufFind(&uf, 7);
+            // After path compression, these should have same root
+            if (ufFind(&uf, 7) != ufFind(&uf, 9)) return 15;
+
+            return 0;  // Success
+        }
+    "#;
+
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_union_find.cpp").expect("E2E test failed");
+
+    assert_eq!(exit_code, 0, "Union-Find should work correctly");
+}
+
+/// E2E test: Bitset operations
+/// Tests: bit manipulation, set operations on bits
+#[test]
+fn test_e2e_bitset_operations() {
+    let source = r#"
+        // Bitset operations using unsigned int
+
+        // Set bit at position
+        unsigned int setBit(unsigned int n, int pos) {
+            return n | (1u << pos);
+        }
+
+        // Clear bit at position
+        unsigned int clearBit(unsigned int n, int pos) {
+            return n & ~(1u << pos);
+        }
+
+        // Toggle bit at position
+        unsigned int toggleBit(unsigned int n, int pos) {
+            return n ^ (1u << pos);
+        }
+
+        // Check if bit is set
+        bool isBitSet(unsigned int n, int pos) {
+            return (n & (1u << pos)) != 0;
+        }
+
+        // Count set bits (population count)
+        int popCount(unsigned int n) {
+            int count = 0;
+            unsigned int val = n;
+            while (val != 0) {
+                count = count + (int)(val & 1u);
+                val = val >> 1;
+            }
+            return count;
+        }
+
+        // Find lowest set bit position (0-indexed, -1 if none)
+        int lowestSetBit(unsigned int n) {
+            if (n == 0) return -1;
+            unsigned int val = n;  // Use local copy for mutation
+            int pos = 0;
+            while ((val & 1u) == 0) {
+                val = val >> 1;
+                pos = pos + 1;
+            }
+            return pos;
+        }
+
+        // Find highest set bit position (0-indexed, -1 if none)
+        int highestSetBit(unsigned int n) {
+            if (n == 0) return -1;
+            unsigned int val = n;  // Use local copy for mutation
+            int pos = 0;
+            while (val != 0) {
+                val = val >> 1;
+                pos = pos + 1;
+            }
+            return pos - 1;
+        }
+
+        // Reverse bits
+        unsigned int reverseBits(unsigned int n) {
+            unsigned int val = n;  // Use local copy for mutation
+            unsigned int result = 0;
+            for (int i = 0; i < 32; i++) {
+                result = result << 1;
+                result = result | (val & 1u);
+                val = val >> 1;
+            }
+            return result;
+        }
+
+        // Check if power of 2
+        bool isPowerOfTwo(unsigned int n) {
+            return n != 0 && (n & (n - 1)) == 0;
+        }
+
+        // Next power of 2
+        unsigned int nextPowerOfTwo(unsigned int n) {
+            if (n == 0) return 1;
+            unsigned int v = n - 1;
+            v = v | (v >> 1);
+            v = v | (v >> 2);
+            v = v | (v >> 4);
+            v = v | (v >> 8);
+            v = v | (v >> 16);
+            return v + 1;
+        }
+
+        int main() {
+            // Test setBit
+            if (setBit(0, 0) != 1) return 1;
+            if (setBit(0, 3) != 8) return 2;
+            if (setBit(1, 3) != 9) return 3;
+
+            // Test clearBit
+            if (clearBit(15, 0) != 14) return 4;
+            if (clearBit(15, 2) != 11) return 5;
+            if (clearBit(8, 3) != 0) return 6;
+
+            // Test toggleBit
+            if (toggleBit(0, 0) != 1) return 7;
+            if (toggleBit(1, 0) != 0) return 8;
+            if (toggleBit(10, 2) != 14) return 9;
+
+            // Test isBitSet
+            if (!isBitSet(5, 0)) return 10;
+            if (isBitSet(5, 1)) return 11;
+            if (!isBitSet(5, 2)) return 12;
+
+            // Test popCount
+            if (popCount(0) != 0) return 13;
+            if (popCount(1) != 1) return 14;
+            if (popCount(7) != 3) return 15;
+            if (popCount(255) != 8) return 16;
+            if (popCount(0xFFFF) != 16) return 17;
+
+            // Test lowestSetBit
+            if (lowestSetBit(0) != -1) return 18;
+            if (lowestSetBit(1) != 0) return 19;
+            if (lowestSetBit(8) != 3) return 20;
+            if (lowestSetBit(12) != 2) return 21;
+
+            // Test highestSetBit
+            if (highestSetBit(0) != -1) return 22;
+            if (highestSetBit(1) != 0) return 23;
+            if (highestSetBit(8) != 3) return 24;
+            if (highestSetBit(15) != 3) return 25;
+            if (highestSetBit(16) != 4) return 26;
+
+            // Test isPowerOfTwo
+            if (!isPowerOfTwo(1)) return 27;
+            if (!isPowerOfTwo(2)) return 28;
+            if (!isPowerOfTwo(4)) return 29;
+            if (isPowerOfTwo(3)) return 30;
+            if (isPowerOfTwo(0)) return 31;
+            if (!isPowerOfTwo(1024)) return 32;
+
+            // Test nextPowerOfTwo
+            if (nextPowerOfTwo(0) != 1) return 33;
+            if (nextPowerOfTwo(1) != 1) return 34;
+            if (nextPowerOfTwo(2) != 2) return 35;
+            if (nextPowerOfTwo(3) != 4) return 36;
+            if (nextPowerOfTwo(5) != 8) return 37;
+            if (nextPowerOfTwo(17) != 32) return 38;
+
+            // Test reverseBits (just check specific patterns)
+            if (reverseBits(0) != 0) return 39;
+            if (reverseBits(0x80000000) != 1) return 40;
+            if (reverseBits(1) != 0x80000000) return 41;
+
+            return 0;  // Success
+        }
+    "#;
+
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_bitset_operations.cpp").expect("E2E test failed");
+
+    assert_eq!(exit_code, 0, "Bitset operations should work correctly");
+}
+
+/// E2E test: String pattern matching
+/// Tests: KMP-like pattern matching, string search algorithms
+#[test]
+fn test_e2e_string_pattern_matching() {
+    let source = r#"
+        // String pattern matching algorithms
+
+        // Simple string length
+        int strLen(const char* s) {
+            int len = 0;
+            while (s[len] != '\0') len = len + 1;
+            return len;
+        }
+
+        // Simple substring search (naive algorithm)
+        // Returns index of first occurrence, -1 if not found
+        int strFind(const char* text, const char* pattern) {
+            int textLen = strLen(text);
+            int patLen = strLen(pattern);
+
+            if (patLen == 0) return 0;
+            if (patLen > textLen) return -1;
+
+            for (int i = 0; i <= textLen - patLen; i++) {
+                int j = 0;
+                while (j < patLen && text[i + j] == pattern[j]) {
+                    j = j + 1;
+                }
+                if (j == patLen) return i;
+            }
+            return -1;
+        }
+
+        // Count occurrences of pattern in text
+        int strCount(const char* text, const char* pattern) {
+            int count = 0;
+            int textLen = strLen(text);
+            int patLen = strLen(pattern);
+
+            if (patLen == 0) return 0;
+            if (patLen > textLen) return 0;
+
+            for (int i = 0; i <= textLen - patLen; i++) {
+                int j = 0;
+                while (j < patLen && text[i + j] == pattern[j]) {
+                    j = j + 1;
+                }
+                if (j == patLen) {
+                    count = count + 1;
+                }
+            }
+            return count;
+        }
+
+        // Check if string starts with prefix
+        bool startsWith(const char* text, const char* prefix) {
+            int i = 0;
+            while (prefix[i] != '\0') {
+                if (text[i] == '\0' || text[i] != prefix[i]) return false;
+                i = i + 1;
+            }
+            return true;
+        }
+
+        // Check if string ends with suffix
+        bool endsWith(const char* text, const char* suffix) {
+            int textLen = strLen(text);
+            int suffixLen = strLen(suffix);
+            if (suffixLen > textLen) return false;
+
+            int offset = textLen - suffixLen;
+            for (int i = 0; i < suffixLen; i++) {
+                if (text[offset + i] != suffix[i]) return false;
+            }
+            return true;
+        }
+
+        // Simple wildcard match (* matches any sequence, ? matches single char)
+        bool wildcardMatch(const char* text, const char* pattern) {
+            int ti = 0;
+            int pi = 0;
+            int starIdx = -1;
+            int matchIdx = 0;
+
+            while (text[ti] != '\0') {
+                if (pattern[pi] != '\0' && (pattern[pi] == '?' || pattern[pi] == text[ti])) {
+                    ti = ti + 1;
+                    pi = pi + 1;
+                } else if (pattern[pi] == '*') {
+                    starIdx = pi;
+                    matchIdx = ti;
+                    pi = pi + 1;
+                } else if (starIdx != -1) {
+                    pi = starIdx + 1;
+                    matchIdx = matchIdx + 1;
+                    ti = matchIdx;
+                } else {
+                    return false;
+                }
+            }
+
+            while (pattern[pi] == '*') pi = pi + 1;
+            return pattern[pi] == '\0';
+        }
+
+        int main() {
+            // Test strLen
+            if (strLen("") != 0) return 1;
+            if (strLen("a") != 1) return 2;
+            if (strLen("hello") != 5) return 3;
+
+            // Test strFind
+            if (strFind("hello world", "world") != 6) return 4;
+            if (strFind("hello world", "hello") != 0) return 5;
+            if (strFind("hello world", "xyz") != -1) return 6;
+            if (strFind("hello world", "") != 0) return 7;
+            if (strFind("aaa", "aa") != 0) return 8;
+            if (strFind("ababab", "bab") != 1) return 9;
+
+            // Test strCount
+            if (strCount("aaa", "a") != 3) return 10;
+            if (strCount("ababab", "ab") != 3) return 11;
+            if (strCount("hello", "l") != 2) return 12;
+            if (strCount("hello", "x") != 0) return 13;
+
+            // Test startsWith
+            if (!startsWith("hello world", "hello")) return 14;
+            if (!startsWith("hello world", "")) return 15;
+            if (startsWith("hello", "hello world")) return 16;
+            if (startsWith("hello", "hx")) return 17;
+
+            // Test endsWith
+            if (!endsWith("hello world", "world")) return 18;
+            if (!endsWith("hello world", "")) return 19;
+            if (endsWith("hello", "hello world")) return 20;
+            if (endsWith("hello", "hx")) return 21;
+
+            // Test wildcardMatch
+            if (!wildcardMatch("hello", "hello")) return 22;
+            if (!wildcardMatch("hello", "h*o")) return 23;
+            if (!wildcardMatch("hello", "*")) return 24;
+            if (!wildcardMatch("hello", "h?llo")) return 25;
+            if (!wildcardMatch("hello", "*llo")) return 26;
+            if (!wildcardMatch("hello", "hel*")) return 27;
+            if (wildcardMatch("hello", "h?o")) return 28;
+            if (!wildcardMatch("", "*")) return 29;
+            if (!wildcardMatch("abc", "a*c")) return 30;
+            if (!wildcardMatch("abcdef", "a*c*f")) return 31;
+
+            return 0;  // Success
+        }
+    "#;
+
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_string_pattern_matching.cpp").expect("E2E test failed");
+
+    assert_eq!(
+        exit_code, 0,
+        "String pattern matching should work correctly"
     );
 }

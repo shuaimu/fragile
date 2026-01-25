@@ -14,11 +14,11 @@ We just convert the fully-resolved AST to equivalent Rust code.
 ## Current Status
 
 **Grammar Tests**: 20/20 passing
-**E2E Tests**: 111/111 passing (4 ignored: 2 STL header limitations, 2 struct array/assignment limitations)
+**E2E Tests**: 116/116 passing (4 ignored: 2 STL header limitations, 2 struct array/assignment limitations)
 **libc++ Transpilation Tests**: 8/8 passing (cstddef, cstdint, type_traits, initializer_list, vector, cstddef_compilation, iostream, thread)
 **Runtime Linking Tests**: 2/2 passing (FILE I/O, pthread)
 **Runtime Function Mapping Tests**: 1/1 passing
-**Total Tests**: 230 passing
+**Total Tests**: 235 passing
 
 **Working**:
 - Simple functions with control flow (if/else, while, for, do-while, switch, recursion)
