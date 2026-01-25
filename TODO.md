@@ -741,10 +741,13 @@ Get `std::vector<int>` working end-to-end.
     - Fixed: Variables initialized with *this use Self type with clone() ✅ 2026-01-24
     - Fixed: Compound assignment operators (+=, -=) return &mut Self ✅ 2026-01-24
     - Fixed: Return self by value adds .clone() automatically ✅ 2026-01-24
+    - Fixed: Synthesized iterator arithmetic operators (op_add, op_sub) ✅ 2026-01-24
+      - Iterators with op_add_assign/op_sub_assign but no op_add/op_sub get synthesized methods
+      - Only applies to iterator-like types (have op_inc or op_dec methods)
     - Remaining 16 errors:
       - Template instantiation (2) - push_back expects &c_void, got i32
       - Hash function overload (2) - _Hash_impl::hash wrong arg count
-      - Iterator arithmetic (2) - missing op_add method on _Bit_iterator
+      - Iterator deref (2) - missing op_deref method on _Bit_iterator (returns _Bit_reference proxy)
       - numeric_limits placeholders (8) - min/max/lowest return wrong types
       - Method on placeholder (1) - is_equal on c_void
       - Non-primitive cast (2) - integer as _Sp___rep

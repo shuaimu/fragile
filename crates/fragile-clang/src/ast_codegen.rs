@@ -2691,6 +2691,53 @@ impl AstCodeGen {
         }
     }
 
+    /// Generate synthesized arithmetic operators (op_add, op_sub) for iterators
+    /// If a struct has op_add_assign but no op_add, we synthesize op_add.
+    /// This handles C++ binary operators that are friend functions, not members.
+    /// Note: Only synthesize for types that look like iterators (have op_inc/op_dec)
+    fn generate_synthesized_arithmetic_operators(&mut self) {
+        // Only synthesize for iterator-like types (have increment/decrement operators)
+        let has_inc = self.current_struct_methods.contains_key("op_inc");
+        let has_dec = self.current_struct_methods.contains_key("op_dec");
+
+        if !has_inc && !has_dec {
+            // Not an iterator-like type, don't synthesize
+            return;
+        }
+
+        // Check what methods exist in current_struct_methods
+        let has_add_assign = self.current_struct_methods.contains_key("op_add_assign");
+        let has_add = self.current_struct_methods.contains_key("op_add");
+        let has_sub_assign = self.current_struct_methods.contains_key("op_sub_assign");
+        let has_sub = self.current_struct_methods.contains_key("op_sub");
+
+        // Synthesize op_add if op_add_assign exists but op_add doesn't
+        if has_add_assign && !has_add {
+            self.writeln("");
+            self.writeln("/// Synthesized operator+ (C++ friend function)");
+            self.writeln("pub fn op_add(&self, __n: isize) -> Self {");
+            self.indent += 1;
+            self.writeln("let mut result = self.clone();");
+            self.writeln("result.op_add_assign(__n);");
+            self.writeln("result");
+            self.indent -= 1;
+            self.writeln("}");
+        }
+
+        // Synthesize op_sub if op_sub_assign exists but op_sub doesn't
+        if has_sub_assign && !has_sub {
+            self.writeln("");
+            self.writeln("/// Synthesized operator- (C++ friend function)");
+            self.writeln("pub fn op_sub(&self, __n: isize) -> Self {");
+            self.indent += 1;
+            self.writeln("let mut result = self.clone();");
+            self.writeln("result.op_sub_assign(__n);");
+            self.writeln("result");
+            self.indent -= 1;
+            self.writeln("}");
+        }
+    }
+
     /// Generate struct definition.
     fn generate_struct(&mut self, name: &str, is_class: bool, children: &[ClangNode]) {
         // For struct DEFINITIONS, use sanitize_identifier() instead of to_rust_type_str()
@@ -2910,6 +2957,10 @@ impl AstCodeGen {
 
             // Generate bit field accessor methods
             self.generate_bit_field_accessors(name);
+
+            // Generate synthesized arithmetic operators for iterators
+            // If a struct has op_add_assign but no op_add, synthesize op_add
+            self.generate_synthesized_arithmetic_operators();
 
             self.indent -= 1;
             self.writeln("}");
