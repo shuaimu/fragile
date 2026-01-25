@@ -5353,7 +5353,17 @@ impl AstCodeGen {
                         UnaryOp::Deref => format!("*{}", operand),
                         UnaryOp::Minus => format!("-{}", operand),
                         UnaryOp::Plus => operand,
-                        UnaryOp::LNot => format!("!{}", operand),
+                        UnaryOp::LNot => {
+                            // C++ logical NOT (!x) converts to bool first
+                            // For non-bool types, `!x` means `x == 0` in C++
+                            let operand_ty = Self::get_expr_type(&node.children[0]);
+                            if matches!(operand_ty, Some(CppType::Bool)) {
+                                format!("!{}", operand)
+                            } else {
+                                // For non-bool types, use != 0 comparison
+                                format!("(({}) == 0)", operand)
+                            }
+                        }
                         UnaryOp::Not => format!("!{}", operand),
                         UnaryOp::AddrOf => {
                             // Check if this is a pointer to a polymorphic class
@@ -5937,7 +5947,17 @@ impl AstCodeGen {
                     match op {
                         UnaryOp::Minus => format!("-{}", operand),
                         UnaryOp::Plus => operand,
-                        UnaryOp::LNot => format!("!{}", operand),
+                        UnaryOp::LNot => {
+                            // C++ logical NOT (!x) converts to bool first
+                            // For non-bool types, `!x` means `x == 0` in C++
+                            let operand_ty = Self::get_expr_type(&node.children[0]);
+                            if matches!(operand_ty, Some(CppType::Bool)) {
+                                format!("!{}", operand)
+                            } else {
+                                // For non-bool types, use != 0 comparison
+                                format!("(({}) == 0)", operand)
+                            }
+                        }
                         UnaryOp::Not => format!("!{}", operand),  // bitwise not ~ in C++
                         UnaryOp::AddrOf => {
                             // Check if this is a pointer to a polymorphic class
