@@ -4267,7 +4267,7 @@ impl AstCodeGen {
         // Additional template parameter type stubs for unresolved template types
         self.writeln("// Additional template parameter type stubs");
         self.writeln("pub mod back_insert_iterator_type_parameter_0_0 {");
-        self.writeln("    pub fn new_2(_: i32, _: std::ffi::c_void) -> std::ffi::c_void { unsafe { std::mem::zeroed() } }");
+        self.writeln("    pub fn new_2<T>(_: i32, _: T) -> std::ffi::c_void { unsafe { std::mem::zeroed() } }");
         self.writeln("}");
         self.writeln("pub mod __libcpp_remove_reference_t_exception_ptr__ {");
         self.writeln("    pub fn new_2<T, U>(_: T, _: U) -> std::ffi::c_void { unsafe { std::mem::zeroed() } }");
@@ -8262,6 +8262,13 @@ impl AstCodeGen {
         {
             return;
         }
+        // Replace `_` placeholder with `auto` type alias for lambda/auto types
+        // `_` is not allowed in static variable type signatures
+        let rust_type = if rust_type == "_" {
+            "auto".to_string()
+        } else {
+            rust_type
+        };
         // Track this as a global variable (needs unsafe access and deduplication)
         // Store the mapping from original name to prefixed name for reference resolution
         self.global_vars.insert(safe_name.clone());
@@ -11979,6 +11986,14 @@ impl AstCodeGen {
                             }) {
                                 // Unsigned integral type - use wrapping_neg for two's complement
                                 format!("({}).wrapping_neg()", operand)
+                            } else if operand == "9223372036854775808"
+                                || operand == "9223372036854775808i64"
+                                || operand == "9223372036854775808u64"
+                            {
+                                // Special case: -9223372036854775808 is i64::MIN
+                                // but the literal 9223372036854775808 is too large for i64
+                                // Use the constant directly (works for both signed and unsigned contexts)
+                                "i64::MIN".to_string()
                             } else {
                                 format!("-{}", operand)
                             }
@@ -12271,6 +12286,11 @@ impl AstCodeGen {
             } => {
                 // Evaluated constant expression (e.g., default argument)
                 if let Some(val) = int_value {
+                    // Special case for i64::MIN - the literal 9223372036854775808 is too large
+                    // Use i64::MIN constant directly - Rust handles this correctly
+                    if *val == i64::MIN {
+                        return "i64::MIN".to_string();
+                    }
                     if *val == 0 {
                         // For zero, skip suffix to allow type inference in generic contexts
                         "0".to_string()
@@ -12451,6 +12471,11 @@ impl AstCodeGen {
             } => {
                 // Evaluated constant expression (e.g., default argument)
                 if let Some(val) = int_value {
+                    // Special case for i64::MIN - the literal 9223372036854775808 is too large
+                    // so -9223372036854775808 causes issues. Use i64::MIN constant instead.
+                    if *val == i64::MIN {
+                        return "i64::MIN".to_string();
+                    }
                     if self.skip_literal_suffix || *val == 0 {
                         // For zero, skip suffix to allow type inference in generic contexts
                         val.to_string()
@@ -13085,12 +13110,18 @@ impl AstCodeGen {
                         // Check if one side is float and the other is an integer literal
                         let left_type = Self::get_expr_type(&node.children[0]);
                         let right_type = Self::get_expr_type(&node.children[1]);
+                        // Also check original types (before implicit casts) for bool detection
+                        // C++ adds IntegralCast from bool to int, so get_expr_type returns int
+                        let left_orig_type = Self::get_original_expr_type(&node.children[0]);
+                        let right_orig_type = Self::get_original_expr_type(&node.children[1]);
                         let left_is_float =
                             matches!(left_type, Some(CppType::Float | CppType::Double));
                         let right_is_float =
                             matches!(right_type, Some(CppType::Float | CppType::Double));
-                        let left_is_bool = matches!(left_type, Some(CppType::Bool));
-                        let right_is_bool = matches!(right_type, Some(CppType::Bool));
+                        let left_is_bool = matches!(left_type, Some(CppType::Bool))
+                            || matches!(left_orig_type, Some(CppType::Bool));
+                        let right_is_bool = matches!(right_type, Some(CppType::Bool))
+                            || matches!(right_orig_type, Some(CppType::Bool));
 
                         // Handle type conversions for arithmetic:
                         // - bool operands need to be cast to integer (C++ implicit conversion)
@@ -13124,6 +13155,27 @@ impl AstCodeGen {
                         // This handles cases like `isize / 64i32` -> `isize / 64`
                         let left = strip_literal_suffix(&self.expr_to_string(&node.children[0]));
                         let right = strip_literal_suffix(&self.expr_to_string(&node.children[1]));
+
+                        // Special handling for i64::MIN in bitwise context with u64
+                        // We need to cast i64::MIN to u64 when used with unsigned operands
+                        let left_type = Self::get_expr_type(&node.children[0]);
+                        let right_type = Self::get_expr_type(&node.children[1]);
+                        let left_is_unsigned = left_type.as_ref().map_or(false, |t| t.is_signed() == Some(false));
+                        let right_is_unsigned = right_type.as_ref().map_or(false, |t| t.is_signed() == Some(false));
+
+                        let left = if right.contains("i64::MIN") && left_is_unsigned {
+                            // Right operand is i64::MIN but left is unsigned - wrap right in cast
+                            // This case shouldn't happen with left, handled by right below
+                            left
+                        } else {
+                            left
+                        };
+                        let right = if right == "i64::MIN" && left_is_unsigned {
+                            "(i64::MIN as u64)".to_string()
+                        } else {
+                            right
+                        };
+
                         // For shift operators, if left side contains `as` (a cast), we need to
                         // parenthesize it. Otherwise Rust parses `1 as u64 << X` as `1 as (u64<<X>)`.
                         let left = if matches!(op, BinaryOp::Shl | BinaryOp::Shr)
@@ -13182,6 +13234,14 @@ impl AstCodeGen {
                             }) {
                                 // Unsigned integral type - use wrapping_neg for two's complement
                                 format!("({}).wrapping_neg()", operand)
+                            } else if operand == "9223372036854775808"
+                                || operand == "9223372036854775808i64"
+                                || operand == "9223372036854775808u64"
+                            {
+                                // Special case: -9223372036854775808 is i64::MIN
+                                // but the literal 9223372036854775808 is too large for i64
+                                // Use the constant directly (works for both signed and unsigned contexts)
+                                "i64::MIN".to_string()
                             } else {
                                 format!("-{}", operand)
                             }
@@ -13201,7 +13261,27 @@ impl AstCodeGen {
                                 format!("(({}) == 0)", operand)
                             }
                         }
-                        UnaryOp::Not => format!("!{}", operand), // bitwise not ~ in C++
+                        UnaryOp::Not => {
+                            // bitwise not ~ in C++
+                            // Special handling for i64::MIN / 0x8000000000000000 representations
+                            // In C++, this is valid but in Rust needs special handling for bitwise operations
+                            if operand == "-9223372036854775808"
+                                || operand == "i64::MIN"
+                                || operand == "-0x8000000000000000i64"
+                            {
+                                format!("!0x8000000000000000u64")
+                            } else if operand.starts_with("-") && operand.len() > 10 {
+                                // For other large negative numbers in bitwise context,
+                                // try to parse and convert to hex
+                                if let Ok(val) = operand.parse::<i64>() {
+                                    format!("!{}u64", val as u64)
+                                } else {
+                                    format!("!{}", operand)
+                                }
+                            } else {
+                                format!("!{}", operand)
+                            }
+                        }
                         UnaryOp::AddrOf => {
                             // Check if child is an ArraySubscriptExpr with a pointer base
                             // In C++, &arr[i] where arr is a pointer is equivalent to arr + i
