@@ -4661,9 +4661,15 @@ impl AstCodeGen {
         self.writeln("pub fn equal<T: PartialEq>(_first1: *const T, _last1: *const T, _first2: *const T) -> bool { true }");
         self.writeln("pub fn __libcpp_atomic_refcount_increment_i64(_ptr: *mut i64) -> i64 { unsafe { *_ptr += 1; *_ptr } }");
         self.writeln("pub fn __libcpp_atomic_refcount_decrement_i64(_ptr: *mut i64) -> i64 { unsafe { *_ptr -= 1; *_ptr } }");
+        self.writeln("// Atomic wait/notify stubs (no-op placeholders)");
+        self.writeln("pub fn __atomic_wait_std_atomic_flag_bool<T, M>(_: T, _: bool, _: M) {}");
+        self.writeln("pub fn __atomic_notify_one_std_atomic_flag<T>(_: T) {}");
+        self.writeln("pub fn __atomic_notify_all_std_atomic_flag<T>(_: T) {}");
         self.writeln("// Math function stubs");
         self.writeln("pub fn __lerp_f64(a: f64, b: f64, t: f64) -> f64 { a + t * (b - a) }");
         self.writeln("pub fn __hypot_f64(x: f64, y: f64, z: f64) -> f64 { (x * x + y * y + z * z).sqrt() }");
+        // Hermite polynomial stub - returns 0.0 as placeholder
+        self.writeln("pub fn __hermite_u32(_n: u32, _x: f64) -> f64 { 0.0 }");
         self.writeln("");
 
         // Shared pointer support
@@ -7343,43 +7349,89 @@ impl AstCodeGen {
 
             // Add ctype virtual method stubs
             // Match both "ctype_base" and "std::ctype<...>" class names
-            if name.starts_with("ctype") || name.starts_with("std::ctype") {
-                self.writeln("");
-                self.writeln("/// Stub for do_is virtual method (single char)");
-                self.writeln("pub fn do_is(&self, _m: u32, _c: i32) -> bool { false }");
-                self.writeln("");
-                self.writeln("/// Stub for do_is virtual method (range)");
-                self.writeln("pub fn do_is_1(&self, _lo: *const i32, _hi: *const i32, _vec: *mut u32) -> *const i32 { _hi }");
-                self.writeln("");
-                self.writeln("/// Stub for do_scan_is virtual method");
-                self.writeln("pub fn do_scan_is(&self, _m: u32, _lo: *const i32, _hi: *const i32) -> *const i32 { _hi }");
-                self.writeln("");
-                self.writeln("/// Stub for do_scan_not virtual method");
-                self.writeln("pub fn do_scan_not(&self, _m: u32, _lo: *const i32, _hi: *const i32) -> *const i32 { _hi }");
-                self.writeln("");
-                self.writeln("/// Stub for do_toupper virtual method (single)");
-                self.writeln("pub fn do_toupper(&self, c: i32) -> i32 { c }");
-                self.writeln("");
-                self.writeln("/// Stub for do_toupper virtual method (range)");
-                self.writeln("pub fn do_toupper_1(&self, _lo: *mut i32, _hi: *const i32) -> *const i32 { _hi }");
-                self.writeln("");
-                self.writeln("/// Stub for do_tolower virtual method (single)");
-                self.writeln("pub fn do_tolower(&self, c: i32) -> i32 { c }");
-                self.writeln("");
-                self.writeln("/// Stub for do_tolower virtual method (range)");
-                self.writeln("pub fn do_tolower_1(&self, _lo: *mut i32, _hi: *const i32) -> *const i32 { _hi }");
-                self.writeln("");
-                self.writeln("/// Stub for do_widen virtual method (single)");
-                self.writeln("pub fn do_widen(&self, c: i8) -> i32 { c as i32 }");
-                self.writeln("");
-                self.writeln("/// Stub for do_widen virtual method (range)");
-                self.writeln("pub fn do_widen_1(&self, _lo: *const i8, _hi: *const i8, _dest: *mut i32) -> *const i8 { _hi }");
-                self.writeln("");
-                self.writeln("/// Stub for do_narrow virtual method (single)");
-                self.writeln("pub fn do_narrow(&self, c: i32, dfault: i8) -> i8 { if c >= 0 && c < 128 { c as i8 } else { dfault } }");
-                self.writeln("");
-                self.writeln("/// Stub for do_narrow virtual method (range)");
-                self.writeln("pub fn do_narrow_1(&self, _lo: *const i32, _hi: *const i32, _dfault: i8, _dest: *mut i8) -> *const i32 { _hi }");
+            // Distinguish between ctype<char> (i8) and ctype<wchar_t> (i32)
+            let is_ctype_char = rust_name.contains("ctype_char")
+                || rust_name.contains("ctype_byname_char")
+                || name.contains("ctype<char>");
+            let is_ctype = name.starts_with("ctype") || name.starts_with("std::ctype");
+            if is_ctype {
+                if is_ctype_char {
+                    // ctype<char> - uses i8 for char type
+                    self.writeln("");
+                    self.writeln("/// Stub for do_is virtual method (single char)");
+                    self.writeln("pub fn do_is(&self, _m: u16, _c: i8) -> bool { false }");
+                    self.writeln("");
+                    self.writeln("/// Stub for do_is virtual method (range)");
+                    self.writeln("pub fn do_is_1(&self, _lo: *const i8, _hi: *const i8, _vec: *mut u16) -> *const i8 { _hi }");
+                    self.writeln("");
+                    self.writeln("/// Stub for do_scan_is virtual method");
+                    self.writeln("pub fn do_scan_is(&self, _m: u16, _lo: *const i8, _hi: *const i8) -> *const i8 { _hi }");
+                    self.writeln("");
+                    self.writeln("/// Stub for do_scan_not virtual method");
+                    self.writeln("pub fn do_scan_not(&self, _m: u16, _lo: *const i8, _hi: *const i8) -> *const i8 { _hi }");
+                    self.writeln("");
+                    self.writeln("/// Stub for do_toupper virtual method (single)");
+                    self.writeln("pub fn do_toupper(&self, c: i8) -> i8 { c }");
+                    self.writeln("");
+                    self.writeln("/// Stub for do_toupper virtual method (range)");
+                    self.writeln("pub fn do_toupper_1(&self, _lo: *mut i8, _hi: *const i8) -> *const i8 { _hi }");
+                    self.writeln("");
+                    self.writeln("/// Stub for do_tolower virtual method (single)");
+                    self.writeln("pub fn do_tolower(&self, c: i8) -> i8 { c }");
+                    self.writeln("");
+                    self.writeln("/// Stub for do_tolower virtual method (range)");
+                    self.writeln("pub fn do_tolower_1(&self, _lo: *mut i8, _hi: *const i8) -> *const i8 { _hi }");
+                    self.writeln("");
+                    self.writeln("/// Stub for do_widen virtual method (single)");
+                    self.writeln("pub fn do_widen(&self, c: i8) -> i8 { c }");
+                    self.writeln("");
+                    self.writeln("/// Stub for do_widen virtual method (range)");
+                    self.writeln("pub fn do_widen_1(&self, _lo: *const i8, _hi: *const i8, _dest: *mut i8) -> *const i8 { _hi }");
+                    self.writeln("");
+                    self.writeln("/// Stub for do_narrow virtual method (single)");
+                    self.writeln("pub fn do_narrow(&self, c: i8, dfault: i8) -> i8 { c }");
+                    self.writeln("");
+                    self.writeln("/// Stub for do_narrow virtual method (range)");
+                    self.writeln("pub fn do_narrow_1(&self, _lo: *const i8, _hi: *const i8, _dfault: i8, _dest: *mut i8) -> *const i8 { _hi }");
+                } else {
+                    // ctype<wchar_t> - uses i32 for wchar_t type
+                    self.writeln("");
+                    self.writeln("/// Stub for do_is virtual method (single char)");
+                    self.writeln("pub fn do_is(&self, _m: u32, _c: i32) -> bool { false }");
+                    self.writeln("");
+                    self.writeln("/// Stub for do_is virtual method (range)");
+                    self.writeln("pub fn do_is_1(&self, _lo: *const i32, _hi: *const i32, _vec: *mut u32) -> *const i32 { _hi }");
+                    self.writeln("");
+                    self.writeln("/// Stub for do_scan_is virtual method");
+                    self.writeln("pub fn do_scan_is(&self, _m: u32, _lo: *const i32, _hi: *const i32) -> *const i32 { _hi }");
+                    self.writeln("");
+                    self.writeln("/// Stub for do_scan_not virtual method");
+                    self.writeln("pub fn do_scan_not(&self, _m: u32, _lo: *const i32, _hi: *const i32) -> *const i32 { _hi }");
+                    self.writeln("");
+                    self.writeln("/// Stub for do_toupper virtual method (single)");
+                    self.writeln("pub fn do_toupper(&self, c: i32) -> i32 { c }");
+                    self.writeln("");
+                    self.writeln("/// Stub for do_toupper virtual method (range)");
+                    self.writeln("pub fn do_toupper_1(&self, _lo: *mut i32, _hi: *const i32) -> *const i32 { _hi }");
+                    self.writeln("");
+                    self.writeln("/// Stub for do_tolower virtual method (single)");
+                    self.writeln("pub fn do_tolower(&self, c: i32) -> i32 { c }");
+                    self.writeln("");
+                    self.writeln("/// Stub for do_tolower virtual method (range)");
+                    self.writeln("pub fn do_tolower_1(&self, _lo: *mut i32, _hi: *const i32) -> *const i32 { _hi }");
+                    self.writeln("");
+                    self.writeln("/// Stub for do_widen virtual method (single)");
+                    self.writeln("pub fn do_widen(&self, c: i8) -> i32 { c as i32 }");
+                    self.writeln("");
+                    self.writeln("/// Stub for do_widen virtual method (range)");
+                    self.writeln("pub fn do_widen_1(&self, _lo: *const i8, _hi: *const i8, _dest: *mut i32) -> *const i8 { _hi }");
+                    self.writeln("");
+                    self.writeln("/// Stub for do_narrow virtual method (single)");
+                    self.writeln("pub fn do_narrow(&self, c: i32, dfault: i8) -> i8 { if c >= 0 && c < 128 { c as i8 } else { dfault } }");
+                    self.writeln("");
+                    self.writeln("/// Stub for do_narrow virtual method (range)");
+                    self.writeln("pub fn do_narrow_1(&self, _lo: *const i32, _hi: *const i32, _dfault: i8, _dest: *mut i8) -> *const i32 { _hi }");
+                }
             }
 
             // Add numpunct virtual method stubs
@@ -10764,7 +10816,20 @@ impl AstCodeGen {
 
                         // Handle int-to-bool conversion (C++ truthy semantics)
                         let ret_is_bool = ret_rust_type.as_ref().map_or(false, |t| t == "bool");
-                        let needs_int_to_bool = ret_is_bool && expr_is_int;
+
+                        // Don't add != 0 for expressions that already return bool
+                        // These are builtins that return int in C but we map to bool in Rust
+                        let already_returns_bool = expr.contains("__builtin_isfinite")
+                            || expr.contains("__builtin_isinf")
+                            || expr.contains("__builtin_isnan")
+                            || expr.contains("__builtin_isnormal")
+                            || expr.contains("__builtin_signbit")
+                            || expr.contains(".is_nan()")
+                            || expr.contains(".is_infinite()")
+                            || expr.contains(".is_finite()")
+                            || expr.contains(".is_normal()");
+
+                        let needs_int_to_bool = ret_is_bool && expr_is_int && !already_returns_bool;
 
                         if needs_int_to_bool {
                             // Convert integer to bool: non-zero = true
