@@ -841,7 +841,7 @@ Get `std::cout` working end-to-end.
     }
     ```
     - **Status**: Transpilation succeeds (128K chars → 23K LOC Rust)
-    - **Progress**: Compilation errors reduced: 65 → 1200 → 19 → 15 → 5 → 2581 (vendored) → 2256 → 2184 → 700 (libstdc++) ✅ 2026-01-25
+    - **Progress**: Compilation errors reduced: 65 → 1200 → 19 → 15 → 5 → 2581 (vendored) → 2256 → 2184 → 700 → 652 (libstdc++) ✅ 2026-01-25
     - Many fixes applied:
       - Skip variadic template instantiations (&&..., ...)
       - Skip decltype return types
@@ -860,9 +860,15 @@ Get `std::cout` working end-to-end.
       - Added template placeholder stubs (basic_string, iterator types) ✅ 2026-01-25
       - Added iostream base type stubs (std__Ios_Fmtflags, etc.) for libstdc++ ✅ 2026-01-25
       - Added char_traits module stub with basic functions ✅ 2026-01-25
-    - **Remaining errors**: ~700 (libstdc++) / ~2184 (vendored libc++)
-      - Main issue: Type mismatches (165), _unnamed values (26), operator issues (32)
-      - Missing exception type (15), _dependent_type new_N calls (31)
+      - Fixed function name deduplication to use sanitized names (operator→op_*) ✅ 2026-01-25
+      - Fixed duplicate _V2 module error (track both root and std:: paths) ✅ 2026-01-25
+      - Fixed duplicate vtable wrapper functions for overloaded methods ✅ 2026-01-25
+      - Added exception type and vtable stub ✅ 2026-01-25
+    - **Remaining errors**: ~652 (libstdc++) - mostly complex template issues:
+      - Type mismatches (165): u32/i32 mixing, array size as initializer
+      - _unnamed values (26): unresolved template placeholders
+      - Dereference errors (32): scalar types incorrectly dereferenced
+      - _dependent_type new_N calls (31): template-dependent constructors
       - VaList initialization (Rust nightly limitation)
     - Fixed: Cast precedence, literal operators, static member names, trait names
     - Fixed: Added vendored libc++ config files (__config_site, __assertion_handler) ✅ 2026-01-25
