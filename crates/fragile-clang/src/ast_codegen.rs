@@ -12763,6 +12763,18 @@ impl AstCodeGen {
                     };
                     let rust_type = ty.to_rust_type_str();
 
+                    // Handle casts to void specially - Rust doesn't support `X as ()`
+                    // C++ uses (void)expr to explicitly discard a result
+                    if matches!(ty, CppType::Void) {
+                        // Just evaluate the expression and discard it with a semicolon in a block
+                        // For simple literals like `0`, we can just skip the entire cast
+                        if inner == "0" || inner == "0i32" || inner == "()" {
+                            return "()".to_string();
+                        }
+                        // For other expressions, wrap in block to discard result: { expr; }
+                        return format!("{{ {}; }}", inner);
+                    }
+
                     // Handle casts to bool specially - Rust doesn't allow `X as bool`
                     if matches!(ty, CppType::Bool) {
                         // Convert to comparison: val != 0 for integers, !ptr.is_null() for pointers
