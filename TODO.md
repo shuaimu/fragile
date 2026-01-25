@@ -626,7 +626,7 @@ Get `std::vector<int>` working end-to-end.
     }
     ```
   - [ ] **23.8.2** Compile transpiled code with rustc + fragile-runtime - IN PROGRESS
-    - **Progress**: Errors reduced 2091 → 107 (94.9% reduction) ✅ 2026-01-24
+    - **Progress**: Errors reduced 2091 → 103 (95.1% reduction) ✅ 2026-01-24
     - Fixed: super:: path computation now accounts for flattened namespaces (std, __)
     - Fixed: Method overloading deduplication within struct impl blocks (23.8.3)
     - Fixed: Constructor overloading with same param count but different types
@@ -659,12 +659,18 @@ Get `std::vector<int>` working end-to-end.
     - Fixed: Base class TypeRef namespace prefix stripping (std::X → X) ✅ 2026-01-24
     - Fixed: find_fragile_runtime_path to check release builds ✅ 2026-01-24
     - Fixed: InitListExpr for scalar types (don't wrap single element in array brackets) ✅ 2026-01-24
-    - Remaining 107 errors:
-      - 23 mismatched types (integer literal type suffixes, e.g. 0i32 where usize expected)
+    - Fixed: Namespace mismatch in MemberExpr base class comparison ✅ 2026-01-24
+      - Strip namespace prefix from BOTH sides when comparing class names
+      - Prevents incorrect `self.__base.method()` for same-class member access
+    - Fixed: Add C++ conversion function support (operator bool → op_bool) ✅ 2026-01-24
+      - Handle CXCursor_ConversionFunction in parser (cursor kind 26)
+      - Transpile as regular CXXMethodDecl with sanitized name
+    - Remaining 103 errors:
+      - 24 mismatched types (integer literal type suffixes, e.g. 0i32 where usize expected)
       - Missing types (template instantiation types like __numeric_traits_floating_*)
       - Missing comparison methods on partial_ordering (op_eq, op_lt, op_le, op_gt, op_ge)
-      - Missing op_bool on _Bit_reference
-      - Incorrect __base field access on non-inheriting types (_Bit_reference, _Bit_iterator)
+      - Incorrect __base field access on _Bit_iterator (struct missing base class field)
+      - Missing types: std__Bit_iterator, _Sp___rep, _dependent_type
   - [ ] **23.8.3** Execute and verify exit code - BLOCKED on 23.8.2
   - [ ] **23.8.4** Add iteration test: `for (int x : v) { ... }` - BLOCKED
   - [ ] **23.8.5** Add resize/reserve/capacity tests - BLOCKED
