@@ -841,7 +841,7 @@ Get `std::cout` working end-to-end.
     }
     ```
     - **Status**: Transpilation succeeds (128K chars → 23K LOC Rust)
-    - **Progress**: Compilation errors reduced: 65 → 1200 → 19 → 15 → 5 → 2581 (vendored) → 2256 → 2184 → 700 → 651 → 642 → 554 → 536 → 502 (libstdc++) ✅ 2026-01-25
+    - **Progress**: Compilation errors reduced: 65 → 1200 → 19 → 15 → 5 → 2581 (vendored) → 2256 → 2184 → 700 → 651 → 642 → 554 → 536 → 502 → 499 (libstdc++) ✅ 2026-01-25
     - Many fixes applied:
       - Skip variadic template instantiations (&&..., ...)
       - Skip decltype return types
@@ -869,15 +869,16 @@ Get `std::cout` working end-to-end.
       - Fixed template specialization member access comparison ✅ 2026-01-25
         - Strip template arguments when comparing class names (e.g., ctype<char> → ctype)
         - Fixes incorrect self.__base._M_widen_ok → self._M_widen_ok for direct members
-    - **Remaining errors**: ~502 (libstdc++) - mostly complex template issues:
-      - Type mismatches (120): u32/i32/usize mixing in binary operations
-      - Reference cast errors (22): &i8 cast directly to i32 without dereference
+    - **Remaining errors**: ~499 (libstdc++) - mostly complex template issues:
+      - Type mismatches (133): u32/i32/usize mixing in binary operations
+      - Reference cast errors (10): &i8 cast directly to i32 without dereference
       - Missing functions (9): cascade from skipping broken functions
       - VaList initialization (Rust nightly limitation)
       - Fixed: Skip template instantiation functions with _dependent_type::new_* calls ✅ 2026-01-25
       - Fixed: Skip functions with bare c_void return type or parameter ✅ 2026-01-25
       - Fixed: Builtin memory functions (memcpy, memmove, memset, memcmp) size parameter cast to usize ✅ 2026-01-25
       - Fixed: Dereference precedence for member access (*x.y → (*x).y) ✅ 2026-01-25
+      - Fixed: Return 0 for pointer types -> std::ptr::null() ✅ 2026-01-25
     - Fixed: Cast precedence, literal operators, static member names, trait names
     - Fixed: Added vendored libc++ config files (__config_site, __assertion_handler) ✅ 2026-01-25
     - Fixed: CLI --use-vendored-libcxx now works correctly ✅ 2026-01-25
