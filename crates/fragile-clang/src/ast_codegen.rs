@@ -4550,14 +4550,20 @@ impl AstCodeGen {
                         initialized_vbase.insert(field);
                         initialized_vbase.insert(storage);
                     }
+                    // Get field info for type-aware initialization
+                    let all_fields_vbase = self.class_fields.get(struct_name).cloned().unwrap_or_default();
                     for (field, value) in &initializers {
                         let sanitized = sanitize_identifier(field);
-                        self.writeln(&format!("{}: {},", sanitized, value));
+                        // Correct initializer value based on field type (e.g., 0 -> null_mut() for pointers)
+                        let corrected = all_fields_vbase.iter()
+                            .find(|(name, _)| name == &sanitized)
+                            .map(|(_, ty)| correct_initializer_for_type(value, ty))
+                            .unwrap_or_else(|| value.clone());
+                        self.writeln(&format!("{}: {},", sanitized, corrected));
                         initialized_vbase.insert(sanitized);
                     }
 
                     // Generate default values for uninitialized fields
-                    let all_fields_vbase = self.class_fields.get(struct_name).cloned().unwrap_or_default();
                     for (field_name, field_type) in &all_fields_vbase {
                         if !initialized_vbase.contains(field_name) {
                             let default_val = default_value_for_type(field_type);
@@ -4637,16 +4643,22 @@ impl AstCodeGen {
                         self.writeln(&format!("{}: {},", field_name, base_call));
                         initialized.insert(field_name.clone());
                     }
+                    // Get field info for type-aware initialization
+                    let all_fields = self.class_fields.get(struct_name).cloned().unwrap_or_default();
                     // Generate field initializers
                     for (field, value) in &initializers {
                         let sanitized = sanitize_identifier(field);
-                        self.writeln(&format!("{}: {},", sanitized, value));
+                        // Correct initializer value based on field type (e.g., 0 -> null_mut() for pointers)
+                        let corrected = all_fields.iter()
+                            .find(|(name, _)| name == &sanitized)
+                            .map(|(_, ty)| correct_initializer_for_type(value, ty))
+                            .unwrap_or_else(|| value.clone());
+                        self.writeln(&format!("{}: {},", sanitized, corrected));
                         initialized.insert(sanitized);
                     }
 
                     // Generate default values for uninitialized fields
                     // This avoids using ..Default::default() which can cause issues with Drop
-                    let all_fields = self.class_fields.get(struct_name).cloned().unwrap_or_default();
                     for (field_name, field_type) in &all_fields {
                         if !initialized.contains(field_name) {
                             let default_val = default_value_for_type(field_type);
@@ -7159,6 +7171,17 @@ fn default_value_for_type(ty: &CppType) -> String {
             }
         }
         _ => "Default::default()".to_string(),
+    }
+}
+
+/// Correct a field initializer value based on the field's type.
+/// Converts literal `0` to `std::ptr::null_mut()` for pointer fields.
+fn correct_initializer_for_type(value: &str, ty: &CppType) -> String {
+    // If value is `0` and the type is a pointer, use null_mut()
+    if matches!(ty, CppType::Pointer { .. }) && value == "0" {
+        "std::ptr::null_mut()".to_string()
+    } else {
+        value.to_string()
     }
 }
 
