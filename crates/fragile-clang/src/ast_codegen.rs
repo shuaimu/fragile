@@ -4900,6 +4900,10 @@ impl AstCodeGen {
             }
         }
 
+        // Collect parameters that are assigned to within the function body
+        // C++ allows modifying by-value params, but Rust requires `mut`
+        let assigned_params = Self::collect_assigned_params_from_children(children, params);
+
         // Function signature - convert polymorphic pointers to trait objects
         // Deduplicate parameter names (C++ allows unnamed params, Rust doesn't)
         let mut param_name_counts: HashMap<String, usize> = HashMap::new();
@@ -4914,7 +4918,9 @@ impl AstCodeGen {
                     param_name = format!("{}_{}", param_name, *count);
                 }
                 *param_name_counts.get_mut(&sanitize_identifier(n)).unwrap() += 1;
-                format!("{}: {}", param_name, type_str)
+                // Add `mut` if this parameter is assigned to in the body
+                let mut_prefix = if assigned_params.contains(n) { "mut " } else { "" };
+                format!("{}{}: {}", mut_prefix, param_name, type_str)
             })
             .collect::<Vec<_>>()
             .join(", ");
@@ -6248,6 +6254,19 @@ impl AstCodeGen {
         let param_names: HashSet<String> = params.iter().map(|(n, _)| n.clone()).collect();
         let mut assigned = HashSet::new();
         Self::find_param_assignments(node, &param_names, &mut assigned);
+        assigned
+    }
+
+    /// Like collect_assigned_params but works on a slice of children nodes (for top-level functions).
+    fn collect_assigned_params_from_children(
+        children: &[ClangNode],
+        params: &[(String, CppType)],
+    ) -> HashSet<String> {
+        let param_names: HashSet<String> = params.iter().map(|(n, _)| n.clone()).collect();
+        let mut assigned = HashSet::new();
+        for child in children {
+            Self::find_param_assignments(child, &param_names, &mut assigned);
+        }
         assigned
     }
 
