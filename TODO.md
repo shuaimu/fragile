@@ -930,7 +930,15 @@ Test against actual open-source C++ projects.
         - Skip function templates with T[N] array parameters
         - Parenthesize casts before shift operators (`(1 as u64) << X`)
       - Remaining issues: cast-method call precedence, deep template instantiation
-    - fmt (format library, mostly header-only) - TODO
+    - [x] fmt (format library, mostly header-only) - INVESTIGATED ✅ [26:01:25]
+      - Transpilation: ✅ Succeeds (270KB headers → 13K LOC Rust)
+      - Compilation: ❌ Blocked by cast precedence issues (~724 errors)
+      - Similar issues to nlohmann/json:
+        - Cast followed by shift: `X as T << Y` needs `(X as T) << Y`
+        - Cast followed by indexing: `X as T[idx]` needs `(X as T)[idx]`
+        - Cast followed by method: `X as T.method()` needs `(X as T).method()`
+        - Unsafe blocks need parentheses before comparison operators
+      - Root cause: Rust's `as` cast has lower precedence than expected
   - [x] **23.11.2** Small projects (1K-5K LOC) - Partial ✅ [26:01:25]
     - [x] Binary Search Tree: recursive insert/search/traversal, tree structure
     - [x] Vec2 class: operator overloading (+, -, *, ==, !=, +=), static factory methods
