@@ -1675,8 +1675,11 @@ impl AstCodeGen {
                     self.generate_function_stub(name, mangled_name, return_type, params, *is_variadic);
                 }
             }
-            ClangNodeKind::RecordDecl { name, is_class, .. } => {
-                self.generate_struct_stub(name, *is_class, &node.children);
+            ClangNodeKind::RecordDecl { name, is_class, is_definition, .. } => {
+                // Only generate struct stub for definitions
+                if *is_definition {
+                    self.generate_struct_stub(name, *is_class, &node.children);
+                }
             }
             ClangNodeKind::EnumDecl { name, is_scoped, underlying_type } => {
                 self.generate_enum_stub(name, *is_scoped, underlying_type, &node.children);
@@ -1935,8 +1938,11 @@ impl AstCodeGen {
                     self.generate_function(name, mangled_name, return_type, params, *is_variadic, *is_coroutine, coroutine_info, &node.children);
                 }
             }
-            ClangNodeKind::RecordDecl { name, is_class, .. } => {
-                self.generate_struct(name, *is_class, &node.children);
+            ClangNodeKind::RecordDecl { name, is_class, is_definition, .. } => {
+                // Only generate struct for definitions, not forward declarations
+                if *is_definition {
+                    self.generate_struct(name, *is_class, &node.children);
+                }
             }
             ClangNodeKind::EnumDecl { name, is_scoped, underlying_type } => {
                 self.generate_enum(name, *is_scoped, underlying_type, &node.children);
@@ -2074,9 +2080,9 @@ impl AstCodeGen {
                     match &child.kind {
                         // Template instantiations appear as RecordDecl children with
                         // type names containing template arguments (e.g., "MyVec<int>")
-                        ClangNodeKind::RecordDecl { name: child_name, is_class, .. } => {
-                            // Only process instantiations (names with <...>)
-                            if child_name.contains('<') && child_name.contains('>') {
+                        ClangNodeKind::RecordDecl { name: child_name, is_class, is_definition, .. } => {
+                            // Only process instantiations (names with <...>) that are definitions
+                            if *is_definition && child_name.contains('<') && child_name.contains('>') {
                                 self.generate_struct(child_name, *is_class, &child.children);
                             }
                         }
@@ -2092,8 +2098,9 @@ impl AstCodeGen {
                 // The name will include the specialization pattern (e.g., "Pair<T, T>")
                 // For now, process children to find any instantiations
                 for child in &node.children {
-                    if let ClangNodeKind::RecordDecl { name: child_name, is_class, .. } = &child.kind {
-                        if child_name.contains('<') && child_name.contains('>') {
+                    if let ClangNodeKind::RecordDecl { name: child_name, is_class, is_definition, .. } = &child.kind {
+                        // Only generate for definitions
+                        if *is_definition && child_name.contains('<') && child_name.contains('>') {
                             self.generate_struct(child_name, *is_class, &child.children);
                         }
                     }
@@ -2511,6 +2518,7 @@ impl AstCodeGen {
         if self.generated_structs.contains(&rust_name) {
             return;
         }
+
         self.generated_structs.insert(rust_name.clone());
 
         // Check if there's an explicit copy constructor - if so, we'll generate Clone impl later
@@ -7525,6 +7533,7 @@ mod tests {
                 ClangNodeKind::RecordDecl {
                     name: "Flags".to_string(),
                     is_class: false,
+                    is_definition: true,
                     fields: vec![],
                 },
                 vec![
@@ -7590,6 +7599,7 @@ mod tests {
                 ClangNodeKind::RecordDecl {
                     name: "Mixed".to_string(),
                     is_class: false,
+                    is_definition: true,
                     fields: vec![],
                 },
                 vec![
@@ -7658,6 +7668,7 @@ mod tests {
                 ClangNodeKind::RecordDecl {
                     name: "MultiGroup".to_string(),
                     is_class: false,
+                    is_definition: true,
                     fields: vec![],
                 },
                 vec![

@@ -184,6 +184,7 @@ pub enum ClangNodeKind {
     RecordDecl {
         name: String,
         is_class: bool,
+        is_definition: bool,
         fields: Vec<(String, CppType)>,
     },
     /// Union declaration

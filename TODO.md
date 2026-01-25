@@ -667,11 +667,13 @@ Get `std::vector<int>` working end-to-end.
       - Transpile as regular CXXMethodDecl with sanitized name
     - Fixed: Skip literal type suffixes in constructor/static initializers ✅ 2026-01-24
       - Rust infers type from context, prevents 0i32/0u8/etc. mismatches
-    - Remaining 101 errors:
-      - 22 mismatched types (iterator/reference type mismatches, return type issues)
+    - Fixed: Skip forward declarations in struct generation ✅ 2026-01-24
+      - Added `is_definition` field to RecordDecl to distinguish forward decls from definitions
+      - Only generate structs for actual definitions, not forward declarations
+      - Fixes _Bit_iterator and other iterators now generating with proper `__base` field
+    - Remaining 108 errors (up from 101 due to more code now being generated):
+      - 32 mismatched types (iterator/reference type mismatches, return type issues)
       - Missing comparison methods on partial_ordering (op_eq, op_lt, op_le, op_gt, op_ge)
-      - Incorrect __base field access on _Bit_iterator (struct missing base class field)
-        - Issue: _Bit_iterator generated from forward reference, then full definition skipped
       - Missing types: std__Bit_iterator, _Sp___rep, _dependent_type
   - [ ] **23.8.3** Execute and verify exit code - BLOCKED on 23.8.2
   - [ ] **23.8.4** Add iteration test: `for (int x : v) { ... }` - BLOCKED

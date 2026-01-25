@@ -912,6 +912,7 @@ impl ClangParser {
                 clang_sys::CXCursor_StructDecl | clang_sys::CXCursor_ClassDecl => {
                     let spelling = cursor_spelling(cursor);
                     let is_class = kind == clang_sys::CXCursor_ClassDecl;
+                    let is_definition = clang_sys::clang_isCursorDefinition(cursor) != 0;
 
                     // For template specializations, the cursor spelling is just "MyPair"
                     // but the type spelling gives us "MyPair<int>" which is what we need
@@ -950,6 +951,7 @@ impl ClangParser {
                     ClangNodeKind::RecordDecl {
                         name: final_name,
                         is_class,
+                        is_definition,
                         fields: Vec::new(),
                     }
                 }

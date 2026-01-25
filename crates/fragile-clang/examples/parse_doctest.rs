@@ -19,9 +19,10 @@ fn count_nodes(node: &ClangNode, depth: usize, max_depth: usize) {
         ClangNodeKind::FunctionTemplateDecl { name, template_params, .. } => {
             println!("{indent}FunctionTemplateDecl: {}<{}>", name, template_params.join(", "));
         }
-        ClangNodeKind::RecordDecl { name, is_class, fields } => {
+        ClangNodeKind::RecordDecl { name, is_class, is_definition, fields } => {
             let kind = if *is_class { "class" } else { "struct" };
-            println!("{indent}RecordDecl ({kind}): {name}");
+            let def_marker = if *is_definition { " (definition)" } else { " (forward decl)" };
+            println!("{indent}RecordDecl ({kind}): {name}{def_marker}");
             println!("{indent}  fields: {}", fields.len());
         }
         ClangNodeKind::ClassTemplateDecl { name, template_params, .. } => {
