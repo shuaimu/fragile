@@ -717,11 +717,27 @@ Get `std::vector<int>` working end-to-end.
       - Added get_original_expr_type() to look through ImplicitCastExpr wrappers
       - Fixed get_base_access_for_class() to use unqualified names for lookup
       - Fixes `__first._M_offset` → `__first.__base._M_offset` for inherited fields
-    - **Progress**: Errors reduced from 2091 to 43 (97.9% reduction) ✅ 2026-01-24
-    - Remaining 43 errors:
-      - Type mismatches (25) - mostly u32+isize arithmetic
-      - Missing modules (3) - numeric_limits, fragile_runtime
-      - Other (15) - assorted issues (op_add, subtract pointers, etc.)
+    - Fixed: Hash function stubs (_Hash_bytes, _Fnv_hash_bytes) ✅ 2026-01-24
+      - Added FNV-1a hash implementation for libstdc++ hash support
+    - Fixed: Manual Clone impl for unions with c_void fields ✅ 2026-01-24
+      - Unions with ManuallyDrop<c_void> can't derive Copy/Clone
+    - Fixed: Implicit casts from integral types to size types (ptrdiff_t, size_t) ✅ 2026-01-24
+      - Parser now recognizes Named types that are typedefs to primitives
+    - Fixed: Pointer add parentheses for complex expressions ✅ 2026-01-24
+      - `ptr.add(__n / 64i32 as usize)` → `ptr.add((__n / 64) as usize)`
+    - Fixed: Strip literal suffixes in arithmetic/bitwise operators ✅ 2026-01-24
+      - `isize / 64i32` → `isize / 64` (type inference)
+    - Fixed: Pass primitive typedef types by value ✅ 2026-01-24
+      - ptrdiff_t, size_t, etc. were incorrectly passed by reference
+    - Fixed: Wrap pointer add/sub compound assignment in unsafe ✅ 2026-01-24
+      - `ptr += n` uses `.add()` which requires unsafe block
+    - Added: numeric_limits and fragile_runtime stub modules ✅ 2026-01-24
+    - **Progress**: Errors reduced from 2091 to 31 (98.5% reduction) ✅ 2026-01-24
+    - Remaining 31 errors:
+      - Iterator type mismatches (20) - return `Self` vs placeholder `*mut c_void`
+      - Method resolution (3) - op_add, is_equal on placeholder types
+      - Module resolution (3) - numeric_limits namespace path
+      - Other (5) - assorted issues
   - [ ] **23.8.3** Execute and verify exit code - BLOCKED on 23.8.2
   - [ ] **23.8.4** Add iteration test: `for (int x : v) { ... }` - BLOCKED
   - [ ] **23.8.5** Add resize/reserve/capacity tests - BLOCKED
