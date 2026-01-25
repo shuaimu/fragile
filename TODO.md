@@ -710,12 +710,18 @@ Get `std::vector<int>` working end-to-end.
     - Fixed: CXXConstructExpr initialization for template types ✅ 2026-01-24
       - Use `unsafe { std::mem::zeroed() }` for default constructors on template types
       - Replaces "0" placeholder that occurred when CXXConstructExpr wasn't parsed
-    - **Progress**: Errors reduced from 2091 to 57 (97.3% reduction) ✅ 2026-01-24
-    - Remaining 57 errors:
+    - Fixed: Member function call syntax for method references ✅ 2026-01-24
+      - MemberExpr with bound member function type now recognized as function reference
+      - Fixes `v.size` being generated instead of `v.size()`
+    - Fixed: Base class field access with implicit DerivedToBase casts ✅ 2026-01-24
+      - Added get_original_expr_type() to look through ImplicitCastExpr wrappers
+      - Fixed get_base_access_for_class() to use unqualified names for lookup
+      - Fixes `__first._M_offset` → `__first.__base._M_offset` for inherited fields
+    - **Progress**: Errors reduced from 2091 to 43 (97.9% reduction) ✅ 2026-01-24
+    - Remaining 43 errors:
       - Type mismatches (25) - mostly u32+isize arithmetic
-      - Field access errors on _Bit_iterator (14) - base class field access issues
       - Missing modules (3) - numeric_limits, fragile_runtime
-      - Other (15) - assorted issues
+      - Other (15) - assorted issues (op_add, subtract pointers, etc.)
   - [ ] **23.8.3** Execute and verify exit code - BLOCKED on 23.8.2
   - [ ] **23.8.4** Add iteration test: `for (int x : v) { ... }` - BLOCKED
   - [ ] **23.8.5** Add resize/reserve/capacity tests - BLOCKED

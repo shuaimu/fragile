@@ -1,0 +1,516 @@
+error[E0204]: the trait `Copy` cannot be implemented for this type
+    --> /tmp/test_vector.rs:2737:10
+     |
+2737 | #[derive(Copy, Clone)]
+     |          ^^^^
+2738 | pub union _anonymousunionat____lib_gcc_x86_64_linux_gnu_14_____________include_c___14_bits_stl_iterator_h_2254_5_ {
+2739 |     pub _M_it: std::mem::ManuallyDrop<std::ffi::c_void>,
+     |     --------------------------------------------------- this field does not implement `Copy`
+     |
+note: the `Copy` impl for `ManuallyDrop<c_void>` requires that `c_void: Copy`
+    --> /tmp/test_vector.rs:2739:16
+     |
+2739 |     pub _M_it: std::mem::ManuallyDrop<std::ffi::c_void>,
+     |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0308]: mismatched types
+    --> /tmp/test_vector.rs:3119:16
+     |
+3118 |     pub fn select_on_container_copy_construction(__rhs: &std::ffi::c_void) -> std::ffi::c_void {
+     |                                                                               ---------------- expected `c_void` because of return type
+3119 |         return __rhs.clone();
+     |                ^^^^^^^^^^^^^ expected `c_void`, found `&c_void`
+     |
+note: `c_void` does not implement `Clone`, so `&c_void` was cloned instead
+    --> /tmp/test_vector.rs:3119:16
+     |
+3119 |         return __rhs.clone();
+     |                ^^^^^
+
+error[E0425]: cannot find function `_Hash_bytes` in this scope
+    --> /tmp/test_vector.rs:3534:16
+     |
+3534 |         return _Hash_bytes(__ptr, __clength, __seed);
+     |                ^^^^^^^^^^^ not found in this scope
+
+error[E0425]: cannot find function `_Fnv_hash_bytes` in this scope
+    --> /tmp/test_vector.rs:3551:16
+     |
+3551 |         return _Fnv_hash_bytes(__ptr, __clength, __seed);
+     |                ^^^^^^^^^^^^^^^ not found in this scope
+
+error[E0061]: this function takes 3 arguments but 1 argument was supplied
+    --> /tmp/test_vector.rs:3570:34
+     |
+3570 |         return if __val != 0.0 { _Hash_impl::hash(__val) } else { 0 };
+     |                                  ^^^^^^^^^^^^^^^^------- two arguments of type `usize` and `usize` are missing
+     |
+note: expected `*const ()`, found `f32`
+    --> /tmp/test_vector.rs:3570:51
+     |
+3570 |         return if __val != 0.0 { _Hash_impl::hash(__val) } else { 0 };
+     |                                                   ^^^^^
+     = note: expected raw pointer `*const ()`
+                       found type `f32`
+note: associated function defined here
+    --> /tmp/test_vector.rs:3533:12
+     |
+3533 |     pub fn hash(__ptr: *const (), __clength: usize, __seed: usize) -> usize {
+     |            ^^^^ ----------------  ----------------  -------------
+help: provide the arguments
+     |
+3570 -         return if __val != 0.0 { _Hash_impl::hash(__val) } else { 0 };
+3570 +         return if __val != 0.0 { _Hash_impl::hash(/* *const () */, /* usize */, /* usize */) } else { 0 };
+     |
+
+error[E0061]: this function takes 3 arguments but 1 argument was supplied
+    --> /tmp/test_vector.rs:3589:34
+     |
+3589 |         return if __val != 0.0 { _Hash_impl::hash(__val) } else { 0 };
+     |                                  ^^^^^^^^^^^^^^^^------- two arguments of type `usize` and `usize` are missing
+     |
+note: expected `*const ()`, found `f64`
+    --> /tmp/test_vector.rs:3589:51
+     |
+3589 |         return if __val != 0.0 { _Hash_impl::hash(__val) } else { 0 };
+     |                                                   ^^^^^
+     = note: expected raw pointer `*const ()`
+                       found type `f64`
+note: associated function defined here
+    --> /tmp/test_vector.rs:3533:12
+     |
+3533 |     pub fn hash(__ptr: *const (), __clength: usize, __seed: usize) -> usize {
+     |            ^^^^ ----------------  ----------------  -------------
+help: provide the arguments
+     |
+3589 -         return if __val != 0.0 { _Hash_impl::hash(__val) } else { 0 };
+3589 +         return if __val != 0.0 { _Hash_impl::hash(/* *const () */, /* usize */, /* usize */) } else { 0 };
+     |
+
+error[E0308]: mismatched types
+    --> /tmp/test_vector.rs:3747:36
+     |
+3747 |         let mut __n: isize = __i + self._M_offset;
+     |                                    ^^^^^^^^^^^^^^ expected `isize`, found `u32`
+
+error[E0277]: cannot add `u32` to `isize`
+    --> /tmp/test_vector.rs:3747:34
+     |
+3747 |         let mut __n: isize = __i + self._M_offset;
+     |                                  ^ no implementation for `isize + u32`
+     |
+     = help: the trait `Add<u32>` is not implemented for `isize`
+help: the following other types implement trait `Add<Rhs>`
+    --> /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/core/src/ops/arith.rs:114:1
+     |
+     = note: `&isize` implements `Add<isize>`
+     |
+     = note: `&isize` implements `Add`
+     |
+     = note: `isize` implements `Add<&isize>`
+     |
+     = note: `isize` implements `Add`
+     = note: this error originates in the macro `forward_ref_binop` which comes from the expansion of the macro `add_impl` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0308]: mismatched types
+    --> /tmp/test_vector.rs:3748:41
+     |
+3748 |         self._M_p = self._M_p.add(__n / 64i32 as usize);
+     |                                         ^^^^^^^^^^^^^^ expected `isize`, found `usize`
+
+error[E0277]: cannot divide `isize` by `usize`
+    --> /tmp/test_vector.rs:3748:39
+     |
+3748 |         self._M_p = self._M_p.add(__n / 64i32 as usize);
+     |                                       ^ no implementation for `isize / usize`
+     |
+     = help: the trait `Div<usize>` is not implemented for `isize`
+help: the following other types implement trait `Div<Rhs>`
+    --> /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/core/src/ops/arith.rs:504:1
+    ::: /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/core/src/ops/arith.rs:507:1
+     |
+     = note: `&isize` implements `Div<isize>`
+     |
+     = note: `&isize` implements `Div`
+     |
+     = note: `isize` implements `Div<&isize>`
+     |
+     = note: `isize` implements `Div`
+     = note: this error originates in the macro `forward_ref_binop` which comes from the expansion of the macro `div_impl_integer` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0308]: mismatched types
+    --> /tmp/test_vector.rs:3748:35
+     |
+3748 |         self._M_p = self._M_p.add(__n / 64i32 as usize);
+     |                               --- ^^^^^^^^^^^^^^^^^^^^ expected `usize`, found `isize`
+     |                               |
+     |                               arguments to this method are incorrect
+     |
+note: method defined here
+    --> /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library/core/src/ptr/mut_ptr.rs:927:25
+help: you can convert an `isize` to a `usize` and panic if the converted value doesn't fit
+     |
+3748 |         self._M_p = self._M_p.add((__n / 64i32 as usize).try_into().unwrap());
+     |                                   +                    +++++++++++++++++++++
+
+error[E0308]: mismatched types
+    --> /tmp/test_vector.rs:3783:16
+     |
+3782 |     pub fn _M_const_cast(&self, ) -> *mut std::ffi::c_void {
+     |                                      --------------------- expected `*mut c_void` because of return type
+3783 |         return self;
+     |                ^^^^ types differ in mutability
+     |
+     = note: expected raw pointer `*mut c_void`
+                  found reference `&_Bit_iterator`
+
+error[E0308]: mismatched types
+    --> /tmp/test_vector.rs:3788:16
+     |
+3786 |     pub fn op_inc(&mut self, ) -> &mut *mut std::ffi::c_void {
+     |                                   -------------------------- expected `&mut *mut c_void` because of return type
+3787 |         self.__base._M_bump_up();
+3788 |         return self;
+     |                ^^^^ expected `&mut *mut c_void`, found `&mut _Bit_iterator`
+     |
+     = note: expected mutable reference `&mut *mut c_void`
+                found mutable reference `&mut _Bit_iterator`
+
+error[E0308]: mismatched types
+    --> /tmp/test_vector.rs:3792:48
+     |
+3792 |         let mut __tmp: *mut std::ffi::c_void = self;
+     |                        ---------------------   ^^^^ types differ in mutability
+     |                        |
+     |                        expected due to this
+     |
+     = note: expected raw pointer `*mut c_void`
+                  found reference `&_Bit_iterator`
+
+error[E0308]: mismatched types
+    --> /tmp/test_vector.rs:3799:16
+     |
+3797 |     pub fn op_dec(&mut self, ) -> &mut *mut std::ffi::c_void {
+     |                                   -------------------------- expected `&mut *mut c_void` because of return type
+3798 |         self.__base._M_bump_down();
+3799 |         return self;
+     |                ^^^^ expected `&mut *mut c_void`, found `&mut _Bit_iterator`
+     |
+     = note: expected mutable reference `&mut *mut c_void`
+                found mutable reference `&mut _Bit_iterator`
+
+error[E0308]: mismatched types
+    --> /tmp/test_vector.rs:3803:48
+     |
+3803 |         let mut __tmp: *mut std::ffi::c_void = self;
+     |                        ---------------------   ^^^^ types differ in mutability
+     |                        |
+     |                        expected due to this
+     |
+     = note: expected raw pointer `*mut c_void`
+                  found reference `&_Bit_iterator`
+
+error[E0308]: mismatched types
+    --> /tmp/test_vector.rs:3810:16
+     |
+3808 |     pub fn op_add_assign(&mut self, __i: isize) -> &mut *mut std::ffi::c_void {
+     |                                                    -------------------------- expected `&mut *mut c_void` because of return type
+3809 |         self.__base._M_incr(__i);
+3810 |         return self;
+     |                ^^^^ expected `&mut *mut c_void`, found `&mut _Bit_iterator`
+     |
+     = note: expected mutable reference `&mut *mut c_void`
+                found mutable reference `&mut _Bit_iterator`
+
+error[E0308]: mismatched types
+    --> /tmp/test_vector.rs:3814:28
+     |
+3814 |         self.op_add_assign(&-__i);
+     |              ------------- ^^^^^ expected `isize`, found `&isize`
+     |              |
+     |              arguments to this method are incorrect
+     |
+note: method defined here
+    --> /tmp/test_vector.rs:3808:12
+     |
+3808 |     pub fn op_add_assign(&mut self, __i: isize) -> &mut *mut std::ffi::c_void {
+     |            ^^^^^^^^^^^^^            ----------
+help: consider removing the borrow
+     |
+3814 -         self.op_add_assign(&-__i);
+3814 +         self.op_add_assign(-__i);
+     |
+
+error[E0308]: mismatched types
+    --> /tmp/test_vector.rs:3815:16
+     |
+3813 |     pub fn op_sub_assign(&mut self, __i: isize) -> &mut *mut std::ffi::c_void {
+     |                                                    -------------------------- expected `&mut *mut c_void` because of return type
+3814 |         self.op_add_assign(&-__i);
+3815 |         return self;
+     |                ^^^^ expected `&mut *mut c_void`, found `&mut _Bit_iterator`
+     |
+     = note: expected mutable reference `&mut *mut c_void`
+                found mutable reference `&mut _Bit_iterator`
+
+error[E0599]: no method named `op_add` found for reference `&_Bit_iterator` in the current scope
+    --> /tmp/test_vector.rs:3819:23
+     |
+3819 |         return *(self.op_add(&__i)).op_deref();
+     |                       ^^^^^^ method not found in `&_Bit_iterator`
+
+error[E0308]: mismatched types
+    --> /tmp/test_vector.rs:3857:16
+     |
+3855 |     pub fn op_inc(&mut self, ) -> &mut *mut std::ffi::c_void {
+     |                                   -------------------------- expected `&mut *mut c_void` because of return type
+3856 |         self.__base._M_bump_up();
+3857 |         return self;
+     |                ^^^^ expected `&mut *mut c_void`, found `&mut _Bit_const_iterator`
+     |
+     = note: expected mutable reference `&mut *mut c_void`
+                found mutable reference `&mut _Bit_const_iterator`
+
+error[E0308]: mismatched types
+    --> /tmp/test_vector.rs:3861:48
+     |
+3861 |         let mut __tmp: *mut std::ffi::c_void = self;
+     |                        ---------------------   ^^^^ types differ in mutability
+     |                        |
+     |                        expected due to this
+     |
+     = note: expected raw pointer `*mut c_void`
+                  found reference `&_Bit_const_iterator`
+
+error[E0308]: mismatched types
+    --> /tmp/test_vector.rs:3868:16
+     |
+3866 |     pub fn op_dec(&mut self, ) -> &mut *mut std::ffi::c_void {
+     |                                   -------------------------- expected `&mut *mut c_void` because of return type
+3867 |         self.__base._M_bump_down();
+3868 |         return self;
+     |                ^^^^ expected `&mut *mut c_void`, found `&mut _Bit_const_iterator`
+     |
+     = note: expected mutable reference `&mut *mut c_void`
+                found mutable reference `&mut _Bit_const_iterator`
+
+error[E0308]: mismatched types
+    --> /tmp/test_vector.rs:3872:48
+     |
+3872 |         let mut __tmp: *mut std::ffi::c_void = self;
+     |                        ---------------------   ^^^^ types differ in mutability
+     |                        |
+     |                        expected due to this
+     |
+     = note: expected raw pointer `*mut c_void`
+                  found reference `&_Bit_const_iterator`
+
+error[E0308]: mismatched types
+    --> /tmp/test_vector.rs:3879:16
+     |
+3877 |     pub fn op_add_assign(&mut self, __i: isize) -> &mut *mut std::ffi::c_void {
+     |                                                    -------------------------- expected `&mut *mut c_void` because of return type
+3878 |         self.__base._M_incr(__i);
+3879 |         return self;
+     |                ^^^^ expected `&mut *mut c_void`, found `&mut _Bit_const_iterator`
+     |
+     = note: expected mutable reference `&mut *mut c_void`
+                found mutable reference `&mut _Bit_const_iterator`
+
+error[E0308]: mismatched types
+    --> /tmp/test_vector.rs:3883:28
+     |
+3883 |         self.op_add_assign(&-__i);
+     |              ------------- ^^^^^ expected `isize`, found `&isize`
+     |              |
+     |              arguments to this method are incorrect
+     |
+note: method defined here
+    --> /tmp/test_vector.rs:3877:12
+     |
+3877 |     pub fn op_add_assign(&mut self, __i: isize) -> &mut *mut std::ffi::c_void {
+     |            ^^^^^^^^^^^^^            ----------
+help: consider removing the borrow
+     |
+3883 -         self.op_add_assign(&-__i);
+3883 +         self.op_add_assign(-__i);
+     |
+
+error[E0308]: mismatched types
+    --> /tmp/test_vector.rs:3884:16
+     |
+3882 |     pub fn op_sub_assign(&mut self, __i: isize) -> &mut *mut std::ffi::c_void {
+     |                                                    -------------------------- expected `&mut *mut c_void` because of return type
+3883 |         self.op_add_assign(&-__i);
+3884 |         return self;
+     |                ^^^^ expected `&mut *mut c_void`, found `&mut _Bit_const_iterator`
+     |
+     = note: expected mutable reference `&mut *mut c_void`
+                found mutable reference `&mut _Bit_const_iterator`
+
+error[E0599]: no method named `op_add` found for reference `&_Bit_const_iterator` in the current scope
+    --> /tmp/test_vector.rs:3888:23
+     |
+3888 |         return *(self.op_add(&__i)).op_deref();
+     |                       ^^^^^^ method not found in `&_Bit_const_iterator`
+
+error[E0369]: cannot subtract `*mut u64` from `*mut u64`
+    --> /tmp/test_vector.rs:3934:60
+     |
+3934 |             __fill_bvector_n(__first_p, __last.__base._M_p - __first_p, *__x);
+     |                                         ------------------ ^ --------- *mut u64
+     |                                         |
+     |                                         *mut u64
+     |
+help: consider using `offset_from` for pointer - pointer if the pointers point to the same allocation
+     |
+3934 -             __fill_bvector_n(__first_p, __last.__base._M_p - __first_p, *__x);
+3934 +             __fill_bvector_n(__first_p, unsafe { __last.__base._M_p.offset_from(__first_p) }, *__x);
+     |
+
+error[E0308]: mismatched types
+    --> /tmp/test_vector.rs:4342:16
+     |
+4341 |     pub fn min() -> std::ffi::c_void {
+     |                     ---------------- expected `c_void` because of return type
+4342 |         return 0;
+     |                ^ expected `c_void`, found integer
+
+error[E0308]: mismatched types
+    --> /tmp/test_vector.rs:4346:16
+     |
+4345 |     pub fn max() -> std::ffi::c_void {
+     |                     ---------------- expected `c_void` because of return type
+4346 |         return 0 as _Sp___rep;
+     |                ^^^^^^^^^^^^^^ expected `c_void`, found `_Sp___rep`
+
+error[E0605]: non-primitive cast: `{integer}` as `_Sp___rep`
+    --> /tmp/test_vector.rs:4346:16
+     |
+4346 |         return 0 as _Sp___rep;
+     |                ^^^^^^^^^^^^^^ an `as` expression can only be used to convert between primitive types or to coerce to a specific trait object
+
+error[E0433]: failed to resolve: use of unresolved module or unlinked crate `numeric_limits`
+    --> /tmp/test_vector.rs:4350:16
+     |
+4350 |         return numeric_limits::min();
+     |                ^^^^^^^^^^^^^^ use of unresolved module or unlinked crate `numeric_limits`
+     |
+     = help: you might be missing a crate named `numeric_limits`
+
+error[E0308]: mismatched types
+    --> /tmp/test_vector.rs:4385:16
+     |
+4384 |     pub fn min() -> std::ffi::c_void {
+     |                     ---------------- expected `c_void` because of return type
+4385 |         return 0;
+     |                ^ expected `c_void`, found integer
+
+error[E0308]: mismatched types
+    --> /tmp/test_vector.rs:4389:16
+     |
+4388 |     pub fn max() -> std::ffi::c_void {
+     |                     ---------------- expected `c_void` because of return type
+4389 |         return 0 as _Sp___rep;
+     |                ^^^^^^^^^^^^^^ expected `c_void`, found `_Sp___rep`
+
+error[E0605]: non-primitive cast: `{integer}` as `_Sp___rep`
+    --> /tmp/test_vector.rs:4389:16
+     |
+4389 |         return 0 as _Sp___rep;
+     |                ^^^^^^^^^^^^^^ an `as` expression can only be used to convert between primitive types or to coerce to a specific trait object
+
+error[E0433]: failed to resolve: use of unresolved module or unlinked crate `numeric_limits`
+    --> /tmp/test_vector.rs:4393:16
+     |
+4393 |         return numeric_limits::min();
+     |                ^^^^^^^^^^^^^^ use of unresolved module or unlinked crate `numeric_limits`
+     |
+     = help: you might be missing a crate named `numeric_limits`
+
+error[E0433]: failed to resolve: use of unresolved module or unlinked crate `fragile_runtime`
+    --> /tmp/test_vector.rs:4472:29
+     |
+4472 |             return unsafe { fragile_runtime::fragile_malloc(__bytes) };
+     |                             ^^^^^^^^^^^^^^^ use of unresolved module or unlinked crate `fragile_runtime`
+     |
+     = help: you might be missing a crate named `fragile_runtime`
+
+error[E0599]: no method named `is_equal` found for reference `&c_void` in the current scope
+    --> /tmp/test_vector.rs:4507:93
+     |
+4507 |         return &*__a as *const std::ffi::c_void == &*__b as *const std::ffi::c_void || *__a.is_equal(*__b);
+     |                                                                                             ^^^^^^^^ method not found in `&c_void`
+
+error[E0308]: mismatched types
+    --> /tmp/test_vector.rs:4516:17
+     |
+4516 |     v.push_back(1i32);
+     |       --------- ^^^^ expected `&c_void`, found `i32`
+     |       |
+     |       arguments to this method are incorrect
+     |
+note: method defined here
+    --> /tmp/test_vector.rs:892:12
+     |
+ 892 |     pub fn push_back(&mut self, __x: &std::ffi::c_void) {
+     |            ^^^^^^^^^            ----------------------
+
+error[E0308]: mismatched types
+    --> /tmp/test_vector.rs:4517:17
+     |
+4517 |     v.push_back(2i32);
+     |       --------- ^^^^ expected `&c_void`, found `i32`
+     |       |
+     |       arguments to this method are incorrect
+     |
+note: method defined here
+    --> /tmp/test_vector.rs:892:12
+     |
+ 892 |     pub fn push_back(&mut self, __x: &std::ffi::c_void) {
+     |            ^^^^^^^^^            ----------------------
+
+error[E0515]: cannot return reference to temporary value
+    --> /tmp/test_vector.rs:3682:16
+     |
+3682 |         return &mut self.op_assign(__x.op_bool() as bool);
+     |                ^^^^^-------------------------------------
+     |                |    |
+     |                |    temporary value created here
+     |                returns a reference to data owned by the current function
+
+warning: function cannot return without recursing
+    --> /tmp/test_vector.rs:4493:9
+     |
+4493 |         fn do_allocate(&self, __bytes: usize, __alignment: usize) -> *mut () {
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ cannot return without recursing
+4494 |             self.do_allocate(__bytes, __alignment)
+     |             -------------------------------------- recursive call site
+     |
+     = help: a `loop` may express intention better if this is on purpose
+     = note: `#[warn(unconditional_recursion)]` on by default
+
+warning: function cannot return without recursing
+    --> /tmp/test_vector.rs:4496:9
+     |
+4496 |         fn do_deallocate(&self, __p: *mut (), __bytes: usize, __alignment: usize) {
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ cannot return without recursing
+4497 |             self.do_deallocate(__p, __bytes, __alignment)
+     |             --------------------------------------------- recursive call site
+     |
+     = help: a `loop` may express intention better if this is on purpose
+
+warning: function cannot return without recursing
+    --> /tmp/test_vector.rs:4499:9
+     |
+4499 |         fn do_is_equal(&self, __other: &std::ffi::c_void) -> bool {
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ cannot return without recursing
+4500 |             self.do_is_equal(__other)
+     |             ------------------------- recursive call site
+     |
+     = help: a `loop` may express intention better if this is on purpose
+
+error: aborting due to 42 previous errors; 3 warnings emitted
+
+Some errors have detailed explanations: E0061, E0204, E0277, E0308, E0369, E0425, E0433, E0515, E0599...
+For more information about an error, try `rustc --explain E0061`.

@@ -69,6 +69,7 @@ struct BaseInfo {
     is_virtual: bool,
 }
 
+#[derive(Debug)]
 enum BaseAccess {
     DirectField(String),
     FieldChain(String),
@@ -3834,6 +3835,33 @@ impl AstCodeGen {
         }
     }
 
+    /// Get the original type of an expression, looking through implicit casts.
+    /// This returns the type of the innermost expression before any implicit conversions.
+    /// For example, for an ImplicitCastExpr<UncheckedDerivedToBase> from _Bit_iterator to _Bit_iterator_base,
+    /// this returns the original _Bit_iterator type, not the casted _Bit_iterator_base type.
+    fn get_original_expr_type(node: &ClangNode) -> Option<CppType> {
+        match &node.kind {
+            // For ImplicitCastExpr, look through to get the original type
+            ClangNodeKind::ImplicitCastExpr { .. } => {
+                if !node.children.is_empty() {
+                    Self::get_original_expr_type(&node.children[0])
+                } else {
+                    None
+                }
+            }
+            // For wrapper nodes, look through
+            ClangNodeKind::Unknown(_) | ClangNodeKind::ParenExpr { .. } => {
+                if !node.children.is_empty() {
+                    Self::get_original_expr_type(&node.children[0])
+                } else {
+                    None
+                }
+            }
+            // For other nodes, return the actual type
+            _ => Self::get_expr_type(node),
+        }
+    }
+
     /// Extract the class name from a type, handling const qualifiers, references, and pointers.
     /// For example, "const Point" -> "Point", Reference { pointee: Named("Point") } -> "Point"
     fn extract_class_name(ty: &Option<CppType>) -> Option<String> {
@@ -3856,13 +3884,24 @@ impl AstCodeGen {
 
     /// Get the base access path for a member declared in a specific base class.
     fn get_base_access_for_class(&self, current_class: &str, declaring_class: &str) -> BaseAccess {
-        if let Some(vbases) = self.virtual_bases.get(current_class) {
+        // Strip namespace prefix from current_class for lookup
+        // The class_bases map uses unqualified names, but current_class may be qualified (e.g., std::_Bit_iterator)
+        let current_class_unqual = if let Some(pos) = current_class.rfind("::") {
+            &current_class[pos + 2..]
+        } else {
+            current_class
+        };
+
+        if let Some(vbases) = self.virtual_bases.get(current_class).or_else(|| self.virtual_bases.get(current_class_unqual)) {
             if vbases.iter().any(|b| b == declaring_class) {
                 return BaseAccess::VirtualPtr(self.virtual_base_field_name(declaring_class));
             }
         }
 
-        if let Some(base_classes) = self.class_bases.get(current_class) {
+        // Try both qualified and unqualified names for class_bases lookup
+        let base_classes = self.class_bases.get(current_class)
+            .or_else(|| self.class_bases.get(current_class_unqual));
+        if let Some(base_classes) = base_classes {
             let mut non_virtual_idx = 0;
             for base in base_classes {
                 if base.name == declaring_class {
@@ -4137,6 +4176,15 @@ impl AstCodeGen {
         match &node.kind {
             ClangNodeKind::DeclRefExpr { ty, .. } => {
                 matches!(ty, CppType::Function { .. })
+            }
+            ClangNodeKind::MemberExpr { ty, .. } => {
+                // MemberExpr with "<bound member function type>" is a method reference
+                // which is used as a function in member call expressions (e.g., v.size())
+                if let CppType::Named(name) = ty {
+                    name.contains("bound member function type")
+                } else {
+                    false
+                }
             }
             ClangNodeKind::Unknown(_) | ClangNodeKind::ImplicitCastExpr { .. } => {
                 // Look through wrapper nodes
@@ -6671,7 +6719,9 @@ impl AstCodeGen {
                 if !node.children.is_empty() {
                     let base = self.expr_to_string(&node.children[0]);
                     // Check if this is accessing an inherited member
-                    let base_type = Self::get_expr_type(&node.children[0]);
+                    // Use get_original_expr_type to look through implicit casts (like UncheckedDerivedToBase)
+                    // This ensures we get the actual object type, not the casted base class type
+                    let base_type = Self::get_original_expr_type(&node.children[0]);
 
                     // Determine if we need base access and get the correct base field name
                     // Skip base access for anonymous struct members (they are flattened into parent)
