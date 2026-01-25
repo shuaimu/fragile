@@ -4266,9 +4266,10 @@ impl AstCodeGen {
         self.writeln("pub type std__Ios_Seekdir = i32;");
         self.writeln("pub type __gthread_mutex_t = usize;");
         self.writeln("pub type __gthread_time_t = i64;");
-        self.writeln("pub type error_category = std::ffi::c_void;");
+        // Empty structs for types used as base classes (need Clone/Default)
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct error_category;");
         self.generated_aliases.insert("error_category".to_string());
-        self.writeln("pub type __ctype_abstract_base_wchar_t_ = std::ffi::c_void;");
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct __ctype_abstract_base_wchar_t_;");
         self.writeln("pub type _OI = std::ffi::c_void;");
         self.writeln("pub type _StateT = std::ffi::c_void;");
         self.writeln("pub type _T1 = std::ffi::c_void;");
@@ -4337,7 +4338,9 @@ impl AstCodeGen {
         self.writeln("pub type _HashIterator = std::ffi::c_void;");
         self.writeln("pub type auto = std::ffi::c_void;");
         self.writeln("pub type __bitset_0__0 = std::ffi::c_void;");
-        self.writeln("pub type __formatter_char_wchar_t = std::ffi::c_void;");
+        // Formatter types used as base classes - need Clone/Default
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct __formatter_char_char;");
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct __formatter_char_wchar_t;");
         self.writeln("");
 
         // Format and unicode related types
