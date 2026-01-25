@@ -2736,6 +2736,24 @@ impl AstCodeGen {
             self.indent -= 1;
             self.writeln("}");
         }
+
+        // Synthesize op_deref if op_index exists but op_deref doesn't
+        // This handles C++ iterators with operator[] that calls operator*
+        // e.g., _Bit_iterator::operator[] returns *(*this + __i)
+        let has_index = self.current_struct_methods.contains_key("op_index");
+        let has_deref = self.current_struct_methods.contains_key("op_deref");
+
+        if has_index && !has_deref {
+            self.writeln("");
+            self.writeln("/// Synthesized operator* (C++ dereference)");
+            self.writeln("/// Returns reference - actual type depends on container");
+            self.writeln("pub fn op_deref(&self) -> &std::ffi::c_void {");
+            self.indent += 1;
+            self.writeln("// Stub: actual implementation depends on container type");
+            self.writeln("unsafe { &*(std::ptr::null::<std::ffi::c_void>()) }");
+            self.indent -= 1;
+            self.writeln("}");
+        }
     }
 
     /// Generate struct definition.
