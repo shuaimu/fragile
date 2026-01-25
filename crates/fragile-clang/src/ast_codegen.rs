@@ -5460,7 +5460,8 @@ impl AstCodeGen {
                         format!("{}.{}", base, member)
                     }
                 } else {
-                    sanitize_identifier(member_name)
+                    // Implicit this - no children means this->member
+                    format!("self.{}", sanitize_identifier(member_name))
                 }
             }
             ClangNodeKind::BinaryOperator { op, .. } => {
