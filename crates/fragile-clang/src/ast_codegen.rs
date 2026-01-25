@@ -2015,9 +2015,24 @@ impl AstCodeGen {
                 self.writeln("}");
             }
             _ => {
+                // Skip constexpr bool artifacts (false; or !false; from if constexpr evaluation)
+                if Self::is_constexpr_bool_artifact(node) {
+                    return;
+                }
+
                 // Default: generate as expression statement
                 let expr = self.expr_to_string(node);
                 let expr = self.substitute_type_in_expr(&expr, subst_map);
+
+                // Also filter out false/!false/true/!true at the string level
+                // These are constexpr artifacts that slip through AST checks
+                let expr_trimmed = expr.trim();
+                if expr_trimmed == "false" || expr_trimmed == "true"
+                    || expr_trimmed == "!false" || expr_trimmed == "!true"
+                {
+                    return;
+                }
+
                 if !expr.is_empty() && expr != "()" {
                     // Wrap in unsafe if the expression dereferences a pointer
                     if Self::needs_unsafe_wrapper(&expr) {
@@ -9269,6 +9284,26 @@ impl AstCodeGen {
         }
     }
 
+    /// Check if a node is a constexpr artifact (bool literal like `false;` or `!false;`)
+    /// that results from `if constexpr` evaluation.
+    /// These should be skipped as they're just residual condition checks.
+    fn is_constexpr_bool_artifact(node: &ClangNode) -> bool {
+        match &node.kind {
+            ClangNodeKind::BoolLiteral(_) => true,
+            // Negated bool: !false or !true
+            ClangNodeKind::UnaryOperator { op: UnaryOp::Not, .. } => {
+                !node.children.is_empty() && Self::is_constexpr_bool_artifact(&node.children[0])
+            }
+            // Look through wrapper nodes (ImplicitCastExpr, Unknown/ParenExpr)
+            ClangNodeKind::ImplicitCastExpr { .. }
+            | ClangNodeKind::Unknown(_)
+            | ClangNodeKind::ParenExpr { .. } => {
+                !node.children.is_empty() && Self::is_constexpr_bool_artifact(&node.children[0])
+            }
+            _ => false,
+        }
+    }
+
     /// Check if a type is a function pointer type.
     fn is_function_pointer_type(ty: &CppType) -> bool {
         matches!(ty, CppType::Pointer { pointee, .. } if matches!(pointee.as_ref(), CppType::Function { .. }))
@@ -10575,6 +10610,12 @@ impl AstCodeGen {
             }
             ClangNodeKind::ExprStmt => {
                 if !node.children.is_empty() {
+                    // Skip trivial boolean literals which are constexpr condition artifacts
+                    // (e.g., `if constexpr (is_constant_evaluated())` evaluates to `false;`)
+                    if Self::is_constexpr_bool_artifact(&node.children[0]) {
+                        return;
+                    }
+
                     let expr = self.expr_to_string(&node.children[0]);
                     if is_tail_expr {
                         self.writeln(&expr);
@@ -10644,6 +10685,12 @@ impl AstCodeGen {
                 // Handled as part of TryStmt
             }
             _ => {
+                // Skip trivial boolean literals which are constexpr condition artifacts
+                // (e.g., `if constexpr (is_constant_evaluated())` evaluates to `false;`)
+                if Self::is_constexpr_bool_artifact(node) {
+                    return;
+                }
+
                 // For expressions at statement level
                 let expr = self.expr_to_string(node);
                 // Skip "_unnamed" placeholder expressions (from unresolved AST nodes)
