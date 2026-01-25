@@ -3021,7 +3021,10 @@ impl AstCodeGen {
                     }
                 } else {
                     // Non-array: the child is the initializer
+                    // Skip literal suffixes - Rust will infer type from variable declaration
+                    self.skip_literal_suffix = true;
                     let init_str = self.expr_to_string(init_node);
+                    self.skip_literal_suffix = false;
 
                     // Check if the expression contains unresolved _unnamed references
                     // This happens with unresolved template parameters in numeric_limits, etc.
@@ -3425,8 +3428,11 @@ impl AstCodeGen {
     }
 
     /// Extract constructor arguments from a CallExpr or CXXConstructExpr node.
-    fn extract_constructor_args(&self, node: &ClangNode) -> Vec<String> {
+    fn extract_constructor_args(&mut self, node: &ClangNode) -> Vec<String> {
         let mut args = Vec::new();
+        // Skip literal suffixes - Rust will infer types from constructor parameters
+        let prev_skip = self.skip_literal_suffix;
+        self.skip_literal_suffix = true;
         match &node.kind {
             ClangNodeKind::CallExpr { .. } => {
                 // Arguments are children of the call expression
@@ -3456,11 +3462,13 @@ impl AstCodeGen {
             // Handle implicit casts wrapping the construct expression
             ClangNodeKind::ImplicitCastExpr { .. } => {
                 if !node.children.is_empty() {
+                    self.skip_literal_suffix = prev_skip;
                     return self.extract_constructor_args(&node.children[0]);
                 }
             }
             _ => {}
         }
+        self.skip_literal_suffix = prev_skip;
         args
     }
 
@@ -4426,7 +4434,11 @@ impl AstCodeGen {
                         // Next sibling should be the initializer expression
                         let init_val = if i + 1 < node.children.len() {
                             i += 1;
-                            self.expr_to_string(&node.children[i])
+                            // Skip literal suffixes - Rust will infer the type from struct field
+                            self.skip_literal_suffix = true;
+                            let val = self.expr_to_string(&node.children[i]);
+                            self.skip_literal_suffix = false;
+                            val
                         } else {
                             "Default::default()".to_string()
                         };
