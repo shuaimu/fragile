@@ -4264,6 +4264,24 @@ impl AstCodeGen {
         self.writeln("pub type reverse_iterator___wrap_iter_typename_allocator_traits_type_parameter_0_2_pointer = std::ffi::c_void;");
         self.writeln("");
 
+        // Additional template parameter type stubs for unresolved template types
+        self.writeln("// Additional template parameter type stubs");
+        self.writeln("pub mod back_insert_iterator_type_parameter_0_0 {");
+        self.writeln("    pub fn new_2(_: i32, _: std::ffi::c_void) -> std::ffi::c_void { unsafe { std::mem::zeroed() } }");
+        self.writeln("}");
+        self.writeln("pub mod __libcpp_remove_reference_t_exception_ptr__ {");
+        self.writeln("    pub fn new_2<T, U>(_: T, _: U) -> std::ffi::c_void { unsafe { std::mem::zeroed() } }");
+        self.writeln("}");
+        self.writeln("pub mod _HashT {");
+        self.writeln("    #[derive(Default)] pub struct Hasher;");
+        self.writeln("    impl Hasher { pub fn op_call(&self, _: std::ffi::c_void) -> u64 { 0 } }");
+        self.writeln("    pub fn new_0() -> Hasher { Hasher }");
+        self.writeln("}");
+        self.writeln("pub mod std__PairT {");
+        self.writeln("    pub fn new_1<T>(_: T) -> std::ffi::c_void { unsafe { std::mem::zeroed() } }");
+        self.writeln("}");
+        self.writeln("");
+
         // Chrono and format type stubs
         self.writeln("// Chrono and format type stubs");
         self.writeln("pub type chrono_nanoseconds = i64;");
