@@ -865,8 +865,9 @@ Get `std::cout` working end-to-end.
       - Fixed duplicate vtable wrapper functions for overloaded methods ✅ 2026-01-25
       - Added exception type and vtable stub ✅ 2026-01-25
       - Skip vtable struct generation if already defined in stubs ✅ 2026-01-25
+      - Fixed array initialization in function template instantiation ✅ 2026-01-25
     - **Remaining errors**: ~651 (libstdc++) - mostly complex template issues:
-      - Type mismatches (165): u32/i32 mixing, array size as initializer
+      - Type mismatches (165): u32/i32 mixing in binary operations
       - _unnamed values (26): unresolved template placeholders
       - Dereference errors (32): scalar types incorrectly dereferenced
       - _dependent_type new_N calls (31): template-dependent constructors
