@@ -4245,16 +4245,16 @@ impl AstCodeGen {
         self.writeln("pub type std___unicode___extended_grapheme_cluster_break___GB11_emoji_state = u32;");
         self.writeln("");
 
-        // Hash function type stubs
+        // Hash function type stubs - need Clone+Default for struct __base fields
         self.writeln("// Hash function type stubs");
-        self.writeln("pub type __string_view_hash_char = std::ffi::c_void;");
-        self.writeln("pub type __string_view_hash_wchar_t = std::ffi::c_void;");
-        self.writeln("pub type __string_view_hash_char8_t = std::ffi::c_void;");
-        self.writeln("pub type __string_view_hash_char16_t = std::ffi::c_void;");
-        self.writeln("pub type __string_view_hash_char32_t = std::ffi::c_void;");
-        self.writeln("pub type __unary_function_error_code__size_t = std::ffi::c_void;");
-        self.writeln("pub type __unary_function_error_condition__size_t = std::ffi::c_void;");
-        self.writeln("pub type __unary_function_nullptr_t__size_t = std::ffi::c_void;");
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct __string_view_hash_char;");
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct __string_view_hash_wchar_t;");
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct __string_view_hash_char8_t;");
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct __string_view_hash_char16_t;");
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct __string_view_hash_char32_t;");
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct __unary_function_error_code__size_t;");
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct __unary_function_error_condition__size_t;");
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct __unary_function_nullptr_t__size_t;");
         self.writeln("pub type __unique_ptr_deleter_sfinae_type_parameter_0_1 = std::ffi::c_void;");
         self.writeln("");
 
