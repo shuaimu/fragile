@@ -4235,6 +4235,27 @@ impl AstCodeGen {
         self.writeln("pub type std___format_spec___alignment = u32;");
         self.writeln("pub type _Real = f64;");
         self.writeln("pub type _Cp = std::ffi::c_void;");
+        self.writeln("pub type _timespec = std::ffi::c_void;");
+        self.writeln("");
+
+        // Unicode grapheme cluster state types
+        self.writeln("// Unicode grapheme cluster break state types");
+        self.writeln("pub type std___unicode___extended_grapheme_cluster_break___rule = u32;");
+        self.writeln("pub type std___unicode___extended_grapheme_cluster_break___GB9c_indic_conjunct_break_state = u32;");
+        self.writeln("pub type std___unicode___extended_grapheme_cluster_break___GB11_emoji_state = u32;");
+        self.writeln("");
+
+        // Hash function type stubs
+        self.writeln("// Hash function type stubs");
+        self.writeln("pub type __string_view_hash_char = std::ffi::c_void;");
+        self.writeln("pub type __string_view_hash_wchar_t = std::ffi::c_void;");
+        self.writeln("pub type __string_view_hash_char8_t = std::ffi::c_void;");
+        self.writeln("pub type __string_view_hash_char16_t = std::ffi::c_void;");
+        self.writeln("pub type __string_view_hash_char32_t = std::ffi::c_void;");
+        self.writeln("pub type __unary_function_error_code__size_t = std::ffi::c_void;");
+        self.writeln("pub type __unary_function_error_condition__size_t = std::ffi::c_void;");
+        self.writeln("pub type __unary_function_nullptr_t__size_t = std::ffi::c_void;");
+        self.writeln("pub type __unique_ptr_deleter_sfinae_type_parameter_0_1 = std::ffi::c_void;");
         self.writeln("");
 
         // Grapheme cluster property constants (libc++ __extended_grapheme_custer_property_boundary)
@@ -4335,6 +4356,9 @@ impl AstCodeGen {
         self.writeln("pub type std___element_count = u64;");
         self.writeln("pub type std___variant_detail__Trait = u32;");
         self.writeln("pub type std_ios_base_seekdir = i32;");
+        self.writeln("pub type std_ios_base = std::ffi::c_void;");
+        self.writeln("pub type std_ios_base_event = i32;");
+        self.writeln("pub type union__unnamed_union_at__home_shuai_workspace_fragile_vendor_llvm_project_libcxx_include___functional_hash_h_416_5_ = std::ffi::c_void;");
         // Placeholder types that need Clone/Default (can't use c_void as base for structs)
         self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct string_view;");
         self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct wstring_view;");
