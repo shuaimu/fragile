@@ -4212,8 +4212,13 @@ impl AstCodeGen {
         self.generated_modules.insert("std::_V2".to_string());
         self.writeln("pub mod _V2 {");
         self.indent += 1;
-        self.writeln("pub fn generic_category() -> () { }");
-        self.writeln("pub fn system_category() -> () { }");
+        // error_category functions return a reference to a static category object
+        // We use static c_void as placeholder since error_category is aliased to c_void
+        self.writeln("static GENERIC_CATEGORY: std::ffi::c_void = unsafe { std::mem::zeroed() };");
+        self.writeln("static SYSTEM_CATEGORY: std::ffi::c_void = unsafe { std::mem::zeroed() };");
+        self.writeln("");
+        self.writeln("pub fn generic_category() -> &'static std::ffi::c_void { &GENERIC_CATEGORY }");
+        self.writeln("pub fn system_category() -> &'static std::ffi::c_void { &SYSTEM_CATEGORY }");
         self.indent -= 1;
         self.writeln("}");
         self.writeln("");
