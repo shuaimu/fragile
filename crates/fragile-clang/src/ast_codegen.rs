@@ -11848,7 +11848,15 @@ fn sanitize_identifier(name: &str) -> String {
 
     // Handle keywords
     if RUST_KEYWORDS.contains(&result.as_str()) {
-        result = format!("r#{}", result);
+        // "Self" cannot be used with r# prefix - it's a special keyword
+        // Also "self" is problematic in certain contexts
+        if result == "Self" {
+            result = "Self_".to_string();
+        } else if result == "self" {
+            result = "self_".to_string();
+        } else {
+            result = format!("r#{}", result);
+        }
     }
 
     // Handle empty names
