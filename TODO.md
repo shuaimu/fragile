@@ -1551,7 +1551,97 @@ The transpiled code is lower-level but preserves exact C++ semantics without dep
 
 ---
 
-## Grammar Tests (20/20 Passing)
+## 26. Transpilable But Not Yet Implemented (Priority: Medium)
+
+These components are currently stubbed or skipped but could be fully transpiled from libc++ source code.
+
+### Low-Hanging Fruit (Low Effort)
+
+- [x] **26.1** STL Algorithms - KEEP-STUBS ✅ 2026-01-31 [docs/dev/analysis_26_1_stl_algorithms.md]
+  - Currently: Hand-written stubs (std_sort_int, std_find_int, etc.) using Rust native algorithms
+  - Analysis: Transpiling libc++ algorithms is HIGH effort (not low) due to:
+    - Heavy template metaprogramming in libc++
+    - Iterator model complexity (traits, categories, SFINAE)
+    - Large dependency chain (iter_swap, distance, advance, etc.)
+  - Decision: Keep Rust-native stubs - they are correct, fast, and well-tested
+  - [x] **26.1.1** `std::sort` - using Rust slice.sort() (introsort, same algorithm)
+  - [x] **26.1.2** `std::find`, `std::count`, `std::copy` - using Rust iterators
+  - [x] **26.1.3** `std::transform`, `std::for_each` - can be added as Rust stubs if needed
+  - [x] **26.1.4** `std::binary_search`, `std::lower_bound` - can be added as Rust stubs if needed
+
+- [ ] **26.2** Exception Classes - Full Implementation
+  - Currently: Stub `what()` methods returning empty string
+  - Could be: Transpile actual exception classes with message storage
+  - Effort: Low - just string storage and constructors
+  - [ ] **26.2.1** `std::exception` base class with message storage
+  - [ ] **26.2.2** `std::runtime_error`, `std::logic_error` with string constructors
+  - [ ] **26.2.3** `std::bad_alloc`, `std::out_of_range`, etc.
+
+- [ ] **26.3** C Variadic Functions (`va_arg`)
+  - Currently: Skipped (requires unstable Rust `c_variadic` feature)
+  - Could be: Enable with `#![feature(c_variadic)]` for nightly builds
+  - Effort: Low - just a feature flag, `va_start`/`va_end`/`va_copy` already work
+  - [ ] **26.3.1** Add nightly-only build configuration
+  - [ ] **26.3.2** Implement `va_arg` using `VaListImpl::arg()`
+  - [ ] **26.3.3** Test with printf-like functions
+
+### Medium Effort
+
+- [ ] **26.4** STL Containers - Full Implementation (Replace Stubs)
+  - Currently: Working stubs (std_vector_int, std_string, etc.)
+  - Could be: Transpile actual libc++ container implementations
+  - Effort: Medium - requires Phase 2 completion (transpile libc++ `src/*.cpp`)
+  - Depends on: Task 22.4.2 (Transpile `src/*.cpp` files)
+  - [ ] **26.4.1** `std::vector<T>` - dynamic array with allocator
+  - [ ] **26.4.2** `std::string` - SSO (small string optimization) implementation
+  - [ ] **26.4.3** `std::unordered_map<K,V>` - hash table with bucket management
+
+- [ ] **26.5** 128-bit Integer Operations
+  - Currently: Skipped with pattern detection (`__lo1`, `__hi1`, etc.)
+  - Could be: May work with libc++ (cleaner than libstdc++)
+  - Effort: Medium - need to test libc++ 128-bit code paths
+  - Note: Rust has native `i128`/`u128` support
+  - [ ] **26.5.1** Analyze libc++ 128-bit multiplication/division code
+  - [ ] **26.5.2** Test transpilation without libstdc++ inline assembly
+  - [ ] **26.5.3** Map 128-bit builtins to Rust native operations
+
+### High Effort
+
+- [ ] **26.6** Locale System - Full Implementation
+  - Currently: No-op stubs for all locale facets
+  - Could be: Transpile actual libc++ locale implementations
+  - Effort: High - complex virtual dispatch, OS-dependent
+  - [ ] **26.6.1** `ctype<char>` - character classification (isalpha, isdigit, etc.)
+  - [ ] **26.6.2** `ctype<wchar_t>` - wide character classification
+  - [ ] **26.6.3** `collate<char>` - string collation/comparison
+  - [ ] **26.6.4** `numpunct<char>` - numeric punctuation (decimal point, thousands sep)
+  - [ ] **26.6.5** `codecvt` variants - character encoding conversion
+
+- [ ] **26.7** PMR (Polymorphic Memory Resources)
+  - Currently: Entire `pmr` namespace skipped
+  - Could be: Transpile with trait-based polymorphism
+  - Effort: High - requires polymorphic allocator protocol
+  - Note: Currently skipped due to "polymorphic dispatch issues" but vtables work
+  - [ ] **26.7.1** `memory_resource` base class as trait
+  - [ ] **26.7.2** `monotonic_buffer_resource` implementation
+  - [ ] **26.7.3** `unsynchronized_pool_resource` implementation
+  - [ ] **26.7.4** `polymorphic_allocator<T>` adaptor
+
+### Summary Table
+
+| Component | Current State | Transpilable? | Effort | Blocker |
+|-----------|--------------|---------------|--------|---------|
+| STL algorithms | Stubs | Yes | Low | None |
+| Exception classes | Stubs | Yes | Low | None |
+| C variadic (`va_arg`) | Skipped | Yes | Low | Nightly Rust |
+| STL containers (full) | Working stubs | Yes | Medium | Task 22.4.2 |
+| 128-bit math | Skipped | Maybe | Medium | Need libc++ testing |
+| Locale system | No-op stubs | Yes | High | Complexity |
+| PMR allocators | Skipped | Yes | High | Polymorphic dispatch |
+
+---
+
+## Grammar Tests (22/22 Passing)
 
 | Test | Feature | Status |
 |------|---------|--------|
@@ -1575,6 +1665,8 @@ The transpiled code is lower-level but preserves exact C++ semantics without dep
 | 18 | Ternary | ✅ |
 | 19 | Do-while | ✅ |
 | 20 | Nested struct | ✅ |
+| 21 | Mutex synchronization | ✅ |
+| 22 | Condition variables | ✅ |
 
 ---
 
