@@ -7359,6 +7359,12 @@ impl AstCodeGen {
             || (generated.contains(".do_tolower(") && generated.contains(", __hi)"))
             || (generated.contains(".do_widen(") && generated.contains(", __to)"))
             || (generated.contains(".do_narrow(") && generated.contains(", __to)"))
+            // gthread functions with void* type mismatches (fn(*mut ()) vs extern "C" fn(*mut c_void))
+            || (generated.contains("pub fn __gthread_create") && generated.contains("*mut ()"))
+            || (generated.contains("pub fn __gthread_join") && generated.contains("*mut *mut ()"))
+            || (generated.contains("pub fn __gthread_key_create") && generated.contains("fn(*mut ())"))
+            || (generated.contains("pub fn __gthread_getspecific") && generated.contains("*mut ()"))
+            || (generated.contains("pub fn __gthread_setspecific") && generated.contains("*const ()"))
         {
             // Rollback - remove the generated function
             self.output.truncate(output_start);
