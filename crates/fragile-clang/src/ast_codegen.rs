@@ -1441,7 +1441,9 @@ impl AstCodeGen {
                         .iter()
                         .map(|a| sanitize_type_for_fn_name(a))
                         .collect();
-                    let mangled_name = format!("{}_{}", fn_name, sanitized_args.join("_"));
+                    // Sanitize function name (handles operator"" user-defined literals)
+                    let sanitized_fn_name = sanitize_identifier(fn_name);
+                    let mangled_name = format!("{}_{}", sanitized_fn_name, sanitized_args.join("_"));
 
                     // Store the instantiation if not already present
                     self.pending_fn_instantiations.entry(mangled_name).or_insert_with(|| (fn_name.clone(), type_args));
@@ -4400,6 +4402,12 @@ impl AstCodeGen {
         self.writeln("}");
         self.writeln("");
 
+        // Extended precision float type stub (GCC/Clang extension)
+        self.writeln("// Extended precision float type stub");
+        self.writeln("pub type __float128 = f64; // stub: 128-bit float, approximated as f64");
+        self.generated_aliases.insert("__float128".to_string());
+        self.writeln("");
+
         // Chrono and format type stubs
         self.writeln("// Chrono and format type stubs");
         self.writeln("pub type chrono_nanoseconds = i64;");
@@ -4407,7 +4415,9 @@ impl AstCodeGen {
         self.writeln("pub type std___format_spec___alignment = u32;");
         self.writeln("pub type _Real = f64;");
         self.writeln("pub type _Cp = std::ffi::c_void;");
+        self.writeln("pub type _Fp = std::ffi::c_void;  // template type parameter placeholder");
         self.writeln("pub type _timespec = std::ffi::c_void;");
+        self.generated_aliases.insert("_Fp".to_string());
         self.writeln("");
 
         // Unicode grapheme cluster state types
@@ -4658,6 +4668,14 @@ impl AstCodeGen {
         self.writeln("unsafe impl Sync for ctype_char {}");
         self.writeln("unsafe impl Send for ctype_char {}");
         self.writeln("pub type __const_reference = std::ffi::c_void;");
+        // Add preamble type aliases to generated_aliases to prevent duplicate definitions
+        self.generated_aliases.insert("__next".to_string());
+        self.generated_aliases.insert("__iter_swap___fn".to_string());
+        self.generated_aliases.insert("__iter_move___fn".to_string());
+        self.generated_aliases.insert("_IntT".to_string());
+        self.generated_aliases.insert("__handle".to_string());
+        self.generated_aliases.insert("__distance".to_string());
+        self.generated_aliases.insert("__const_reference".to_string());
         self.writeln("");
 
         // ctype vtable stubs - mark as generated to prevent duplicate definitions
@@ -4717,6 +4735,16 @@ impl AstCodeGen {
         self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct atomic_unsigned_long_long { pub __a_: u64 }");
         self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct atomic___contention_t_or_largest { pub __a_: i64 }");
         self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct atomic_make_unsigned_t___contention_t_or_largest { pub __a_: u64 }");
+        // Add atomic types to generated_structs to prevent duplicate definitions
+        self.generated_structs.insert("atomic_signed_char".to_string());
+        self.generated_structs.insert("atomic_unsigned_char".to_string());
+        self.generated_structs.insert("atomic_unsigned_short".to_string());
+        self.generated_structs.insert("atomic_unsigned_int".to_string());
+        self.generated_structs.insert("atomic_unsigned_long".to_string());
+        self.generated_structs.insert("atomic_long_long".to_string());
+        self.generated_structs.insert("atomic_unsigned_long_long".to_string());
+        self.generated_structs.insert("atomic___contention_t_or_largest".to_string());
+        self.generated_structs.insert("atomic_make_unsigned_t___contention_t_or_largest".to_string());
         self.writeln("");
 
         // Char traits base types
@@ -5298,6 +5326,21 @@ impl AstCodeGen {
         self.writeln("// Shared pointer support");
         // Note: __SHARED_COUNT_VTABLE is not needed - abstract class vtables are not instantiated
         self.writeln("pub static __Control: () = ();");
+        self.writeln("");
+
+        // Thread-related type stubs
+        self.writeln("// Thread-related type stubs");
+        self.writeln("pub type thread_id = u64;");
+        self.writeln("pub type __native_type = u64;");
+        self.writeln("pub type __wait_clock_t_time_point = u64;");
+        self.writeln("pub type _Stop_state_ref = std::ffi::c_void;");
+        self.writeln("pub type stop_token__Stop_state_ref = std::ffi::c_void;");
+        self.writeln("pub type __waiter_std_true_type = std::ffi::c_void;");
+        self.writeln("pub type __waiter_std_false_type = std::ffi::c_void;");
+        self.writeln("pub type __waiter_base___waiter_pool = std::ffi::c_void;");
+        self.writeln("pub type __timed_waiter_std_true_type = std::ffi::c_void;");
+        self.writeln("pub type __timed_waiter_std_false_type = std::ffi::c_void;");
+        self.writeln("pub type __detail___bare_wait = std::ffi::c_void;");
         self.writeln("");
 
         // More type stubs for libstdc++
@@ -13962,7 +14005,9 @@ impl AstCodeGen {
                                 .iter()
                                 .map(|a| sanitize_type_for_fn_name(a))
                                 .collect();
-                            let mangled_name = format!("{}_{}", name, sanitized_args.join("_"));
+                            // Sanitize the function name (handles operator"" user-defined literals)
+                            let sanitized_name = sanitize_identifier(name);
+                            let mangled_name = format!("{}_{}", sanitized_name, sanitized_args.join("_"));
                             return self.compute_relative_path(namespace_path, &mangled_name);
                         }
                     }

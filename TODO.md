@@ -1081,7 +1081,7 @@ Get `std::cout` working end-to-end.
 
 Get `std::thread` working end-to-end.
 
-- [ ] **23.10** std::thread E2E milestone - BLOCKED (same issues as vector)
+- [ ] **23.10** std::thread E2E milestone - IN PROGRESS
   - [x] **23.10.1** Transpile simple thread usage ✅ 2026-01-24
     ```cpp
     #include <thread>
@@ -1092,9 +1092,16 @@ Get `std::thread` working end-to-end.
         return 0;
     }
     ```
-    - **Status**: Transpilation succeeds (112K chars), 40 compilation errors
-    - Same root causes as vector (template params, base class resolution, etc.)
-    - See `docs/dev/investigation_vector_25_errors.md` for details
+    - **Status**: Transpilation succeeds (112K chars)
+    - **Progress v2 (compilation errors)**: 358 → 343 → 335 → 317 ✅ 2026-01-31
+      - Fixed duplicate atomic type definitions (added to generated_structs)
+      - Fixed duplicate preamble type aliases (added to generated_aliases)
+      - Fixed user-defined literals (operator""ms → op_literal_ms)
+      - Added __float128 type stub (approximated as f64)
+      - Added _Fp template parameter placeholder
+      - Added thread_id, __native_type, __wait_clock_t_time_point stubs
+      - Added waiter type stubs for std::thread internal types
+    - **Remaining errors at 317**: type mismatches, template placeholders as structs, bool arithmetic
   - [ ] **23.10.2** Verify pthread_create/join are called correctly - BLOCKED
   - [ ] **23.10.3** Add mutex test with std::mutex - BLOCKED
   - [ ] **23.10.4** Add condition variable test - BLOCKED
