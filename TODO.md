@@ -965,15 +965,24 @@ Get `std::cout` working end-to-end.
         - Type aliases like `pub type const_reference = &c_void` require lifetime specifier
         - Added 'static lifetime: `pub type const_reference = &'static c_void`
         - Fixes E0106: missing lifetime specifier
-    - **Remaining errors at 432**: mostly code generation issues requiring deeper fixes:
-      - E0308 (307): Type mismatches (usize/u64, f32/f64, i32/u32, pointer/reference)
+      - Fixed: writeln!/write! macro issues for iostream output (432→431) ✅ 2026-01-31
+        - Added `use std::io::Write;` import for Write trait
+        - Fixed empty format string in `writeln!` (must have at least `""`)
+        - Fixes E0599: cannot write into `Stdout`
+    - **Remaining errors at 431**: mostly code generation issues requiring deeper fixes:
+      - E0308 (312): Type mismatches (usize/u64, f32/f64, i32/u32, pointer/reference)
       - E0061 (47): Wrong number of arguments (function overloading issues)
       - E0560 (20): Struct has no field (vtable virtual methods missing)
-      - E0609 (9): No field on type (array._unnamed)
-      - E0277 (6): Trait not satisfied (bool arithmetic, c_void ops)
-      - E0599 (5): No method found (__on_zero_shared, op_add on raw pointers)
-      - E0606 (1): Invalid cast (TypeId as c_void)
+      - E0277 (13): Trait not satisfied (bool arithmetic, c_void ops, PartialOrd)
+      - E0599 (10): No method found (__on_zero_shared, op_add on raw pointers)
+      - E0609 (9): No field on type (array._unnamed for begin/end functions)
+      - E0600 (3): Cannot apply unary operator (negation on unsigned types)
       - E0423 (3): Expected value, found type alias
+      - E0424 (2): Self-referencing in constructors (member initializer lists)
+      - E0062 (2): Field specified more than once (duplicate initializers)
+      - E0080 (2): Division by zero in constant evaluation
+      - E0618 (1): Expected function, found value (std::min shadowed by global)
+      - E0610 (1): Field access on primitive (inf.0)
   - [ ] **23.9.2** Fix iostream static initialization (global cout/cin/cerr objects) - BLOCKED
     - libc++ uses `__start_std_streams` section for initialization
     - May need to generate Rust static initialization code

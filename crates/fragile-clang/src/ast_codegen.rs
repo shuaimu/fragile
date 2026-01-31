@@ -397,6 +397,9 @@ impl AstCodeGen {
         self.writeln("#![allow(non_camel_case_types)]");
         self.writeln("#![allow(non_snake_case)]");
         self.writeln("");
+        // Import Write trait for writeln!/write! macros with std::io::stdout()/stderr()
+        self.writeln("use std::io::Write;");
+        self.writeln("");
         self.write_array_helpers();
 
         // Generate comparison category stubs for libstdc++/libc++
@@ -10198,7 +10201,7 @@ impl AstCodeGen {
         if format_args.is_empty() {
             // Just endl or flush with no content
             if has_newline {
-                format!("writeln!({}).unwrap()", stream_expr)
+                format!("writeln!({}, \"\").unwrap()", stream_expr)
             } else {
                 format!("{{ let _ = {}.flush(); {} }}", stream_expr, stream_expr)
             }
