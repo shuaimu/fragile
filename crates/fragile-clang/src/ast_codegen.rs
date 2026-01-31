@@ -431,6 +431,17 @@ impl AstCodeGen {
         // Generate static vtable instances (after class definitions)
         self.generate_all_static_vtables();
 
+        // Add atomic_flag impl if the struct was generated
+        if self.generated_structs.contains("atomic_flag") {
+            self.writeln("");
+            self.writeln("// atomic_flag test method impl (generated)");
+            self.writeln("impl AtomicFlagTest for atomic_flag {");
+            self.writeln("    #[inline] fn test<M>(&self, _m: M) -> bool {");
+            self.writeln("        __cxx_atomic_load___cxx_atomic_base_impl_bool(&self.__a_ as *const _, _m)");
+            self.writeln("    }");
+            self.writeln("}");
+        }
+
         self.output
     }
 
@@ -4893,6 +4904,12 @@ impl AstCodeGen {
         self.writeln("}");
         self.writeln("");
 
+        // Trait extension for atomic_flag::test method
+        // The test method is rolled back due to 1 + __cxx_atomic_load pattern, but callers need it
+        // We only add this when atomic_flag is generated (checked at end of codegen)
+        self.writeln("// atomic_flag test method extension trait");
+        self.writeln("pub trait AtomicFlagTest { fn test<M>(&self, _m: M) -> bool; }");
+
         // char_traits module stub (libstdc++ uses std::char_traits)
         // Use generic functions to support char, wchar_t, char8_t, char16_t, char32_t
         self.writeln("// char_traits module stub");
@@ -6944,6 +6961,7 @@ impl AstCodeGen {
             || generated.contains("c_void::new_")  // Constructor call on placeholder type
             || generated.contains("1 + __cxx_atomic_load")  // Wrong operator: 1 == not 1 +
             || generated.contains("/ __pow_10(")  // u128/u32 division type mismatch
+            || generated.contains("(-__errno_location())")  // Unary minus on pointer (errno check)
         {
             // Rollback - remove the generated function
             self.output.truncate(output_start);
@@ -10792,6 +10810,7 @@ impl AstCodeGen {
                     || generated.contains("__const_iterator::new_")  // Template placeholder const_iterator
                     || generated.contains("__const_reference::new_")  // Template placeholder const_reference
                     || generated.contains("1 + __cxx_atomic_load")  // Wrong operator: 1 == not 1 +
+                    || generated.contains("TypeId::of::<()>() as *const")  // Invalid TypeId cast
                 {
                     // Rollback - remove the generated method
                     self.output.truncate(output_start);
