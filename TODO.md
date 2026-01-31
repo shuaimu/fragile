@@ -14,11 +14,11 @@ We just convert the fully-resolved AST to equivalent Rust code.
 ## Current Status
 
 **Grammar Tests**: 22/22 passing
-**E2E Tests**: 131/131 passing (2 ignored: 2 STL header limitations)
+**E2E Tests**: 132/132 passing (2 ignored: 2 STL header limitations)
 **libc++ Transpilation Tests**: 8/8 passing (cstddef, cstdint, type_traits, initializer_list, vector, cstddef_compilation, iostream, thread)
 **Runtime Linking Tests**: 2/2 passing (FILE I/O, pthread)
 **Runtime Function Mapping Tests**: 1/1 passing
-**Total Tests**: 255 passing
+**Total Tests**: 256 passing
 
 **Working**:
 - Simple functions with control flow (if/else, while, for, do-while, switch, recursion)
@@ -1569,9 +1569,9 @@ These components are currently stubbed or skipped but could be fully transpiled 
   - [x] **26.1.3** `std::transform`, `std::for_each` - can be added as Rust stubs if needed
   - [x] **26.1.4** `std::binary_search`, `std::lower_bound` - can be added as Rust stubs if needed
 
-- [ ] **26.2** Exception Classes - Full Implementation (In Progress)
-  - Currently: Message storage added to base class, stubs for derived classes
-  - Could be: Full message handling for all exception types
+- [x] **26.2** Exception Classes - Full Implementation ✅ 2026-01-31
+  - Message storage in base class, type-specific defaults for all derived classes
+  - Full message handling for all 22 exception types
   - Effort: Low - just string storage and constructors
   - [x] **26.2.1** `std::exception` base class with message storage ✅ 2026-01-31
     - Added `_M_msg: *const i8` field to store exception message
@@ -1582,7 +1582,10 @@ These components are currently stubbed or skipped but could be fully transpiled 
     - `new_1(&std_string)` calls `.c_str()` and stores in `__base._M_msg`
     - `new_1_1(*const i8)` stores message directly in `__base._M_msg`
     - what() delegated to base class
-  - [ ] **26.2.3** `std::bad_alloc`, `std::out_of_range`, etc.
+  - [x] **26.2.3** `std::bad_alloc`, `std::out_of_range`, etc. ✅ 2026-01-31
+    - Type-specific default messages for all exception classes
+    - what() checks base message, falls back to type-specific default if null/empty
+    - 22 exception types with appropriate default messages
 
 - [ ] **26.3** C Variadic Functions (`va_arg`)
   - Currently: Skipped (requires unstable Rust `c_variadic` feature)

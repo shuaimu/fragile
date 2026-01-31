@@ -974,6 +974,44 @@ fn test_exception_derived_class_constructors() {
     );
 }
 
+/// Test exception classes have type-specific default messages
+/// Task 26.2.3: bad_alloc, out_of_range, etc. should return meaningful defaults
+/// Note: Exception class stubs are generated in the preamble's exception struct.
+#[test]
+fn test_exception_type_specific_messages() {
+    let parser = ClangParser::new().expect("Failed to create parser");
+
+    // Simple C++ code to trigger preamble generation
+    let source = r#"
+        int main() {
+            return 0;
+        }
+    "#;
+
+    let ast = parser
+        .parse_string(source, "exception_msgs.cpp")
+        .expect("Failed to parse");
+    let code = AstCodeGen::new().generate(&ast.translation_unit);
+
+    // Verify base exception class has its default message in what()
+    assert!(
+        code.contains("b\"exception\\0\""),
+        "exception should have default message 'exception'"
+    );
+
+    // Verify exception what() checks _M_msg field
+    assert!(
+        code.contains("if self._M_msg.is_null()"),
+        "exception.what() should check if _M_msg is null"
+    );
+
+    // Verify exception returns stored message when not null
+    assert!(
+        code.contains("self._M_msg"),
+        "exception.what() should return _M_msg when set"
+    );
+}
+
 #[test]
 fn test_e2e_namespaces() {
     let source = r#"

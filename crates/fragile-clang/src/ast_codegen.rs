@@ -8821,16 +8821,43 @@ impl AstCodeGen {
                 if !has_what {
                     self.writeln("");
                     self.writeln("/// Returns exception message");
-                    self.writeln("/// Delegates to base class which stores the message");
                     self.writeln("pub fn what(&self) -> *const i8 {");
                     self.indent += 1;
-                    // For derived exception classes, delegate to base class
-                    // The base class chain leads to exception which has _M_msg
+
+                    // Get default message for this exception type
+                    let default_msg = match name {
+                        "exception" => "exception",
+                        "bad_exception" => "bad_exception",
+                        "bad_typeid" => "bad_typeid",
+                        "bad_cast" => "bad_cast",
+                        "bad_weak_ptr" => "bad_weak_ptr",
+                        "bad_optional_access" => "bad_optional_access",
+                        "bad_alloc" => "std::bad_alloc",
+                        "bad_array_new_length" => "std::bad_array_new_length",
+                        "bad_function_call" => "bad_function_call",
+                        "bad_variant_access" => "bad_variant_access",
+                        "logic_error" => "logic_error",
+                        "runtime_error" => "runtime_error",
+                        "domain_error" => "domain_error",
+                        "invalid_argument" => "invalid_argument",
+                        "length_error" => "length_error",
+                        "out_of_range" => "out_of_range",
+                        "range_error" => "range_error",
+                        "overflow_error" => "overflow_error",
+                        "underflow_error" => "underflow_error",
+                        "system_error" => "system_error",
+                        "failure" => "ios_base::failure",
+                        _ => "exception",
+                    };
+
                     if name == "exception" {
                         // exception class directly has _M_msg
                         self.writeln("if self._M_msg.is_null() {");
                         self.indent += 1;
-                        self.writeln("b\"exception\\0\".as_ptr() as *const i8");
+                        self.writeln(&format!(
+                            "b\"{}\\0\".as_ptr() as *const i8",
+                            default_msg
+                        ));
                         self.indent -= 1;
                         self.writeln("} else {");
                         self.indent += 1;
@@ -8839,7 +8866,20 @@ impl AstCodeGen {
                         self.writeln("}");
                     } else {
                         // Delegate to __base.what() which eventually reaches exception._M_msg
-                        self.writeln("self.__base.what()");
+                        // If base message is null, return type-specific default
+                        self.writeln("let base_msg = self.__base.what();");
+                        self.writeln("if base_msg.is_null() || unsafe { *base_msg == 0 } {");
+                        self.indent += 1;
+                        self.writeln(&format!(
+                            "b\"{}\\0\".as_ptr() as *const i8",
+                            default_msg
+                        ));
+                        self.indent -= 1;
+                        self.writeln("} else {");
+                        self.indent += 1;
+                        self.writeln("base_msg");
+                        self.indent -= 1;
+                        self.writeln("}");
                     }
                     self.indent -= 1;
                     self.writeln("}");
