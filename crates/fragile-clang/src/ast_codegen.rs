@@ -4295,6 +4295,11 @@ impl AstCodeGen {
         self.writeln("pub type pthread_cond_t = usize;");
         self.writeln("pub type pthread_once_t = i32;");
         self.writeln("pub type pthread_key_t = u32;");
+        // Mark pthread types as generated to skip struct generation
+        self.generated_structs.insert("pthread_mutexattr_t".to_string());
+        self.generated_structs.insert("pthread_cond_t".to_string());
+        self.generated_structs.insert("pthread_once_t".to_string());
+        self.generated_structs.insert("pthread_key_t".to_string());
         self.writeln("");
         self.writeln("// C locale functions");
         self.writeln("pub fn __cloc() -> locale_t { std::ptr::null_mut() }");
@@ -4473,6 +4478,12 @@ impl AstCodeGen {
         self.writeln("pub type _Words = std::ffi::c_void;");
         self.writeln("pub type _Alloc_hider = std::ffi::c_void;");
         self.writeln("pub type pthread_mutex_t = usize;");
+        // Mark these types as generated to skip struct generation
+        self.generated_structs.insert("pthread_mutex_t".to_string());
+        self.generated_structs.insert("__gthread_recursive_mutex_t".to_string());
+        self.generated_structs.insert("__gthread_cond_t".to_string());
+        self.generated_structs.insert("_Words".to_string());
+        self.generated_structs.insert("_Alloc_hider".to_string());
         self.writeln("");
 
         // Missing template parameter types (for libc++ iostream)
@@ -4505,6 +4516,12 @@ impl AstCodeGen {
         self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct allocator_char;");
         self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct codecvt_char16_t__char__mbstate_t;");
         self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct codecvt_char32_t__char__mbstate_t;");
+        // Mark placeholder types as generated to skip struct generation
+        self.generated_structs.insert("string_view".to_string());
+        self.generated_structs.insert("wstring_view".to_string());
+        self.generated_structs.insert("allocator_char".to_string());
+        self.generated_structs.insert("codecvt_char16_t__char__mbstate_t".to_string());
+        self.generated_structs.insert("codecvt_char32_t__char__mbstate_t".to_string());
         self.writeln("");
 
         // More template parameter placeholders
@@ -4542,6 +4559,7 @@ impl AstCodeGen {
         self.writeln("pub type __prev = std::ffi::c_void;");
         self.writeln("pub type __short = std::ffi::c_void;");
         self.writeln("pub type __sigset_t = u64;");
+        self.generated_structs.insert("__sigset_t".to_string());
         self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct __scalar_hash_long_double;");
         self.writeln("pub type __remove_cv_type_parameter_0_0_ = std::ffi::c_void;");
         self.writeln("pub type __remove_cv_type_parameter_0_1_ = std::ffi::c_void;");
@@ -5113,6 +5131,7 @@ impl AstCodeGen {
         self.writeln("");
 
         // iostream type aliases (libc++ uses these as type aliases to template instantiations)
+        // Mark these as generated to prevent struct definitions from overriding them
         self.writeln("// iostream type aliases");
         self.writeln("pub type basic_filebuf_char = std::ffi::c_void;");
         self.writeln("pub type basic_filebuf_wchar_t = std::ffi::c_void;");
@@ -5141,6 +5160,24 @@ impl AstCodeGen {
         self.writeln("pub type basic_stringstream_char = std::ffi::c_void;");
         self.writeln("pub type basic_stringstream_wchar_t = std::ffi::c_void;");
         self.writeln("");
+        // Mark iostream type aliases as generated to skip struct generation
+        for name in &[
+            "basic_filebuf_char", "basic_filebuf_wchar_t",
+            "basic_ifstream_char", "basic_ifstream_wchar_t",
+            "basic_ofstream_char", "basic_ofstream_wchar_t",
+            "basic_fstream_char", "basic_fstream_wchar_t",
+            "basic_ios_char", "basic_ios_wchar_t",
+            "basic_istream_char", "basic_istream_wchar_t",
+            "basic_ostream_char", "basic_ostream_wchar_t",
+            "basic_iostream_char", "basic_iostream_wchar_t",
+            "basic_streambuf_char", "basic_streambuf_wchar_t",
+            "basic_stringbuf_char", "basic_stringbuf_wchar_t",
+            "basic_istringstream_char", "basic_istringstream_wchar_t",
+            "basic_ostringstream_char", "basic_ostringstream_wchar_t",
+            "basic_stringstream_char", "basic_stringstream_wchar_t",
+        ] {
+            self.generated_structs.insert(name.to_string());
+        }
 
         // Template parameter placeholder types
         self.writeln("// Template parameter placeholder types");
@@ -5516,6 +5553,7 @@ impl AstCodeGen {
         self.writeln("// Thread and time functions");
         self.writeln("#[inline] pub fn sched_yield() -> i32 { 0 }");
         self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct timespec { pub tv_sec: i64, pub tv_nsec: i64 }");
+        self.generated_structs.insert("timespec".to_string());
         self.writeln("#[inline] pub fn __convert_to_timespec_chrono_nanoseconds(_ns: i64) -> timespec { timespec { tv_sec: _ns / 1000000000, tv_nsec: _ns % 1000000000 } }");
         self.writeln("#[inline] pub fn nanosleep(_req: *const timespec, _rem: *mut timespec) -> i32 { 0 }");
         self.writeln("#[inline] pub fn __errno_location() -> *mut i32 { static mut ERRNO: i32 = 0; unsafe { &mut ERRNO as *mut i32 } }");
