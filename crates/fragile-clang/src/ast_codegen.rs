@@ -13035,12 +13035,20 @@ impl AstCodeGen {
 
                     // Handle pointer subtraction: ptr1 - ptr2 -> unsafe { ptr1.offset_from(ptr2) }
                     // Returns isize (number of elements between pointers)
+                    // Arrays also count as pointers in this context (array-to-pointer decay)
                     let right_type = Self::get_expr_type(&node.children[1]);
                     let right_is_pointer = matches!(right_type, Some(CppType::Pointer { .. }));
-                    if left_is_pointer && right_is_pointer && matches!(op, BinaryOp::Sub) {
+                    let right_is_array = matches!(right_type, Some(CppType::Array { .. }));
+                    if left_is_pointer && (right_is_pointer || right_is_array) && matches!(op, BinaryOp::Sub) {
                         let left = self.expr_to_string(&node.children[0]);
                         let right = self.expr_to_string(&node.children[1]);
-                        return format!("unsafe {{ {}.offset_from({}) }}", left, right);
+                        // For arrays, we need to get the pointer (arrays decay to pointers)
+                        let right_ptr = if right_is_array {
+                            format!("{}.as_ptr()", right)
+                        } else {
+                            right
+                        };
+                        return format!("unsafe {{ {}.offset_from({}) }}", left, right_ptr);
                     }
 
                     // Handle pointer arithmetic specially
