@@ -4511,8 +4511,26 @@ impl AstCodeGen {
         self.writeln("pub type fpos___mbstate_t = fpos_mbstate_t;");
         self.writeln("");
         // Placeholder types that need Clone/Default (can't use c_void as base for structs)
-        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct string_view;");
-        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct wstring_view;");
+        // string_view with data/size/length methods
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct string_view { pub __data: *const i8, pub __size: u64 }");
+        self.writeln("impl string_view {");
+        self.indent += 1;
+        self.writeln("pub fn data(&self) -> *const i8 { self.__data }");
+        self.writeln("pub fn size(&self) -> u64 { self.__size }");
+        self.writeln("pub fn length(&self) -> u64 { self.__size }");
+        self.writeln("pub fn empty(&self) -> bool { self.__size == 0 }");
+        self.indent -= 1;
+        self.writeln("}");
+        // wstring_view with data/size/length methods
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct wstring_view { pub __data: *const i32, pub __size: u64 }");
+        self.writeln("impl wstring_view {");
+        self.indent += 1;
+        self.writeln("pub fn data(&self) -> *const i32 { self.__data }");
+        self.writeln("pub fn size(&self) -> u64 { self.__size }");
+        self.writeln("pub fn length(&self) -> u64 { self.__size }");
+        self.writeln("pub fn empty(&self) -> bool { self.__size == 0 }");
+        self.indent -= 1;
+        self.writeln("}");
         self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct allocator_char;");
         self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct codecvt_char16_t__char__mbstate_t;");
         self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct codecvt_char32_t__char__mbstate_t;");
@@ -7917,6 +7935,7 @@ impl AstCodeGen {
             // Add stub comparison operators for strong_ordering
             // strong_ordering needs op_eq, op_ne, op_lt, op_le, op_gt, op_ge
             // to compare against _CmpUnspecifiedParam (which represents 0)
+            // Note: libstdc++ uses _M_value, libc++ uses __value_
             if name == "strong_ordering" {
                 // Check if op_eq is already defined
                 let has_op_eq = self
@@ -7928,12 +7947,12 @@ impl AstCodeGen {
                 if !has_op_eq {
                     self.writeln("");
                     self.writeln("/// Comparison operators for three-way comparison with 0");
-                    self.writeln("pub fn op_eq(&self, _other: &_CmpUnspecifiedParam) -> bool { self.__value_ == 0 }");
-                    self.writeln("pub fn op_ne(&self, _other: &_CmpUnspecifiedParam) -> bool { self.__value_ != 0 }");
-                    self.writeln("pub fn op_lt(&self, _other: &_CmpUnspecifiedParam) -> bool { self.__value_ < 0 }");
-                    self.writeln("pub fn op_le(&self, _other: &_CmpUnspecifiedParam) -> bool { self.__value_ <= 0 }");
-                    self.writeln("pub fn op_gt(&self, _other: &_CmpUnspecifiedParam) -> bool { self.__value_ > 0 }");
-                    self.writeln("pub fn op_ge(&self, _other: &_CmpUnspecifiedParam) -> bool { self.__value_ >= 0 }");
+                    self.writeln("pub fn op_eq(&self, _other: &_CmpUnspecifiedParam) -> bool { self._M_value == 0 }");
+                    self.writeln("pub fn op_ne(&self, _other: &_CmpUnspecifiedParam) -> bool { self._M_value != 0 }");
+                    self.writeln("pub fn op_lt(&self, _other: &_CmpUnspecifiedParam) -> bool { self._M_value < 0 }");
+                    self.writeln("pub fn op_le(&self, _other: &_CmpUnspecifiedParam) -> bool { self._M_value <= 0 }");
+                    self.writeln("pub fn op_gt(&self, _other: &_CmpUnspecifiedParam) -> bool { self._M_value > 0 }");
+                    self.writeln("pub fn op_ge(&self, _other: &_CmpUnspecifiedParam) -> bool { self._M_value >= 0 }");
                 }
             }
 
@@ -7948,12 +7967,12 @@ impl AstCodeGen {
                 if !has_op_eq {
                     self.writeln("");
                     self.writeln("/// Comparison operators for three-way comparison with 0");
-                    self.writeln("pub fn op_eq(&self, _other: &_CmpUnspecifiedParam) -> bool { self.__value_ == 0 }");
-                    self.writeln("pub fn op_ne(&self, _other: &_CmpUnspecifiedParam) -> bool { self.__value_ != 0 }");
-                    self.writeln("pub fn op_lt(&self, _other: &_CmpUnspecifiedParam) -> bool { self.__value_ < 0 }");
-                    self.writeln("pub fn op_le(&self, _other: &_CmpUnspecifiedParam) -> bool { self.__value_ <= 0 }");
-                    self.writeln("pub fn op_gt(&self, _other: &_CmpUnspecifiedParam) -> bool { self.__value_ > 0 }");
-                    self.writeln("pub fn op_ge(&self, _other: &_CmpUnspecifiedParam) -> bool { self.__value_ >= 0 }");
+                    self.writeln("pub fn op_eq(&self, _other: &_CmpUnspecifiedParam) -> bool { self._M_value == 0 }");
+                    self.writeln("pub fn op_ne(&self, _other: &_CmpUnspecifiedParam) -> bool { self._M_value != 0 }");
+                    self.writeln("pub fn op_lt(&self, _other: &_CmpUnspecifiedParam) -> bool { self._M_value < 0 }");
+                    self.writeln("pub fn op_le(&self, _other: &_CmpUnspecifiedParam) -> bool { self._M_value <= 0 }");
+                    self.writeln("pub fn op_gt(&self, _other: &_CmpUnspecifiedParam) -> bool { self._M_value > 0 }");
+                    self.writeln("pub fn op_ge(&self, _other: &_CmpUnspecifiedParam) -> bool { self._M_value >= 0 }");
                 }
             }
 
