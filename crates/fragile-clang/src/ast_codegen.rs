@@ -3252,6 +3252,8 @@ impl AstCodeGen {
         self.writeln("pub type __cmp_cat_type = i8;");
         self.writeln("pub type __cmp_cat__Ord = i8;");
         self.writeln("pub type __cmp_cat__Ncmp = i8;");
+        // libstdc++ uses std::__cmp_cat::_Ord which becomes std___cmp_cat__Ord
+        self.writeln("pub type std___cmp_cat__Ord = i8;");
         self.writeln("");
         // __cmp_cat___unspec - used in comparison expressions
         self.writeln("#[repr(C)]");
@@ -5221,6 +5223,13 @@ impl AstCodeGen {
         self.writeln("pub fn equal<T: PartialEq>(_first1: *const T, _last1: *const T, _first2: *const T) -> bool { true }");
         self.writeln("pub fn __libcpp_atomic_refcount_increment_i64(_ptr: *mut i64) -> i64 { unsafe { *_ptr += 1; *_ptr } }");
         self.writeln("pub fn __libcpp_atomic_refcount_decrement_i64(_ptr: *mut i64) -> i64 { unsafe { *_ptr -= 1; *_ptr } }");
+        // GCC/libstdc++ atomic stubs
+        self.writeln("// GCC/libstdc++ atomic functions (single-threaded stubs)");
+        self.writeln("pub fn __exchange_and_add(__mem: *mut i32, __val: i32) -> i32 { unsafe { let old = *__mem; *__mem += __val; old } }");
+        self.writeln("pub fn __atomic_add(__mem: *mut i32, __val: i32) { unsafe { *__mem += __val; } }");
+        // Mark these as generated to prevent duplicate definition from C++ code
+        self.generated_functions.insert("__exchange_and_add".to_string(), 1);
+        self.generated_functions.insert("__atomic_add".to_string(), 1);
         self.writeln("// Atomic wait/notify stubs (no-op placeholders)");
         self.writeln("pub fn __atomic_wait_std_atomic_flag_bool<T, M>(_: T, _: bool, _: M) {}");
         self.writeln("pub fn __atomic_notify_one_std_atomic_flag<T>(_: T) {}");
@@ -11022,6 +11031,9 @@ impl AstCodeGen {
                     || (generated.contains("pub fn scan_not_1") && !generated.contains("do_scan_not_1"))
                     // is method with wrong overload
                     || (generated.contains("pub fn is_1") && generated.contains("self.do_is(__lo, __hi"))
+                    // Broken atomic functions that just return their pointer argument
+                    || (generated.contains("pub fn __exchange_and_add(") && generated.contains("return __mem;"))
+                    || (generated.contains("pub fn __atomic_add(") && generated.contains("__mem;") && !generated.contains("*__mem"))
                 {
                     // Rollback - remove the generated method
                     self.output.truncate(output_start);
