@@ -14187,7 +14187,7 @@ impl AstCodeGen {
                                 // Check if the argument is a class/struct type that should be passed by reference
                                 let needs_ref = match &arg_type {
                                     Some(CppType::Named(name)) => {
-                                        // These are typedefs to primitive types - pass by value
+                                        // These are typedefs to primitive types or enums - pass by value
                                         !matches!(
                                             name.as_str(),
                                             "ptrdiff_t"
@@ -14209,6 +14209,13 @@ impl AstCodeGen {
                                                 | "uint16_t"
                                                 | "uint32_t"
                                                 | "uint64_t"
+                                                // Enum types - pass by value, not reference
+                                                | "memory_order"
+                                                | "std::memory_order"
+                                                | "float_round_style"
+                                                | "std::float_round_style"
+                                                | "float_denorm_style"
+                                                | "std::float_denorm_style"
                                         )
                                     }
                                     _ => false,
