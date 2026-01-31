@@ -13150,6 +13150,28 @@ impl AstCodeGen {
                             right
                         };
 
+                        // Handle enum type compared with integer literal:
+                        // In C++, enums can be compared with integers directly.
+                        // In Rust, we need to cast the enum to its underlying type.
+                        // Check if left is a Named type (possible enum) and right is an integer literal.
+                        let left_is_named = matches!(left_type, Some(CppType::Named(_)));
+                        let right_is_int_literal = is_integer_literal_str(&right);
+                        let left = if left_is_named && right_is_int_literal {
+                            // Cast enum to i32 (most common underlying type)
+                            format!("({} as i32)", left)
+                        } else {
+                            left
+                        };
+
+                        // Also handle the reverse case: right is Named (enum), left is int literal
+                        let right_is_named = matches!(right_type, Some(CppType::Named(_)));
+                        let left_is_int_literal = is_integer_literal_str(&left);
+                        let right = if right_is_named && left_is_int_literal {
+                            format!("({} as i32)", right)
+                        } else {
+                            right
+                        };
+
                         // Wrap left operand in parens if it ends with "as TYPE" to prevent
                         // < being interpreted as generic arguments (e.g., `x as i32 < y`)
                         let left = if left.contains(" as ") && !left.starts_with('(') {
