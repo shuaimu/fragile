@@ -1980,7 +1980,9 @@ impl AstCodeGen {
             || generated.contains("._unnamed")  // Unresolved member access (e.g., array begin/end)
             || generated.contains("- _unnamed")  // Unresolved in arithmetic (64 - _unnamed)
             || generated.contains("-> std::ffi::c_void")  // Returns void type (placeholder)
-            || generated.contains(": std::ffi::c_void)")  // Parameter is c_void placeholder
+            || generated.contains(": std::ffi::c_void)")  // Parameter is c_void placeholder (end of params)
+            || generated.contains(": &std::ffi::c_void,")  // Reference to c_void placeholder (mid-params)
+            || generated.contains(": &mut std::ffi::c_void,")  // Mutable ref to c_void placeholder
         {
             // Rollback - remove the generated function
             self.output.truncate(output_start);
@@ -4480,6 +4482,9 @@ impl AstCodeGen {
         // Use c_void as a placeholder - the actual generated code provides the real types
         self.writeln("pub fn equivalent(&self, _code: i32, _condition: *const std::ffi::c_void) -> bool { _code == 0 }");
         self.writeln("pub fn equivalent_1(&self, _code: *const std::ffi::c_void, _condition: i32) -> bool { _condition == 0 }");
+        // message() returns a string describing the error code - use c_void as placeholder
+        // since basic_string_char may not be defined yet at this point
+        self.writeln("pub fn message(&self, _ev: i32) -> std::ffi::c_void { unsafe { std::mem::zeroed() } }");
         self.indent -= 1;
         self.writeln("}");
         self.generated_aliases.insert("error_category".to_string());
@@ -7032,13 +7037,23 @@ impl AstCodeGen {
         }
 
         // Skip functions that return bare c_void (placeholder for unresolved types like std::string)
-        // Also skip functions with c_void parameters (except pointer/ref to c_void which is valid)
+        // Also skip functions with c_void parameters (bare c_void, or reference to c_void that should
+        // be a proper type like basic_string but got mangled to c_void)
         if return_type_str == "std::ffi::c_void" {
             return;
         }
         if params.iter().any(|(_, t)| {
             let ts = t.to_rust_type_str();
-            ts == "std::ffi::c_void"
+            // Skip bare c_void parameters
+            if ts == "std::ffi::c_void" {
+                return true;
+            }
+            // Skip references to c_void (these are typically mistyped basic_string params in stoi/stol etc.)
+            // But allow pointers to c_void which are valid for opaque types
+            if ts == "&std::ffi::c_void" || ts == "&mut std::ffi::c_void" {
+                return true;
+            }
+            false
         }) {
             return;
         }
@@ -8369,6 +8384,15 @@ impl AstCodeGen {
                     self.indent -= 1;
                     self.writeln("}");
                 }
+
+                // _M_grow_words - grows the word array for ios_base
+                self.writeln("");
+                self.writeln("/// Grows word array (libstdc++ internal)");
+                self.writeln("pub fn _M_grow_words(&mut self, _ix: i32, _is_pword: bool) -> _Words {");
+                self.indent += 1;
+                self.writeln("Default::default()");
+                self.indent -= 1;
+                self.writeln("}");
             }
 
             // Add codecvt virtual method stubs
@@ -8444,6 +8468,12 @@ impl AstCodeGen {
                     self.writeln("");
                     self.writeln("/// Stub for do_narrow virtual method (range)");
                     self.writeln("pub fn do_narrow_1(&self, _lo: *const i8, _hi: *const i8, _dfault: i8, _dest: *mut i8) -> *const i8 { _hi }");
+                    self.writeln("");
+                    self.writeln("/// Internal method to initialize widen table");
+                    self.writeln("pub fn _M_widen_init(&self) {}");
+                    self.writeln("");
+                    self.writeln("/// Internal method to initialize narrow table");
+                    self.writeln("pub fn _M_narrow_init(&self) {}");
                 } else {
                     // ctype<wchar_t> - uses i32 for wchar_t type
                     self.writeln("");
