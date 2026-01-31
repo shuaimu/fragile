@@ -262,6 +262,9 @@ pub struct AstCodeGen {
     fn_template_definitions: HashMap<String, FnTemplateInfo>,
     /// Pending function template instantiations: mangled name (e.g., "add_i32") -> (template_name, type_args)
     pending_fn_instantiations: HashMap<String, (String, Vec<String>)>,
+    /// Class names for which we should skip vtable constant generation
+    /// (because they have hand-written vtable stubs in the preamble)
+    skip_vtable_generation: HashSet<String>,
 }
 
 /// Information about a function template definition
@@ -326,6 +329,7 @@ impl AstCodeGen {
             pending_template_instantiations: HashSet::new(),
             fn_template_definitions: HashMap::new(),
             pending_fn_instantiations: HashMap::new(),
+            skip_vtable_generation: HashSet::new(),
         }
     }
 
@@ -633,6 +637,12 @@ impl AstCodeGen {
     /// Generate a static vtable instance for a concrete class.
     fn generate_static_vtable(&mut self, vtable_info: &ClassVTableInfo) {
         let class_name = &vtable_info.class_name;
+
+        // Skip vtable generation for classes with hand-written stubs
+        if self.skip_vtable_generation.contains(class_name) {
+            return;
+        }
+
         let sanitized_class = sanitize_identifier(class_name);
 
         // Find the root class (the one with the vtable type)
@@ -4519,6 +4529,14 @@ impl AstCodeGen {
         // ctype vtable stubs - mark as generated to prevent duplicate definitions
         self.generated_structs.insert("ctype_char__vtable".to_string());
         self.generated_structs.insert("ctype_wchar_t__vtable".to_string());
+        // Skip vtable constant generation for these stub types (vtable constants must be hand-written)
+        // Both non-qualified and std::-qualified names for robustness
+        self.skip_vtable_generation.insert("ctype<char>".to_string());
+        self.skip_vtable_generation.insert("ctype<wchar_t>".to_string());
+        self.skip_vtable_generation.insert("std::ctype<char>".to_string());
+        self.skip_vtable_generation.insert("std::ctype<wchar_t>".to_string());
+        self.skip_vtable_generation.insert("std::ctype_byname<char>".to_string());
+        self.skip_vtable_generation.insert("std::ctype_byname<wchar_t>".to_string());
         self.writeln("// ctype vtable stubs");
         // ctype_char uses i8 for char type
         self.writeln("#[repr(C)]");
@@ -4589,6 +4607,14 @@ impl AstCodeGen {
         // collate vtable stubs - mark as generated to prevent duplicate definitions
         self.generated_structs.insert("collate_char__vtable".to_string());
         self.generated_structs.insert("collate_wchar_t__vtable".to_string());
+        // Skip vtable constant generation for these stub types (vtable constants must be hand-written)
+        // Both non-qualified and std::-qualified names for robustness
+        self.skip_vtable_generation.insert("collate<char>".to_string());
+        self.skip_vtable_generation.insert("collate<wchar_t>".to_string());
+        self.skip_vtable_generation.insert("std::collate<char>".to_string());
+        self.skip_vtable_generation.insert("std::collate<wchar_t>".to_string());
+        self.skip_vtable_generation.insert("std::collate_byname<char>".to_string());
+        self.skip_vtable_generation.insert("std::collate_byname<wchar_t>".to_string());
         self.writeln("// collate vtable stubs");
         self.writeln("#[repr(C)]");
         self.writeln("pub struct collate_char__vtable {");
