@@ -4132,6 +4132,21 @@ impl AstCodeGen {
         self.indent -= 1;
         self.writeln("}");
         self.writeln("");
+        // _Hash_impl struct with hash methods for libstdc++
+        self.writeln("// _Hash_impl struct for libstdc++ hash support");
+        self.writeln("#[derive(Default, Clone, Copy)]");
+        self.writeln("pub struct _Hash_impl;");
+        self.writeln("impl _Hash_impl {");
+        self.indent += 1;
+        self.writeln("pub fn new_0() -> Self { Self }");
+        self.writeln("pub fn hash(_ptr: *const (), _len: u64, _seed: u64) -> u64 { _Hash_bytes(_ptr, _len, _seed) }");
+        self.writeln("pub fn hash_i32(_v: &i32) -> u64 { *_v as u64 }");
+        self.writeln("pub fn hash_ptr_const___<T>(_ptr: *const T, _len: u64, _seed: u64) -> u64 { _Hash_bytes(_ptr as *const (), _len, _seed) }");
+        self.writeln("pub fn __hash_combine_std_error_categoryconst(_cat: *const error_category, _hash: u64) -> u64 { _hash }");
+        self.indent -= 1;
+        self.writeln("}");
+        self.generated_structs.insert("_Hash_impl".to_string());
+        self.writeln("");
 
         // numeric_limits stub for libstdc++
         self.writeln("// numeric_limits stub for libstdc++ allocator");
@@ -5787,6 +5802,18 @@ impl AstCodeGen {
         self.writeln("pub fn __stoa_extern__C__fn_ptr_const_i8__ptr_mut_ptr_mut_i8___ret__f64_i8_i8_u64(_f: &dyn Fn(*const i8, *mut *mut i8) -> f64, _name: *const i8, _str: *const i8, _idx: *mut u64, _base: i32) -> f64 { 0.0 }");
         self.writeln("#[inline]");
         self.writeln("pub fn __stoa_extern__C__fn_ptr_const_i8__ptr_mut_ptr_mut_i8___ret__f32_i8_i8_u64(_f: &dyn Fn(*const i8, *mut *mut i8) -> f32, _name: *const i8, _str: *const i8, _idx: *mut u64, _base: i32) -> f32 { 0.0 }");
+        // __stoa variants for wchar_t (i32) strings
+        self.writeln("#[inline]");
+        self.writeln("pub fn __stoa_extern__C__fn_ptr_const_i32__ptr_mut_ptr_mut_i32__i32___ret__i64_i8_i32_u64(_f: &dyn Fn(*const i32, *mut *mut i32, i32) -> i64, _name: *const i8, _str: *const i32, _idx: *mut u64, _base: i32) -> i64 { 0 }");
+        self.writeln("#[inline]");
+        self.writeln("pub fn __stoa_extern__C__fn_ptr_const_i32__ptr_mut_ptr_mut_i32__i32___ret__u64_i8_i32_u64(_f: &dyn Fn(*const i32, *mut *mut i32, i32) -> u64, _name: *const i8, _str: *const i32, _idx: *mut u64, _base: i32) -> u64 { 0 }");
+        self.writeln("#[inline]");
+        self.writeln("pub fn __stoa_extern__C__fn_ptr_const_i32__ptr_mut_ptr_mut_i32___ret__f32_i8_i32_u64(_f: &dyn Fn(*const i32, *mut *mut i32) -> f32, _name: *const i8, _str: *const i32, _idx: *mut u64, _base: i32) -> f32 { 0.0 }");
+        self.writeln("#[inline]");
+        self.writeln("pub fn __stoa_extern__C__fn_ptr_const_i32__ptr_mut_ptr_mut_i32___ret__f64_i8_i32_u64(_f: &dyn Fn(*const i32, *mut *mut i32) -> f64, _name: *const i8, _str: *const i32, _idx: *mut u64, _base: i32) -> f64 { 0.0 }");
+        // uncaught_exception function for exception handling
+        self.writeln("#[inline]");
+        self.writeln("pub fn uncaught_exception() -> bool { false }");
         self.writeln("");
 
         // to_string stubs for std::to_string functions
