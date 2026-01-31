@@ -1123,7 +1123,16 @@ Get `std::thread` working end-to-end.
       - Skip global variables with unresolved __d, __n0, __n1 from 128-bit math ✅ 2026-01-31
       - Added __atomic_notify_address_bool and __platform_wait_i32 function stubs (194→184) ✅ 2026-01-31
       - Skip global variables with __lo1/__lo2/__hi1/__hi2/__x/__y from 128-bit math (184→180) ✅ 2026-01-31
-    - **Remaining errors at 180**: E0308 type mismatches (45), E0599 missing methods (30+), E0061 wrong arg count (20+)
+      - Added this_thread and chrono module tracking to prevent duplicates ✅ 2026-01-31
+      - Added literals::chrono_literals module with duration stubs (ms, us, ns, s, min, h) ✅ 2026-01-31
+      - Skip functions returning _unnamed.clone() (unresolved chrono literals) ✅ 2026-01-31
+      - Skip global variables with _Pn/_Qn (unresolved ratio template params) ✅ 2026-01-31
+      - Added timespec field registration for named struct initialization ✅ 2026-01-31
+      - Fix self/self. detection in initializers to handle *this in member init list (180→164) ✅ 2026-01-31
+      - Added is_lock_free, wait, notify_one, notify_all to __atomic_base_bool (164→164) ✅ 2026-01-31
+      - Added atomic_flag::clear method stub (164→164) ✅ 2026-01-31
+      - Fixed numeric_limits::min/max stubs to be 0-arg type limits instead of 2-arg comparison (164→145) ✅ 2026-01-31
+    - **Remaining errors at 145**: E0308 type mismatches (49), E0599 c_void methods (30+), E0610 primitives (9)
   - [ ] **23.10.2** Verify pthread_create/join are called correctly - BLOCKED
   - [ ] **23.10.3** Add mutex test with std::mutex - BLOCKED
   - [ ] **23.10.4** Add condition variable test - BLOCKED

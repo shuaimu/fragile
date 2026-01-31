@@ -434,10 +434,16 @@ impl AstCodeGen {
         // Add atomic_flag impl if the struct was generated
         if self.generated_structs.contains("atomic_flag") {
             self.writeln("");
-            self.writeln("// atomic_flag test method impl (generated)");
+            self.writeln("// atomic_flag test and clear method impls (generated)");
             self.writeln("impl AtomicFlagTest for atomic_flag {");
             self.writeln("    #[inline] fn test<M>(&self, _m: M) -> bool {");
             self.writeln("        __cxx_atomic_load___cxx_atomic_base_impl_bool(&self.__a_ as *const _, _m)");
+            self.writeln("    }");
+            self.writeln("}");
+            // Only add clear - the other methods (wait, notify_one, notify_all) are generated from C++ code
+            self.writeln("impl atomic_flag {");
+            self.writeln("    #[inline] pub fn clear(&mut self, _order: i32) {");
+            self.writeln("        unsafe { __atomic_clear(&mut self.__a_ as *mut _, _order); }");
             self.writeln("    }");
             self.writeln("}");
         }
@@ -1980,6 +1986,7 @@ impl AstCodeGen {
             || generated.contains("_unnamed)")  // Unresolved value in function call
             || generated.contains("_unnamed,")  // Unresolved value in function call
             || generated.contains("._unnamed")  // Unresolved member access (e.g., array begin/end)
+            || generated.contains("_unnamed.clone()")  // Unresolved value being cloned (chrono literals)
             || generated.contains("- _unnamed")  // Unresolved in arithmetic (64 - _unnamed)
             || generated.contains("-> std::ffi::c_void")  // Returns void type (placeholder)
             || generated.contains(": std::ffi::c_void)")  // Parameter is c_void placeholder (end of params)
@@ -4178,18 +4185,31 @@ impl AstCodeGen {
         self.writeln("#[inline]");
         self.writeln("pub fn max() -> isize { isize::MAX }");
         // Type-specific min/max functions that libstdc++ generates
-        self.writeln("#[inline] pub fn min_bool_bool(_a: bool, _b: bool) -> bool { false }");
-        self.writeln("#[inline] pub fn min_i8_i8(a: i8, b: i8) -> i8 { if a < b { a } else { b } }");
-        self.writeln("#[inline] pub fn min_u8_u8(a: u8, b: u8) -> u8 { if a < b { a } else { b } }");
-        self.writeln("#[inline] pub fn min_i16_i16(a: i16, b: i16) -> i16 { if a < b { a } else { b } }");
-        self.writeln("#[inline] pub fn min_u16_u16(a: u16, b: u16) -> u16 { if a < b { a } else { b } }");
-        self.writeln("#[inline] pub fn min_i32_i32(a: i32, b: i32) -> i32 { if a < b { a } else { b } }");
-        self.writeln("#[inline] pub fn min_u32_u32(a: u32, b: u32) -> u32 { if a < b { a } else { b } }");
-        self.writeln("#[inline] pub fn min_i64_i64(a: i64, b: i64) -> i64 { if a < b { a } else { b } }");
-        self.writeln("#[inline] pub fn min_u64_u64(a: u64, b: u64) -> u64 { if a < b { a } else { b } }");
-        self.writeln("#[inline] pub fn min_i128_i128(a: i128, b: i128) -> i128 { if a < b { a } else { b } }");
-        self.writeln("#[inline] pub fn min_u128_u128(a: u128, b: u128) -> u128 { if a < b { a } else { b } }");
-        self.writeln("#[inline] pub fn max___float128___float128(a: f64, b: f64) -> f64 { if a > b { a } else { b } }");
+        // These are 0-arg static methods returning the type's min/max value
+        self.writeln("#[inline] pub fn min_bool_bool() -> bool { false }");
+        self.writeln("#[inline] pub fn max_bool_bool() -> bool { true }");
+        self.writeln("#[inline] pub fn min_i8_i8() -> i8 { i8::MIN }");
+        self.writeln("#[inline] pub fn max_i8_i8() -> i8 { i8::MAX }");
+        self.writeln("#[inline] pub fn min_u8_u8() -> u8 { u8::MIN }");
+        self.writeln("#[inline] pub fn max_u8_u8() -> u8 { u8::MAX }");
+        self.writeln("#[inline] pub fn min_i16_i16() -> i16 { i16::MIN }");
+        self.writeln("#[inline] pub fn max_i16_i16() -> i16 { i16::MAX }");
+        self.writeln("#[inline] pub fn min_u16_u16() -> u16 { u16::MIN }");
+        self.writeln("#[inline] pub fn max_u16_u16() -> u16 { u16::MAX }");
+        self.writeln("#[inline] pub fn min_i32_i32() -> i32 { i32::MIN }");
+        self.writeln("#[inline] pub fn max_i32_i32() -> i32 { i32::MAX }");
+        self.writeln("#[inline] pub fn min_u32_u32() -> u32 { u32::MIN }");
+        self.writeln("#[inline] pub fn max_u32_u32() -> u32 { u32::MAX }");
+        self.writeln("#[inline] pub fn min_i64_i64() -> i64 { i64::MIN }");
+        self.writeln("#[inline] pub fn max_i64_i64() -> i64 { i64::MAX }");
+        self.writeln("#[inline] pub fn min_u64_u64() -> u64 { u64::MIN }");
+        self.writeln("#[inline] pub fn max_u64_u64() -> u64 { u64::MAX }");
+        self.writeln("#[inline] pub fn min_i128_i128() -> i128 { i128::MIN }");
+        self.writeln("#[inline] pub fn max_i128_i128() -> i128 { i128::MAX }");
+        self.writeln("#[inline] pub fn min_u128_u128() -> u128 { u128::MIN }");
+        self.writeln("#[inline] pub fn max_u128_u128() -> u128 { u128::MAX }");
+        self.writeln("#[inline] pub fn min___float128___float128() -> f64 { f64::MIN }");
+        self.writeln("#[inline] pub fn max___float128___float128() -> f64 { f64::MAX }");
         // Float limit functions for __float128
         self.writeln("#[inline] pub fn _S_1pm16352() -> f64 { 0.0 }");  // smallest denorm for __float128
         self.writeln("#[inline] pub fn _S_1p16256() -> f64 { f64::MAX }");  // largest value approximation
@@ -4201,6 +4221,10 @@ impl AstCodeGen {
         self.writeln("");
 
         // Thread-related module stubs
+        // Mark as generated to avoid duplicate from C++ namespace code
+        self.generated_modules.insert("this_thread".to_string());
+        self.generated_modules
+            .insert("std::this_thread".to_string());
         self.writeln("pub mod this_thread {");
         self.indent += 1;
         self.writeln("#[inline] pub fn sleep_for_chrono_duration_long__ratio_1__1000___(_d: i64) { }");
@@ -4211,10 +4235,38 @@ impl AstCodeGen {
         self.writeln("");
 
         // Chrono module stubs
+        // Mark as generated to avoid duplicate from C++ namespace code
+        self.generated_modules.insert("chrono".to_string());
+        self.generated_modules.insert("std::chrono".to_string());
         self.writeln("pub mod chrono {");
         self.indent += 1;
         self.writeln("#[inline] pub fn duration_cast_duration_long__ratio_1__1000000000___enable_if_is_duration_duration_long__ratio_1__1000000000___enable_if_is_duration_duration_long__ratio_1__1000000000(_d: i64) -> i64 { _d }");
         self.writeln("#[inline] pub fn time_point_cast_time_point_system_clock__duration_long__ratio_1__1000000000___enable_if_t___is_duration_duration_long__ratio_1__1_value__time_point_system_clock__duration_long__ratio_1__1___enable_if_t___is_duration_duration_long__ratio_1__1_value__time_point_system_clock__duration_long__ratio_1__1(_t: i64) -> i64 { _t }");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("");
+
+        // Literals module stubs (for user-defined literals like 1ms, 1us)
+        self.generated_modules.insert("literals".to_string());
+        self.generated_modules
+            .insert("std::literals".to_string());
+        self.writeln("pub mod literals {");
+        self.indent += 1;
+        self.generated_modules
+            .insert("chrono_literals".to_string());
+        self.generated_modules
+            .insert("std::literals::chrono_literals".to_string());
+        self.writeln("pub mod chrono_literals {");
+        self.indent += 1;
+        // User-defined literal operators return duration types (approximated as i64)
+        self.writeln("#[inline] pub fn op_literal_ms_() -> i64 { 1 }"); // milliseconds
+        self.writeln("#[inline] pub fn op_literal_us_() -> i64 { 1 }"); // microseconds
+        self.writeln("#[inline] pub fn op_literal_ns_() -> i64 { 1 }"); // nanoseconds
+        self.writeln("#[inline] pub fn op_literal_s_() -> i64 { 1 }"); // seconds
+        self.writeln("#[inline] pub fn op_literal_min_() -> i64 { 60 }"); // minutes
+        self.writeln("#[inline] pub fn op_literal_h_() -> i64 { 3600 }"); // hours
+        self.indent -= 1;
+        self.writeln("}");
         self.indent -= 1;
         self.writeln("}");
         self.writeln("");
@@ -5500,6 +5552,10 @@ impl AstCodeGen {
         self.writeln("self.compare_exchange_weak(expected, desired, _success, _fail)");
         self.indent -= 1;
         self.writeln("}");
+        self.writeln("#[inline] pub fn is_lock_free(&self) -> bool { true }");
+        self.writeln("#[inline] pub fn wait(&self, _old: bool, _order: i32) { }");
+        self.writeln("#[inline] pub fn notify_one(&self) { }");
+        self.writeln("#[inline] pub fn notify_all(&self) { }");
         self.indent -= 1;
         self.writeln("}");
         self.writeln("");
@@ -5985,6 +6041,14 @@ impl AstCodeGen {
         self.writeln("#[inline] pub fn sched_yield() -> i32 { 0 }");
         self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct timespec { pub tv_sec: i64, pub tv_nsec: i64 }");
         self.generated_structs.insert("timespec".to_string());
+        // Register field names so InitListExpr can use named initialization
+        self.class_fields.insert(
+            "timespec".to_string(),
+            vec![
+                ("tv_sec".to_string(), CppType::Long { signed: true }),
+                ("tv_nsec".to_string(), CppType::Long { signed: true }),
+            ],
+        );
         self.writeln("#[inline] pub fn __convert_to_timespec_chrono_nanoseconds(_ns: i64) -> timespec { timespec { tv_sec: _ns / 1000000000, tv_nsec: _ns % 1000000000 } }");
         self.writeln("#[inline] pub fn nanosleep(_req: *const timespec, _rem: *mut timespec) -> i32 { 0 }");
         self.writeln("#[inline] pub fn __errno_location() -> *mut i32 { static mut ERRNO: i32 = 0; unsafe { &mut ERRNO as *mut i32 } }");
@@ -9540,7 +9604,9 @@ impl AstCodeGen {
                         || init_str.starts_with("__x ")  // Unresolved __x at start
                         || init_str.contains(" __x ")  // Unresolved __x in expression
                         || init_str.starts_with("__y ")  // Unresolved __y at start
-                        || init_str.contains(" __y ");  // Unresolved __y in expression
+                        || init_str.contains(" __y ")  // Unresolved __y in expression
+                        || init_str.contains("_Pn")  // Unresolved _Pn from ratio template
+                        || init_str.contains("_Qn");  // Unresolved _Qn from ratio template
                     if has_template_pattern {
                         Self::default_value_for_static(ty)
                     } else if matches!(ty, CppType::Bool) {
@@ -10314,11 +10380,15 @@ impl AstCodeGen {
     /// using the `__self` pattern (let mut __self = Self {...}; statements; __self).
     /// Returns true if:
     /// - Any initializer value references `self.` (uses a field being initialized)
+    /// - Any initializer value passes `self` as an argument (C++ *this in member init list)
     /// - Any field is assigned multiple times (duplicate field names)
     fn initializers_need_self_pattern(initializers: &[(String, String)]) -> bool {
-        // Check for any value that references self (other fields)
+        // Check for any value that references self (other fields or whole object)
         for (_, value) in initializers {
-            if value.contains("self.") {
+            if value.contains("self.")  // References a field
+                || value.contains("self)")  // Passes self as argument (end of call)
+                || value.contains("self,")  // Passes self as argument (mid of call)
+            {
                 return true;
             }
         }
@@ -12368,8 +12438,11 @@ impl AstCodeGen {
                         if initializers_need_stmts {
                             for (field, value) in &initializers {
                                 let sanitized = sanitize_identifier(field);
-                                // Replace self. with __self. for proper reference
-                                let fixed_value = value.replace("self.", "__self.");
+                                // Replace self references with __self for proper reference
+                                let fixed_value = value
+                                    .replace("self.", "__self.")
+                                    .replace("self)", "&mut __self as *mut Self)")  // Pass pointer to self
+                                    .replace("self,", "&mut __self as *mut Self,");  // Pass pointer to self
                                 let corrected = all_fields
                                     .iter()
                                     .find(|(name, _)| name == &sanitized)
