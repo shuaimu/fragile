@@ -5770,6 +5770,23 @@ impl AstCodeGen {
         self.writeln("pub fn wcscmp(_s1: *const i32, _s2: *const i32) -> i32 { 0 }");
         self.writeln("#[inline]");
         self.writeln("pub fn wcsncmp(_s1: *const i32, _s2: *const i32, _n: u64) -> i32 { 0 }");
+        self.writeln("#[inline]");
+        self.writeln("pub fn wmemchr(_s: *const i32, _c: i32, _n: u64) -> *const i32 { std::ptr::null() }");
+        // Exception throwing stubs
+        self.writeln("#[inline]");
+        self.writeln("pub fn __throw_out_of_range_fmt(_fmt: *const i8, _s: *const i8, _pos: u64, _size: u64) { panic!(\"out of range\"); }");
+        // pthread mutex timedlock
+        self.writeln("#[inline]");
+        self.writeln("pub fn pthread_mutex_timedlock(_mutex: *mut std::ffi::c_void, _abs_timeout: *const std::ffi::c_void) -> i32 { 0 }");
+        // __stoa stubs for string-to-number conversions (libstdc++ internal)
+        self.writeln("#[inline]");
+        self.writeln("pub fn __stoa_extern__C__fn_ptr_const_i8__ptr_mut_ptr_mut_i8__i32___ret__i64_i8_i8_u64(_f: &dyn Fn(*const i8, *mut *mut i8, i32) -> i64, _name: *const i8, _str: *const i8, _idx: *mut u64, _base: i32) -> i64 { 0 }");
+        self.writeln("#[inline]");
+        self.writeln("pub fn __stoa_extern__C__fn_ptr_const_i8__ptr_mut_ptr_mut_i8__i32___ret__u64_i8_i8_u64(_f: &dyn Fn(*const i8, *mut *mut i8, i32) -> u64, _name: *const i8, _str: *const i8, _idx: *mut u64, _base: i32) -> u64 { 0 }");
+        self.writeln("#[inline]");
+        self.writeln("pub fn __stoa_extern__C__fn_ptr_const_i8__ptr_mut_ptr_mut_i8___ret__f64_i8_i8_u64(_f: &dyn Fn(*const i8, *mut *mut i8) -> f64, _name: *const i8, _str: *const i8, _idx: *mut u64, _base: i32) -> f64 { 0.0 }");
+        self.writeln("#[inline]");
+        self.writeln("pub fn __stoa_extern__C__fn_ptr_const_i8__ptr_mut_ptr_mut_i8___ret__f32_i8_i8_u64(_f: &dyn Fn(*const i8, *mut *mut i8) -> f32, _name: *const i8, _str: *const i8, _idx: *mut u64, _base: i32) -> f32 { 0.0 }");
         self.writeln("");
 
         // to_string stubs for std::to_string functions
