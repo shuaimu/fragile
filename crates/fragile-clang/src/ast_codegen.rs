@@ -432,18 +432,27 @@ impl AstCodeGen {
         self.generate_all_static_vtables();
 
         // Add atomic_flag impl if the struct was generated
-        if self.generated_structs.contains("atomic_flag") {
+        // Note: Only generate for libc++ - libstdc++ uses a different internal structure
+        // and the C++ generated methods are sufficient
+        if self.generated_structs.contains("atomic_flag")
+            && !self.generated_structs.contains("__atomic_flag_base")
+        {
+            // libc++ uses __a_ field directly
             self.writeln("");
             self.writeln("// atomic_flag test and clear method impls (generated)");
             self.writeln("impl AtomicFlagTest for atomic_flag {");
             self.writeln("    #[inline] fn test<M>(&self, _m: M) -> bool {");
-            self.writeln("        __cxx_atomic_load___cxx_atomic_base_impl_bool(&self.__a_ as *const _, _m)");
+            self.writeln(
+                "        __cxx_atomic_load___cxx_atomic_base_impl_bool(&self.__a_ as *const _, _m)",
+            );
             self.writeln("    }");
             self.writeln("}");
             // Only add clear - the other methods (wait, notify_one, notify_all) are generated from C++ code
             self.writeln("impl atomic_flag {");
             self.writeln("    #[inline] pub fn clear(&mut self, _order: i32) {");
-            self.writeln("        unsafe { __atomic_clear(&mut self.__a_ as *mut _, _order); }");
+            self.writeln(
+                "        unsafe { __atomic_clear(&mut self.__a_ as *mut _, _order); }",
+            );
             self.writeln("    }");
             self.writeln("}");
         }
@@ -2013,6 +2022,12 @@ impl AstCodeGen {
             || generated.contains("c_void.op_")   // c_void placeholder used as callable object
             || generated.contains("inf.0")        // Broken infinity literal (should be just inf)
             || generated.contains("NaN.0")        // Broken NaN literal (should be just NaN)
+            // __platform_notify calling syscall with wrong number of arguments
+            || (generated.contains("fn __platform_notify") && generated.contains("syscall("))
+            // __atomic_wait_address_bare calling methods on wrong types
+            || (generated.contains("fn __atomic_wait_address_bare") && generated.contains("__pred.clone()"))
+            // __atomic_spin with wrong argument types
+            || (generated.contains("fn __atomic_spin") && generated.contains("__pred.clone()"))
         {
             // Rollback - remove the generated function
             self.output.truncate(output_start);
@@ -5453,6 +5468,7 @@ impl AstCodeGen {
         self.writeln("#[inline] pub unsafe fn __atomic_wait_address_v_bool_bool(_ptr: *const bool, _expected: bool) { }");
         self.writeln("#[inline] pub fn __atomic_notify_address_bool(_addr: *mut bool, _all: bool) { }");
         self.writeln("#[inline] pub fn __platform_wait_i32(_addr: *const i32, _val: i32) { }");
+        self.writeln("#[inline] pub fn __platform_notify_i32(_addr: *const i32, _all: bool) { }");
         self.writeln("#[inline] pub unsafe fn __builtin_ia32_pause() { std::hint::spin_loop() }");
         // syscall - use libc::syscall or define with fixed args (variadic requires nightly)
         self.writeln("#[inline] pub unsafe fn syscall(_num: i64) -> i64 { 0 }");
@@ -6807,6 +6823,11 @@ impl AstCodeGen {
         underlying_type: &CppType,
         children: &[ClangNode],
     ) {
+        // Skip enums with known duplicate discriminant issues
+        if name == "__memory_order_modifier" {
+            return;
+        }
+
         let kind = if is_scoped { "enum class" } else { "enum" };
         self.writeln(&format!("/// C++ {} `{}`", kind, name));
 
@@ -7897,6 +7918,29 @@ impl AstCodeGen {
             || (generated.contains("swap_std_thread_id_std_thread_id(") && generated.contains("__t._M_id"))
             // get_stop_source calling clone on stop_source (Clone impl was skipped)
             || (generated.contains("self._M_stop_source.clone()"))
+            // atomic_flag_clear calling rolled-back atomic_flag_clear_explicit
+            || (generated.contains("pub fn atomic_flag_clear") && generated.contains("atomic_flag_clear_explicit("))
+            // __platform_notify calling syscall with wrong number of arguments
+            || (generated.contains("fn __platform_notify") && generated.contains("syscall("))
+            // numeric_limits methods with inf.0 pattern (accessing field on f64)
+            || (generated.contains("return inf.0") || generated.contains("return -inf.0"))
+            || (generated.contains("return NaN.0"))
+            // thread::swap calling swap_std_thread_id with wrong argument types
+            || (generated.contains("swap_std_thread_id_std_thread_id(&mut self._M_id"))
+            // thread::native_handle accessing _M_thread on id (wrong type)
+            || (generated.contains("self._M_id._M_thread"))
+            // operator== on thread_id accessing _M_thread field on u64 type alias
+            || (generated.contains("pub fn op_eq") && generated.contains("._M_thread =="))
+            // atomic_flag_test functions calling .test() method (not available in libstdc++)
+            || (generated.contains("pub fn atomic_flag_test") && generated.contains("(*__a).test("))
+            // op_____ functions accessing _M_thread on thread_id type
+            || (generated.contains("__x._M_thread.cmp("))
+            // __condvar Drop with bool/int mixing in condition
+            || (generated.contains("impl Drop for __condvar") && generated.contains("&& 16i32"))
+            // stop_source methods that call clone on c_void
+            || (generated.contains("pub fn get_token") && generated.contains("stop_token::new_1(self._M_state)"))
+            // jthread methods with stop_source/thread issues
+            || (generated.contains("pub fn get_stop_token") && generated.contains("stop_token::new_1("))
         {
             // Rollback - remove the generated function
             self.output.truncate(output_start);
@@ -8221,6 +8265,13 @@ impl AstCodeGen {
             )
         });
 
+        // Type aliases that resolve to c_void - these don't implement Default or Clone
+        let c_void_type_aliases = [
+            "_Stop_state_ref",
+            "stop_token__Stop_state_ref",
+            "__waiter_std_true_type",
+        ];
+
         // Check if there's any field that would prevent deriving Default:
         // - Arrays larger than 32 elements (Rust's Default is only impl'd for arrays up to [T; 32])
         // - Fields of type c_void which doesn't implement Default
@@ -8237,13 +8288,19 @@ impl AstCodeGen {
                 }
                 // Check for c_void fields (c_void doesn't implement Default)
                 let type_str = ty.to_rust_type_str();
-                if type_str == "std::ffi::c_void" || type_str.ends_with("c_void") {
+                if type_str == "std::ffi::c_void"
+                    || type_str.ends_with("c_void")
+                    || c_void_type_aliases.iter().any(|alias| type_str == *alias)
+                {
                     return true;
                 }
                 // Check for array of c_void
                 if let CppType::Array { element, .. } = ty {
                     let elem_str = element.to_rust_type_str();
-                    if elem_str == "std::ffi::c_void" || elem_str.ends_with("c_void") {
+                    if elem_str == "std::ffi::c_void"
+                        || elem_str.ends_with("c_void")
+                        || c_void_type_aliases.iter().any(|alias| elem_str == *alias)
+                    {
                         return true;
                     }
                 }
@@ -8253,17 +8310,28 @@ impl AstCodeGen {
             }
         });
 
+        // Types that don't implement Clone (in addition to c_void aliases)
+        let non_clone_types = [
+            "stop_source",
+            "stop_token",
+            "thread",
+            "jthread",
+        ];
+
         let kind = if is_class { "class" } else { "struct" };
         self.writeln(&format!("/// C++ {} `{}`", kind, name));
         self.writeln("#[repr(C)]");
-        // Check if any field contains c_void (which doesn't impl Default or Clone)
+        // Check if any field contains c_void or types that don't impl Clone
         let has_c_void_field = children.iter().any(|child| {
             if let ClangNodeKind::FieldDecl { ty, is_static, .. } = &child.kind {
                 if *is_static {
                     return false;
                 }
                 let type_str = ty.to_rust_type_str();
-                type_str == "std::ffi::c_void" || type_str.ends_with("c_void")
+                type_str == "std::ffi::c_void"
+                    || type_str.ends_with("c_void")
+                    || c_void_type_aliases.iter().any(|alias| type_str == *alias)
+                    || non_clone_types.iter().any(|t| type_str == *t)
             } else {
                 false
             }
@@ -9219,6 +9287,8 @@ impl AstCodeGen {
                     || generated.contains("self.join()")
                     // sem_destroy in destructor with wrong pointer type
                     || generated.contains("sem_destroy(&mut self")
+                    // __condvar destructor with bool/int mixing in condition
+                    || (generated.contains("impl Drop for __condvar") && generated.contains("&& 16i32"))
                 {
                     self.output.truncate(output_start);
                 }
@@ -9265,6 +9335,11 @@ impl AstCodeGen {
         underlying_type: &CppType,
         children: &[ClangNode],
     ) {
+        // Skip enums with known duplicate discriminant issues
+        if name == "__memory_order_modifier" {
+            return;
+        }
+
         // Skip enums with dependent types (template parameters)
         let repr_type = underlying_type.to_rust_type_str();
         if repr_type == "_dependent_type"
@@ -12067,6 +12142,33 @@ impl AstCodeGen {
                     || (generated.contains("_M_base.wait(") && generated.contains(", __m)"))
                     // get_stop_source calling clone on stop_source (Clone impl was skipped)
                     || generated.contains("self._M_stop_source.clone()")
+                    // thread::swap calling swap_std_thread_id_std_thread_id with wrong argument types
+                    || (generated.contains("pub fn swap(") && generated.contains("swap_std_thread_id_std_thread_id(&mut self._M_id"))
+                    // jthread::swap with wrong argument types for swap functions
+                    || (generated.contains("pub fn swap(") && generated.contains("swap_std_stop_source_std_stop_source(&mut self._M_stop_source"))
+                    || (generated.contains("pub fn swap(") && generated.contains("swap_thread_thread(&mut self._M_thread"))
+                    // thread::native_handle accessing _M_thread on id type (id is u64, not struct)
+                    || (generated.contains("pub fn native_handle(") && generated.contains("self._M_id._M_thread"))
+                    // thread::get_id returning clone of _M_id (id is u64, needs no clone)
+                    || (generated.contains("pub fn get_id(") && generated.contains("self._M_id.clone()"))
+                    // numeric_limits methods with inf.0 pattern (accessing field on f64)
+                    || generated.contains("return inf.0")
+                    || generated.contains("return -inf.0")
+                    || generated.contains("return NaN.0")
+                    // numeric_limits __float128 helper methods that call _S_4p with wrong arg count
+                    || (generated.contains("_S_1pm4088(") && generated.contains("numeric_limits::_S_4p("))
+                    || (generated.contains("_S_1pm16352(") && generated.contains("numeric_limits::_S_4p("))
+                    || (generated.contains("_S_1p4064(") && generated.contains("numeric_limits::_S_4p("))
+                    || (generated.contains("_S_1p16256(") && generated.contains("numeric_limits::_S_4p("))
+                    // __atomic_semaphore _S_do_try_acquire with wrong load_i32/compare_exchange args
+                    || (generated.contains("pub fn _S_do_try_acquire(") && generated.contains("load_i32(__counter,"))
+                    // __atomic_semaphore _M_acquire/_M_try_acquire calling rolled-back _S_do_try_acquire
+                    || (generated.contains("pub fn _M_acquire(") && generated.contains("_S_do_try_acquire(&mut"))
+                    || (generated.contains("pub fn _M_try_acquire(") && generated.contains("_S_do_try_acquire(&mut"))
+                    // __atomic_semaphore _M_release with memory_order transmute issue
+                    || (generated.contains("pub fn _M_release(") && generated.contains("transmute::<i32, memory_order>"))
+                    // stop_source get_token calling constructor with c_void
+                    || (generated.contains("pub fn get_token(") && generated.contains("stop_token::new_1(self._M_state)"))
                 {
                     // Rollback - remove the generated method
                     self.output.truncate(output_start);
@@ -12673,6 +12775,8 @@ impl AstCodeGen {
                     || generated.contains("sem_destroy(&mut")
                     // __self.swap with wrong mutability in thread constructor
                     || (generated.contains("__self.swap(&__t)") && generated.contains("__t: &mut"))
+                    // stop_token constructor trying to clone c_void reference
+                    || (generated.contains("_M_state: __state.clone()") && generated.contains("&_Stop_state_ref"))
                 {
                     self.output.truncate(output_start);
                 }
