@@ -1940,6 +1940,7 @@ impl AstCodeGen {
             || generated.contains("_unnamed)")  // Unresolved value in function call
             || generated.contains("_unnamed,")  // Unresolved value in function call
             || generated.contains("._unnamed")  // Unresolved member access (e.g., array begin/end)
+            || generated.contains("- _unnamed")  // Unresolved in arithmetic (64 - _unnamed)
             || generated.contains("-> std::ffi::c_void")  // Returns void type (placeholder)
             || generated.contains(": std::ffi::c_void)")  // Parameter is c_void placeholder
         {
@@ -4977,9 +4978,9 @@ impl AstCodeGen {
         // STL algorithm stubs
         self.writeln("// STL algorithm stubs");
         self.writeln("#[inline]");
-        self.writeln("pub fn upper_bound_unsigned_int_unsigned_int(_first: *const u32, _last: *const u32, _val: u32) -> i64 {");
+        self.writeln("pub fn upper_bound_unsigned_int_unsigned_int(_first: *const u32, _last: *const u32, _val: u32) -> *const u32 {");
         self.indent += 1;
-        self.writeln("// Binary search for upper bound");
+        self.writeln("// Binary search for upper bound - returns pointer like C++ iterator");
         self.writeln("unsafe {");
         self.indent += 1;
         self.writeln("let len = (_last as usize - _first as usize) / std::mem::size_of::<u32>();");
@@ -4991,7 +4992,7 @@ impl AstCodeGen {
         self.writeln("if *_first.add(mid) <= _val { lo = mid + 1; } else { hi = mid; }");
         self.indent -= 1;
         self.writeln("}");
-        self.writeln("lo as i64");
+        self.writeln("_first.add(lo)");
         self.indent -= 1;
         self.writeln("}");
         self.indent -= 1;
@@ -6751,6 +6752,9 @@ impl AstCodeGen {
             format!("{}_{}", sanitized_base_name, *count - 1)
         };
 
+        // Save output position so we can rollback if the function contains broken patterns
+        let output_start = self.output.len();
+
         // Doc comment
         self.writeln(&format!("/// C++ function `{}`", name));
         self.writeln(&format!("/// Mangled: `{}`", mangled_name));
@@ -6928,6 +6932,18 @@ impl AstCodeGen {
             self.indent -= 1;
             self.writeln("}");
             self.writeln("");
+        }
+
+        // Check if the generated function contains broken patterns and rollback if so
+        let generated = &self.output[output_start..];
+        if generated.contains("_unnamed)")  // Unresolved value in function call
+            || generated.contains("_unnamed,")  // Unresolved value in function call
+            || generated.contains("._unnamed")  // Unresolved member access
+            || generated.contains("- _unnamed")  // Unresolved in arithmetic (64 - _unnamed)
+            || generated.contains("i8).op_add(")  // String concat on char pointers (not valid Rust)
+        {
+            // Rollback - remove the generated function
+            self.output.truncate(output_start);
         }
     }
 
@@ -8513,6 +8529,8 @@ impl AstCodeGen {
             || rust_type == "integral_constant__Tp____v"
             || rust_type.starts_with("type_parameter_")
             || rust_type.contains("_parameter_")
+            // Skip arrays with template-dependent size expressions
+            || rust_type.contains("sizeof___(")
         {
             return;
         }
@@ -8568,10 +8586,18 @@ impl AstCodeGen {
                     let init_str = self.expr_to_string(init_node);
                     self.skip_literal_suffix = false;
 
-                    // Check if the expression contains unresolved _unnamed references
+                    // Check if the expression contains unresolved template patterns
                     // This happens with unresolved template parameters in numeric_limits, etc.
                     // Fall back to default value in these cases
-                    if init_str.contains("_unnamed") {
+                    // Patterns that indicate template-dependent expressions:
+                    // - _unnamed: unresolved template parameter
+                    // - sizeof___(_Type): C++ sizeof...() pack expansion
+                    // - _Size, _Args, etc. used in value context (type aliases from templates)
+                    let has_template_pattern = init_str.contains("_unnamed")
+                        || init_str.contains("sizeof___(")
+                        || (init_str.contains("_Size") && init_str.contains("=="))
+                        || (init_str.contains("_Args") && !init_str.starts_with("type "));
+                    if has_template_pattern {
                         Self::default_value_for_static(ty)
                     } else if matches!(ty, CppType::Bool) {
                         // Handle bool type with integer initializer (C++ allows 0/1 for bool)
@@ -9324,6 +9350,32 @@ impl AstCodeGen {
                 }
             }
         }
+    }
+
+    /// Check if constructor initializers have problematic patterns that require
+    /// using the `__self` pattern (let mut __self = Self {...}; statements; __self).
+    /// Returns true if:
+    /// - Any initializer value references `self.` (uses a field being initialized)
+    /// - Any field is assigned multiple times (duplicate field names)
+    fn initializers_need_self_pattern(initializers: &[(String, String)]) -> bool {
+        // Check for any value that references self (other fields)
+        for (_, value) in initializers {
+            if value.contains("self.") {
+                return true;
+            }
+        }
+
+        // Check for duplicate field assignments
+        let mut seen_fields = std::collections::HashSet::new();
+        for (field, _) in initializers {
+            let sanitized = sanitize_identifier(field);
+            if seen_fields.contains(&sanitized) {
+                return true;
+            }
+            seen_fields.insert(sanitized);
+        }
+
+        false
     }
 
     /// Extract constructor arguments from a CallExpr or CXXConstructExpr node.
@@ -11106,8 +11158,12 @@ impl AstCodeGen {
                         .map(|v| v.base_class.is_some() && !v.is_abstract)
                         .unwrap_or(false);
 
+                    // Check if initializers have patterns that require __self pattern
+                    // (duplicate fields, or values that reference self.fieldname)
+                    let initializers_need_stmts = Self::initializers_need_self_pattern(&initializers);
+
                     // Use __self pattern if we need to do post-construction work
-                    let needs_self_pattern = has_non_member_stmts || is_derived_polymorphic;
+                    let needs_self_pattern = has_non_member_stmts || is_derived_polymorphic || initializers_need_stmts;
 
                     self.writeln(&format!("pub fn {}({}) -> Self {{", fn_name, params_str));
                     self.indent += 1;
@@ -11156,17 +11212,22 @@ impl AstCodeGen {
                         .get(struct_name)
                         .cloned()
                         .unwrap_or_default();
-                    // Generate field initializers
-                    for (field, value) in &initializers {
-                        let sanitized = sanitize_identifier(field);
-                        // Correct initializer value based on field type (e.g., 0 -> null_mut() for pointers)
-                        let corrected = all_fields
-                            .iter()
-                            .find(|(name, _)| name == &sanitized)
-                            .map(|(_, ty)| correct_initializer_for_type(value, ty))
-                            .unwrap_or_else(|| value.clone());
-                        self.writeln(&format!("{}: {},", sanitized, corrected));
-                        initialized.insert(sanitized);
+
+                    // If initializers need __self pattern, don't put them in struct literal
+                    // They will be generated as statements after struct creation
+                    if !initializers_need_stmts {
+                        // Generate field initializers in struct literal
+                        for (field, value) in &initializers {
+                            let sanitized = sanitize_identifier(field);
+                            // Correct initializer value based on field type (e.g., 0 -> null_mut() for pointers)
+                            let corrected = all_fields
+                                .iter()
+                                .find(|(name, _)| name == &sanitized)
+                                .map(|(_, ty)| correct_initializer_for_type(value, ty))
+                                .unwrap_or_else(|| value.clone());
+                            self.writeln(&format!("{}: {},", sanitized, corrected));
+                            initialized.insert(sanitized);
+                        }
                     }
 
                     // Generate default values for uninitialized fields
@@ -11195,6 +11256,22 @@ impl AstCodeGen {
                                 vtable_path,
                                 sanitized.to_uppercase()
                             ));
+                        }
+
+                        // Generate member field assignments as statements when they have
+                        // dependencies or duplicates that can't be expressed in struct literal
+                        if initializers_need_stmts {
+                            for (field, value) in &initializers {
+                                let sanitized = sanitize_identifier(field);
+                                // Replace self. with __self. for proper reference
+                                let fixed_value = value.replace("self.", "__self.");
+                                let corrected = all_fields
+                                    .iter()
+                                    .find(|(name, _)| name == &sanitized)
+                                    .map(|(_, ty)| correct_initializer_for_type(&fixed_value, ty))
+                                    .unwrap_or_else(|| fixed_value.clone());
+                                self.writeln(&format!("__self.{} = {};", sanitized, corrected));
+                            }
                         }
 
                         // Generate non-member statements with __self context
@@ -13189,6 +13266,17 @@ impl AstCodeGen {
                             right
                         };
                         return format!("unsafe {{ {}.offset_from({}) }}", left, right_ptr);
+                    }
+
+                    // Handle subtraction of array from non-pointer (e.g., when left is a function call
+                    // whose return type in the AST differs from the actual stub return type)
+                    // This handles cases like: upper_bound(...) - __entries where upper_bound returns a pointer
+                    if right_is_array && matches!(op, BinaryOp::Sub) {
+                        let left = self.expr_to_string(&node.children[0]);
+                        let right = self.expr_to_string(&node.children[1]);
+                        // Assume left is a pointer (e.g., iterator/pointer from algorithm function)
+                        // and subtract the array's base pointer
+                        return format!("unsafe {{ ({} as *const _).offset_from({}.as_ptr()) }}", left, right);
                     }
 
                     // Handle pointer arithmetic specially
