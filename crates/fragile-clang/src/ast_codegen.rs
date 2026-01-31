@@ -7365,6 +7365,25 @@ impl AstCodeGen {
             || (generated.contains("pub fn __gthread_key_create") && generated.contains("fn(*mut ())"))
             || (generated.contains("pub fn __gthread_getspecific") && generated.contains("*mut ()"))
             || (generated.contains("pub fn __gthread_setspecific") && generated.contains("*const ()"))
+            // hermite functions with wrong calls (should call __hermite_u32 not hermite_u32)
+            || (generated.contains("pub fn hermite_u32") && generated.contains("return hermite_u32("))
+            || (generated.contains("pub fn hermitef") && generated.contains("return hermite_u32("))
+            || (generated.contains("pub fn hermitel") && generated.contains("return hermite_u32("))
+            || (generated.contains("pub fn hermite_1") && generated.contains("return hermite_u32("))
+            // __constexpr_memcmp that ends without returning (incomplete body)
+            || (generated.contains("pub fn __constexpr_memcmp") && generated.contains("__n as u64;\n}"))
+            // logic_error/runtime_error constructors with wrong argument type
+            || (generated.contains("logic_error::new_1(__s)") && generated.contains("__s: *const i8"))
+            || (generated.contains("runtime_error::new_1(__s)") && generated.contains("__s: *const i8"))
+            // pthread TLS functions with type mismatches
+            || (generated.contains("pub fn __libcpp_tls_create") && generated.contains("fn(*mut c_void)"))
+            || (generated.contains("pub fn __libcpp_tls_get") && generated.contains("-> *mut ()"))
+            || (generated.contains("pub fn __libcpp_tls_set") && generated.contains("*mut ()"))
+            // __builtin_is* called with f32 instead of f64
+            || (generated.contains("return __builtin_isfinite(__x)") && generated.contains("__x: f32"))
+            || (generated.contains("return __builtin_isinf(__x)") && generated.contains("__x: f32"))
+            || (generated.contains("return __builtin_isnan(__x)") && generated.contains("__x: f32"))
+            || (generated.contains("return __builtin_isnormal(__x)") && generated.contains("__x: f32"))
         {
             // Rollback - remove the generated function
             self.output.truncate(output_start);
