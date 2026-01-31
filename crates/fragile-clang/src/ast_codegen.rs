@@ -9047,6 +9047,12 @@ impl AstCodeGen {
                             "1" | "1i32" => "true".to_string(),
                             _ => init_str,
                         }
+                    } else if matches!(ty, CppType::Pointer { .. }) || rust_type.contains('*') {
+                        // For pointer types with empty InitListExpr, use null_mut()
+                        match init_str.as_str() {
+                            "[]" | "0" | "0i32" => "std::ptr::null_mut()".to_string(),
+                            _ => init_str,
+                        }
                     } else if matches!(ty, CppType::Named(_)) {
                         // For struct types, convert 0 to zeroed memory initialization
                         match init_str.as_str() {
@@ -10457,9 +10463,16 @@ impl AstCodeGen {
                         _ => "unsafe { std::mem::zeroed() }".to_string(),
                     }
                 } else {
-                    "[]".to_string()
+                    // Unsized arrays - check if element is pointer type
+                    // For pointers, return null_mut() instead of empty array
+                    match element.as_ref() {
+                        CppType::Pointer { .. } => "std::ptr::null_mut()".to_string(),
+                        _ => "[]".to_string(),
+                    }
                 }
             }
+            // For named types that look like pointers, use null_mut()
+            CppType::Named(name) if name.contains('*') => "std::ptr::null_mut()".to_string(),
             // For named types (structs) and references, use zeroed memory which is const-compatible
             CppType::Named(_) | CppType::Reference { .. } => {
                 "unsafe { std::mem::zeroed() }".to_string()
@@ -11259,8 +11272,8 @@ impl AstCodeGen {
                     // is method with wrong overload
                     || (generated.contains("pub fn is_1") && generated.contains("self.do_is(__lo, __hi"))
                     // Broken atomic functions that just return their pointer argument
-                    || (generated.contains("pub fn __exchange_and_add(") && generated.contains("return __mem;"))
-                    || (generated.contains("pub fn __atomic_add(") && generated.contains("__mem;") && !generated.contains("*__mem"))
+                    || (generated.contains("pub fn __exchange_and_add") && generated.contains("return __mem;"))
+                    || (generated.contains("pub fn __atomic_add") && generated.contains("__mem;") && !generated.contains("*__mem"))
                     // iter() on raw pointers - raw pointers don't have iter() method
                     || generated.contains(".iter().")
                 {
