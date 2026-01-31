@@ -969,20 +969,24 @@ Get `std::cout` working end-to-end.
         - Added `use std::io::Write;` import for Write trait
         - Fixed empty format string in `writeln!` (must have at least `""`)
         - Fixes E0599: cannot write into `Stdout`
-    - **Remaining errors at 431**: mostly code generation issues requiring deeper fixes:
+      - Fixed: Unsigned type comparison with -1 literal (431→429) ✅ 2026-01-31
+        - In C++, comparing unsigned with -1 works (wraps to MAX)
+        - In Rust, use explicit max values (u64::MAX, u128::MAX, etc.)
+        - Fixes E0600: cannot apply unary operator `-` to unsigned types
+    - **Remaining errors at 429**: mostly code generation issues requiring deeper fixes:
       - E0308 (312): Type mismatches (usize/u64, f32/f64, i32/u32, pointer/reference)
       - E0061 (47): Wrong number of arguments (function overloading issues)
       - E0560 (20): Struct has no field (vtable virtual methods missing)
       - E0277 (13): Trait not satisfied (bool arithmetic, c_void ops, PartialOrd)
       - E0599 (10): No method found (__on_zero_shared, op_add on raw pointers)
       - E0609 (9): No field on type (array._unnamed for begin/end functions)
-      - E0600 (3): Cannot apply unary operator (negation on unsigned types)
       - E0423 (3): Expected value, found type alias
       - E0424 (2): Self-referencing in constructors (member initializer lists)
       - E0062 (2): Field specified more than once (duplicate initializers)
       - E0080 (2): Division by zero in constant evaluation
       - E0618 (1): Expected function, found value (std::min shadowed by global)
       - E0610 (1): Field access on primitive (inf.0)
+      - E0600 (1): Pointer negation (errno_location parsing issue)
   - [ ] **23.9.2** Fix iostream static initialization (global cout/cin/cerr objects) - BLOCKED
     - libc++ uses `__start_std_streams` section for initialization
     - May need to generate Rust static initialization code

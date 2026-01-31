@@ -13126,6 +13126,24 @@ impl AstCodeGen {
                             right_str
                         };
 
+                        // Handle comparison of unsigned type with -1:
+                        // In C++, comparing unsigned with -1 works because -1 wraps to MAX.
+                        // In Rust, we need to use the explicit max value.
+                        let left_is_unsigned = left_type.as_ref().is_some_and(|t| t.is_signed() == Some(false));
+                        let right = if left_is_unsigned && right == "-1" {
+                            match left_type.as_ref().unwrap().to_rust_type_str().as_str() {
+                                "u8" => "u8::MAX".to_string(),
+                                "u16" => "u16::MAX".to_string(),
+                                "u32" => "u32::MAX".to_string(),
+                                "u64" => "u64::MAX".to_string(),
+                                "u128" => "u128::MAX".to_string(),
+                                "usize" => "usize::MAX".to_string(),
+                                _ => right, // Unknown type, keep -1
+                            }
+                        } else {
+                            right
+                        };
+
                         // Wrap left operand in parens if it ends with "as TYPE" to prevent
                         // < being interpreted as generic arguments (e.g., `x as i32 < y`)
                         let left = if left.contains(" as ") && !left.starts_with('(') {
