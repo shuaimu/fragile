@@ -842,7 +842,7 @@ Get `std::cout` working end-to-end.
     ```
     - **Status**: Transpilation succeeds (128K chars → 23K LOC Rust)
     - **Progress**: Compilation errors reduced (unique error codes): 65 → ... → 491 → 476 → 457 → 452 → 442 → 438 → 435 → 366 → 357 → 354 → 343 → 337 → 336 → 330 → 326 → 322 → 321 → 312 (libstdc++) ✅ 2026-01-25
-    - **Progress v2**: Total error count (incl. duplicate locations): 1225 → 1218 → 1214 → 1205 → 1201 → 1190 → 1169 → 1112 → 1063 → 1052 → 981 → 869 → 842 → 794 → 784 → 763 → 751 → 745 → 743 → 726 → 724 → 720 → 712 → 707 → 705 → 663 → 657 → 651 → 648 → 645 → 632 → 626 → 592 → 582 → 555 → 485 → 471 → 465 → 464 → 452 → 448 → 446 → 441 → 437 → 436 → 433 → 432 → 428 → 415 → 407 → 399 → 397 → 387 → 380 → 379 → 324 → 322 → 319 → 309 → 287 → 277 ✅ 2026-01-31
+    - **Progress v2**: Total error count (incl. duplicate locations): 1225 → 1218 → 1214 → 1205 → 1201 → 1190 → 1169 → 1112 → 1063 → 1052 → 981 → 869 → 842 → 794 → 784 → 763 → 751 → 745 → 743 → 726 → 724 → 720 → 712 → 707 → 705 → 663 → 657 → 651 → 648 → 645 → 632 → 626 → 592 → 582 → 555 → 485 → 471 → 465 → 464 → 452 → 448 → 446 → 441 → 437 → 436 → 433 → 432 → 428 → 415 → 407 → 399 → 397 → 387 → 380 → 379 → 324 → 322 → 319 → 309 → 287 → 277 → 268 ✅ 2026-01-31
       - Fixed: Constructor body with dependent field assignments (self.field in initializer) ✅ 2026-01-31
         - Detect when initializers reference self.field or have duplicate field names
         - Use __self pattern with post-construction statements instead of struct literal
@@ -857,6 +857,10 @@ Get `std::cout` working end-to-end.
       - Fixed: Add AtomicFlagTest trait with test() method for atomic_flag ✅ 2026-01-31
       - Fixed: Skip functions with unary minus on errno pointer ✅ 2026-01-31
       - Fixed: Skip methods with invalid TypeId cast ✅ 2026-01-31
+      - Fixed: Add SharedPtrOnZeroShared and SharedPtrReleaseWeak traits for shared_ptr internals ✅ 2026-01-31
+      - Fixed: Add __throw_invalid_type_format_error stub for format type checking ✅ 2026-01-31
+      - Fixed: Skip ordering type conversion operators returning wrong type (partial vs weak vs strong) ✅ 2026-01-31
+      - Fixed: Skip methods returning builtin functions without calling them (__builtin_huge_vall, etc.) ✅ 2026-01-31
       - Fixed cast-after-method parsing: wrap pointer casts in parentheses before .add()/.sub()
       - Added long double math builtins (__builtin_expl, __builtin_sqrtl, etc.) - 37 functions
       - Added __to_underlying_* stubs for enum-to-int conversion

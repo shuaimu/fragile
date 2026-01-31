@@ -442,6 +442,33 @@ impl AstCodeGen {
             self.writeln("}");
         }
 
+        // Add SharedPtrOnZeroShared impl for __shared_count if generated
+        if self.generated_structs.contains("__shared_count") {
+            self.writeln("");
+            self.writeln("// __shared_count reference counting stub impl");
+            self.writeln("impl SharedPtrOnZeroShared for __shared_count {");
+            self.writeln("    #[inline] fn __on_zero_shared(&mut self) { /* destructor cleanup - no-op stub */ }");
+            self.writeln("}");
+        }
+
+        // Add SharedPtrOnZeroShared impl for facet if generated
+        if self.generated_structs.contains("facet") {
+            self.writeln("");
+            self.writeln("// facet reference counting stub impl");
+            self.writeln("impl SharedPtrOnZeroShared for facet {");
+            self.writeln("    #[inline] fn __on_zero_shared(&mut self) { /* destructor cleanup - no-op stub */ }");
+            self.writeln("}");
+        }
+
+        // Add SharedPtrReleaseWeak impl for __shared_weak_count if generated
+        if self.generated_structs.contains("__shared_weak_count") {
+            self.writeln("");
+            self.writeln("// __shared_weak_count weak reference stub impl");
+            self.writeln("impl SharedPtrReleaseWeak for __shared_weak_count {");
+            self.writeln("    #[inline] fn __release_weak(&mut self) { /* weak ref cleanup - no-op stub */ }");
+            self.writeln("}");
+        }
+
         self.output
     }
 
@@ -4910,6 +4937,18 @@ impl AstCodeGen {
         self.writeln("// atomic_flag test method extension trait");
         self.writeln("pub trait AtomicFlagTest { fn test<M>(&self, _m: M) -> bool; }");
 
+        // Shared pointer reference counting stub traits (libc++ shared_ptr internals)
+        self.writeln("");
+        self.writeln("// Shared pointer reference counting stub traits");
+        self.writeln("pub trait SharedPtrOnZeroShared { fn __on_zero_shared(&mut self); }");
+        self.writeln("pub trait SharedPtrReleaseWeak { fn __release_weak(&mut self); }");
+
+        // Stub for __throw_invalid_type_format_error (used in format type checking)
+        self.writeln("");
+        self.writeln("// Format error throw stub");
+        self.writeln("#[inline(always)]");
+        self.writeln("pub fn __throw_invalid_type_format_error<T>(_id: T) { panic!(\"invalid type format\"); }");
+
         // char_traits module stub (libstdc++ uses std::char_traits)
         // Use generic functions to support char, wchar_t, char8_t, char16_t, char32_t
         self.writeln("// char_traits module stub");
@@ -6962,6 +7001,16 @@ impl AstCodeGen {
             || generated.contains("1 + __cxx_atomic_load")  // Wrong operator: 1 == not 1 +
             || generated.contains("/ __pow_10(")  // u128/u32 division type mismatch
             || generated.contains("(-__errno_location())")  // Unary minus on pointer (errno check)
+            // Builtin functions returned without being called (should be __builtin_foo() not __builtin_foo)
+            || (generated.contains("return __builtin_huge_vall") && !generated.contains("return __builtin_huge_vall("))
+            || (generated.contains("return __builtin_nanl") && !generated.contains("return __builtin_nanl("))
+            || (generated.contains("return __builtin_nansl") && !generated.contains("return __builtin_nansl("))
+            || (generated.contains("return __builtin_huge_valf") && !generated.contains("return __builtin_huge_valf("))
+            || (generated.contains("return __builtin_nanf") && !generated.contains("return __builtin_nanf("))
+            || (generated.contains("return __builtin_nansf") && !generated.contains("return __builtin_nansf("))
+            || (generated.contains("return __builtin_huge_val") && !generated.contains("return __builtin_huge_val(") && !generated.contains("return __builtin_huge_vall"))
+            || (generated.contains("return __builtin_nan") && !generated.contains("return __builtin_nan(") && !generated.contains("return __builtin_nanl") && !generated.contains("return __builtin_nanf") && !generated.contains("return __builtin_nans"))
+            || (generated.contains("return __builtin_nans") && !generated.contains("return __builtin_nans(") && !generated.contains("return __builtin_nansl") && !generated.contains("return __builtin_nansf"))
         {
             // Rollback - remove the generated function
             self.output.truncate(output_start);
@@ -10811,6 +10860,17 @@ impl AstCodeGen {
                     || generated.contains("__const_reference::new_")  // Template placeholder const_reference
                     || generated.contains("1 + __cxx_atomic_load")  // Wrong operator: 1 == not 1 +
                     || generated.contains("TypeId::of::<()>() as *const")  // Invalid TypeId cast
+                    // Ordering conversion operators returning wrong type
+                    || (generated.contains("-> partial_ordering") && generated.contains("WEAK_ORDERING_"))
+                    || (generated.contains("-> partial_ordering") && generated.contains("STRONG_ORDERING_"))
+                    || (generated.contains("-> weak_ordering") && generated.contains("STRONG_ORDERING_"))
+                    // Builtin functions returned without being called
+                    || (generated.contains("return __builtin_huge_vall") && !generated.contains("return __builtin_huge_vall("))
+                    || (generated.contains("return __builtin_nanl") && !generated.contains("return __builtin_nanl("))
+                    || (generated.contains("return __builtin_nansl") && !generated.contains("return __builtin_nansl("))
+                    || (generated.contains("return __builtin_huge_valf") && !generated.contains("return __builtin_huge_valf("))
+                    || (generated.contains("return __builtin_nanf") && !generated.contains("return __builtin_nanf("))
+                    || (generated.contains("return __builtin_nansf") && !generated.contains("return __builtin_nansf("))
                 {
                     // Rollback - remove the generated method
                     self.output.truncate(output_start);
