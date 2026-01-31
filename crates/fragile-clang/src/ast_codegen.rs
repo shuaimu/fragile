@@ -15025,7 +15025,7 @@ impl AstCodeGen {
                         // Check if left side is float type and right side is integer literal
                         // Rust requires float literals (e.g., 1.0) when assigning to float
                         let left_type = Self::get_expr_type(&node.children[0]);
-                        let right_type = Self::get_expr_type(&node.children[1]);
+                        let _right_type = Self::get_expr_type(&node.children[1]);
                         let left_is_float =
                             matches!(left_type, Some(CppType::Float | CppType::Double));
                         let right = if left_is_float && is_integer_literal_str(&right_str) {
@@ -15281,9 +15281,9 @@ impl AstCodeGen {
                         // Special handling for i64::MIN in bitwise context with u64
                         // We need to cast i64::MIN to u64 when used with unsigned operands
                         let left_type = Self::get_expr_type(&node.children[0]);
-                        let right_type = Self::get_expr_type(&node.children[1]);
+                        let _right_type = Self::get_expr_type(&node.children[1]);
                         let left_is_unsigned = left_type.as_ref().map_or(false, |t| t.is_signed() == Some(false));
-                        let right_is_unsigned = right_type.as_ref().map_or(false, |t| t.is_signed() == Some(false));
+                        let _right_is_unsigned = _right_type.as_ref().map_or(false, |t| t.is_signed() == Some(false));
 
                         let left = if right.contains("i64::MIN") && left_is_unsigned {
                             // Right operand is i64::MIN but left is unsigned - wrap right in cast
