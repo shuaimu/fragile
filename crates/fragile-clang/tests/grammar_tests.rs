@@ -426,3 +426,16 @@ fn test_20_nested_struct() {
         result.error
     );
 }
+
+#[test]
+fn test_21_mutex() {
+    let source = include_str!("../../../tests/cpp/grammar/21_mutex.cpp");
+    let result = run_grammar_test(source, "21_mutex.cpp", "test_mutex", 42);
+    assert!(result.compile_ok, "Compilation failed: {:?}", result.error);
+    assert_eq!(
+        result.actual,
+        Some(result.expected),
+        "Wrong result: {:?}",
+        result.error
+    );
+}

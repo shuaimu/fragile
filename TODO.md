@@ -13,7 +13,7 @@ We just convert the fully-resolved AST to equivalent Rust code.
 
 ## Current Status
 
-**Grammar Tests**: 20/20 passing
+**Grammar Tests**: 21/21 passing
 **E2E Tests**: 129/129 passing (2 ignored: 2 STL header limitations)
 **libc++ Transpilation Tests**: 8/8 passing (cstddef, cstdint, type_traits, initializer_list, vector, cstddef_compilation, iostream, thread)
 **Runtime Linking Tests**: 2/2 passing (FILE I/O, pthread)
@@ -1162,7 +1162,13 @@ Get `std::thread` working end-to-end.
     - fragile_pthread_join retrieves JoinHandle from HashMap and calls .join()
     - Uses LazyLock for thread-safe HashMap initialization
     - Added E2E test test_e2e_pthread that verifies threads run and return values
-  - [ ] **23.10.3** Add mutex test with std::mutex
+  - [x] **23.10.3** Add mutex test with pthread_mutex ✅ 2026-01-31
+    - Fixed: Null pointer conversion (integer 0 → std::ptr::null()/null_mut()) for pointer parameters
+    - Fixed: pthread_mutex_t global variable initialization using unsafe { std::mem::zeroed() }
+    - Fixed: Return 0 in pointer-returning functions → std::ptr::null_mut()
+    - Added NullToPointer cast detection in parser and code generation
+    - Added E2E test test_21_mutex that verifies mutex synchronization with 2 threads
+    - Grammar tests: 21/21 passing, E2E tests: 129/129 passing
   - [ ] **23.10.4** Add condition variable test
 
 ### Phase 7: Real-World Project Test (Priority: Goal)

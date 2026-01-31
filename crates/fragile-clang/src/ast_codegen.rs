@@ -238,6 +238,9 @@ pub struct AstCodeGen {
     generated_structs: HashSet<String>,
     /// Track already generated type aliases to avoid duplicates
     generated_aliases: HashSet<String>,
+    /// Track type aliases that resolve to primitive types (e.g., pthread_mutex_t = usize)
+    /// These need special handling since they can't have ::new_N() constructors
+    primitive_aliases: HashSet<String>,
     /// Track already generated module names to avoid duplicates (e.g., inline namespaces)
     generated_modules: HashSet<String>,
     /// Map from class/struct name to its bit field groups
@@ -318,6 +321,7 @@ impl AstCodeGen {
             anon_namespace_counter: 0,
             generated_structs: HashSet::new(),
             generated_aliases: HashSet::new(),
+            primitive_aliases: HashSet::new(),
             generated_modules: HashSet::new(),
             bit_field_groups: HashMap::new(),
             generated_functions: HashMap::new(),
@@ -4668,6 +4672,10 @@ impl AstCodeGen {
         self.generated_structs.insert("__gthread_cond_t".to_string());
         self.generated_structs.insert("_Words".to_string());
         self.generated_structs.insert("_Alloc_hider".to_string());
+        // Mark primitive type aliases for proper initialization
+        self.primitive_aliases.insert("pthread_mutex_t".to_string());
+        self.primitive_aliases.insert("__gthread_recursive_mutex_t".to_string());
+        self.primitive_aliases.insert("__gthread_cond_t".to_string());
         self.writeln("");
 
         // Missing template parameter types (for libc++ iostream)
@@ -6297,13 +6305,13 @@ impl AstCodeGen {
         self.writeln("static THREAD_HANDLES: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<u64, std::thread::JoinHandle<usize>>>> = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));");
         self.writeln("static NEXT_THREAD_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);");
         self.writeln("");
-        // Use usize for attr and arg to accept any integer/pointer value (including 0)
+        // Use pointer types for attr and arg to match the C API signature
         // Use fn pointer type that matches transpiled code (*mut () instead of *mut c_void)
-        self.writeln("pub unsafe fn fragile_pthread_create(thread_id: *mut u64, _attr: usize, start_routine: Option<fn(*mut ()) -> *mut ()>, arg: usize) -> i32 {");
+        self.writeln("pub unsafe fn fragile_pthread_create(thread_id: *mut u64, _attr: *const (), start_routine: Option<fn(*mut ()) -> *mut ()>, arg: *mut ()) -> i32 {");
         self.indent += 1;
         self.writeln("let func = match start_routine { Some(f) => f, None => return 22 };");
         self.writeln("let func_ptr = func as usize;");
-        self.writeln("let info = ThreadStartInfo { func: func_ptr, arg: arg };");
+        self.writeln("let info = ThreadStartInfo { func: func_ptr, arg: arg as usize };");
         self.writeln("let tid = NEXT_THREAD_ID.fetch_add(1, std::sync::atomic::Ordering::SeqCst);");
         self.writeln("let handle = std::thread::spawn(move || {");
         self.indent += 1;
@@ -7105,9 +7113,34 @@ impl AstCodeGen {
             ClangNodeKind::VarDecl { name, ty, has_init } => {
                 // Skip out-of-class static member definitions (TypeRef child indicates qualified name)
                 // These are already handled in the class generation
-                let is_static_member_def = node.children.iter().any(
-                    |c| matches!(&c.kind, ClangNodeKind::Unknown(s) if s.starts_with("TypeRef:")),
-                );
+                // BUT: TypeRef can also just refer to the variable's type (e.g., "TypeRef:S" for "S s1 = {};")
+                // Only skip if the TypeRef name doesn't match the variable's type name
+                // AND the TypeRef is NOT a known typedef/type alias (typedef'd types have TypeRef children)
+                let type_name = ty.to_rust_type_str();
+                let is_static_member_def = node.children.iter().any(|c| {
+                    if let ClangNodeKind::Unknown(s) = &c.kind {
+                        if let Some(type_ref_name) = s.strip_prefix("TypeRef:") {
+                            // If TypeRef matches the variable's type, it's just a type reference, not a qualifier
+                            // Static member defs have TypeRef to the containing class, not the variable's type
+                            //
+                            // Also skip checking if the TypeRef refers to a known typedef/type alias
+                            // This happens for variables with typedef'd types like "static my_type_t myvar;"
+                            // where my_type_t is a typedef - the VarDecl has a TypeRef:my_type_t child
+                            // but the parsed type is the underlying type (e.g., u64)
+                            let is_typedef_ref = self.generated_aliases.contains(type_ref_name);
+                            if is_typedef_ref {
+                                // This is a typedef/type alias reference, not a class qualifier
+                                false
+                            } else {
+                                type_ref_name != type_name && !type_name.contains(type_ref_name)
+                            }
+                        } else {
+                            false
+                        }
+                    } else {
+                        false
+                    }
+                });
                 if !is_static_member_def {
                     self.generate_global_var(name, ty, *has_init, &node.children);
                 }
@@ -7841,8 +7874,6 @@ impl AstCodeGen {
             // Broken atomic functions (global function versions) that return pointer instead of i32
             || (generated.contains("pub fn __exchange_and_add") && generated.contains("return __mem;"))
             || (generated.contains("pub fn __atomic_add") && generated.contains("__mem;") && !generated.contains("*__mem"))
-            // pthread_mutex_init with literal 0 instead of null pointer
-            || (generated.contains("fragile_pthread_mutex_init(") && generated.contains(", 0)"))
             // pthread_cond_timedwait with wrong timeout type
             || (generated.contains("fragile_pthread_cond_timedwait(") && generated.contains("__abs_timeout)"))
             // error_category comparison operators returning bool instead of strong_ordering
@@ -9685,6 +9716,18 @@ impl AstCodeGen {
         }
 
         self.generated_aliases.insert(safe_name.clone());
+
+        // Track if this type alias resolves to a primitive (can't use ::new_N constructors)
+        let is_primitive = matches!(
+            rust_type.as_str(),
+            "usize" | "isize" | "i8" | "i16" | "i32" | "i64" | "i128" | "u8" | "u16" | "u32"
+                | "u64" | "u128" | "f32" | "f64" | "bool" | "()" | "char"
+        ) || rust_type.starts_with('*')
+            || rust_type.starts_with('&');
+        if is_primitive {
+            self.primitive_aliases.insert(safe_name.clone());
+        }
+
         self.writeln(&format!("/// C++ typedef/using `{}`", name));
         // Check if the type is a reference - needs 'static lifetime for type aliases
         // Reference types start with & but not with *
@@ -9831,8 +9874,11 @@ impl AstCodeGen {
                         }
                     } else if matches!(ty, CppType::Named(_)) {
                         // For struct types, convert 0 to zeroed memory initialization
+                        // Also handle Default::default() which can't be used in statics
                         match init_str.as_str() {
-                            "0" | "0i32" => "unsafe { std::mem::zeroed() }".to_string(),
+                            "0" | "0i32" | "Default::default()" => {
+                                "unsafe { std::mem::zeroed() }".to_string()
+                            }
                             _ => init_str,
                         }
                     } else {
@@ -14036,6 +14082,18 @@ impl AstCodeGen {
                     }
                     let needs_parens = is_binary_op(child);
                     match cast_kind {
+                        CastKind::NullToPointer => {
+                            // Integer 0 to pointer - use std::ptr::null() or null_mut()
+                            if let CppType::Pointer { is_const, .. } = ty {
+                                if *is_const {
+                                    return "std::ptr::null()".to_string();
+                                } else {
+                                    return "std::ptr::null_mut()".to_string();
+                                }
+                            }
+                            // Fallback - shouldn't happen but use null_mut
+                            "std::ptr::null_mut()".to_string()
+                        }
                         CastKind::IntegralCast => {
                             // Need explicit cast for integral conversions
                             let rust_type = ty.to_rust_type_str();
@@ -16001,6 +16059,7 @@ impl AstCodeGen {
 
                             // Check if the type maps to a pointer, primitive, or non-struct type
                             // that can't have a constructor (e.g., `*mut std::ffi::c_void`)
+                            // Also check if it's a type alias to a primitive (e.g., pthread_mutex_t = usize)
                             let is_non_struct = struct_name.starts_with('*')
                                 || struct_name.starts_with('&')
                                 || struct_name == "std::ffi::c_void"
@@ -16020,7 +16079,8 @@ impl AstCodeGen {
                                 || struct_name == "f64"
                                 || struct_name == "isize"
                                 || struct_name == "usize"
-                                || struct_name == "char";
+                                || struct_name == "char"
+                                || self.primitive_aliases.contains(&struct_name);
 
                             if is_non_struct {
                                 // For non-struct types, just use the first argument as-is
@@ -16095,6 +16155,38 @@ impl AstCodeGen {
                                     if matches!(&types[i], CppType::Pointer { .. })
                                         || matches!(&types[i], CppType::Array { size: None, .. })
                                     {
+                                        // Check if argument is integer literal 0 (null pointer constant)
+                                        if let ClangNodeKind::IntegerLiteral { value: 0, .. } =
+                                            &c.kind
+                                        {
+                                            // Check if pointer is const or mutable
+                                            let is_const =
+                                                matches!(&types[i], CppType::Pointer { is_const, .. } if *is_const);
+                                            return if is_const {
+                                                "std::ptr::null()".to_string()
+                                            } else {
+                                                "std::ptr::null_mut()".to_string()
+                                            };
+                                        }
+                                        // Also check for ImplicitCastExpr wrapping a zero literal
+                                        // (common for NULL macro and nullptr)
+                                        if matches!(&c.kind, ClangNodeKind::ImplicitCastExpr { .. })
+                                        {
+                                            if let Some(inner) = c.children.first() {
+                                                if let ClangNodeKind::IntegerLiteral {
+                                                    value: 0,
+                                                    ..
+                                                } = &inner.kind
+                                                {
+                                                    let is_const = matches!(&types[i], CppType::Pointer { is_const, .. } if *is_const);
+                                                    return if is_const {
+                                                        "std::ptr::null()".to_string()
+                                                    } else {
+                                                        "std::ptr::null_mut()".to_string()
+                                                    };
+                                                }
+                                            }
+                                        }
                                         let arg_type = Self::get_expr_type(c);
                                         let is_array =
                                             matches!(arg_type, Some(CppType::Array { .. }));
@@ -16166,6 +16258,28 @@ impl AstCodeGen {
                                 if needs_ref {
                                     let arg_str = self.expr_to_string(c);
                                     return format!("&{}", arg_str);
+                                }
+                            }
+
+                            // Final fallback: if the argument is integer literal 0 and the
+                            // expression type is a pointer type (NULL constant), use null pointer
+                            // This handles cases where param_types is None but we can infer from
+                            // the argument's ImplicitCastExpr result type that it should be a pointer
+                            if let ClangNodeKind::ImplicitCastExpr { ty, .. } = &c.kind {
+                                if matches!(ty, CppType::Pointer { .. }) {
+                                    // The cast result type is a pointer, check if input is 0
+                                    if let Some(inner) = c.children.first() {
+                                        if let ClangNodeKind::IntegerLiteral { value: 0, .. } =
+                                            &inner.kind
+                                        {
+                                            let is_const = matches!(ty, CppType::Pointer { is_const, .. } if *is_const);
+                                            return if is_const {
+                                                "std::ptr::null()".to_string()
+                                            } else {
+                                                "std::ptr::null_mut()".to_string()
+                                            };
+                                        }
+                                    }
                                 }
                             }
 
@@ -16624,6 +16738,19 @@ impl AstCodeGen {
                         CastKind::FunctionToPointerDecay => {
                             // Function to pointer decay - wrap in Some() for Option<fn(...)> type
                             format!("Some({})", inner)
+                        }
+                        CastKind::NullToPointer => {
+                            // Integer 0 to pointer - use std::ptr::null() or null_mut()
+                            if let CppType::Pointer { is_const, .. } = ty {
+                                if *is_const {
+                                    "std::ptr::null()".to_string()
+                                } else {
+                                    "std::ptr::null_mut()".to_string()
+                                }
+                            } else {
+                                // Fallback - shouldn't happen but use null_mut
+                                "std::ptr::null_mut()".to_string()
+                            }
                         }
                         _ => {
                             // Check for derived-to-base pointer cast for polymorphic types

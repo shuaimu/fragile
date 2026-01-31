@@ -2976,6 +2976,10 @@ impl ClangParser {
                                 None
                             }
                         }
+                        // Null to pointer (integer literal 0 to pointer type)
+                        (CppType::Pointer { .. }, CppType::Int { .. }) => {
+                            Some(CastKind::NullToPointer)
+                        }
                         _ => None,
                     };
 
