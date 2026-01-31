@@ -7066,6 +7066,35 @@ impl AstCodeGen {
             || (generated.contains("return __builtin_roundl") && !generated.contains("return __builtin_roundl("))
             || (generated.contains("return __builtin_lroundl") && !generated.contains("return __builtin_lroundl("))
             || (generated.contains("return __builtin_fmodl") && !generated.contains("return __builtin_fmodl("))
+            || (generated.contains("return __builtin_scalblnl") && !generated.contains("return __builtin_scalblnl("))
+            || (generated.contains("return __builtin_scalbnl") && !generated.contains("return __builtin_scalbnl("))
+            || (generated.contains("return __builtin_fmaxl") && !generated.contains("return __builtin_fmaxl("))
+            || (generated.contains("return __builtin_fminl") && !generated.contains("return __builtin_fminl("))
+            || (generated.contains("return __builtin_fdiml") && !generated.contains("return __builtin_fdiml("))
+            || (generated.contains("return __builtin_hypotl") && !generated.contains("return __builtin_hypotl("))
+            || (generated.contains("return __builtin_copysignl") && !generated.contains("return __builtin_copysignl("))
+            || (generated.contains("return __builtin_remquol") && !generated.contains("return __builtin_remquol("))
+            || (generated.contains("return __builtin_remainderl") && !generated.contains("return __builtin_remainderl("))
+            || (generated.contains("return __builtin_asinl") && !generated.contains("return __builtin_asinl("))
+            || (generated.contains("return __builtin_acosl") && !generated.contains("return __builtin_acosl("))
+            || (generated.contains("return __builtin_atanl") && !generated.contains("return __builtin_atanl("))
+            || (generated.contains("return __builtin_atan2l") && !generated.contains("return __builtin_atan2l("))
+            || (generated.contains("return __builtin_sinhl") && !generated.contains("return __builtin_sinhl("))
+            || (generated.contains("return __builtin_coshl") && !generated.contains("return __builtin_coshl("))
+            || (generated.contains("return __builtin_tanhl") && !generated.contains("return __builtin_tanhl("))
+            || (generated.contains("return __builtin_asinhl") && !generated.contains("return __builtin_asinhl("))
+            || (generated.contains("return __builtin_acoshl") && !generated.contains("return __builtin_acoshl("))
+            || (generated.contains("return __builtin_atanhl") && !generated.contains("return __builtin_atanhl("))
+            || (generated.contains("return __builtin_erfl") && !generated.contains("return __builtin_erfl("))
+            || (generated.contains("return __builtin_erfcl") && !generated.contains("return __builtin_erfcl("))
+            || (generated.contains("return __builtin_lgammal") && !generated.contains("return __builtin_lgammal("))
+            || (generated.contains("return __builtin_tgammal") && !generated.contains("return __builtin_tgammal("))
+            || (generated.contains("return __builtin_modfl") && !generated.contains("return __builtin_modfl("))
+            || (generated.contains("return __builtin_nearbyintl") && !generated.contains("return __builtin_nearbyintl("))
+            || (generated.contains("return __builtin_llroundl") && !generated.contains("return __builtin_llroundl("))
+            || (generated.contains("return __builtin_rintl") && !generated.contains("return __builtin_rintl("))
+            || (generated.contains("return __builtin_lrintl") && !generated.contains("return __builtin_lrintl("))
+            || (generated.contains("return __builtin_llrintl") && !generated.contains("return __builtin_llrintl("))
         {
             // Rollback - remove the generated function
             self.output.truncate(output_start);
@@ -10926,6 +10955,16 @@ impl AstCodeGen {
                     || (generated.contains("return __builtin_huge_valf") && !generated.contains("return __builtin_huge_valf("))
                     || (generated.contains("return __builtin_nanf") && !generated.contains("return __builtin_nanf("))
                     || (generated.contains("return __builtin_nansf") && !generated.contains("return __builtin_nansf("))
+                    // ctype methods calling wrong overload (2-arg method calling 1-arg overload or vice versa)
+                    || (generated.contains("pub fn toupper_1") && generated.contains("self.do_toupper(__low, __high)"))
+                    || (generated.contains("pub fn tolower_1") && generated.contains("self.do_tolower(__low, __high)"))
+                    || (generated.contains("pub fn widen_1") && generated.contains("self.do_widen(__low, __high"))
+                    || (generated.contains("pub fn narrow_1") && generated.contains("self.do_narrow(__lo, __hi"))
+                    // scan methods with wrong overload
+                    || (generated.contains("pub fn scan_is_1") && !generated.contains("do_scan_is_1"))
+                    || (generated.contains("pub fn scan_not_1") && !generated.contains("do_scan_not_1"))
+                    // is method with wrong overload
+                    || (generated.contains("pub fn is_1") && generated.contains("self.do_is(__lo, __hi"))
                 {
                     // Rollback - remove the generated method
                     self.output.truncate(output_start);
