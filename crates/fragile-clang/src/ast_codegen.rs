@@ -1986,6 +1986,22 @@ impl AstCodeGen {
             || generated.contains(": &std::ffi::c_void,")  // Reference to c_void placeholder (mid-params)
             || generated.contains(": &mut std::ffi::c_void,")  // Mutable ref to c_void placeholder
             || generated.contains("__stoa_extern__C")  // wstring stoi/stol with c_str type mismatches
+            || generated.contains("(-__errno_location())")  // Pointer negation used as condition (libstdc++ futex)
+            || generated.contains(") && 11i32")  // C++ short-circuit with int instead of bool
+            || generated.contains(") && 4i32")   // C++ short-circuit with int instead of bool
+            || generated.contains("_Pn)")       // Unresolved template parameter variable
+            || generated.contains("_Qn)")       // Unresolved template parameter variable
+            || generated.contains("__lo1)")     // Unresolved variable from 128-bit math
+            || generated.contains("__lo2)")     // Unresolved variable from 128-bit math
+            || generated.contains("__hi1)")     // Unresolved variable from 128-bit math
+            || generated.contains("__hi2)")     // Unresolved variable from 128-bit math
+            || generated.contains("__n0)")      // Unresolved variable
+            || generated.contains("__n1)")      // Unresolved variable
+            || generated.contains("__x,")       // Unresolved variable in call args
+            || generated.contains("__y,")       // Unresolved variable in call args
+            || generated.contains(": __d")      // Unresolved __d variable in declaration
+            || generated.contains("memory_order::new_0()")  // memory_order enum used as struct
+            || generated.contains(".op_bitand(")  // bitwise and as method on enum (libstdc++ atomics)
         {
             // Rollback - remove the generated function
             self.output.truncate(output_start);
@@ -5396,12 +5412,15 @@ impl AstCodeGen {
         self.writeln("pub const NaN: f64 = f64::NAN;");
         // pthread_self for thread ID (called from this_thread module)
         self.writeln("#[inline] pub fn pthread_self() -> u64 { 0 }");
+        // Futex wait/wake constants (libstdc++ internal)
+        self.writeln("pub const __wait_private: i32 = 0x80;");  // FUTEX_PRIVATE_FLAG
+        self.writeln("pub const __wake_private: i32 = 0x80;");  // FUTEX_PRIVATE_FLAG
         self.writeln("");
 
         // Thread-related type stubs
         self.writeln("// Thread-related type stubs");
         self.writeln("pub type thread_id = u64;");
-        self.writeln("pub type __native_type = u64;");
+        self.writeln("pub type __native_type = usize;");  // matches pthread_mutex_t
         self.writeln("pub type __wait_clock_t_time_point = u64;");
         self.writeln("pub type _Stop_state_ref = std::ffi::c_void;");
         self.writeln("pub type stop_token__Stop_state_ref = std::ffi::c_void;");
@@ -7740,6 +7759,9 @@ impl AstCodeGen {
             || (generated.contains(".equivalent(") && generated.contains("&*__rhs)"))
             // system_error constructor with wrong __what type (*const i8 vs &c_void)
             || (generated.contains("system_error::new_2(") && generated.contains("__what)") && generated.contains("__what: *const i8"))
+            // memory_order enum used as struct with op_bitand/op_bitor (libstdc++ atomic internals)
+            || (generated.contains(".op_bitand(") && generated.contains("memory_order"))
+            || (generated.contains(".op_bitor(") && generated.contains("memory_order"))
         {
             // Rollback - remove the generated function
             self.output.truncate(output_start);
@@ -9505,7 +9527,10 @@ impl AstCodeGen {
                         || init_str.contains("sizeof___(")
                         || (init_str.contains("_Size") && init_str.contains("=="))
                         || (init_str.contains("_Args") && !init_str.starts_with("type "))
-                        || init_str.contains("/ unsafe { __gv_");  // Division by unresolved global
+                        || init_str.contains("/ unsafe { __gv_")  // Division by unresolved global
+                        || init_str.contains("__d")  // Unresolved __d from 128-bit division
+                        || init_str.contains("__n1")  // Unresolved __n1 from 128-bit math
+                        || init_str.contains("__n0");  // Unresolved __n0 from 128-bit math
                     if has_template_pattern {
                         Self::default_value_for_static(ty)
                     } else if matches!(ty, CppType::Bool) {
@@ -11800,6 +11825,10 @@ impl AstCodeGen {
                     || (generated.contains("pub fn pword") && generated.contains("&mut __word._M_pword"))
                     // narrow method with &self mutating _M_narrow array
                     || (generated.contains("pub fn narrow(&self") && generated.contains("self._M_narrow["))
+                    // memory_order enum used as struct (libstdc++ internal pattern)
+                    || generated.contains("memory_order::new_0()")
+                    // bitwise and as method on enum (libstdc++ atomics)
+                    || generated.contains(".op_bitand(")
                 {
                     // Rollback - remove the generated method
                     self.output.truncate(output_start);

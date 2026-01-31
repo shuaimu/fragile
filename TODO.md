@@ -1093,7 +1093,7 @@ Get `std::thread` working end-to-end.
     }
     ```
     - **Status**: Transpilation succeeds (112K chars)
-    - **Progress v2 (compilation errors)**: 358 → 343 → 335 → 317 → 304 → 303 → 277 → 248 → 236 → 235 → 234 → 229 ✅ 2026-01-31
+    - **Progress v2 (compilation errors)**: 358 → 343 → 335 → 317 → 304 → 303 → 277 → 248 → 236 → 235 → 234 → 229 → 219 → 214 → 194 ✅ 2026-01-31
       - Fixed duplicate atomic type definitions (added to generated_structs)
       - Fixed duplicate preamble type aliases (added to generated_aliases)
       - Fixed user-defined literals (operator""ms → op_literal_ms)
@@ -1116,7 +1116,12 @@ Get `std::thread` working end-to-end.
       - Added swap function stubs (swap_thread_thread, etc.) (236→235) ✅ 2026-01-31
       - Added pthread_self stub for thread ID (235→234) ✅ 2026-01-31
       - Added __atomic_base_bool impl block with new_0, new_1, op_assign, load, store, exchange, compare_exchange_* (234→229) ✅ 2026-01-31
-    - **Remaining errors at 229**: E0308 type mismatches (52), E0599 missing methods (34), E0425 missing values (14), E0061 wrong arg count (23)
+      - Fixed __native_type to use usize instead of u64 to match pthread_mutex_t (229→219) ✅ 2026-01-31
+      - Added __wait_private and __wake_private futex constants ✅ 2026-01-31
+      - Skip template instantiations with problematic patterns (errno, unresolved vars) (219→214) ✅ 2026-01-31
+      - Skip methods with memory_order::new_0() and .op_bitand() (214→194) ✅ 2026-01-31
+      - Skip global variables with unresolved __d, __n0, __n1 from 128-bit math ✅ 2026-01-31
+    - **Remaining errors at 194**: E0308 type mismatches (45), E0599 missing methods (30+), E0425 missing values (small), E0061 wrong arg count (20+)
   - [ ] **23.10.2** Verify pthread_create/join are called correctly - BLOCKED
   - [ ] **23.10.3** Add mutex test with std::mutex - BLOCKED
   - [ ] **23.10.4** Add condition variable test - BLOCKED
