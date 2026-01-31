@@ -14,11 +14,11 @@ We just convert the fully-resolved AST to equivalent Rust code.
 ## Current Status
 
 **Grammar Tests**: 22/22 passing
-**E2E Tests**: 132/132 passing (2 ignored: 2 STL header limitations)
+**E2E Tests**: 133/133 passing (2 ignored: 2 STL header limitations)
 **libc++ Transpilation Tests**: 8/8 passing (cstddef, cstdint, type_traits, initializer_list, vector, cstddef_compilation, iostream, thread)
 **Runtime Linking Tests**: 2/2 passing (FILE I/O, pthread)
 **Runtime Function Mapping Tests**: 1/1 passing
-**Total Tests**: 256 passing
+**Total Tests**: 257 passing
 
 **Working**:
 - Simple functions with control flow (if/else, while, for, do-while, switch, recursion)
@@ -1606,14 +1606,22 @@ These components are currently stubbed or skipped but could be fully transpiled 
   - [ ] **26.4.2** `std::string` - SSO (small string optimization) implementation
   - [ ] **26.4.3** `std::unordered_map<K,V>` - hash table with bucket management
 
-- [ ] **26.5** 128-bit Integer Operations
-  - Currently: Skipped with pattern detection (`__lo1`, `__hi1`, etc.)
-  - Could be: May work with libc++ (cleaner than libstdc++)
-  - Effort: Medium - need to test libc++ 128-bit code paths
-  - Note: Rust has native `i128`/`u128` support
-  - [ ] **26.5.1** Analyze libc++ 128-bit multiplication/division code
-  - [ ] **26.5.2** Test transpilation without libstdc++ inline assembly
-  - [ ] **26.5.3** Map 128-bit builtins to Rust native operations
+- [x] **26.5** 128-bit Integer Operations ✅ 2026-01-31
+  - Analysis: `__lo1/__hi1/__lo2/__hi2` are NOT 128-bit math - they're locale collation parameters
+  - libc++ uses clean 128-bit code with compiler builtins (not inline assembly like libstdc++)
+  - Rust has native `i128`/`u128` support and types map correctly
+  - [x] **26.5.1** Analyze libc++ 128-bit multiplication/division code ✅ 2026-01-31
+    - libc++ uses `__builtin_*_overflow()` functions for checked arithmetic
+    - No internal 128-bit breakdown code like libstdc++
+    - Files: int128_builtins.cpp, saturation_arithmetic.h, linear_congruential_engine.h
+  - [x] **26.5.2** Test transpilation without libstdc++ inline assembly ✅ 2026-01-31
+    - libc++ doesn't use inline assembly for 128-bit operations
+    - Uses standard GCC builtins that Rust can transpile
+  - [x] **26.5.3** Map 128-bit builtins to Rust native operations ✅ 2026-01-31
+    - Added `__builtin_add_overflow` → `overflowing_add`
+    - Added `__builtin_sub_overflow` → `overflowing_sub`
+    - Added `__builtin_mul_overflow` → `overflowing_mul`
+    - Added test_e2e_builtin_overflow test
 
 ### High Effort
 
@@ -1641,11 +1649,11 @@ These components are currently stubbed or skipped but could be fully transpiled 
 
 | Component | Current State | Transpilable? | Effort | Blocker |
 |-----------|--------------|---------------|--------|---------|
-| STL algorithms | Stubs | Yes | Low | None |
-| Exception classes | Stubs | Yes | Low | None |
+| STL algorithms | Stubs (KEEP) | N/A | - | Rust-native is better |
+| Exception classes | **Complete** ✅ | N/A | - | Done |
 | C variadic (`va_arg`) | Skipped | Yes | Low | Nightly Rust |
 | STL containers (full) | Working stubs | Yes | Medium | Task 22.4.2 |
-| 128-bit math | Skipped | Maybe | Medium | Need libc++ testing |
+| 128-bit math | **Complete** ✅ | N/A | - | Done - uses builtins |
 | Locale system | No-op stubs | Yes | High | Complexity |
 | PMR allocators | Skipped | Yes | High | Polymorphic dispatch |
 

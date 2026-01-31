@@ -2396,6 +2396,60 @@ impl AstCodeGen {
                     None
                 }
             }
+            // Overflow-checking arithmetic builtins
+            // __builtin_add_overflow(a, b, &result) -> bool (true if overflow)
+            "__builtin_add_overflow" | "__builtin_sadd_overflow" | "__builtin_saddl_overflow"
+            | "__builtin_saddll_overflow" | "__builtin_uadd_overflow" | "__builtin_uaddl_overflow"
+            | "__builtin_uaddll_overflow" => {
+                if args.len() >= 3 {
+                    // Uses Rust's overflowing_add: (result, overflow_flag)
+                    Some((
+                        format!(
+                            "{{ let (__result, __overflow) = ({}).overflowing_add({}); \
+                             unsafe {{ *({}) = __result; }} __overflow }}",
+                            args[0], args[1], args[2]
+                        ),
+                        false,
+                    ))
+                } else {
+                    None
+                }
+            }
+            // __builtin_sub_overflow(a, b, &result) -> bool (true if overflow)
+            "__builtin_sub_overflow" | "__builtin_ssub_overflow" | "__builtin_ssubl_overflow"
+            | "__builtin_ssubll_overflow" | "__builtin_usub_overflow" | "__builtin_usubl_overflow"
+            | "__builtin_usubll_overflow" => {
+                if args.len() >= 3 {
+                    Some((
+                        format!(
+                            "{{ let (__result, __overflow) = ({}).overflowing_sub({}); \
+                             unsafe {{ *({}) = __result; }} __overflow }}",
+                            args[0], args[1], args[2]
+                        ),
+                        false,
+                    ))
+                } else {
+                    None
+                }
+            }
+            // __builtin_mul_overflow(a, b, &result) -> bool (true if overflow)
+            "__builtin_mul_overflow" | "__builtin_smul_overflow" | "__builtin_smull_overflow"
+            | "__builtin_smulll_overflow" | "__builtin_umul_overflow" | "__builtin_umull_overflow"
+            | "__builtin_umulll_overflow" => {
+                if args.len() >= 3 {
+                    Some((
+                        format!(
+                            "{{ let (__result, __overflow) = ({}).overflowing_mul({}); \
+                             unsafe {{ *({}) = __result; }} __overflow }}",
+                            args[0], args[1], args[2]
+                        ),
+                        false,
+                    ))
+                } else {
+                    None
+                }
+            }
+
             // Atomic builtins - common patterns
             "__atomic_load_n" => {
                 if args.len() >= 2 {

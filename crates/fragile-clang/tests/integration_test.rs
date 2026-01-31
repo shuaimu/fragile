@@ -10705,3 +10705,42 @@ fn test_e2e_pthread() {
 
     assert_eq!(exit_code, 0, "pthread_create/join should spawn and run a thread");
 }
+
+/// Test __builtin_*_overflow functions for checked arithmetic
+#[test]
+fn test_e2e_builtin_overflow() {
+    let source = r#"
+        int main() {
+            int result;
+
+            // Test __builtin_add_overflow: 2 + 3 = 5, no overflow
+            if (__builtin_add_overflow(2, 3, &result)) return 1;  // should not overflow
+            if (result != 5) return 2;
+
+            // Test __builtin_sub_overflow: 10 - 3 = 7, no overflow
+            if (__builtin_sub_overflow(10, 3, &result)) return 3;  // should not overflow
+            if (result != 7) return 4;
+
+            // Test __builtin_mul_overflow: 6 * 7 = 42, no overflow
+            if (__builtin_mul_overflow(6, 7, &result)) return 5;  // should not overflow
+            if (result != 42) return 6;
+
+            // Test overflow detection: INT_MAX + 1 overflows
+            // Note: Using smaller values to avoid platform-specific issues
+            unsigned char small_result;
+            if (!__builtin_add_overflow((unsigned char)250, (unsigned char)10, &small_result)) {
+                // This SHOULD overflow (250 + 10 = 260 > 255)
+                return 7;
+            }
+            // Result should be 260 mod 256 = 4
+            if (small_result != 4) return 8;
+
+            return 0;  // All tests passed
+        }
+    "#;
+
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_builtin_overflow.cpp").expect("E2E test failed");
+
+    assert_eq!(exit_code, 0, "__builtin_*_overflow functions should work correctly");
+}
