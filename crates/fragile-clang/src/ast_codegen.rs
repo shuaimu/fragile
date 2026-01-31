@@ -5258,11 +5258,12 @@ impl AstCodeGen {
         self.writeln("pub static greater: i8 = 1;");
         self.writeln("");
 
-        // Unicode grapheme break constants
+        // Unicode grapheme break constants - values must match __property enum values
+        // Type is u32 to match std___extended_grapheme_custer_property_boundary___property alias
         self.writeln("// Unicode grapheme break constants");
-        self.writeln("pub static __SpacingMark: u8 = 1;");
-        self.writeln("pub static __Prepend: u8 = 2;");
-        self.writeln("pub static __Linker: u8 = 3;");
+        self.writeln("pub static __SpacingMark: u32 = 10;"); // __property::__SpacingMark = 10
+        self.writeln("pub static __Prepend: u32 = 8;");      // __property::__Prepend = 8
+        self.writeln("pub static __Linker: u32 = 16;");      // Not in enum, use __none value (16)
         self.writeln("");
 
         // Currency/locale constants

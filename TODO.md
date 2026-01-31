@@ -842,7 +842,7 @@ Get `std::cout` working end-to-end.
     ```
     - **Status**: Transpilation succeeds (128K chars → 23K LOC Rust)
     - **Progress**: Compilation errors reduced (unique error codes): 65 → ... → 491 → 476 → 457 → 452 → 442 → 438 → 435 → 366 → 357 → 354 → 343 → 337 → 336 → 330 → 326 → 322 → 321 → 312 (libstdc++) ✅ 2026-01-25
-    - **Progress v2**: Total error count (incl. duplicate locations): 1225 → 1218 → 1214 → 1205 → 1201 → 1190 → 1169 → 1112 → 1063 → 1052 → 981 → 869 → 842 → 794 → 784 → 763 → 751 → 745 → 743 → 726 → 724 → 720 → 712 → 707 → 705 → 663 → 657 → 651 → 648 → 645 → 632 → 626 → 592 → 582 → 555 → 485 → 471 → 465 → 464 → 452 → 448 → 446 → 441 → 437 → 436 → 433 → 432 → 428 → 415 → 407 → 399 ✅ 2026-01-31
+    - **Progress v2**: Total error count (incl. duplicate locations): 1225 → 1218 → 1214 → 1205 → 1201 → 1190 → 1169 → 1112 → 1063 → 1052 → 981 → 869 → 842 → 794 → 784 → 763 → 751 → 745 → 743 → 726 → 724 → 720 → 712 → 707 → 705 → 663 → 657 → 651 → 648 → 645 → 632 → 626 → 592 → 582 → 555 → 485 → 471 → 465 → 464 → 452 → 448 → 446 → 441 → 437 → 436 → 433 → 432 → 428 → 415 → 407 → 399 → 397 ✅ 2026-01-31
       - Fixed cast-after-method parsing: wrap pointer casts in parentheses before .add()/.sub()
       - Added long double math builtins (__builtin_expl, __builtin_sqrtl, etc.) - 37 functions
       - Added __to_underlying_* stubs for enum-to-int conversion
@@ -990,7 +990,12 @@ Get `std::cout` working end-to-end.
         - Clang evaluates enum constants to integers (e.g., `memory_order_seq_cst` → 5)
         - Now using `std::mem::transmute::<i32, memory_order>(5i32)` for known enum types
         - Fixes E0308: expected `memory_order`, found integer (default argument cases)
-    - **Remaining errors at 399**: mostly code generation issues requiring deeper fixes:
+      - Fixed: Unicode grapheme break constants type mismatch (399→397) ✅ 2026-01-31
+        - Stub constants (`__SpacingMark`, `__Prepend`, `__Linker`) had wrong type (u8)
+        - Changed to u32 to match `std___extended_grapheme_custer_property_boundary___property` alias
+        - Fixed values to match actual enum variant values (10, 8, 16)
+        - Fixes E0308: expected `u32`, found `u8`
+    - **Remaining errors at 397**: mostly code generation issues requiring deeper fixes:
       - E0308 (291): Type mismatches (usize/u64, f32/f64, i32/u32, pointer/reference)
       - E0061 (47): Wrong number of arguments (function overloading issues)
       - E0560 (20): Struct has no field (vtable virtual methods missing)
