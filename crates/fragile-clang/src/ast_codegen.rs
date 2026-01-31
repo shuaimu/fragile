@@ -4242,6 +4242,22 @@ impl AstCodeGen {
         self.writeln("    fn default() -> Self { LOCALE_FACET_VTABLE_DEFAULT }");
         self.writeln("}");
 
+        // Stub vtable constants for codecvt types (used in constructors)
+        self.writeln("");
+        self.writeln("// Stub vtable constants for codecvt types");
+        self.writeln("pub static STD_CODECVT_CHAR_CHAR_MBSTATE_T__VTABLE: locale_facet_vtable = LOCALE_FACET_VTABLE_DEFAULT;");
+        self.writeln("pub static STD_CODECVT_WCHAR_T_CHAR_MBSTATE_T__VTABLE: locale_facet_vtable = LOCALE_FACET_VTABLE_DEFAULT;");
+        self.writeln("pub static STD_CODECVT_CHAR16_T_CHAR_MBSTATE_T__VTABLE: locale_facet_vtable = LOCALE_FACET_VTABLE_DEFAULT;");
+        self.writeln("pub static STD_CODECVT_CHAR32_T_CHAR_MBSTATE_T__VTABLE: locale_facet_vtable = LOCALE_FACET_VTABLE_DEFAULT;");
+        self.writeln("pub static STD_CODECVT_CHAR16_T_CHAR8_T_MBSTATE_T__VTABLE: locale_facet_vtable = LOCALE_FACET_VTABLE_DEFAULT;");
+        self.writeln("pub static STD_CODECVT_CHAR32_T_CHAR8_T_MBSTATE_T__VTABLE: locale_facet_vtable = LOCALE_FACET_VTABLE_DEFAULT;");
+
+        // Stub vtable constants for numpunct types
+        self.writeln("");
+        self.writeln("// Stub vtable constants for numpunct types");
+        self.writeln("pub static STD_NUMPUNCT_CHAR__VTABLE: locale_facet_vtable = LOCALE_FACET_VTABLE_DEFAULT;");
+        self.writeln("pub static STD_NUMPUNCT_WCHAR_T__VTABLE: locale_facet_vtable = LOCALE_FACET_VTABLE_DEFAULT;");
+
 
         self.writeln("#[repr(C)]");
         self.writeln("pub struct locale_facet {");
@@ -4654,6 +4670,22 @@ impl AstCodeGen {
         self.skip_vtable_generation.insert("std::collate<wchar_t>".to_string());
         self.skip_vtable_generation.insert("std::collate_byname<char>".to_string());
         self.skip_vtable_generation.insert("std::collate_byname<wchar_t>".to_string());
+        // Skip codecvt vtable generation - signatures don't match locale_facet_vtable
+        self.skip_vtable_generation.insert("std::codecvt<char, char, mbstate_t>".to_string());
+        self.skip_vtable_generation.insert("std::codecvt<wchar_t, char, mbstate_t>".to_string());
+        self.skip_vtable_generation.insert("std::codecvt<char16_t, char, mbstate_t>".to_string());
+        self.skip_vtable_generation.insert("std::codecvt<char32_t, char, mbstate_t>".to_string());
+        self.skip_vtable_generation.insert("std::codecvt<char16_t, char8_t, mbstate_t>".to_string());
+        self.skip_vtable_generation.insert("std::codecvt<char32_t, char8_t, mbstate_t>".to_string());
+        self.skip_vtable_generation.insert("std::codecvt_byname<char, char, mbstate_t>".to_string());
+        self.skip_vtable_generation.insert("std::codecvt_byname<wchar_t, char, mbstate_t>".to_string());
+        self.skip_vtable_generation.insert("std::codecvt_byname<char16_t, char, mbstate_t>".to_string());
+        self.skip_vtable_generation.insert("std::codecvt_byname<char32_t, char, mbstate_t>".to_string());
+        // Skip numpunct vtable generation - uses locale_facet_vtable with incompatible signatures
+        self.skip_vtable_generation.insert("std::numpunct<char>".to_string());
+        self.skip_vtable_generation.insert("std::numpunct<wchar_t>".to_string());
+        self.skip_vtable_generation.insert("std::numpunct_byname<char>".to_string());
+        self.skip_vtable_generation.insert("std::numpunct_byname<wchar_t>".to_string());
         self.writeln("// collate vtable stubs");
         self.writeln("#[repr(C)]");
         self.writeln("pub struct collate_char__vtable {");
@@ -7011,6 +7043,29 @@ impl AstCodeGen {
             || (generated.contains("return __builtin_huge_val") && !generated.contains("return __builtin_huge_val(") && !generated.contains("return __builtin_huge_vall"))
             || (generated.contains("return __builtin_nan") && !generated.contains("return __builtin_nan(") && !generated.contains("return __builtin_nanl") && !generated.contains("return __builtin_nanf") && !generated.contains("return __builtin_nans"))
             || (generated.contains("return __builtin_nans") && !generated.contains("return __builtin_nans(") && !generated.contains("return __builtin_nansl") && !generated.contains("return __builtin_nansf"))
+            // More long double math builtins returned without being called
+            || (generated.contains("return __builtin_expl") && !generated.contains("return __builtin_expl("))
+            || (generated.contains("return __builtin_frexpl") && !generated.contains("return __builtin_frexpl("))
+            || (generated.contains("return __builtin_ldexpl") && !generated.contains("return __builtin_ldexpl("))
+            || (generated.contains("return __builtin_exp2l") && !generated.contains("return __builtin_exp2l("))
+            || (generated.contains("return __builtin_expm1l") && !generated.contains("return __builtin_expm1l("))
+            || (generated.contains("return __builtin_log1pl") && !generated.contains("return __builtin_log1pl("))
+            || (generated.contains("return __builtin_logl") && !generated.contains("return __builtin_logl("))
+            || (generated.contains("return __builtin_log10l") && !generated.contains("return __builtin_log10l("))
+            || (generated.contains("return __builtin_log2l") && !generated.contains("return __builtin_log2l("))
+            || (generated.contains("return __builtin_sinl") && !generated.contains("return __builtin_sinl("))
+            || (generated.contains("return __builtin_cosl") && !generated.contains("return __builtin_cosl("))
+            || (generated.contains("return __builtin_tanl") && !generated.contains("return __builtin_tanl("))
+            || (generated.contains("return __builtin_powl") && !generated.contains("return __builtin_powl("))
+            || (generated.contains("return __builtin_sqrtl") && !generated.contains("return __builtin_sqrtl("))
+            || (generated.contains("return __builtin_cbrtl") && !generated.contains("return __builtin_cbrtl("))
+            || (generated.contains("return __builtin_fabsl") && !generated.contains("return __builtin_fabsl("))
+            || (generated.contains("return __builtin_floorl") && !generated.contains("return __builtin_floorl("))
+            || (generated.contains("return __builtin_ceill") && !generated.contains("return __builtin_ceill("))
+            || (generated.contains("return __builtin_truncl") && !generated.contains("return __builtin_truncl("))
+            || (generated.contains("return __builtin_roundl") && !generated.contains("return __builtin_roundl("))
+            || (generated.contains("return __builtin_lroundl") && !generated.contains("return __builtin_lroundl("))
+            || (generated.contains("return __builtin_fmodl") && !generated.contains("return __builtin_fmodl("))
         {
             // Rollback - remove the generated function
             self.output.truncate(output_start);
