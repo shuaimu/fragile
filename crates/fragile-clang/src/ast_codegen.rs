@@ -6941,6 +6941,9 @@ impl AstCodeGen {
             || generated.contains("._unnamed")  // Unresolved member access
             || generated.contains("- _unnamed")  // Unresolved in arithmetic (64 - _unnamed)
             || generated.contains("i8).op_add(")  // String concat on char pointers (not valid Rust)
+            || generated.contains("c_void::new_")  // Constructor call on placeholder type
+            || generated.contains("1 + __cxx_atomic_load")  // Wrong operator: 1 == not 1 +
+            || generated.contains("/ __pow_10(")  // u128/u32 division type mismatch
         {
             // Rollback - remove the generated function
             self.output.truncate(output_start);
@@ -8593,10 +8596,12 @@ impl AstCodeGen {
                     // - _unnamed: unresolved template parameter
                     // - sizeof___(_Type): C++ sizeof...() pack expansion
                     // - _Size, _Args, etc. used in value context (type aliases from templates)
+                    // - division by auto/c_void type variables
                     let has_template_pattern = init_str.contains("_unnamed")
                         || init_str.contains("sizeof___(")
                         || (init_str.contains("_Size") && init_str.contains("=="))
-                        || (init_str.contains("_Args") && !init_str.starts_with("type "));
+                        || (init_str.contains("_Args") && !init_str.starts_with("type "))
+                        || init_str.contains("/ unsafe { __gv_");  // Division by unresolved global
                     if has_template_pattern {
                         Self::default_value_for_static(ty)
                     } else if matches!(ty, CppType::Bool) {
@@ -10729,6 +10734,9 @@ impl AstCodeGen {
                     format!("{}_{}", base_method_name, *count - 1)
                 };
 
+                // Save output position for potential rollback
+                let output_start = self.output.len();
+
                 self.writeln(&format!(
                     "pub fn {}({}{}){} {{",
                     method_name, self_param, params_str, ret_str
@@ -10776,6 +10784,18 @@ impl AstCodeGen {
                 self.indent -= 1;
                 self.writeln("}");
                 self.writeln("");
+
+                // Check if the generated method contains broken patterns and rollback if so
+                let generated = &self.output[output_start..];
+                if generated.contains("c_void::new_")  // Constructor call on placeholder type
+                    || generated.contains("__iterator::new_")  // Template placeholder iterator
+                    || generated.contains("__const_iterator::new_")  // Template placeholder const_iterator
+                    || generated.contains("__const_reference::new_")  // Template placeholder const_reference
+                    || generated.contains("1 + __cxx_atomic_load")  // Wrong operator: 1 == not 1 +
+                {
+                    // Rollback - remove the generated method
+                    self.output.truncate(output_start);
+                }
             }
             ClangNodeKind::ConstructorDecl { params, .. } => {
                 // Base name uses new_N format where N is param count
