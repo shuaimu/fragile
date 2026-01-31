@@ -952,14 +952,19 @@ Get `std::cout` working end-to-end.
         - Abstract classes (with pure virtual methods) don't have static vtable instances
         - Changed vtable initialization to use `std::ptr::null()` for abstract classes
         - Fixes `__shared_count` and `__shared_weak_count` constructor errors
+      - Fixed: Polymorphic stub types need __vtable field ✅ 2026-01-30
+        - Added `__vtable: *const ()` field to polymorphic base class stubs
+        - Affected types: error_category, ctype_char, ctype_wchar_t, collate_char, collate_wchar_t
+        - Added Sync+Send impls for static usage
+        - Fixes field access errors when derived classes access `__base.__vtable`
     - **Remaining errors at 436**: mostly code generation issues requiring deeper fixes:
-      - E0308 (308): Type mismatches (usize/u64, f32/f64, i32/u32, pointer/reference)
+      - E0308 (312): Type mismatches (usize/u64, f32/f64, i32/u32, pointer/reference)
       - E0061 (47): Wrong number of arguments (function overloading issues)
       - E0560 (20): Struct has no field (vtable virtual methods missing)
-      - E0609 (13): No field on type (array._unnamed)
-      - E0277 (13): Trait not satisfied (bool arithmetic, c_void ops)
-      - E0599 (11): No method found (__on_zero_shared, op_add on raw pointers)
-      - E0606 (4): Invalid cast
+      - E0609 (9): No field on type (array._unnamed, reduced from 13)
+      - E0277 (9): Trait not satisfied (bool arithmetic, c_void ops)
+      - E0599 (9): No method found (__on_zero_shared, op_add on raw pointers)
+      - E0606 (3): Invalid cast
       - E0423 (3): Expected value, found type alias
   - [ ] **23.9.2** Fix iostream static initialization (global cout/cin/cerr objects) - BLOCKED
     - libc++ uses `__start_std_streams` section for initialization

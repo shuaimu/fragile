@@ -4351,7 +4351,11 @@ impl AstCodeGen {
         // Empty structs for types used as base classes (need Clone/Default)
         // Note: error_category methods that use error_condition/error_code are defined later
         // after those types are available
-        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct error_category;");
+        // Note: error_category is a polymorphic base class - needs __vtable pointer
+        self.writeln("#[repr(C)] #[derive(Clone, Copy)] pub struct error_category { pub __vtable: *const () }");
+        self.writeln("impl Default for error_category { fn default() -> Self { Self { __vtable: std::ptr::null() } } }");
+        self.writeln("unsafe impl Sync for error_category {}");
+        self.writeln("unsafe impl Send for error_category {}");
         self.writeln("impl error_category {");
         self.indent += 1;
         self.writeln("pub fn op_eq(&self, _other: &error_category) -> bool { std::ptr::eq(self, _other) }");
@@ -4490,8 +4494,15 @@ impl AstCodeGen {
         self.writeln("pub type __decay_typename___invoke_result_type_parameter_0_2____decay_typename___invoke_result_type_parameter_0_1__type_parameter_0_0_type__type_ = std::ffi::c_void;");
         self.writeln("pub type __decay_typename___invoke_result_type_parameter_0_1__type_parameter_0_0_type_ = std::ffi::c_void;");
         self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct __cxx_atomic_impl___cxx_contention_t;");
-        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct ctype_wchar_t;");
-        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct ctype_char;");
+        // ctype_wchar_t and ctype_char are polymorphic base classes - need __vtable pointer
+        self.writeln("#[repr(C)] #[derive(Clone, Copy)] pub struct ctype_wchar_t { pub __vtable: *const () }");
+        self.writeln("impl Default for ctype_wchar_t { fn default() -> Self { Self { __vtable: std::ptr::null() } } }");
+        self.writeln("unsafe impl Sync for ctype_wchar_t {}");
+        self.writeln("unsafe impl Send for ctype_wchar_t {}");
+        self.writeln("#[repr(C)] #[derive(Clone, Copy)] pub struct ctype_char { pub __vtable: *const () }");
+        self.writeln("impl Default for ctype_char { fn default() -> Self { Self { __vtable: std::ptr::null() } } }");
+        self.writeln("unsafe impl Sync for ctype_char {}");
+        self.writeln("unsafe impl Send for ctype_char {}");
         self.writeln("pub type __const_reference = std::ffi::c_void;");
         self.writeln("");
 
@@ -4515,10 +4526,16 @@ impl AstCodeGen {
         self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct __char_traits_base_char32_t__uint_least32_t__static_cast_uint_least32_t_4294967295U_;");
         self.writeln("");
 
-        // Locale and collate types
+        // Locale and collate types (polymorphic base classes - need __vtable pointer)
         self.writeln("// Locale and collate types");
-        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct collate_char;");
-        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct collate_wchar_t;");
+        self.writeln("#[repr(C)] #[derive(Clone, Copy)] pub struct collate_char { pub __vtable: *const () }");
+        self.writeln("impl Default for collate_char { fn default() -> Self { Self { __vtable: std::ptr::null() } } }");
+        self.writeln("unsafe impl Sync for collate_char {}");
+        self.writeln("unsafe impl Send for collate_char {}");
+        self.writeln("#[repr(C)] #[derive(Clone, Copy)] pub struct collate_wchar_t { pub __vtable: *const () }");
+        self.writeln("impl Default for collate_wchar_t { fn default() -> Self { Self { __vtable: std::ptr::null() } } }");
+        self.writeln("unsafe impl Sync for collate_wchar_t {}");
+        self.writeln("unsafe impl Send for collate_wchar_t {}");
         self.writeln("");
 
         // Format context types
@@ -4922,9 +4939,9 @@ impl AstCodeGen {
         // C++ returns const error_category&, and:
         // - Used directly: generic_category() -> &error_category (works)
         // - Address taken: &generic_category() as *const -> need special handling
-        self.writeln("static GENERIC_CATEGORY: error_category = error_category;");
-        self.writeln("static SYSTEM_CATEGORY: error_category = error_category;");
-        self.writeln("static IOSTREAM_CATEGORY: error_category = error_category;");
+        self.writeln("static GENERIC_CATEGORY: error_category = error_category { __vtable: std::ptr::null() };");
+        self.writeln("static SYSTEM_CATEGORY: error_category = error_category { __vtable: std::ptr::null() };");
+        self.writeln("static IOSTREAM_CATEGORY: error_category = error_category { __vtable: std::ptr::null() };");
         self.writeln("");
         self.writeln("pub fn generic_category() -> &'static error_category { &GENERIC_CATEGORY }");
         self.writeln("pub fn system_category() -> &'static error_category { &SYSTEM_CATEGORY }");
