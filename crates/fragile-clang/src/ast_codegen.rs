@@ -10993,7 +10993,9 @@ impl AstCodeGen {
                 self.constructor_signatures
                     .entry(struct_name.to_string())
                     .or_default()
-                    .push((fn_name.clone(), param_types));
+                    .push((fn_name.clone(), param_types.clone()));
+                // Keep a copy for matching base class constructor overloads
+                let current_ctor_param_types = param_types;
 
                 // Deduplicate parameter names (C++ allows unnamed params, Rust doesn't)
                 let mut param_name_counts: HashMap<String, usize> = HashMap::new();
@@ -11084,31 +11086,59 @@ impl AstCodeGen {
                                     let args = self.extract_constructor_args(&node.children[i]);
 
                                     // Look up constructor signature to correct 0 -> null_mut() for pointer params
+                                    // Also find the matching constructor overload by comparing parameter types
                                     let ctor_name_lookup = format!("new_{}", args.len());
-                                    let corrected_args: Vec<String> = if let Some(ctors) =
+                                    let (corrected_args, matched_ctor_name): (Vec<String>, String) = if let Some(ctors) =
                                         self.constructor_signatures.get(&base_class)
                                     {
-                                        // Find the matching constructor by name
-                                        if let Some((_, param_types)) =
+                                        // Try to find a constructor that matches the current derived class constructor's parameter types
+                                        // This handles cases like new_1_1(*const i8) calling base::new_1_1(*const i8) instead of base::new_1(&c_void)
+                                        let matching_ctor = ctors.iter().find(|(name, base_param_types)| {
+                                            // Must match argument count
+                                            if !name.starts_with(&ctor_name_lookup) {
+                                                return false;
+                                            }
+                                            // Check if parameter types are compatible
+                                            if base_param_types.len() != current_ctor_param_types.len() {
+                                                return false;
+                                            }
+                                            // Compare parameter types - look for exact or compatible matches
+                                            current_ctor_param_types.iter().zip(base_param_types.iter()).all(|(derived_ty, base_ty)| {
+                                                // Check if types are the same or compatible
+                                                derived_ty.to_rust_type_str() == base_ty.to_rust_type_str()
+                                            })
+                                        });
+
+                                        if let Some((matched_name, matched_param_types)) = matching_ctor {
+                                            let corrected = args.iter()
+                                                .zip(matched_param_types.iter())
+                                                .map(|(arg, ty)| {
+                                                    correct_initializer_for_type(arg, ty)
+                                                })
+                                                .collect();
+                                            (corrected, matched_name.clone())
+                                        } else if let Some((_, param_types)) =
                                             ctors.iter().find(|(name, _)| *name == ctor_name_lookup)
                                         {
-                                            args.iter()
+                                            // Fall back to the basic new_N constructor
+                                            let corrected = args.iter()
                                                 .zip(param_types.iter())
                                                 .map(|(arg, ty)| {
                                                     correct_initializer_for_type(arg, ty)
                                                 })
-                                                .collect()
+                                                .collect();
+                                            (corrected, ctor_name_lookup.clone())
                                         } else {
-                                            args.clone()
+                                            (args.clone(), ctor_name_lookup.clone())
                                         }
                                     } else {
-                                        args.clone()
+                                        (args.clone(), ctor_name_lookup.clone())
                                     };
 
                                     let ctor_call = format!(
-                                        "{}::new_{}({})",
+                                        "{}::{}({})",
                                         base_class,
-                                        args.len(),
+                                        matched_ctor_name,
                                         corrected_args.join(", ")
                                     );
 
@@ -11131,17 +11161,22 @@ impl AstCodeGen {
                                         } else {
                                             let base_has_vbases =
                                                 self.class_has_virtual_bases(&info.name);
+                                            // Use the matched constructor name (with correct overload suffix)
+                                            // instead of just new_{args.len()}
                                             let ctor_name = if base_has_vbases {
+                                                // For vbases, we need to extract the suffix from matched_ctor_name
+                                                // e.g., new_1_1 -> __new_without_vbases_1_1
+                                                let suffix = matched_ctor_name.strip_prefix("new_").unwrap_or(&matched_ctor_name);
                                                 format!(
                                                     "{}::__new_without_vbases_{}",
                                                     info.name,
-                                                    corrected_args.len()
+                                                    suffix
                                                 )
                                             } else {
                                                 format!(
-                                                    "{}::new_{}",
+                                                    "{}::{}",
                                                     info.name,
-                                                    corrected_args.len()
+                                                    matched_ctor_name
                                                 )
                                             };
                                             let ctor_call = format!(
