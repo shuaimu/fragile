@@ -885,6 +885,49 @@ fn test_e2e_exception_handling() {
     assert_eq!(exit_code, 0, "Exception handling should compile and run");
 }
 
+/// Test exception message storage in std::exception base class
+/// Task 26.2.1: exception class should store and return messages via what()
+#[test]
+fn test_exception_message_storage() {
+    let parser = ClangParser::new().expect("Failed to create parser");
+
+    // Simple C++ code to trigger exception class generation
+    let source = r#"
+        int main() {
+            return 0;
+        }
+    "#;
+
+    let ast = parser
+        .parse_string(source, "exception_msg.cpp")
+        .expect("Failed to parse");
+    let code = AstCodeGen::new().generate(&ast.translation_unit);
+
+    // Verify exception struct has _M_msg field for message storage
+    assert!(
+        code.contains("pub _M_msg: *const i8"),
+        "exception struct should have _M_msg field for message storage"
+    );
+
+    // Verify exception has constructor that accepts message
+    assert!(
+        code.contains("pub fn new_1(msg: *const i8)"),
+        "exception should have new_1 constructor accepting message"
+    );
+
+    // Verify what() checks _M_msg before returning default
+    assert!(
+        code.contains("if self._M_msg.is_null()"),
+        "what() should check if _M_msg is null"
+    );
+
+    // Verify what() returns stored message when not null
+    assert!(
+        code.contains("self._M_msg"),
+        "what() should return _M_msg when not null"
+    );
+}
+
 #[test]
 fn test_e2e_namespaces() {
     let source = r#"

@@ -5778,17 +5778,39 @@ impl AstCodeGen {
         self.writeln("pub struct exception {");
         self.indent += 1;
         self.writeln("pub __vtable: *const exception_vtable,");
+        self.writeln("pub _M_msg: *const i8,  // Message storage for what()");
         self.indent -= 1;
         self.writeln("}");
         self.writeln("impl Default for exception {");
         self.indent += 1;
-        self.writeln("fn default() -> Self { Self { __vtable: std::ptr::null() } }");
+        self.writeln(
+            "fn default() -> Self { Self { __vtable: std::ptr::null(), _M_msg: std::ptr::null() } }",
+        );
         self.indent -= 1;
         self.writeln("}");
         self.writeln("impl exception {");
         self.indent += 1;
         self.writeln("pub fn new_0() -> Self { Default::default() }");
-        self.writeln("pub fn what(&self) -> *const i8 { b\"exception\\0\".as_ptr() as *const i8 }");
+        self.writeln("/// Construct exception with message");
+        self.writeln("pub fn new_1(msg: *const i8) -> Self {");
+        self.indent += 1;
+        self.writeln("Self { __vtable: std::ptr::null(), _M_msg: msg }");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("/// Returns exception message");
+        self.writeln("pub fn what(&self) -> *const i8 {");
+        self.indent += 1;
+        self.writeln("if self._M_msg.is_null() {");
+        self.indent += 1;
+        self.writeln("b\"exception\\0\".as_ptr() as *const i8");
+        self.indent -= 1;
+        self.writeln("} else {");
+        self.indent += 1;
+        self.writeln("self._M_msg");
+        self.indent -= 1;
+        self.writeln("}");
+        self.indent -= 1;
+        self.writeln("}");
         self.indent -= 1;
         self.writeln("}");
         self.writeln("");
@@ -8798,10 +8820,27 @@ impl AstCodeGen {
                     > 0;
                 if !has_what {
                     self.writeln("");
-                    self.writeln("/// Returns exception message (stub)");
+                    self.writeln("/// Returns exception message");
+                    self.writeln("/// Delegates to base class which stores the message");
                     self.writeln("pub fn what(&self) -> *const i8 {");
                     self.indent += 1;
-                    self.writeln("b\"exception\\0\".as_ptr() as *const i8");
+                    // For derived exception classes, delegate to base class
+                    // The base class chain leads to exception which has _M_msg
+                    if name == "exception" {
+                        // exception class directly has _M_msg
+                        self.writeln("if self._M_msg.is_null() {");
+                        self.indent += 1;
+                        self.writeln("b\"exception\\0\".as_ptr() as *const i8");
+                        self.indent -= 1;
+                        self.writeln("} else {");
+                        self.indent += 1;
+                        self.writeln("self._M_msg");
+                        self.indent -= 1;
+                        self.writeln("}");
+                    } else {
+                        // Delegate to __base.what() which eventually reaches exception._M_msg
+                        self.writeln("self.__base.what()");
+                    }
                     self.indent -= 1;
                     self.writeln("}");
                 }
@@ -8970,8 +9009,10 @@ impl AstCodeGen {
                     self.writeln(
                         "/// Stub constructor for string argument (libc++ exception class)",
                     );
+                    self.writeln("/// Note: string's c_str() should be passed to what()");
                     self.writeln("pub fn new_1(_s: &std::ffi::c_void) -> Self {");
                     self.indent += 1;
+                    self.writeln("// Cannot extract c_str from c_void; use default message");
                     self.writeln("Default::default()");
                     self.indent -= 1;
                     self.writeln("}");
@@ -8988,9 +9029,12 @@ impl AstCodeGen {
                     self.writeln(
                         "/// Stub constructor for const char* argument (libc++ exception class)",
                     );
-                    self.writeln("pub fn new_1_1(_s: *const i8) -> Self {");
+                    self.writeln("/// Stores message pointer for what() to return");
+                    self.writeln("pub fn new_1_1(msg: *const i8) -> Self {");
                     self.indent += 1;
-                    self.writeln("Default::default()");
+                    self.writeln("let mut obj = Self::default();");
+                    self.writeln("obj.__base._M_msg = msg;");
+                    self.writeln("obj");
                     self.indent -= 1;
                     self.writeln("}");
                 }
