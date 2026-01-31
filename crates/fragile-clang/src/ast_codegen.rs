@@ -1983,6 +1983,7 @@ impl AstCodeGen {
             || generated.contains(": std::ffi::c_void)")  // Parameter is c_void placeholder (end of params)
             || generated.contains(": &std::ffi::c_void,")  // Reference to c_void placeholder (mid-params)
             || generated.contains(": &mut std::ffi::c_void,")  // Mutable ref to c_void placeholder
+            || generated.contains("__stoa_extern__C")  // wstring stoi/stol with c_str type mismatches
         {
             // Rollback - remove the generated function
             self.output.truncate(output_start);
@@ -5889,12 +5890,13 @@ impl AstCodeGen {
         self.writeln("");
 
         // pthread stubs (no-op implementations for transpiled code)
+        // Use u64 for pthread_t since on 64-bit Linux pthread_t is unsigned long (u64)
         self.writeln("// pthread stubs (no-op implementations)");
-        self.writeln("pub unsafe fn fragile_pthread_create(_: *mut usize, _: *const std::ffi::c_void, _: Option<unsafe extern \"C\" fn(*mut std::ffi::c_void) -> *mut std::ffi::c_void>, _: *mut std::ffi::c_void) -> i32 { 0 }");
-        self.writeln("pub unsafe fn fragile_pthread_join(_: usize, _: *mut *mut std::ffi::c_void) -> i32 { 0 }");
-        self.writeln("pub fn fragile_pthread_self() -> usize { 0 }");
-        self.writeln("pub fn fragile_pthread_equal(_: usize, _: usize) -> i32 { 1 }");
-        self.writeln("pub unsafe fn fragile_pthread_detach(_: usize) -> i32 { 0 }");
+        self.writeln("pub unsafe fn fragile_pthread_create(_: *mut u64, _: *const std::ffi::c_void, _: Option<unsafe extern \"C\" fn(*mut std::ffi::c_void) -> *mut std::ffi::c_void>, _: *mut std::ffi::c_void) -> i32 { 0 }");
+        self.writeln("pub unsafe fn fragile_pthread_join(_: u64, _: *mut *mut std::ffi::c_void) -> i32 { 0 }");
+        self.writeln("pub fn fragile_pthread_self() -> u64 { 0 }");
+        self.writeln("pub fn fragile_pthread_equal(_: u64, _: u64) -> i32 { 1 }");
+        self.writeln("pub unsafe fn fragile_pthread_detach(_: u64) -> i32 { 0 }");
         self.writeln("pub fn fragile_pthread_exit(_: *mut std::ffi::c_void) -> ! { std::process::exit(0) }");
         self.writeln("pub unsafe fn fragile_pthread_attr_init(_: *mut std::ffi::c_void) -> i32 { 0 }");
         self.writeln("pub unsafe fn fragile_pthread_attr_destroy(_: *mut std::ffi::c_void) -> i32 { 0 }");
@@ -7336,6 +7338,8 @@ impl AstCodeGen {
             || (generated.contains("return __builtin_rintl") && !generated.contains("return __builtin_rintl("))
             || (generated.contains("return __builtin_lrintl") && !generated.contains("return __builtin_lrintl("))
             || (generated.contains("return __builtin_llrintl") && !generated.contains("return __builtin_llrintl("))
+            // wstring stoi/stol with c_str type mismatches (__stoa functions call c_str which returns wrong type)
+            || generated.contains("__stoa_extern__C")
         {
             // Rollback - remove the generated function
             self.output.truncate(output_start);
