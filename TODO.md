@@ -842,7 +842,7 @@ Get `std::cout` working end-to-end.
     ```
     - **Status**: Transpilation succeeds (128K chars → 23K LOC Rust)
     - **Progress**: Compilation errors reduced (unique error codes): 65 → ... → 491 → 476 → 457 → 452 → 442 → 438 → 435 → 366 → 357 → 354 → 343 → 337 → 336 → 330 → 326 → 322 → 321 → 312 (libstdc++) ✅ 2026-01-25
-    - **Progress v2**: Total error count (incl. duplicate locations): 1225 → 1218 → 1214 → 1205 → 1201 → 1190 → 1169 → 1112 → 1063 → 1052 → 981 → 869 → 842 → 794 → 784 → 763 → 751 → 745 → 743 → 726 → 724 → 720 → 712 → 707 → 705 → 663 → 657 → 651 → 648 → 645 → 632 → 626 → 592 → 582 → 555 → 485 → 471 → 465 → 464 → 452 → 448 → 446 → 441 → 437 → 436 → 433 → 432 → 428 → 415 → 407 → 399 → 397 → 387 → 380 → 379 → 324 ✅ 2026-01-31
+    - **Progress v2**: Total error count (incl. duplicate locations): 1225 → 1218 → 1214 → 1205 → 1201 → 1190 → 1169 → 1112 → 1063 → 1052 → 981 → 869 → 842 → 794 → 784 → 763 → 751 → 745 → 743 → 726 → 724 → 720 → 712 → 707 → 705 → 663 → 657 → 651 → 648 → 645 → 632 → 626 → 592 → 582 → 555 → 485 → 471 → 465 → 464 → 452 → 448 → 446 → 441 → 437 → 436 → 433 → 432 → 428 → 415 → 407 → 399 → 397 → 387 → 380 → 379 → 324 → 322 ✅ 2026-01-31
       - Fixed cast-after-method parsing: wrap pointer casts in parentheses before .add()/.sub()
       - Added long double math builtins (__builtin_expl, __builtin_sqrtl, etc.) - 37 functions
       - Added __to_underlying_* stubs for enum-to-int conversion
@@ -1010,7 +1010,11 @@ Get `std::cout` working end-to-end.
         - STD_CTYPE_CHAR__VTABLE, STD_CTYPE_WCHAR_T__VTABLE (and _byname variants)
         - STD_COLLATE_BYNAME_CHAR__VTABLE, STD_COLLATE_BYNAME_WCHAR_T__VTABLE
         - Fixes E0425: cannot find value `STD_CTYPE_CHAR__VTABLE` in this scope (55 errors fixed)
-    - **Remaining errors at 324**: mostly code generation issues requiring deeper fixes:
+      - Fixed: Add array begin/end stub functions (324→322) ✅ 2026-01-31
+        - Added begin__u32__N_ and end__u32__N_ for array sizes 110, 403, 1501
+        - Used by libc++ grapheme property lookup tables
+        - Fixes E0425: cannot find function `begin__u32__1501_` in this scope
+    - **Remaining errors at 322**: mostly code generation issues requiring deeper fixes:
       - E0308 (196): Type mismatches (usize/u64, f32/f64, i32/u32, pointer/reference)
       - E0061 (43+): Method argument count issues (function overloading)
       - E0277 (6): Trait not satisfied (bool arithmetic, c_void ops)

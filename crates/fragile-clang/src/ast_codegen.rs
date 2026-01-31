@@ -4998,6 +4998,17 @@ impl AstCodeGen {
         self.writeln("}");
         self.writeln("");
 
+        // Array begin/end stubs for template instantiations
+        // These functions are instantiated for various array sizes and return pointers
+        self.writeln("// Array begin/end stubs (template instantiations)");
+        self.writeln("#[inline] pub fn begin__u32__110_(__arr: *mut [u32; 110]) -> *const u32 { unsafe { (*__arr).as_ptr() } }");
+        self.writeln("#[inline] pub fn end__u32__110_(__arr: *mut [u32; 110]) -> *const u32 { unsafe { (*__arr).as_ptr().add(110) } }");
+        self.writeln("#[inline] pub fn begin__u32__403_(__arr: *mut [u32; 403]) -> *const u32 { unsafe { (*__arr).as_ptr() } }");
+        self.writeln("#[inline] pub fn end__u32__403_(__arr: *mut [u32; 403]) -> *const u32 { unsafe { (*__arr).as_ptr().add(403) } }");
+        self.writeln("#[inline] pub fn begin__u32__1501_(__arr: *mut [u32; 1501]) -> *const u32 { unsafe { (*__arr).as_ptr() } }");
+        self.writeln("#[inline] pub fn end__u32__1501_(__arr: *mut [u32; 1501]) -> *const u32 { unsafe { (*__arr).as_ptr().add(1501) } }");
+        self.writeln("");
+
         // UTF-8 helper stubs
         self.writeln("// UTF-8 encoding helper stubs");
         self.writeln("#[inline]");
