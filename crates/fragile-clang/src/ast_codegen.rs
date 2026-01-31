@@ -7863,6 +7863,40 @@ impl AstCodeGen {
             || generated.contains("&& 16i32")
             // atomic_flag_wait functions calling rolled-back wait method
             || (generated.contains("atomic_flag_wait") && generated.contains("(*__a).wait("))
+            // atomic_flag_clear_explicit calling clear with memory_order instead of i32
+            || (generated.contains("atomic_flag_clear") && generated.contains("(*__a).clear(__m)"))
+            // __waiter_pool functions with broken array initialization
+            || generated.contains("[__waiter_pool_base; 16] = __ct")
+            // __atomic_always_lock_free with wrong second argument type
+            || (generated.contains("__atomic_always_lock_free(0, 0)"))
+            // swap functions with mutability issues
+            || (generated.contains("pub fn swap") && generated.contains(".swap(&*__"))
+            // swap with wrong reference type in thread/swap constructor
+            || (generated.contains("__self.swap(&__t)") && generated.contains("__t: &mut thread"))
+            // swap_std_thread_id with wrong arg types
+            || (generated.contains("swap_std_thread_id_std_thread_id(") && generated.contains("&mut __t._M_id"))
+            // sem_init/sem_destroy with wrong pointer types
+            || generated.contains("sem_init(&mut")
+            || generated.contains("sem_destroy(&mut")
+            // _S_do_try_acquire with wrong pointer types
+            || generated.contains("_S_do_try_acquire(&mut")
+            // __atomic_wait_address_bare with wrong closure type
+            || generated.contains("__atomic_wait_address_bare_i32(")
+            // __atomic_spin with wrong argument
+            || generated.contains("__atomic_spin___std___detail___default_spin_policy(")
+            // fetch_add_i32 with memory_order transmute
+            || (generated.contains("fetch_add_i32(") && generated.contains("transmute::<i32, memory_order>"))
+            // stop_token methods with c_void type issues
+            || (generated.contains("stop_token::new_1(") && generated.contains("self._M_state"))
+            || (generated.contains("__state.clone()") && generated.contains("_M_state: "))
+            // Clone impl calling new_1 with wrong type
+            || (generated.contains("Self::new_1(self)") && generated.contains("impl Clone"))
+            // swap methods with wrong argument types
+            || (generated.contains("swap_std_stop_source_std_stop_source(") && generated.contains("__other._M_stop_source"))
+            || (generated.contains("swap_thread_thread(") && generated.contains("__other._M_thread"))
+            || (generated.contains("swap_std_thread_id_std_thread_id(") && generated.contains("__t._M_id"))
+            // get_stop_source calling clone on stop_source (Clone impl was skipped)
+            || (generated.contains("self._M_stop_source.clone()"))
         {
             // Rollback - remove the generated function
             self.output.truncate(output_start);
@@ -9183,6 +9217,8 @@ impl AstCodeGen {
                     || generated.contains("self.joinable()")
                     || generated.contains("self.request_stop()")
                     || generated.contains("self.join()")
+                    // sem_destroy in destructor with wrong pointer type
+                    || generated.contains("sem_destroy(&mut self")
                 {
                     self.output.truncate(output_start);
                 }
@@ -9193,7 +9229,15 @@ impl AstCodeGen {
 
         // Generate Clone impl if there's an explicit copy constructor
         // (otherwise Clone is derived via #[derive(Default, Clone)] above)
-        if has_explicit_copy_ctor {
+        // Skip Clone impl for classes whose copy constructor was rolled back
+        let skip_clone = rust_name == "stop_source"
+            || rust_name == "stop_token"
+            || rust_name == "jthread"
+            || rust_name == "thread"
+            || rust_name == "__atomic_semaphore"
+            || rust_name == "__semaphore_base"
+            || rust_name == "__platform_semaphore";
+        if has_explicit_copy_ctor && !skip_clone {
             self.writeln("");
             self.writeln(&format!("impl Clone for {} {{", rust_name));
             self.indent += 1;
@@ -9648,7 +9692,9 @@ impl AstCodeGen {
                         || init_str.starts_with("__y ")  // Unresolved __y at start
                         || init_str.contains(" __y ")  // Unresolved __y in expression
                         || init_str.contains("_Pn")  // Unresolved _Pn from ratio template
-                        || init_str.contains("_Qn");  // Unresolved _Qn from ratio template
+                        || init_str.contains("_Qn")  // Unresolved _Qn from ratio template
+                        || init_str.contains("__atomic_always_lock_free(0, 0)")  // Wrong arg type
+                        || init_str.contains("(0 & (0 - 1))");  // Broken arithmetic in condition
                     if has_template_pattern {
                         Self::default_value_for_static(ty)
                     } else if matches!(ty, CppType::Bool) {
@@ -11993,6 +12039,11 @@ impl AstCodeGen {
                     || generated.contains("pthread_cond_clockwait(")
                     // Bool/int mixing in conditions (libstdc++ internal)
                     || generated.contains("&& 16i32 {")
+                    || generated.contains("!__e && 16i32")
+                    // Array type mismatch in __waiter_pool
+                    || generated.contains("[__waiter_pool_base; 16] = __ct")
+                    // Broken -1 && 0 pattern in numeric_limits
+                    || generated.contains("(-1 && 0)")
                     // atomic_flag op_assign returning reference instead of bool
                     || (generated.contains("_M_base.op_assign(") && generated.contains("-> bool"))
                     // atomic methods with memory_order transmute (wrong argument types)
@@ -12006,6 +12057,16 @@ impl AstCodeGen {
                     || (generated.contains("return __v == 1;") && generated.contains("pub fn test"))
                     // __atomic_base_bool methods with wrong store argument types
                     || (generated.contains("_M_base.store(") && generated.contains("__m)"))
+                    // atomic_flag methods passing memory_order where i32 expected
+                    || (generated.contains("_M_base.load(__m)") && generated.contains("__m: memory_order"))
+                    || (generated.contains("_M_base.exchange(") && generated.contains(", __m)"))
+                    || (generated.contains("_M_base.compare_exchange_weak(") && generated.contains("__m1, __m2)"))
+                    || (generated.contains("_M_base.compare_exchange_weak(") && generated.contains(", __m)"))
+                    || (generated.contains("_M_base.compare_exchange_strong(") && generated.contains("__m1, __m2)"))
+                    || (generated.contains("_M_base.compare_exchange_strong(") && generated.contains(", __m)"))
+                    || (generated.contains("_M_base.wait(") && generated.contains(", __m)"))
+                    // get_stop_source calling clone on stop_source (Clone impl was skipped)
+                    || generated.contains("self._M_stop_source.clone()")
                 {
                     // Rollback - remove the generated method
                     self.output.truncate(output_start);
@@ -12607,6 +12668,11 @@ impl AstCodeGen {
                     // jthread constructor with missing nostopstate_t and std_thread constructors
                     || generated.contains("std_nostopstate_t::new_1(")
                     || generated.contains("std_thread::new_0(")
+                    // sem_init/sem_destroy in constructors
+                    || generated.contains("sem_init(&mut")
+                    || generated.contains("sem_destroy(&mut")
+                    // __self.swap with wrong mutability in thread constructor
+                    || (generated.contains("__self.swap(&__t)") && generated.contains("__t: &mut"))
                 {
                     self.output.truncate(output_start);
                 }

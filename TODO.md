@@ -1141,7 +1141,12 @@ Get `std::thread` working end-to-end.
       - Skip functions returning memory_order with i32 constants (83→81) ✅ 2026-01-31
       - Skip atomic_flag methods with bool/int mixing (81→77) ✅ 2026-01-31
       - Skip atomic_flag_wait functions calling rolled-back wait method (77→70) ✅ 2026-01-31
-    - **Remaining errors at 70**: E0308 type mismatches (40), E0061 arg counts (11), E0610 primitives (9)
+      - Skip atomic_flag methods passing memory_order where i32 expected (70→57) ✅ 2026-01-31
+      - Skip __atomic_always_lock_free globals and broken arithmetic patterns (57→54) ✅ 2026-01-31
+      - Skip atomic_flag_clear_explicit and waiter_pool array patterns (54→43) ✅ 2026-01-31
+      - Skip semaphore constructors and methods with sem_init/sem_destroy (43→41) ✅ 2026-01-31
+      - Skip Clone impls for classes with rolled-back copy constructors (41→40) ✅ 2026-01-31
+    - **Remaining errors at 40**: E0308 type mismatches (12), E0610 primitives (9), E0061 arg counts (7)
   - [ ] **23.10.2** Verify pthread_create/join are called correctly - BLOCKED
   - [ ] **23.10.3** Add mutex test with std::mutex - BLOCKED
   - [ ] **23.10.4** Add condition variable test - BLOCKED
