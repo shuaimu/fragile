@@ -4161,6 +4161,44 @@ impl AstCodeGen {
         self.writeln("pub fn min() -> isize { isize::MIN }");
         self.writeln("#[inline]");
         self.writeln("pub fn max() -> isize { isize::MAX }");
+        // Type-specific min/max functions that libstdc++ generates
+        self.writeln("#[inline] pub fn min_bool_bool(_a: bool, _b: bool) -> bool { false }");
+        self.writeln("#[inline] pub fn min_i8_i8(a: i8, b: i8) -> i8 { if a < b { a } else { b } }");
+        self.writeln("#[inline] pub fn min_u8_u8(a: u8, b: u8) -> u8 { if a < b { a } else { b } }");
+        self.writeln("#[inline] pub fn min_i16_i16(a: i16, b: i16) -> i16 { if a < b { a } else { b } }");
+        self.writeln("#[inline] pub fn min_u16_u16(a: u16, b: u16) -> u16 { if a < b { a } else { b } }");
+        self.writeln("#[inline] pub fn min_i32_i32(a: i32, b: i32) -> i32 { if a < b { a } else { b } }");
+        self.writeln("#[inline] pub fn min_u32_u32(a: u32, b: u32) -> u32 { if a < b { a } else { b } }");
+        self.writeln("#[inline] pub fn min_i64_i64(a: i64, b: i64) -> i64 { if a < b { a } else { b } }");
+        self.writeln("#[inline] pub fn min_u64_u64(a: u64, b: u64) -> u64 { if a < b { a } else { b } }");
+        self.writeln("#[inline] pub fn min_i128_i128(a: i128, b: i128) -> i128 { if a < b { a } else { b } }");
+        self.writeln("#[inline] pub fn min_u128_u128(a: u128, b: u128) -> u128 { if a < b { a } else { b } }");
+        self.writeln("#[inline] pub fn max___float128___float128(a: f64, b: f64) -> f64 { if a > b { a } else { b } }");
+        // Float limit functions for __float128
+        self.writeln("#[inline] pub fn _S_1pm16352() -> f64 { 0.0 }");  // smallest denorm for __float128
+        self.writeln("#[inline] pub fn _S_1p16256() -> f64 { f64::MAX }");  // largest value approximation
+        self.writeln("#[inline] pub fn _S_1pm4088() -> f64 { f64::MIN_POSITIVE }");  // smallest normalized
+        self.writeln("#[inline] pub fn _S_1p4064() -> f64 { f64::MAX }");  // max exponent
+        self.writeln("#[inline] pub fn _S_4p() -> f64 { f64::EPSILON }");  // epsilon approximation
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("");
+
+        // Thread-related module stubs
+        self.writeln("pub mod this_thread {");
+        self.indent += 1;
+        self.writeln("#[inline] pub fn sleep_for_chrono_duration_long__ratio_1__1000___(_d: i64) { }");
+        self.writeln("#[inline] pub fn sleep_for_chrono_duration_long__ratio_1__1000000000___(_d: i64) { }");
+        self.writeln("#[inline] pub fn r#yield() { std::thread::yield_now() }");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("");
+
+        // Chrono module stubs
+        self.writeln("pub mod chrono {");
+        self.indent += 1;
+        self.writeln("#[inline] pub fn duration_cast_duration_long__ratio_1__1000000000___enable_if_is_duration_duration_long__ratio_1__1000000000___enable_if_is_duration_duration_long__ratio_1__1000000000(_d: i64) -> i64 { _d }");
+        self.writeln("#[inline] pub fn time_point_cast_time_point_system_clock__duration_long__ratio_1__1000000000___enable_if_t___is_duration_duration_long__ratio_1__1_value__time_point_system_clock__duration_long__ratio_1__1___enable_if_t___is_duration_duration_long__ratio_1__1_value__time_point_system_clock__duration_long__ratio_1__1(_t: i64) -> i64 { _t }");
         self.indent -= 1;
         self.writeln("}");
         self.writeln("");
@@ -4410,7 +4448,7 @@ impl AstCodeGen {
 
         // Chrono and format type stubs
         self.writeln("// Chrono and format type stubs");
-        self.writeln("pub type chrono_nanoseconds = i64;");
+        // chrono_nanoseconds is defined as a struct later in generate_stubs
         self.writeln("pub type std___extended_grapheme_custer_property_boundary___property = u32;");
         self.writeln("pub type std___format_spec___alignment = u32;");
         self.writeln("pub type _Real = f64;");
@@ -5328,6 +5366,38 @@ impl AstCodeGen {
         self.writeln("pub static __Control: () = ();");
         self.writeln("");
 
+        // Atomic and system call function stubs
+        self.writeln("// Atomic and system call function stubs");
+        self.writeln("#[inline] pub unsafe fn __atomic_thread_fence(_order: i32) { std::sync::atomic::fence(std::sync::atomic::Ordering::SeqCst) }");
+        self.writeln("#[inline] pub unsafe fn __atomic_signal_fence(_order: i32) { std::sync::atomic::compiler_fence(std::sync::atomic::Ordering::SeqCst) }");
+        self.writeln("#[inline] pub unsafe fn __atomic_test_and_set(_ptr: *mut bool, _order: i32) -> bool { false }");
+        self.writeln("#[inline] pub unsafe fn __atomic_clear(_ptr: *mut bool, _order: i32) { }");
+        self.writeln("#[inline] pub unsafe fn __atomic_wait_address_v_bool_bool(_ptr: *const bool, _expected: bool) { }");
+        self.writeln("#[inline] pub unsafe fn __builtin_ia32_pause() { std::hint::spin_loop() }");
+        // syscall - use libc::syscall or define with fixed args (variadic requires nightly)
+        self.writeln("#[inline] pub unsafe fn syscall(_num: i64) -> i64 { 0 }");
+        self.writeln("#[inline] pub unsafe fn sem_init(_sem: *mut std::ffi::c_void, _pshared: i32, _value: u32) -> i32 { 0 }");
+        self.writeln("#[inline] pub unsafe fn sem_destroy(_sem: *mut std::ffi::c_void) -> i32 { 0 }");
+        self.writeln("#[inline] pub unsafe fn __gthread_cond_timedwait(_cond: *mut std::ffi::c_void, _mutex: *mut std::ffi::c_void, _abs: *const std::ffi::c_void) -> i32 { 0 }");
+        self.writeln("#[inline] pub unsafe fn pthread_cond_clockwait(_cond: *mut std::ffi::c_void, _mutex: *mut std::ffi::c_void, _clock: i32, _abs: *const std::ffi::c_void) -> i32 { 0 }");
+        self.writeln("#[inline] pub fn __terminate() { std::process::abort() }");
+        self.writeln("#[inline] pub fn __throw_system_error(_err: i32) { panic!(\"system error\") }");
+        // Atomic load/store/CAS operations for semaphores
+        self.writeln("#[inline] pub fn load_i32(ptr: *const i32) -> i32 { unsafe { std::ptr::read_volatile(ptr) } }");
+        self.writeln("#[inline] pub fn compare_exchange_strong_i32(_ptr: *mut i32, _expected: *mut i32, _desired: i32, _success: i32, _fail: i32) -> bool { false }");
+        self.writeln("#[inline] pub fn fetch_add_i32(ptr: *mut i32, val: i32, _order: i32) -> i32 { unsafe { let old = *ptr; *ptr += val; old } }");
+        self.writeln("#[inline] pub fn _S_do_try_acquire(_sem: *mut std::ffi::c_void) -> bool { false }");
+        self.writeln("#[inline] pub fn __atomic_spin___std___detail___default_spin_policy(_f: impl FnMut() -> bool, _p: std::ffi::c_void) -> bool { false }");
+        // Swap functions
+        self.writeln("#[inline] pub fn swap_std_thread_id_std_thread_id(a: *mut u64, b: *mut u64) { unsafe { std::ptr::swap(a, b) } }");
+        self.writeln("#[inline] pub fn swap_std_stop_source_std_stop_source(a: *mut std::ffi::c_void, b: *mut std::ffi::c_void) { unsafe { std::ptr::swap(a, b) } }");
+        self.writeln("#[inline] pub fn swap_thread_thread(a: *mut std::ffi::c_void, b: *mut std::ffi::c_void) { unsafe { std::ptr::swap(a, b) } }");
+        // NaN constant
+        self.writeln("pub const NaN: f64 = f64::NAN;");
+        // pthread_self for thread ID (called from this_thread module)
+        self.writeln("#[inline] pub fn pthread_self() -> u64 { 0 }");
+        self.writeln("");
+
         // Thread-related type stubs
         self.writeln("// Thread-related type stubs");
         self.writeln("pub type thread_id = u64;");
@@ -5341,6 +5411,88 @@ impl AstCodeGen {
         self.writeln("pub type __timed_waiter_std_true_type = std::ffi::c_void;");
         self.writeln("pub type __timed_waiter_std_false_type = std::ffi::c_void;");
         self.writeln("pub type __detail___bare_wait = std::ffi::c_void;");
+        self.writeln("");
+
+        // Atomic type stubs for libstdc++
+        self.writeln("// Atomic type stubs");
+        // __atomic_base types for all primitive types
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct __atomic_base_bool { pub _M_i: bool }");
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct __atomic_base_char { pub _M_i: i8 }");
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct __atomic_base_signed_char { pub _M_i: i8 }");
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct __atomic_base_unsigned_char { pub _M_i: u8 }");
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct __atomic_base_short { pub _M_i: i16 }");
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct __atomic_base_unsigned_short { pub _M_i: u16 }");
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct __atomic_base_int { pub _M_i: i32 }");
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct __atomic_base_unsigned_int { pub _M_i: u32 }");
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct __atomic_base_long { pub _M_i: i64 }");
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct __atomic_base_unsigned_long { pub _M_i: u64 }");
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct __atomic_base_long_long { pub _M_i: i64 }");
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct __atomic_base_unsigned_long_long { pub _M_i: u64 }");
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct __atomic_base_wchar_t { pub _M_i: i32 }");
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct __atomic_base_char8_t { pub _M_i: u8 }");
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct __atomic_base_char16_t { pub _M_i: u16 }");
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct __atomic_base_char32_t { pub _M_i: u32 }");
+        self.generated_structs.insert("__atomic_base_bool".to_string());
+        self.generated_structs.insert("__atomic_base_char".to_string());
+        self.generated_structs.insert("__atomic_base_signed_char".to_string());
+        self.generated_structs.insert("__atomic_base_unsigned_char".to_string());
+        self.generated_structs.insert("__atomic_base_short".to_string());
+        self.generated_structs.insert("__atomic_base_unsigned_short".to_string());
+        self.generated_structs.insert("__atomic_base_int".to_string());
+        self.generated_structs.insert("__atomic_base_unsigned_int".to_string());
+        self.generated_structs.insert("__atomic_base_long".to_string());
+        self.generated_structs.insert("__atomic_base_unsigned_long".to_string());
+        self.generated_structs.insert("__atomic_base_long_long".to_string());
+        self.generated_structs.insert("__atomic_base_unsigned_long_long".to_string());
+        self.generated_structs.insert("__atomic_base_wchar_t".to_string());
+        self.generated_structs.insert("__atomic_base_char8_t".to_string());
+        self.generated_structs.insert("__atomic_base_char16_t".to_string());
+        self.generated_structs.insert("__atomic_base_char32_t".to_string());
+        // __atomic_flag_base type
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct __atomic_flag_base { pub _M_i: bool }");
+        self.generated_structs.insert("__atomic_flag_base".to_string());
+        // __atomic_float types for floating point atomics
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct __atomic_float_float { pub _M_fp: f32 }");
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct __atomic_float_double { pub _M_fp: f64 }");
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct __atomic_float_long_double { pub _M_fp: f64 }");
+        self.generated_structs.insert("__atomic_float_float".to_string());
+        self.generated_structs.insert("__atomic_float_double".to_string());
+        self.generated_structs.insert("__atomic_float_long_double".to_string());
+        self.writeln("");
+
+        // Impl block for __atomic_base_bool with atomic methods
+        self.writeln("impl __atomic_base_bool {");
+        self.indent += 1;
+        self.writeln("#[inline] pub fn new_0() -> Self { Self { _M_i: false } }");
+        self.writeln("#[inline] pub fn new_1(val: bool) -> Self { Self { _M_i: val } }");
+        self.writeln("#[inline] pub fn op_assign(&mut self, val: bool) -> &mut Self { self._M_i = val; self }");
+        self.writeln("#[inline] pub fn load(&self, _order: i32) -> bool { self._M_i }");
+        self.writeln("#[inline] pub fn store(&mut self, val: bool, _order: i32) { self._M_i = val; }");
+        self.writeln("#[inline] pub fn exchange(&mut self, val: bool, _order: i32) -> bool { let old = self._M_i; self._M_i = val; old }");
+        self.writeln("#[inline] pub fn compare_exchange_weak(&mut self, expected: &mut bool, desired: bool, _success: i32, _fail: i32) -> bool {");
+        self.indent += 1;
+        self.writeln("if self._M_i == *expected { self._M_i = desired; true } else { *expected = self._M_i; false }");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("#[inline] pub fn compare_exchange_strong(&mut self, expected: &mut bool, desired: bool, _success: i32, _fail: i32) -> bool {");
+        self.indent += 1;
+        self.writeln("self.compare_exchange_weak(expected, desired, _success, _fail)");
+        self.indent -= 1;
+        self.writeln("}");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("");
+
+        // Memory order constants
+        self.writeln("// Memory order constants");
+        self.writeln("pub const memory_order_relaxed: i32 = 0;");
+        self.writeln("pub const memory_order_consume: i32 = 1;");
+        self.writeln("pub const memory_order_acquire: i32 = 2;");
+        self.writeln("pub const memory_order_release: i32 = 3;");
+        self.writeln("pub const memory_order_acq_rel: i32 = 4;");
+        self.writeln("pub const memory_order_seq_cst: i32 = 5;");
+        self.writeln("pub const __memory_order_mask: i32 = 0x0ffff;");
+        self.writeln("pub const __memory_order_modifier_mask: i32 = 0xffff0000u32 as i32;");
         self.writeln("");
 
         // More type stubs for libstdc++
@@ -5398,6 +5550,92 @@ impl AstCodeGen {
         self.writeln("pub type _Size_decltype___detail___to_unsigned_like_std_declval_typename___iter_traits_impl_typename_remove_cvref_type_parameter_0_0_type__incrementable_traits_typename_remove_cvref_type_parameter_0_0_type_type_difference_type_______S_store_size = usize;");
         // strong_ordering type for comparisons
         self.writeln("pub type std_strong_ordering = i8;");
+        self.writeln("");
+
+        // Chrono type stubs for libstdc++
+        self.writeln("// Chrono type stubs");
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct chrono_microseconds { pub _M_r: i64 }");
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct chrono_milliseconds { pub _M_r: i64 }");
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct chrono_seconds { pub _M_r: i64 }");
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct chrono_minutes { pub _M_r: i64 }");
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct chrono_hours { pub _M_r: i64 }");
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct chrono_nanoseconds { pub _M_r: i64 }");
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct chrono_steady_clock { pub _M_t: i64 }");
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct chrono_system_clock { pub _M_t: i64 }");
+        self.writeln("pub type chrono_time_point___clock_t = i64;");
+        self.writeln("pub type time_point = i64;");
+        self.generated_structs.insert("chrono_microseconds".to_string());
+        self.generated_structs.insert("chrono_milliseconds".to_string());
+        self.generated_structs.insert("chrono_seconds".to_string());
+        self.generated_structs.insert("chrono_minutes".to_string());
+        self.generated_structs.insert("chrono_hours".to_string());
+        self.generated_structs.insert("chrono_nanoseconds".to_string());
+        self.generated_structs.insert("chrono_steady_clock".to_string());
+        self.generated_structs.insert("chrono_system_clock".to_string());
+        self.generated_structs.insert("chrono_time_point___clock_t".to_string());
+        self.generated_structs.insert("time_point".to_string());
+        self.writeln("");
+
+        // Ratio type stubs for libstdc++ (SI prefixes)
+        self.writeln("// Ratio type stubs (SI prefixes)");
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct ratio_1__1000000000000000000L { pub num: i64, pub den: i64 }");
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct ratio_1__1000000000000000L { pub num: i64, pub den: i64 }");
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct ratio_1__1000000000000L { pub num: i64, pub den: i64 }");
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct ratio_1__1000000000 { pub num: i64, pub den: i64 }");
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct ratio_1__1000000 { pub num: i64, pub den: i64 }");
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct ratio_1__1000 { pub num: i64, pub den: i64 }");
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct ratio_1__100 { pub num: i64, pub den: i64 }");
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct ratio_1__10 { pub num: i64, pub den: i64 }");
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct ratio_10__1 { pub num: i64, pub den: i64 }");
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct ratio_100__1 { pub num: i64, pub den: i64 }");
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct ratio_1000__1 { pub num: i64, pub den: i64 }");
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct ratio_1000000__1 { pub num: i64, pub den: i64 }");
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct ratio_1000000000__1 { pub num: i64, pub den: i64 }");
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct ratio_1000000000000L__1 { pub num: i64, pub den: i64 }");
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct ratio_1000000000000000L__1 { pub num: i64, pub den: i64 }");
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct ratio_1000000000000000000L__1 { pub num: i64, pub den: i64 }");
+        self.generated_structs.insert("ratio_1__1000000000000000000L".to_string());
+        self.generated_structs.insert("ratio_1__1000000000000000L".to_string());
+        self.generated_structs.insert("ratio_1__1000000000000L".to_string());
+        self.generated_structs.insert("ratio_1__1000000000".to_string());
+        self.generated_structs.insert("ratio_1__1000000".to_string());
+        self.generated_structs.insert("ratio_1__1000".to_string());
+        self.generated_structs.insert("ratio_1__100".to_string());
+        self.generated_structs.insert("ratio_1__10".to_string());
+        self.generated_structs.insert("ratio_10__1".to_string());
+        self.generated_structs.insert("ratio_100__1".to_string());
+        self.generated_structs.insert("ratio_1000__1".to_string());
+        self.generated_structs.insert("ratio_1000000__1".to_string());
+        self.generated_structs.insert("ratio_1000000000__1".to_string());
+        self.generated_structs.insert("ratio_1000000000000L__1".to_string());
+        self.generated_structs.insert("ratio_1000000000000000L__1".to_string());
+        self.generated_structs.insert("ratio_1000000000000000000L__1".to_string());
+        self.writeln("");
+
+        // Thread and stop token type stubs
+        self.writeln("// Thread and stop token type stubs");
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct std_thread { pub _M_id: u64 }");
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct std_nostopstate_t;");
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct std_counting_semaphore_1 { pub _M_counter: i32 }");
+        self.writeln("pub const nostopstate: std_nostopstate_t = std_nostopstate_t;");
+        self.generated_structs.insert("std_thread".to_string());
+        self.generated_structs.insert("std_nostopstate_t".to_string());
+        self.generated_structs.insert("std_counting_semaphore_1".to_string());
+        self.writeln("");
+
+        // More type alias stubs for complex template instantiations
+        self.writeln("// Complex template type aliases");
+        self.writeln("pub type duration_typename_common_type_type_parameter_0_0_type__typename_type_parameter_0_1_type = i64;");
+        self.writeln("pub type _Cb_impl = std::ffi::c_void;");
+        self.writeln("pub type _Callback = std::ffi::c_void;");
+        self.writeln("pub type __hash_base_size_t__thread_id = usize;");
+        self.writeln("pub type atomic_make_signed_t___detail___platform_wait_t = i32;");
+        self.writeln("pub type atomic_make_unsigned_t___detail___platform_wait_t = u32;");
+        self.writeln("pub type enable_if___and____not__is_pointer__Dp__is_default_constructible__Dp_value__void = ();");
+        self.writeln("pub type __enable_if_t___is_duration_duration_long__ratio_1__1_value__time_point_system_clock__duration_long__ratio_1__1 = i64;");
+        self.writeln("pub type __enable_if_is_duration_duration_long__ratio_1__1000000000 = i64;");
+        self.writeln("pub type _Digit__Base___Dig = u8;");
+        self.writeln("pub type _Val_int = i32;");
         self.writeln("");
 
         // Exception class stub - base class for all exception types

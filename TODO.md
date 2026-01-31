@@ -1093,7 +1093,7 @@ Get `std::thread` working end-to-end.
     }
     ```
     - **Status**: Transpilation succeeds (112K chars)
-    - **Progress v2 (compilation errors)**: 358 → 343 → 335 → 317 ✅ 2026-01-31
+    - **Progress v2 (compilation errors)**: 358 → 343 → 335 → 317 → 304 → 303 → 277 → 248 → 236 → 235 → 234 → 229 ✅ 2026-01-31
       - Fixed duplicate atomic type definitions (added to generated_structs)
       - Fixed duplicate preamble type aliases (added to generated_aliases)
       - Fixed user-defined literals (operator""ms → op_literal_ms)
@@ -1101,7 +1101,22 @@ Get `std::thread` working end-to-end.
       - Added _Fp template parameter placeholder
       - Added thread_id, __native_type, __wait_clock_t_time_point stubs
       - Added waiter type stubs for std::thread internal types
-    - **Remaining errors at 317**: type mismatches, template placeholders as structs, bool arithmetic
+      - Fixed binary operator detection for macro-expanded code (317→304) ✅ 2026-01-31
+      - Added __atomic_base_* type stubs (16 types for all primitive types) (303→277) ✅ 2026-01-31
+      - Added __atomic_float_* type stubs (float, double, long_double) ✅ 2026-01-31
+      - Added __atomic_flag_base type stub ✅ 2026-01-31
+      - Added memory_order_* constants (relaxed, consume, acquire, release, acq_rel, seq_cst) ✅ 2026-01-31
+      - Added chrono type stubs (microseconds, milliseconds, seconds, etc.) (277→248) ✅ 2026-01-31
+      - Added ratio type stubs (SI prefixes from atto to exa) ✅ 2026-01-31
+      - Added std_thread, std_nostopstate_t, std_counting_semaphore_1 type stubs ✅ 2026-01-31
+      - Added numeric_limits min/max functions for all primitive types (248→236) ✅ 2026-01-31
+      - Added this_thread module with sleep_for and yield stubs ✅ 2026-01-31
+      - Added chrono module with duration_cast and time_point_cast stubs ✅ 2026-01-31
+      - Added atomic function stubs (__atomic_thread_fence, __atomic_signal_fence, etc.) ✅ 2026-01-31
+      - Added swap function stubs (swap_thread_thread, etc.) (236→235) ✅ 2026-01-31
+      - Added pthread_self stub for thread ID (235→234) ✅ 2026-01-31
+      - Added __atomic_base_bool impl block with new_0, new_1, op_assign, load, store, exchange, compare_exchange_* (234→229) ✅ 2026-01-31
+    - **Remaining errors at 229**: E0308 type mismatches (52), E0599 missing methods (34), E0425 missing values (14), E0061 wrong arg count (23)
   - [ ] **23.10.2** Verify pthread_create/join are called correctly - BLOCKED
   - [ ] **23.10.3** Add mutex test with std::mutex - BLOCKED
   - [ ] **23.10.4** Add condition variable test - BLOCKED
