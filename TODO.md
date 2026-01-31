@@ -842,7 +842,7 @@ Get `std::cout` working end-to-end.
     ```
     - **Status**: Transpilation succeeds (128K chars → 23K LOC Rust)
     - **Progress**: Compilation errors reduced (unique error codes): 65 → ... → 491 → 476 → 457 → 452 → 442 → 438 → 435 → 366 → 357 → 354 → 343 → 337 → 336 → 330 → 326 → 322 → 321 → 312 (libstdc++) ✅ 2026-01-25
-    - **Progress v2**: Total error count (incl. duplicate locations): 1225 → 1218 → 1214 → 1205 → 1201 → 1190 → 1169 → 1112 → 1063 → 1052 → 981 → 869 → 842 → 794 → 784 → 763 → 751 → 745 → 743 → 726 → 724 → 720 → 712 → 707 → 705 → 663 → 657 → 651 → 648 → 645 → 632 → 626 → 592 → 582 → 555 → 485 → 471 → 465 → 464 → 452 → 448 → 446 → 441 → 437 → 436 ✅ 2026-01-30
+    - **Progress v2**: Total error count (incl. duplicate locations): 1225 → 1218 → 1214 → 1205 → 1201 → 1190 → 1169 → 1112 → 1063 → 1052 → 981 → 869 → 842 → 794 → 784 → 763 → 751 → 745 → 743 → 726 → 724 → 720 → 712 → 707 → 705 → 663 → 657 → 651 → 648 → 645 → 632 → 626 → 592 → 582 → 555 → 485 → 471 → 465 → 464 → 452 → 448 → 446 → 441 → 437 → 436 → 433 ✅ 2026-01-30
       - Fixed cast-after-method parsing: wrap pointer casts in parentheses before .add()/.sub()
       - Added long double math builtins (__builtin_expl, __builtin_sqrtl, etc.) - 37 functions
       - Added __to_underlying_* stubs for enum-to-int conversion
@@ -957,14 +957,18 @@ Get `std::cout` working end-to-end.
         - Affected types: error_category, ctype_char, ctype_wchar_t, collate_char, collate_wchar_t
         - Added Sync+Send impls for static usage
         - Fixes field access errors when derived classes access `__base.__vtable`
-    - **Remaining errors at 436**: mostly code generation issues requiring deeper fixes:
-      - E0308 (312): Type mismatches (usize/u64, f32/f64, i32/u32, pointer/reference)
+      - Fixed: Don't add & for pointer types in operator arguments (436→433) ✅ 2026-01-30
+        - Pointer types and named pointer types (e.g., `const char*`) should be passed by value
+        - Fixes E0606 errors: `&*const u8` invalid cast to `*const i8`
+        - String literal concatenation with op_add now works correctly
+    - **Remaining errors at 433**: mostly code generation issues requiring deeper fixes:
+      - E0308 (307): Type mismatches (usize/u64, f32/f64, i32/u32, pointer/reference)
       - E0061 (47): Wrong number of arguments (function overloading issues)
       - E0560 (20): Struct has no field (vtable virtual methods missing)
-      - E0609 (9): No field on type (array._unnamed, reduced from 13)
-      - E0277 (9): Trait not satisfied (bool arithmetic, c_void ops)
-      - E0599 (9): No method found (__on_zero_shared, op_add on raw pointers)
-      - E0606 (3): Invalid cast
+      - E0609 (9): No field on type (array._unnamed)
+      - E0277 (6): Trait not satisfied (bool arithmetic, c_void ops)
+      - E0599 (5): No method found (__on_zero_shared, op_add on raw pointers)
+      - E0606 (1): Invalid cast (TypeId as c_void)
       - E0423 (3): Expected value, found type alias
   - [ ] **23.9.2** Fix iostream static initialization (global cout/cin/cerr objects) - BLOCKED
     - libc++ uses `__start_std_streams` section for initialization

@@ -13856,11 +13856,19 @@ impl AstCodeGen {
                         }
                         // Pass class/struct types by reference, primitives by value
                         // Named types that are typedefs to primitives should be passed by value
+                        // Pointer types should never have & added (would create &*const T)
                         let needs_ref = match &right_type {
+                            Some(CppType::Pointer { .. }) => {
+                                // Pointer types - pass by value (don't create &*const T)
+                                false
+                            }
                             Some(CppType::Named(name)) => {
-                                // These are typedefs to primitive types - pass by value
-                                !matches!(
-                                    name.as_str(),
+                                // These are typedefs to primitive types or pointer types - pass by value
+                                // Also handle named pointer types like "const char*"
+                                let name_str = name.as_str();
+                                let is_pointer_type = name_str.contains('*');
+                                let is_primitive_typedef = matches!(
+                                    name_str,
                                     "ptrdiff_t"
                                         | "std::ptrdiff_t"
                                         | "ssize_t"
@@ -13880,7 +13888,9 @@ impl AstCodeGen {
                                         | "uint16_t"
                                         | "uint32_t"
                                         | "uint64_t"
-                                )
+                                );
+                                // Pass by value if it's a pointer type or a primitive typedef
+                                !is_pointer_type && !is_primitive_typedef
                             }
                             _ => false,
                         };
