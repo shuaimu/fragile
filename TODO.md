@@ -842,7 +842,7 @@ Get `std::cout` working end-to-end.
     ```
     - **Status**: Transpilation succeeds (128K chars → 23K LOC Rust)
     - **Progress**: Compilation errors reduced (unique error codes): 65 → ... → 491 → 476 → 457 → 452 → 442 → 438 → 435 → 366 → 357 → 354 → 343 → 337 → 336 → 330 → 326 → 322 → 321 → 312 (libstdc++) ✅ 2026-01-25
-    - **Progress v2**: Total error count (incl. duplicate locations): 1225 → 1218 → 1214 → 1205 → 1201 → 1190 → 1169 → 1112 → 1063 → 1052 → 981 → 869 → 842 → 794 → 784 → 763 → 751 → 745 → 743 → 726 → 724 → 720 → 712 → 707 → 705 → 663 → 657 → 651 → 648 → 645 → 632 → 626 → 592 → 582 → 555 → 485 → 471 → 465 → 464 → 452 → 448 → 446 → 441 → 437 → 436 → 433 → 432 → 428 → 415 → 407 → 399 → 397 → 387 → 380 → 379 ✅ 2026-01-31
+    - **Progress v2**: Total error count (incl. duplicate locations): 1225 → 1218 → 1214 → 1205 → 1201 → 1190 → 1169 → 1112 → 1063 → 1052 → 981 → 869 → 842 → 794 → 784 → 763 → 751 → 745 → 743 → 726 → 724 → 720 → 712 → 707 → 705 → 663 → 657 → 651 → 648 → 645 → 632 → 626 → 592 → 582 → 555 → 485 → 471 → 465 → 464 → 452 → 448 → 446 → 441 → 437 → 436 → 433 → 432 → 428 → 415 → 407 → 399 → 397 → 387 → 380 → 379 → 324 ✅ 2026-01-31
       - Fixed cast-after-method parsing: wrap pointer casts in parentheses before .add()/.sub()
       - Added long double math builtins (__builtin_expl, __builtin_sqrtl, etc.) - 37 functions
       - Added __to_underlying_* stubs for enum-to-int conversion
@@ -1005,20 +1005,22 @@ Get `std::cout` working end-to-end.
         - Skip: ctype<char/wchar_t>, collate<char/wchar_t>, ctype_byname, collate_byname (std:: prefixed)
         - Prevents generated vtable constants from conflicting with stub vtable structures
         - Fixes E0063: missing fields in vtable initializer (do_compare, do_hash, do_toupper, etc.)
-    - **Remaining errors at 379**: mostly code generation issues requiring deeper fixes:
-      - E0308 (234): Type mismatches (usize/u64, f32/f64, i32/u32, pointer/reference)
-      - E0061 (31): Wrong number of arguments (function overloading issues)
-      - E0425 (14): Cannot find value (unresolved template parameter references)
-      - E0277 (13): Trait not satisfied (bool arithmetic, c_void ops, PartialOrd)
-      - E0599 (10): No method found (__on_zero_shared, op_add on raw pointers)
-      - E0609 (3): No field on type (array._unnamed for begin/end functions)
-      - E0423 (3): Expected value, found type alias
+      - Fixed: Add stub vtable constants for locale facet types (379→324) ✅ 2026-01-31
+        - Added stub functions and vtable constants for skipped vtable types
+        - STD_CTYPE_CHAR__VTABLE, STD_CTYPE_WCHAR_T__VTABLE (and _byname variants)
+        - STD_COLLATE_BYNAME_CHAR__VTABLE, STD_COLLATE_BYNAME_WCHAR_T__VTABLE
+        - Fixes E0425: cannot find value `STD_CTYPE_CHAR__VTABLE` in this scope (55 errors fixed)
+    - **Remaining errors at 324**: mostly code generation issues requiring deeper fixes:
+      - E0308 (196): Type mismatches (usize/u64, f32/f64, i32/u32, pointer/reference)
+      - E0061 (43+): Method argument count issues (function overloading)
+      - E0277 (6): Trait not satisfied (bool arithmetic, c_void ops)
+      - E0599 (5): No method found (__on_zero_shared, op_add on raw pointers)
+      - E0423 (3): Expected value, found type alias (_Args, _Size - template params)
+      - E0425 (2): Cannot find value (_unnamed, unresolved template refs)
       - E0424 (2): Self-referencing in constructors (member initializer lists)
-      - E0062 (2): Field specified more than once (duplicate initializers)
+      - E0609 (2): No field on type (array._unnamed for begin/end functions)
       - E0080 (2): Division by zero in constant evaluation
-      - E0618 (1): Expected function, found value (std::min shadowed by global)
-      - E0610 (1): Field access on primitive (inf.0)
-      - E0600 (1): Pointer negation (errno_location parsing issue)
+      - E0062 (1): Field specified more than once (duplicate initializers)
   - [ ] **23.9.2** Fix iostream static initialization (global cout/cin/cerr objects) - BLOCKED
     - libc++ uses `__start_std_streams` section for initialization
     - May need to generate Rust static initialization code
