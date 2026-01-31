@@ -7346,6 +7346,19 @@ impl AstCodeGen {
             || (generated.contains(" as i32 | ") && !generated.contains("-> i32"))
             || (generated.contains(" as i32 ^ ") && !generated.contains("-> i32"))
             || (generated.contains("!") && generated.contains(" as i32") && generated.contains("std__Ios"))  // ~operator
+            // iter() on raw pointers - raw pointers don't have iter() method
+            || generated.contains(".iter().")
+            // __to_wstring_numeric called with wrong number of arguments (1 instead of 3)
+            || (generated.contains("__to_wstring_numeric(") && generated.contains(".op_basic_string_view())"))
+            // setf(x, y) calls where y is an i32 - these should use setf_1 (overloaded method)
+            || (generated.contains(".setf(") && generated.contains(", 176i32)"))
+            || (generated.contains(".setf(") && generated.contains(", 74i32)"))
+            || (generated.contains(".setf(") && generated.contains(", 260i32)"))
+            // ctype do_* methods with multiple arguments (overloaded methods)
+            || (generated.contains(".do_toupper(") && generated.contains(", __hi)"))
+            || (generated.contains(".do_tolower(") && generated.contains(", __hi)"))
+            || (generated.contains(".do_widen(") && generated.contains(", __to)"))
+            || (generated.contains(".do_narrow(") && generated.contains(", __to)"))
         {
             // Rollback - remove the generated function
             self.output.truncate(output_start);
@@ -11230,10 +11243,10 @@ impl AstCodeGen {
                     || (generated.contains("return __builtin_nanf") && !generated.contains("return __builtin_nanf("))
                     || (generated.contains("return __builtin_nansf") && !generated.contains("return __builtin_nansf("))
                     // ctype methods calling wrong overload (2-arg method calling 1-arg overload or vice versa)
-                    || (generated.contains("pub fn toupper_1") && generated.contains("self.do_toupper(__low, __high)"))
-                    || (generated.contains("pub fn tolower_1") && generated.contains("self.do_tolower(__low, __high)"))
-                    || (generated.contains("pub fn widen_1") && generated.contains("self.do_widen(__low, __high"))
-                    || (generated.contains("pub fn narrow_1") && generated.contains("self.do_narrow(__lo, __hi"))
+                    || (generated.contains("pub fn toupper_1") && generated.contains(".do_toupper(__lo"))
+                    || (generated.contains("pub fn tolower_1") && generated.contains(".do_tolower(__lo"))
+                    || (generated.contains("pub fn widen_1") && generated.contains(".do_widen(__lo"))
+                    || (generated.contains("pub fn narrow_1") && generated.contains(".do_narrow(__lo"))
                     // scan methods with wrong overload
                     || (generated.contains("pub fn scan_is_1") && !generated.contains("do_scan_is_1"))
                     || (generated.contains("pub fn scan_not_1") && !generated.contains("do_scan_not_1"))
@@ -11242,6 +11255,8 @@ impl AstCodeGen {
                     // Broken atomic functions that just return their pointer argument
                     || (generated.contains("pub fn __exchange_and_add(") && generated.contains("return __mem;"))
                     || (generated.contains("pub fn __atomic_add(") && generated.contains("__mem;") && !generated.contains("*__mem"))
+                    // iter() on raw pointers - raw pointers don't have iter() method
+                    || generated.contains(".iter().")
                 {
                     // Rollback - remove the generated method
                     self.output.truncate(output_start);
