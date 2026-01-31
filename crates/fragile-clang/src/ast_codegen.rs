@@ -5737,21 +5737,27 @@ impl AstCodeGen {
                 ..
             } = &child.kind
             {
-                if !matches!(access, crate::ast::AccessSpecifier::Private) {
-                    if *is_virtual {
-                        continue;
-                    }
-                    let base_name = base_type.to_rust_type_str();
-                    // Use __base for single inheritance, __base0/__base1/etc for MI
-                    let field_name = if base_idx == 0 {
-                        "__base".to_string()
-                    } else {
-                        format!("__base{}", base_idx)
-                    };
-                    self.writeln(&format!("pub {}: {},", field_name, base_name));
-                    base_fields.push((field_name, base_type.clone()));
-                    base_idx += 1;
+                // Always include base class fields regardless of C++ access specifier
+                // (private inheritance still requires the base subobject for correct layout)
+                if *is_virtual {
+                    continue;
                 }
+                let base_name = base_type.to_rust_type_str();
+                // Use __base for single inheritance, __base0/__base1/etc for MI
+                let field_name = if base_idx == 0 {
+                    "__base".to_string()
+                } else {
+                    format!("__base{}", base_idx)
+                };
+                // Use pub(crate) for private inheritance, pub otherwise
+                let vis = if matches!(access, crate::ast::AccessSpecifier::Private) {
+                    "pub(crate) "
+                } else {
+                    "pub "
+                };
+                self.writeln(&format!("{}{}: {},", vis, field_name, base_name));
+                base_fields.push((field_name, base_type.clone()));
+                base_idx += 1;
             }
         }
 
@@ -7103,23 +7109,28 @@ impl AstCodeGen {
                 ..
             } = &child.kind
             {
-                // Only include public/protected bases (private inheritance is more complex)
-                if !matches!(access, crate::ast::AccessSpecifier::Private) {
-                    if *is_virtual {
-                        continue;
-                    }
-                    let base_name = base_type.to_rust_type_str();
-                    // Use __base for first base (backward compatible), __base1/__base2/etc for MI
-                    let field_name = if base_idx == 0 {
-                        "__base".to_string()
-                    } else {
-                        format!("__base{}", base_idx)
-                    };
-                    self.writeln(&format!("/// Inherited from `{}`", base_name));
-                    self.writeln(&format!("pub {}: {},", field_name, base_name));
-                    base_fields.push((field_name, base_type.clone()));
-                    base_idx += 1;
+                // Always include base class fields regardless of C++ access specifier
+                // (private inheritance still requires the base subobject for correct layout)
+                if *is_virtual {
+                    continue;
                 }
+                let base_name = base_type.to_rust_type_str();
+                // Use __base for first base (backward compatible), __base1/__base2/etc for MI
+                let field_name = if base_idx == 0 {
+                    "__base".to_string()
+                } else {
+                    format!("__base{}", base_idx)
+                };
+                // Use pub(crate) for private inheritance, pub otherwise
+                let vis = if matches!(access, crate::ast::AccessSpecifier::Private) {
+                    "pub(crate) "
+                } else {
+                    "pub "
+                };
+                self.writeln(&format!("/// Inherited from `{}`", base_name));
+                self.writeln(&format!("{}{}: {},", vis, field_name, base_name));
+                base_fields.push((field_name, base_type.clone()));
+                base_idx += 1;
             }
         }
 
