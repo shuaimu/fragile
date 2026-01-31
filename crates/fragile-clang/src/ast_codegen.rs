@@ -2009,6 +2009,10 @@ impl AstCodeGen {
             || generated.contains(": __d")      // Unresolved __d variable in declaration
             || generated.contains("memory_order::new_0()")  // memory_order enum used as struct
             || generated.contains(".op_bitand(")  // bitwise and as method on enum (libstdc++ atomics)
+            || generated.contains("c_void::new_")  // c_void placeholder used as constructable type
+            || generated.contains("c_void.op_")   // c_void placeholder used as callable object
+            || generated.contains("inf.0")        // Broken infinity literal (should be just inf)
+            || generated.contains("NaN.0")        // Broken NaN literal (should be just NaN)
         {
             // Rollback - remove the generated function
             self.output.truncate(output_start);
@@ -2661,6 +2665,12 @@ impl AstCodeGen {
             || func_name.contains("fragile_free")
             || func_name.contains("fragile_realloc")
             || func_name.contains("fragile_calloc")
+        {
+            return true;
+        }
+        // Unsafe builtin functions
+        if func_name.starts_with("__builtin_ia32_")  // x86 intrinsics
+            || func_name.starts_with("__atomic_")  // atomic operations
         {
             return true;
         }
@@ -5692,6 +5702,10 @@ impl AstCodeGen {
         // Thread and stop token type stubs
         self.writeln("// Thread and stop token type stubs");
         self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct std_thread { pub _M_id: u64 }");
+        self.writeln("impl std_thread {");
+        self.writeln("    pub fn new_0() -> Self { Self { _M_id: 0 } }");
+        self.writeln("    pub fn join(&mut self) { /* stub: actual thread join not implemented */ }");
+        self.writeln("}");
         self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct std_nostopstate_t;");
         self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct std_counting_semaphore_1 { pub _M_counter: i32 }");
         self.writeln("pub const nostopstate: std_nostopstate_t = std_nostopstate_t;");
@@ -6815,7 +6829,16 @@ impl AstCodeGen {
             } = &child.kind
             {
                 if let Some(v) = value {
-                    self.writeln(&format!("{} = {},", const_name, v));
+                    // For unsigned repr types, handle negative values by wrapping
+                    let fixed_value = if repr_type.starts_with('u') && *v < 0 {
+                        // Negative value in unsigned enum - use explicit cast
+                        // This handles C++ patterns like `__memory_order_modifier_mask = -65536`
+                        // which should be 0xFFFF0000 in unsigned
+                        format!("{}i64 as {}", v, repr_type)
+                    } else {
+                        v.to_string()
+                    };
+                    self.writeln(&format!("{} = {},", const_name, fixed_value));
                 } else {
                     self.writeln(&format!("{},", const_name));
                 }
@@ -7828,6 +7851,18 @@ impl AstCodeGen {
             // memory_order enum used as struct with op_bitand/op_bitor (libstdc++ atomic internals)
             || (generated.contains(".op_bitand(") && generated.contains("memory_order"))
             || (generated.contains(".op_bitor(") && generated.contains("memory_order"))
+            // __cmpexch_failure_order2 returns memory_order but uses i32 constants
+            || (generated.contains("-> memory_order") && generated.contains("memory_order_acquire") && generated.contains("memory_order_relaxed"))
+            // __waiter_pool functions with wrong array/type handling
+            || (generated.contains("[__waiter_pool_base; 16] = __ct"))
+            // __gthread_cond_timedwait with wrong argument types
+            || generated.contains("__gthread_cond_timedwait(")
+            // pthread_cond_clockwait with wrong argument types
+            || generated.contains("pthread_cond_clockwait(")
+            // Bool/int mixing in conditions (libstdc++ internal)
+            || generated.contains("&& 16i32")
+            // atomic_flag_wait functions calling rolled-back wait method
+            || (generated.contains("atomic_flag_wait") && generated.contains("(*__a).wait("))
         {
             // Rollback - remove the generated function
             self.output.truncate(output_start);
@@ -9141,6 +9176,13 @@ impl AstCodeGen {
                 let generated = &self.output[output_start..];
                 if generated.contains("_dependent_type::new_")
                     || generated.contains("._unnamed")
+                    // c_void type alias (_Stop_state_ref) methods in destructor
+                    || generated.contains("._M_state.op_bool()")
+                    || generated.contains("._M_state.op_arrow()")
+                    // jthread destructor calling rolled-back methods
+                    || generated.contains("self.joinable()")
+                    || generated.contains("self.request_stop()")
+                    || generated.contains("self.join()")
                 {
                     self.output.truncate(output_start);
                 }
@@ -11909,6 +11951,61 @@ impl AstCodeGen {
                     || generated.contains("memory_order::new_0()")
                     // bitwise and as method on enum (libstdc++ atomics)
                     || generated.contains(".op_bitand(")
+                    // Methods on c_void type aliases (stop_token's _Stop_state_ref)
+                    // These patterns cover self._M_state, __self._M_state, __other._M_state
+                    || generated.contains("._M_state.op_bool()")
+                    || generated.contains("._M_state.op_arrow()")
+                    || generated.contains("._M_state.swap(")
+                    || generated.contains("._M_state.clone()")
+                    || generated.contains("._M_state.op_eq(")
+                    || generated.contains("._M_state.op_assign(")
+                    // Type alias constructor calls on c_void placeholder types
+                    || generated.contains("stop_token__Stop_state_ref::new_")
+                    // jthread methods calling unavailable thread methods
+                    || generated.contains("._M_thread.joinable()")
+                    || generated.contains("._M_thread.join()")
+                    || generated.contains("._M_thread.detach()")
+                    || generated.contains("._M_thread.get_id()")
+                    || generated.contains("._M_thread.native_handle()")
+                    || generated.contains("thread::hardware_concurrency()")
+                    // stop_source methods referencing rolled-back methods
+                    || generated.contains("_M_stop_source.request_stop()")
+                    || generated.contains("_M_stop_source.get_token()")
+                    // Integer swap pattern (broken template instantiation)
+                    || generated.contains("0.swap(&self)")
+                    // Chrono duration operators not implemented
+                    || generated.contains(".op____(")  // spaceship operator <=>
+                    || generated.contains(".op_sub(")  // subtraction operator
+                    || generated.contains(".count() as i64")  // duration::count() on wrong type
+                    // thread::id comparison (needs PartialEq impl)
+                    || generated.contains("._M_id.clone().op_eq(")
+                    // _Hash_impl::hash_u64 not implemented
+                    || generated.contains("_Hash_impl::hash_u64(")
+                    // std_nostopstate_t constructor
+                    || generated.contains("std_nostopstate_t::new_1(")
+                    // std_thread constructor
+                    || generated.contains("std_thread::new_0(")
+                    // thread methods calling rolled-back joinable
+                    || (generated.contains("pub fn op_assign") && generated.contains("self.joinable()"))
+                    // __gthread_cond_timedwait with wrong argument types
+                    || generated.contains("__gthread_cond_timedwait(")
+                    // pthread_cond_clockwait with wrong argument types
+                    || generated.contains("pthread_cond_clockwait(")
+                    // Bool/int mixing in conditions (libstdc++ internal)
+                    || generated.contains("&& 16i32 {")
+                    // atomic_flag op_assign returning reference instead of bool
+                    || (generated.contains("_M_base.op_assign(") && generated.contains("-> bool"))
+                    // atomic methods with memory_order transmute (wrong argument types)
+                    || (generated.contains("_M_base.load(") && generated.contains("transmute::<i32, memory_order>"))
+                    || (generated.contains("_M_base.store(") && generated.contains("transmute::<i32, memory_order>"))
+                    || (generated.contains("_M_base.exchange(") && generated.contains("transmute::<i32, memory_order>"))
+                    // atomic_flag wait/notify with bool/int mixing
+                    || (generated.contains("pub fn wait") && generated.contains("if __old { 1 } else { 0 }"))
+                    || (generated.contains("__atomic_wait_address") && generated.contains("bool, || &self"))
+                    // atomic test_and_set with bool == 1 comparison
+                    || (generated.contains("return __v == 1;") && generated.contains("pub fn test"))
+                    // __atomic_base_bool methods with wrong store argument types
+                    || (generated.contains("_M_base.store(") && generated.contains("__m)"))
                 {
                     // Rollback - remove the generated method
                     self.output.truncate(output_start);
@@ -12004,6 +12101,23 @@ impl AstCodeGen {
                             // Pattern: &__cat as *const error_category -> __cat as *const error_category
                             if val.contains("&__cat as *const") {
                                 val = val.replace("&__cat as *const", "__cat as *const");
+                            }
+                            // Fix __base_type typedef resolution
+                            // C++ uses nested typedef __base_type that varies per class, but we have a global alias
+                            // Replace __base_type::new_N with the actual field type's constructor
+                            if val.contains("__base_type::new_") {
+                                if let Some(current_class) = &self.current_class {
+                                    if let Some(fields) = self.class_fields.get(current_class) {
+                                        // Find the field type for this member
+                                        for (field_name, field_type) in fields {
+                                            if field_name == name {
+                                                let actual_type = field_type.to_rust_type_str();
+                                                val = val.replace("__base_type::", &format!("{}::", actual_type));
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
                             }
                             val
                         } else {
@@ -12478,6 +12592,21 @@ impl AstCodeGen {
                     || generated.contains(".__vtable = &STD_CTYPE_WCHAR_T__VTABLE")
                     // system_error constructor with wrong __base type
                     || (generated.contains("__base: system_error::new_2(") && generated.contains("__what: *const i8"))
+                    // c_void placeholder used as constructable base type
+                    || generated.contains("c_void::new_")
+                    // __base_type typedef resolves to wrong global type
+                    || generated.contains("__base_type::new_")
+                    // c_void type alias (_Stop_state_ref) methods in constructor body
+                    || generated.contains("._M_state.op_bool()")
+                    || generated.contains("._M_state.op_arrow()")
+                    || generated.contains("._M_state.swap(")
+                    || generated.contains("._M_state.clone()")
+                    || generated.contains("._M_state.op_eq(")
+                    || generated.contains("._M_state.op_assign(")
+                    || generated.contains("stop_token__Stop_state_ref::new_")
+                    // jthread constructor with missing nostopstate_t and std_thread constructors
+                    || generated.contains("std_nostopstate_t::new_1(")
+                    || generated.contains("std_thread::new_0(")
                 {
                     self.output.truncate(output_start);
                 }
