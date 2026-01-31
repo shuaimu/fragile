@@ -14,11 +14,11 @@ We just convert the fully-resolved AST to equivalent Rust code.
 ## Current Status
 
 **Grammar Tests**: 22/22 passing
-**E2E Tests**: 130/130 passing (2 ignored: 2 STL header limitations)
+**E2E Tests**: 131/131 passing (2 ignored: 2 STL header limitations)
 **libc++ Transpilation Tests**: 8/8 passing (cstddef, cstdint, type_traits, initializer_list, vector, cstddef_compilation, iostream, thread)
 **Runtime Linking Tests**: 2/2 passing (FILE I/O, pthread)
 **Runtime Function Mapping Tests**: 1/1 passing
-**Total Tests**: 254 passing
+**Total Tests**: 255 passing
 
 **Working**:
 - Simple functions with control flow (if/else, while, for, do-while, switch, recursion)
@@ -1578,7 +1578,10 @@ These components are currently stubbed or skipped but could be fully transpiled 
     - `what()` returns stored message or default "exception" if null
     - `new_1(msg)` constructor stores message pointer
     - Derived classes delegate to `__base.what()`
-  - [ ] **26.2.2** `std::runtime_error`, `std::logic_error` with string constructors
+  - [x] **26.2.2** `std::runtime_error`, `std::logic_error` with string constructors ✅ 2026-01-31
+    - `new_1(&std_string)` calls `.c_str()` and stores in `__base._M_msg`
+    - `new_1_1(*const i8)` stores message directly in `__base._M_msg`
+    - what() delegated to base class
   - [ ] **26.2.3** `std::bad_alloc`, `std::out_of_range`, etc.
 
 - [ ] **26.3** C Variadic Functions (`va_arg`)

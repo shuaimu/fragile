@@ -9007,13 +9007,14 @@ impl AstCodeGen {
                 if !has_new_1 {
                     self.writeln("");
                     self.writeln(
-                        "/// Stub constructor for string argument (libc++ exception class)",
+                        "/// Stub constructor for std::string argument (libc++ exception class)",
                     );
-                    self.writeln("/// Note: string's c_str() should be passed to what()");
-                    self.writeln("pub fn new_1(_s: &std::ffi::c_void) -> Self {");
+                    self.writeln("/// Extracts c_str() from std_string and stores for what()");
+                    self.writeln("pub fn new_1(s: &std_string) -> Self {");
                     self.indent += 1;
-                    self.writeln("// Cannot extract c_str from c_void; use default message");
-                    self.writeln("Default::default()");
+                    self.writeln("let mut obj = Self::default();");
+                    self.writeln("obj.__base._M_msg = s.c_str();");
+                    self.writeln("obj");
                     self.indent -= 1;
                     self.writeln("}");
                 }

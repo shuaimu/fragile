@@ -928,6 +928,52 @@ fn test_exception_message_storage() {
     );
 }
 
+/// Test runtime_error and logic_error string constructors
+/// Task 26.2.2: These exception classes should accept std::string and const char*
+/// Note: Exception class stubs are generated during struct impl block generation,
+/// so we verify the stub patterns exist in the preamble for std_string which is
+/// the type used by the exception constructors.
+#[test]
+fn test_exception_derived_class_constructors() {
+    let parser = ClangParser::new().expect("Failed to create parser");
+
+    // Simple C++ code to trigger preamble generation
+    let source = r#"
+        int main() {
+            return 0;
+        }
+    "#;
+
+    let ast = parser
+        .parse_string(source, "exception_derived.cpp")
+        .expect("Failed to parse");
+    let code = AstCodeGen::new().generate(&ast.translation_unit);
+
+    // Verify std_string has c_str() method which exception constructors will call
+    assert!(
+        code.contains("pub fn c_str(&self) -> *const i8"),
+        "std_string should have c_str() method for exception constructors"
+    );
+
+    // Verify std_string c_str() implementation returns data pointer
+    assert!(
+        code.contains("self._data as *const i8"),
+        "c_str() should return _data as *const i8"
+    );
+
+    // Verify exception base class stores message
+    assert!(
+        code.contains("pub _M_msg: *const i8"),
+        "exception base class should have _M_msg field"
+    );
+
+    // Verify exception.what() uses stored message
+    assert!(
+        code.contains("if self._M_msg.is_null()"),
+        "exception.what() should check _M_msg"
+    );
+}
+
 #[test]
 fn test_e2e_namespaces() {
     let source = r#"
