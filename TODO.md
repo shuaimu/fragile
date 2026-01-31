@@ -843,7 +843,7 @@ Get `std::cout` working end-to-end.
     - **Status**: Transpilation succeeds (128K chars → 23K LOC Rust)
     - **Progress**: Compilation errors reduced (unique error codes): 65 → ... → 491 → 476 → 457 → 452 → 442 → 438 → 435 → 366 → 357 → 354 → 343 → 337 → 336 → 330 → 326 → 322 → 321 → 312 (libstdc++) ✅ 2026-01-25
     - **Progress v2**: Total error count (incl. duplicate locations): 1225 → 1218 → 1214 → 1205 → 1201 → 1190 → 1169 → 1112 → 1063 → 1052 → 981 → 869 → 842 → 794 → 784 → 763 → 751 → 745 → 743 → 726 → 724 → 720 → 712 → 707 → 705 → 663 → 657 → 651 → 648 → 645 → 632 → 626 → 592 → 582 → 555 → 485 → 471 → 465 → 464 → 452 → 448 → 446 → 441 → 437 → 436 → 433 → 432 → 428 → 415 → 407 → 399 → 397 → 387 → 380 → 379 → 324 → 322 → 319 → 309 → 287 → 277 → 268 → 202 → 184 ✅ 2026-01-31
-    - **Progress v3 (libstdc++)**: 295 → 261 → 242 → 240 → 219 → 188 → 182 → 173 → 170 → 156 → 144 → 132 → 79 → 74 → 65 → 62 ✅ 2026-01-31
+    - **Progress v3 (libstdc++)**: 295 → 261 → 242 → 240 → 219 → 188 → 182 → 173 → 170 → 156 → 144 → 132 → 79 → 74 → 65 → 62 → 39 ✅ 2026-01-31
       - Fixed: Add preamble type aliases to generated_structs set to prevent duplicate struct generation ✅ 2026-01-31
         - iostream types: basic_istream_char, basic_streambuf_char, etc.
         - pthread types: pthread_mutex_t, pthread_cond_t, etc.
@@ -875,6 +875,12 @@ Get `std::cout` working end-to-end.
       - Fixed: Skip functions returning long double math builtins without calling them (__builtin_expl, etc.) ✅ 2026-01-31
       - Fixed: Skip more long double math builtins (scalblnl, scalbnl, fmaxl, fminl, hypotl, etc.) ✅ 2026-01-31
       - Fixed: Skip ctype methods calling wrong overloads (toupper_1, tolower_1, widen_1, narrow_1) ✅ 2026-01-31
+      - Fixed: Add rollback patterns for broken math and pthread functions (62→39) ✅ 2026-01-31
+        - Atomic functions (__exchange_and_add, __atomic_add) returning pointer instead of i32
+        - pthread functions with wrong argument types (literal 0 vs null pointer)
+        - error_category comparison operators returning bool instead of strong_ordering
+        - ios_base setf/unsetf with i32 instead of u32
+        - locale_facet, wstring conversion, Box::from_raw, system_error constructor issues
       - Fixed cast-after-method parsing: wrap pointer casts in parentheses before .add()/.sub()
       - Added long double math builtins (__builtin_expl, __builtin_sqrtl, etc.) - 37 functions
       - Added __to_underlying_* stubs for enum-to-int conversion

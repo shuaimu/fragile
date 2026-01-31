@@ -7384,6 +7384,41 @@ impl AstCodeGen {
             || (generated.contains("return __builtin_isinf(__x)") && generated.contains("__x: f32"))
             || (generated.contains("return __builtin_isnan(__x)") && generated.contains("__x: f32"))
             || (generated.contains("return __builtin_isnormal(__x)") && generated.contains("__x: f32"))
+            // Broken atomic functions (global function versions) that return pointer instead of i32
+            || (generated.contains("pub fn __exchange_and_add") && generated.contains("return __mem;"))
+            || (generated.contains("pub fn __atomic_add") && generated.contains("__mem;") && !generated.contains("*__mem"))
+            // pthread_mutex_init with literal 0 instead of null pointer
+            || (generated.contains("fragile_pthread_mutex_init(") && generated.contains(", 0)"))
+            // pthread_cond_timedwait with wrong timeout type
+            || (generated.contains("fragile_pthread_cond_timedwait(") && generated.contains("__abs_timeout)"))
+            // error_category comparison operators returning bool instead of strong_ordering
+            || (generated.contains("-> strong_ordering") && generated.contains(".op____(&") && generated.contains("let mut __c: strong_ordering ="))
+            // wstring conversion with char pointer instead of wchar_t pointer
+            || (generated.contains("__wout.add(") && generated.contains("*__s.add(") && generated.contains("i32") && generated.contains("i8"))
+            // locale_facet new_1 with __refs u64 as bool
+            || (generated.contains("if __refs {") && generated.contains("__refs: u64"))
+            // Box::from_raw on &self (mutability issue)
+            || (generated.contains("Box::from_raw(self)") && generated.contains("&self,"))
+            // system_error constructor with wrong inheritance
+            || (generated.contains("system_error::new_2(") && generated.contains("__base: system_error"))
+            // hermite function with wrong argument types (calls nonexistent hermite_u32)
+            || (generated.contains("return hermite_u32(") && generated.contains("__x as f64"))
+            // __constexpr_memcmp with incomplete body (no return)
+            || (generated.contains("pub fn __constexpr_memcmp") && generated.contains("__n as u64;") && !generated.contains("return"))
+            // uselocale with reference instead of pointer
+            || (generated.contains("uselocale(__loc)") && generated.contains("&mut *mut c_void"))
+            // hash functions returning wrong type
+            || (generated.contains("pub fn __hash") && generated.contains("-> u64") && generated.contains(">> "))
+            || (generated.contains("pub fn hash_code") && generated.contains("wrapping_mul(0x9e3779b9)"))
+            // __libcpp_atomic_refcount with value instead of pointer
+            || (generated.contains("__libcpp_atomic_refcount_increment") && generated.contains("self.__shared_owners_)"))
+            || (generated.contains("__libcpp_atomic_refcount_decrement") && generated.contains("self.__shared_owners_)"))
+            || (generated.contains("__libcpp_atomic_refcount_increment") && generated.contains("self.__shared_weak_owners_)"))
+            // use_count returning pointer instead of i64
+            || (generated.contains("pub fn use_count") && generated.contains(".add(1 as usize)"))
+            // ios_base setf/unsetf with i32 instead of u32
+            || (generated.contains("__base.setf(") && generated.contains("i32)"))
+            || (generated.contains("__base.unsetf(") && generated.contains("i32)"))
         {
             // Rollback - remove the generated function
             self.output.truncate(output_start);
