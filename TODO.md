@@ -973,7 +973,11 @@ Get `std::cout` working end-to-end.
         - In C++, comparing unsigned with -1 works (wraps to MAX)
         - In Rust, use explicit max values (u64::MAX, u128::MAX, etc.)
         - Fixes E0600: cannot apply unary operator `-` to unsigned types
-    - **Remaining errors at 429**: mostly code generation issues requiring deeper fixes:
+      - Fixed: Wrap return statements in template instantiations with unsafe (429→428) ✅ 2026-01-31
+        - Return statements containing pointer dereferences need unsafe blocks
+        - Added needs_unsafe_wrapper check for template function return statements
+        - Fixes E0133: dereference of raw pointer requires unsafe
+    - **Remaining errors at 428**: mostly code generation issues requiring deeper fixes:
       - E0308 (312): Type mismatches (usize/u64, f32/f64, i32/u32, pointer/reference)
       - E0061 (47): Wrong number of arguments (function overloading issues)
       - E0560 (20): Struct has no field (vtable virtual methods missing)

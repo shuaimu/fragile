@@ -1956,6 +1956,12 @@ impl AstCodeGen {
                     let expr = self.expr_to_string(&node.children[0]);
                     // Substitute template types in the expression
                     let expr = self.substitute_type_in_expr(&expr, subst_map);
+                    // Wrap in unsafe if the expression dereferences a pointer
+                    let expr = if Self::needs_unsafe_wrapper(&expr) {
+                        format!("unsafe {{ {} }}", expr)
+                    } else {
+                        expr
+                    };
                     self.writeln(&format!("return {};", expr));
                 } else {
                     self.writeln("return;");
