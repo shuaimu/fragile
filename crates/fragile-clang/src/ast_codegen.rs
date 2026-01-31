@@ -4674,6 +4674,8 @@ impl AstCodeGen {
         self.generated_structs.insert("_Alloc_hider".to_string());
         // Mark primitive type aliases for proper initialization
         self.primitive_aliases.insert("pthread_mutex_t".to_string());
+        self.primitive_aliases.insert("pthread_cond_t".to_string());
+        self.primitive_aliases.insert("pthread_rwlock_t".to_string());
         self.primitive_aliases.insert("__gthread_recursive_mutex_t".to_string());
         self.primitive_aliases.insert("__gthread_cond_t".to_string());
         self.writeln("");

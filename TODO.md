@@ -13,7 +13,7 @@ We just convert the fully-resolved AST to equivalent Rust code.
 
 ## Current Status
 
-**Grammar Tests**: 21/21 passing
+**Grammar Tests**: 22/22 passing
 **E2E Tests**: 129/129 passing (2 ignored: 2 STL header limitations)
 **libc++ Transpilation Tests**: 8/8 passing (cstddef, cstdint, type_traits, initializer_list, vector, cstddef_compilation, iostream, thread)
 **Runtime Linking Tests**: 2/2 passing (FILE I/O, pthread)
@@ -1169,7 +1169,11 @@ Get `std::thread` working end-to-end.
     - Added NullToPointer cast detection in parser and code generation
     - Added E2E test test_21_mutex that verifies mutex synchronization with 2 threads
     - Grammar tests: 21/21 passing, E2E tests: 129/129 passing
-  - [ ] **23.10.4** Add condition variable test
+  - [x] **23.10.4** Add condition variable test ✅ 2026-01-31
+    - Added pthread_cond_t and pthread_rwlock_t to primitive_aliases for proper initialization
+    - Created test_22_condvar test with producer-consumer pattern
+    - Verifies pthread_cond_init/signal/wait/destroy work correctly
+    - Grammar tests: 22/22 passing, E2E tests: 129/129 passing
 
 ### Phase 7: Real-World Project Test (Priority: Goal)
 

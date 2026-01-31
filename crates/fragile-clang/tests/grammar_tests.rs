@@ -439,3 +439,16 @@ fn test_21_mutex() {
         result.error
     );
 }
+
+#[test]
+fn test_22_condvar() {
+    let source = include_str!("../../../tests/cpp/grammar/22_condvar.cpp");
+    let result = run_grammar_test(source, "22_condvar.cpp", "test_condvar", 42);
+    assert!(result.compile_ok, "Compilation failed: {:?}", result.error);
+    assert_eq!(
+        result.actual,
+        Some(result.expected),
+        "Wrong result: {:?}",
+        result.error
+    );
+}
