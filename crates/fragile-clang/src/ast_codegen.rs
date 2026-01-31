@@ -4495,8 +4495,10 @@ impl AstCodeGen {
         self.writeln("// More system type stubs");
         self.writeln("pub type __gthread_recursive_mutex_t = usize;");
         self.writeln("pub type __gthread_cond_t = usize;");
-        self.writeln("pub type _Words = std::ffi::c_void;");
-        self.writeln("pub type _Alloc_hider = std::ffi::c_void;");
+        // _Words is a libstdc++ iostream internal struct - needs Default+Clone
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct _Words { pub _M_pword: *mut (), pub _M_iword: i64 }");
+        // _Alloc_hider is a libstdc++ string internal - needs Default+Clone
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct _Alloc_hider { pub _M_p: *mut i8 }");
         self.writeln("pub type pthread_mutex_t = usize;");
         // Mark these types as generated to skip struct generation
         self.generated_structs.insert("pthread_mutex_t".to_string());
@@ -4948,6 +4950,10 @@ impl AstCodeGen {
         self.writeln("impl basic_string_view_char8_t {");
         self.writeln("    pub fn new_0() -> Self { Default::default() }");
         self.writeln("    pub fn new_3(_tag: u64, __str: *const u8, __len: u64) -> Self { Self { __data_: __str, __size_: __len } }");
+        self.writeln("    pub fn data(&self) -> *const u8 { self.__data_ }");
+        self.writeln("    pub fn length(&self) -> u64 { self.__size_ }");
+        self.writeln("    pub fn size(&self) -> u64 { self.__size_ }");
+        self.writeln("    pub fn empty(&self) -> bool { self.__size_ == 0 }");
         self.writeln("}");
         self.writeln("#[repr(C)]");
         self.writeln("#[derive(Default, Clone)]");
@@ -4955,6 +4961,10 @@ impl AstCodeGen {
         self.writeln("impl basic_string_view_char16_t {");
         self.writeln("    pub fn new_0() -> Self { Default::default() }");
         self.writeln("    pub fn new_3(_tag: u64, __str: *const u16, __len: u64) -> Self { Self { __data_: __str, __size_: __len } }");
+        self.writeln("    pub fn data(&self) -> *const u16 { self.__data_ }");
+        self.writeln("    pub fn length(&self) -> u64 { self.__size_ }");
+        self.writeln("    pub fn size(&self) -> u64 { self.__size_ }");
+        self.writeln("    pub fn empty(&self) -> bool { self.__size_ == 0 }");
         self.writeln("}");
         self.writeln("#[repr(C)]");
         self.writeln("#[derive(Default, Clone)]");
@@ -4962,6 +4972,10 @@ impl AstCodeGen {
         self.writeln("impl basic_string_view_char32_t {");
         self.writeln("    pub fn new_0() -> Self { Default::default() }");
         self.writeln("    pub fn new_3(_tag: u64, __str: *const u32, __len: u64) -> Self { Self { __data_: __str, __size_: __len } }");
+        self.writeln("    pub fn data(&self) -> *const u32 { self.__data_ }");
+        self.writeln("    pub fn length(&self) -> u64 { self.__size_ }");
+        self.writeln("    pub fn size(&self) -> u64 { self.__size_ }");
+        self.writeln("    pub fn empty(&self) -> bool { self.__size_ == 0 }");
         self.writeln("}");
         // Track as generated to prevent duplicates
         self.generated_structs.insert("basic_string_view_char".to_string());
@@ -5280,17 +5294,39 @@ impl AstCodeGen {
         self.writeln("pub type basic_syncbuf_wchar_t = std::ffi::c_void;");
         self.writeln("pub type basic_osyncstream_wchar_t = std::ffi::c_void;");
         // pthread/atomic types for glibc
-        self.writeln("pub type __pthread_list_t = std::ffi::c_void;");
+        // Note: __pthread_list_t is a doubly-linked list node, needs Default/Clone
+        self.writeln("#[repr(C)]");
+        self.writeln("#[derive(Default, Clone, Copy)]");
+        self.writeln("pub struct __pthread_list_t { pub __prev: *mut (), pub __next: *mut () }");
+        self.generated_structs.insert("__pthread_list_t".to_string());
         self.writeln("pub type _unnamed_struct_at__usr_include_x86_64_linux_gnu_bits_atomic_wide_counter_h_28_3_ = std::ffi::c_void;");
         // Variadic template types
         self.writeln("pub type _Maybe_unary_or_binary_function_type_parameter_0_0__type_parameter_0_1__type_parameter_0_2___ = std::ffi::c_void;");
         self.writeln("pub type integral_constant_unsigned_long__sizeof_____ArgTypes_ = std::ffi::c_void;");
-        // hash_base types for string_view
-        self.writeln("pub type __hash_base_size_t__string_view = std::ffi::c_void;");
-        self.writeln("pub type __hash_base_size_t__wstring_view = std::ffi::c_void;");
-        self.writeln("pub type __hash_base_size_t__u8string_view = std::ffi::c_void;");
-        self.writeln("pub type __hash_base_size_t__u16string_view = std::ffi::c_void;");
-        self.writeln("pub type __hash_base_size_t__u32string_view = std::ffi::c_void;");
+        // hash_base types for string_view - need Default+Clone for struct inheritance
+        self.writeln("#[derive(Default, Clone, Copy)] pub struct __hash_base_size_t__string_view;");
+        self.writeln("#[derive(Default, Clone, Copy)] pub struct __hash_base_size_t__wstring_view;");
+        self.writeln("#[derive(Default, Clone, Copy)] pub struct __hash_base_size_t__u8string_view;");
+        self.writeln("#[derive(Default, Clone, Copy)] pub struct __hash_base_size_t__u16string_view;");
+        self.writeln("#[derive(Default, Clone, Copy)] pub struct __hash_base_size_t__u32string_view;");
+        self.generated_structs.insert("__hash_base_size_t__string_view".to_string());
+        self.generated_structs.insert("__hash_base_size_t__wstring_view".to_string());
+        self.generated_structs.insert("__hash_base_size_t__u8string_view".to_string());
+        self.generated_structs.insert("__hash_base_size_t__u16string_view".to_string());
+        self.generated_structs.insert("__hash_base_size_t__u32string_view".to_string());
+        // More hash_base types for error codes - need Default+Clone
+        self.writeln("#[derive(Default, Clone, Copy)] pub struct __hash_base_size_t__error_code;");
+        self.writeln("#[derive(Default, Clone, Copy)] pub struct __hash_base_size_t__error_condition;");
+        self.generated_structs.insert("__hash_base_size_t__error_code".to_string());
+        self.generated_structs.insert("__hash_base_size_t__error_condition".to_string());
+        // Tuple implementation type for variadic tuples - need Default+Clone
+        self.writeln("#[derive(Default, Clone, Copy)] pub struct _Tuple_impl_0__type_parameter_0_0___;");
+        self.generated_structs.insert("_Tuple_impl_0__type_parameter_0_0___".to_string());
+        // Callback list for ios_base
+        self.writeln("pub type _Callback_list = *mut ();");
+        // ctype abstract base - needs __vtable field for polymorphism
+        self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct __ctype_abstract_base_wchar_t { pub __vtable: *const std::ffi::c_void }");
+        self.generated_structs.insert("__ctype_abstract_base_wchar_t".to_string());
         // Internal template types
         self.writeln("pub type __cv_selector_type_parameter_0_1___IsConst___IsVol = std::ffi::c_void;");
         self.writeln("pub type __strictest_alignment_type_parameter_0_1___ = std::ffi::c_void;");
@@ -5715,6 +5751,25 @@ impl AstCodeGen {
         self.writeln("pub fn wcstod(_s: *const i32, _endptr: *mut *mut i32) -> f64 { 0.0 }");
         self.writeln("#[inline]");
         self.writeln("pub fn wcstold(_s: *const i32, _endptr: *mut *mut i32) -> f64 { 0.0 }");
+        // Wide character memory/string functions (use u64 for size_t compatibility)
+        self.writeln("#[inline]");
+        self.writeln("pub fn wmemcmp(_s1: *const i32, _s2: *const i32, _n: u64) -> i32 { 0 }");
+        self.writeln("#[inline]");
+        self.writeln("pub fn wcslen(_s: *const i32) -> u64 { 0 }");
+        self.writeln("#[inline]");
+        self.writeln("pub fn wmemcpy(_dest: *mut i32, _src: *const i32, _n: u64) -> *mut i32 { _dest }");
+        self.writeln("#[inline]");
+        self.writeln("pub fn wmemset(_s: *mut i32, _c: i32, _n: u64) -> *mut i32 { _s }");
+        self.writeln("#[inline]");
+        self.writeln("pub fn wmemmove(_dest: *mut i32, _src: *const i32, _n: u64) -> *mut i32 { _dest }");
+        self.writeln("#[inline]");
+        self.writeln("pub fn wcscpy(_dest: *mut i32, _src: *const i32) -> *mut i32 { _dest }");
+        self.writeln("#[inline]");
+        self.writeln("pub fn wcsncpy(_dest: *mut i32, _src: *const i32, _n: u64) -> *mut i32 { _dest }");
+        self.writeln("#[inline]");
+        self.writeln("pub fn wcscmp(_s1: *const i32, _s2: *const i32) -> i32 { 0 }");
+        self.writeln("#[inline]");
+        self.writeln("pub fn wcsncmp(_s1: *const i32, _s2: *const i32, _n: u64) -> i32 { 0 }");
         self.writeln("");
 
         // to_string stubs for std::to_string functions
