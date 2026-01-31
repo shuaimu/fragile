@@ -6285,11 +6285,55 @@ impl AstCodeGen {
         self.writeln("}");
         self.writeln("");
 
-        // pthread stubs (no-op implementations for transpiled code)
+        // pthread implementations using Rust std::thread
         // Use u64 for pthread_t since on 64-bit Linux pthread_t is unsigned long (u64)
-        self.writeln("// pthread stubs (no-op implementations)");
-        self.writeln("pub unsafe fn fragile_pthread_create(_: *mut u64, _: *const std::ffi::c_void, _: Option<unsafe extern \"C\" fn(*mut std::ffi::c_void) -> *mut std::ffi::c_void>, _: *mut std::ffi::c_void) -> i32 { 0 }");
-        self.writeln("pub unsafe fn fragile_pthread_join(_: u64, _: *mut *mut std::ffi::c_void) -> i32 { 0 }");
+        // Use *mut () for void* to match transpiled code
+        self.writeln("// pthread implementations using Rust std::thread");
+        self.writeln("");
+        self.writeln("// Wrapper to make function pointer and arg Send-safe");
+        self.writeln("struct ThreadStartInfo { func: usize, arg: usize }");
+        self.writeln("unsafe impl Send for ThreadStartInfo {}");
+        self.writeln("");
+        self.writeln("static THREAD_HANDLES: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<u64, std::thread::JoinHandle<usize>>>> = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));");
+        self.writeln("static NEXT_THREAD_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);");
+        self.writeln("");
+        // Use usize for attr and arg to accept any integer/pointer value (including 0)
+        // Use fn pointer type that matches transpiled code (*mut () instead of *mut c_void)
+        self.writeln("pub unsafe fn fragile_pthread_create(thread_id: *mut u64, _attr: usize, start_routine: Option<fn(*mut ()) -> *mut ()>, arg: usize) -> i32 {");
+        self.indent += 1;
+        self.writeln("let func = match start_routine { Some(f) => f, None => return 22 };");
+        self.writeln("let func_ptr = func as usize;");
+        self.writeln("let info = ThreadStartInfo { func: func_ptr, arg: arg };");
+        self.writeln("let tid = NEXT_THREAD_ID.fetch_add(1, std::sync::atomic::Ordering::SeqCst);");
+        self.writeln("let handle = std::thread::spawn(move || {");
+        self.indent += 1;
+        self.writeln("let f: fn(*mut ()) -> *mut () = std::mem::transmute(info.func);");
+        self.writeln("let result = f(info.arg as *mut ());");
+        self.writeln("result as usize");
+        self.indent -= 1;
+        self.writeln("});");
+        self.writeln("THREAD_HANDLES.lock().unwrap().insert(tid, handle);");
+        self.writeln("*thread_id = tid;");
+        self.writeln("0");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("");
+        self.writeln("pub unsafe fn fragile_pthread_join(thread_id: u64, retval: *mut *mut ()) -> i32 {");
+        self.indent += 1;
+        self.writeln("let handle = THREAD_HANDLES.lock().unwrap().remove(&thread_id);");
+        self.writeln("match handle {");
+        self.indent += 1;
+        self.writeln("Some(h) => match h.join() {");
+        self.indent += 1;
+        self.writeln("Ok(result) => { if !retval.is_null() { *retval = result as *mut (); } 0 }");
+        self.writeln("Err(_) => 1");
+        self.indent -= 1;
+        self.writeln("},");
+        self.writeln("None => 3");
+        self.indent -= 1;
+        self.writeln("}");
+        self.indent -= 1;
+        self.writeln("}");
         self.writeln("pub fn fragile_pthread_self() -> u64 { 0 }");
         self.writeln("pub fn fragile_pthread_equal(_: u64, _: u64) -> i32 { 1 }");
         self.writeln("pub unsafe fn fragile_pthread_detach(_: u64) -> i32 { 0 }");

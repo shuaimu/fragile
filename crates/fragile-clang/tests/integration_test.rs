@@ -10545,3 +10545,36 @@ fn test_e2e_deref_postinc() {
         "Dereference of post-increment should work correctly"
     );
 }
+
+/// E2E test: pthread_create and pthread_join
+/// Tests that threads actually spawn and execute
+#[test]
+fn test_e2e_pthread() {
+    let source = r#"
+        #include <pthread.h>
+
+        static int result = 0;
+
+        void* worker(void* arg) {
+            result = 42;
+            return (void*)result;
+        }
+
+        int main() {
+            pthread_t tid;
+            pthread_create(&tid, 0, worker, 0);
+            void* retval;
+            pthread_join(tid, &retval);
+            // Check that the thread actually ran and set result
+            if (result != 42) return 1;
+            // Check that the return value is correct
+            if ((int)(long)retval != 42) return 2;
+            return 0;  // Success
+        }
+    "#;
+
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_pthread.cpp").expect("E2E test failed");
+
+    assert_eq!(exit_code, 0, "pthread_create/join should spawn and run a thread");
+}

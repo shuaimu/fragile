@@ -14,7 +14,7 @@ We just convert the fully-resolved AST to equivalent Rust code.
 ## Current Status
 
 **Grammar Tests**: 20/20 passing
-**E2E Tests**: 128/128 passing (2 ignored: 2 STL header limitations)
+**E2E Tests**: 129/129 passing (2 ignored: 2 STL header limitations)
 **libc++ Transpilation Tests**: 8/8 passing (cstddef, cstdint, type_traits, initializer_list, vector, cstddef_compilation, iostream, thread)
 **Runtime Linking Tests**: 2/2 passing (FILE I/O, pthread)
 **Runtime Function Mapping Tests**: 1/1 passing
@@ -1156,7 +1156,12 @@ Get `std::thread` working end-to-end.
       - Skip __atomic_semaphore methods with wrong arg types (10→5) ✅ 2026-01-31
       - Add __platform_notify_i32 stub (5→0) ✅ 2026-01-31 🎉
     - **Remaining errors at 0**: COMPILATION SUCCESS!
-  - [ ] **23.10.2** Verify pthread_create/join are called correctly
+  - [x] **23.10.2** Verify pthread_create/join are called correctly ✅ 2026-01-31
+    - Implemented working pthread stubs in ast_codegen.rs that actually spawn threads
+    - fragile_pthread_create uses std::thread::spawn with ThreadStartInfo wrapper
+    - fragile_pthread_join retrieves JoinHandle from HashMap and calls .join()
+    - Uses LazyLock for thread-safe HashMap initialization
+    - Added E2E test test_e2e_pthread that verifies threads run and return values
   - [ ] **23.10.3** Add mutex test with std::mutex
   - [ ] **23.10.4** Add condition variable test
 
