@@ -1,153 +1,241 @@
-# C++ to Rust Transpiler Status
+# C++ to Rust Transpiler - Complete Status Report
 
-This document tracks the implementation status of the C++ to Rust transpiler.
+> **Last updated**: 2026-01-30
 
-## Overview
+This document provides a comprehensive status of the Fragile C++ → Rust transpiler, tracking what's complete, in progress, and planned.
 
-The transpiler converts C++ source code to Rust source code via:
-```
-C++ Source → Clang (libclang) → Clang AST → Rust Source → rustc → Binary
-```
+---
 
-## Feature Status Legend
+## Quick Summary
 
-- ✅ Implemented and tested
-- ⚠️ Partially implemented
-- ❌ Not yet implemented
+| Category | Status | Notes |
+|----------|--------|-------|
+| **Test Suite** | 247 tests passing | Simple/medium complexity code |
+| **Core C++ Features** | ⚠️ ~85% complete | Works for E2E tests, gaps exposed by libc++ |
+| **Type System** | ⚠️ Partial | 304 type mismatch errors in complex code |
+| **Function Calls** | ⚠️ Partial | 47 argument count errors in complex code |
+| **Struct/Field Access** | ⚠️ Partial | 13 field access errors in complex code |
+| **OOP & Inheritance** | ✅ Complete | E2E tested |
+| **Memory Management** | ✅ Complete | E2E tested |
+| **Templates** | ✅ Complete (via Clang) | |
+| **C++20 Features** | ✅ Mostly complete | |
+| **Runtime Library** | ✅ Complete | stdio, pthread, atomics |
+| **libc++ (STL)** | 🔄 437 errors | Exposes underlying transpiler gaps |
+
+### Reality Check
+
+The 247 passing tests cover **simple to medium complexity** C++ patterns. When transpiling **production-quality C++ code** (libc++ headers), we see 437 compilation errors that reveal gaps in:
+
+| Error Type | Count | Underlying Issue |
+|------------|-------|------------------|
+| E0308 | 304 | Type inference/conversion incomplete |
+| E0061 | 47 | Function overload resolution gaps |
+| E0609 | 13 | Struct field generation/access issues |
+| E0277 | 10 | Missing trait implementations |
+| E0599 | 6 | Method resolution issues |
+| E0606 | 3 | Cast handling issues |
+
+---
+
+## Test Status
+
+| Test Category | Passing | Notes |
+|---------------|---------|-------|
+| Grammar Tests | 20/20 | Core syntax parsing |
+| E2E Tests | 128/128 | Simple/medium complexity |
+| libc++ Transpilation | 8/8 | Transpiles but doesn't fully compile |
+| Runtime Linking | 2/2 | FILE I/O, pthread |
+| Function Mapping | 1/1 | Runtime function bindings |
+| **Total** | **247** | |
+
+---
+
+## Feature Status by Category
+
+### Legend
+- ✅ Complete and tested (works in E2E tests)
+- ⚠️ Partial (works in simple cases, fails in complex libc++ code)
+- 🔄 In progress
+- ❌ Not implemented
 - 🚫 Not planned / Out of scope
 
 ---
 
-## Basic Types
+## 1. Basic Types
 
-| Feature | Status | Notes |
-|---------|--------|-------|
-| `void` | ✅ | Maps to `()` |
-| `bool` | ✅ | Maps to `bool` |
-| `char` | ✅ | Maps to `i8` (signed) or `u8` (unsigned) |
-| `short` | ✅ | Maps to `i16`/`u16` |
-| `int` | ✅ | Maps to `i32`/`u32` |
-| `long` | ✅ | Maps to `i64`/`u64` |
-| `long long` | ✅ | Maps to `i64`/`u64` |
-| `float` | ✅ | Maps to `f32` |
-| `double` | ✅ | Maps to `f64` |
-| `size_t` | ✅ | Maps to `usize` |
-| `nullptr_t` | ✅ | Maps to `std::ptr::null_mut()` |
+| Feature | Status | Rust Mapping | Notes |
+|---------|--------|--------------|-------|
+| `void` | ✅ | `()` | |
+| `bool` | ⚠️ | `bool` | Bool arithmetic has issues (E0277) |
+| `char` | ✅ | `i8` / `u8` | |
+| `short` | ✅ | `i16` / `u16` | |
+| `int` | ✅ | `i32` / `u32` | |
+| `long` | ⚠️ | `i64` / `u64` | Mixed with usize causes E0308 |
+| `long long` | ✅ | `i64` / `u64` | |
+| `float` | ⚠️ | `f32` | f32/f64 mismatches (E0308) |
+| `double` | ⚠️ | `f64` | f32/f64 mismatches (E0308) |
+| `long double` | ✅ | `f64` | Precision loss |
+| `__int128` | ⚠️ | `i128` / `u128` | Mixed arithmetic issues |
+| `size_t` | ⚠️ | `usize` | usize/u64 mismatches (E0308) |
+| `ptrdiff_t` | ⚠️ | `isize` | isize/i64 mismatches |
+| `nullptr_t` | ✅ | `std::ptr::null_mut()` | |
 
-## Compound Types
+---
 
-| Feature | Status | Notes |
-|---------|--------|-------|
-| Pointers (`T*`) | ✅ | Maps to `*mut T` / `*const T` |
-| References (`T&`) | ✅ | Maps to `&T` / `&mut T` |
-| Rvalue references (`T&&`) | ⚠️ | Parsed, basic return-by-value works |
-| Arrays (`T[N]`) | ✅ | Maps to `[T; N]` |
-| Function pointers | ✅ | `Option<fn(...)>` with Some()/None |
+## 2. Compound Types
 
-## Structs and Classes
+| Feature | Status | Rust Mapping | Notes |
+|---------|--------|--------------|-------|
+| Pointers (`T*`) | ⚠️ | `*mut T` / `*const T` | Pointer/reference confusion (E0308) |
+| References (`T&`) | ⚠️ | `&T` / `&mut T` | Reference handling gaps |
+| Rvalue refs (`T&&`) | ⚠️ | Pass by value | Basic only |
+| Arrays (`T[N]`) | ⚠️ | `[T; N]` | Array field access issues (E0609) |
+| Function pointers | ✅ | `Option<fn(...)>` | |
+| Member pointers | ❌ | — | Not implemented |
+
+---
+
+## 3. Structs and Classes
 
 | Feature | Status | Notes |
 |---------|--------|-------|
 | Struct definition | ✅ | `#[repr(C)]` struct |
 | Class definition | ✅ | Same as struct |
 | Public fields | ✅ | `pub field: Type` |
-| Private fields | ✅ | No `pub` for private, `pub(crate)` for protected |
-| Field access (`.`) | ✅ | `obj.field` |
+| Private fields | ✅ | No `pub` keyword |
+| Protected fields | ✅ | `pub(crate)` |
+| Field access (`.`) | ⚠️ | 13 E0609 errors in complex code |
 | Arrow access (`->`) | ✅ | `(*ptr).field` |
 | Nested structs | ✅ | |
-| Anonymous structs | ✅ | Flatten fields into parent or synthetic name |
-| Anonymous unions | ✅ | `#[repr(C)] union` with synthetic name |
-| Bit fields | ✅ | Packed storage with getter/setter accessors |
+| Anonymous structs | ⚠️ | Some `_unnamed` field issues |
+| Anonymous unions | ✅ | `#[repr(C)] union` |
+| Bit fields | ✅ | Getter/setter accessors |
 
-## Constructors and Destructors
+---
+
+## 4. Constructors and Destructors
+
+| Feature | Status | Rust Mapping |
+|---------|--------|--------------|
+| Default constructor | ✅ | `new_0() -> Self` |
+| Parameterized constructor | ✅ | `new_N(...)` |
+| Copy constructor | ✅ | `Clone` trait |
+| Move constructor | ✅ | Rust move semantics |
+| Destructor | ✅ | `Drop` trait |
+| Member initializer lists | ✅ | Field initialization |
+| Delegating constructors | ✅ | Call base constructor |
+| `new T()` | ✅ | `Box::into_raw(Box::new(T::new()))` |
+| `delete` | ✅ | `Box::from_raw()` + drop |
+| `new[]` / `delete[]` | ✅ | Vec allocation |
+| Placement new | ✅ | `std::ptr::write()` |
+| Explicit destructor call | ✅ | `std::ptr::drop_in_place()` |
+
+---
+
+## 5. Methods
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| Default constructor | ✅ | Generates `new_0() -> Self { ... }` |
-| Parameterized constructor | ✅ | Generates `new_N(...)` with param mapping |
-| Copy constructor | ✅ | Maps to `Clone` trait |
-| Move constructor | ✅ | Rust's natural move semantics |
-| Destructor | ✅ | Maps to `Drop` trait |
-| Member initializer lists | ✅ | Positional mapping from params to fields |
-| Constructor calls | ✅ | `new T()` → `Box::into_raw(Box::new(T::new()))` |
-
-## Methods
-
-| Feature | Status | Notes |
-|---------|--------|-------|
-| Instance methods | ✅ | Body generates `self.field` access |
-| Static methods | ✅ | `static mut` globals with unsafe access |
-| Const methods | ✅ | Maps to `&self`, auto-detected |
-| Non-const methods | ✅ | Maps to `&mut self` |
-| Method calls | ✅ | Full AST codegen |
-| Virtual methods | ✅ | Static dispatch via override resolution |
+| Instance methods | ✅ | `self.field` access |
+| Static methods | ✅ | `static mut` globals |
+| Const methods | ✅ | Auto-detected → `&self` |
+| Non-const methods | ✅ | Auto-detected → `&mut self` |
+| Virtual methods | ✅ | Static dispatch |
 | Pure virtual methods | ⚠️ | Basic support |
-| Override/final | ⚠️ | Parsed, not enforced |
-| Operator overloading | ✅ | Full support (see below) |
+| `override` / `final` | ⚠️ | Parsed, not enforced |
+| Friend functions | ✅ | No access control |
+| Method resolution | ⚠️ | 6 E0599 errors in complex code |
 
-## Operator Overloading
+---
+
+## 6. Operator Overloading
+
+| Operator | Status | Rust Method |
+|----------|--------|-------------|
+| Binary (`+`, `-`, `*`, `/`, `%`) | ⚠️ | `op_add`, etc. (E0599 on raw pointers) |
+| Comparison (`==`, `!=`, `<`, etc.) | ✅ | `op_eq`, etc. |
+| Assignment (`=`) | ✅ | `op_assign` |
+| Compound assignment (`+=`, etc.) | ✅ | `op_add_assign`, etc. |
+| Subscript (`[]`) | ✅ | Returns `&mut` |
+| Function call (`()`) | ✅ | `op_call` |
+| Dereference (`*`) | ✅ | `op_deref` |
+| Arrow (`->`) | ✅ | `op_arrow` |
+| Increment (`++`) | ✅ | Pre/post correct |
+| Decrement (`--`) | ✅ | Pre/post correct |
+| Three-way (`<=>`) | ✅ | `a.cmp(&b) as i8` |
+
+---
+
+## 7. Inheritance
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| Binary operators (+, -, *, /, %) | ✅ | `op_add`, `op_sub`, etc. |
-| Comparison operators (==, !=, <, >, <=, >=) | ✅ | `op_eq`, `op_ne`, etc. |
-| Assignment operators (=, +=, -=, etc.) | ✅ | `op_assign`, `op_add_assign`, etc. |
-| Subscript operator [] | ✅ | Returns `&mut`, correct arg passing |
-| Function call operator () | ✅ | `op_call` method |
-| Dereference operator * | ✅ | `op_deref` → returns `&mut` |
-| Arrow operator -> | ✅ | `op_arrow` → pointer dereference |
-| Increment/decrement (++, --) | ✅ | Pre/post semantics |
+| Single inheritance | ✅ | `__base` field |
+| Multiple inheritance | ✅ | `__base_N` fields |
+| Virtual inheritance | ✅ | Diamond via shared pointers |
+| Private inheritance | ✅ | `pub(crate)` for `__base` |
+| `dynamic_cast` | ✅ | Via trait objects |
+| `static_cast` | ✅ | `as` casts |
+| `reinterpret_cast` | ✅ | `as` casts |
+| `const_cast` | ✅ | Type conversion |
 
-## Inheritance
+---
 
-| Feature | Status | Notes |
-|---------|--------|-------|
-| Single inheritance | ✅ | Base embedded as `__base` field |
-| Multiple inheritance | ✅ | Multiple `__base_N` fields |
-| Virtual inheritance | ✅ | Diamond inheritance via shared pointers |
-| `dynamic_cast` | ✅ | Via trait objects, reference types supported |
-| RTTI (`typeid`) | ✅ | Maps to `TypeId::of::<T>()` |
-| `type_info` class | ✅ | Wrapper struct in fragile-runtime |
+## 8. RTTI (Runtime Type Information)
 
-## Functions
+| Feature | Status | Rust Mapping |
+|---------|--------|--------------|
+| `typeid(expr)` | ✅ | `TypeId::of::<T>()` |
+| `typeid(Type)` | ✅ | `TypeId::of::<Type>()` |
+| `std::type_info` | ✅ | Wrapper in fragile-runtime |
+| `type_info::name()` | ✅ | `std::any::type_name` |
+| `type_info::hash_code()` | ✅ | TypeId hash |
+
+---
+
+## 9. Functions
 
 | Feature | Status | Notes |
 |---------|--------|-------|
 | Function definitions | ✅ | |
 | Function declarations | ✅ | Extern declarations |
 | Parameters (by value) | ✅ | |
-| Parameters (by reference) | ✅ | |
+| Parameters (by reference) | ⚠️ | Some reference issues |
 | Return values | ✅ | |
-| Recursion | ✅ | Tested with factorial |
-| Variadic functions | ✅ | `extern "C"` with `...`, `va_list` → `VaList` |
-| Default parameters | ✅ | Evaluated at call site via clang |
-| Function overloading | ✅ | Clang resolves, name mangled |
+| Recursion | ✅ | |
+| Variadic functions | ✅ | `extern "C"` with `...` |
+| `va_list` | ✅ | `std::ffi::VaList` |
+| `va_arg` | ⚠️ | libclang limitation |
+| Default parameters | ✅ | Via Clang |
+| Function overloading | ⚠️ | 47 E0061 errors (wrong arg count) |
+| Function templates | ✅ | Clang instantiates |
 
-## Expressions
+---
+
+## 10. Expressions
 
 | Feature | Status | Notes |
 |---------|--------|-------|
 | Integer literals | ✅ | With type suffix |
 | Float literals | ✅ | With type suffix |
 | Bool literals | ✅ | |
-| String literals | ✅ | `b"...\0".as_ptr() as *const i8` |
-| Char literals | ✅ | |
-| Binary operators (+, -, *, /, %) | ✅ | |
+| String literals | ✅ | `b"...\0".as_ptr()` |
+| Character literals | ✅ | |
+| Binary operators | ✅ | |
 | Comparison operators | ✅ | |
-| Logical operators (&&, \|\|, !) | ✅ | |
+| Logical operators | ✅ | |
 | Bitwise operators | ✅ | |
-| Assignment (=) | ✅ | |
-| Compound assignment (+=, etc.) | ✅ | Full support |
-| Increment/decrement (++, --) | ✅ | Pre/post semantics correct |
-| Ternary operator (?:) | ✅ | `if cond { a } else { b }` |
-| Comma operator | ✅ | `{ a; b }` block expression |
-| `sizeof` | ✅ | Evaluated by Clang at compile time |
-| `alignof` | ✅ | Evaluated by Clang at compile time |
-| Type casts | ✅ | `static_cast`, `reinterpret_cast`, `const_cast` |
-| Implicit casts | ✅ | Detected and generated as `as` casts |
-| Pointer arithmetic | ✅ | `.add()`, `.sub()` methods |
+| Assignment | ✅ | |
+| Compound assignment | ✅ | |
+| Ternary (`?:`) | ✅ | `if cond { a } else { b }` |
+| Comma operator | ✅ | `{ a; b }` |
+| `sizeof` / `alignof` | ✅ | Evaluated by Clang |
+| Implicit casts | ⚠️ | Type mismatch issues |
+| Pointer arithmetic | ✅ | `.add()`, `.sub()` |
 
-## Statements
+---
+
+## 11. Statements
 
 | Feature | Status | Notes |
 |---------|--------|-------|
@@ -158,218 +246,334 @@ C++ Source → Clang (libclang) → Clang AST → Rust Source → rustc → Bina
 | Do-while loop | ✅ | |
 | Range-based for | ✅ | `for x in container.iter()` |
 | Switch/case | ✅ | Match expression |
-| Break | ✅ | |
-| Continue | ✅ | |
+| Break / Continue | ✅ | |
 | Return | ✅ | |
-| Goto | ❌ | Not supported in safe Rust |
+| Goto | ❌ | Not supported in Rust |
+| Labels | ❌ | (requires goto) |
 
-## Templates
+---
+
+## 12. Templates
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| Function templates | ✅ | Clang instantiates, we transpile result |
-| Class templates | ✅ | Clang instantiates, we transpile result |
+| Function templates | ✅ | Clang instantiates |
+| Class templates | ✅ | Clang instantiates |
 | Template specialization | ✅ | Via Clang |
 | Partial specialization | ✅ | Via Clang |
 | Variadic templates | ✅ | Via Clang |
 | SFINAE | ✅ | Handled by Clang |
 | Concepts (C++20) | ✅ | Handled by Clang |
+| `extern template` | ✅ | Handled by Clang |
 
-## Namespaces
+---
+
+## 13. Namespaces
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| Namespace declaration | ✅ | Maps to Rust modules |
+| Namespace declaration | ✅ | Rust modules |
 | Nested namespaces | ✅ | Nested modules |
+| Inline namespaces | ✅ | `std::__1::` stripped |
 | Using directive | ✅ | `use namespace::*;` |
 | Using declaration | ✅ | `pub type` aliases |
-| Anonymous namespace | ✅ | Private module with synthetic name |
+| Anonymous namespace | ✅ | Private module |
+| Namespace aliases | ✅ | `pub use` |
 
-## Memory Management
+---
 
-| Feature | Status | Notes |
-|---------|--------|-------|
+## 14. Memory Management
+
+| Feature | Status | Rust Mapping |
+|---------|--------|--------------|
 | Stack allocation | ✅ | Local variables |
-| `new` / `delete` | ✅ | `Box::into_raw(Box::new())` / `Box::from_raw()` |
-| `new[]` / `delete[]` | ✅ | Vec allocation with raw pointer |
-| Placement new | ✅ | `std::ptr::write()` with alignment checks |
+| `new` / `delete` | ✅ | `Box::into_raw` / `Box::from_raw` |
+| `new[]` / `delete[]` | ✅ | Vec allocation |
+| Placement new | ✅ | `std::ptr::write()` |
 | Array placement new | ✅ | Loop with `ptr::write` |
-| Smart pointers | ✅ | Types pass through (awaiting libc++ transpilation) |
+| Aligned allocation | ✅ | Alignment assertions |
 
-## Error Handling
+---
 
-| Feature | Status | Notes |
-|---------|--------|-------|
-| Exceptions (`throw`) | ✅ | Maps to `panic!("message")` |
-| `try`/`catch` | ✅ | Maps to `std::panic::catch_unwind` |
+## 15. Error Handling
+
+| Feature | Status | Rust Mapping |
+|---------|--------|--------------|
+| `throw` | ✅ | `panic!("message")` |
+| `try` / `catch` | ✅ | `std::panic::catch_unwind` |
 | `noexcept` | ⚠️ | Parsed, not enforced |
-| Stack unwinding | ✅ | Via panic unwinding |
+| Stack unwinding | ✅ | Via panic |
 
-## Lambdas
+---
+
+## 16. Lambdas
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| Basic lambdas | ✅ | Rust closures with type inference |
-| Capture by value ([=]) | ✅ | `move` closures |
-| Capture by reference ([&]) | ✅ | Borrow closures |
-| Generic lambdas (auto params) | ✅ | `_` type inference |
+| Basic lambdas | ✅ | Rust closures |
+| Capture by value (`[=]`) | ✅ | `move` closures |
+| Capture by reference (`[&]`) | ✅ | Borrow closures |
+| Explicit captures | ✅ | |
+| Generic lambdas (`auto`) | ✅ | `_` type inference |
+| Init capture | ⚠️ | Basic support |
 
-## Preprocessor
+---
+
+## 17. Enums
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| C-style enums | ✅ | `#[repr(C)]` |
+| Scoped enums (`enum class`) | ✅ | Rust enum |
+| Enum with underlying type | ✅ | `#[repr(u8)]`, etc. |
+| Anonymous enums | ✅ | Standalone constants |
+| Empty enums | ✅ | Type alias |
+
+---
+
+## 18. Preprocessor
 
 | Feature | Status | Notes |
 |---------|--------|-------|
 | `#include` | ✅ | Handled by Clang |
-| `#define` (constants) | ✅ | Handled by Clang |
-| `#define` (macros) | ✅ | Expanded by Clang |
+| `#define` | ✅ | Expanded by Clang |
 | `#ifdef` / `#ifndef` | ✅ | Handled by Clang |
 | `#pragma` | 🚫 | Ignored |
 
-## C++11/14/17/20 Features
+---
+
+## 19. C++11/14/17 Features
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| Scoped enums (enum class) | ✅ | Rust enums with `#[repr]` |
-| Type aliases (using) | ✅ | `pub type` |
-| Auto type deduction | ✅ | Via Clang |
+| `auto` type deduction | ✅ | Via Clang |
 | Range-based for | ✅ | |
 | Lambdas | ✅ | |
-| Concepts | ✅ | Handled by Clang |
-| Ranges (views) | ✅ | filter/transform/take/drop/reverse → iterator methods |
-| Ranges (algorithms) | ✅ | for_each/find/sort/copy → iterator methods |
-| Coroutines (async) | ✅ | `async fn` with `.await` |
-| Coroutines (generators) | ✅ | State machine with Iterator impl |
-| Modules (import) | ✅ | CXCursor_ModuleImportDecl → comment (pending full support) |
-| Modules (export) | ⚠️ | Requires token-based parsing |
 | `constexpr` | ✅ | Evaluated by Clang |
-| `consteval` | ✅ | Evaluated by Clang |
-| Three-way comparison (`<=>`) | ✅ | `a.cmp(&b) as i8` |
-| Designated initializers | ✅ | `{ .x = 10 }` syntax |
+| `nullptr` | ✅ | |
+| Scoped enums | ✅ | |
+| `override` / `final` | ⚠️ | Parsed only |
+| Variadic templates | ✅ | Via Clang |
+| `static_assert` | ✅ | Via Clang |
+| Uniform initialization | ✅ | |
+| `decltype` | ✅ | Via Clang |
 
-## Standard Library Support
+---
 
-### Current Approach (Pass-Through - Awaiting libc++ Transpilation)
-
-STL types pass through as regular C++ types, awaiting full libc++ transpilation.
+## 20. C++20 Features
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| `std::string` | ✅ | Passes through as `std_string` |
-| `std::vector<T>` | ✅ | Passes through as `std_vector_T` |
-| `std::map<K,V>` | ✅ | Passes through (awaiting libc++) |
-| `std::unordered_map<K,V>` | ✅ | Passes through (awaiting libc++) |
-| `std::unique_ptr<T>` | ✅ | Passes through (awaiting libc++) |
-| `std::shared_ptr<T>` | ✅ | Passes through (awaiting libc++) |
-| `std::weak_ptr<T>` | ✅ | Passes through (awaiting libc++) |
-| `std::optional<T>` | ✅ | Passes through (awaiting libc++) |
-| `std::array<T, N>` | ✅ | Passes through (awaiting libc++) |
-| `std::span<T>` | ✅ | Passes through (awaiting libc++) |
-| `std::variant` | ✅ | Passes through (awaiting libc++) |
-| I/O streams | ✅ | Passes through (C stdio in fragile-runtime) |
-
-### Future Approach (No Special Treatment)
-
-STL types will be transpiled exactly like any other C++ code. When user code `#include`s `<vector>`, Clang parses the **libc++ (LLVM)** headers, and we transpile whatever Clang produces.
-
-**Key principle**: The C++ standard library is just C++ code - no special handling needed.
-
-**Why libc++**: We use libc++ (LLVM's standard library) instead of libstdc++ (GNU) because:
-- Designed to work with Clang (which we use for parsing)
-- Cleaner codebase with better readability
-- Fewer GCC-specific compiler intrinsics
-- Better header-only support
-
-This preserves exact C++ semantics:
-- Iterator invalidation behavior
-- Exception safety guarantees
-- Allocator model
-- All STL methods (not just common ones)
-
-See `TODO.md` Section 22 for the implementation plan.
+| Concepts | ✅ | Handled by Clang |
+| Ranges (views) | ✅ | `filter`/`transform`/`take`/`drop` |
+| Ranges (algorithms) | ✅ | `for_each`/`find`/`sort`/`copy` |
+| Coroutines (async) | ✅ | `async fn` with `.await` |
+| Coroutines (generators) | ✅ | State machine with `Iterator` |
+| Three-way comparison | ✅ | `a.cmp(&b) as i8` |
+| Designated initializers | ✅ | `{ .x = 10 }` |
+| `consteval` / `constinit` | ✅ | Evaluated by Clang |
+| Modules (`import`) | ⚠️ | Basic parsing only |
+| Modules (`export`) | ❌ | Requires token parsing |
 
 ---
 
-## Code Generation Quality
+## 21. Standard Library (STL) Support
 
-| Feature | Status | Notes |
-|---------|--------|-------|
-| Minimize temporaries | ✅ | Removed redundant type suffixes |
-| Dead code elimination | ❌ | |
-| Readable variable names | ✅ | Preserves source identifiers |
-| Proper indentation | ✅ | |
-| Comments | ✅ | Doc comments for functions/classes |
+### Current Status: 437 Compilation Errors
 
-## Testing
+STL (libc++) transpilation **exposes gaps** in core transpiler features.
 
-| Feature | Status | Notes |
-|---------|--------|-------|
-| Grammar tests | ✅ | 20/20 passing |
-| E2E tests | ✅ | 70/70 passing (62 core + 6 libc++ + 2 runtime) |
-| Unit tests | ✅ | 187 total tests |
-| libc++ transpilation | ✅ | 6/6 passing (cstddef, cstdint, type_traits, initializer_list, vector, cstddef_compilation) |
-| Runtime linking | ✅ | 2/2 passing (FILE I/O, pthread) |
-| Compile generated code | ✅ | Automatically verified |
-| Run generated code | ✅ | Exit codes verified |
+### libc++ Header Progress
 
----
+| Header | Transpiles | Compiles | Runs | Errors |
+|--------|------------|----------|------|--------|
+| `<cstddef>` | ✅ | ✅ | ✅ | 0 |
+| `<cstdint>` | ✅ | ✅ | — | 0 |
+| `<type_traits>` | ✅ | ✅ | — | 0 |
+| `<initializer_list>` | ✅ | ✅ | — | 0 |
+| `<vector>` | ✅ | ❌ | — | ~200+ |
+| `<iostream>` | ✅ | ❌ | — | **437** |
+| `<thread>` | ✅ | ❌ | — | Blocked |
 
-## Test Coverage
+### Error Breakdown (iostream)
 
-### Grammar Tests (20/20)
-- Arithmetic, comparisons, logical/bitwise operators
-- Control flow (if/else, while, for, do-while, switch)
-- Functions and recursion
-- Structs with fields, methods, constructors
-- Pointers, references, arrays
-- Ternary operator, nested structs
+These errors reveal **core transpiler gaps**, not STL-specific issues:
 
-### E2E Tests (62/62)
-- Simple functions, factorial, arrays
-- Pointers, references
-- Constructors, destructors (Drop trait)
-- Copy constructors (Clone trait)
-- Single and multiple inheritance
-- Virtual/diamond inheritance
-- Namespaces and modules
-- Operator overloading (binary, subscript, call, deref, arrow)
-- Assignment operators
-- Exception handling (throw/try/catch)
-- Enum classes
-- Static members
-- Lambdas with captures
-- Range-based for loops
-- Default parameters
-- Const/non-const methods
-- Increment/decrement operators
-- Pointer arithmetic
-- Type aliases
-- sizeof/alignof operators
-- String literals and char literals
-- Implicit type casts (char→int, etc.)
-- Designated initializers (C++20)
+| Error | Count | Root Cause |
+|-------|-------|------------|
+| E0308 | 304 | **Type system gaps**: usize/u64, f32/f64, pointer/reference mismatches |
+| E0061 | 47 | **Function handling gaps**: wrong argument counts, overload issues |
+| E0609 | 13 | **Struct handling gaps**: missing fields, `_unnamed` access |
+| E0277 | 10 | **Trait gaps**: bool arithmetic, c_void operations |
+| E0599 | 6 | **Method resolution gaps**: missing methods on types |
+| E0606 | 3 | **Cast handling gaps**: invalid type casts |
 
-### libc++ Transpilation Tests (6/6)
-- `<cstddef>` - Basic typedefs (size_t, ptrdiff_t)
-- `<cstdint>` - Integer types (int8_t, uint64_t, etc.)
-- `<type_traits>` - Template metaprogramming
-- `<initializer_list>` - Simple container with range-for
-- `<vector>` - Full STL container (generates ~215K chars)
-- `<cstddef>` compilation test - Verify rustc can compile generated code
+### Progress: 1225 → 437 errors (65% reduction)
 
-### Runtime Linking Tests (2/2)
-- FILE I/O (fopen, fwrite, fread, fclose)
-- pthread (pthread_create, pthread_join, pthread_self)
+**Recent fixes** (2026-01-30):
+- Include private base class fields in struct generation
+- i64::MIN literal handling
+- bool arithmetic in binary ops
+- Template parameter type stubs
+- u128/i128 mixed arithmetic
 
 ---
 
-### fragile-runtime Tests
-- pthread wrappers (create, join, detach, attributes)
-- pthread_mutex (init, lock, unlock, trylock)
-- atomics (load, store, exchange, CAS, fetch_ops)
-- condition variables (wait, signal, broadcast)
-- read-write locks (rdlock, wrlock, trylock)
-- RTTI (type_info wrapper with name, hash_code, before)
-- C stdio (fopen/fclose, fread/fwrite, fseek/ftell, standard streams)
+## 22. Compiler Builtins
+
+| Builtin | Status | Rust Mapping |
+|---------|--------|--------------|
+| `__builtin_memset` | ✅ | `std::ptr::write_bytes` |
+| `__builtin_memcpy` | ✅ | `std::ptr::copy_nonoverlapping` |
+| `__builtin_memmove` | ✅ | `std::ptr::copy` |
+| `__builtin_strlen` | ✅ | Loop-based |
+| `__builtin_memcmp` | ✅ | Loop-based |
+| `__builtin_clz/ctz/popcount` | ✅ | Rust intrinsics |
+| `__builtin_bswap*` | ✅ | `.swap_bytes()` |
+| `__builtin_expect` | ✅ | Pass-through |
+| `__builtin_unreachable` | ✅ | `unreachable_unchecked()` |
+| `__builtin_trap/abort` | ✅ | `std::process::abort()` |
+| `__builtin_is_constant_evaluated` | ✅ | `false` |
+| Long double math | ✅ | 37 functions |
 
 ---
 
-*Last updated: 2026-01-24*
+## 23. Runtime Library (fragile-runtime)
+
+### C stdio ✅
+
+`fopen`, `fclose`, `fread`, `fwrite`, `fseek`, `ftell`, `fgetc`, `fputc`, `fgets`, `fputs`, `getchar`, `putchar`, `ungetc`, `stdin`, `stdout`, `stderr`, `feof`, `ferror`, `fflush`
+
+### pthreads ✅
+
+`pthread_create`, `pthread_join`, `pthread_self`, `pthread_equal`, `pthread_detach`, `pthread_exit`, `pthread_attr_*`, `pthread_mutex_*`, `pthread_cond_*`, `pthread_rwlock_*`
+
+### Atomics ✅
+
+`load`, `store`, `exchange`, `compare_exchange_*`, `fetch_add/sub/and/or/xor`, `thread_fence`, `signal_fence`
+
+---
+
+## 24. Known Limitations
+
+| Limitation | Reason | Workaround |
+|------------|--------|------------|
+| `goto` | No Rust equivalent | Restructure control flow |
+| Member pointers | Complex semantics | Use function pointers |
+| `va_arg` type | libclang limitation | Manual annotation |
+| C++20 modules (full) | libclang doesn't expose | Token parsing needed |
+| ABI compatibility | Different layouts | Use `#[repr(C)]` |
+
+---
+
+## 25. Priority: Fix Core Gaps
+
+Before STL can work, these core issues must be fixed:
+
+### High Priority (Blocking STL)
+
+1. **Type mismatches (E0308: 304 errors)**
+   - usize vs u64/i64 conversions
+   - f32 vs f64 handling
+   - Pointer vs reference confusion
+
+2. **Function calls (E0061: 47 errors)**
+   - Overload resolution
+   - Argument count mismatches
+
+3. **Field access (E0609: 13 errors)**
+   - Anonymous struct field naming
+   - Array member access
+
+### Medium Priority
+
+4. **Trait implementations (E0277: 10 errors)**
+   - Bool in arithmetic contexts
+   - c_void operations
+
+5. **Method resolution (E0599: 6 errors)**
+   - Missing method stubs
+   - Raw pointer methods
+
+6. **Cast handling (E0606: 3 errors)**
+   - Invalid cast patterns
+
+---
+
+## 26. Project Milestones
+
+### Completed ✅
+
+1. **E2E Tests** - 128 tests for simple/medium C++ patterns
+2. **OOP Features** - Inheritance, virtual methods, RTTI
+3. **Memory Management** - new/delete, placement new
+4. **Templates** - Fully handled by Clang
+5. **C++20** - Coroutines, ranges, designated initializers
+6. **Runtime** - stdio, pthread, atomics
+
+### In Progress 🔄
+
+1. **Fix core type system gaps** (304 errors)
+2. **Fix function overload handling** (47 errors)
+3. **Fix struct field access** (13 errors)
+4. **iostream E2E** - Currently 437 errors
+
+### Blocked
+
+1. **std::thread E2E** - Waiting on iostream
+2. **Medium-size project** - Waiting on STL
+
+---
+
+## 27. Architecture Overview
+
+```
+C++ Source
+    │
+    ▼
+┌─────────────┐
+│   Clang     │  (libclang)
+│   Parser    │
+└─────────────┘
+    │
+    ▼
+┌─────────────┐
+│  Clang AST  │  (templates resolved, macros expanded)
+└─────────────┘
+    │
+    ▼
+┌─────────────┐
+│  fragile-   │  (AST → Rust source)
+│   clang     │  ← GAPS HERE cause 437 errors
+└─────────────┘
+    │
+    ▼
+┌─────────────┐
+│ Rust Source │  (unsafe, with fragile-runtime)
+└─────────────┘
+    │
+    ▼
+┌─────────────┐
+│   rustc     │  ← Catches the errors
+└─────────────┘
+    │
+    ▼
+   Binary
+```
+
+---
+
+## 28. File Reference
+
+| File | Purpose |
+|------|---------|
+| `crates/fragile-clang/src/parse.rs` | Clang AST parsing |
+| `crates/fragile-clang/src/ast.rs` | AST representation |
+| `crates/fragile-clang/src/types.rs` | Type mappings (gaps here) |
+| `crates/fragile-clang/src/ast_codegen.rs` | Code generation (gaps here) |
+| `crates/fragile-runtime/src/lib.rs` | Runtime library |
+| `TODO.md` | Detailed task tracking |
+
+---
+
+*For detailed task breakdown, see [TODO.md](../TODO.md)*

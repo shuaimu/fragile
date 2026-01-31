@@ -4858,9 +4858,9 @@ impl AstCodeGen {
         self.writeln("pub fn __hermite_u32(_n: u32, _x: f64) -> f64 { 0.0 }");
         self.writeln("");
 
-        // Shared pointer support
+        // Shared pointer support (stubs for control blocks)
         self.writeln("// Shared pointer support");
-        self.writeln("pub static __SHARED_COUNT_VTABLE: () = ();");
+        // Note: __SHARED_COUNT_VTABLE is not needed - abstract class vtables are not instantiated
         self.writeln("pub static __Control: () = ();");
         self.writeln("");
 
@@ -10725,11 +10725,17 @@ impl AstCodeGen {
                     // Initialize vtable pointer for ROOT polymorphic classes
                     if let Some(vtable_info) = self.vtables.get(struct_name).cloned() {
                         if vtable_info.base_class.is_none() {
-                            let sanitized = sanitize_identifier(struct_name);
-                            self.writeln(&format!(
-                                "__vtable: &{}_VTABLE,",
-                                sanitized.to_uppercase()
-                            ));
+                            if vtable_info.is_abstract {
+                                // Abstract classes don't have static vtable instances
+                                // Initialize to null - derived class constructor will set it
+                                self.writeln("__vtable: std::ptr::null(),");
+                            } else {
+                                let sanitized = sanitize_identifier(struct_name);
+                                self.writeln(&format!(
+                                    "__vtable: &{}_VTABLE,",
+                                    sanitized.to_uppercase()
+                                ));
+                            }
                             initialized_vbase.insert("__vtable".to_string());
                         }
                     }
@@ -10885,12 +10891,18 @@ impl AstCodeGen {
                     // (Derived classes get vtable pointer through __base)
                     if let Some(vtable_info) = self.vtables.get(struct_name).cloned() {
                         if vtable_info.base_class.is_none() {
-                            // This is a root polymorphic class - set vtable pointer
-                            let sanitized = sanitize_identifier(struct_name);
-                            self.writeln(&format!(
-                                "__vtable: &{}_VTABLE,",
-                                sanitized.to_uppercase()
-                            ));
+                            if vtable_info.is_abstract {
+                                // Abstract classes don't have static vtable instances
+                                // Initialize to null - derived class constructor will set it
+                                self.writeln("__vtable: std::ptr::null(),");
+                            } else {
+                                // This is a root polymorphic class - set vtable pointer
+                                let sanitized = sanitize_identifier(struct_name);
+                                self.writeln(&format!(
+                                    "__vtable: &{}_VTABLE,",
+                                    sanitized.to_uppercase()
+                                ));
+                            }
                             initialized.insert("__vtable".to_string());
                         }
                     }
