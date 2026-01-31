@@ -5799,18 +5799,20 @@ impl AstCodeGen {
         self.writeln("#[inline]");
         self.writeln("pub fn __stoa_extern__C__fn_ptr_const_i8__ptr_mut_ptr_mut_i8__i32___ret__u64_i8_i8_u64(_f: &dyn Fn(*const i8, *mut *mut i8, i32) -> u64, _name: *const i8, _str: *const i8, _idx: *mut u64, _base: i32) -> u64 { 0 }");
         self.writeln("#[inline]");
-        self.writeln("pub fn __stoa_extern__C__fn_ptr_const_i8__ptr_mut_ptr_mut_i8___ret__f64_i8_i8_u64(_f: &dyn Fn(*const i8, *mut *mut i8) -> f64, _name: *const i8, _str: *const i8, _idx: *mut u64, _base: i32) -> f64 { 0.0 }");
+        // Floating-point __stoa variants don't have base parameter
+        self.writeln("pub fn __stoa_extern__C__fn_ptr_const_i8__ptr_mut_ptr_mut_i8___ret__f64_i8_i8_u64(_f: &dyn Fn(*const i8, *mut *mut i8) -> f64, _name: *const i8, _str: *const i8, _idx: *mut u64) -> f64 { 0.0 }");
         self.writeln("#[inline]");
-        self.writeln("pub fn __stoa_extern__C__fn_ptr_const_i8__ptr_mut_ptr_mut_i8___ret__f32_i8_i8_u64(_f: &dyn Fn(*const i8, *mut *mut i8) -> f32, _name: *const i8, _str: *const i8, _idx: *mut u64, _base: i32) -> f32 { 0.0 }");
+        self.writeln("pub fn __stoa_extern__C__fn_ptr_const_i8__ptr_mut_ptr_mut_i8___ret__f32_i8_i8_u64(_f: &dyn Fn(*const i8, *mut *mut i8) -> f32, _name: *const i8, _str: *const i8, _idx: *mut u64) -> f32 { 0.0 }");
         // __stoa variants for wchar_t (i32) strings
         self.writeln("#[inline]");
         self.writeln("pub fn __stoa_extern__C__fn_ptr_const_i32__ptr_mut_ptr_mut_i32__i32___ret__i64_i8_i32_u64(_f: &dyn Fn(*const i32, *mut *mut i32, i32) -> i64, _name: *const i8, _str: *const i32, _idx: *mut u64, _base: i32) -> i64 { 0 }");
         self.writeln("#[inline]");
         self.writeln("pub fn __stoa_extern__C__fn_ptr_const_i32__ptr_mut_ptr_mut_i32__i32___ret__u64_i8_i32_u64(_f: &dyn Fn(*const i32, *mut *mut i32, i32) -> u64, _name: *const i8, _str: *const i32, _idx: *mut u64, _base: i32) -> u64 { 0 }");
+        // Floating-point wchar_t variants don't have base parameter
         self.writeln("#[inline]");
-        self.writeln("pub fn __stoa_extern__C__fn_ptr_const_i32__ptr_mut_ptr_mut_i32___ret__f32_i8_i32_u64(_f: &dyn Fn(*const i32, *mut *mut i32) -> f32, _name: *const i8, _str: *const i32, _idx: *mut u64, _base: i32) -> f32 { 0.0 }");
+        self.writeln("pub fn __stoa_extern__C__fn_ptr_const_i32__ptr_mut_ptr_mut_i32___ret__f32_i8_i32_u64(_f: &dyn Fn(*const i32, *mut *mut i32) -> f32, _name: *const i8, _str: *const i32, _idx: *mut u64) -> f32 { 0.0 }");
         self.writeln("#[inline]");
-        self.writeln("pub fn __stoa_extern__C__fn_ptr_const_i32__ptr_mut_ptr_mut_i32___ret__f64_i8_i32_u64(_f: &dyn Fn(*const i32, *mut *mut i32) -> f64, _name: *const i8, _str: *const i32, _idx: *mut u64, _base: i32) -> f64 { 0.0 }");
+        self.writeln("pub fn __stoa_extern__C__fn_ptr_const_i32__ptr_mut_ptr_mut_i32___ret__f64_i8_i32_u64(_f: &dyn Fn(*const i32, *mut *mut i32) -> f64, _name: *const i8, _str: *const i32, _idx: *mut u64) -> f64 { 0.0 }");
         // uncaught_exception function for exception handling
         self.writeln("#[inline]");
         self.writeln("pub fn uncaught_exception() -> bool { false }");
