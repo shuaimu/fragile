@@ -8454,93 +8454,160 @@ impl AstCodeGen {
             // Add ctype virtual method stubs
             // Match both "ctype_base" and "std::ctype<...>" class names
             // Distinguish between ctype<char> (i8) and ctype<wchar_t> (i32)
+            // Only add stubs for methods not already generated
+            // Note: methods are tracked as base_name -> count, so "do_widen" with count=2
+            // means both "do_widen" and "do_widen_1" have been generated
             let is_ctype_char = rust_name.contains("ctype_char")
                 || rust_name.contains("ctype_byname_char")
                 || name.contains("ctype<char>");
             let is_ctype = name.starts_with("ctype") || name.starts_with("std::ctype");
             if is_ctype {
+                // Copy method counts upfront to avoid borrow issues
+                // For base method (no suffix), check count >= 1
+                // For _1 suffix, check count >= 2
+                let do_is_count = self.current_struct_methods.get("do_is").copied().unwrap_or(0);
+                let do_scan_is_count = self.current_struct_methods.get("do_scan_is").copied().unwrap_or(0);
+                let do_scan_not_count = self.current_struct_methods.get("do_scan_not").copied().unwrap_or(0);
+                let do_toupper_count = self.current_struct_methods.get("do_toupper").copied().unwrap_or(0);
+                let do_tolower_count = self.current_struct_methods.get("do_tolower").copied().unwrap_or(0);
+                let do_widen_count = self.current_struct_methods.get("do_widen").copied().unwrap_or(0);
+                let do_narrow_count = self.current_struct_methods.get("do_narrow").copied().unwrap_or(0);
+                let widen_init_count = self.current_struct_methods.get("_M_widen_init").copied().unwrap_or(0);
+                let narrow_init_count = self.current_struct_methods.get("_M_narrow_init").copied().unwrap_or(0);
                 if is_ctype_char {
                     // ctype<char> - uses i8 for char type
-                    self.writeln("");
-                    self.writeln("/// Stub for do_is virtual method (single char)");
-                    self.writeln("pub fn do_is(&self, _m: u16, _c: i8) -> bool { false }");
-                    self.writeln("");
-                    self.writeln("/// Stub for do_is virtual method (range)");
-                    self.writeln("pub fn do_is_1(&self, _lo: *const i8, _hi: *const i8, _vec: *mut u16) -> *const i8 { _hi }");
-                    self.writeln("");
-                    self.writeln("/// Stub for do_scan_is virtual method");
-                    self.writeln("pub fn do_scan_is(&self, _m: u16, _lo: *const i8, _hi: *const i8) -> *const i8 { _hi }");
-                    self.writeln("");
-                    self.writeln("/// Stub for do_scan_not virtual method");
-                    self.writeln("pub fn do_scan_not(&self, _m: u16, _lo: *const i8, _hi: *const i8) -> *const i8 { _hi }");
-                    self.writeln("");
-                    self.writeln("/// Stub for do_toupper virtual method (single)");
-                    self.writeln("pub fn do_toupper(&self, c: i8) -> i8 { c }");
-                    self.writeln("");
-                    self.writeln("/// Stub for do_toupper virtual method (range)");
-                    self.writeln("pub fn do_toupper_1(&self, _lo: *mut i8, _hi: *const i8) -> *const i8 { _hi }");
-                    self.writeln("");
-                    self.writeln("/// Stub for do_tolower virtual method (single)");
-                    self.writeln("pub fn do_tolower(&self, c: i8) -> i8 { c }");
-                    self.writeln("");
-                    self.writeln("/// Stub for do_tolower virtual method (range)");
-                    self.writeln("pub fn do_tolower_1(&self, _lo: *mut i8, _hi: *const i8) -> *const i8 { _hi }");
-                    self.writeln("");
-                    self.writeln("/// Stub for do_widen virtual method (single)");
-                    self.writeln("pub fn do_widen(&self, c: i8) -> i8 { c }");
-                    self.writeln("");
-                    self.writeln("/// Stub for do_widen virtual method (range)");
-                    self.writeln("pub fn do_widen_1(&self, _lo: *const i8, _hi: *const i8, _dest: *mut i8) -> *const i8 { _hi }");
-                    self.writeln("");
-                    self.writeln("/// Stub for do_narrow virtual method (single)");
-                    self.writeln("pub fn do_narrow(&self, c: i8, dfault: i8) -> i8 { c }");
-                    self.writeln("");
-                    self.writeln("/// Stub for do_narrow virtual method (range)");
-                    self.writeln("pub fn do_narrow_1(&self, _lo: *const i8, _hi: *const i8, _dfault: i8, _dest: *mut i8) -> *const i8 { _hi }");
-                    self.writeln("");
-                    self.writeln("/// Internal method to initialize widen table");
-                    self.writeln("pub fn _M_widen_init(&self) {}");
-                    self.writeln("");
-                    self.writeln("/// Internal method to initialize narrow table");
-                    self.writeln("pub fn _M_narrow_init(&self) {}");
+                    if do_is_count < 1 {
+                        self.writeln("");
+                        self.writeln("/// Stub for do_is virtual method (single char)");
+                        self.writeln("pub fn do_is(&self, _m: u16, _c: i8) -> bool { false }");
+                    }
+                    if do_is_count < 2 {
+                        self.writeln("");
+                        self.writeln("/// Stub for do_is virtual method (range)");
+                        self.writeln("pub fn do_is_1(&self, _lo: *const i8, _hi: *const i8, _vec: *mut u16) -> *const i8 { _hi }");
+                    }
+                    if do_scan_is_count < 1 {
+                        self.writeln("");
+                        self.writeln("/// Stub for do_scan_is virtual method");
+                        self.writeln("pub fn do_scan_is(&self, _m: u16, _lo: *const i8, _hi: *const i8) -> *const i8 { _hi }");
+                    }
+                    if do_scan_not_count < 1 {
+                        self.writeln("");
+                        self.writeln("/// Stub for do_scan_not virtual method");
+                        self.writeln("pub fn do_scan_not(&self, _m: u16, _lo: *const i8, _hi: *const i8) -> *const i8 { _hi }");
+                    }
+                    if do_toupper_count < 1 {
+                        self.writeln("");
+                        self.writeln("/// Stub for do_toupper virtual method (single)");
+                        self.writeln("pub fn do_toupper(&self, c: i8) -> i8 { c }");
+                    }
+                    if do_toupper_count < 2 {
+                        self.writeln("");
+                        self.writeln("/// Stub for do_toupper virtual method (range)");
+                        self.writeln("pub fn do_toupper_1(&self, _lo: *mut i8, _hi: *const i8) -> *const i8 { _hi }");
+                    }
+                    if do_tolower_count < 1 {
+                        self.writeln("");
+                        self.writeln("/// Stub for do_tolower virtual method (single)");
+                        self.writeln("pub fn do_tolower(&self, c: i8) -> i8 { c }");
+                    }
+                    if do_tolower_count < 2 {
+                        self.writeln("");
+                        self.writeln("/// Stub for do_tolower virtual method (range)");
+                        self.writeln("pub fn do_tolower_1(&self, _lo: *mut i8, _hi: *const i8) -> *const i8 { _hi }");
+                    }
+                    if do_widen_count < 1 {
+                        self.writeln("");
+                        self.writeln("/// Stub for do_widen virtual method (single)");
+                        self.writeln("pub fn do_widen(&self, c: i8) -> i8 { c }");
+                    }
+                    if do_widen_count < 2 {
+                        self.writeln("");
+                        self.writeln("/// Stub for do_widen virtual method (range)");
+                        self.writeln("pub fn do_widen_1(&self, _lo: *const i8, _hi: *const i8, _dest: *mut i8) -> *const i8 { _hi }");
+                    }
+                    if do_narrow_count < 1 {
+                        self.writeln("");
+                        self.writeln("/// Stub for do_narrow virtual method (single)");
+                        self.writeln("pub fn do_narrow(&self, c: i8, dfault: i8) -> i8 { c }");
+                    }
+                    if do_narrow_count < 2 {
+                        self.writeln("");
+                        self.writeln("/// Stub for do_narrow virtual method (range)");
+                        self.writeln("pub fn do_narrow_1(&self, _lo: *const i8, _hi: *const i8, _dfault: i8, _dest: *mut i8) -> *const i8 { _hi }");
+                    }
+                    if widen_init_count < 1 {
+                        self.writeln("");
+                        self.writeln("/// Internal method to initialize widen table");
+                        self.writeln("pub fn _M_widen_init(&self) {}");
+                    }
+                    if narrow_init_count < 1 {
+                        self.writeln("");
+                        self.writeln("/// Internal method to initialize narrow table");
+                        self.writeln("pub fn _M_narrow_init(&self) {}");
+                    }
                 } else {
                     // ctype<wchar_t> - uses i32 for wchar_t type
-                    self.writeln("");
-                    self.writeln("/// Stub for do_is virtual method (single char)");
-                    self.writeln("pub fn do_is(&self, _m: u32, _c: i32) -> bool { false }");
-                    self.writeln("");
-                    self.writeln("/// Stub for do_is virtual method (range)");
-                    self.writeln("pub fn do_is_1(&self, _lo: *const i32, _hi: *const i32, _vec: *mut u32) -> *const i32 { _hi }");
-                    self.writeln("");
-                    self.writeln("/// Stub for do_scan_is virtual method");
-                    self.writeln("pub fn do_scan_is(&self, _m: u32, _lo: *const i32, _hi: *const i32) -> *const i32 { _hi }");
-                    self.writeln("");
-                    self.writeln("/// Stub for do_scan_not virtual method");
-                    self.writeln("pub fn do_scan_not(&self, _m: u32, _lo: *const i32, _hi: *const i32) -> *const i32 { _hi }");
-                    self.writeln("");
-                    self.writeln("/// Stub for do_toupper virtual method (single)");
-                    self.writeln("pub fn do_toupper(&self, c: i32) -> i32 { c }");
-                    self.writeln("");
-                    self.writeln("/// Stub for do_toupper virtual method (range)");
-                    self.writeln("pub fn do_toupper_1(&self, _lo: *mut i32, _hi: *const i32) -> *const i32 { _hi }");
-                    self.writeln("");
-                    self.writeln("/// Stub for do_tolower virtual method (single)");
-                    self.writeln("pub fn do_tolower(&self, c: i32) -> i32 { c }");
-                    self.writeln("");
-                    self.writeln("/// Stub for do_tolower virtual method (range)");
-                    self.writeln("pub fn do_tolower_1(&self, _lo: *mut i32, _hi: *const i32) -> *const i32 { _hi }");
-                    self.writeln("");
-                    self.writeln("/// Stub for do_widen virtual method (single)");
-                    self.writeln("pub fn do_widen(&self, c: i8) -> i32 { c as i32 }");
-                    self.writeln("");
-                    self.writeln("/// Stub for do_widen virtual method (range)");
-                    self.writeln("pub fn do_widen_1(&self, _lo: *const i8, _hi: *const i8, _dest: *mut i32) -> *const i8 { _hi }");
-                    self.writeln("");
-                    self.writeln("/// Stub for do_narrow virtual method (single)");
-                    self.writeln("pub fn do_narrow(&self, c: i32, dfault: i8) -> i8 { if c >= 0 && c < 128 { c as i8 } else { dfault } }");
-                    self.writeln("");
-                    self.writeln("/// Stub for do_narrow virtual method (range)");
-                    self.writeln("pub fn do_narrow_1(&self, _lo: *const i32, _hi: *const i32, _dfault: i8, _dest: *mut i8) -> *const i32 { _hi }");
+                    if do_is_count < 1 {
+                        self.writeln("");
+                        self.writeln("/// Stub for do_is virtual method (single char)");
+                        self.writeln("pub fn do_is(&self, _m: u32, _c: i32) -> bool { false }");
+                    }
+                    if do_is_count < 2 {
+                        self.writeln("");
+                        self.writeln("/// Stub for do_is virtual method (range)");
+                        self.writeln("pub fn do_is_1(&self, _lo: *const i32, _hi: *const i32, _vec: *mut u32) -> *const i32 { _hi }");
+                    }
+                    if do_scan_is_count < 1 {
+                        self.writeln("");
+                        self.writeln("/// Stub for do_scan_is virtual method");
+                        self.writeln("pub fn do_scan_is(&self, _m: u32, _lo: *const i32, _hi: *const i32) -> *const i32 { _hi }");
+                    }
+                    if do_scan_not_count < 1 {
+                        self.writeln("");
+                        self.writeln("/// Stub for do_scan_not virtual method");
+                        self.writeln("pub fn do_scan_not(&self, _m: u32, _lo: *const i32, _hi: *const i32) -> *const i32 { _hi }");
+                    }
+                    if do_toupper_count < 1 {
+                        self.writeln("");
+                        self.writeln("/// Stub for do_toupper virtual method (single)");
+                        self.writeln("pub fn do_toupper(&self, c: i32) -> i32 { c }");
+                    }
+                    if do_toupper_count < 2 {
+                        self.writeln("");
+                        self.writeln("/// Stub for do_toupper virtual method (range)");
+                        self.writeln("pub fn do_toupper_1(&self, _lo: *mut i32, _hi: *const i32) -> *const i32 { _hi }");
+                    }
+                    if do_tolower_count < 1 {
+                        self.writeln("");
+                        self.writeln("/// Stub for do_tolower virtual method (single)");
+                        self.writeln("pub fn do_tolower(&self, c: i32) -> i32 { c }");
+                    }
+                    if do_tolower_count < 2 {
+                        self.writeln("");
+                        self.writeln("/// Stub for do_tolower virtual method (range)");
+                        self.writeln("pub fn do_tolower_1(&self, _lo: *mut i32, _hi: *const i32) -> *const i32 { _hi }");
+                    }
+                    if do_widen_count < 1 {
+                        self.writeln("");
+                        self.writeln("/// Stub for do_widen virtual method (single)");
+                        self.writeln("pub fn do_widen(&self, c: i8) -> i32 { c as i32 }");
+                    }
+                    if do_widen_count < 2 {
+                        self.writeln("");
+                        self.writeln("/// Stub for do_widen virtual method (range)");
+                        self.writeln("pub fn do_widen_1(&self, _lo: *const i8, _hi: *const i8, _dest: *mut i32) -> *const i8 { _hi }");
+                    }
+                    if do_narrow_count < 1 {
+                        self.writeln("");
+                        self.writeln("/// Stub for do_narrow virtual method (single)");
+                        self.writeln("pub fn do_narrow(&self, c: i32, dfault: i8) -> i8 { if c >= 0 && c < 128 { c as i8 } else { dfault } }");
+                    }
+                    if do_narrow_count < 2 {
+                        self.writeln("");
+                        self.writeln("/// Stub for do_narrow virtual method (range)");
+                        self.writeln("pub fn do_narrow_1(&self, _lo: *const i32, _hi: *const i32, _dfault: i8, _dest: *mut i8) -> *const i32 { _hi }");
+                    }
                 }
             }
 
