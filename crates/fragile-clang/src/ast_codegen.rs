@@ -1929,6 +1929,7 @@ impl AstCodeGen {
         } else if generated.contains("_dependent_type::new_")
             || generated.contains("_unnamed)")  // Unresolved value in function call
             || generated.contains("_unnamed,")  // Unresolved value in function call
+            || generated.contains("._unnamed")  // Unresolved member access (e.g., array begin/end)
             || generated.contains("-> std::ffi::c_void")  // Returns void type (placeholder)
             || generated.contains(": std::ffi::c_void)")  // Parameter is c_void placeholder
         {
