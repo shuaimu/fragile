@@ -12364,6 +12364,27 @@ impl AstCodeGen {
                     if *val == i64::MIN {
                         return "i64::MIN".to_string();
                     }
+                    // Check if the type is an enum (Named type) - use unsafe transmute for enum values
+                    // This handles cases like memory_order_seq_cst which evaluate to 5
+                    if let CppType::Named(name) = ty {
+                        // Check if this is a known enum type
+                        let is_enum = matches!(
+                            name.as_str(),
+                            "memory_order"
+                                | "std::memory_order"
+                                | "float_round_style"
+                                | "std::float_round_style"
+                                | "float_denorm_style"
+                                | "std::float_denorm_style"
+                        );
+                        if is_enum {
+                            let rust_type = ty.to_rust_type_str();
+                            return format!(
+                                "unsafe {{ std::mem::transmute::<i32, {}>({}i32) }}",
+                                rust_type, val
+                            );
+                        }
+                    }
                     if *val == 0 {
                         // For zero, skip suffix to allow type inference in generic contexts
                         "0".to_string()
@@ -12548,6 +12569,27 @@ impl AstCodeGen {
                     // so -9223372036854775808 causes issues. Use i64::MIN constant instead.
                     if *val == i64::MIN {
                         return "i64::MIN".to_string();
+                    }
+                    // Check if the type is an enum (Named type) - use unsafe transmute for enum values
+                    // This handles cases like memory_order_seq_cst which evaluate to 5
+                    if let CppType::Named(name) = ty {
+                        // Check if this is a known enum type
+                        let is_enum = matches!(
+                            name.as_str(),
+                            "memory_order"
+                                | "std::memory_order"
+                                | "float_round_style"
+                                | "std::float_round_style"
+                                | "float_denorm_style"
+                                | "std::float_denorm_style"
+                        );
+                        if is_enum {
+                            let rust_type = ty.to_rust_type_str();
+                            return format!(
+                                "unsafe {{ std::mem::transmute::<i32, {}>({}i32) }}",
+                                rust_type, val
+                            );
+                        }
                     }
                     if self.skip_literal_suffix || *val == 0 {
                         // For zero, skip suffix to allow type inference in generic contexts
