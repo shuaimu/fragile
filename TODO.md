@@ -1121,7 +1121,9 @@ Get `std::thread` working end-to-end.
       - Skip template instantiations with problematic patterns (errno, unresolved vars) (219→214) ✅ 2026-01-31
       - Skip methods with memory_order::new_0() and .op_bitand() (214→194) ✅ 2026-01-31
       - Skip global variables with unresolved __d, __n0, __n1 from 128-bit math ✅ 2026-01-31
-    - **Remaining errors at 194**: E0308 type mismatches (45), E0599 missing methods (30+), E0425 missing values (small), E0061 wrong arg count (20+)
+      - Added __atomic_notify_address_bool and __platform_wait_i32 function stubs (194→184) ✅ 2026-01-31
+      - Skip global variables with __lo1/__lo2/__hi1/__hi2/__x/__y from 128-bit math (184→180) ✅ 2026-01-31
+    - **Remaining errors at 180**: E0308 type mismatches (45), E0599 missing methods (30+), E0061 wrong arg count (20+)
   - [ ] **23.10.2** Verify pthread_create/join are called correctly - BLOCKED
   - [ ] **23.10.3** Add mutex test with std::mutex - BLOCKED
   - [ ] **23.10.4** Add condition variable test - BLOCKED

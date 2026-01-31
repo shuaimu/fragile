@@ -5389,6 +5389,8 @@ impl AstCodeGen {
         self.writeln("#[inline] pub unsafe fn __atomic_test_and_set(_ptr: *mut bool, _order: i32) -> bool { false }");
         self.writeln("#[inline] pub unsafe fn __atomic_clear(_ptr: *mut bool, _order: i32) { }");
         self.writeln("#[inline] pub unsafe fn __atomic_wait_address_v_bool_bool(_ptr: *const bool, _expected: bool) { }");
+        self.writeln("#[inline] pub fn __atomic_notify_address_bool(_addr: *mut bool, _all: bool) { }");
+        self.writeln("#[inline] pub fn __platform_wait_i32(_addr: *const i32, _val: i32) { }");
         self.writeln("#[inline] pub unsafe fn __builtin_ia32_pause() { std::hint::spin_loop() }");
         // syscall - use libc::syscall or define with fixed args (variadic requires nightly)
         self.writeln("#[inline] pub unsafe fn syscall(_num: i64) -> i64 { 0 }");
@@ -9530,7 +9532,15 @@ impl AstCodeGen {
                         || init_str.contains("/ unsafe { __gv_")  // Division by unresolved global
                         || init_str.contains("__d")  // Unresolved __d from 128-bit division
                         || init_str.contains("__n1")  // Unresolved __n1 from 128-bit math
-                        || init_str.contains("__n0");  // Unresolved __n0 from 128-bit math
+                        || init_str.contains("__n0")  // Unresolved __n0 from 128-bit math
+                        || init_str.contains("__lo1")  // Unresolved __lo1 from 128-bit add
+                        || init_str.contains("__lo2")  // Unresolved __lo2 from 128-bit add
+                        || init_str.contains("__hi1")  // Unresolved __hi1 from 128-bit add
+                        || init_str.contains("__hi2")  // Unresolved __hi2 from 128-bit add
+                        || init_str.starts_with("__x ")  // Unresolved __x at start
+                        || init_str.contains(" __x ")  // Unresolved __x in expression
+                        || init_str.starts_with("__y ")  // Unresolved __y at start
+                        || init_str.contains(" __y ");  // Unresolved __y in expression
                     if has_template_pattern {
                         Self::default_value_for_static(ty)
                     } else if matches!(ty, CppType::Bool) {
