@@ -2250,6 +2250,24 @@ impl AstCodeGen {
                     None
                 }
             }
+            "__builtin_memchr" => {
+                // __builtin_memchr(s, c, n) -> find first occurrence of c in first n bytes of s
+                // Returns pointer to found byte or null if not found
+                if args.len() >= 3 {
+                    Some((
+                        format!(
+                            "{{ let __s = {} as *const u8; let __c = ({}) as u8; let __n = ({}) as usize; \
+                         let mut __i = 0usize; \
+                         while __i < __n {{ if *__s.add(__i) == __c {{ return __s.add(__i) as *mut std::ffi::c_void; }} __i += 1; }} \
+                         std::ptr::null_mut() }}",
+                            args[0], args[1], args[2]
+                        ),
+                        true,
+                    ))
+                } else {
+                    None
+                }
+            }
             "__builtin_strlen" => {
                 // __builtin_strlen(s) -> strlen equivalent (returns u64 for size_t)
                 if !args.is_empty() {
@@ -5253,6 +5271,33 @@ impl AstCodeGen {
             "pub type basic_ostream_type_parameter_0_0__type_parameter_0_1 = std::ffi::c_void;",
         );
         self.writeln("pub type memory_resource = std::ffi::c_void;");
+        // iostream/streambuf related template instantiation types
+        self.writeln("pub type num_put_type_parameter_0_0__ostreambuf_iterator_type_parameter_0_0__type_parameter_0_1 = std::ffi::c_void;");
+        self.writeln("pub type num_get_type_parameter_0_0__istreambuf_iterator_type_parameter_0_0__type_parameter_0_1 = std::ffi::c_void;");
+        // C++20 syncbuf types
+        self.writeln("pub type basic_syncbuf_char = std::ffi::c_void;");
+        self.writeln("pub type basic_osyncstream_char = std::ffi::c_void;");
+        self.writeln("pub type basic_syncbuf_wchar_t = std::ffi::c_void;");
+        self.writeln("pub type basic_osyncstream_wchar_t = std::ffi::c_void;");
+        // pthread/atomic types for glibc
+        self.writeln("pub type __pthread_list_t = std::ffi::c_void;");
+        self.writeln("pub type _unnamed_struct_at__usr_include_x86_64_linux_gnu_bits_atomic_wide_counter_h_28_3_ = std::ffi::c_void;");
+        // Variadic template types
+        self.writeln("pub type _Maybe_unary_or_binary_function_type_parameter_0_0__type_parameter_0_1__type_parameter_0_2___ = std::ffi::c_void;");
+        self.writeln("pub type integral_constant_unsigned_long__sizeof_____ArgTypes_ = std::ffi::c_void;");
+        // hash_base types for string_view
+        self.writeln("pub type __hash_base_size_t__string_view = std::ffi::c_void;");
+        self.writeln("pub type __hash_base_size_t__wstring_view = std::ffi::c_void;");
+        self.writeln("pub type __hash_base_size_t__u8string_view = std::ffi::c_void;");
+        self.writeln("pub type __hash_base_size_t__u16string_view = std::ffi::c_void;");
+        self.writeln("pub type __hash_base_size_t__u32string_view = std::ffi::c_void;");
+        // Internal template types
+        self.writeln("pub type __cv_selector_type_parameter_0_1___IsConst___IsVol = std::ffi::c_void;");
+        self.writeln("pub type __strictest_alignment_type_parameter_0_1___ = std::ffi::c_void;");
+        // Long decltype name for range size
+        self.writeln("pub type _Size_decltype___detail___to_unsigned_like_std_declval_typename___iter_traits_impl_typename_remove_cvref_type_parameter_0_0_type__incrementable_traits_typename_remove_cvref_type_parameter_0_0_type_type_difference_type_______S_store_size = usize;");
+        // strong_ordering type for comparisons
+        self.writeln("pub type std_strong_ordering = i8;");
         self.writeln("");
 
         // Exception class stub - base class for all exception types
@@ -5655,6 +5700,21 @@ impl AstCodeGen {
         self.writeln("pub fn strtod(_s: *const i8, _endptr: *mut *mut i8) -> f64 { 0.0 }");
         self.writeln("#[inline]");
         self.writeln("pub fn strtold(_s: *const i8, _endptr: *mut *mut i8) -> f64 { 0.0 }");
+        // Wide character string conversion functions (wchar_t = i32)
+        self.writeln("#[inline]");
+        self.writeln("pub fn wcstol(_s: *const i32, _endptr: *mut *mut i32, _base: i32) -> i64 { 0 }");
+        self.writeln("#[inline]");
+        self.writeln("pub fn wcstoul(_s: *const i32, _endptr: *mut *mut i32, _base: i32) -> u64 { 0 }");
+        self.writeln("#[inline]");
+        self.writeln("pub fn wcstoll(_s: *const i32, _endptr: *mut *mut i32, _base: i32) -> i64 { 0 }");
+        self.writeln("#[inline]");
+        self.writeln("pub fn wcstoull(_s: *const i32, _endptr: *mut *mut i32, _base: i32) -> u64 { 0 }");
+        self.writeln("#[inline]");
+        self.writeln("pub fn wcstof(_s: *const i32, _endptr: *mut *mut i32) -> f32 { 0.0 }");
+        self.writeln("#[inline]");
+        self.writeln("pub fn wcstod(_s: *const i32, _endptr: *mut *mut i32) -> f64 { 0.0 }");
+        self.writeln("#[inline]");
+        self.writeln("pub fn wcstold(_s: *const i32, _endptr: *mut *mut i32) -> f64 { 0.0 }");
         self.writeln("");
 
         // to_string stubs for std::to_string functions
@@ -8125,8 +8185,9 @@ impl AstCodeGen {
                     self.writeln("/// Sets format flags");
                     self.writeln("pub fn setf(&mut self, __fmtfl: u32) -> u32 {");
                     self.indent += 1;
-                    self.writeln("let __r = self.__fmtflags_;");
-                    self.writeln("self.__fmtflags_ |= __fmtfl;");
+                    // Use _M_flags for libstdc++ compatibility
+                    self.writeln("let __r = unsafe { std::mem::transmute_copy::<_, u32>(&self._M_flags) };");
+                    self.writeln("self._M_flags = unsafe { std::mem::transmute(__r | __fmtfl) };");
                     self.writeln("__r");
                     self.indent -= 1;
                     self.writeln("}");
@@ -8134,9 +8195,10 @@ impl AstCodeGen {
                     self.writeln("/// Sets format flags with mask");
                     self.writeln("pub fn setf_1(&mut self, __fmtfl: u32, __mask: u32) -> u32 {");
                     self.indent += 1;
-                    self.writeln("let __r = self.__fmtflags_;");
+                    self.writeln("let __r = unsafe { std::mem::transmute_copy::<_, u32>(&self._M_flags) };");
                     self.writeln("self.unsetf(__mask);");
-                    self.writeln("self.__fmtflags_ |= __fmtfl & __mask;");
+                    self.writeln("let __cur = unsafe { std::mem::transmute_copy::<_, u32>(&self._M_flags) };");
+                    self.writeln("self._M_flags = unsafe { std::mem::transmute(__cur | (__fmtfl & __mask)) };");
                     self.writeln("__r");
                     self.indent -= 1;
                     self.writeln("}");
@@ -8154,7 +8216,9 @@ impl AstCodeGen {
                     self.writeln("/// Clears format flags");
                     self.writeln("pub fn unsetf(&mut self, __mask: u32) {");
                     self.indent += 1;
-                    self.writeln("self.__fmtflags_ &= !__mask;");
+                    // Use _M_flags for libstdc++ compatibility
+                    self.writeln("let __cur = unsafe { std::mem::transmute_copy::<_, u32>(&self._M_flags) };");
+                    self.writeln("self._M_flags = unsafe { std::mem::transmute(__cur & !__mask) };");
                     self.indent -= 1;
                     self.writeln("}");
                 }
@@ -8171,15 +8235,9 @@ impl AstCodeGen {
                     self.writeln("/// Clears error state flags");
                     self.writeln("pub fn clear(&mut self, __state: u32) {");
                     self.indent += 1;
-                    self.writeln("if !self.__rdbuf_.is_null() {");
-                    self.indent += 1;
-                    self.writeln("self.__rdstate_ = __state;");
-                    self.indent -= 1;
-                    self.writeln("} else {");
-                    self.indent += 1;
-                    self.writeln("self.__rdstate_ = __state | 1;"); // badbit = 1
-                    self.indent -= 1;
-                    self.writeln("}");
+                    // Use _M_streambuf_state for libstdc++ compatibility
+                    // Simplified: just set the state directly
+                    self.writeln("self._M_streambuf_state = unsafe { std::mem::transmute(__state) };");
                     self.indent -= 1;
                     self.writeln("}");
                 }
@@ -8196,15 +8254,16 @@ impl AstCodeGen {
                     self.writeln("/// Gets format flags");
                     self.writeln("pub fn flags(&self) -> u32 {");
                     self.indent += 1;
-                    self.writeln("self.__fmtflags_");
+                    // Use _M_flags for libstdc++ compatibility
+                    self.writeln("unsafe { std::mem::transmute_copy(&self._M_flags) }");
                     self.indent -= 1;
                     self.writeln("}");
                     self.writeln("");
                     self.writeln("/// Sets format flags (replaces all)");
                     self.writeln("pub fn flags_1(&mut self, __fmtfl: u32) -> u32 {");
                     self.indent += 1;
-                    self.writeln("let __r = self.__fmtflags_;");
-                    self.writeln("self.__fmtflags_ = __fmtfl;");
+                    self.writeln("let __r = unsafe { std::mem::transmute_copy::<_, u32>(&self._M_flags) };");
+                    self.writeln("self._M_flags = unsafe { std::mem::transmute(__fmtfl) };");
                     self.writeln("__r");
                     self.indent -= 1;
                     self.writeln("}");
