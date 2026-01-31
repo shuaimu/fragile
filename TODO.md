@@ -842,7 +842,7 @@ Get `std::cout` working end-to-end.
     ```
     - **Status**: Transpilation succeeds (128K chars → 23K LOC Rust)
     - **Progress**: Compilation errors reduced (unique error codes): 65 → ... → 491 → 476 → 457 → 452 → 442 → 438 → 435 → 366 → 357 → 354 → 343 → 337 → 336 → 330 → 326 → 322 → 321 → 312 (libstdc++) ✅ 2026-01-25
-    - **Progress v2**: Total error count (incl. duplicate locations): 1225 → 1218 → 1214 → 1205 → 1201 → 1190 → 1169 → 1112 → 1063 → 1052 → 981 → 869 → 842 → 794 → 784 → 763 → 751 → 745 → 743 → 726 → 724 → 720 → 712 → 707 → 705 → 663 → 657 → 651 → 648 → 645 → 632 → 626 → 592 → 582 → 555 → 485 → 471 → 465 → 464 → 452 → 448 → 446 → 441 → 437 → 436 → 433 → 432 → 428 → 415 → 407 → 399 → 397 ✅ 2026-01-31
+    - **Progress v2**: Total error count (incl. duplicate locations): 1225 → 1218 → 1214 → 1205 → 1201 → 1190 → 1169 → 1112 → 1063 → 1052 → 981 → 869 → 842 → 794 → 784 → 763 → 751 → 745 → 743 → 726 → 724 → 720 → 712 → 707 → 705 → 663 → 657 → 651 → 648 → 645 → 632 → 626 → 592 → 582 → 555 → 485 → 471 → 465 → 464 → 452 → 448 → 446 → 441 → 437 → 436 → 433 → 432 → 428 → 415 → 407 → 399 → 397 → 387 ✅ 2026-01-31
       - Fixed cast-after-method parsing: wrap pointer casts in parentheses before .add()/.sub()
       - Added long double math builtins (__builtin_expl, __builtin_sqrtl, etc.) - 37 functions
       - Added __to_underlying_* stubs for enum-to-int conversion
@@ -995,10 +995,14 @@ Get `std::cout` working end-to-end.
         - Changed to u32 to match `std___extended_grapheme_custer_property_boundary___property` alias
         - Fixed values to match actual enum variant values (10, 8, 16)
         - Fixes E0308: expected `u32`, found `u8`
-    - **Remaining errors at 397**: mostly code generation issues requiring deeper fixes:
-      - E0308 (291): Type mismatches (usize/u64, f32/f64, i32/u32, pointer/reference)
+      - Fixed: Add vtable stubs for ctype and collate locale facets (397→387) ✅ 2026-01-31
+        - Added `ctype_char__vtable` with do_toupper, do_toupper_1, do_tolower, do_tolower_1
+        - Added `ctype_wchar_t__vtable` with do_is, do_scan_is/not, do_toupper/tolower, do_widen/narrow
+        - Added `collate_char__vtable` and `collate_wchar_t__vtable` with do_compare, do_transform, do_hash
+        - Fixes E0560: struct `ctype_char__vtable` has no field named `do_toupper` (and similar)
+    - **Remaining errors at 387**: mostly code generation issues requiring deeper fixes:
+      - E0308 (276): Type mismatches (usize/u64, f32/f64, i32/u32, pointer/reference)
       - E0061 (47): Wrong number of arguments (function overloading issues)
-      - E0560 (20): Struct has no field (vtable virtual methods missing)
       - E0277 (13): Trait not satisfied (bool arithmetic, c_void ops, PartialOrd)
       - E0599 (10): No method found (__on_zero_shared, op_add on raw pointers)
       - E0609 (9): No field on type (array._unnamed for begin/end functions)

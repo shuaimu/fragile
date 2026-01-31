@@ -4515,6 +4515,44 @@ impl AstCodeGen {
         self.writeln("pub type __const_reference = std::ffi::c_void;");
         self.writeln("");
 
+        // ctype vtable stubs - mark as generated to prevent duplicate definitions
+        self.generated_structs.insert("ctype_char__vtable".to_string());
+        self.generated_structs.insert("ctype_wchar_t__vtable".to_string());
+        self.writeln("// ctype vtable stubs");
+        // ctype_char uses i8 for char type
+        self.writeln("#[repr(C)]");
+        self.writeln("pub struct ctype_char__vtable {");
+        self.writeln("    pub __type_id: u64,");
+        self.writeln("    pub __base_count: usize,");
+        self.writeln("    pub __base_type_ids: &'static [u64],");
+        self.writeln("    pub do_toupper: unsafe fn(*const ctype_char_, i8) -> i8,");
+        self.writeln("    pub do_toupper_1: unsafe fn(*const ctype_char_, *mut i8, *const i8) -> *const i8,");
+        self.writeln("    pub do_tolower: unsafe fn(*const ctype_char_, i8) -> i8,");
+        self.writeln("    pub do_tolower_1: unsafe fn(*const ctype_char_, *mut i8, *const i8) -> *const i8,");
+        self.writeln("    pub __destructor: unsafe fn(*mut ctype_char_),");
+        self.writeln("}");
+        // ctype_wchar_t uses i32 for wchar_t type
+        self.writeln("#[repr(C)]");
+        self.writeln("pub struct ctype_wchar_t__vtable {");
+        self.writeln("    pub __type_id: u64,");
+        self.writeln("    pub __base_count: usize,");
+        self.writeln("    pub __base_type_ids: &'static [u64],");
+        self.writeln("    pub do_is: unsafe fn(*const ctype_wchar_t_, u32, i32) -> bool,");
+        self.writeln("    pub do_is_1: unsafe fn(*const ctype_wchar_t_, *const i32, *const i32, *mut u32) -> *const i32,");
+        self.writeln("    pub do_scan_is: unsafe fn(*const ctype_wchar_t_, u32, *const i32, *const i32) -> *const i32,");
+        self.writeln("    pub do_scan_not: unsafe fn(*const ctype_wchar_t_, u32, *const i32, *const i32) -> *const i32,");
+        self.writeln("    pub do_toupper: unsafe fn(*const ctype_wchar_t_, i32) -> i32,");
+        self.writeln("    pub do_toupper_1: unsafe fn(*const ctype_wchar_t_, *mut i32, *const i32) -> *const i32,");
+        self.writeln("    pub do_tolower: unsafe fn(*const ctype_wchar_t_, i32) -> i32,");
+        self.writeln("    pub do_tolower_1: unsafe fn(*const ctype_wchar_t_, *mut i32, *const i32) -> *const i32,");
+        self.writeln("    pub do_widen: unsafe fn(*const ctype_wchar_t_, i8) -> i32,");
+        self.writeln("    pub do_widen_1: unsafe fn(*const ctype_wchar_t_, *const i8, *const i8, *mut i32) -> *const i8,");
+        self.writeln("    pub do_narrow: unsafe fn(*const ctype_wchar_t_, i32, i8) -> i8,");
+        self.writeln("    pub do_narrow_1: unsafe fn(*const ctype_wchar_t_, *const i32, *const i32, i8, *mut i8) -> *const i32,");
+        self.writeln("    pub __destructor: unsafe fn(*mut ctype_wchar_t_),");
+        self.writeln("}");
+        self.writeln("");
+
         // Atomic types
         self.writeln("// Atomic types");
         self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct atomic_signed_char { pub __a_: i8 }");
@@ -4545,6 +4583,32 @@ impl AstCodeGen {
         self.writeln("impl Default for collate_wchar_t { fn default() -> Self { Self { __vtable: std::ptr::null() } } }");
         self.writeln("unsafe impl Sync for collate_wchar_t {}");
         self.writeln("unsafe impl Send for collate_wchar_t {}");
+        self.writeln("");
+
+        // collate vtable stubs - mark as generated to prevent duplicate definitions
+        self.generated_structs.insert("collate_char__vtable".to_string());
+        self.generated_structs.insert("collate_wchar_t__vtable".to_string());
+        self.writeln("// collate vtable stubs");
+        self.writeln("#[repr(C)]");
+        self.writeln("pub struct collate_char__vtable {");
+        self.writeln("    pub __type_id: u64,");
+        self.writeln("    pub __base_count: usize,");
+        self.writeln("    pub __base_type_ids: &'static [u64],");
+        self.writeln("    pub do_compare: unsafe fn(*const collate_char_, *const i8, *const i8, *const i8, *const i8) -> i32,");
+        self.writeln("    pub do_transform: unsafe fn(*const collate_char_, *const i8, *const i8) -> std::ffi::c_void,");
+        self.writeln("    pub do_hash: unsafe fn(*const collate_char_, *const i8, *const i8) -> i64,");
+        self.writeln("    pub __destructor: unsafe fn(*mut collate_char_),");
+        self.writeln("}");
+        self.writeln("#[repr(C)]");
+        self.writeln("pub struct collate_wchar_t__vtable {");
+        self.writeln("    pub __type_id: u64,");
+        self.writeln("    pub __base_count: usize,");
+        self.writeln("    pub __base_type_ids: &'static [u64],");
+        self.writeln("    pub do_compare: unsafe fn(*const collate_wchar_t_, *const i32, *const i32, *const i32, *const i32) -> i32,");
+        self.writeln("    pub do_transform: unsafe fn(*const collate_wchar_t_, *const i32, *const i32) -> std::ffi::c_void,");
+        self.writeln("    pub do_hash: unsafe fn(*const collate_wchar_t_, *const i32, *const i32) -> i64,");
+        self.writeln("    pub __destructor: unsafe fn(*mut collate_wchar_t_),");
+        self.writeln("}");
         self.writeln("");
 
         // Format context types
