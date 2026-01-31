@@ -11068,20 +11068,20 @@ impl AstCodeGen {
             if op_name == "operator<<" {
                 if let Some(right_idx) = right_idx_opt {
                     if left_idx < node.children.len() && right_idx < node.children.len() {
-                        // First check if left operand is directly a stream
-                        if let Some(stream_type) =
-                            Self::get_io_stream_type(&node.children[left_idx])
-                        {
-                            // Base case: stream << arg
-                            return Some((stream_type, vec![&node.children[right_idx]]));
-                        }
-                        // Recursive case: (stream << ...) << arg
-                        // Check if left operand is another operator<< on a stream
+                        let left_node = &node.children[left_idx];
+
+                        // Try recursive case FIRST: (stream << ...) << arg
+                        // This handles chained operators like ((cout << "Hello") << endl)
                         if let Some((stream_type, mut args)) =
-                            self.collect_stream_output_args(&node.children[left_idx])
+                            self.collect_stream_output_args(left_node)
                         {
                             args.push(&node.children[right_idx]);
                             return Some((stream_type, args));
+                        }
+
+                        // Base case: stream << arg (left is directly a stream, not a chain)
+                        if let Some(stream_type) = Self::get_io_stream_type(left_node) {
+                            return Some((stream_type, vec![&node.children[right_idx]]));
                         }
                     }
                 }
@@ -11103,14 +11103,30 @@ impl AstCodeGen {
             .last()
             .is_some_and(|arg| Self::is_stream_manipulator(arg) == Some("newline"));
 
-        // Filter out endl/flush manipulators, collect format args
-        let format_args: Vec<String> = args
-            .iter()
-            .filter(|arg| Self::is_stream_manipulator(arg).is_none())
-            .map(|arg| self.expr_to_string(arg))
-            .collect();
+        // Filter out endl/flush manipulators, process format args
+        // For string literals, embed them directly in the format string
+        // For other expressions, use {} placeholder
+        let mut format_parts: Vec<String> = Vec::new();
+        let mut expr_args: Vec<String> = Vec::new();
 
-        if format_args.is_empty() {
+        for arg in args.iter() {
+            if Self::is_stream_manipulator(arg).is_some() {
+                continue; // Skip endl/flush
+            }
+
+            if let Some(str_val) = Self::get_string_literal_value(arg) {
+                // String literal - embed directly in format string
+                // Escape braces for format string
+                let escaped = str_val.replace('{', "{{").replace('}', "}}");
+                format_parts.push(escaped);
+            } else {
+                // Non-literal - use {} placeholder
+                format_parts.push("{}".to_string());
+                expr_args.push(self.expr_to_string(arg));
+            }
+        }
+
+        if format_parts.is_empty() {
             // Just endl or flush with no content
             if has_newline {
                 format!("writeln!({}, \"\").unwrap()", stream_expr)
@@ -11118,20 +11134,45 @@ impl AstCodeGen {
                 format!("{{ let _ = {}.flush(); {} }}", stream_expr, stream_expr)
             }
         } else {
-            // Build format string with {} placeholders
-            let format_str = vec!["{}"; format_args.len()].join("");
-            let args_str = format_args.join(", ");
-            if has_newline {
-                format!(
-                    "writeln!({}, \"{}\", {}).unwrap()",
-                    stream_expr, format_str, args_str
-                )
+            let format_str = format_parts.join("");
+            if expr_args.is_empty() {
+                // All string literals - no extra args needed
+                if has_newline {
+                    format!("writeln!({}, \"{}\").unwrap()", stream_expr, format_str)
+                } else {
+                    format!("write!({}, \"{}\").unwrap()", stream_expr, format_str)
+                }
             } else {
-                format!(
-                    "write!({}, \"{}\", {}).unwrap()",
-                    stream_expr, format_str, args_str
-                )
+                let args_str = expr_args.join(", ");
+                if has_newline {
+                    format!(
+                        "writeln!({}, \"{}\", {}).unwrap()",
+                        stream_expr, format_str, args_str
+                    )
+                } else {
+                    format!(
+                        "write!({}, \"{}\", {}).unwrap()",
+                        stream_expr, format_str, args_str
+                    )
+                }
             }
+        }
+    }
+
+    /// Extract string literal value from a node, looking through wrapper nodes.
+    fn get_string_literal_value(node: &ClangNode) -> Option<String> {
+        match &node.kind {
+            ClangNodeKind::StringLiteral(s) => Some(s.clone()),
+            ClangNodeKind::Unknown(_) | ClangNodeKind::ImplicitCastExpr { .. } => {
+                // Look through wrapper nodes
+                for child in &node.children {
+                    if let Some(s) = Self::get_string_literal_value(child) {
+                        return Some(s);
+                    }
+                }
+                None
+            }
+            _ => None,
         }
     }
 
