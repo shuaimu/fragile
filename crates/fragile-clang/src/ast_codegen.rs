@@ -7340,6 +7340,12 @@ impl AstCodeGen {
             || (generated.contains("return __builtin_llrintl") && !generated.contains("return __builtin_llrintl("))
             // wstring stoi/stol with c_str type mismatches (__stoa functions call c_str which returns wrong type)
             || generated.contains("__stoa_extern__C")
+            // Enum bitwise operators with type mismatches (u32 return with i32 expression)
+            // Pattern: "return X as i32 & Y as i32;" where return type is not i32
+            || (generated.contains(" as i32 & ") && !generated.contains("-> i32"))
+            || (generated.contains(" as i32 | ") && !generated.contains("-> i32"))
+            || (generated.contains(" as i32 ^ ") && !generated.contains("-> i32"))
+            || (generated.contains("!") && generated.contains(" as i32") && generated.contains("std__Ios"))  // ~operator
         {
             // Rollback - remove the generated function
             self.output.truncate(output_start);
@@ -9655,6 +9661,14 @@ impl AstCodeGen {
                 let pattern = format!(" as {}}}", wrong_type);
                 let replacement = format!(" as {}}}", return_type);
                 result = result.replace(&pattern, &replacement);
+
+                // Handle casts in bitwise expressions: "X as i32 & Y as i32" -> "X as u32 & Y as u32"
+                // These occur with enum types in bitwise operations
+                for bitop in &[" & ", " | ", " ^ "] {
+                    let pattern = format!(" as {}{}", wrong_type, bitop);
+                    let replacement = format!(" as {}{}", return_type, bitop);
+                    result = result.replace(&pattern, &replacement);
+                }
 
                 // Also handle cases where the cast is at the end of the expression
                 // e.g., "*__c as i32" -> "*__c as u16"
