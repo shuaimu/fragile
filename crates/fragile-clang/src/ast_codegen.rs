@@ -8256,7 +8256,19 @@ impl AstCodeGen {
 
         self.generated_aliases.insert(safe_name.clone());
         self.writeln(&format!("/// C++ typedef/using `{}`", name));
-        self.writeln(&format!("pub type {} = {};", safe_name, rust_type));
+        // Check if the type is a reference - needs 'static lifetime for type aliases
+        // Reference types start with & but not with *
+        if rust_type.starts_with('&') && !rust_type.starts_with("*") {
+            // Add 'static lifetime after the & (handle &mut too)
+            let lifetime_type = if rust_type.starts_with("&mut ") {
+                format!("&'static mut {}", &rust_type[5..])
+            } else {
+                format!("&'static {}", &rust_type[1..])
+            };
+            self.writeln(&format!("pub type {} = {};", safe_name, lifetime_type));
+        } else {
+            self.writeln(&format!("pub type {} = {};", safe_name, rust_type));
+        }
         self.writeln("");
     }
 
