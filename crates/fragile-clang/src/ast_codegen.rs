@@ -13189,8 +13189,40 @@ impl AstCodeGen {
                             // C++ logical NOT (!x) converts to bool first
                             // For non-bool types, `!x` means `x == 0` in C++
                             let operand_ty = Self::get_expr_type(&node.children[0]);
+
+
                             if matches!(operand_ty, Some(CppType::Bool)) {
-                                format!("!{}", operand)
+                                // Need to parenthesize if operand is a binary expression
+                                // because Rust's ! has higher precedence than comparison operators
+                                // e.g., !a == b parses as (!a) == b, not !(a == b)
+                                //
+                                // Also look through wrapper nodes (ImplicitCastExpr, CastExpr, ParenExpr)
+                                // to find underlying BinaryOperator
+                                fn contains_binary_op_in_child(node: &ClangNode) -> bool {
+                                    match &node.kind {
+                                        ClangNodeKind::BinaryOperator { .. } => true,
+                                        ClangNodeKind::ImplicitCastExpr { .. }
+                                        | ClangNodeKind::CastExpr { .. }
+                                        | ClangNodeKind::ParenExpr { .. } => {
+                                            node.children.first().map_or(false, |c| contains_binary_op_in_child(c))
+                                        }
+                                        _ => false,
+                                    }
+                                }
+                                let needs_parens = contains_binary_op_in_child(&node.children[0])
+                                    || operand.contains(" == ")
+                                    || operand.contains(" != ")
+                                    || operand.contains(" < ")
+                                    || operand.contains(" > ")
+                                    || operand.contains(" <= ")
+                                    || operand.contains(" >= ")
+                                    || operand.contains(" && ")
+                                    || operand.contains(" || ");
+                                if needs_parens {
+                                    format!("!({})", operand)
+                                } else {
+                                    format!("!{}", operand)
+                                }
                             } else if matches!(operand_ty, Some(CppType::Pointer { .. })) {
                                 // For pointer types, use is_null()
                                 format!("{}.is_null()", operand)
@@ -14589,7 +14621,37 @@ impl AstCodeGen {
                             // For non-bool types, `!x` means `x == 0` in C++
                             let operand_ty = Self::get_expr_type(&node.children[0]);
                             if matches!(operand_ty, Some(CppType::Bool)) {
-                                format!("!{}", operand)
+                                // Need to parenthesize if operand is a binary expression
+                                // because Rust's ! has higher precedence than comparison operators
+                                // e.g., !a == b parses as (!a) == b, not !(a == b)
+                                //
+                                // Also look through wrapper nodes (ImplicitCastExpr, CastExpr, ParenExpr)
+                                // to find underlying BinaryOperator
+                                fn contains_binary_op_in_child(node: &ClangNode) -> bool {
+                                    match &node.kind {
+                                        ClangNodeKind::BinaryOperator { .. } => true,
+                                        ClangNodeKind::ImplicitCastExpr { .. }
+                                        | ClangNodeKind::CastExpr { .. }
+                                        | ClangNodeKind::ParenExpr { .. } => {
+                                            node.children.first().map_or(false, |c| contains_binary_op_in_child(c))
+                                        }
+                                        _ => false,
+                                    }
+                                }
+                                let needs_parens = contains_binary_op_in_child(&node.children[0])
+                                    || operand.contains(" == ")
+                                    || operand.contains(" != ")
+                                    || operand.contains(" < ")
+                                    || operand.contains(" > ")
+                                    || operand.contains(" <= ")
+                                    || operand.contains(" >= ")
+                                    || operand.contains(" && ")
+                                    || operand.contains(" || ");
+                                if needs_parens {
+                                    format!("!({})", operand)
+                                } else {
+                                    format!("!{}", operand)
+                                }
                             } else if matches!(operand_ty, Some(CppType::Pointer { .. })) {
                                 // For pointer types, use is_null()
                                 format!("{}.is_null()", operand)
@@ -15969,10 +16031,17 @@ impl AstCodeGen {
                         } else if inner == "true" || inner == "false" {
                             return inner;  // Already boolean
                         } else {
-                            // Check if inner is a pointer type
+                            // Check if inner is already a boolean expression (comparison, logical op)
+                            // These patterns already return bool in Rust
                             let inner_ty = Self::get_expr_type(&node.children.iter().find(|c| {
                                 !matches!(&c.kind, ClangNodeKind::Unknown(s) if s.starts_with("TypeRef"))
                             }).unwrap_or(&node.children[0]));
+
+                            // Check if inner expression type is already bool
+                            if matches!(inner_ty, Some(CppType::Bool)) {
+                                return inner;  // Already boolean, no conversion needed
+                            }
+
                             if matches!(inner_ty, Some(CppType::Pointer { .. })) {
                                 return format!("!{}.is_null()", inner);
                             }

@@ -2015,7 +2015,15 @@ impl ClangParser {
 
             clang_sys::clang_tokenize(tu, extent, &mut tokens, &mut num_tokens);
 
-            let mut result = BinaryOp::Add; // Default
+            let mut result: Option<BinaryOp> = None;
+
+            // For macro-expanded code, the child offsets may not be useful
+            // (they might be identical or point to the macro call site).
+            // In that case, we scan all operator tokens and pick the best match.
+            let offsets_valid = first_end_offset < second_start_offset;
+
+            // Collect all candidate operators from tokens
+            let mut candidates: Vec<(BinaryOp, u32)> = Vec::new();
 
             // Find operator token between first child end and second child start
             for i in 0..num_tokens {
@@ -2024,34 +2032,104 @@ impl ClangParser {
 
                 // CXToken_Punctuation = 0
                 if token_kind == 0 {
-                    let token_loc = clang_sys::clang_getTokenLocation(tu, token);
-                    let mut token_offset: u32 = 0;
-                    clang_sys::clang_getSpellingLocation(
-                        token_loc,
-                        std::ptr::null_mut(),
-                        std::ptr::null_mut(),
-                        std::ptr::null_mut(),
-                        &mut token_offset,
-                    );
+                    let token_spelling = clang_sys::clang_getTokenSpelling(tu, token);
+                    let token_str = cx_string_to_string(token_spelling);
 
-                    // Only consider tokens between the two children
-                    if token_offset >= first_end_offset && token_offset < second_start_offset {
-                        let token_spelling = clang_sys::clang_getTokenSpelling(tu, token);
-                        let token_str = cx_string_to_string(token_spelling);
+                    if let Some(op) = str_to_binary_op(&token_str) {
+                        let token_loc = clang_sys::clang_getTokenLocation(tu, token);
+                        let mut token_offset: u32 = 0;
+                        clang_sys::clang_getSpellingLocation(
+                            token_loc,
+                            std::ptr::null_mut(),
+                            std::ptr::null_mut(),
+                            std::ptr::null_mut(),
+                            &mut token_offset,
+                        );
 
-                        if let Some(op) = str_to_binary_op(&token_str) {
-                            result = op;
-                            break;
+                        // Collect all candidates for heuristic fallback
+                        candidates.push((op, token_offset));
+
+                        // If offsets are valid, try position-based matching first
+                        if offsets_valid && result.is_none() {
+                            // Only consider tokens between the two children
+                            if token_offset >= first_end_offset && token_offset < second_start_offset {
+                                result = Some(op);
+                            }
                         }
                     }
                 }
+            }
+
+            // Use type-based heuristics to validate the result
+            // This handles macro-expanded code where tokenization may find wrong operators
+            let cursor_type = self.get_cursor_type(cursor);
+            let result_is_bool = matches!(cursor_type.as_deref(), Some("bool") | Some("_Bool"));
+
+            // If the BinaryOperator returns bool but we found an arithmetic operator,
+            // this is likely a macro expansion issue. Look for logical operators instead.
+            if result_is_bool {
+                let current_op = result.unwrap_or(BinaryOp::Add);
+                let is_arithmetic = matches!(
+                    current_op,
+                    BinaryOp::Add
+                        | BinaryOp::Sub
+                        | BinaryOp::Mul
+                        | BinaryOp::Div
+                        | BinaryOp::Rem
+                        | BinaryOp::And
+                        | BinaryOp::Or
+                        | BinaryOp::Xor
+                        | BinaryOp::Shl
+                        | BinaryOp::Shr
+                );
+
+                if is_arithmetic {
+                    // First, try to find a logical operator from candidates
+                    let mut found_logical = false;
+                    for (op, _) in &candidates {
+                        if matches!(op, BinaryOp::LAnd | BinaryOp::LOr) {
+                            result = Some(*op);
+                            found_logical = true;
+                            break;
+                        }
+                    }
+
+                    // If no logical operator in candidates but the expression returns bool,
+                    // and we detected an arithmetic operator, default to LAnd.
+                    // This handles macro-expanded code where && tokens aren't in the expansion.
+                    if !found_logical {
+                        result = Some(BinaryOp::LAnd);
+                    }
+                }
+            }
+
+            // If still no result, use first candidate from tokens
+            if result.is_none() && !candidates.is_empty() {
+                result = Some(candidates[0].0);
             }
 
             if !tokens.is_null() {
                 clang_sys::clang_disposeTokens(tu, tokens, num_tokens);
             }
 
-            result
+            result.unwrap_or(BinaryOp::Add)
+        }
+    }
+
+    /// Get the type name of a cursor's type (for heuristic operator detection)
+    fn get_cursor_type(&self, cursor: clang_sys::CXCursor) -> Option<String> {
+        unsafe {
+            let ty = clang_sys::clang_getCursorType(cursor);
+            if ty.kind == clang_sys::CXType_Invalid {
+                return None;
+            }
+            let type_spelling = clang_sys::clang_getTypeSpelling(ty);
+            let type_str = cx_string_to_string(type_spelling);
+            if type_str.is_empty() {
+                None
+            } else {
+                Some(type_str)
+            }
         }
     }
 
