@@ -9764,12 +9764,13 @@ impl AstCodeGen {
                 if !has_op_eq {
                     self.writeln("");
                     self.writeln("/// Comparison operators for three-way comparison with 0");
-                    self.writeln("pub fn op_eq(&self, _other: &_CmpUnspecifiedParam) -> bool { self._M_value == 0 }");
-                    self.writeln("pub fn op_ne(&self, _other: &_CmpUnspecifiedParam) -> bool { self._M_value != 0 }");
-                    self.writeln("pub fn op_lt(&self, _other: &_CmpUnspecifiedParam) -> bool { self._M_value < 0 }");
-                    self.writeln("pub fn op_le(&self, _other: &_CmpUnspecifiedParam) -> bool { self._M_value <= 0 }");
-                    self.writeln("pub fn op_gt(&self, _other: &_CmpUnspecifiedParam) -> bool { self._M_value > 0 }");
-                    self.writeln("pub fn op_ge(&self, _other: &_CmpUnspecifiedParam) -> bool { self._M_value >= 0 }");
+                    // Note: libc++ uses __value_, libstdc++ uses _M_value
+                    self.writeln("pub fn op_eq(&self, _other: &_CmpUnspecifiedParam) -> bool { self.__value_ == 0 }");
+                    self.writeln("pub fn op_ne(&self, _other: &_CmpUnspecifiedParam) -> bool { self.__value_ != 0 }");
+                    self.writeln("pub fn op_lt(&self, _other: &_CmpUnspecifiedParam) -> bool { self.__value_ < 0 }");
+                    self.writeln("pub fn op_le(&self, _other: &_CmpUnspecifiedParam) -> bool { self.__value_ <= 0 }");
+                    self.writeln("pub fn op_gt(&self, _other: &_CmpUnspecifiedParam) -> bool { self.__value_ > 0 }");
+                    self.writeln("pub fn op_ge(&self, _other: &_CmpUnspecifiedParam) -> bool { self.__value_ >= 0 }");
                 }
             }
 
@@ -9784,12 +9785,13 @@ impl AstCodeGen {
                 if !has_op_eq {
                     self.writeln("");
                     self.writeln("/// Comparison operators for three-way comparison with 0");
-                    self.writeln("pub fn op_eq(&self, _other: &_CmpUnspecifiedParam) -> bool { self._M_value == 0 }");
-                    self.writeln("pub fn op_ne(&self, _other: &_CmpUnspecifiedParam) -> bool { self._M_value != 0 }");
-                    self.writeln("pub fn op_lt(&self, _other: &_CmpUnspecifiedParam) -> bool { self._M_value < 0 }");
-                    self.writeln("pub fn op_le(&self, _other: &_CmpUnspecifiedParam) -> bool { self._M_value <= 0 }");
-                    self.writeln("pub fn op_gt(&self, _other: &_CmpUnspecifiedParam) -> bool { self._M_value > 0 }");
-                    self.writeln("pub fn op_ge(&self, _other: &_CmpUnspecifiedParam) -> bool { self._M_value >= 0 }");
+                    // Note: libc++ uses __value_, libstdc++ uses _M_value
+                    self.writeln("pub fn op_eq(&self, _other: &_CmpUnspecifiedParam) -> bool { self.__value_ == 0 }");
+                    self.writeln("pub fn op_ne(&self, _other: &_CmpUnspecifiedParam) -> bool { self.__value_ != 0 }");
+                    self.writeln("pub fn op_lt(&self, _other: &_CmpUnspecifiedParam) -> bool { self.__value_ < 0 }");
+                    self.writeln("pub fn op_le(&self, _other: &_CmpUnspecifiedParam) -> bool { self.__value_ <= 0 }");
+                    self.writeln("pub fn op_gt(&self, _other: &_CmpUnspecifiedParam) -> bool { self.__value_ > 0 }");
+                    self.writeln("pub fn op_ge(&self, _other: &_CmpUnspecifiedParam) -> bool { self.__value_ >= 0 }");
                 }
             }
 
@@ -9939,9 +9941,9 @@ impl AstCodeGen {
                     self.writeln("/// Sets format flags");
                     self.writeln("pub fn setf(&mut self, __fmtfl: u32) -> u32 {");
                     self.indent += 1;
-                    // Use _M_flags for libstdc++ compatibility
-                    self.writeln("let __r = unsafe { std::mem::transmute_copy::<_, u32>(&self._M_flags) };");
-                    self.writeln("self._M_flags = unsafe { std::mem::transmute(__r | __fmtfl) };");
+                    // Use __fmtflags_ for libc++ compatibility
+                    self.writeln("let __r = self.__fmtflags_;");
+                    self.writeln("self.__fmtflags_ = __r | __fmtfl;");
                     self.writeln("__r");
                     self.indent -= 1;
                     self.writeln("}");
@@ -9949,10 +9951,9 @@ impl AstCodeGen {
                     self.writeln("/// Sets format flags with mask");
                     self.writeln("pub fn setf_1(&mut self, __fmtfl: u32, __mask: u32) -> u32 {");
                     self.indent += 1;
-                    self.writeln("let __r = unsafe { std::mem::transmute_copy::<_, u32>(&self._M_flags) };");
+                    self.writeln("let __r = self.__fmtflags_;");
                     self.writeln("self.unsetf(__mask);");
-                    self.writeln("let __cur = unsafe { std::mem::transmute_copy::<_, u32>(&self._M_flags) };");
-                    self.writeln("self._M_flags = unsafe { std::mem::transmute(__cur | (__fmtfl & __mask)) };");
+                    self.writeln("self.__fmtflags_ = self.__fmtflags_ | (__fmtfl & __mask);");
                     self.writeln("__r");
                     self.indent -= 1;
                     self.writeln("}");
@@ -9970,9 +9971,8 @@ impl AstCodeGen {
                     self.writeln("/// Clears format flags");
                     self.writeln("pub fn unsetf(&mut self, __mask: u32) {");
                     self.indent += 1;
-                    // Use _M_flags for libstdc++ compatibility
-                    self.writeln("let __cur = unsafe { std::mem::transmute_copy::<_, u32>(&self._M_flags) };");
-                    self.writeln("self._M_flags = unsafe { std::mem::transmute(__cur & !__mask) };");
+                    // Use __fmtflags_ for libc++ compatibility
+                    self.writeln("self.__fmtflags_ = self.__fmtflags_ & !__mask;");
                     self.indent -= 1;
                     self.writeln("}");
                 }
@@ -9989,9 +9989,8 @@ impl AstCodeGen {
                     self.writeln("/// Clears error state flags");
                     self.writeln("pub fn clear(&mut self, __state: u32) {");
                     self.indent += 1;
-                    // Use _M_streambuf_state for libstdc++ compatibility
-                    // Simplified: just set the state directly
-                    self.writeln("self._M_streambuf_state = unsafe { std::mem::transmute(__state) };");
+                    // Use __rdstate_ for libc++ compatibility
+                    self.writeln("self.__rdstate_ = __state;");
                     self.indent -= 1;
                     self.writeln("}");
                 }
@@ -10008,16 +10007,16 @@ impl AstCodeGen {
                     self.writeln("/// Gets format flags");
                     self.writeln("pub fn flags(&self) -> u32 {");
                     self.indent += 1;
-                    // Use _M_flags for libstdc++ compatibility
-                    self.writeln("unsafe { std::mem::transmute_copy(&self._M_flags) }");
+                    // Use __fmtflags_ for libc++ compatibility
+                    self.writeln("self.__fmtflags_");
                     self.indent -= 1;
                     self.writeln("}");
                     self.writeln("");
                     self.writeln("/// Sets format flags (replaces all)");
                     self.writeln("pub fn flags_1(&mut self, __fmtfl: u32) -> u32 {");
                     self.indent += 1;
-                    self.writeln("let __r = unsafe { std::mem::transmute_copy::<_, u32>(&self._M_flags) };");
-                    self.writeln("self._M_flags = unsafe { std::mem::transmute(__fmtfl) };");
+                    self.writeln("let __r = self.__fmtflags_;");
+                    self.writeln("self.__fmtflags_ = __fmtfl;");
                     self.writeln("__r");
                     self.indent -= 1;
                     self.writeln("}");
