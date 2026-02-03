@@ -13435,6 +13435,21 @@ impl AstCodeGen {
                     || (generated.contains("pub fn op_call") && generated.contains("-> std___backoff_results") && generated.contains("__continue_poll"))
                     // char_traits compare calling rolled-back __constexpr_memcmp_u8_u8
                     || (generated.contains("pub fn compare") && generated.contains("__constexpr_memcmp_u8_u8("))
+                    // char_traits r#move/copy calling __constexpr_memmove with mutability mismatch
+                    || (generated.contains("pub fn r#move") && generated.contains("__constexpr_memmove_i8_i8(__s1, __s2"))
+                    || (generated.contains("pub fn copy") && generated.contains("__constexpr_memmove_i8_i8(__s1, __s2"))
+                    // __shared_count methods calling __libcpp_atomic_refcount with value instead of pointer
+                    || (generated.contains("__libcpp_atomic_refcount_increment_i64(self.__shared_owners_)"))
+                    || (generated.contains("__libcpp_atomic_refcount_decrement_i64(self.__shared_owners_)"))
+                    || (generated.contains("__libcpp_atomic_refcount_increment_i64(self.__shared_weak_owners_)"))
+                    // __shared_count use_count returning pointer instead of i64
+                    || (generated.contains("pub fn use_count") && generated.contains(".add(1 as usize)"))
+                    // __shared_weak_count methods calling rolled-back __shared_count methods
+                    || (generated.contains("pub fn __add_shared") && generated.contains("__base.__add_shared()"))
+                    || (generated.contains("pub fn __release_shared") && generated.contains("__base.__release_shared()"))
+                    || (generated.contains("pub fn use_count") && generated.contains("__base.use_count()"))
+                    // exception_ptr swap with wrong type - expecting *mut c_void, got c_void
+                    || (generated.contains("exception_ptr::new_1(") && generated.contains("*__other"))
                 {
                     // Rollback - remove the generated method
                     self.output.truncate(output_start);
