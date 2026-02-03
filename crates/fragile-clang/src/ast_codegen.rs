@@ -63,6 +63,67 @@ fn int_literal_to_float(s: &str) -> String {
     format!("{}.0", stripped)
 }
 
+/// Wrap an expression in parentheses if it's an unsafe block.
+/// Rust requires unsafe blocks to be wrapped in parentheses when used in binary expressions.
+/// E.g., `unsafe { (*ptr).field } + 1` must be `(unsafe { (*ptr).field }) + 1`
+fn wrap_unsafe_for_binop(expr: &str) -> String {
+    let trimmed = expr.trim();
+    if trimmed.starts_with("unsafe {") && trimmed.ends_with('}') {
+        format!("({})", expr)
+    } else {
+        expr.to_string()
+    }
+}
+
+/// Check if a name looks like a C++ AST class name that was incorrectly encoded as an identifier.
+/// The C++ AST exporter encodes unknown expression types as DeclRefExpr with the class name
+/// (e.g., "CXXDependentScopeMemberExpr", "UnresolvedMemberExpr") as the identifier.
+/// These are template-dependent expressions that can't be fully resolved.
+fn is_cpp_ast_class_name(name: &str) -> bool {
+    // Known C++ AST class names that appear as unresolved expressions
+    const CPP_AST_NAMES: &[&str] = &[
+        "CXXDependentScopeMemberExpr",
+        "CXXUnresolvedConstructExpr",
+        "UnresolvedMemberExpr",
+        "UnresolvedLookupExpr",
+        "DependentScopeDeclRefExpr",
+        "PackExpansionExpr",
+        "SizeOfPackExpr",
+        "TypeTraitExpr",
+        "CXXNoexceptExpr",
+        "SubstNonTypeTemplateParmExpr",
+        "ExprWithCleanups",
+        "MaterializeTemporaryExpr",
+        "CXXBindTemporaryExpr",
+        "CXXDefaultArgExpr",
+        "CXXDefaultInitExpr",
+        "CXXStdInitializerListExpr",
+        "CXXPseudoDestructorExpr",
+        "CXXTypeidExpr",
+        "CXXUuidofExpr",
+        "CXXThrowExpr",
+        "CXXScalarValueInitExpr",
+        "CXXNullPtrLiteralExpr",
+        "CXXBoolLiteralExpr",
+        "UserDefinedLiteral",
+        "CompoundLiteralExpr",
+        "AtomicExpr",
+        "GenericSelectionExpr",
+        "PseudoObjectExpr",
+        "OpaqueValueExpr",
+        "TypoExpr",
+        "RecoveryExpr",
+        "ArrayTypeTraitExpr",
+        "ExpressionTraitExpr",
+        "FunctionParmPackExpr",
+        "CXXFoldExpr",
+        "ConceptSpecializationExpr",
+        "RequiresExpr",
+    ];
+
+    CPP_AST_NAMES.contains(&name)
+}
+
 /// Rust reserved keywords that need raw identifier syntax.
 const RUST_KEYWORDS: &[&str] = &[
     "as", "async", "await", "break", "const", "continue", "crate", "dyn", "else", "enum", "extern",
@@ -220,7 +281,8 @@ pub struct AstCodeGen {
     /// Used to determine whether a DeclRefExpr should use local or global variable
     local_vars: HashSet<String>,
     /// Current namespace path during code generation (for relative path computation)
-    current_namespace: Vec<String>,
+    /// Each entry is (namespace_name, is_inline) where is_inline indicates C++ inline namespaces
+    current_namespace: Vec<(String, bool)>,
     /// When true, use __self instead of self for this expressions
     use_ctor_self: bool,
     /// Current method return type (for reference return handling)
@@ -268,6 +330,24 @@ pub struct AstCodeGen {
     /// Class names for which we should skip vtable constant generation
     /// (because they have hand-written vtable stubs in the preamble)
     skip_vtable_generation: HashSet<String>,
+    /// In variadic functions, maps the C va_list variable name to the Rust variadic parameter
+    /// e.g., if C code has `va_list args`, this maps "args" -> "__va_args"
+    va_list_mapping: Option<String>,
+    /// Variadic template instantiations: mangled name -> instantiation node
+    /// These are fully expanded functions from variadic templates (e.g., sum<int, int, int>)
+    variadic_template_instantiations: HashMap<String, ClangNode>,
+    /// Types used in the code that might need stub definitions generated
+    /// Maps Rust type name -> C++ original name
+    used_types: HashMap<String, String>,
+    /// Types containing std_ffi_c_void that need placeholder struct stubs
+    /// These are unresolved template instantiations with void placeholders
+    void_placeholder_types: HashSet<String>,
+    /// Inline namespace aliases: maps parent namespace path to full path with inline namespace
+    /// e.g., "std" -> "std::__1" means std::map should resolve to std::__1::map
+    inline_namespace_aliases: HashMap<String, String>,
+    /// LibTooling AST context for template method bodies
+    /// Key: (class_name, method_name), Value: method body as ClangNode
+    libtooling_method_bodies: HashMap<(String, String), Vec<ClangNode>>,
 }
 
 /// Information about a function template definition
@@ -334,7 +414,19 @@ impl AstCodeGen {
             fn_template_definitions: HashMap::new(),
             pending_fn_instantiations: HashMap::new(),
             skip_vtable_generation: HashSet::new(),
+            va_list_mapping: None,
+            variadic_template_instantiations: HashMap::new(),
+            used_types: HashMap::new(),
+            void_placeholder_types: HashSet::new(),
+            inline_namespace_aliases: HashMap::new(),
+            libtooling_method_bodies: HashMap::new(),
         }
+    }
+
+    /// Set template method bodies from LibTooling AST.
+    /// This enables generating actual code instead of `todo!()` for template methods.
+    pub fn set_libtooling_bodies(&mut self, bodies: HashMap<(String, String), Vec<ClangNode>>) {
+        self.libtooling_method_bodies = bodies;
     }
 
     /// Log a diagnostic message if diagnostic mode is enabled.
@@ -373,6 +465,103 @@ impl AstCodeGen {
         }
     }
 
+    /// Check if a name or type string contains unresolved template placeholders.
+    /// Returns true if the string contains patterns that indicate an uninstantiated template:
+    /// - `type_parameter_N_M` (Clang's internal name for template type parameters)
+    /// - `type-parameter-N-M` (Clang's hyphenated variant)
+    /// - `_Tp`, `_Alloc`, `_Key`, `_Value` etc. (STL internal parameter names)
+    /// - `typename_` prefix (unresolved dependent typenames)
+    ///
+    /// IMPORTANT: This should detect template PARAMETERS (like `_Key`, `_Tp`) that appear
+    /// as template arguments (e.g., `_Hashtable<_Key, _Value>`), NOT types that have these
+    /// substrings as part of their name (e.g., `_Hashtable_base` is a valid type name).
+    fn has_unresolved_template_placeholder(s: &str) -> bool {
+        // Clang's internal template parameter names (these are always unresolved)
+        s.contains("type_parameter_0_")
+            || s.contains("type_parameter_1_")
+            || s.contains("type_parameter_2_")
+            || s.contains("type-parameter-")
+            // Unresolved dependent type names
+            || s.contains("typename_")
+            // STL internal template parameter names - these appear as template arguments
+            // Check for patterns like <_Tp> or <_Tp, or , _Tp> indicating template params
+            || Self::has_template_param_pattern(s, "_Tp")
+            || Self::has_template_param_pattern(s, "_Alloc")
+            || Self::has_template_param_pattern(s, "_Key")
+            || Self::has_template_param_pattern(s, "_Value")
+            || Self::has_template_param_pattern(s, "_Hash")
+            || Self::has_template_param_pattern(s, "_Pred")
+            || Self::has_template_param_pattern(s, "_Equal")
+            || Self::has_template_param_pattern(s, "_Compare")
+            || Self::has_template_param_pattern(s, "_Args")
+            || Self::has_template_param_pattern(s, "_CharT")
+            || Self::has_template_param_pattern(s, "_Traits")
+    }
+
+    /// Check if a template parameter name appears as a template argument in the string.
+    /// This looks for patterns like:
+    /// - `<_Key>` or `<_Key,` or `, _Key>` or `, _Key,` (template argument)
+    /// - `_Key ` or `_Key*` or `_Key&` (parameter type)
+    /// But NOT patterns where the param is part of a larger identifier (e.g., `_KeyCompare`).
+    fn has_template_param_pattern(s: &str, param: &str) -> bool {
+        let len = param.len();
+        let bytes = s.as_bytes();
+        let param_bytes = param.as_bytes();
+
+        // Guard against empty param or string too short
+        if len == 0 || bytes.len() < len {
+            return false;
+        }
+
+        for i in 0..=bytes.len() - len {
+            if &bytes[i..i+len] == param_bytes {
+                // Check character before (if exists)
+                let before_ok = i == 0 || {
+                    let c = bytes[i - 1];
+                    // Must be preceded by template delimiter, space, or nothing
+                    c == b'<' || c == b',' || c == b' ' || c == b'(' || c == b'*' || c == b'&'
+                };
+                // Check character after (if exists)
+                let after_ok = i + len >= bytes.len() || {
+                    let c = bytes[i + len];
+                    // Must NOT be followed by alphanumeric or underscore (which would make it a different identifier)
+                    // Only allow: > , ) * & : space (template/type delimiters)
+                    c == b'>' || c == b',' || c == b' ' || c == b')' || c == b'*' || c == b'&'
+                        || c == b':'  // Allow _Tp::value_type etc
+                };
+                if before_ok && after_ok {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// Substitute a named template parameter when it appears as a template argument.
+    /// This carefully avoids partial matches (e.g., "_Key" shouldn't match "_KeyCompare").
+    /// Pattern examples:
+    /// - "<_Key>" -> "<int>"
+    /// - "<_Key," -> "<int,"
+    /// - ", _Key>" -> ", int>"
+    /// - ", _Key," -> ", int,"
+    fn substitute_template_arg_in_string(s: &str, param: &str, replacement: &str) -> String {
+        let mut result = s.to_string();
+        let patterns = [
+            (format!("<{}>", param), format!("<{}>", replacement)),
+            (format!("<{},", param), format!("<{},", replacement)),
+            (format!(", {}>", param), format!(", {}>", replacement)),
+            (format!(", {},", param), format!(", {},", replacement)),
+            (format!("<{} ", param), format!("<{} ", replacement)),
+            (format!(" {} ", param), format!(" {} ", replacement)),
+            (format!(" {}>", param), format!(" {}>", replacement)),
+            (format!(" {},", param), format!(" {},", replacement)),
+        ];
+        for (from, to) in patterns {
+            result = result.replace(&from, &to);
+        }
+        result
+    }
+
     /// Generate Rust source code from a Clang AST.
     pub fn generate(mut self, ast: &ClangNode) -> String {
         // First pass: collect polymorphic class information
@@ -404,9 +593,15 @@ impl AstCodeGen {
         self.writeln("#![allow(unused_mut)]");
         self.writeln("#![allow(non_camel_case_types)]");
         self.writeln("#![allow(non_snake_case)]");
+        // Enable C variadic function support (requires nightly Rust)
+        self.writeln("#![feature(c_variadic)]");
         self.writeln("");
         // Import Write trait for writeln!/write! macros with std::io::stdout()/stderr()
         self.writeln("use std::io::Write;");
+        self.writeln("");
+        // Type alias for std::ffi::c_void when used in composite struct names
+        // (e.g., common_iterator_std_ffi_c_void -> common_iterator<std::ffi::c_void>)
+        self.writeln("pub type std_ffi_c_void = std::ffi::c_void;");
         self.writeln("");
         self.write_array_helpers();
 
@@ -488,7 +683,271 @@ impl AstCodeGen {
             self.writeln("}");
         }
 
+        // Generate variadic template instantiations collected during code generation
+        self.generate_variadic_template_instantiations();
+
+        // Generate placeholder structs for types that were used but not defined
+        self.generate_missing_type_stubs();
+
+        // Generate placeholder structs for void placeholder types (unresolved template instantiations)
+        self.generate_void_placeholder_stubs();
+
         self.output
+    }
+
+    /// Generate placeholder structs for unresolved template types.
+    /// These include:
+    /// - Types containing std_ffi_c_void (unresolved template parameters)
+    /// - Types containing void____void_ (another placeholder pattern)
+    /// - Template parameter placeholders like _Rep, _Mutex, _Container
+    fn generate_void_placeholder_stubs(&mut self) {
+        use std::collections::BTreeSet;
+
+        // Scan the output for type names that need stub generation
+        let output_copy = self.output.clone();
+        let mut stub_types: BTreeSet<String> = BTreeSet::new();
+
+        // Look for patterns like:
+        // - `-> TypeName` (return type)
+        // - `: TypeName` (field type, parameter type)
+        // - `*mut TypeName` or `*const TypeName` (pointer types)
+        for line in output_copy.lines() {
+            // Skip comment lines
+            if line.trim_start().starts_with("//") {
+                continue;
+            }
+
+            // Extract type names from various positions
+            let patterns_to_check = [
+                "-> ", "-> *mut ", "-> *const ",
+                ": ", ": *mut ", ": *const ",
+                "<", ", ",
+                "= ", // type aliases: pub type Foo = Bar
+            ];
+
+            for pattern in patterns_to_check {
+                for part in line.split(pattern) {
+                    // Extract potential type name (up to next delimiter)
+                    let type_name = part
+                        .split(|c: char| c == ',' || c == ')' || c == '>' || c == '{' || c == ';' || c.is_whitespace())
+                        .next()
+                        .unwrap_or("");
+
+                    // Clean the type name
+                    let clean_name: String = type_name
+                        .chars()
+                        .take_while(|c| c.is_alphanumeric() || *c == '_')
+                        .collect();
+
+                    if clean_name.is_empty() {
+                        continue;
+                    }
+
+                    // Skip primitives and common types
+                    if matches!(clean_name.as_str(),
+                        "i8" | "i16" | "i32" | "i64" | "i128" |
+                        "u8" | "u16" | "u32" | "u64" | "u128" |
+                        "usize" | "isize" | "f32" | "f64" | "bool" | "char" |
+                        "Self" | "self" | "Option" | "Result" | "Vec" | "String" |
+                        "pub" | "fn" | "mut" | "const" | "let" | "if" | "else" |
+                        "return" | "unsafe" | "struct" | "impl" | "for" | "while" |
+                        "match" | "true" | "false" | "Some" | "None" | "Ok" | "Err")
+                    {
+                        continue;
+                    }
+
+                    // Check if this looks like an unresolved type that needs a stub
+                    let needs_stub = clean_name.contains("std_ffi_c_void")
+                        || clean_name.contains("void____void_")
+                        // Template parameter placeholders (start with _ and are short)
+                        || (clean_name.starts_with('_')
+                            && !clean_name.starts_with("__")
+                            && clean_name.len() <= 15
+                            && clean_name.chars().skip(1).all(|c| c.is_alphabetic()))
+                        // Template types with __add_, __remove_, __impl_, etc.
+                        || (clean_name.starts_with("__")
+                            && (clean_name.contains("__add_")
+                                || clean_name.contains("__remove_")
+                                || clean_name.contains("__impl_")
+                                || clean_name.contains("__compressed_pair_padding_")))
+                        // Types ending with unresolved patterns
+                        || clean_name.ends_with("___")
+                        || clean_name.ends_with("__0")
+                        // atomic types that need stubs
+                        || (clean_name.starts_with("atomic_") && !clean_name.contains("::"))
+                        // Unresolved unique_ptr types
+                        || (clean_name.starts_with("unique_ptr_") && clean_name.contains("__void_"))
+                        // basic_string/basic_streambuf with unresolved template params
+                        || (clean_name.starts_with("basic_string") && clean_name.contains("_string_typ"))
+                        || (clean_name.starts_with("basic_string") && (clean_name.contains("Alloc") || clean_name.contains("Elem")))
+                        || (clean_name.starts_with("basic_streambuf") && clean_name.contains("__"))
+                        || (clean_name.starts_with("ctype_") && clean_name.contains("_string_typ"))
+                        // Tuple types with unresolved params
+                        || (clean_name.starts_with("tuple_") && clean_name.contains("___"));
+
+                    if needs_stub
+                        && !clean_name.is_empty()
+                        && !clean_name.starts_with('*')
+                        && !clean_name.starts_with('&')
+                        && !clean_name.contains("::")
+                        && clean_name.chars().next().map_or(false, |c| c.is_alphabetic() || c == '_')
+                    {
+                        stub_types.insert(clean_name);
+                    }
+                }
+            }
+        }
+
+        // Filter out types that are already generated
+        let types_to_generate: Vec<String> = stub_types
+            .into_iter()
+            .filter(|t| !self.generated_structs.contains(t))
+            .collect();
+
+        if types_to_generate.is_empty() {
+            return;
+        }
+
+        self.writeln("");
+        self.writeln("// ==========================================================");
+        self.writeln("// Placeholder structs for unresolved template instantiations");
+        self.writeln("// These are opaque types - actual layout depends on template args");
+        self.writeln("// ==========================================================");
+        self.writeln("");
+
+        for type_name in types_to_generate {
+            self.writeln(&format!("/// Placeholder for unresolved template `{}`", type_name));
+            self.writeln("#[repr(C)]");
+            self.writeln(&format!("pub struct {} {{", type_name));
+            self.indent += 1;
+            self.writeln("_opaque: [u8; 64], // placeholder - actual size may differ");
+            self.indent -= 1;
+            self.writeln("}");
+            self.writeln("");
+
+            // Generate Default impl
+            self.writeln(&format!("impl Default for {} {{", type_name));
+            self.indent += 1;
+            self.writeln("fn default() -> Self {");
+            self.indent += 1;
+            self.writeln("Self { _opaque: [0u8; 64] }");
+            self.indent -= 1;
+            self.writeln("}");
+            self.indent -= 1;
+            self.writeln("}");
+            self.writeln("");
+
+            // Mark as generated
+            self.generated_structs.insert(type_name);
+        }
+    }
+
+    /// Generate placeholder struct definitions for types that were used but not defined.
+    /// This handles cases where libclang doesn't expose ClassDecl for template instantiations
+    /// but we still need struct definitions for the generated code to compile.
+    fn generate_missing_type_stubs(&mut self) {
+        // Collect types that need stubs
+        let mut missing_types: Vec<(String, String)> = Vec::new();
+
+        for (rust_name, cpp_name) in &self.used_types {
+            // Skip if already generated
+            if self.generated_structs.contains(rust_name) {
+                continue;
+            }
+            // Skip if it's a type alias
+            if self.generated_aliases.contains(rust_name) {
+                continue;
+            }
+            // Skip template definitions with unresolved placeholders
+            if Self::has_unresolved_template_placeholder(cpp_name) {
+                continue;
+            }
+            // Skip internal types
+            if rust_name.starts_with("__") && !rust_name.starts_with("__cxx11") {
+                continue;
+            }
+            // Skip invalid Rust identifiers
+            if rust_name == "_" || rust_name.is_empty() || rust_name.starts_with('[') {
+                continue;
+            }
+            // Skip types that are just template parameter placeholders like _T1, _T2
+            if rust_name.starts_with("_T") && rust_name.len() <= 3 && rust_name.chars().skip(2).all(|c| c.is_ascii_digit()) {
+                continue;
+            }
+            // Skip types that are already in the preamble
+            let preamble_types = [
+                "_Sink", "_NodeAlloc", "unsigned_long_const", "std_pair_bool__std_size_t",
+                "std_size_t", "std_ptrdiff_t", "__int128", "__int128_unsigned",
+                "__gnu_cxx___ops__Iter_less_iter", "__gnu_cxx___ops__Iter_comp_iter",
+                "std_nothrow_t", "std_align_val_t", "_Iterator_base", "_Iterator_base_base",
+            ];
+            if preamble_types.contains(&rust_name.as_str()) {
+                continue;
+            }
+            // Skip types that start with underscore and are likely internal
+            if rust_name.starts_with('_') && !rust_name.starts_with("__cxx11")
+                && !rust_name.contains("unordered")
+            {
+                continue;
+            }
+            // Skip auto-deduced types
+            if cpp_name == "auto" || cpp_name.contains("decltype") {
+                continue;
+            }
+            // Skip const-qualified types (the non-const version will be generated)
+            if cpp_name.starts_with("const ") {
+                continue;
+            }
+            // Skip array types
+            if cpp_name.contains('[') && cpp_name.contains(']') {
+                continue;
+            }
+            // Skip dependent types
+            if cpp_name.contains("::type") || cpp_name.contains("typename ") {
+                continue;
+            }
+
+            missing_types.push((rust_name.clone(), cpp_name.clone()));
+        }
+
+        if missing_types.is_empty() {
+            return;
+        }
+
+        self.writeln("");
+        self.writeln("// ==========================================================");
+        self.writeln("// Placeholder structs for template instantiations");
+        self.writeln("// These are opaque types - actual fields are determined at runtime");
+        self.writeln("// ==========================================================");
+        self.writeln("");
+
+        for (rust_name, cpp_name) in missing_types {
+            self.writeln(&format!("/// Placeholder for C++ `{}`", cpp_name));
+            self.writeln("#[repr(C)]");
+            // Use an opaque array to match the C++ struct size
+            // For now, use a placeholder size - in the future we could query libclang for actual size
+            self.writeln(&format!("pub struct {} {{", rust_name));
+            self.indent += 1;
+            self.writeln("_opaque: [u8; 64], // placeholder - actual size may differ");
+            self.indent -= 1;
+            self.writeln("}");
+            self.writeln("");
+
+            // Generate Default impl
+            self.writeln(&format!("impl Default for {} {{", rust_name));
+            self.indent += 1;
+            self.writeln("fn default() -> Self {");
+            self.indent += 1;
+            self.writeln("Self { _opaque: [0u8; 64] }");
+            self.indent -= 1;
+            self.writeln("}");
+            self.indent -= 1;
+            self.writeln("}");
+            self.writeln("");
+
+            // Mark as generated
+            self.generated_structs.insert(rust_name);
+        }
     }
 
     /// First pass: collect information about polymorphic classes.
@@ -1261,7 +1720,7 @@ impl AstCodeGen {
     /// of each namespace so we can generate a single merged module.
     fn collect_namespace_contents(&mut self, children: &[ClangNode], current_path: Vec<String>) {
         for child in children {
-            if let ClangNodeKind::NamespaceDecl { name } = &child.kind {
+            if let ClangNodeKind::NamespaceDecl { name, .. } = &child.kind {
                 if let Some(ns_name) = name {
                     // Skip flattened namespaces (std, __-prefixed) but still recurse into them
                     let is_flattened = ns_name.starts_with("__") || ns_name == "std";
@@ -1302,6 +1761,11 @@ impl AstCodeGen {
     /// Collect template definitions and find all template instantiation usages.
     /// This enables generating structs for template types like MyVec<int>.
     fn collect_template_info(&mut self, children: &[ClangNode]) {
+        self.collect_template_info_with_namespace(children, &[]);
+    }
+
+    /// Collect template definitions with namespace tracking.
+    fn collect_template_info_with_namespace(&mut self, children: &[ClangNode], namespace_path: &[String]) {
         for child in children {
             match &child.kind {
                 ClangNodeKind::ClassTemplateDecl {
@@ -1309,13 +1773,51 @@ impl AstCodeGen {
                     template_params,
                     ..
                 } => {
-                    // Store template definition
-                    self.template_definitions.insert(
-                        name.clone(),
-                        (template_params.clone(), child.children.clone()),
-                    );
+                    // Skip templates with empty params (these are forward declarations or nested)
+                    // and skip templates without field declarations (these are partial specializations or friend decls)
+                    if !template_params.is_empty() {
+                        // Count field declarations - only store if we have actual fields
+                        let has_fields = child.children.iter().any(|c| {
+                            matches!(c.kind, ClangNodeKind::FieldDecl { .. })
+                        });
+
+                        // Helper to conditionally insert template, preferring templates with fields
+                        let should_insert = |existing: Option<&(Vec<String>, Vec<ClangNode>)>, has_fields: bool| -> bool {
+                            match existing {
+                                None => true,
+                                Some((_, existing_children)) => {
+                                    // If existing has no fields but we do, replace it
+                                    let existing_has_fields = existing_children.iter().any(|c| {
+                                        matches!(c.kind, ClangNodeKind::FieldDecl { .. })
+                                    });
+                                    has_fields && !existing_has_fields
+                                }
+                            }
+                        };
+
+                        // Store template definition with short name
+                        if should_insert(self.template_definitions.get(name), has_fields) {
+                            self.template_definitions.insert(
+                                name.clone(),
+                                (template_params.clone(), child.children.clone()),
+                            );
+                        }
+
+                        // Also store with fully-qualified name if in a namespace
+                        if !namespace_path.is_empty() {
+                            let full_name = format!("{}::{}", namespace_path.join("::"), name);
+                            if should_insert(self.template_definitions.get(&full_name), has_fields) {
+                                self.template_definitions.insert(
+                                    full_name,
+                                    (template_params.clone(), child.children.clone()),
+                                );
+                            }
+                            // Note: We no longer blindly filter __ namespaces here.
+                            // Instead, inline namespace aliases are used during lookup.
+                        }
+                    }
                     // Recurse into template to find usages
-                    self.collect_template_info(&child.children);
+                    self.collect_template_info_with_namespace(&child.children, namespace_path);
                 }
                 ClangNodeKind::FunctionTemplateDecl {
                     name,
@@ -1332,23 +1834,37 @@ impl AstCodeGen {
                         .find(|c| matches!(c.kind, ClangNodeKind::CompoundStmt))
                         .cloned();
 
-                    // Store function template definition
+                    // Store function template definition with short name
                     self.fn_template_definitions.insert(
                         name.clone(),
                         FnTemplateInfo {
                             template_params: template_params.clone(),
                             return_type: return_type.clone(),
                             params: params.clone(),
-                            body,
+                            body: body.clone(),
                             is_noexcept: *is_noexcept,
                         },
                     );
+                    // Also store with fully-qualified name if in a namespace
+                    if !namespace_path.is_empty() {
+                        let full_name = format!("{}::{}", namespace_path.join("::"), name);
+                        self.fn_template_definitions.insert(
+                            full_name,
+                            FnTemplateInfo {
+                                template_params: template_params.clone(),
+                                return_type: return_type.clone(),
+                                params: params.clone(),
+                                body,
+                                is_noexcept: *is_noexcept,
+                            },
+                        );
+                    }
                     // Recurse into template to find usages
-                    self.collect_template_info(&child.children);
+                    self.collect_template_info_with_namespace(&child.children, namespace_path);
                 }
                 ClangNodeKind::VarDecl { ty, .. } | ClangNodeKind::FieldDecl { ty, .. } => {
                     self.collect_template_type(ty);
-                    self.collect_template_info(&child.children);
+                    self.collect_template_info_with_namespace(&child.children, namespace_path);
                 }
                 ClangNodeKind::FunctionDecl {
                     return_type,
@@ -1359,7 +1875,7 @@ impl AstCodeGen {
                     for (_, param_ty) in params {
                         self.collect_template_type(param_ty);
                     }
-                    self.collect_template_info(&child.children);
+                    self.collect_template_info_with_namespace(&child.children, namespace_path);
                 }
                 ClangNodeKind::CXXMethodDecl {
                     return_type,
@@ -1370,21 +1886,37 @@ impl AstCodeGen {
                     for (_, param_ty) in params {
                         self.collect_template_type(param_ty);
                     }
-                    self.collect_template_info(&child.children);
+                    self.collect_template_info_with_namespace(&child.children, namespace_path);
                 }
                 ClangNodeKind::CallExpr { .. } => {
                     // Check if this is a call to a function template instantiation
                     // by looking at the callee (first child should be DeclRefExpr or ImplicitCastExpr)
                     self.collect_fn_template_instantiation(child);
-                    self.collect_template_info(&child.children);
+                    self.collect_template_info_with_namespace(&child.children, namespace_path);
+                }
+                ClangNodeKind::NamespaceDecl { name, is_inline } => {
+                    // Track namespace for template name qualification
+                    // For inline namespaces (like std::__1), also register alias from parent::name to parent::inline::name
+                    let mut new_path = namespace_path.to_vec();
+                    if let Some(ns_name) = name {
+                        new_path.push(ns_name.clone());
+
+                        // If this is an inline namespace, record the alias
+                        // e.g., std::__1 is inline, so std::map should resolve to std::__1::map
+                        if *is_inline && !namespace_path.is_empty() {
+                            let parent_path = namespace_path.join("::");
+                            let full_path = new_path.join("::");
+                            self.inline_namespace_aliases.insert(parent_path, full_path);
+                        }
+                    }
+                    self.collect_template_info_with_namespace(&child.children, &new_path);
                 }
                 ClangNodeKind::RecordDecl { .. }
-                | ClangNodeKind::NamespaceDecl { .. }
                 | ClangNodeKind::CompoundStmt => {
-                    self.collect_template_info(&child.children);
+                    self.collect_template_info_with_namespace(&child.children, namespace_path);
                 }
                 _ => {
-                    self.collect_template_info(&child.children);
+                    self.collect_template_info_with_namespace(&child.children, namespace_path);
                 }
             }
         }
@@ -1471,16 +2003,56 @@ impl AstCodeGen {
         }
     }
 
+    /// Look up a template definition, trying inline namespace aliases if direct lookup fails.
+    /// For example, if looking up "std::map" and we have an alias "std" -> "std::__1",
+    /// this will also try "std::__1::map".
+    fn lookup_template_definition(&self, template_name: &str) -> Option<(Vec<String>, Vec<ClangNode>)> {
+        // First try direct lookup
+        if let Some(def) = self.template_definitions.get(template_name) {
+            return Some(def.clone());
+        }
+
+        // Try resolving via inline namespace aliases
+        // For "std::map", check if we have an alias for "std" -> "std::__1"
+        if let Some(colon_idx) = template_name.rfind("::") {
+            let namespace_part = &template_name[..colon_idx];
+            let name_part = &template_name[colon_idx + 2..];
+
+            // Check if there's an inline namespace alias for this namespace
+            if let Some(aliased_namespace) = self.inline_namespace_aliases.get(namespace_part) {
+                let aliased_name = format!("{}::{}", aliased_namespace, name_part);
+                if let Some(def) = self.template_definitions.get(&aliased_name) {
+                    return Some(def.clone());
+                }
+            }
+        }
+
+        None
+    }
+
     /// Check if a type is a template instantiation (e.g., MyVec<int>) and record it.
     fn collect_template_type(&mut self, ty: &CppType) {
         if let CppType::Named(name) = ty {
+            // Track all named types for potential stub generation
+            let rust_name = ty.to_rust_type_str();
+            // Only track non-primitive types that look like struct names
+            if !rust_name.contains("::")
+                && !rust_name.starts_with('*')
+                && !rust_name.starts_with('&')
+                && !matches!(rust_name.as_str(), "i8" | "i16" | "i32" | "i64" | "i128"
+                    | "u8" | "u16" | "u32" | "u64" | "u128" | "usize" | "isize"
+                    | "f32" | "f64" | "bool" | "char" | "()")
+            {
+                self.used_types.insert(rust_name, name.clone());
+            }
+
             // Check if this is a template instantiation (contains <>)
             if name.contains('<') && name.contains('>') {
                 // Extract template name (everything before <)
                 if let Some(idx) = name.find('<') {
                     let template_name = &name[..idx];
-                    // Only add if we have a definition for this template
-                    if self.template_definitions.contains_key(template_name) {
+                    // Check if we have a definition (directly or via inline namespace alias)
+                    if self.lookup_template_definition(template_name).is_some() {
                         self.pending_template_instantiations.insert(name.clone());
                     }
                 }
@@ -1509,8 +2081,9 @@ impl AstCodeGen {
                 let args_str = &inst_name[open_idx + 1..inst_name.len() - 1]; // Strip < and >
                 let type_args = parse_template_args(args_str);
 
+                // Use inline namespace-aware lookup
                 if let Some((template_params, template_children)) =
-                    self.template_definitions.get(template_name).cloned()
+                    self.lookup_template_definition(template_name)
                 {
                     // Generate struct with substituted types
                     self.generate_template_struct(
@@ -1575,12 +2148,15 @@ impl AstCodeGen {
         self.generated_structs.insert(rust_name.clone());
 
         // Build substitution map: T -> int, etc.
+        // Also map Clang's internal type-parameter-N-M names to the same substitutions.
         let mut subst_map = HashMap::new();
-        for (param, arg) in template_params.iter().zip(type_args.iter()) {
-            subst_map.insert(
-                param.clone(),
-                CppType::Named(arg.clone()).to_rust_type_str(),
-            );
+        for (idx, (param, arg)) in template_params.iter().zip(type_args.iter()).enumerate() {
+            let rust_arg = CppType::Named(arg.clone()).to_rust_type_str();
+            // Map named parameter (e.g., "_Key" -> "i32")
+            subst_map.insert(param.clone(), rust_arg.clone());
+            // Also map Clang's internal format: "type-parameter-0-N" -> "i32"
+            // This handles cases where libclang doesn't resolve the param name
+            subst_map.insert(format!("type-parameter-0-{}", idx), rust_arg);
         }
 
         self.writeln(&format!("/// C++ template instantiation `{}`", inst_name));
@@ -1679,7 +2255,30 @@ impl AstCodeGen {
                     }
                 }
 
-                ty.to_rust_type_str()
+                // Substitute type-parameter-N-M patterns within complex type names
+                // e.g., "__tree<__value_type<type-parameter-0-0, type-parameter-0-1>, ...>"
+                // becomes "__tree<__value_type<int, int>, ...>" after substitution
+                let mut result = name.clone();
+                for (param, replacement) in subst_map {
+                    // Only substitute type-parameter patterns, not named params in complex types
+                    // Named params like "_Key" might be part of struct names like "_KeyCompare"
+                    if param.starts_with("type-parameter-") {
+                        result = result.replace(param, replacement);
+                    }
+                }
+
+                // If substitution happened and the result still has unresolved patterns,
+                // try named param substitution too (carefully, to avoid partial matches)
+                for (param, replacement) in subst_map {
+                    if !param.starts_with("type-parameter-") {
+                        // Only substitute when param appears as a template argument
+                        // e.g., "<_Key>" or "<_Key," or ", _Key>" or ", _Key,"
+                        result = Self::substitute_template_arg_in_string(&result, param, replacement);
+                    }
+                }
+
+                // Convert the result to a valid Rust type
+                CppType::Named(result).to_rust_type_str()
             }
             CppType::Pointer { pointee, is_const } => {
                 let inner = self.substitute_template_type(pointee, subst_map);
@@ -1724,10 +2323,7 @@ impl AstCodeGen {
         for child in children {
             if matches!(
                 &child.kind,
-                ClangNodeKind::CXXMethodDecl {
-                    is_definition: true,
-                    ..
-                }
+                ClangNodeKind::CXXMethodDecl { .. }
             ) {
                 has_methods = true;
                 break;
@@ -1749,12 +2345,12 @@ impl AstCodeGen {
                 name,
                 return_type,
                 params,
-                is_definition,
                 is_static,
                 ..
             } = &child.kind
             {
-                if *is_definition {
+                // Generate method stub (for templates, most methods are declarations not definitions)
+                {
                     // Generate method with substituted types
                     let ret_type = self.substitute_template_type(return_type, subst_map);
                     let mut param_strs = Vec::new();
@@ -1803,7 +2399,29 @@ impl AstCodeGen {
                         ret_str
                     ));
                     self.indent += 1;
-                    self.writeln("todo!(\"Template method body\")");
+
+                    // Try to look up the method body from LibTooling AST
+                    // First try with exact class name, then with empty string (matches any class)
+                    let key = (rust_name.to_string(), name.clone());
+                    let fallback_key = (String::new(), name.clone());
+                    let body_opt = self.libtooling_method_bodies.get(&key)
+                        .or_else(|| self.libtooling_method_bodies.get(&fallback_key))
+                        .and_then(|bodies| {
+                            // Find the body matching the parameter count
+                            bodies.iter().find(|body| {
+                                // For now, just use the first available body
+                                // TODO: Match by parameter signature
+                                matches!(body.kind, ClangNodeKind::CompoundStmt)
+                            }).cloned()
+                        });
+
+                    if let Some(body) = body_opt {
+                        // Generate the actual method body
+                        self.generate_block_contents(&body.children, return_type);
+                    } else {
+                        self.writeln("todo!(\"Template method body\")");
+                    }
+
                     self.indent -= 1;
                     self.writeln("}");
                     self.writeln("");
@@ -2186,6 +2804,197 @@ impl AstCodeGen {
                     }
                 }
             }
+        }
+    }
+
+    /// Recursively collect variadic template instantiations from a node and its children.
+    fn collect_variadic_template_instantiations(&mut self, node: &ClangNode) {
+        // Check if this is a CallExpr with a template instantiation
+        if let ClangNodeKind::CallExpr {
+            template_instantiation: Some(instantiation),
+            ..
+        } = &node.kind
+        {
+            self.record_variadic_template_instantiation(instantiation);
+        }
+
+        // Recurse into children
+        for child in &node.children {
+            self.collect_variadic_template_instantiations(child);
+        }
+    }
+
+    /// Record a variadic template instantiation for later code generation.
+    /// The instantiation node contains the fully expanded function from libclang.
+    fn record_variadic_template_instantiation(&mut self, instantiation: &ClangNode) {
+        // Extract the function name and generate a mangled name
+        if let ClangNodeKind::FunctionTemplateInstantiation {
+            name: _,
+            mangled_name,
+            ..
+        } = &instantiation.kind
+        {
+            // Use the mangled name as the key to avoid duplicates
+            if !self.variadic_template_instantiations.contains_key(mangled_name) {
+                self.variadic_template_instantiations
+                    .insert(mangled_name.clone(), instantiation.clone());
+            }
+        } else if let ClangNodeKind::FunctionDecl {
+            name, mangled_name, ..
+        } = &instantiation.kind
+        {
+            // The instantiation might come as a FunctionDecl if it wasn't recognized as a template
+            // instantiation during parsing (e.g., because the template args are in a pack)
+            let key = if mangled_name.is_empty() {
+                name.clone()
+            } else {
+                mangled_name.clone()
+            };
+            if !self.variadic_template_instantiations.contains_key(&key) {
+                self.variadic_template_instantiations
+                    .insert(key, instantiation.clone());
+            }
+        }
+    }
+
+    /// Generate code for all collected variadic template instantiations.
+    fn generate_variadic_template_instantiations(&mut self) {
+        // Clone to avoid borrow issues
+        let instantiations: Vec<(String, ClangNode)> = self
+            .variadic_template_instantiations
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+
+        for (mangled_name, instantiation) in instantiations {
+            self.generate_variadic_template_instance(&mangled_name, &instantiation);
+        }
+    }
+
+    /// Generate code for a single variadic template instantiation.
+    fn generate_variadic_template_instance(&mut self, _mangled_name: &str, instantiation: &ClangNode) {
+        // Extract function info based on node type
+        let (name, return_type, params, _is_noexcept, children) =
+            match &instantiation.kind {
+                ClangNodeKind::FunctionTemplateInstantiation {
+                    name,
+                    return_type,
+                    params,
+                    is_noexcept,
+                    ..
+                } => (
+                    name.clone(),
+                    return_type.clone(),
+                    params.clone(),
+                    *is_noexcept,
+                    &instantiation.children,
+                ),
+                ClangNodeKind::FunctionDecl {
+                    name,
+                    return_type,
+                    params,
+                    is_noexcept,
+                    ..
+                } => (
+                    name.clone(),
+                    return_type.clone(),
+                    params.clone(),
+                    *is_noexcept,
+                    &instantiation.children,
+                ),
+                _ => return, // Not a function
+            };
+
+        // Skip if already generated
+        let sanitized_name = sanitize_identifier(&name);
+        // Create a unique function name based on parameter types (to match call site naming)
+        // For variadic templates, each parameter type is expanded, so we use unique types
+        let mut seen_types = std::collections::HashSet::new();
+        let unique_types: Vec<String> = params
+            .iter()
+            .map(|(_, ty)| sanitize_type_for_fn_name(&ty.to_rust_type_str()))
+            .filter(|ty| seen_types.insert(ty.clone()))
+            .collect();
+        let func_name = if unique_types.is_empty() {
+            sanitized_name.clone()
+        } else {
+            format!("{}_{}", sanitized_name, unique_types.join("_"))
+        };
+
+        if self.generated_functions.contains_key(&func_name) {
+            return;
+        }
+        self.generated_functions
+            .insert(func_name.clone(), self.output.len());
+
+        // Generate return type
+        let ret_str = if return_type == CppType::Void {
+            String::new()
+        } else {
+            format!(" -> {}", return_type.to_rust_type_str())
+        };
+
+        // Generate parameters
+        let mut param_strs = Vec::new();
+        let mut param_name_counts: HashMap<String, usize> = HashMap::new();
+        for (param_name, param_ty) in &params {
+            let rust_ty = param_ty.to_rust_type_str();
+            let mut pname = sanitize_identifier(param_name);
+            if pname.is_empty() {
+                pname = format!("_arg{}", param_strs.len());
+            }
+            // Handle duplicate parameter names (common in variadic expansion)
+            let count = param_name_counts.entry(pname.clone()).or_insert(0);
+            if *count > 0 {
+                pname = format!("{}_{}", pname, *count);
+            }
+            *param_name_counts.get_mut(&sanitize_identifier(param_name)).unwrap() += 1;
+            param_strs.push(format!("{}: {}", pname, rust_ty));
+        }
+
+        // Save output position for potential rollback
+        let output_start = self.output.len();
+
+        self.writeln(&format!("/// Variadic template instantiation: {}", name));
+        self.writeln("#[inline]");
+        self.writeln(&format!(
+            "pub fn {}({}){} {{",
+            func_name,
+            param_strs.join(", "),
+            ret_str
+        ));
+        self.indent += 1;
+
+        // For variadic templates, the body references all parameters with the same name
+        // (e.g., all named "args"), but we renamed them (args, args_1, args_2).
+        // Until we implement proper parameter renaming in the body, generate a stub.
+        // Check if this is a variadic template with duplicate param names
+        let has_duplicate_names = {
+            let mut names = std::collections::HashSet::new();
+            params.iter().any(|(n, _)| !names.insert(n.clone()))
+        };
+
+        if has_duplicate_names {
+            // Generate a stub with todo!
+            self.writeln("// TODO: Variadic template body with pack expansion");
+            self.writeln("todo!(\"variadic template instantiation\")");
+        } else {
+            // No duplicate names - generate the body normally
+            for child in children {
+                if let ClangNodeKind::CompoundStmt = &child.kind {
+                    self.generate_block_contents(&child.children, &return_type);
+                }
+            }
+        }
+
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("");
+
+        // Check for broken patterns and rollback if necessary
+        let generated = &self.output[output_start..];
+        if generated.contains("Args...") || generated.contains("_unnamed") {
+            self.output.truncate(output_start);
         }
     }
 
@@ -2802,7 +3611,7 @@ impl AstCodeGen {
             // If this is a DeclRefExpr (variable reference), use it
             ClangNodeKind::DeclRefExpr { .. } => Some(node),
             // For CallExpr to variant constructor, look for the argument
-            ClangNodeKind::CallExpr { ty } => {
+            ClangNodeKind::CallExpr { ty, .. } => {
                 if let CppType::Named(name) = ty {
                     if name.starts_with("std::variant<") {
                         // This is a call to variant constructor, look for the argument
@@ -2989,7 +3798,7 @@ impl AstCodeGen {
     /// Check if this is a std::get call on a variant.
     /// Returns (variant_arg_node, variant_type, return_type) if it is.
     fn is_std_get_call(node: &ClangNode) -> Option<(&ClangNode, CppType, &CppType)> {
-        if let ClangNodeKind::CallExpr { ty } = &node.kind {
+        if let ClangNodeKind::CallExpr { ty, .. } = &node.kind {
             // Look for the callee - it may be directly a DeclRefExpr or wrapped in ImplicitCastExpr
             let callee = node.children.first()?;
             let decl_ref = match &callee.kind {
@@ -3516,8 +4325,23 @@ impl AstCodeGen {
                      // libc++ RTTI implementation types
                      "__impl___type_name_t",
                      // libc++ internal string type
-                     "std___libcpp_refstring"] {
-            // Don't add to generated_structs to avoid conflict with C++ definitions
+                     "std___libcpp_refstring",
+                     // Hash table internal types (unordered_map/set)
+                     "_Hash_node_value_type_parameter_0_1__false",
+                     "_Hash_node_value_type_parameter_0_1__true",
+                     "_Hash_node_value_type_parameter_0_1____hash_cached_value",
+                     "_Equal", "_NodeAlloc", "_Value",
+                     "_Hashtable_alloc_type_parameter_0_0",
+                     "integral_constant_bool____v",
+                     "integral_constant_bool___Constant_iterators",
+                     "integral_constant_bool___Unique_keys",
+                     "_RehashPolicy",
+                     // Const-qualified primitive aliases
+                     "unsigned_long_const",
+                     // std::pair aliases
+                     "std_pair_bool__std_size_t", "std_pair_bool__u64"] {
+            // Add to generated_structs to prevent duplicate definitions from AST traversal
+            self.generated_structs.insert(name.to_string());
             self.writeln("#[repr(C)]");
             self.writeln("#[derive(Default, Copy, Clone)]");
             self.writeln(&format!("pub struct {};", name));
@@ -3782,118 +4606,6 @@ impl AstCodeGen {
         self.writeln("}");
         self.writeln("");
         self.generated_structs.insert("std_string".to_string());
-
-        // std::unordered_map<int, int> stub implementation
-        self.writeln("// std::unordered_map<int, int> stub implementation");
-        self.writeln("#[repr(C)]");
-        self.writeln("pub struct std_unordered_map_int_int {");
-        self.indent += 1;
-        self.writeln("_buckets: Vec<Vec<(i32, i32)>>,");
-        self.writeln("_size: usize,");
-        self.indent -= 1;
-        self.writeln("}");
-        self.writeln("");
-        self.writeln("impl Default for std_unordered_map_int_int {");
-        self.indent += 1;
-        self.writeln("fn default() -> Self {");
-        self.indent += 1;
-        self.writeln("Self { _buckets: vec![Vec::new(); 16], _size: 0 }");
-        self.indent -= 1;
-        self.writeln("}");
-        self.indent -= 1;
-        self.writeln("}");
-        self.writeln("");
-        self.writeln("impl std_unordered_map_int_int {");
-        self.indent += 1;
-        // Default constructor
-        self.writeln("pub fn new_0() -> Self { Default::default() }");
-        // size()
-        self.writeln("pub fn size(&self) -> usize { self._size }");
-        // empty()
-        self.writeln("pub fn empty(&self) -> bool { self._size == 0 }");
-        // _hash helper
-        self.writeln("#[inline]");
-        self.writeln("fn _hash(key: i32) -> usize {");
-        self.indent += 1;
-        self.writeln("(key as u32 as usize) % 16");
-        self.indent -= 1;
-        self.writeln("}");
-        // insert()
-        self.writeln("pub fn insert(&mut self, key: i32, value: i32) {");
-        self.indent += 1;
-        self.writeln("let idx = Self::_hash(key);");
-        self.writeln("for &mut (ref k, ref mut v) in &mut self._buckets[idx] {");
-        self.indent += 1;
-        self.writeln("if *k == key { *v = value; return; }");
-        self.indent -= 1;
-        self.writeln("}");
-        self.writeln("self._buckets[idx].push((key, value));");
-        self.writeln("self._size += 1;");
-        self.indent -= 1;
-        self.writeln("}");
-        // find()
-        self.writeln("pub fn find(&self, key: i32) -> Option<i32> {");
-        self.indent += 1;
-        self.writeln("let idx = Self::_hash(key);");
-        self.writeln("for &(k, v) in &self._buckets[idx] {");
-        self.indent += 1;
-        self.writeln("if k == key { return Some(v); }");
-        self.indent -= 1;
-        self.writeln("}");
-        self.writeln("None");
-        self.indent -= 1;
-        self.writeln("}");
-        // contains()
-        self.writeln("pub fn contains(&self, key: i32) -> bool { self.find(key).is_some() }");
-        // op_index() - operator[]
-        self.writeln("pub fn op_index(&mut self, key: i32) -> &mut i32 {");
-        self.indent += 1;
-        self.writeln("let idx = Self::_hash(key);");
-        self.writeln("for i in 0..self._buckets[idx].len() {");
-        self.indent += 1;
-        self.writeln("if self._buckets[idx][i].0 == key {");
-        self.indent += 1;
-        self.writeln("return &mut self._buckets[idx][i].1;");
-        self.indent -= 1;
-        self.writeln("}");
-        self.indent -= 1;
-        self.writeln("}");
-        self.writeln("self._buckets[idx].push((key, 0));");
-        self.writeln("self._size += 1;");
-        self.writeln("let len = self._buckets[idx].len();");
-        self.writeln("&mut self._buckets[idx][len - 1].1");
-        self.indent -= 1;
-        self.writeln("}");
-        // erase()
-        self.writeln("pub fn erase(&mut self, key: i32) -> bool {");
-        self.indent += 1;
-        self.writeln("let idx = Self::_hash(key);");
-        self.writeln("if let Some(pos) = self._buckets[idx].iter().position(|&(k, _)| k == key) {");
-        self.indent += 1;
-        self.writeln("self._buckets[idx].remove(pos);");
-        self.writeln("self._size -= 1;");
-        self.writeln("return true;");
-        self.indent -= 1;
-        self.writeln("}");
-        self.writeln("false");
-        self.indent -= 1;
-        self.writeln("}");
-        // clear()
-        self.writeln("pub fn clear(&mut self) {");
-        self.indent += 1;
-        self.writeln("for bucket in &mut self._buckets {");
-        self.indent += 1;
-        self.writeln("bucket.clear();");
-        self.indent -= 1;
-        self.writeln("}");
-        self.writeln("self._size = 0;");
-        self.indent -= 1;
-        self.writeln("}");
-        self.indent -= 1;
-        self.writeln("}");
-        self.writeln("");
-        self.generated_structs
-            .insert("std_unordered_map_int_int".to_string());
 
         // std::unique_ptr<int> stub implementation
         self.writeln("// std::unique_ptr<int> stub implementation");
@@ -4181,6 +4893,7 @@ impl AstCodeGen {
         self.writeln("#[repr(C)]");
         self.writeln("#[derive(Default, Copy, Clone)]");
         self.writeln("pub struct union__unnamed_union_at__usr_include_x86_64_linux_gnu_bits_types___mbstate_t_h_16_3_ { pub __wch: u32 }");
+        self.generated_structs.insert("union__unnamed_union_at__usr_include_x86_64_linux_gnu_bits_types___mbstate_t_h_16_3_".to_string());
         self.writeln("");
 
         // libc++ internal function stubs
@@ -4502,6 +5215,7 @@ impl AstCodeGen {
         self.writeln("#[repr(C)]");
         self.writeln("#[derive(Default, Clone)]");
         self.writeln("pub struct locale_id { pub _phantom: u8 }");
+        self.generated_structs.insert("locale_id".to_string());
         self.writeln("");
 
         // System/pthread type stubs for libc++ threading support
@@ -4560,6 +5274,7 @@ impl AstCodeGen {
         self.writeln("pub type initializer_list_type_parameter_0_0 = std::ffi::c_void;");
         self.writeln("pub type optional__Tp = std::ffi::c_void;");
         self.writeln("pub type string_type = std::ffi::c_void;");
+        self.generated_structs.insert("string_type".to_string());
         self.writeln("pub type std_locale = std::ffi::c_void;"); // Stub - will be generated from iostream
         self.writeln("");
 
@@ -4742,18 +5457,23 @@ impl AstCodeGen {
         self.writeln("pub type std_float_round_style = i32;");
         self.writeln("pub type std_float_denorm_style = i32;");
         self.writeln("pub type std_errc = i32;");
+        self.generated_structs.insert("std_errc".to_string());
         self.writeln("pub type std_io_errc = i32;");
+        self.generated_structs.insert("std_io_errc".to_string());
         self.writeln("pub type std_type_info = std::ffi::c_void;");
         self.writeln("pub type std__OrdResult = i32;");
         self.writeln("pub type std___element_count = u64;");
         self.writeln("pub type std___variant_detail__Trait = u32;");
         self.writeln("pub type std_ios_base_seekdir = i32;");
+        self.generated_structs.insert("std_ios_base_seekdir".to_string());
         self.writeln("pub type std_ios_base = std::ffi::c_void;");
         self.writeln("pub type std_ios_base_event = i32;");
+        self.generated_structs.insert("std_ios_base_event".to_string());
         // Union for f64 hashing - has __s (struct with __a, __b: u32) and __t (f64)
         self.writeln("#[repr(C)] #[derive(Clone, Copy)] pub union union__unnamed_union_at__home_shuai_workspace_fragile_vendor_llvm_project_libcxx_include___functional_hash_h_416_5_ { pub __s: union__hash_f64_inner, pub __t: f64 }");
         self.writeln("#[repr(C)] #[derive(Clone, Copy, Default)] pub struct union__hash_f64_inner { pub __a: u32, pub __b: u32 }");
         self.writeln("impl Default for union__unnamed_union_at__home_shuai_workspace_fragile_vendor_llvm_project_libcxx_include___functional_hash_h_416_5_ { fn default() -> Self { Self { __s: Default::default() } } }");
+        self.generated_structs.insert("union__unnamed_union_at__home_shuai_workspace_fragile_vendor_llvm_project_libcxx_include___functional_hash_h_416_5_".to_string());
         // File position type stub - simple version that works without __mbstate_t
         self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct fpos_mbstate_t { pub __pos: i64, pub __state_count: i32, pub __state_value: u32 }");
         self.writeln("pub type fpos___mbstate_t = fpos_mbstate_t;");
@@ -4830,6 +5550,7 @@ impl AstCodeGen {
         self.writeln("pub type __remove_cv_type_parameter_0_0_ = std::ffi::c_void;");
         self.writeln("pub type __remove_cv_type_parameter_0_1_ = std::ffi::c_void;");
         self.writeln("pub type std___backoff_results = std::ffi::c_void;");
+        self.generated_structs.insert("std___backoff_results".to_string());
         self.writeln("pub type __split_buffer_typename_allocator_traits_type_parameter_0_1_pointer__typename_allocator_traits_type_parameter_0_1_template_rebind_alloc_typename_allocator_traits_type_parameter_0_1_pointer__std___split_buffer_pointer_layout = std::ffi::c_void;");
         self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct __char_traits_base_wchar_t__wint_t__static_cast_wint_t__4294967295U__;");
         self.writeln("");
@@ -4841,6 +5562,7 @@ impl AstCodeGen {
         self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct numpunct_char;");
         self.writeln("pub type __next = std::ffi::c_void;");
         self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct mbstate_t { pub __count: i32, pub __value: u32 }");  // standalone definition
+        self.generated_structs.insert("mbstate_t".to_string());
         self.writeln("pub type __iter_swap___fn = std::ffi::c_void;");
         self.writeln("pub type __iter_move___fn = std::ffi::c_void;");
         self.writeln("pub type _IntT = i64;");
@@ -5542,6 +6264,7 @@ impl AstCodeGen {
         self.writeln("#[inline] pub unsafe fn pthread_cond_clockwait(_cond: *mut std::ffi::c_void, _mutex: *mut std::ffi::c_void, _clock: i32, _abs: *const std::ffi::c_void) -> i32 { 0 }");
         self.writeln("#[inline] pub fn __terminate() { std::process::abort() }");
         self.writeln("#[inline] pub fn __throw_system_error(_err: i32) { panic!(\"system error\") }");
+        self.generated_functions.insert("__throw_system_error".to_string(), 1);
         // Atomic load/store/CAS operations for semaphores
         self.writeln("#[inline] pub fn load_i32(ptr: *const i32) -> i32 { unsafe { std::ptr::read_volatile(ptr) } }");
         self.writeln("#[inline] pub fn compare_exchange_strong_i32(_ptr: *mut i32, _expected: *mut i32, _desired: i32, _success: i32, _fail: i32) -> bool { false }");
@@ -6494,8 +7217,16 @@ impl AstCodeGen {
     /// Compute the relative Rust path from current namespace to target namespace.
     /// Returns the path string to use for referring to an item in target_ns from current_namespace.
     fn compute_relative_path(&self, target_ns: &[String], ident: &str) -> String {
-        // If target namespace matches current namespace, just use the identifier
-        if target_ns == self.current_namespace.as_slice() {
+        // Extract just the names from current_namespace for comparison
+        let current_names: Vec<&str> = self
+            .current_namespace
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .collect();
+
+        // If target namespace matches current namespace names, just use the identifier
+        let target_strs: Vec<&str> = target_ns.iter().map(|s| s.as_str()).collect();
+        if target_strs == current_names {
             return ident.to_string();
         }
 
@@ -6506,8 +7237,8 @@ impl AstCodeGen {
         // Find the common prefix length
         let common_len = target_ns
             .iter()
-            .zip(self.current_namespace.iter())
-            .take_while(|(a, b)| a == b)
+            .zip(current_names.iter())
+            .take_while(|(a, b)| a.as_str() == **b)
             .count();
 
         // Calculate how many real module levels to go up
@@ -6516,7 +7247,7 @@ impl AstCodeGen {
             self.current_namespace
                 .iter()
                 .skip(common_len)
-                .filter(|ns| is_real_namespace(ns))
+                .filter(|(ns, _)| is_real_namespace(ns))
                 .count(),
         );
 
@@ -6611,6 +7342,14 @@ impl AstCodeGen {
         self.indent -= 1;
         self.writeln("}");
         self.writeln("");
+
+        // Helper functions for STL algorithms
+        self.writeln("// STL algorithm helpers");
+        self.writeln("#[inline]");
+        self.writeln("pub fn max_u64_u64(a: u64, b: u64) -> u64 { if a > b { a } else { b } }");
+        self.writeln("#[inline]");
+        self.writeln("pub fn min_u64_u64(a: u64, b: u64) -> u64 { if a < b { a } else { b } }");
+        self.writeln("");
     }
 
     /// Generate a top-level stub declaration (signatures only).
@@ -6656,7 +7395,7 @@ impl AstCodeGen {
             ClangNodeKind::UnionDecl { name, .. } => {
                 self.generate_union_stub(name, &node.children);
             }
-            ClangNodeKind::NamespaceDecl { name } => {
+            ClangNodeKind::NamespaceDecl { name, .. } => {
                 // Generate Rust module for namespace stubs
                 if let Some(ns_name) = name {
                     // Skip internal namespaces or flatten them into the global scope
@@ -6758,11 +7497,7 @@ impl AstCodeGen {
         let rust_name = CppType::Named(name.to_string()).to_rust_type_str();
 
         // Skip template DEFINITIONS that have unresolved type parameters
-        if name.contains("_Tp")
-            || name.contains("_Alloc")
-            || name.contains("type-parameter-")
-            || name.contains("type_parameter_")
-        {
+        if Self::has_unresolved_template_placeholder(name) {
             return;
         }
 
@@ -7250,24 +7985,33 @@ impl AstCodeGen {
                     }
                 }
             }
-            ClangNodeKind::NamespaceDecl { name } => {
+            ClangNodeKind::NamespaceDecl { name, is_inline } => {
                 // Generate Rust module for namespace
                 if let Some(ns_name) = name {
                     // Skip anonymous namespaces, standard library namespaces, or problematic ones
                     // pmr namespace has memory_resource with polymorphic dispatch issues
                     if ns_name.starts_with("__") || ns_name == "std" || ns_name == "pmr" {
                         // Still track the namespace for deduplication, but don't create module
-                        self.current_namespace.push(ns_name.clone());
+                        // Pass is_inline flag for proper module key computation
+                        self.current_namespace.push((ns_name.clone(), *is_inline));
                         for child in &node.children {
                             self.generate_top_level(child);
                         }
                         self.current_namespace.pop();
                     } else {
                         // Build full module key for deduplication
-                        let module_key = if self.current_namespace.is_empty() {
+                        // Filter out inline namespaces which are transparent in C++
+                        // This uses the is_inline flag instead of heuristics
+                        let effective_namespace: Vec<&str> = self
+                            .current_namespace
+                            .iter()
+                            .filter(|(_, is_inline)| !is_inline)
+                            .map(|(name, _)| name.as_str())
+                            .collect();
+                        let module_key = if effective_namespace.is_empty() {
                             ns_name.clone()
                         } else {
-                            format!("{}::{}", self.current_namespace.join("::"), ns_name)
+                            format!("{}::{}", effective_namespace.join("::"), ns_name)
                         };
 
                         // Check if this is the first occurrence of this module
@@ -7288,7 +8032,8 @@ impl AstCodeGen {
                         self.writeln("use super::*;");
 
                         // Track current namespace for relative path computation
-                        self.current_namespace.push(ns_name.clone());
+                        // Regular (non-inline) namespace
+                        self.current_namespace.push((ns_name.clone(), false));
 
                         // Use merged namespace contents from all occurrences
                         // This handles C++ namespace reopening (same namespace declared multiple times)
@@ -7345,7 +8090,8 @@ impl AstCodeGen {
                     self.module_depth += 1;
 
                     // Track the synthetic namespace name for path resolution
-                    self.current_namespace.push(anon_name.clone());
+                    // Anonymous namespaces are not inline
+                    self.current_namespace.push((anon_name.clone(), false));
                     for child in &node.children {
                         self.generate_top_level(child);
                     }
@@ -7583,10 +8329,8 @@ impl AstCodeGen {
             return;
         }
 
-        // Skip C variadic functions (with ... parameter) - these require unstable Rust features
-        if is_variadic {
-            return;
-        }
+        // C variadic functions are now supported with #![feature(c_variadic)]
+        // The function signature uses `...` and the body can use args.arg::<T>()
 
         // Skip functions with decltype return types (can't be expressed in Rust)
         let return_type_str = return_type.to_rust_type_str();
@@ -7594,12 +8338,15 @@ impl AstCodeGen {
             return;
         }
 
-        // Skip functions with unresolved template type parameters in return type
+        // Skip functions with unresolved template type parameters in return type or parameters
         // These are template definitions that haven't been fully instantiated
-        if return_type_str.contains("_Tp")
-            || return_type_str.contains("_Args")
-            || return_type_str.contains("type_parameter_")
-        {
+        if Self::has_unresolved_template_placeholder(&return_type_str) {
+            return;
+        }
+        // Also check all parameter types for unresolved placeholders
+        if params.iter().any(|(_, t)| {
+            Self::has_unresolved_template_placeholder(&t.to_rust_type_str())
+        }) {
             return;
         }
 
@@ -7775,11 +8522,12 @@ impl AstCodeGen {
         } else {
             // Normal function handling
             // Add variadic indicator for C variadic functions
+            // In Rust, the `...` parameter must be named for accessing args
             let params_with_variadic = if is_variadic {
                 if params_str.is_empty() {
-                    "...".to_string()
+                    "mut __va_args: ...".to_string()
                 } else {
-                    format!("{}, ...", params_str)
+                    format!("{}, mut __va_args: ...", params_str)
                 }
             } else {
                 params_str
@@ -7807,6 +8555,20 @@ impl AstCodeGen {
             let old_return_type = self.current_return_type.take();
             self.current_return_type = Some(return_type.clone());
 
+            // For variadic functions, scan for va_list declarations and set up mapping
+            let old_va_list_mapping = self.va_list_mapping.take();
+            if is_variadic {
+                // Find va_list variable name in the function body
+                for child in children {
+                    if let ClangNodeKind::CompoundStmt = &child.kind {
+                        if let Some(va_name) = Self::find_va_list_var_name(&child.children) {
+                            self.va_list_mapping = Some(va_name);
+                            break;
+                        }
+                    }
+                }
+            }
+
             // Find the compound statement (function body)
             for child in children {
                 if let ClangNodeKind::CompoundStmt = &child.kind {
@@ -7814,6 +8576,7 @@ impl AstCodeGen {
                 }
             }
 
+            self.va_list_mapping = old_va_list_mapping;
             self.current_return_type = old_return_type;
             self.indent -= 1;
             self.writeln("}");
@@ -8365,12 +9128,7 @@ impl AstCodeGen {
         // Template definitions use names like "vector<_Tp, _Alloc>" or contain type-parameter-X-X.
         // We should only generate structs for actual instantiations like "vector<int>".
         // Clang presents template definitions with dependent type parameter names.
-        if name.contains("_Tp")
-            || name.contains("_Alloc")
-            || name.contains("type-parameter-")
-            || name.contains("type_parameter_")
-            || (name.contains('<') && (name.contains("_T>") || name.contains("_T,")))
-        {
+        if Self::has_unresolved_template_placeholder(name) {
             // This is a template definition, not an instantiation - skip it
             // The actual instantiation (e.g., std::vector<int>) will generate its own struct
             return;
@@ -9856,6 +10614,14 @@ impl AstCodeGen {
             return;
         }
 
+        // Skip type aliases that reference unresolved template parameter types
+        // These are libstdc++/libc++ internal types that cannot be resolved
+        if Self::has_unresolved_template_placeholder(&rust_type)
+            || Self::has_unresolved_template_placeholder(&safe_name)
+        {
+            return;
+        }
+
         self.generated_aliases.insert(safe_name.clone());
 
         // Track if this type alias resolves to a primitive (can't use ::new_N constructors)
@@ -9895,7 +10661,9 @@ impl AstCodeGen {
         children: &[ClangNode],
     ) {
         // Sanitize the name to handle special characters and keywords
-        let base_name = sanitize_identifier(name);
+        // Use sanitize_identifier_for_composite since the __gv_ prefix makes it a valid identifier
+        // (e.g., "move" -> "move" not "r#move", since "__gv_move" is valid)
+        let base_name = sanitize_identifier_for_composite(name);
 
         // Prefix global variables with __gv_ to prevent parameter shadowing
         // Rust doesn't allow function parameters to shadow statics, so we need unique names
@@ -11072,7 +11840,7 @@ impl AstCodeGen {
             ClangNodeKind::BinaryOperator { ty, .. } => Some(ty.clone()),
             ClangNodeKind::UnaryOperator { ty, .. } => Some(ty.clone()),
             ClangNodeKind::MemberExpr { ty, .. } => Some(ty.clone()),
-            ClangNodeKind::CallExpr { ty } => Some(ty.clone()),
+            ClangNodeKind::CallExpr { ty, .. } => Some(ty.clone()),
             ClangNodeKind::ImplicitCastExpr { ty, .. } => Some(ty.clone()),
             ClangNodeKind::CastExpr { ty, .. } => Some(ty.clone()),
             ClangNodeKind::ArraySubscriptExpr { ty } => Some(ty.clone()),
@@ -11722,6 +12490,90 @@ impl AstCodeGen {
         matches!(ty, CppType::Pointer { pointee, .. } if matches!(pointee.as_ref(), CppType::Function { .. }))
     }
 
+    /// Check if a type is a va_list type.
+    fn is_va_list_type(ty: &CppType) -> bool {
+        let type_str = ty.to_rust_type_str();
+        type_str.contains("VaList") || type_str.contains("va_list") || type_str.contains("__va_list_tag")
+    }
+
+    /// Find the va_list variable name in a function body.
+    /// Looks for VarDecl with a va_list type.
+    fn find_va_list_var_name(stmts: &[ClangNode]) -> Option<String> {
+        for stmt in stmts {
+            if let ClangNodeKind::DeclStmt = &stmt.kind {
+                for child in &stmt.children {
+                    if let ClangNodeKind::VarDecl { name, ty, .. } = &child.kind {
+                        if Self::is_va_list_type(ty) {
+                            return Some(name.clone());
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Detect if an expression is a va_arg call.
+    /// va_arg(args, T) in C expands to a VAArgExpr in Clang AST, but libclang
+    /// exposes it as UnexposedExpr wrapping a reference to the va_list variable.
+    ///
+    /// Pattern:
+    /// - init_node is UnexposedExpr (or nested UnexposedExpr)
+    /// - The innermost expression is a DeclRefExpr to a va_list variable
+    /// - The VarDecl's type is NOT a va_list type (it's the type being extracted)
+    ///
+    /// Returns Some(va_list_name) if this is a va_arg expression.
+    fn detect_va_arg_expr(init_node: &ClangNode, var_type: &CppType) -> Option<String> {
+        // Check if the variable type is NOT a va_list (if it were, this would be a copy, not va_arg)
+        let var_type_str = var_type.to_rust_type_str();
+        if var_type_str.contains("VaList") || var_type_str.contains("va_list") || var_type_str.contains("__va_list_tag") {
+            return None;
+        }
+
+        // Navigate through UnexposedExpr wrappers to find the innermost expression
+        fn find_va_list_ref(node: &ClangNode) -> Option<String> {
+            match &node.kind {
+                ClangNodeKind::DeclRefExpr { name, ty, .. } => {
+                    // Check if this is a reference to a va_list variable
+                    let type_str = ty.to_rust_type_str();
+                    if type_str.contains("VaList") || type_str.contains("va_list") || type_str.contains("__va_list_tag") {
+                        Some(name.clone())
+                    } else {
+                        None
+                    }
+                }
+                ClangNodeKind::Unknown(s) if s == "UnexposedExpr" => {
+                    // Look through UnexposedExpr wrapper
+                    for child in &node.children {
+                        if let Some(name) = find_va_list_ref(child) {
+                            return Some(name);
+                        }
+                    }
+                    None
+                }
+                ClangNodeKind::ImplicitCastExpr { .. } => {
+                    // Look through implicit casts
+                    for child in &node.children {
+                        if let Some(name) = find_va_list_ref(child) {
+                            return Some(name);
+                        }
+                    }
+                    None
+                }
+                _ => None,
+            }
+        }
+
+        // Check if the init is an UnexposedExpr (the va_arg wrapper)
+        if let ClangNodeKind::Unknown(s) = &init_node.kind {
+            if s == "UnexposedExpr" {
+                return find_va_list_ref(init_node);
+            }
+        }
+
+        None
+    }
+
     /// Recursively find an operator name in a node tree.
     fn find_operator_name(node: &ClangNode) -> Option<String> {
         match &node.kind {
@@ -12076,6 +12928,24 @@ impl AstCodeGen {
                 is_const,
                 ..
             } => {
+                // Skip methods with unresolved template placeholders in return type or parameters
+                let return_type_str = return_type.to_rust_type_str();
+                if Self::has_unresolved_template_placeholder(&return_type_str) {
+                    self.current_class = old_class;
+                    return;
+                }
+                if params.iter().any(|(_, t)| {
+                    Self::has_unresolved_template_placeholder(&t.to_rust_type_str())
+                }) {
+                    self.current_class = old_class;
+                    return;
+                }
+                // Also skip if the struct/class itself has unresolved placeholders
+                if Self::has_unresolved_template_placeholder(struct_name) {
+                    self.current_class = old_class;
+                    return;
+                }
+
                 // If the C++ method is marked const, use &self
                 // Otherwise, use &mut self (non-const methods can potentially mutate)
                 let returns_mut_ref = matches!(
@@ -12406,6 +13276,19 @@ impl AstCodeGen {
                 }
             }
             ClangNodeKind::ConstructorDecl { params, .. } => {
+                // Skip constructors with unresolved template placeholders in parameters
+                if params.iter().any(|(_, t)| {
+                    Self::has_unresolved_template_placeholder(&t.to_rust_type_str())
+                }) {
+                    self.current_class = old_class;
+                    return;
+                }
+                // Also skip if the struct/class itself has unresolved placeholders
+                if Self::has_unresolved_template_placeholder(struct_name) {
+                    self.current_class = old_class;
+                    return;
+                }
+
                 // Track output position for potential rollback
                 let output_start = self.output.len();
 
@@ -13030,11 +13913,20 @@ impl AstCodeGen {
 
     /// Generate a statement.
     fn generate_stmt(&mut self, node: &ClangNode, is_tail_expr: bool) {
+        // Pre-process: collect variadic template instantiations from this node and children
+        self.collect_variadic_template_instantiations(node);
+
         match &node.kind {
             ClangNodeKind::DeclStmt => {
                 // Variable declaration
                 for child in &node.children {
                     if let ClangNodeKind::VarDecl { name, ty, .. } = &child.kind {
+                        // Skip va_list variable declarations in variadic functions
+                        // The va_list is accessed through the named variadic parameter instead
+                        if self.va_list_mapping.is_some() && Self::is_va_list_type(ty) {
+                            continue;
+                        }
+
                         // Check if this is a reference, array, or pointer type
                         let is_ref = matches!(ty, CppType::Reference { .. });
                         let is_const_ref = matches!(ty, CppType::Reference { is_const: true, .. });
@@ -13091,6 +13983,18 @@ impl AstCodeGen {
                                 && Self::is_nullptr_literal(init_node)
                             {
                                 " = None".to_string()
+                            } else if let Some(va_list_name) = Self::detect_va_arg_expr(init_node, ty) {
+                                // va_arg(args, T) → __va_args.arg::<T>()
+                                // libclang exposes va_arg as UnexposedExpr wrapping the va_list reference
+                                // The va_list variable is replaced with the __va_args parameter
+                                let rust_type = ty.to_rust_type_str();
+                                // Use __va_args if we have a va_list mapping, otherwise use the detected name
+                                let va_param = if self.va_list_mapping.as_ref() == Some(&va_list_name) {
+                                    "__va_args"
+                                } else {
+                                    &va_list_name
+                                };
+                                format!(" = {}.arg::<{}>()", va_param, rust_type)
                             } else {
                                 // Skip type suffixes for literals when we have explicit type annotation
                                 self.skip_literal_suffix = true;
@@ -14324,6 +15228,12 @@ impl AstCodeGen {
                 ty,
                 ..
             } => {
+                // Check for C++ AST class names that were incorrectly encoded as identifiers.
+                // These are template-dependent expressions that can't be fully resolved.
+                if is_cpp_ast_class_name(name) {
+                    return "0 /* template-dependent */".to_string();
+                }
+
                 if name == "this" {
                     "self".to_string()
                 } else {
@@ -14542,8 +15452,8 @@ impl AstCodeGen {
                         return format!("{{ {}; {} }}", left, right);
                     }
                     let op_str = binop_to_string(op);
-                    let left = self.expr_to_string_raw(&node.children[0]);
-                    let right = self.expr_to_string_raw(&node.children[1]);
+                    let left = wrap_unsafe_for_binop(&self.expr_to_string_raw(&node.children[0]));
+                    let right = wrap_unsafe_for_binop(&self.expr_to_string_raw(&node.children[1]));
                     format!("{} {} {}", left, op_str, right)
                 } else {
                     "/* binary op error */".to_string()
@@ -14822,6 +15732,12 @@ impl AstCodeGen {
                 ty,
                 ..
             } => {
+                // Check for C++ AST class names that were incorrectly encoded as identifiers.
+                // These are template-dependent expressions that can't be fully resolved.
+                if is_cpp_ast_class_name(name) {
+                    return "0 /* template-dependent */".to_string();
+                }
+
                 if name == "this" {
                     if self.use_ctor_self {
                         "__self".to_string()
@@ -15208,6 +16124,9 @@ impl AstCodeGen {
                             r
                         };
 
+                        // Wrap unsafe blocks in parentheses for binary expressions
+                        let left = wrap_unsafe_for_binop(&left);
+                        let right = wrap_unsafe_for_binop(&right);
                         format!("{} {} {}", left, op_str, right)
                     } else if matches!(
                         op,
@@ -15291,6 +16210,9 @@ impl AstCodeGen {
                         } else {
                             left
                         };
+                        // Wrap unsafe blocks in parentheses for binary expressions
+                        let left = wrap_unsafe_for_binop(&left);
+                        let right = wrap_unsafe_for_binop(&right);
                         format!("{} {} {}", left, op_str, right)
                     } else if matches!(op, BinaryOp::Add | BinaryOp::Sub) && left_is_pointer {
                         // Pointer + integer or pointer - integer -> ptr.add(n) or ptr.sub(n)
@@ -15403,6 +16325,9 @@ impl AstCodeGen {
                             }
                         };
 
+                        // Wrap unsafe blocks in parentheses for binary expressions
+                        let left = wrap_unsafe_for_binop(&left);
+                        let right = wrap_unsafe_for_binop(&right);
                         format!("{} {} {}", left, op_str, right)
                     } else if matches!(
                         op,
@@ -15446,6 +16371,9 @@ impl AstCodeGen {
                         } else {
                             left
                         };
+                        // Wrap unsafe blocks in parentheses for binary expressions
+                        let left = wrap_unsafe_for_binop(&left);
+                        let right = wrap_unsafe_for_binop(&right);
                         format!("{} {} {}", left, op_str, right)
                     } else {
                         let left = self.expr_to_string(&node.children[0]);
@@ -15467,6 +16395,9 @@ impl AstCodeGen {
                         } else {
                             left
                         };
+                        // Wrap unsafe blocks in parentheses for binary expressions
+                        let left = wrap_unsafe_for_binop(&left);
+                        let right = wrap_unsafe_for_binop(&right);
                         format!("{} {} {}", left, op_str, right)
                     }
                 } else {
@@ -15767,7 +16698,13 @@ impl AstCodeGen {
                     "/* unary op error */".to_string()
                 }
             }
-            ClangNodeKind::CallExpr { ty } => {
+            ClangNodeKind::CallExpr {
+                ty,
+                template_instantiation: _,
+            } => {
+                // NOTE: template_instantiation is handled during statement generation
+                // (in generate_stmt), not here in expr_to_string, because we need &mut self
+
                 // Check if this is a virtual method call through a pointer to polymorphic class
                 // If so, generate vtable dispatch instead of trait-based dispatch
                 if let Some(vtable_call) = self.try_generate_vtable_dispatch(node) {
@@ -16013,6 +16950,8 @@ impl AstCodeGen {
                             && (op_name == "operator==" || op_name == "operator!=")
                         {
                             let rust_op = if op_name == "operator==" { "==" } else { "!=" };
+                            let left_operand = wrap_unsafe_for_binop(&left_operand);
+                            let right_operand = wrap_unsafe_for_binop(&right_operand);
                             return format!("{} {} {}", left_operand, rust_op, right_operand);
                         }
 
@@ -16032,6 +16971,8 @@ impl AstCodeGen {
 
                             if left_is_primitive && right_is_primitive {
                                 // Use native Rust operator for primitives
+                                let left_operand = wrap_unsafe_for_binop(&left_operand);
+                                let right_operand = wrap_unsafe_for_binop(&right_operand);
                                 return format!("{} {} {}", left_operand, rust_op, right_operand);
                             }
                         }
@@ -18300,8 +19241,8 @@ mod tests {
     }
 
     #[test]
-    fn test_variadic_function_skipped() {
-        // Test that C variadic functions are skipped (require unstable Rust features)
+    fn test_variadic_function_generated() {
+        // Test that C variadic functions are generated correctly using Rust's c_variadic feature
         let ast = make_node(
             ClangNodeKind::TranslationUnit,
             vec![make_node(
@@ -18339,11 +19280,20 @@ mod tests {
         );
 
         let code = AstCodeGen::new().generate(&ast);
-        // Variadic functions should be skipped (not generated) because they require
-        // unstable Rust features (c_variadic). The function body should not appear.
+        // Variadic functions should be generated with extern "C" linkage and c_variadic feature
         assert!(
-            !code.contains("fn my_printf"),
-            "Variadic function should be skipped, but found in generated code:\n{}",
+            code.contains("pub unsafe extern \"C\" fn my_printf"),
+            "Variadic function should be generated with extern \"C\" linkage:\n{}",
+            code
+        );
+        assert!(
+            code.contains("mut __va_args: ..."),
+            "Variadic function should have named variadic parameter:\n{}",
+            code
+        );
+        assert!(
+            code.contains("#![feature(c_variadic)]"),
+            "Generated code should enable c_variadic feature:\n{}",
             code
         );
     }

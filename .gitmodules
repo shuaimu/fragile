@@ -7,3 +7,6 @@
 [submodule "vendor/doctest"]
 	path = vendor/doctest
 	url = https://github.com/doctest/doctest.git
+[submodule "vendor/c2rust"]
+	path = vendor/c2rust
+	url = https://github.com/immunant/c2rust.git
