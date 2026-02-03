@@ -2675,6 +2675,8 @@ impl AstCodeGen {
             || (generated.contains("fn __atomic_wait_address_bare") && generated.contains("__pred.clone()"))
             // __atomic_spin with wrong argument types
             || (generated.contains("fn __atomic_spin") && generated.contains("__pred.clone()"))
+            // __bit_iterator template type not substituted
+            || generated.contains("__bit_iterator<")
         {
             // Rollback - remove the generated function
             self.output.truncate(output_start);
@@ -8632,6 +8634,8 @@ impl AstCodeGen {
             || generated.contains("- _unnamed")  // Unresolved in arithmetic (64 - _unnamed)
             || generated.contains("i8).op_add(")  // String concat on char pointers (not valid Rust)
             || generated.contains("c_void::new_")  // Constructor call on placeholder type
+            || generated.contains("__bit_iterator<")  // Unsubstituted template type
+            || generated.contains("pair<__bit_iterator")  // Unsubstituted return type
             || generated.contains("1 + __cxx_atomic_load")  // Wrong operator: 1 == not 1 +
             || generated.contains("/ __pow_10(")  // u128/u32 division type mismatch
             || generated.contains("(-__errno_location())")  // Unary minus on pointer (errno check)
