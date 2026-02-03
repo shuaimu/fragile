@@ -13979,6 +13979,9 @@ impl AstCodeGen {
                     // These call logic_error/runtime_error::new_1 with wrong parameter type
                     || (generated.contains("logic_error::new_1(__s)") && generated.contains("__s: &std::ffi::c_void"))
                     || (generated.contains("runtime_error::new_1(__s)") && generated.contains("__s: &std::ffi::c_void"))
+                    // __narrow_to_utf8/__widen_from_utf8 constructors with wrong base class type
+                    // These call __mbstate_t::new_1(1) but base is codecvt_charXX_t__char__mbstate_t
+                    || generated.contains("__mbstate_t::new_1(1)")
                 {
                     self.output.truncate(output_start);
                 }
