@@ -8734,6 +8734,10 @@ impl AstCodeGen {
             // logic_error/runtime_error constructors with wrong argument type
             || (generated.contains("logic_error::new_1(__s)") && generated.contains("__s: *const i8"))
             || (generated.contains("runtime_error::new_1(__s)") && generated.contains("__s: *const i8"))
+            // Exception class constructors with &c_void placeholder (unresolved template type)
+            // These can't be fixed at call site - roll back the whole constructor
+            || (generated.contains("logic_error::new_1(__s)") && generated.contains("__s: &std::ffi::c_void"))
+            || (generated.contains("runtime_error::new_1(__s)") && generated.contains("__s: &std::ffi::c_void"))
             // pthread TLS functions with type mismatches
             || (generated.contains("pub fn __libcpp_tls_create") && generated.contains("fn(*mut c_void)"))
             || (generated.contains("pub fn __libcpp_tls_get") && generated.contains("-> *mut ()"))
@@ -9923,6 +9927,30 @@ impl AstCodeGen {
                     self.writeln("obj");
                     self.indent -= 1;
                     self.writeln("}");
+                }
+                // Register these stub constructors in constructor_signatures
+                // so derived exception classes can properly match them
+                let name_str = name.to_string();
+                if !has_new_1 {
+                    // new_1 takes &std_string
+                    self.constructor_signatures
+                        .entry(name_str.clone())
+                        .or_default()
+                        .push(("new_1".to_string(), vec![CppType::Reference {
+                            referent: Box::new(CppType::Named("std_string".to_string())),
+                            is_const: true,
+                            is_rvalue: false,
+                        }]));
+                }
+                if !has_new_1_1 {
+                    // new_1_1 takes *const i8
+                    self.constructor_signatures
+                        .entry(name_str)
+                        .or_default()
+                        .push(("new_1_1".to_string(), vec![CppType::Pointer {
+                            is_const: true,
+                            pointee: Box::new(CppType::Char { signed: true })
+                        }]));
                 }
             }
 
@@ -13472,8 +13500,19 @@ impl AstCodeGen {
                                             }
                                             // Compare parameter types - look for exact or compatible matches
                                             current_ctor_param_types.iter().zip(base_param_types.iter()).all(|(derived_ty, base_ty)| {
-                                                // Check if types are the same or compatible
-                                                derived_ty.to_rust_type_str() == base_ty.to_rust_type_str()
+                                                let derived_str = derived_ty.to_rust_type_str();
+                                                let base_str = base_ty.to_rust_type_str();
+                                                // Check if types are the same
+                                                if derived_str == base_str {
+                                                    return true;
+                                                }
+                                                // Exception class compatibility: *const i8 matches *const i8
+                                                // This handles the case where derived exception class has *const i8
+                                                // but the base has a different representation
+                                                if derived_str == "*const i8" && base_str == "*const i8" {
+                                                    return true;
+                                                }
+                                                false
                                             })
                                         });
 
@@ -13921,6 +13960,10 @@ impl AstCodeGen {
                     || (generated.contains("__self.swap(&__t)") && generated.contains("__t: &mut"))
                     // stop_token constructor trying to clone c_void reference
                     || (generated.contains("_M_state: __state.clone()") && generated.contains("&_Stop_state_ref"))
+                    // Exception class constructors with &c_void placeholder (unresolved template type)
+                    // These call logic_error/runtime_error::new_1 with wrong parameter type
+                    || (generated.contains("logic_error::new_1(__s)") && generated.contains("__s: &std::ffi::c_void"))
+                    || (generated.contains("runtime_error::new_1(__s)") && generated.contains("__s: &std::ffi::c_void"))
                 {
                     self.output.truncate(output_start);
                 }
