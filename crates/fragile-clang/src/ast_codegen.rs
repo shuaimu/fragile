@@ -8885,6 +8885,11 @@ impl AstCodeGen {
             // atomic_thread_fence/atomic_signal_fence calling nonexistent __cxx_atomic_* functions
             || (generated.contains("pub fn atomic_thread_fence") && generated.contains("__cxx_atomic_thread_fence("))
             || (generated.contains("pub fn atomic_signal_fence") && generated.contains("__cxx_atomic_signal_fence("))
+            // __base_10_u64 with && instead of & for bitwise AND
+            || (generated.contains("pub fn __base_10_u64") && generated.contains("&& 4294967295"))
+            // __append10 with wrong __value type (u64 instead of i8)
+            || (generated.contains("pub fn __append10_i8") && generated.contains("__value: u64"))
+            || (generated.contains("pub fn __append9_i8") && generated.contains("__value: u32"))
             // atomic_flag test method with 1 && (integer where bool expected)
             || (generated.contains("return 1 &&") && generated.contains("__cxx_atomic_load"))
             // __libcpp_tls_create calling pthread_key_create with wrong function pointer type
