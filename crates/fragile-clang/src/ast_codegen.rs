@@ -2683,6 +2683,18 @@ impl AstCodeGen {
             || (generated.contains("fn __atomic_spin") && generated.contains("__pred.clone()"))
             // __bit_iterator template type not substituted
             || generated.contains("__bit_iterator<")
+            // hermite_u32 with __x as f64 (wrong type substitution)
+            || (generated.contains("hermite_u32(") && generated.contains("__x as f64)"))
+            // __constexpr_memcmp with incomplete body (no return)
+            || (generated.contains("fn __constexpr_memcmp") && !generated.contains("return"))
+            // __constexpr_memmove with mutability mismatch (*const to *mut)
+            || (generated.contains("__constexpr_memmove") && generated.contains("__s2, __n)"))
+            // __libcpp_atomic_refcount_increment/decrement with value instead of pointer
+            || (generated.contains("__libcpp_atomic_refcount_increment") && generated.contains("self.__shared_owners_)"))
+            || (generated.contains("__libcpp_atomic_refcount_increment") && generated.contains("self.__shared_weak_owners_)"))
+            || (generated.contains("__libcpp_atomic_refcount_decrement") && generated.contains("self.__shared_owners_)"))
+            // __shared_count use_count returning pointer instead of i64
+            || (generated.contains("fn use_count") && generated.contains(".add(1 as usize)"))
         {
             // Rollback - remove the generated function
             self.output.truncate(output_start);
@@ -13421,6 +13433,8 @@ impl AstCodeGen {
                     || (generated.contains("__c11_atomic_signal_fence(__order as u32)"))
                     // op_call returning c_void with __continue_poll (wrong return type)
                     || (generated.contains("pub fn op_call") && generated.contains("-> std___backoff_results") && generated.contains("__continue_poll"))
+                    // char_traits compare calling rolled-back __constexpr_memcmp_u8_u8
+                    || (generated.contains("pub fn compare") && generated.contains("__constexpr_memcmp_u8_u8("))
                 {
                     // Rollback - remove the generated method
                     self.output.truncate(output_start);
