@@ -13343,6 +13343,8 @@ impl AstCodeGen {
                     || (generated.contains("pub fn unshift(") && generated.contains("self.do_unshift(*__st,"))
                     || (generated.contains("pub fn r#in(") && generated.contains("self.do_in(*__st,"))
                     || (generated.contains("pub fn length(") && generated.contains("self.do_length(&*__st,"))
+                    // char_traits find method with global variable confusion (__gv___s instead of __s parameter)
+                    || (generated.contains("pub fn find(") && generated.contains("__gv___s"))
                 {
                     // Rollback - remove the generated method
                     self.output.truncate(output_start);
