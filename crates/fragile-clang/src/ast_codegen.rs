@@ -707,6 +707,24 @@ impl AstCodeGen {
         let output_copy = self.output.clone();
         let mut stub_types: BTreeSet<String> = BTreeSet::new();
 
+        // First, collect all already-defined type aliases from the output
+        // Pattern: "pub type X = ..."
+        let mut defined_aliases: BTreeSet<String> = BTreeSet::new();
+        for line in output_copy.lines() {
+            let trimmed = line.trim();
+            if trimmed.starts_with("pub type ") {
+                // Extract the type name between "pub type " and " ="
+                if let Some(rest) = trimmed.strip_prefix("pub type ") {
+                    if let Some(name) = rest.split('=').next() {
+                        let type_name = name.trim();
+                        if !type_name.is_empty() {
+                            defined_aliases.insert(type_name.to_string());
+                        }
+                    }
+                }
+            }
+        }
+
         // Look for patterns like:
         // - `-> TypeName` (return type)
         // - `: TypeName` (field type, parameter type)
@@ -798,10 +816,17 @@ impl AstCodeGen {
             }
         }
 
-        // Filter out types that are already generated
+        // Filter out types that are already generated (as structs or type aliases)
+        // Also filter out invalid identifiers like "_"
         let types_to_generate: Vec<String> = stub_types
             .into_iter()
-            .filter(|t| !self.generated_structs.contains(t))
+            .filter(|t| {
+                !self.generated_structs.contains(t)
+                    && !self.generated_aliases.contains(t)
+                    && !defined_aliases.contains(t)
+                    && t != "_"
+                    && t.len() > 1 // Skip single-char names
+            })
             .collect();
 
         if types_to_generate.is_empty() {
@@ -5525,6 +5550,12 @@ impl AstCodeGen {
         self.writeln("pub type _HashIterator = std::ffi::c_void;");
         self.writeln("pub type auto = std::ffi::c_void;");
         self.writeln("pub type __bitset_0__0 = std::ffi::c_void;");
+        // Track these type aliases to prevent duplicate struct generation
+        for name in ["_State", "_Key", "_Hash", "_Pred", "_Elem", "_Codecvt",
+                     "__iterator", "__imp", "__secret_tag", "__advance",
+                     "_HashIterator", "auto", "__bitset_0__0"] {
+            self.generated_aliases.insert(name.to_string());
+        }
         // Formatter types used as base classes - need Clone/Default
         self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct __formatter_char_char;");
         self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct __formatter_char_wchar_t;");
