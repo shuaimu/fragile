@@ -483,6 +483,12 @@ impl AstCodeGen {
             || s.contains("type-parameter-")
             // Unresolved dependent type names
             || s.contains("typename_")
+            // Template parameter names embedded with double underscores (e.g., vector__Tp___Alloc)
+            || s.contains("__Tp")
+            || s.contains("__Alloc")
+            || s.contains("__CharT")
+            || s.contains("__Traits")
+            || s.contains("___Alloc")  // Triple underscore variant
             // STL internal template parameter names - these appear as template arguments
             // Check for patterns like <_Tp> or <_Tp, or , _Tp> indicating template params
             || Self::has_template_param_pattern(s, "_Tp")
@@ -8733,11 +8739,13 @@ impl AstCodeGen {
             || (generated.contains("pub fn __gthread_setspecific") && generated.contains("*const ()"))
             // hermite functions with wrong calls (should call __hermite_u32 not hermite_u32)
             || (generated.contains("pub fn hermite_u32") && generated.contains("return hermite_u32("))
+            || (generated.contains("pub fn hermite_u32") && generated.contains("__x as f64"))  // hermite called with f64 cast
             || (generated.contains("pub fn hermitef") && generated.contains("return hermite_u32("))
             || (generated.contains("pub fn hermitel") && generated.contains("return hermite_u32("))
             || (generated.contains("pub fn hermite_1") && generated.contains("return hermite_u32("))
             // __constexpr_memcmp that ends without returning (incomplete body)
             || (generated.contains("pub fn __constexpr_memcmp") && generated.contains("__n as u64;\n}"))
+            || (generated.contains("pub fn __constexpr_memcmp") && !generated.contains("return"))
             // logic_error/runtime_error constructors with wrong argument type
             || (generated.contains("logic_error::new_1(__s)") && generated.contains("__s: *const i8"))
             || (generated.contains("runtime_error::new_1(__s)") && generated.contains("__s: *const i8"))
@@ -8859,8 +8867,12 @@ impl AstCodeGen {
             || generated.contains("sem_destroy(&mut")
             // _S_do_try_acquire with wrong pointer types
             || generated.contains("_S_do_try_acquire(&mut")
-            // Commented out: __cxx_atomic_thread_fence/__cxx_atomic_signal_fence - needed by other code
-            // The u32 vs i32 mismatch is acceptable for these functions
+            // __cxx_atomic_thread_fence/__cxx_atomic_signal_fence with u32 cast (should be i32)
+            || generated.contains("__c11_atomic_thread_fence(__order as u32)")
+            || generated.contains("__c11_atomic_signal_fence(__order as u32)")
+            // atomic_thread_fence/atomic_signal_fence calling nonexistent __cxx_atomic_* functions
+            || (generated.contains("pub fn atomic_thread_fence") && generated.contains("__cxx_atomic_thread_fence("))
+            || (generated.contains("pub fn atomic_signal_fence") && generated.contains("__cxx_atomic_signal_fence("))
             // atomic_flag test method with 1 && (integer where bool expected)
             || (generated.contains("return 1 &&") && generated.contains("__cxx_atomic_load"))
             // __libcpp_tls_create calling pthread_key_create with wrong function pointer type
@@ -8886,6 +8898,8 @@ impl AstCodeGen {
             || (generated.contains("self._M_stop_source.clone()"))
             // atomic_flag_clear calling rolled-back atomic_flag_clear_explicit
             || (generated.contains("pub fn atomic_flag_clear") && generated.contains("atomic_flag_clear_explicit("))
+            // atomic_flag_wait functions calling rolled-back wait method
+            || (generated.contains("pub fn atomic_flag_wait") && generated.contains(").wait("))
             // __platform_notify calling syscall with wrong number of arguments
             || (generated.contains("fn __platform_notify") && generated.contains("syscall("))
             // numeric_limits methods with inf.0 pattern (accessing field on f64)
@@ -8898,7 +8912,7 @@ impl AstCodeGen {
             // operator== on thread_id accessing _M_thread field on u64 type alias
             || (generated.contains("pub fn op_eq") && generated.contains("._M_thread =="))
             // atomic_flag_test functions calling .test() method (not available in libstdc++)
-            || (generated.contains("pub fn atomic_flag_test") && generated.contains("(*__a).test("))
+            || (generated.contains("pub fn atomic_flag_test") && generated.contains(").test("))
             // op_____ functions accessing _M_thread on thread_id type
             || (generated.contains("__x._M_thread.cmp("))
             // __condvar Drop with bool/int mixing in condition
@@ -8907,6 +8921,22 @@ impl AstCodeGen {
             || (generated.contains("pub fn get_token") && generated.contains("stop_token::new_1(self._M_state)"))
             // jthread methods with stop_source/thread issues
             || (generated.contains("pub fn get_stop_token") && generated.contains("stop_token::new_1("))
+            // Variadic functions with __va not defined (should be __va_args)
+            || (generated.contains("__va_args: ...") && generated.contains("__va)"))
+            // strong_ordering returns with bare `equal` (should be strong_ordering::equal)
+            || (generated.contains("-> strong_ordering") && generated.contains("return equal."))
+            || (generated.contains("-> strong_ordering") && generated.contains("return less."))
+            || (generated.contains("-> strong_ordering") && generated.contains("return greater."))
+            // numeric_limits methods incorrectly calling 2-arg min/max shims with 0 args
+            || (generated.contains("pub fn lowest") && generated.contains("min_bool()"))
+            || (generated.contains("pub fn lowest") && generated.contains("max_f32()"))
+            || (generated.contains("pub fn lowest") && generated.contains("max_f64()"))
+            || (generated.contains("pub fn lowest") && generated.contains("max_bool()"))
+            // __hypot with 3 args (should use __hypot3)
+            || (generated.contains("__hypot_f32(__") && generated.contains(", __z)"))
+            || (generated.contains("__hypot_f64(__") && generated.contains(", __z)"))
+            // ctype do_is with 3 args (overloaded method - different signature)
+            || (generated.contains(".do_is(") && generated.contains(", __vec)"))
         {
             // Rollback - remove the generated function
             self.output.truncate(output_start);
@@ -10824,6 +10854,7 @@ impl AstCodeGen {
                         || (init_str.contains("_Size") && init_str.contains("=="))
                         || (init_str.contains("_Args") && !init_str.starts_with("type "))
                         || init_str.contains("/ unsafe { __gv_")  // Division by unresolved global
+                        || init_str.contains("/ (unsafe { __gv_")  // Division by unresolved global (parens)
                         || init_str.contains("__d")  // Unresolved __d from 128-bit division
                         || init_str.contains("__n1")  // Unresolved __n1 from 128-bit math
                         || init_str.contains("__n0")  // Unresolved __n0 from 128-bit math
@@ -13352,6 +13383,44 @@ impl AstCodeGen {
                     || (generated.contains("pub fn length(") && generated.contains("self.do_length(&*__st,"))
                     // char_traits find method with global variable confusion (__gv___s instead of __s parameter)
                     || (generated.contains("pub fn find(") && generated.contains("__gv___s"))
+                    // numeric_limits methods incorrectly calling 2-arg min/max shims with 0 args
+                    || (generated.contains("pub fn lowest") && generated.contains("min_bool()"))
+                    || (generated.contains("pub fn lowest") && generated.contains("max_f32()"))
+                    || (generated.contains("pub fn lowest") && generated.contains("max_f64()"))
+                    || (generated.contains("pub fn lowest") && generated.contains("max_bool()"))
+                    // ctype do_is with 3 args (overloaded method - different signature)
+                    || (generated.contains(".do_is(") && generated.contains(", __vec)"))
+                    // atomic_flag wait methods with &mut self on &self method
+                    || (generated.contains("pub fn wait(&self") && generated.contains("&mut self,"))
+                    // error_code default_error_condition with broken vtable access
+                    || (generated.contains("pub fn default_error_condition") && generated.contains("__vtable).default_error_condition)"))
+                    // type_info op_eq comparing &self with *const (type mismatch)
+                    || (generated.contains("pub fn op_eq") && generated.contains("return self == &*__arg as *const"))
+                    // hash functions returning usize instead of u64
+                    || (generated.contains("-> u64") && generated.contains(".wrapping_mul(") && !generated.contains("as u64"))
+                    // __find_idx_return with __ambiguous (wrong type)
+                    || (generated.contains("pub fn __find_idx_return") && generated.contains("__ambiguous"))
+                    // char_traits methods using __gv___s global instead of __s parameter
+                    || (generated.contains("pub fn length(") && generated.contains("__gv___s"))
+                    || (generated.contains("pub fn assign_1(") && generated.contains("__gv___s"))
+                    // numpunct methods with i8 return calling i32 do_* methods
+                    || (generated.contains("pub fn decimal_point") && generated.contains("-> i8") && generated.contains("do_decimal_point()"))
+                    || (generated.contains("pub fn thousands_sep") && generated.contains("-> i8") && generated.contains("do_thousands_sep()"))
+                    // ctype methods with u16 mask arg instead of u32
+                    || (generated.contains("pub fn is(") && generated.contains("__m: u16"))
+                    || (generated.contains("pub fn scan_is(") && generated.contains("__m: u16"))
+                    || (generated.contains("pub fn scan_not(") && generated.contains("__m: u16"))
+                    // ctype narrow with &__c instead of i32
+                    || (generated.contains("pub fn narrow(&self") && generated.contains("&__c,"))
+                    // atomic_flag __atomic_contention_address missing & on addressof argument
+                    || (generated.contains("pub fn __atomic_contention_address") && generated.contains("addressof(__a.__a_)"))
+                    // hash op_call returning u32 instead of u64 (XOR of two u32 fields)
+                    || (generated.contains("pub fn op_call") && generated.contains("__u.__s.__a ^"))
+                    // __cxx_atomic_thread_fence/__cxx_atomic_signal_fence with u32 instead of i32
+                    || (generated.contains("__c11_atomic_thread_fence(__order as u32)"))
+                    || (generated.contains("__c11_atomic_signal_fence(__order as u32)"))
+                    // op_call returning c_void with __continue_poll (wrong return type)
+                    || (generated.contains("pub fn op_call") && generated.contains("-> std___backoff_results") && generated.contains("__continue_poll"))
                 {
                     // Rollback - remove the generated method
                     self.output.truncate(output_start);
