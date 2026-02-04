@@ -19217,12 +19217,12 @@ impl AstCodeGen {
                     if struct_name == "_" && !node.children.is_empty() && !is_function_call {
                         let first_child = &node.children[0];
 
-                        // Check for method call pattern: CallExpr{auto} -> MemberExpr{method}
+                        // Check for method call or field access pattern: CallExpr{auto} -> MemberExpr
                         if let ClangNodeKind::MemberExpr { member_name, is_arrow, .. } = &first_child.kind {
                             // Get the base object and check if it's resolvable
                             if !first_child.children.is_empty() {
                                 let base = self.expr_to_string(&first_child.children[0]);
-                                // Only treat as method call if base resolves to something valid
+                                // Only treat as method/field access if base resolves to something valid
                                 // (not template-dependent placeholder)
                                 if !base.contains("template-dependent") && !base.starts_with("0") {
                                     let method_args: Vec<String> = node.children[1..]
@@ -19230,12 +19230,23 @@ impl AstCodeGen {
                                         .map(|c| self.expr_to_string(c))
                                         .collect();
 
-                                    let method_name = sanitize_identifier(member_name);
+                                    let member = sanitize_identifier(member_name);
 
+                                    // If there are no arguments, this is a field access (e.g., pair.first)
+                                    // wrapped in a CallExpr with auto type. Just return the field access.
+                                    if method_args.is_empty() {
+                                        if *is_arrow {
+                                            return format!("unsafe {{ (*{}).{} }}", base, member);
+                                        } else {
+                                            return format!("{}.{}", base, member);
+                                        }
+                                    }
+
+                                    // With arguments, this is a method call
                                     if *is_arrow {
-                                        return format!("unsafe {{ (*{}).{}({}) }}", base, method_name, method_args.join(", "));
+                                        return format!("unsafe {{ (*{}).{}({}) }}", base, member, method_args.join(", "));
                                     } else {
-                                        return format!("{}.{}({})", base, method_name, method_args.join(", "));
+                                        return format!("{}.{}({})", base, member, method_args.join(", "));
                                     }
                                 }
                             }
@@ -19366,6 +19377,12 @@ impl AstCodeGen {
                                     // Multiple args for non-struct type - shouldn't happen but handle gracefully
                                     args[0].clone()
                                 }
+                            } else if struct_name == "_" && num_args == 1 {
+                                // Special case: auto-typed CallExpr with single argument that wasn't
+                                // caught by earlier patterns. This happens when the expression is
+                                // complex (e.g., method().field access). Don't generate _::new_1() -
+                                // just pass through the argument.
+                                args[0].clone()
                             } else {
                                 // Always use StructName::new_N(args) to ensure custom constructor bodies run
                                 format!("{}::new_{}({})", struct_name, num_args, args.join(", "))
@@ -19672,11 +19689,12 @@ impl AstCodeGen {
                             return format!("{}({})", func_name, remaining_args.join(", "));
                         }
 
-                        // Pattern 3: CXXConstructExpr{auto} -> MemberExpr{method} -> args...
-                        // This is a method call with auto return type, wrapped as a constructor
-                        // Example: __tree_.__emplace_unique(piecewise_construct, ...)
-                        // The MemberExpr contains: base object, method name
-                        // Remaining children are the actual arguments
+                        // Pattern 3: CXXConstructExpr(auto) -> MemberExpr(method/field) -> args...
+                        // This is either a method call or field access with auto return type, wrapped as a constructor
+                        // Example method: __tree_.__emplace_unique(piecewise_construct, ...)
+                        // Example field: result.first (pair field access)
+                        // The MemberExpr contains: base object, member name
+                        // If there are remaining children, it's a method call. Otherwise, field access.
                         if let ClangNodeKind::MemberExpr { member_name, is_arrow, .. } = &first_child.kind {
                             // Get the base object (e.g., __tree_)
                             let base = if !first_child.children.is_empty() {
@@ -19691,7 +19709,6 @@ impl AstCodeGen {
                                 .map(|c| self.expr_to_string(c))
                                 .collect();
 
-                            let access = if *is_arrow { "->" } else { "." };
                             let method_name = sanitize_identifier(member_name);
 
                             // Generate: base.method(args...) or (*base).method(args...)
@@ -19738,6 +19755,11 @@ impl AstCodeGen {
                             } else {
                                 args[0].clone()
                             }
+                        } else if struct_name == "_" && num_args == 1 {
+                            // Special case: auto-typed CXXConstructExpr with single argument that
+                            // wasn't caught by earlier patterns. Don't generate _::new_1() - just
+                            // pass through the argument.
+                            args[0].clone()
                         } else {
                             format!("{}::new_{}({})", struct_name, num_args, args.join(", "))
                         }

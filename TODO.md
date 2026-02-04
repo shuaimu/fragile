@@ -535,11 +535,26 @@ The current implementation uses forbidden patterns (see `docs/dev/wrong.md`). Th
       - **After**: `(*self).__tree_.__emplace_unique(piecewise_construct, forward_as_tuple(r#move(__k)), forward_as_tuple())`
       - All 135 integration tests + 4 runtime correctness tests pass
 
+    - **Fix (2026-02-04)**: Handle single-arg auto-typed expressions as pass-through
+      - **Root cause**: After fixing method calls, the remaining `_::new_1()` wrapper around `.first`
+        field access was caused by single-arg auto-typed CallExpr/CXXConstructExpr falling through
+        to constructor generation. The expression `emplace_unique(...).first` was being wrapped.
+      - **Solution**: Added special case in both CallExpr and CXXConstructExpr handlers:
+        - When `struct_name == "_"` (auto type) AND `num_args == 1`, pass through the argument directly
+        - Multi-arg cases still generate `_::new_N()` to avoid breaking other patterns
+      - **Before**: `(*_::new_1(unsafe { (*self).__tree_ }.__emplace_unique(...).first)).second`
+      - **After**: `(*unsafe { (*self).__tree_ }.__emplace_unique(...).first).second`
+      - Cleaned up debug code (FRAGILE_DEBUG_AUTO_MEMBER)
+      - All 135 integration tests + 4 runtime correctness tests pass
+      - **Remaining issue**: `piecewise_construct` and `forward_as_tuple` symbols not defined in
+        generated Rust code (these are libc++ standard library symbols that need to be transpiled)
+
   - **Progress Update**:
     - Fixed unresolved template struct generation (skip structs with generic type args like `_CharT`)
     - Fixed memory_order enum value generation (use `memory_order::seq_cst` instead of `5i32`)
     - Map test now compiles with **0 errors** (down from 14 errors)
     - Method calls with auto return type now properly generate method syntax instead of constructor syntax
+    - Removed `_::new_1()` wrapper around single-arg auto-typed expressions
 
 - [x] **27.8.4** Add runtime correctness tests ✅
   - Added `crates/fragile-clang/tests/runtime_correctness_tests.rs`
