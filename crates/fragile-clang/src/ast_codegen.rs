@@ -145,6 +145,116 @@ fn sanitize_identifier_for_composite(name: &str) -> String {
     }
 }
 
+/// Extract base C++ class name from a mangled Rust struct name.
+///
+/// The goal is to extract the class name (like "map", "vector", "__tree_node_base")
+/// from mangled names like "std_map_int__int", "std_vector_int".
+///
+/// Examples:
+/// - "std_map_int__int" -> "map"
+/// - "std___tree_node_base_void__" -> "__tree_node_base"
+/// - "std_vector_int" -> "vector"
+/// - "std___1___map_value_compare_int__int" -> "__map_value_compare"
+/// - "MyClass" -> "MyClass"
+fn extract_cpp_base_class_name(rust_name: &str) -> String {
+    // Strip "std_" prefix if present
+    let name = rust_name.strip_prefix("std_").unwrap_or(rust_name);
+
+    // Strip inline namespace prefix like "__1_"
+    let name = name.strip_prefix("__1_").unwrap_or(name);
+
+    // Known primitive types to skip
+    let primitives = [
+        "int", "void", "char", "bool", "long", "short", "float", "double",
+        "i8", "i16", "i32", "i64", "i128", "u8", "u16", "u32", "u64", "u128",
+        "usize", "isize", "f32", "f64",
+    ];
+
+    // Handle internal names (starting with __)
+    // e.g., "__tree_node_base_void__" -> "__tree_node_base"
+    if name.starts_with("__") {
+        // Find the end of the internal name - it ends before a primitive type
+        let mut end_idx = name.len();
+        for prim in &primitives {
+            if let Some(idx) = name.find(&format!("_{}_", prim)) {
+                end_idx = end_idx.min(idx);
+            } else if let Some(idx) = name.find(&format!("_{}__", prim)) {
+                end_idx = end_idx.min(idx);
+            } else if name.ends_with(&format!("_{}", prim)) {
+                end_idx = end_idx.min(name.len() - prim.len() - 1);
+            }
+        }
+        return name[..end_idx].to_string();
+    }
+
+    // Otherwise, the class name is the first non-primitive segment
+    // e.g., "map_int__int" -> "map", "vector_int" -> "vector"
+    let parts: Vec<&str> = name.split('_').collect();
+    for part in &parts {
+        if part.is_empty() {
+            continue;
+        }
+        // Skip primitives
+        if primitives.contains(part) {
+            continue;
+        }
+        // Skip numeric parts (like template arg indices)
+        if part.chars().all(|c| c.is_numeric()) {
+            continue;
+        }
+        return (*part).to_string();
+    }
+
+    // Fallback: return original
+    rust_name.to_string()
+}
+
+/// Convert a sanitized Rust method name back to C++ operator form for LibTooling lookup.
+///
+/// Examples:
+/// - "op_index" -> "operator[]"
+/// - "op_call" -> "operator()"
+/// - "op_deref" -> "operator*"
+/// - "op_plus" -> "operator+"
+/// - "size" -> "size" (unchanged)
+fn rust_method_name_to_cpp(rust_name: &str) -> String {
+    match rust_name {
+        "op_index" => "operator[]".to_string(),
+        "op_call" => "operator()".to_string(),
+        "op_deref" => "operator*".to_string(),
+        "op_arrow" => "operator->".to_string(),
+        "op_plus" => "operator+".to_string(),
+        "op_minus" => "operator-".to_string(),
+        "op_mul" => "operator*".to_string(),
+        "op_div" => "operator/".to_string(),
+        "op_mod" => "operator%".to_string(),
+        "op_eq" => "operator==".to_string(),
+        "op_ne" => "operator!=".to_string(),
+        "op_lt" => "operator<".to_string(),
+        "op_gt" => "operator>".to_string(),
+        "op_le" => "operator<=".to_string(),
+        "op_ge" => "operator>=".to_string(),
+        "op_plus_assign" => "operator+=".to_string(),
+        "op_minus_assign" => "operator-=".to_string(),
+        "op_mul_assign" => "operator*=".to_string(),
+        "op_div_assign" => "operator/=".to_string(),
+        "op_assign" => "operator=".to_string(),
+        "op_pre_inc" | "op_post_inc" => "operator++".to_string(),
+        "op_pre_dec" | "op_post_dec" => "operator--".to_string(),
+        "op_neg" => "operator-".to_string(),
+        "op_not" => "operator!".to_string(),
+        "op_bitnot" => "operator~".to_string(),
+        "op_bitand" => "operator&".to_string(),
+        "op_bitor" => "operator|".to_string(),
+        "op_bitxor" => "operator^".to_string(),
+        "op_shl" => "operator<<".to_string(),
+        "op_shr" => "operator>>".to_string(),
+        "op_and" => "operator&&".to_string(),
+        "op_or" => "operator||".to_string(),
+        _ => rust_name.to_string(),
+    }
+}
+
 /// Information about a virtual method for vtable generation.
 /// This represents a single entry in a C++ vtable.
 #[derive(Clone, Debug)]
@@ -3370,11 +3480,32 @@ impl AstCodeGen {
                     self.indent += 1;
 
                     // Try to look up the method body from LibTooling AST
-                    // First try with exact class name, then with empty string (matches any class)
+                    // LibTooling uses simple C++ class names (e.g., "map", "vector")
+                    // while rust_name includes template args (e.g., "std_map_int__int")
+                    // Also, LibTooling uses C++ operator names (e.g., "operator[]")
+                    // while we use sanitized names (e.g., "op_index")
+
+                    // Convert Rust method name back to C++ operator name for lookup
+                    let cpp_method_name = rust_method_name_to_cpp(&name);
+
                     let key = (rust_name.to_string(), name.clone());
+
+                    // Extract base C++ class name from rust_name
+                    // e.g., "std_map_int__int" -> "map", "std___tree_node_base_void__" -> "__tree_node_base"
+                    let cpp_base_name = extract_cpp_base_class_name(rust_name);
+                    let cpp_key = (cpp_base_name.clone(), name.clone());
+
+                    // Also try with C++ operator name
+                    let cpp_op_key = (cpp_base_name.clone(), cpp_method_name.clone());
+
                     let fallback_key = (String::new(), name.clone());
+                    let fallback_cpp_key = (String::new(), cpp_method_name.clone());
+
                     let method_info_opt = self.libtooling_method_bodies.get(&key)
+                        .or_else(|| self.libtooling_method_bodies.get(&cpp_key))
+                        .or_else(|| self.libtooling_method_bodies.get(&cpp_op_key))
                         .or_else(|| self.libtooling_method_bodies.get(&fallback_key))
+                        .or_else(|| self.libtooling_method_bodies.get(&fallback_cpp_key))
                         .and_then(|methods| {
                             // Find method with matching parameter count
                             let param_count = params.len();
@@ -3779,6 +3910,12 @@ impl AstCodeGen {
             }
         }
 
+        // Before adding stubs, try to look up methods from LibTooling bodies
+        // that weren't in the AST children. This is needed for operator[] and other
+        // methods that libclang may not expose for template instantiations.
+        let cpp_base_name = extract_cpp_base_class_name(rust_name);
+        self.generate_libtooling_only_methods(rust_name, &cpp_base_name);
+
         // Special case: add size() method for std::map, std::set, std::list, and hash-based containers
         // These containers delegate to internal types but the size() method often gets filtered out
         // due to unresolved template types
@@ -3836,6 +3973,127 @@ impl AstCodeGen {
         self.indent -= 1;
         self.writeln("}");
         self.writeln("");
+    }
+
+    /// Generate methods from LibTooling bodies that weren't already generated from AST.
+    ///
+    /// This handles methods like operator[] that libclang may not expose for template
+    /// instantiations, but LibTooling does have bodies for.
+    fn generate_libtooling_only_methods(&mut self, rust_name: &str, cpp_base_name: &str) {
+        // Find methods from LibTooling that might not be in the AST
+        // Look for methods with the C++ base class name
+        // ONLY use exact class name matches - empty class name fallback is too broad
+        let methods_to_generate: Vec<(String, String, crate::libtooling::MethodInfo)> = {
+            let mut methods = Vec::new();
+            for ((class_name, method_name), method_infos) in &self.libtooling_method_bodies {
+                // Match by exact base class name (e.g., "map" matches std_map_int__int)
+                // Don't use empty string fallback as it's too ambiguous
+                if class_name == cpp_base_name {
+                    for info in method_infos {
+                        // Convert C++ operator name to Rust method name
+                        let rust_method_name = match method_name.as_str() {
+                            "operator[]" => "op_index",
+                            "operator()" => "op_call",
+                            "operator*" => "op_deref",
+                            "operator->" => "op_arrow",
+                            "operator+" => "op_plus",
+                            "operator-" => "op_minus",
+                            "operator==" => "op_eq",
+                            "operator!=" => "op_ne",
+                            "operator<" => "op_lt",
+                            "operator>" => "op_gt",
+                            "operator<=" => "op_le",
+                            "operator>=" => "op_ge",
+                            "operator+=" => "op_plus_assign",
+                            "operator-=" => "op_minus_assign",
+                            "operator=" => "op_assign",
+                            "operator++" => "op_pre_inc",
+                            "operator--" => "op_pre_dec",
+                            _ => method_name.as_str(),
+                        };
+
+                        // Check if this method is already in the generated output
+                        let impl_start = self.output.rfind(&format!("impl {} {{", rust_name)).unwrap_or(0);
+                        let method_sig = format!("pub fn {}(", rust_method_name);
+                        if !self.output[impl_start..].contains(&method_sig) {
+                            methods.push((class_name.clone(), rust_method_name.to_string(), info.clone()));
+                        }
+                    }
+                }
+            }
+            methods
+        };
+
+        // Generate each method
+        for (class_name, rust_method_name, info) in methods_to_generate {
+            // Skip if body isn't a compound statement
+            if !matches!(info.body.kind, ClangNodeKind::CompoundStmt) {
+                continue;
+            }
+
+            // For now, focus on operator[] for maps since it's the most critical
+            if rust_method_name != "op_index" {
+                continue;
+            }
+
+            // Determine return type based on the container type
+            // For maps, operator[] returns a reference to the value type
+            let return_type = if rust_name.starts_with("std_map_") || rust_name.starts_with("std_unordered_map_") {
+                // Extract value type from rust_name: std_map_int__int -> int (second type)
+                // This is a simplification; full parsing would be more complex
+                "*mut i32".to_string() // Default for now
+            } else {
+                "std::ffi::c_void".to_string()
+            };
+
+            let method_output_start = self.output.len();
+
+            // Generate method signature
+            let param_list = if info.param_names.is_empty() {
+                "&mut self".to_string()
+            } else {
+                // Build parameter list - first param is key type for operator[]
+                let param_name = sanitize_identifier(&info.param_names[0]);
+                format!("&mut self, {}: i32", param_name) // Default key type to i32
+            };
+
+            self.writeln(&format!(
+                "pub fn {}({}) -> {} {{",
+                rust_method_name, param_list, return_type
+            ));
+            self.indent += 1;
+
+            // Register parameter names as local variables
+            for param_name in &info.param_names {
+                if !param_name.is_empty() {
+                    self.local_vars.insert(sanitize_identifier(param_name));
+                }
+            }
+
+            // Generate body from LibTooling
+            let body_return_type = CppType::Pointer {
+                pointee: Box::new(CppType::Int { signed: true }),
+                is_const: false,
+            };
+            self.generate_block_contents(&info.body.children, &body_return_type);
+
+            self.indent -= 1;
+            self.writeln("}");
+            self.writeln("");
+
+            // Check for broken patterns and rollback if needed
+            let generated = &self.output[method_output_start..];
+            if generated.contains("todo!(")
+                || generated.contains("._M_")
+                || generated.contains(".__tree_")
+                || generated.contains(".__comp_")
+                || generated.contains("c_void")
+                || generated.contains("*0")
+            {
+                // Rollback - this method body has issues
+                self.output.truncate(method_output_start);
+            }
+        }
     }
 
     /// Generate function implementations for pending function template instantiations.

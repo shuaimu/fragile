@@ -96,7 +96,7 @@ fn main() -> Result<()> {
             // If using LibTooling, pre-parse files to extract template method bodies
             let mut libtooling_results: std::collections::HashMap<
                 std::path::PathBuf,
-                std::collections::HashMap<(String, String), Vec<fragile_clang::ClangNode>>,
+                std::collections::HashMap<(String, String), Vec<fragile_clang::MethodInfo>>,
             > = std::collections::HashMap::new();
 
             // Also store specialization field types when using LibTooling
@@ -112,7 +112,7 @@ fn main() -> Result<()> {
                     eprintln!("  LibTooling parsing: {}", file.display());
                     match libtooling_parser.parse_file(file) {
                         Ok(libtooling_ctx) => {
-                            let method_bodies = fragile_clang::extract_method_bodies(&libtooling_ctx);
+                            let method_bodies = fragile_clang::extract_method_bodies_with_params(&libtooling_ctx);
                             let field_types = fragile_clang::extract_specialization_field_types(&libtooling_ctx);
                             eprintln!("    Found {} method body entries, {} specialization field types",
                                 method_bodies.len(), field_types.len());

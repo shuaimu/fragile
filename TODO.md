@@ -436,10 +436,20 @@ The current implementation uses forbidden patterns (see `docs/dev/wrong.md`). Th
     - Updated `AstCodeGen` to register parameter names as local variables
     - Result: 19874 ParmVarDecl nodes now exported, methods have proper param names
 
-  - [ ] **27.8.3.3** Fix variable declaration propagation in method bodies
-    - Issue: Variables like __n, __max declared in C++ body aren't captured
-    - Location: libtooling.rs VarDecl handling, DeclStmt handling
-    - Fix: Ensure DeclStmt children are properly converted with names
+  - [x] **27.8.3.3** Fix method body lookup from LibTooling ✅
+    - **Investigation (2026-02-04)**:
+      - VarDecl propagation was NOT the actual issue - VarDecls ARE being exported (3561 nodes)
+      - Real issues found and fixed:
+        1. Class name mismatch: `std_map_int__int` (rust) vs `map` (LibTooling)
+           - Added `extract_cpp_base_class_name()` to convert rust names to C++ base names
+        2. Method name mismatch: `op_index` (rust) vs `operator[]` (LibTooling)
+           - Added `rust_method_name_to_cpp()` to convert back to C++ operator names
+        3. Added `generate_libtooling_only_methods()` to generate methods from LibTooling
+           that aren't in the AST children (like operator[])
+      - Result: map::operator[] body IS now found from LibTooling
+      - **Remaining blocker**: The method body references `.__tree_` which is an internal
+        field that doesn't exist in our generated struct. This is a field extraction issue,
+        not variable propagation - see 27.8.3.5
 
   - [x] **27.8.3.4** Improve field type matching in find_matching_specialization ✅
     - **FIXED** two issues:
@@ -450,6 +460,13 @@ The current implementation uses forbidden patterns (see `docs/dev/wrong.md`). Th
          - Added `find_matching_close_angle()` helper to properly parse template args
          - Skip names with `::` after template closing `>`
     - Result: Many more specializations now match (e.g., `unique_lock<_Mutex>`, `__map_value_compare`, etc.)
+
+  - [ ] **27.8.3.5** Fix internal field generation for STL containers
+    - Issue: map::operator[] body references `.__tree_` but our struct doesn't have this field
+    - Root cause: LibClang exposes primary template fields, not specialization-specific fields
+    - The `__tree_` field is actually present in libc++ map implementation
+    - Need to: Extract and generate fields from LibTooling specialization data
+    - Location: find_matching_specialization(), generate_template_instantiation()
 
   - **Progress Update**:
     - Fixed unresolved template struct generation (skip structs with generic type args like `_CharT`)
