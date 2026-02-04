@@ -19527,6 +19527,13 @@ impl AstCodeGen {
             ClangNodeKind::CXXConstructExpr { ty } => {
                 // Direct constructor call - all children are arguments
                 // This is distinct from CallExpr which has a function reference as first child
+                //
+                // SPECIAL CASE: When the type is "auto" (becomes "_" in Rust) and the first child
+                // is a function reference (DeclRefExpr/ImplicitCastExpr->DeclRefExpr), this is actually
+                // a function call whose return type couldn't be resolved, not a constructor.
+                // LibTooling sometimes wraps function calls in CXXConstructExpr when the return type
+                // is auto-deduced. We detect this and generate a function call instead.
+
                 if let CppType::Named(cpp_struct_name) = ty {
                     let struct_name = CppType::Named(cpp_struct_name.clone()).to_rust_type_str();
 
@@ -19543,6 +19550,54 @@ impl AstCodeGen {
                             true
                         })
                         .collect();
+
+                    // Check if this is a function call wrapped in auto-typed CXXConstructExpr
+                    // Pattern: CXXConstructExpr{auto} -> DeclRefExpr{function_name} -> actual_args...
+                    if struct_name == "_" && !arg_nodes.is_empty() {
+                        // Check if first child is a function reference
+                        let first_child = arg_nodes[0];
+                        let maybe_func_name = match &first_child.kind {
+                            ClangNodeKind::DeclRefExpr { name, .. } => {
+                                // Check if this is a known function (not a variable)
+                                if name == "forward_as_tuple" || name == "move" || name == "forward"
+                                    || name.starts_with("__builtin_") || name.starts_with("__libcpp_")
+                                    || name.ends_with("_as_tuple")
+                                {
+                                    Some(sanitize_identifier(name))
+                                } else {
+                                    None
+                                }
+                            }
+                            ClangNodeKind::ImplicitCastExpr { .. } => {
+                                // Check for ImplicitCastExpr wrapping DeclRefExpr
+                                first_child.children.first().and_then(|inner| {
+                                    if let ClangNodeKind::DeclRefExpr { name, .. } = &inner.kind {
+                                        if name == "forward_as_tuple" || name == "move" || name == "forward"
+                                            || name.starts_with("__builtin_") || name.starts_with("__libcpp_")
+                                            || name.ends_with("_as_tuple")
+                                        {
+                                            Some(sanitize_identifier(name))
+                                        } else {
+                                            None
+                                        }
+                                    } else {
+                                        None
+                                    }
+                                })
+                            }
+                            _ => None,
+                        };
+
+                        if let Some(func_name) = maybe_func_name {
+                            // This is actually a function call, not a constructor
+                            // Generate: func_name(remaining_args...)
+                            let remaining_args: Vec<String> = arg_nodes[1..]
+                                .iter()
+                                .map(|c| self.expr_to_string(c))
+                                .collect();
+                            return format!("{}({})", func_name, remaining_args.join(", "));
+                        }
+                    }
 
                     // Check if this is a copy constructor call (single arg of same type)
                     let is_copy_ctor = arg_nodes.len() == 1 && {
