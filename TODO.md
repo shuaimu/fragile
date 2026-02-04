@@ -97,6 +97,22 @@ crates/
 
 ---
 
+## ⚠️ MANDATORY: Post-Commit Review
+
+**After EVERY commit, read `docs/dev/wrong.md` and verify:**
+
+- [ ] No new rollback patterns added (current count: ~204 - must decrease, never increase)
+- [ ] No new stub method injections (hardcoded return values like `size() { 0 }`)
+- [ ] No semantic type mappings (`std::map` → `BTreeMap`)
+- [ ] No `todo!()` bodies without tracking issue
+- [ ] No silent skips without logging
+
+**If the commit violates any of these, revert and fix properly.**
+
+See `docs/dev/wrong.md` for full explanation of forbidden patterns.
+
+---
+
 ## Current Priority: Full libc++ STL Container Transpilation
 
 ### ⚠️ CRITICAL DESIGN PRINCIPLE: Absolute Transpilation, No Semantic Mapping
@@ -139,7 +155,14 @@ Semantic mapping would be incorrect. Absolute transpilation preserves exact C++ 
 3. `std::vector<int>` - compile and run: push_back, pop_back, iterate, resize (DONE ✅)
 4. `std::list<int>` - compile and run: push_back, push_front, iterate, erase
 
-**Current State** (std::map, std::list - compiles with 0 errors on successful runs, stubs only):
+**Current State** (BROKEN - uses forbidden patterns, must be fixed):
+
+⚠️ **WARNING**: The current implementation cheats by:
+1. Using ~204 "rollback patterns" that delete broken methods instead of fixing them
+2. Injecting stub methods (`size() { 0 }`, `op_index() { null_mut() }`)
+3. Methods marked `todo!("Template method body")` instead of actual transpiled code
+
+**This is NOT acceptable.** Task 27.8 below tracks removing these hacks.
 
 - [x] **27.1** LibTooling integration for template bodies ✅
   - [x] **27.1.1** Extract method bodies from ClassTemplateSpecializationDecl
@@ -159,7 +182,7 @@ Semantic mapping would be incorrect. Absolute transpilation preserves exact C++ 
 - [x] **27.4** Fix unsafe block assignment syntax ✅
   - [x] **27.4.1** Wrap unsafe blocks in parentheses when used as lvalue
 
-- [x] **27.5** Fix remaining std::map compilation errors ✅ (reduced from ~50-60 to 0 on successful runs)
+- [~] **27.5** Fix remaining std::map compilation errors ⚠️ USED FORBIDDEN PATTERNS - REDO
   - Error categories (approximate):
     - E0070 (5): Invalid left-hand side of assignment
     - E0308 (5-7): Mismatched types
@@ -205,7 +228,7 @@ Semantic mapping would be incorrect. Absolute transpilation preserves exact C++ 
     - Added patterns for duration cast from i32
     - Error count reduced from ~4-11 to ~6-23 (some variance due to HashMap ordering)
 
-- [x] **27.6** std::unordered_map transpilation ✅
+- [~] **27.6** std::unordered_map transpilation ⚠️ USED FORBIDDEN PATTERNS - REDO
   - [x] **27.6.1** Create test case for basic operations ✅
     - Created unordered_map_test_runner.rs example
     - Current state: 34 compilation errors (missing op_index, size methods)
@@ -218,7 +241,7 @@ Semantic mapping would be incorrect. Absolute transpilation preserves exact C++ 
     - Remaining 22 errors are generic (missing builtin functions, string type aliases)
     - These are common issues across all STL containers, not unordered_map specific
 
-- [x] **27.7** std::list transpilation ✅
+- [~] **27.7** std::list transpilation ⚠️ USED FORBIDDEN PATTERNS - REDO
   - [x] **27.7.1** Create test case for basic operations ✅
     - Created list_test_runner.rs example
     - Current state: 17 compilation errors (c_void clone, type mismatches)
@@ -233,6 +256,73 @@ Semantic mapping would be incorrect. Absolute transpilation preserves exact C++ 
     - Added patterns for data/data_1 empty methods and fill_1 with c_void
     - Added patterns for get/get_1 on tuple_leaf casting self as i32
     - List test compiles consistently with 0 errors on good runs
+
+### 27.8 Remove Forbidden Patterns (Priority: CRITICAL - BLOCKING)
+
+**This task MUST be completed before any STL container can be considered "done".**
+
+The current implementation uses forbidden patterns (see `docs/dev/wrong.md`). These must be removed and replaced with proper fixes.
+
+- [ ] **27.8.1** Remove rollback patterns from ast_codegen.rs (204 total → 0)
+
+  **Analysis**: The 204 patterns break down into these categories:
+  - ~37 patterns: Internal field access (`._M_*`, `.__ptr_`, `.__val_`, etc.)
+  - ~16 patterns: c_void type issues (`c_void +`, `+ c_void`)
+  - ~10 patterns: vtable assignment issues
+  - ~8 patterns: Builtin/libcpp intrinsic calls
+  - ~133 patterns: Other template/type issues
+
+  **Subtasks** (each ≤500 LOC, do in order):
+
+  - [x] **27.8.1.1** Create rollback pattern audit report ✅
+    - Documented all 204 patterns with root cause hypotheses
+    - Output: `docs/dev/rollback-audit.md`
+    - Categories: 37 field access, 16 c_void, 10 vtable, 8 builtin, 133 other
+
+  - [ ] **27.8.1.2** Fix internal field access patterns (37 patterns → 0)
+    - Root cause: Fields like `_M_current`, `_M_t`, `_M_impl` not being generated in struct definitions
+    - Fix: Ensure LibTooling extracts all fields from ClassTemplateSpecializationDecl
+    - Test: Internal fields appear in generated Rust structs
+
+  - [ ] **27.8.1.3** Fix c_void type resolution (16 patterns → 0)
+    - Root cause: Template parameter types resolving to c_void instead of actual types
+    - Fix: Improve type deduction in template instantiations
+    - Test: Template types resolve to concrete types, not c_void
+
+  - [ ] **27.8.1.4** Fix vtable generation (10 patterns → 0)
+    - Root cause: Virtual table references in constructor initializers
+    - Fix: Handle vtable initialization properly
+    - Test: Classes with virtual functions compile without vtable errors
+
+  - [ ] **27.8.1.5** Fix builtin/intrinsic calls (8 patterns → 0)
+    - Root cause: Calls to `__builtin_*`, `__libcpp_*` not being transpiled
+    - Fix: Add mappings for common builtins
+    - Test: Code using builtins compiles
+
+  - [ ] **27.8.1.6** Fix remaining patterns (133 patterns → 0)
+    - After 27.8.1.2-27.8.1.5, reassess remaining patterns
+    - Break down further if >500 LOC each
+
+- [ ] **27.8.2** Remove stub method injections
+  - Location: ast_codegen.rs lines ~3300-3350
+  - Remove: `size() { 0 }`, `op_index() { null_mut() }`, `push_back() { }`, `new_0() { zeroed() }`
+  - Replace with: actual transpiled libc++ method bodies
+
+- [ ] **27.8.3** Fix underlying transpilation issues
+  - Why are `._M_current`, `._M_t`, `._M_impl` fields not being generated?
+  - Why are template method bodies not being extracted by LibTooling?
+  - Why do type mismatches occur (c_void instead of actual types)?
+
+- [ ] **27.8.4** Add runtime correctness tests
+  - Compilation success is NOT sufficient
+  - Add tests that verify: insert actually inserts, size returns correct count, iteration works
+  - Tests must FAIL with current stub implementations
+
+- [ ] **27.8.5** Metric: Rollback pattern count
+  - Track: `grep -c "|| generated.contains" crates/fragile-clang/src/ast_codegen.rs`
+  - Current: ~204
+  - Target: 0
+  - Every PR must report this number and it must decrease or stay same, NEVER increase
 
 ---
 
