@@ -559,12 +559,23 @@ The current implementation uses forbidden patterns (see `docs/dev/wrong.md`). Th
       - All 135 integration tests + 4 runtime correctness tests pass
       - **Map compilation**: Now compiles with 0 errors (stub methods return default values)
 
+    - **Fix (2026-02-04)**: Expand LibTooling method generation to handle size()
+      - Previously, `generate_libtooling_only_methods` only handled `op_index` method
+      - Extended to also handle `size()` method from LibTooling bodies
+      - Fixed zero-arg method call detection: auto-typed MemberExpr inside CallExpr should ALWAYS
+        be a method call (`base.method()`) not field access (`base.field`)
+      - The previous heuristic "no args = field access" was wrong for methods like `size()`
+      - Added `size()` stub to `__tree_*` placeholder structs for map::size() delegation
+      - Map now has proper `size()` method: `return self.__tree_.size()` instead of stub `{ 0 }`
+      - All 135 integration tests + 4 runtime correctness tests pass
+
   - **Progress Update**:
     - Fixed unresolved template struct generation (skip structs with generic type args like `_CharT`)
     - Fixed memory_order enum value generation (use `memory_order::seq_cst` instead of `5i32`)
     - Map test now compiles with **0 errors** (down from 14 errors)
     - Method calls with auto return type now properly generate method syntax instead of constructor syntax
     - Removed `_::new_1()` wrapper around single-arg auto-typed expressions
+    - LibTooling method generation now handles `size()` in addition to `op_index`
     - Added stubs for piecewise_construct, forward_as_tuple, and tree emplace operations
 
 - [x] **27.8.4** Add runtime correctness tests ✅

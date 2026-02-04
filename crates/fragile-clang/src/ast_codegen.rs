@@ -1473,6 +1473,10 @@ impl AstCodeGen {
                 self.writeln("__tree_emplace_result::default()");
                 self.indent -= 1;
                 self.writeln("}");
+                self.writeln("");
+                // Add size() stub for map::size() delegation
+                self.writeln("/// Stub for size - returns 0 (tree size not tracked)");
+                self.writeln("pub fn size(&self) -> usize { 0 }");
                 self.indent -= 1;
                 self.writeln("}");
                 self.writeln("");
@@ -4087,37 +4091,51 @@ impl AstCodeGen {
         };
 
         // Generate each method
-        for (class_name, rust_method_name, info) in methods_to_generate {
+        for (_class_name, rust_method_name, info) in methods_to_generate {
             // Skip if body isn't a compound statement
             if !matches!(info.body.kind, ClangNodeKind::CompoundStmt) {
                 continue;
             }
 
-            // For now, focus on operator[] for maps since it's the most critical
-            if rust_method_name != "op_index" {
+            // Allow specific methods we have working implementations for
+            let allowed_methods = ["op_index", "size"];
+            if !allowed_methods.contains(&rust_method_name.as_str()) {
                 continue;
             }
 
-            // Determine return type based on the container type
-            // For maps, operator[] returns a reference to the value type
-            let return_type = if rust_name.starts_with("std_map_") || rust_name.starts_with("std_unordered_map_") {
-                // Extract value type from rust_name: std_map_int__int -> int (second type)
-                // This is a simplification; full parsing would be more complex
-                "*mut i32".to_string() // Default for now
-            } else {
-                "std::ffi::c_void".to_string()
+            // Determine return type and parameter list based on the method name
+            let (return_type, param_list, body_return_type) = match rust_method_name.as_str() {
+                "size" => {
+                    // size() takes no parameters, returns usize, and is const (&self)
+                    (
+                        "usize".to_string(),
+                        "&self".to_string(),
+                        CppType::Named("usize".to_string()),
+                    )
+                }
+                "op_index" => {
+                    // operator[] returns reference to value type, takes key parameter
+                    let ret_type = if rust_name.starts_with("std_map_") || rust_name.starts_with("std_unordered_map_") {
+                        "*mut i32".to_string() // Default for now
+                    } else {
+                        "std::ffi::c_void".to_string()
+                    };
+                    let params = if info.param_names.is_empty() {
+                        "&mut self".to_string()
+                    } else {
+                        let param_name = sanitize_identifier(&info.param_names[0]);
+                        format!("&mut self, {}: i32", param_name)
+                    };
+                    let body_ret = CppType::Pointer {
+                        pointee: Box::new(CppType::Int { signed: true }),
+                        is_const: false,
+                    };
+                    (ret_type, params, body_ret)
+                }
+                _ => continue, // Skip unknown methods
             };
 
             let method_output_start = self.output.len();
-
-            // Generate method signature
-            let param_list = if info.param_names.is_empty() {
-                "&mut self".to_string()
-            } else {
-                // Build parameter list - first param is key type for operator[]
-                let param_name = sanitize_identifier(&info.param_names[0]);
-                format!("&mut self, {}: i32", param_name) // Default key type to i32
-            };
 
             self.writeln(&format!(
                 "pub fn {}({}) -> {} {{",
@@ -4131,12 +4149,6 @@ impl AstCodeGen {
                     self.local_vars.insert(sanitize_identifier(param_name));
                 }
             }
-
-            // Generate body from LibTooling
-            let body_return_type = CppType::Pointer {
-                pointee: Box::new(CppType::Int { signed: true }),
-                is_const: false,
-            };
             self.generate_block_contents(&info.body.children, &body_return_type);
 
             self.indent -= 1;
@@ -19348,12 +19360,14 @@ impl AstCodeGen {
                     if struct_name == "_" && !node.children.is_empty() && !is_function_call {
                         let first_child = &node.children[0];
 
-                        // Check for method call or field access pattern: CallExpr{auto} -> MemberExpr
+                        // Check for method call pattern: CallExpr{auto} -> MemberExpr
+                        // Since this is inside CallExpr (from CXXMemberCallExpr), it's ALWAYS a method call
+                        // even with no arguments (e.g., tree.size())
                         if let ClangNodeKind::MemberExpr { member_name, is_arrow, .. } = &first_child.kind {
                             // Get the base object and check if it's resolvable
                             if !first_child.children.is_empty() {
                                 let base = self.expr_to_string(&first_child.children[0]);
-                                // Only treat as method/field access if base resolves to something valid
+                                // Only treat as method call if base resolves to something valid
                                 // (not template-dependent placeholder)
                                 if !base.contains("template-dependent") && !base.starts_with("0") {
                                     let method_args: Vec<String> = node.children[1..]
@@ -19363,17 +19377,8 @@ impl AstCodeGen {
 
                                     let member = sanitize_identifier(member_name);
 
-                                    // If there are no arguments, this is a field access (e.g., pair.first)
-                                    // wrapped in a CallExpr with auto type. Just return the field access.
-                                    if method_args.is_empty() {
-                                        if *is_arrow {
-                                            return format!("unsafe {{ (*{}).{} }}", base, member);
-                                        } else {
-                                            return format!("{}.{}", base, member);
-                                        }
-                                    }
-
-                                    // With arguments, this is a method call
+                                    // This is a method call (might have zero args like size())
+                                    // Always generate method call syntax, not field access
                                     if *is_arrow {
                                         return format!("unsafe {{ (*{}).{}({}) }}", base, member, method_args.join(", "));
                                     } else {
