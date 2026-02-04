@@ -214,6 +214,94 @@ pub struct TemplateMethodInstantiation {
     pub node_id: u64,
 }
 
+/// Information about a method from LibTooling, including parameters and body.
+#[derive(Debug, Clone)]
+pub struct MethodInfo {
+    /// Parameter names in order
+    pub param_names: Vec<String>,
+    /// The method body as a ClangNode
+    pub body: ClangNode,
+}
+
+/// Extract all template method bodies with parameter information from the LibTooling AST.
+///
+/// Returns a map with key (class_name, method_name) and value list of MethodInfo structs.
+/// Each MethodInfo contains parameter names and the method body.
+pub fn extract_method_bodies_with_params(ctx: &AstContext) -> HashMap<(String, String), Vec<MethodInfo>> {
+    // First, build a map from method node ID to parent class name
+    let mut method_to_class: HashMap<u64, String> = HashMap::new();
+
+    for (_id, node) in &ctx.ast_nodes {
+        if node.tag == ASTEntryTag::TagCXXRecordDecl
+            || node.tag == ASTEntryTag::TagClassTemplateSpecializationDecl
+        {
+            let class_name = node.get_string(0).unwrap_or("").to_string();
+            if class_name.is_empty() {
+                continue;
+            }
+
+            for child_opt in &node.children {
+                if let Some(child_id) = child_opt {
+                    if let Some(child_node) = ctx.ast_nodes.get(child_id) {
+                        if child_node.tag == ASTEntryTag::TagCXXMethodDecl {
+                            method_to_class.insert(*child_id, class_name.clone());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let mut result: HashMap<(String, String), Vec<MethodInfo>> = HashMap::new();
+
+    for (id, node) in &ctx.ast_nodes {
+        if node.tag == ASTEntryTag::TagCXXMethodDecl {
+            let method_name = node.get_string(0).unwrap_or("").to_string();
+            if method_name.is_empty() {
+                continue;
+            }
+
+            // Extract parameter names and find body
+            let mut param_names = Vec::new();
+            let mut body_id = None;
+
+            for child_opt in &node.children {
+                if let Some(child_id) = child_opt {
+                    if let Some(child_node) = ctx.ast_nodes.get(child_id) {
+                        if child_node.tag == ASTEntryTag::TagParmVarDecl {
+                            let param_name = child_node.get_string(0).unwrap_or("").to_string();
+                            param_names.push(param_name);
+                        } else if child_node.tag == ASTEntryTag::TagCompoundStmt {
+                            body_id = Some(*child_id);
+                        }
+                    }
+                }
+            }
+
+            if let Some(body_id) = body_id {
+                if let Some(body_node) = convert_to_clang_node(ctx, body_id) {
+                    let class_name = method_to_class.get(id).cloned().unwrap_or_default();
+
+                    let method_info = MethodInfo {
+                        param_names: param_names.clone(),
+                        body: body_node,
+                    };
+
+                    let key = (class_name.clone(), method_name.clone());
+                    result.entry(key).or_default().push(method_info.clone());
+
+                    if !class_name.is_empty() {
+                        let fallback_key = (String::new(), method_name.clone());
+                        result.entry(fallback_key).or_default().push(method_info);
+                    }
+                }
+            }
+        }
+    }
+
+    result
+}
+
 /// Extract all template method bodies from the LibTooling AST.
 ///
 /// Returns a map suitable for use with `AstCodeGen::set_libtooling_bodies()`.
@@ -222,6 +310,8 @@ pub struct TemplateMethodInstantiation {
 /// Note: Class names are extracted from the parent record declarations.
 /// The key uses the raw C++ class name (e.g., "map", "_Rb_tree") without
 /// template parameters.
+///
+/// DEPRECATED: Use extract_method_bodies_with_params() instead for parameter information.
 pub fn extract_method_bodies(ctx: &AstContext) -> HashMap<(String, String), Vec<ClangNode>> {
     // First, build a map from method node ID to parent class name
     let mut method_to_class: HashMap<u64, String> = HashMap::new();

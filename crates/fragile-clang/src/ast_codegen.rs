@@ -349,8 +349,8 @@ pub struct AstCodeGen {
     /// e.g., "std" -> "std::__1" means std::map should resolve to std::__1::map
     inline_namespace_aliases: HashMap<String, String>,
     /// LibTooling AST context for template method bodies
-    /// Key: (class_name, method_name), Value: method body as ClangNode
-    libtooling_method_bodies: HashMap<(String, String), Vec<ClangNode>>,
+    /// Key: (class_name, method_name), Value: method info (params + body)
+    libtooling_method_bodies: HashMap<(String, String), Vec<crate::libtooling::MethodInfo>>,
     /// Resolved field types from LibTooling template specializations
     /// Key: qualified type name (e.g., "std::pair"), Value: field info
     specialization_field_types: HashMap<String, crate::libtooling::SpecializationFieldInfo>,
@@ -439,7 +439,7 @@ impl AstCodeGen {
 
     /// Set template method bodies from LibTooling AST.
     /// This enables generating actual code instead of `todo!()` for template methods.
-    pub fn set_libtooling_bodies(&mut self, bodies: HashMap<(String, String), Vec<ClangNode>>) {
+    pub fn set_libtooling_bodies(&mut self, bodies: HashMap<(String, String), Vec<crate::libtooling::MethodInfo>>) {
         self.libtooling_method_bodies = bodies;
     }
 
@@ -3373,20 +3373,30 @@ impl AstCodeGen {
                     // First try with exact class name, then with empty string (matches any class)
                     let key = (rust_name.to_string(), name.clone());
                     let fallback_key = (String::new(), name.clone());
-                    let body_opt = self.libtooling_method_bodies.get(&key)
+                    let method_info_opt = self.libtooling_method_bodies.get(&key)
                         .or_else(|| self.libtooling_method_bodies.get(&fallback_key))
-                        .and_then(|bodies| {
-                            // Find the body matching the parameter count
-                            bodies.iter().find(|body| {
-                                // For now, just use the first available body
-                                // TODO: Match by parameter signature
-                                matches!(body.kind, ClangNodeKind::CompoundStmt)
+                        .and_then(|methods| {
+                            // Find method with matching parameter count
+                            let param_count = params.len();
+                            methods.iter().find(|m| {
+                                m.param_names.len() == param_count
+                                    && matches!(m.body.kind, ClangNodeKind::CompoundStmt)
+                            }).or_else(|| {
+                                // Fall back to first available body if param count doesn't match
+                                methods.iter().find(|m| matches!(m.body.kind, ClangNodeKind::CompoundStmt))
                             }).cloned()
                         });
 
-                    if let Some(body) = body_opt {
+                    if let Some(method_info) = method_info_opt {
+                        // Register LibTooling parameter names as local variables
+                        // This ensures DeclRefExpr lookups work for parameters
+                        for param_name in &method_info.param_names {
+                            if !param_name.is_empty() {
+                                self.local_vars.insert(sanitize_identifier(param_name));
+                            }
+                        }
                         // Generate the actual method body
-                        self.generate_block_contents(&body.children, return_type);
+                        self.generate_block_contents(&method_info.body.children, return_type);
                     } else {
                         self.writeln("todo!(\"Template method body\")");
                     }

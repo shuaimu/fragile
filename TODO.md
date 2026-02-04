@@ -428,10 +428,13 @@ The current implementation uses forbidden patterns (see `docs/dev/wrong.md`). Th
     - extract_specialization_field_types() in libtooling.rs correctly extracts fields
     - The problem is NOT extraction, but MATCHING (see 27.8.3.4)
 
-  - [ ] **27.8.3.2** Fix parameter extraction in method body conversion
-    - Issue: Parameters appear as ParmVarDecl but aren't tracked by name
-    - Location: libtooling.rs `convert_to_clang_node()` and `extract_method_bodies()`
-    - Fix: Extract parameter names from CXXMethodDecl children before CompoundStmt
+  - [x] **27.8.3.2** Fix parameter extraction in method body conversion ✅
+    - **FIXED** - ParmVarDecl nodes were not being exported from LibTooling!
+    - Added `VisitParmVarDecl()` in AstExporter.cpp to export parameter declarations
+    - Created `MethodInfo` struct to hold param names + body
+    - Created `extract_method_bodies_with_params()` function
+    - Updated `AstCodeGen` to register parameter names as local variables
+    - Result: 19874 ParmVarDecl nodes now exported, methods have proper param names
 
   - [ ] **27.8.3.3** Fix variable declaration propagation in method bodies
     - Issue: Variables like __n, __max declared in C++ body aren't captured

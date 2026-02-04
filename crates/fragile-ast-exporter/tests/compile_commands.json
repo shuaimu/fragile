@@ -1,0 +1,7 @@
+[
+  {
+    "directory": "/home/shuai/workspace/fragile/crates/fragile-ast-exporter/tests",
+    "command": "/usr/bin/clang++ -std=c++17 -c test_template.cpp -o test_template.o",
+    "file": "test_template.cpp"
+  }
+]
