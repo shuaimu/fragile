@@ -3561,6 +3561,12 @@ impl AstCodeGen {
                                 self.local_vars.insert(sanitize_identifier(param_name));
                             }
                         }
+                        // Also register all VarDecls from the method body as local variables
+                        // This ensures that variables declared inside the C++ method body are recognized
+                        let body_vardecls = Self::extract_vardecl_names(&method_info.body);
+                        for var_name in &body_vardecls {
+                            self.local_vars.insert(sanitize_identifier(var_name));
+                        }
                         // Generate the actual method body
                         self.generate_block_contents(&method_info.body.children, return_type);
                     } else {
@@ -4032,6 +4038,34 @@ impl AstCodeGen {
         self.writeln("");
     }
 
+    /// Extract all VarDecl names from a ClangNode tree.
+    /// This is used to pre-register local variables before generating method bodies.
+    fn extract_vardecl_names(node: &ClangNode) -> Vec<String> {
+        let mut names = Vec::new();
+        Self::extract_vardecl_names_recursive(node, &mut names);
+        names
+    }
+
+    /// Recursive helper for extract_vardecl_names
+    fn extract_vardecl_names_recursive(node: &ClangNode, names: &mut Vec<String>) {
+        // Check if this node is a VarDecl
+        if let ClangNodeKind::VarDecl { name, .. } = &node.kind {
+            if !name.is_empty() {
+                names.push(name.clone());
+            }
+        }
+        // Also check for ParmVarDecl (in case of nested function-like constructs)
+        if let ClangNodeKind::ParmVarDecl { name, .. } = &node.kind {
+            if !name.is_empty() {
+                names.push(name.clone());
+            }
+        }
+        // Recurse into children
+        for child in &node.children {
+            Self::extract_vardecl_names_recursive(child, names);
+        }
+    }
+
     /// Generate methods from LibTooling bodies that weren't already generated from AST.
     ///
     /// This handles methods like operator[] that libclang may not expose for template
@@ -4151,6 +4185,15 @@ impl AstCodeGen {
                     self.local_vars.insert(sanitize_identifier(param_name));
                 }
             }
+
+            // Also register all VarDecls from the method body as local variables
+            // This ensures that variables declared inside the C++ method body are recognized
+            // as declared when generating the Rust code
+            let body_vardecls = Self::extract_vardecl_names(&info.body);
+            for var_name in &body_vardecls {
+                self.local_vars.insert(sanitize_identifier(var_name));
+            }
+
             self.generate_block_contents(&info.body.children, &body_return_type);
 
             self.indent -= 1;
