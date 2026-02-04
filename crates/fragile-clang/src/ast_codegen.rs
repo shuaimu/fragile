@@ -342,6 +342,9 @@ pub struct AstCodeGen {
     /// Types containing std_ffi_c_void that need placeholder struct stubs
     /// These are unresolved template instantiations with void placeholders
     void_placeholder_types: HashSet<String>,
+    /// Generated opaque types for unresolved template parameters
+    /// Maps opaque type name (e.g., "__Opaque_Key") to original param name (e.g., "_Key")
+    opaque_types: HashMap<String, String>,
     /// Inline namespace aliases: maps parent namespace path to full path with inline namespace
     /// e.g., "std" -> "std::__1" means std::map should resolve to std::__1::map
     inline_namespace_aliases: HashMap<String, String>,
@@ -425,6 +428,7 @@ impl AstCodeGen {
             variadic_template_instantiations: HashMap::new(),
             used_types: HashMap::new(),
             void_placeholder_types: HashSet::new(),
+            opaque_types: HashMap::new(),
             inline_namespace_aliases: HashMap::new(),
             libtooling_method_bodies: HashMap::new(),
             specialization_field_types: HashMap::new(),
@@ -562,6 +566,149 @@ impl AstCodeGen {
             }
         }
         false
+    }
+
+    /// Extract all template parameter names from an unresolved type string.
+    /// Returns a list of parameter names found (e.g., ["_Key", "_Value", "type-parameter-0-0"]).
+    fn extract_template_params(s: &str) -> Vec<String> {
+        let mut params = Vec::new();
+
+        // Check for type-parameter-N-M patterns (hyphenated version from LibTooling)
+        let mut rest = s;
+        while let Some(idx) = rest.find("type-parameter-") {
+            let start = idx;
+            let after = &rest[start + 15..]; // after "type-parameter-"
+            // Extract the N-M part
+            let end_idx = after
+                .find(|c: char| !c.is_ascii_digit() && c != '-')
+                .unwrap_or(after.len());
+            if end_idx > 0 {
+                let param_name = format!("type-parameter-{}", &after[..end_idx]);
+                if !params.contains(&param_name) {
+                    params.push(param_name);
+                }
+            }
+            rest = &rest[start + 15 + end_idx..];
+        }
+
+        // Check for type_parameter_N_M patterns (underscore version from Clang AST)
+        let mut rest = s;
+        while let Some(idx) = rest.find("type_parameter_") {
+            let start = idx;
+            let after = &rest[start + 15..]; // after "type_parameter_"
+            let end_idx = after
+                .find(|c: char| !c.is_ascii_digit() && c != '_')
+                .unwrap_or(after.len());
+            if end_idx > 0 {
+                let param_name = format!("type_parameter_{}", &after[..end_idx]);
+                if !params.contains(&param_name) {
+                    params.push(param_name);
+                }
+            }
+            rest = &rest[start + 15 + end_idx..];
+        }
+
+        // Check for embedded double-underscore param patterns (__Tp, __Alloc, etc.)
+        let embedded_params = [
+            "__Tp", "__Alloc", "__CharT", "__Traits", "___Alloc",
+        ];
+        for param in embedded_params {
+            if s.contains(param) && !params.contains(&param.to_string()) {
+                params.push(param.to_string());
+            }
+        }
+
+        // Check for named template parameters: _Tp, _Alloc, _Key, _Value, etc.
+        // Use has_template_param_pattern to avoid partial matches
+        let named_params = [
+            "_Tp", "_Alloc", "_Key", "_Value", "_Hash", "_Pred", "_Equal",
+            "_Compare", "_Args", "_CharT", "_Traits", "_Allocator", "_Container",
+            "_NodeAlloc", "_NodePtr", "_VoidPtr", "_MapType", "_Pointer",
+        ];
+
+        for param in named_params {
+            if Self::has_template_param_pattern(s, param) && !params.contains(&param.to_string()) {
+                params.push(param.to_string());
+            }
+        }
+
+        params
+    }
+
+    /// Convert a template parameter name to an opaque type name.
+    /// Examples:
+    /// - "type-parameter-0-0" -> "__Opaque_T0_0"
+    /// - "type_parameter_0_0" -> "__Opaque_T0_0"
+    /// - "_Key" -> "__Opaque_Key"
+    /// - "__Tp" -> "__Opaque__Tp"
+    /// - "_Tp" -> "__Opaque_Tp"
+    fn param_to_opaque_type(param: &str) -> String {
+        if param.starts_with("type-parameter-") {
+            // Convert type-parameter-N-M to __Opaque_TN_M
+            let suffix = &param["type-parameter-".len()..];
+            let clean = suffix.replace('-', "_");
+            format!("__Opaque_T{}", clean)
+        } else if param.starts_with("type_parameter_") {
+            // Convert type_parameter_N_M to __Opaque_TN_M
+            let suffix = &param["type_parameter_".len()..];
+            format!("__Opaque_T{}", suffix)
+        } else if param.starts_with("___") {
+            // Convert ___Alloc to __Opaque___Alloc
+            format!("__Opaque{}", param)
+        } else if param.starts_with("__") {
+            // Convert __Tp to __Opaque__Tp
+            format!("__Opaque{}", param)
+        } else if param.starts_with('_') {
+            // Convert _Key to __Opaque_Key
+            format!("__Opaque{}", param)
+        } else {
+            format!("__Opaque_{}", param)
+        }
+    }
+
+    /// Convert an unresolved type to use opaque placeholder types instead of c_void.
+    /// Returns the converted type string and a list of opaque types that need generation.
+    /// This is a fallback for when LibTooling match fails and template substitution
+    /// still has unresolved parameters.
+    fn convert_to_opaque_type(&self, unresolved_type: &str) -> (String, Vec<(String, String)>) {
+        let params = Self::extract_template_params(unresolved_type);
+
+        if params.is_empty() {
+            // No template params found, fall back to c_void
+            return ("std::ffi::c_void".to_string(), vec![]);
+        }
+
+        // Replace template params with opaque types
+        let mut result = unresolved_type.to_string();
+        let mut opaque_types = Vec::new();
+
+        for param in params {
+            let opaque_name = Self::param_to_opaque_type(&param);
+
+            // Replace the parameter in the type string
+            if param.starts_with("type-parameter-") || param.starts_with("type_parameter_") {
+                // Direct replacement for Clang-generated param names
+                result = result.replace(&param, &opaque_name);
+            } else if param.starts_with("__") || param.starts_with("___") {
+                // For embedded double/triple underscore params, do direct replacement
+                result = result.replace(&param, &opaque_name);
+            } else {
+                // For named params, use careful substitution to avoid partial matches
+                result = Self::substitute_template_arg_in_string(&result, &param, &opaque_name);
+            }
+
+            opaque_types.push((opaque_name, param));
+        }
+
+        // Clean up the result - convert to a valid Rust type if it's still complex
+        // If the result still has < > but now with opaque types, convert to a struct name
+        if result.contains('<') {
+            // Convert to a Rust-friendly struct name
+            let rust_type = CppType::Named(result.clone()).to_rust_type_str();
+            (rust_type, opaque_types)
+        } else {
+            (result, opaque_types)
+        }
     }
 
     /// Substitute a named template parameter when it appears as a template argument.
@@ -788,10 +935,83 @@ impl AstCodeGen {
         // Generate placeholder structs for types that were used but not defined
         self.generate_missing_type_stubs();
 
+        // Generate opaque type stubs for unresolved template parameters
+        self.generate_opaque_type_stubs();
+
         // Generate placeholder structs for void placeholder types (unresolved template instantiations)
         self.generate_void_placeholder_stubs();
 
         self.output
+    }
+
+    /// Generate opaque type stubs for unresolved template parameters.
+    /// These are created when LibTooling matching fails and we fall back from c_void
+    /// to opaque types that preserve type identity.
+    fn generate_opaque_type_stubs(&mut self) {
+        if self.opaque_types.is_empty() {
+            return;
+        }
+
+        // Clone to avoid borrow issues, sort for deterministic output
+        let mut types: Vec<_> = self.opaque_types.iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        types.sort_by_key(|(name, _)| name.clone());
+
+        self.writeln("");
+        self.writeln("// ==========================================================");
+        self.writeln("// Opaque types for unresolved template parameters");
+        self.writeln("// These provide type safety when template substitution fails");
+        self.writeln("// ==========================================================");
+        self.writeln("");
+
+        for (opaque_name, param_name) in types {
+            // Skip if already generated
+            if self.generated_structs.contains(&opaque_name) {
+                continue;
+            }
+
+            self.writeln(&format!("/// Opaque placeholder for template parameter `{}`", param_name));
+            self.writeln(&format!("/// Used when LibTooling cannot resolve the concrete type"));
+            self.writeln("#[repr(C)]");
+            self.writeln(&format!("pub struct {} {{", opaque_name));
+            self.indent += 1;
+            self.writeln("_opaque: [u8; 8], // size of a pointer");
+            self.indent -= 1;
+            self.writeln("}");
+            self.writeln("");
+
+            // Generate Clone impl
+            self.writeln(&format!("impl Clone for {} {{", opaque_name));
+            self.indent += 1;
+            self.writeln("fn clone(&self) -> Self {");
+            self.indent += 1;
+            self.writeln("Self { _opaque: self._opaque }");
+            self.indent -= 1;
+            self.writeln("}");
+            self.indent -= 1;
+            self.writeln("}");
+            self.writeln("");
+
+            // Generate Copy impl (opaque types are Copy for simplicity)
+            self.writeln(&format!("impl Copy for {} {{}}", opaque_name));
+            self.writeln("");
+
+            // Generate Default impl
+            self.writeln(&format!("impl Default for {} {{", opaque_name));
+            self.indent += 1;
+            self.writeln("fn default() -> Self {");
+            self.indent += 1;
+            self.writeln("Self { _opaque: [0u8; 8] }");
+            self.indent -= 1;
+            self.writeln("}");
+            self.indent -= 1;
+            self.writeln("}");
+            self.writeln("");
+
+            // Mark as generated
+            self.generated_structs.insert(opaque_name.clone());
+        }
     }
 
     /// Generate placeholder structs for unresolved template types.
@@ -2513,7 +2733,12 @@ impl AstCodeGen {
                         // Fall back to template substitution
                         let rust_type = self.substitute_template_type(ty, &subst_map);
                         if Self::has_unresolved_template_placeholder(&rust_type) {
-                            "std::ffi::c_void".to_string()
+                            // Use opaque types instead of c_void for better type preservation
+                            let (opaque_type, new_opaques) = self.convert_to_opaque_type(&rust_type);
+                            for (opaque_name, param_name) in new_opaques {
+                                self.opaque_types.insert(opaque_name, param_name);
+                            }
+                            opaque_type
                         } else {
                             rust_type
                         }
@@ -2522,7 +2747,12 @@ impl AstCodeGen {
                     // No LibTooling info - use template substitution
                     let rust_type = self.substitute_template_type(ty, &subst_map);
                     if Self::has_unresolved_template_placeholder(&rust_type) {
-                        "std::ffi::c_void".to_string()
+                        // Use opaque types instead of c_void for better type preservation
+                        let (opaque_type, new_opaques) = self.convert_to_opaque_type(&rust_type);
+                        for (opaque_name, param_name) in new_opaques {
+                            self.opaque_types.insert(opaque_name, param_name);
+                        }
+                        opaque_type
                     } else {
                         rust_type
                     }

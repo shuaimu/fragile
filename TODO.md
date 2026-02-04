@@ -305,10 +305,12 @@ The current implementation uses forbidden patterns (see `docs/dev/wrong.md`). Th
       - Added `template_args_match()`: combines all normalization logic
       - **Result**: Matches increased from ~3 to 14, including `std::map<int, int, ...>` and `__tree_node_base<void *>`
 
-    - [ ] **27.8.1.2.3** Improve fallback when LibTooling match fails
-      - Instead of c_void, try to deduce field types from method usage
-      - Or: Generate fields as generic type parameters
-      - Test: Fields have meaningful types, not c_void
+    - [x] **27.8.1.2.3** Improve fallback when LibTooling match fails ✅
+      - Added `extract_template_params()`: extracts template param names from unresolved types
+      - Added `param_to_opaque_type()`: converts params to opaque type names (e.g., `_Key` → `__Opaque_Key`)
+      - Added `convert_to_opaque_type()`: replaces template params with opaque types instead of c_void
+      - Added `generate_opaque_type_stubs()`: generates struct definitions for opaque types with Clone, Copy, Default
+      - **Result**: Fields now use type-preserving opaque types (e.g., `__Opaque__Alloc`) instead of generic `c_void`
 
     - [ ] **27.8.1.2.4** Remove field access rollback patterns after fixes
       - Only remove patterns for which the underlying issue is fixed
