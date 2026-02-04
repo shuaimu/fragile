@@ -3028,22 +3028,48 @@ impl AstCodeGen {
                         || (generated.contains("c_void") && generated.contains("["))
                         // Methods with undeclared __tiestr variable
                         || (generated.contains("__tiestr") && !generated.contains("__tiestr:") && !generated.contains("let __tiestr") && !generated.contains("let mut __tiestr"))
-                        // Methods with undeclared __last variable
-                        || (generated.contains("__last)") && !generated.contains("__last:") && !generated.contains("let __last") && !generated.contains("let mut __last"))
-                        // Methods with undeclared __low variable
-                        || (generated.contains("__low)") && !generated.contains("__low:") && !generated.contains("let __low") && !generated.contains("let mut __low"))
-                        // Methods with undeclared __high variable
-                        || (generated.contains("__high)") && !generated.contains("__high:") && !generated.contains("let __high") && !generated.contains("let mut __high"))
-                        // Methods with undeclared __to variable
-                        || (generated.contains("(__to)") && !generated.contains("__to:") && !generated.contains("let __to") && !generated.contains("let mut __to"))
+                        // Methods with undeclared __last variable (in function args or return statements)
+                        || ((generated.contains("__last)") || generated.contains("__last;")) && !generated.contains("__last:") && !generated.contains("let __last") && !generated.contains("let mut __last"))
+                        // Methods with undeclared __low variable (any usage)
+                        || (generated.contains("__low") && !generated.contains("__low:") && !generated.contains("let __low") && !generated.contains("let mut __low") && !generated.contains("__lower"))
+                        // Methods with undeclared __high variable (any usage)
+                        || (generated.contains("__high") && !generated.contains("__high:") && !generated.contains("let __high") && !generated.contains("let mut __high") && !generated.contains("__higher"))
+                        // Methods with undeclared __to variable (any usage)
+                        || (generated.contains("__to") && !generated.contains("__to:") && !generated.contains("let __to") && !generated.contains("let mut __to") && !generated.contains("__to_") && !generated.contains("__top"))
+                        // Methods with undeclared __s1 variable
+                        || (generated.contains("__s1") && !generated.contains("__s1:") && !generated.contains("let __s1") && !generated.contains("let mut __s1"))
+                        // Methods with undeclared __s2 variable
+                        || (generated.contains("__s2") && !generated.contains("__s2:") && !generated.contains("let __s2") && !generated.contains("let mut __s2"))
+                        // Methods with undeclared __t variable
+                        || (generated.contains("__t") && !generated.contains("__t:") && !generated.contains("let __t") && !generated.contains("let mut __t") && !generated.contains("__t_") && !generated.contains("__tr") && !generated.contains("__type") && !generated.contains("__tie"))
                         // Methods with undeclared __dest variable (function argument)
                         || (generated.contains("(__dest,") && !generated.contains("__dest:") && !generated.contains("let __dest") && !generated.contains("let mut __dest"))
                         // Methods with undeclared __src variable (function argument)
                         || (generated.contains("__src,") && !generated.contains("__src:") && !generated.contains("let __src") && !generated.contains("let mut __src"))
+                        // Methods with undeclared __i variable (index parameter)
+                        || (generated.contains("(__i)") && !generated.contains("__i:") && !generated.contains("let __i") && !generated.contains("let mut __i"))
+                        // Methods with undeclared _Min variable (returned directly)
+                        || (generated.contains("_Min;") && !generated.contains("let _Min") && !generated.contains("let mut _Min"))
+                        // Methods with undeclared __a variable (parameter)
+                        || (generated.contains("__a;") && !generated.contains("__a:") && !generated.contains("let __a") && !generated.contains("let mut __a"))
+                        // Methods with undeclared _EOFVal variable
+                        || (generated.contains("_EOFVal") && !generated.contains("let _EOFVal") && !generated.contains("let mut _EOFVal"))
+                        // Methods with undeclared __key variable (map key parameter)
+                        || (generated.contains("__key") && !generated.contains("__key:") && !generated.contains("let __key") && !generated.contains("let mut __key") && !generated.contains("__key_"))
+                        // Methods with undeclared __pos variable (position parameter)
+                        || (generated.contains("__pos") && !generated.contains("__pos:") && !generated.contains("let __pos") && !generated.contains("let mut __pos"))
+                        // Methods with undeclared _Max variable (returned directly)
+                        || (generated.contains("_Max;") && !generated.contains("let _Max") && !generated.contains("let mut _Max"))
+                        // Methods with undeclared __ptr variable
+                        || (generated.contains("__ptr") && !generated.contains("__ptr:") && !generated.contains("let __ptr") && !generated.contains("let mut __ptr") && !generated.contains(".__ptr") && !generated.contains("__ptr_"))
                         // Methods calling undefined functions
                         || generated.contains("__to_address(")
                         || generated.contains("__libcpp_deallocate(")
                         || generated.contains("__cxx_atomic_store(")
+                        // Methods with BuiltinBitCastExpr - Clang AST node that shouldn't appear
+                        || generated.contains("BuiltinBitCastExpr")
+                        // Methods calling undefined min function
+                        || (generated.contains("min(") && !generated.contains("std::cmp::min(") && !generated.contains(".min(") && !generated.contains("_min("))
                         // c_void + integer operations (impossible)
                         || generated.contains("c_void + ")
                         // Binary != on __bit_reference (no PartialEq impl)

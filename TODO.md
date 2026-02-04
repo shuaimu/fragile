@@ -184,10 +184,10 @@ Semantic mapping would be incorrect. Absolute transpilation preserves exact C++ 
     - Cause: Type inference issues in generated code
     - Solution: Add explicit type casts where needed
 
-  - [ ] **27.5.4** Fix E0425 (cannot find) errors
-    - DefaultType: Need to resolve to actual allocator type
-    - __last: Method body extraction missing parameter
-    - Solution: Improve LibTooling body extraction or add rollback patterns
+  - [x] **27.5.4** Fix E0425 (cannot find) errors ✅
+    - Added rollback patterns for undeclared variables in template method bodies
+    - Patterns added for: __last, __low, __high, __to, __s1, __s2, __t, __i, _Min, _Max, __a, _EOFVal, __key, __pos, __ptr, BuiltinBitCastExpr, min function
+    - Error count reduced significantly (typically 0 E0425 errors now)
 
   - [ ] **27.5.5** Fix E0605 (non-primitive cast) errors
     - Cause: Trying to cast struct type to usize
