@@ -458,9 +458,6 @@ pub struct AstCodeGen {
     /// Types used in the code that might need stub definitions generated
     /// Maps Rust type name -> C++ original name
     used_types: HashMap<String, String>,
-    /// Types containing std_ffi_c_void that need placeholder struct stubs
-    /// These are unresolved template instantiations with void placeholders
-    void_placeholder_types: HashSet<String>,
     /// Generated opaque types for unresolved template parameters
     /// Maps opaque type name (e.g., "__Opaque_Key") to original param name (e.g., "_Key")
     opaque_types: HashMap<String, String>,
@@ -546,7 +543,6 @@ impl AstCodeGen {
             va_list_mapping: None,
             variadic_template_instantiations: HashMap::new(),
             used_types: HashMap::new(),
-            void_placeholder_types: HashSet::new(),
             opaque_types: HashMap::new(),
             inline_namespace_aliases: HashMap::new(),
             libtooling_method_bodies: HashMap::new(),

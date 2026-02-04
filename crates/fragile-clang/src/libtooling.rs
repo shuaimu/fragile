@@ -380,28 +380,6 @@ pub fn extract_method_bodies(ctx: &AstContext) -> HashMap<(String, String), Vec<
     bodies
 }
 
-/// Find the parent class name for a method declaration (deprecated - use method_to_class map).
-fn find_parent_class_name(ctx: &AstContext, _method_id: u64) -> String {
-    // Search for CXXRecordDecl or ClassTemplateSpecializationDecl that contains this method
-    for (_id, node) in &ctx.ast_nodes {
-        if node.tag == ASTEntryTag::TagCXXRecordDecl
-            || node.tag == ASTEntryTag::TagClassTemplateSpecializationDecl
-        {
-            // Check if this record contains the method
-            // Note: This is a simplified heuristic - in practice we'd need parent pointers
-            let class_name = node.get_string(0).unwrap_or("").to_string();
-            if !class_name.is_empty() {
-                // Return the first class name we find that might be relevant
-                // In a more complete implementation, we'd check the AST hierarchy
-                return class_name;
-            }
-        }
-    }
-
-    // Fallback: return empty string (will match any class)
-    String::new()
-}
-
 /// Convert an AST exporter node to a ClangNode.
 ///
 /// This is a partial conversion - only nodes that are commonly needed
@@ -982,7 +960,7 @@ pub fn extract_specialization_field_types(ctx: &AstContext) -> HashMap<String, S
 
     let mut result = HashMap::new();
 
-    for (spec_id, node) in &ctx.ast_nodes {
+    for (_spec_id, node) in &ctx.ast_nodes {
         if node.tag != ASTEntryTag::TagClassTemplateSpecializationDecl {
             continue;
         }
