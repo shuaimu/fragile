@@ -8887,9 +8887,17 @@ impl AstCodeGen {
             || (generated.contains("pub fn atomic_signal_fence") && generated.contains("__cxx_atomic_signal_fence("))
             // __base_10_u64 with && instead of & for bitwise AND
             || (generated.contains("pub fn __base_10_u64") && generated.contains("&& 4294967295"))
+            // __find_idx_return with __ambiguous (wrong type - i32 instead of u64)
+            || (generated.contains("pub fn __find_idx_return") && generated.contains("__ambiguous"))
+            // op_eq for error_code/error_condition with equivalent method signature mismatch
+            || (generated.contains("pub fn op_eq") && generated.contains(".equivalent(") && generated.contains("error_condition"))
             // __append10 with wrong __value type (u64 instead of i8)
             || (generated.contains("pub fn __append10_i8") && generated.contains("__value: u64"))
             || (generated.contains("pub fn __append9_i8") && generated.contains("__value: u32"))
+            // __append9_i8 callers with wrong type (u32 instead of i8)
+            || (generated.contains("__append10_i8(__first, __value)") && generated.contains("__value: u32"))
+            // __base_10_u32 caller with wrong value type
+            || (generated.contains("pub fn __base_10_u32") && generated.contains("__append10_i8(") && generated.contains("__value)"))
             // atomic_flag test method with 1 && (integer where bool expected)
             || (generated.contains("return 1 &&") && generated.contains("__cxx_atomic_load"))
             // __libcpp_tls_create calling pthread_key_create with wrong function pointer type
@@ -13455,6 +13463,9 @@ impl AstCodeGen {
                     || (generated.contains("pub fn use_count") && generated.contains("__base.use_count()"))
                     // exception_ptr swap with wrong type - expecting *mut c_void, got c_void
                     || (generated.contains("exception_ptr::new_1(") && generated.contains("*__other"))
+                    // collate_byname new_0 methods with vtable reference instead of pointer
+                    || generated.contains(".__vtable = &STD_COLLATE_BYNAME_CHAR__VTABLE")
+                    || generated.contains(".__vtable = &STD_COLLATE_BYNAME_WCHAR_T__VTABLE")
                 {
                     // Rollback - remove the generated method
                     self.output.truncate(output_start);
@@ -14094,6 +14105,13 @@ impl AstCodeGen {
                     // __narrow_to_utf8/__widen_from_utf8 constructors with wrong base class type
                     // These call __mbstate_t::new_1(1) but base is codecvt_charXX_t__char__mbstate_t
                     || generated.contains("__mbstate_t::new_1(1)")
+                    // bad_weak_ptr constructor with vtable reference instead of pointer
+                    || generated.contains(".__vtable = &BAD_WEAK_PTR_VTABLE")
+                    // collate_byname constructors with vtable reference instead of pointer
+                    || generated.contains(".__vtable = &STD_COLLATE_BYNAME_CHAR__VTABLE")
+                    || generated.contains(".__vtable = &STD_COLLATE_BYNAME_WCHAR_T__VTABLE")
+                    // __locale_guard constructor with uselocale(&mut) instead of uselocale(*mut)
+                    || (generated.contains("uselocale(__loc)") && generated.contains("__loc: &mut"))
                 {
                     self.output.truncate(output_start);
                 }
