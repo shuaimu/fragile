@@ -336,11 +336,23 @@ The current implementation uses forbidden patterns (see `docs/dev/wrong.md`). Th
     - Root cause: Virtual table references in constructor initializers
     - Fix: Handle vtable initialization properly
     - Test: Classes with virtual functions compile without vtable errors
+    - **Analysis (2026-02-04)**:
+      - Vtable constants ARE generated in preamble (STD_CTYPE_CHAR__VTABLE, etc.)
+      - Problem: Constructor code does `.__vtable = &STD_XXX_VTABLE` but struct layout mismatch
+      - Affects: ctype<char>, ctype<wchar_t>, collate_byname<char/wchar_t>
+      - Current count: 16 vtable-related rollback patterns
+      - Fix requires: Coordinating struct layout with constructor vtable init code
 
-  - [ ] **27.8.1.5** Fix builtin/intrinsic calls (8 patterns → 0)
+  - [x] **27.8.1.5** Fix builtin/intrinsic calls (8 patterns → 0) ✅
     - Root cause: Calls to `__builtin_*`, `__libcpp_*` not being transpiled
     - Fix: Add mappings for common builtins
     - Test: Code using builtins compiles
+    - **Added mappings for**:
+      - `__builtin_operator_new` → `std::alloc::alloc` with Layout
+      - `__builtin_operator_delete` → `std::alloc::dealloc` with Layout
+      - `__libcpp_deallocate` → `std::alloc::dealloc` with size/align
+      - `__libcpp_unreachable` → `std::hint::unreachable_unchecked()`
+      - `__libcpp_atomic_refcount_increment/decrement` → atomic-like operations
 
   - [ ] **27.8.1.6** Fix remaining patterns (133 patterns → 0)
     - After 27.8.1.2-27.8.1.5, reassess remaining patterns

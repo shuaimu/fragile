@@ -4757,6 +4757,94 @@ impl AstCodeGen {
                     None
                 }
             }
+
+            // Memory allocation/deallocation builtins
+            // Note: These are simplified - real implementation would need alignment handling
+            "__builtin_operator_new" => {
+                // __builtin_operator_new(size) -> std::alloc::alloc(Layout::from_size_align_unchecked(size, 8))
+                if !args.is_empty() {
+                    Some((
+                        format!(
+                            "std::alloc::alloc(std::alloc::Layout::from_size_align_unchecked({} as usize, 8)) as *mut _",
+                            args[0]
+                        ),
+                        true,
+                    ))
+                } else {
+                    None
+                }
+            }
+            "__builtin_operator_delete" => {
+                // __builtin_operator_delete(ptr) -> std::alloc::dealloc(ptr, Layout::from_size_align_unchecked(1, 1))
+                // Note: We don't have the original size, so we use a minimal layout
+                if !args.is_empty() {
+                    Some((
+                        format!(
+                            "std::alloc::dealloc({} as *mut u8, std::alloc::Layout::from_size_align_unchecked(1, 1))",
+                            args[0]
+                        ),
+                        true,
+                    ))
+                } else {
+                    None
+                }
+            }
+            "__libcpp_deallocate" => {
+                // __libcpp_deallocate(ptr, size, align) or __libcpp_deallocate(ptr, size)
+                if args.len() >= 2 {
+                    let align = if args.len() >= 3 { &args[2] } else { "8" };
+                    Some((
+                        format!(
+                            "std::alloc::dealloc({} as *mut u8, std::alloc::Layout::from_size_align_unchecked({} as usize, {} as usize))",
+                            args[0], args[1], align
+                        ),
+                        true,
+                    ))
+                } else if !args.is_empty() {
+                    Some((
+                        format!(
+                            "std::alloc::dealloc({} as *mut u8, std::alloc::Layout::from_size_align_unchecked(1, 1))",
+                            args[0]
+                        ),
+                        true,
+                    ))
+                } else {
+                    None
+                }
+            }
+            "__libcpp_unreachable" => {
+                // __libcpp_unreachable() -> std::hint::unreachable_unchecked()
+                Some(("std::hint::unreachable_unchecked()".to_string(), true))
+            }
+            "__libcpp_atomic_refcount_increment" | "__libcpp_atomic_refcount_increment_i64" => {
+                // Atomic increment - returns old value
+                // __libcpp_atomic_refcount_increment(&ptr) -> atomic fetch_add
+                if !args.is_empty() {
+                    Some((
+                        format!(
+                            "{{ let __p = {} as *mut i64; let __old = *__p; *__p = __old.wrapping_add(1); __old }}",
+                            args[0]
+                        ),
+                        true,
+                    ))
+                } else {
+                    Some(("0i64".to_string(), false))
+                }
+            }
+            "__libcpp_atomic_refcount_decrement" | "__libcpp_atomic_refcount_decrement_i64" => {
+                // Atomic decrement - returns old value
+                if !args.is_empty() {
+                    Some((
+                        format!(
+                            "{{ let __p = {} as *mut i64; let __old = *__p; *__p = __old.wrapping_sub(1); __old }}",
+                            args[0]
+                        ),
+                        true,
+                    ))
+                } else {
+                    Some(("0i64".to_string(), false))
+                }
+            }
             _ => None,
         }
     }
