@@ -2524,10 +2524,18 @@ impl AstCodeGen {
     ) {
         // Skip template DEFINITIONS that have unresolved type parameters.
         // Only generate structs for actual instantiations with concrete types.
-        if inst_name.contains("_Tp")
-            || inst_name.contains("_Alloc")
-            || inst_name.contains("type-parameter-")
-        {
+        // Check if any type argument is:
+        // 1. A generic type parameter (like _CharT, _Traits, _Rp, etc.)
+        // 2. A dependent type (like value_type, size_type, etc.)
+        let has_unresolved_args = type_args.iter().any(|arg| {
+            Self::is_generic_type_param(arg) || Self::is_dependent_type(arg)
+        });
+        if has_unresolved_args {
+            return;
+        }
+
+        // Also skip explicit patterns in inst_name as a fallback
+        if inst_name.contains("type-parameter-") {
             return;
         }
 
@@ -17091,10 +17099,17 @@ impl AstCodeGen {
                                 | "std::float_denorm_style"
                         );
                         if is_enum {
-                            // memory_order is represented as i32 constants in generated code,
-                            // so just return the integer value directly (no transmute needed)
+                            // memory_order has a proper Rust enum with named variants
                             if name == "memory_order" || name == "std::memory_order" {
-                                return format!("{}i32", val);
+                                return match *val {
+                                    0 => "memory_order::relaxed".to_string(),
+                                    1 => "memory_order::consume".to_string(),
+                                    2 => "memory_order::acquire".to_string(),
+                                    3 => "memory_order::release".to_string(),
+                                    4 => "memory_order::acq_rel".to_string(),
+                                    5 => "memory_order::seq_cst".to_string(),
+                                    _ => format!("unsafe {{ std::mem::transmute::<i32, memory_order>({}i32) }}", val),
+                                };
                             }
                             let rust_type = ty.to_rust_type_str();
                             return format!(
@@ -17302,10 +17317,17 @@ impl AstCodeGen {
                                 | "std::float_denorm_style"
                         );
                         if is_enum {
-                            // memory_order is represented as i32 constants in generated code,
-                            // so just return the integer value directly (no transmute needed)
+                            // memory_order has a proper Rust enum with named variants
                             if name == "memory_order" || name == "std::memory_order" {
-                                return format!("{}i32", val);
+                                return match *val {
+                                    0 => "memory_order::relaxed".to_string(),
+                                    1 => "memory_order::consume".to_string(),
+                                    2 => "memory_order::acquire".to_string(),
+                                    3 => "memory_order::release".to_string(),
+                                    4 => "memory_order::acq_rel".to_string(),
+                                    5 => "memory_order::seq_cst".to_string(),
+                                    _ => format!("unsafe {{ std::mem::transmute::<i32, memory_order>({}i32) }}", val),
+                                };
                             }
                             let rust_type = ty.to_rust_type_str();
                             return format!(

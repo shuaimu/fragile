@@ -447,7 +447,11 @@ The current implementation uses forbidden patterns (see `docs/dev/wrong.md`). Th
          - Added `find_matching_close_angle()` helper to properly parse template args
          - Skip names with `::` after template closing `>`
     - Result: Many more specializations now match (e.g., `unique_lock<_Mutex>`, `__map_value_compare`, etc.)
-    - Remaining issues are type mismatches in return types (task 27.8.3.2-3)
+
+  - **Progress Update**:
+    - Fixed unresolved template struct generation (skip structs with generic type args like `_CharT`)
+    - Fixed memory_order enum value generation (use `memory_order::seq_cst` instead of `5i32`)
+    - Map test now compiles with **0 errors** (down from 14 errors)
 
 - [ ] **27.8.4** Add runtime correctness tests
   - Compilation success is NOT sufficient
