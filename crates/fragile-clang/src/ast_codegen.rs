@@ -3111,10 +3111,15 @@ impl AstCodeGen {
                         || (generated.contains(".__size_ }) + 0") && rust_name.contains("basic_string_view"))
                         // Methods with fill returning c_void
                         || (generated.contains("pub fn fill(") && generated.contains("-> std::ffi::c_void"))
+                        // Methods with data() or data_1() with empty body returning unit type
+                        || (generated.contains("pub fn data(&mut self)") && generated.contains("{\n"))
+                        || (generated.contains("pub fn data_1(&mut self)") && generated.contains("{\n"))
                         // Methods with data() returning c_void via empty body
                         || (generated.contains("pub fn data(") && generated.contains("return unsafe { (*self)") && generated.contains("-> std::ffi::c_void"))
                         // Methods with data_1 returning c_void
                         || (generated.contains("pub fn data_1(") && generated.contains("-> std::ffi::c_void"))
+                        // Methods with fill_1 taking and returning c_void
+                        || (generated.contains("pub fn fill_1(") && generated.contains("__ch: std::ffi::c_void)") && generated.contains("-> std::ffi::c_void"))
                         // Methods dereferencing c_void via __current_
                         || (generated.contains("*unsafe { (*self).__current_ }") && (rust_name.contains("common_iterator") || rust_name.contains("istreambuf_iterator") || rust_name.contains("istream_iterator") || rust_name.contains("__wrap_iter")))
                         // Methods dereferencing c_void via __current_ with as cast
@@ -3130,6 +3135,9 @@ impl AstCodeGen {
                         // Methods returning get/get_1 that return c_void pointers from broken bodies
                         || (generated.contains("pub fn get(") && generated.contains("*mut std::ffi::c_void") && generated.contains(".__ptr_"))
                         || (generated.contains("pub fn get_1(") && generated.contains("*const std::ffi::c_void") && generated.contains(".__ptr_"))
+                        // Methods with get/get_1 on tuple_leaf casting self as i32
+                        || (generated.contains("pub fn get(") && generated.contains("return self as i32"))
+                        || (generated.contains("pub fn get_1(") && generated.contains("return self as i32"))
                         // Methods casting 0 to duration type
                         || (generated.contains("return 0 as _") && (rust_name.contains("duration") || rust_name.contains("time_point")))
                         // Methods returning base() that access missing fields
@@ -3203,7 +3211,7 @@ impl AstCodeGen {
                         // Methods accessing __bufptr_ on basic_ios
                         || (rust_name.contains("basic_ios") && generated.contains(".__bufptr_"))
                         // Methods accessing __ptr_ on types without it (many iterator and wrapper types)
-                        || (generated.contains(".__ptr_") && (rust_name.contains("counted_iterator") || rust_name.contains("basic_ios") || rust_name.contains("unique_ptr") || rust_name.contains("__bit_reference") || rust_name.contains("__bit_const_reference") || rust_name.contains("unique_lock") || rust_name.contains("move_iterator") || rust_name.contains("__hash_const") || rust_name.contains("insert_iterator") || rust_name.contains("ostreambuf_iterator") || rust_name.contains("__hash_map") || rust_name.contains("back_insert_iterator") || rust_name.contains("front_insert_iterator")))
+                        || (generated.contains(".__ptr_") && (rust_name.contains("counted_iterator") || rust_name.contains("basic_ios") || rust_name.contains("unique_ptr") || rust_name.contains("__bit_reference") || rust_name.contains("__bit_const_reference") || rust_name.contains("unique_lock") || rust_name.contains("move_iterator") || rust_name.contains("__hash_const") || rust_name.contains("insert_iterator") || rust_name.contains("ostreambuf_iterator") || rust_name.contains("__hash_map") || rust_name.contains("back_insert_iterator") || rust_name.contains("front_insert_iterator") || rust_name.contains("__hash_iterator") || rust_name.contains("__hash_local_iterator")))
                         // Methods calling __constexpr_wmemchr
                         || generated.contains("__constexpr_wmemchr(")
                         // Methods accessing .good as field
@@ -3252,8 +3260,9 @@ impl AstCodeGen {
                         || (generated.contains("._unnamed") && (rust_name.contains("iterator") || rust_name.contains("common_iterator") || rust_name.contains("reverse_iterator") || rust_name.contains("ostreambuf_iterator") || rust_name.contains("__map_iterator") || rust_name.contains("__hash_")))
                         // Methods accessing __engaged_ on unique_ptr types
                         || (rust_name.starts_with("unique_ptr_") && generated.contains(".__engaged_"))
-                        // Methods calling clone on c_void
+                        // Methods calling clone on c_void (various patterns)
                         || generated.contains("c_void.clone()")
+                        || (generated.contains(": std::ffi::c_void)") && generated.contains(".clone()"))
                         // Methods accessing __tree_ on wrong types
                         || (generated.contains(".__tree_") && (rust_name.contains("owning_view") || rust_name.contains("subrange") || rust_name.contains("initializer_list")))
                         // Methods accessing __i_ on more iterator types
