@@ -10384,6 +10384,11 @@ impl AstCodeGen {
             "__base_10_u64" | "__base_10_u32" | "__find_idx_return" => true,
             // __cmpexch_failure_order2 - returns memory_order with i32 constants
             "__cmpexch_failure_order2" => true,
+            // Condvar functions - wrong argument types (pthread/gthread wrappers)
+            "__gthread_cond_timedwait" | "__gthread_cond_wait" | "pthread_cond_clockwait" => true,
+            // Threading swap functions - access _M_thread/_M_id/_M_stop_source on wrong types
+            "swap_thread_thread" | "swap_std_thread_id_std_thread_id"
+            | "swap_std_stop_source_std_stop_source" => true,
             // Functions also in fn template skip list that may come through generate_function()
             "__platform_notify" | "__common_trait" | "__append10" | "__append9"
             | "__constexpr_memcmp" => true,
@@ -10810,11 +10815,8 @@ impl AstCodeGen {
             || (generated.contains(".op_bitor(") && generated.contains("memory_order"))
             // __cmpexch_failure_order2 returns memory_order but uses i32 constants
             || (generated.contains("-> memory_order") && generated.contains("memory_order_acquire") && generated.contains("memory_order_relaxed"))
-            // NOTE: duplicate __waiter_pool pattern removed (simple form below already catches this)
-            // __gthread_cond_timedwait with wrong argument types
-            || generated.contains("__gthread_cond_timedwait(")
-            // pthread_cond_clockwait with wrong argument types
-            || generated.contains("pthread_cond_clockwait(")
+            // NOTE: __gthread_cond_timedwait/pthread_cond_clockwait patterns removed
+            // (is_broken_function guard skips these before generation)
             // Bool/int mixing in conditions (libstdc++ internal)
             || generated.contains("&& 16i32")
             // atomic_flag_wait functions calling rolled-back wait method
@@ -10829,12 +10831,12 @@ impl AstCodeGen {
             || (generated.contains("pub fn swap") && generated.contains(".swap(&*__"))
             // swap with wrong reference type in thread/swap constructor
             || (generated.contains("__self.swap(&__t)") && generated.contains("__t: &mut thread"))
-            // swap_std_thread_id with wrong arg types
-            || (generated.contains("swap_std_thread_id_std_thread_id(") && generated.contains("&mut __t._M_id"))
-            // sem_init/sem_destroy with wrong pointer types
+            // NOTE: swap_std_thread_id_std_thread_id pattern removed
+            // (is_broken_function guard skips swap_std_thread_id_std_thread_id before generation)
+            // NOTE: sem_init/sem_destroy/try_acquire patterns kept as safety net
+            // (these calls appear in bodies of functions beyond just the skipped ones)
             || generated.contains("sem_init(&mut")
             || generated.contains("sem_destroy(&mut")
-            // _S_do_try_acquire with wrong pointer types
             || generated.contains("_S_do_try_acquire(&mut")
             // NOTE: __c11_atomic_thread_fence/__c11_atomic_signal_fence u32 patterns removed
             // (is_broken_function guard skips __cxx_atomic_thread_fence/signal_fence before generation)
@@ -10863,33 +10865,13 @@ impl AstCodeGen {
             || (generated.contains("__state.clone()") && generated.contains("_M_state: "))
             // Clone impl calling new_1 with wrong type
             || (generated.contains("Self::new_1(self)") && generated.contains("impl Clone"))
-            // swap methods with wrong argument types
-            || (generated.contains("swap_std_stop_source_std_stop_source(") && generated.contains("__other._M_stop_source"))
-            || (generated.contains("swap_thread_thread(") && generated.contains("__other._M_thread"))
-            || (generated.contains("swap_std_thread_id_std_thread_id(") && generated.contains("__t._M_id"))
-            // get_stop_source calling clone on stop_source (Clone impl was skipped)
-            || (generated.contains("self._M_stop_source.clone()"))
-            // NOTE: atomic_flag_clear/atomic_flag_wait patterns removed
-            // (is_broken_function guard skips these before generation)
-            // NOTE: __platform_notify pattern removed
-            // (is_broken_function guard skips __platform_notify before generation)
-            // NOTE: inf.0 and NaN.0 patterns removed - fixed by proper handling of special float values
-            // thread::swap calling swap_std_thread_id with wrong argument types
-            || (generated.contains("swap_std_thread_id_std_thread_id(&mut self._M_id"))
-            // thread::native_handle accessing _M_thread on id (wrong type)
-            || (generated.contains("self._M_id._M_thread"))
-            // operator== on thread_id accessing _M_thread field on u64 type alias
-            || (generated.contains("pub fn op_eq") && generated.contains("._M_thread =="))
-            // NOTE: atomic_flag_test pattern removed
-            // (is_broken_function guard skips atomic_flag_test/atomic_flag_test_explicit before generation)
-            // op_____ functions accessing _M_thread on thread_id type
-            || (generated.contains("__x._M_thread.cmp("))
-            // __condvar Drop with bool/int mixing in condition
-            || (generated.contains("impl Drop for __condvar") && generated.contains("&& 16i32"))
-            // stop_source methods that call clone on c_void
-            || (generated.contains("pub fn get_token") && generated.contains("stop_token::new_1(self._M_state)"))
-            // jthread methods with stop_source/thread issues
-            || (generated.contains("pub fn get_stop_token") && generated.contains("stop_token::new_1("))
+            // NOTE: swap_std_stop_source/swap_thread_thread/swap_std_thread_id compound patterns removed
+            // (is_broken_function guard skips these swap functions before generation)
+            // NOTE: self._M_stop_source.clone(), swap_std_thread_id_std_thread_id(&mut self._M_id),
+            // self._M_id._M_thread, op_eq+._M_thread, __x._M_thread.cmp(,
+            // impl Drop for __condvar, get_token/get_stop_token patterns removed
+            // (is_broken_method_type guard skips threading/condvar types,
+            //  is_broken_function guard skips swap functions)
             // Variadic functions with __va not defined (should be __va_args)
             || (generated.contains("__va_args: ...") && generated.contains("__va)"))
             // strong_ordering returns with bare `equal` (should be strong_ordering::equal)
@@ -12323,7 +12305,10 @@ impl AstCodeGen {
         let is_broken_drop_type = matches!(rust_name.as_str(),
             "jthread" | "thread" | "stop_token" | "stop_source"
             | "__atomic_semaphore" | "__semaphore_base" | "__platform_semaphore"
-            | "__condvar"
+            | "__condvar" | "condition_variable" | "condition_variable_any"
+            | "timed_mutex" | "recursive_timed_mutex"
+            | "counting_semaphore" | "binary_semaphore"
+            | "__waiter_pool_base"
             // Locale types - vtable reference issues, broken destructor bodies
             | "bad_weak_ptr"
         ) || rust_name.contains("ctype_")
@@ -12379,6 +12364,14 @@ impl AstCodeGen {
             || rust_name == "__atomic_semaphore"
             || rust_name == "__semaphore_base"
             || rust_name == "__platform_semaphore"
+            || rust_name == "__condvar"
+            || rust_name == "condition_variable"
+            || rust_name == "condition_variable_any"
+            || rust_name == "timed_mutex"
+            || rust_name == "recursive_timed_mutex"
+            || rust_name == "counting_semaphore"
+            || rust_name == "binary_semaphore"
+            || rust_name == "__waiter_pool_base"
             || rust_name == "bad_weak_ptr"
             || rust_name.contains("ctype_")
             || rust_name.contains("collate_byname_");
@@ -15036,8 +15029,14 @@ impl AstCodeGen {
             "jthread" | "thread" | "stop_token" | "stop_source" => true,
             // Semaphore types - broken atomic operations and sem_init/sem_destroy
             "__atomic_semaphore" | "__semaphore_base" | "__platform_semaphore" => true,
-            // Condvar type - bool/int mixing in condition
-            "__condvar" => true,
+            // Condvar types - bool/int mixing, __gthread_cond_timedwait/pthread_cond_clockwait
+            "__condvar" | "condition_variable" | "condition_variable_any" => true,
+            // Timed mutex types - call __gthread_cond_timedwait via condition_variable
+            "timed_mutex" | "recursive_timed_mutex" => true,
+            // Semaphore public types - call sem_init/sem_destroy/_S_do_try_acquire
+            "counting_semaphore" | "binary_semaphore" => true,
+            // Waiter pool - broken array initialization [__waiter_pool_base; 16]
+            "__waiter_pool_base" => true,
             // bad_weak_ptr - vtable reference instead of pointer in constructor
             "bad_weak_ptr" => true,
             _ => {
@@ -15318,15 +15317,13 @@ impl AstCodeGen {
                     // (is_broken_method_type guard skips threading types)
                     // _Hash_impl::hash_u64 not implemented
                     || generated.contains("_Hash_impl::hash_u64(")
-                    // __gthread_cond_timedwait with wrong argument types
-                    || generated.contains("__gthread_cond_timedwait(")
-                    // pthread_cond_clockwait with wrong argument types
-                    || generated.contains("pthread_cond_clockwait(")
+                    // NOTE: __gthread_cond_timedwait/pthread_cond_clockwait patterns removed
+                    // (is_broken_method_type guard skips condition_variable/timed_mutex types)
                     // Bool/int mixing in conditions (libstdc++ internal)
                     || generated.contains("&& 16i32 {")
                     || generated.contains("!__e && 16i32")
-                    // Array type mismatch in __waiter_pool
-                    || generated.contains("[__waiter_pool_base; 16] = __ct")
+                    // NOTE: [__waiter_pool_base; 16] pattern removed
+                    // (is_broken_method_type guard skips __waiter_pool_base type)
                     // Broken -1 && 0 pattern in numeric_limits
                     || generated.contains("(-1 && 0)")
                     // atomic_flag op_assign returning reference instead of bool

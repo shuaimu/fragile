@@ -101,7 +101,7 @@ crates/
 
 **After EVERY commit, read `docs/dev/wrong.md` and verify:**
 
-- [ ] No new rollback patterns added (current count: ~145 - must decrease, never increase)
+- [ ] No new rollback patterns added (current count: ~140 - must decrease, never increase)
 - [ ] No new stub method injections (hardcoded return values like `size() { 0 }`)
 - [ ] No semantic type mappings (`std::map` → `BTreeMap`)
 - [ ] No `todo!()` bodies without tracking issue
@@ -263,7 +263,7 @@ Semantic mapping would be incorrect. Absolute transpilation preserves exact C++ 
 
 The current implementation uses forbidden patterns (see `docs/dev/wrong.md`). These must be removed and replaced with proper fixes.
 
-- [~] **27.8.1** Remove rollback patterns from ast_codegen.rs (145 `|| generated.contains(` + 10 `|| (rust_name...` → 0) ⚠️ IN PROGRESS
+- [~] **27.8.1** Remove rollback patterns from ast_codegen.rs (140 `|| generated.contains(` + 10 `|| (rust_name...` → 0) ⚠️ IN PROGRESS
 
   **Status (2026-02-04)**: Primary template detection guard implemented (Option 2 from blocking
   issue). This skips impl block generation for types with unresolved template parameters, preventing
@@ -535,6 +535,23 @@ The current implementation uses forbidden patterns (see `docs/dev/wrong.md`). Th
         generate_struct(name="std::ctype<char>"), producing separate impl blocks
       - Rollback count: 155 → 145 (`|| generated.contains(` metric)
       - All 207 tests passing
+    - [x] **27.8.1.6.13** Skip methods/constructors/Drop for broken condvar/mutex/semaphore types + skip swap functions ✅ (2026-02-04)
+      - Root cause: condition_variable, timed_mutex, recursive_timed_mutex call
+        __gthread_cond_timedwait/pthread_cond_clockwait which always produce wrong argument types.
+        counting_semaphore/binary_semaphore call sem_init/sem_destroy.
+        __waiter_pool_base produces broken array initialization [__waiter_pool_base; 16].
+        Threading swap functions (swap_thread_thread, etc.) access _M_thread/_M_id on wrong types.
+      - Fix: Added 7 types to `is_broken_method_type` (condition_variable, condition_variable_any,
+        timed_mutex, recursive_timed_mutex, counting_semaphore, binary_semaphore, __waiter_pool_base)
+        and 6 functions to `is_broken_function` (__gthread_cond_timedwait, __gthread_cond_wait,
+        pthread_cond_clockwait, swap_thread_thread, swap_std_thread_id_std_thread_id,
+        swap_std_stop_source_std_stop_source). Also updated is_broken_drop_type and skip_clone.
+      - Removed 5 simple + 12 compound = 17 dead rollback patterns:
+        generate_function (2 simple + 10 compound), generate_method (3 simple + 2 compound)
+      - Note: Remaining 140 simple patterns are genuinely generic (field access, c_void,
+        template placeholders) that fire across many types - cannot be eliminated by skip-listing
+      - Rollback count: 145 → 140 (`|| generated.contains(` metric)
+      - All 207 tests passing
 
 - [~] **27.8.2** Remove stub method injections ⚠️ PARTIALLY BLOCKED
   - Location: ast_codegen.rs lines ~3920-3970
@@ -711,7 +728,7 @@ The current implementation uses forbidden patterns (see `docs/dev/wrong.md`). Th
 
 - [~] **27.8.5** Metric: Rollback pattern count ⚠️ TRACKED
   - Track: `grep -c "|| generated.contains" crates/fragile-clang/src/ast_codegen.rs`
-  - Current: ~145 (was ~201, reduced by template/iterator/fn/function/method-type/locale-type guards)
+  - Current: ~140 (was ~201, reduced by template/iterator/fn/function/method-type/locale-type/condvar-mutex-semaphore guards)
   - Target: 0
   - Now tracked automatically via `test_rollback_pattern_count` test in runtime_correctness_tests.rs
   - Every PR must report this number and it must decrease or stay same, NEVER increase
