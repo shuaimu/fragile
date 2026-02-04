@@ -390,8 +390,13 @@ The current implementation uses forbidden patterns (see `docs/dev/wrong.md`). Th
       - Map hermite_u32, hermitef, hermitel, hermite_1 → __hermite_u32 stub
 
     **Remaining subtasks** (break down further as needed):
-    - [ ] **27.8.1.6.4** Reduce undeclared variable patterns (~100)
-    - [ ] **27.8.1.6.5** Reduce field access patterns (~80) - related to 27.8.3
+    - [ ] **27.8.1.6.4** Reduce undeclared variable patterns (~100) - BLOCKED by 27.8.3
+      - Root cause: LibTooling method bodies don't capture parameter declarations
+      - Variables like __n, __max, __len, __r appear in body but not declared
+      - Need to fix parameter extraction in LibTooling integration first
+    - [ ] **27.8.1.6.5** Reduce field access patterns (~80) - BLOCKED by 27.8.3
+      - Root cause: Fields not being extracted from template specializations
+      - Patterns catch accesses to ._M_*, .__ptr_, .__val_ that don't exist
 
 - [ ] **27.8.2** Remove stub method injections
   - Location: ast_codegen.rs lines ~3300-3350
