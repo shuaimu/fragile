@@ -479,6 +479,7 @@ The current implementation uses forbidden patterns (see `docs/dev/wrong.md`). Th
       - Removed 14 dead `|| (rust_name... && generated.contains(...))` patterns from
         `generate_template_impl()` rollback
       - Rollback count: 196 → 194 (`|| generated.contains(` metric)
+      - Narrowed 13 mixed guard patterns to remove dead skip-list type references
       - All 207 tests passing
 
 - [~] **27.8.2** Remove stub method injections ⚠️ PARTIALLY BLOCKED
@@ -656,7 +657,7 @@ The current implementation uses forbidden patterns (see `docs/dev/wrong.md`). Th
 
 - [~] **27.8.5** Metric: Rollback pattern count ⚠️ TRACKED
   - Track: `grep -c "|| generated.contains" crates/fragile-clang/src/ast_codegen.rs`
-  - Current: ~195 (was ~201, reduced by primary template guard)
+  - Current: ~194 (was ~201, reduced by primary template guard + iterator skip list)
   - Target: 0
   - Now tracked automatically via `test_rollback_pattern_count` test in runtime_correctness_tests.rs
   - Every PR must report this number and it must decrease or stay same, NEVER increase

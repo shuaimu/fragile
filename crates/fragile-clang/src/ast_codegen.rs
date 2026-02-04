@@ -3833,35 +3833,36 @@ impl AstCodeGen {
                         // Methods accessing .cbegin as field (it's a method)
                         || generated.contains(".cbegin ")
                         // Methods calling __is_long as method on wrong types
-                        || (generated.contains("__is_long(") && (rust_name.contains("owning_view") || rust_name.contains("initializer_list") || rust_name.contains("subrange") || rust_name.contains("basic_string_view")))
+                        || (generated.contains("__is_long(") && (rust_name.contains("initializer_list") || rust_name.contains("subrange") || rust_name.contains("basic_string_view")))
                         // NOTE: __size_ pattern for owning_view removed (iterator skip list)
                         // Methods accessing .cend as field (it's a method)
                         || generated.contains(".cend ")
                         // Methods calling __libcpp_unreachable()
                         || generated.contains("__libcpp_unreachable(")
                         // Methods accessing .fail on wrong types
-                        || (generated.contains(".fail") && (rust_name.contains("unique_ptr") || rust_name.contains("unique_lock") || rust_name.contains("__bit_reference") || rust_name.contains("__bit_const_reference")))
+                        || (generated.contains(".fail") && (rust_name.contains("unique_ptr") || rust_name.contains("unique_lock")))
                         // Methods accessing __exceptions_ on basic_ios
                         || (rust_name.contains("basic_ios") && generated.contains(".__exceptions_"))
                         // Methods accessing __bufptr_ on basic_ios
                         || (rust_name.contains("basic_ios") && generated.contains(".__bufptr_"))
-                        // Methods accessing __ptr_ on types without it (many iterator and wrapper types)
-                        || (generated.contains(".__ptr_") && (rust_name.contains("counted_iterator") || rust_name.contains("basic_ios") || rust_name.contains("unique_ptr") || rust_name.contains("__bit_reference") || rust_name.contains("__bit_const_reference") || rust_name.contains("unique_lock") || rust_name.contains("move_iterator") || rust_name.contains("__hash_const") || rust_name.contains("insert_iterator") || rust_name.contains("ostreambuf_iterator") || rust_name.contains("__hash_map") || rust_name.contains("back_insert_iterator") || rust_name.contains("front_insert_iterator") || rust_name.contains("__hash_iterator") || rust_name.contains("__hash_local_iterator")))
+                        // Methods accessing __ptr_ on types without it (iterator types removed - caught by skip list)
+                        || (generated.contains(".__ptr_") && (rust_name.contains("basic_ios") || rust_name.contains("unique_ptr") || rust_name.contains("unique_lock") || rust_name.contains("__hash_const") || rust_name.contains("__hash_map")))
                         // Methods calling __constexpr_wmemchr
                         || generated.contains("__constexpr_wmemchr(")
                         // Methods accessing .good as field
                         || generated.contains(".good ")
                         // NOTE: __data_ pattern for owning_view removed (iterator skip list)
                         // Methods accessing __current_ on wrong types (not reverse_iterator)
-                        || (generated.contains(".__current_") && (rust_name.contains("unique_ptr") || rust_name.contains("common_iterator") || rust_name.contains("ostreambuf_iterator") || rust_name.contains("__map_iterator") || rust_name.contains("__map_const_iterator") || rust_name.contains("insert_iterator") || rust_name.contains("__hash_") || rust_name.contains("front_insert_iterator")))
+                        // Methods accessing __current_ on wrong types (iterator types removed - caught by skip list)
+                        || (generated.contains(".__current_") && (rust_name.contains("unique_ptr") || rust_name.contains("__hash_")))
                         // Methods accessing __owns_ on wrong types
-                        || (generated.contains(".__owns_") && (rust_name.contains("unique_ptr") || rust_name.contains("__bit_reference") || rust_name.contains("__bit_const_reference") || rust_name.contains("basic_ios")))
+                        || (generated.contains(".__owns_") && (rust_name.contains("unique_ptr") || rust_name.contains("basic_ios")))
                         // Methods accessing __val_ on bit references, unique_ptr, and unique_lock
-                        || (generated.contains(".__val_") && (rust_name.contains("__bit_reference") || rust_name.contains("__bit_const_reference") || rust_name.contains("unique_ptr") || rust_name.contains("unique_lock")))
+                        || (generated.contains(".__val_") && (rust_name.contains("unique_ptr") || rust_name.contains("unique_lock")))
                         // Methods accessing __begin_ on owning_view and basic_string_view
-                        || (generated.contains(".__begin_") && (rust_name.contains("owning_view") || rust_name.contains("basic_string_view")))
+                        || (generated.contains(".__begin_") && rust_name.contains("basic_string_view"))
                         // Methods accessing __i_ on wrong iterator types
-                        || (generated.contains(".__i_") && (rust_name.contains("ostreambuf_iterator") || rust_name.contains("__hash_local") || rust_name.contains("__hash_iterator") || rust_name.contains("unique_ptr")))
+                        || (generated.contains(".__i_") && rust_name.contains("unique_ptr"))
                         // NOTE: _unnamed pattern for __tuple_leaf removed (iterator skip list)
                         // Methods calling do_narrow (wrong type)
                         || (rust_name.contains("basic_ios") && generated.contains("do_narrow("))
@@ -3883,31 +3884,32 @@ impl AstCodeGen {
                         // Methods with integer to c_void addition
                         || generated.contains("{integer}` to `c_void")
                         // Methods accessing _unnamed on various iterator types
-                        || (generated.contains("._unnamed") && (rust_name.contains("iterator") || rust_name.contains("common_iterator") || rust_name.contains("reverse_iterator") || rust_name.contains("ostreambuf_iterator") || rust_name.contains("__map_iterator") || rust_name.contains("__hash_")))
+                        || (generated.contains("._unnamed") && (rust_name.contains("iterator") || rust_name.contains("__hash_")))
                         // Methods accessing __engaged_ on unique_ptr types
                         || (rust_name.starts_with("unique_ptr_") && generated.contains(".__engaged_"))
                         // Methods calling clone on c_void (various patterns)
                         || generated.contains("c_void.clone()")
                         || (generated.contains(": std::ffi::c_void)") && generated.contains(".clone()"))
                         // Methods accessing __tree_ on wrong types
-                        || (generated.contains(".__tree_") && (rust_name.contains("owning_view") || rust_name.contains("subrange") || rust_name.contains("initializer_list")))
-                        // Methods accessing __i_ on more iterator types
-                        || (generated.contains(".__i_") && (rust_name.contains("common_iterator") || rust_name.contains("reverse_iterator") || rust_name.contains("insert_iterator") || rust_name.contains("__hash_const")))
+                        || (generated.contains(".__tree_") && (rust_name.contains("subrange") || rust_name.contains("initializer_list")))
+                        // NOTE: __i_ pattern for common/reverse/insert_iterator narrowed (iterator skip list)
+                        || (generated.contains(".__i_") && rust_name.contains("__hash_const"))
                         // Methods accessing __f_ on __tuple_leaf and other types without it
-                        || (generated.contains(".__f_") && (rust_name.contains("__tuple_leaf") || rust_name.contains("unique_ptr") || rust_name.contains("__bit_reference") || rust_name.contains("unique_lock") || rust_name.contains("basic_ios")))
+                        || (generated.contains(".__f_") && (rust_name.contains("unique_ptr") || rust_name.contains("unique_lock") || rust_name.contains("basic_ios")))
                         // Methods accessing .bad as field (it's a method)
                         || generated.contains(".bad ")
                         // Methods accessing __policy_ on wrong types
-                        || (generated.contains(".__policy_") && (rust_name.contains("unique_ptr") || rust_name.contains("unique_lock") || rust_name.contains("__bit_reference") || rust_name.contains("__bit_const_reference") || rust_name.contains("basic_ios")))
+                        || (generated.contains(".__policy_") && (rust_name.contains("unique_ptr") || rust_name.contains("unique_lock") || rust_name.contains("basic_ios")))
                         // Methods accessing __end_ on wrong types
-                        || (generated.contains(".__end_") && (rust_name.contains("owning_view") || rust_name.contains("initializer_list") || rust_name.contains("basic_string_view")))
+                        || (generated.contains(".__end_") && (rust_name.contains("initializer_list") || rust_name.contains("basic_string_view")))
                         // Methods calling __ptr_ or __begin_ on map types (broken LibTooling body)
                         || (generated.contains(".__ptr_(") && rust_name.starts_with("std_map_"))
                         || (generated.contains(".__begin_(") && rust_name.starts_with("std_map_"))
                         // Methods calling _M_erase on map types (libstdc++ internal method)
                         || (generated.contains("._M_erase(") && rust_name.starts_with("std_map_"))
                         // Methods accessing __value_ on iterator types (not valid fields)
-                        || (generated.contains(".__value_") && (rust_name.contains("common_iterator") || rust_name.contains("reverse_iterator") || rust_name.contains("ostreambuf_iterator") || rust_name.contains("move_iterator") || rust_name.contains("__map_iterator") || rust_name.contains("__map_const_iterator") || rust_name.contains("insert_iterator") || rust_name.contains("__hash_")))
+                        // Methods accessing __value_ on iterator types (most removed - caught by skip list)
+                        || (generated.contains(".__value_") && rust_name.contains("__hash_"))
                         // Methods that dereference c_void
                         || generated.contains("*c_void")
                         // (*_TreeIterator already covered by line 3686 above)
