@@ -10358,6 +10358,38 @@ impl AstCodeGen {
             return;
         }
 
+        // Skip functions that always produce broken code
+        // These are internal STL functions with inherent type mismatches that always get rolled back
+        let is_broken_function = match name {
+            // gthread pthread wrappers - void* transpiled as *mut () instead of *mut c_void
+            "__gthread_create" | "__gthread_join" | "__gthread_key_create"
+            | "__gthread_getspecific" | "__gthread_setspecific"
+            | "__gthread_mutex_timedlock" | "__gthread_recursive_mutex_timedlock" => true,
+            // hermite math functions - always call wrong function name (hermite_u32 vs __hermite_u32)
+            "hermite" | "hermitef" | "hermitel" => true,
+            // libc++ TLS wrappers - wrong function pointer / return types
+            "__libcpp_tls_create" | "__libcpp_tls_get" | "__libcpp_tls_set" => true,
+            // atomic_flag functions - call nonexistent methods (.wait(), .clear(), .test())
+            "atomic_flag_wait" | "atomic_flag_wait_explicit"
+            | "atomic_flag_clear" | "atomic_flag_clear_explicit"
+            | "atomic_flag_test" | "atomic_flag_test_explicit" => true,
+            // atomic fence functions - call nonexistent __cxx_atomic_* functions
+            "atomic_thread_fence" | "atomic_signal_fence" => true,
+            // __cxx_atomic fence wrappers - always pass __order as u32 instead of i32
+            "__cxx_atomic_thread_fence" | "__cxx_atomic_signal_fence" => true,
+            // numeric conversion internals - wrong bitwise ops / type mismatches
+            "__base_10_u64" | "__base_10_u32" | "__find_idx_return" => true,
+            // __cmpexch_failure_order2 - returns memory_order with i32 constants
+            "__cmpexch_failure_order2" => true,
+            // Functions also in fn template skip list that may come through generate_function()
+            "__platform_notify" | "__common_trait" | "__append10" | "__append9"
+            | "__constexpr_memcmp" => true,
+            _ => false,
+        };
+        if is_broken_function {
+            return;
+        }
+
         // Special handling for C++ main function
         let is_main = name == "main" && params.is_empty();
         // Use sanitized name for duplicate tracking to avoid suffix issues with operators
@@ -10678,21 +10710,12 @@ impl AstCodeGen {
             || (generated.contains(".do_tolower(") && generated.contains(", __hi)"))
             || (generated.contains(".do_widen(") && generated.contains(", __to)"))
             || (generated.contains(".do_narrow(") && generated.contains(", __to)"))
-            // gthread functions with void* type mismatches (fn(*mut ()) vs extern "C" fn(*mut c_void))
-            || (generated.contains("pub fn __gthread_create") && generated.contains("*mut ()"))
-            || (generated.contains("pub fn __gthread_join") && generated.contains("*mut *mut ()"))
-            || (generated.contains("pub fn __gthread_key_create") && generated.contains("fn(*mut ())"))
-            || (generated.contains("pub fn __gthread_getspecific") && generated.contains("*mut ()"))
-            || (generated.contains("pub fn __gthread_setspecific") && generated.contains("*const ()"))
-            // hermite functions with wrong calls (should call __hermite_u32 not hermite_u32)
-            || (generated.contains("pub fn hermite_u32") && generated.contains("return hermite_u32("))
-            || (generated.contains("pub fn hermite_u32") && generated.contains("__x as f64"))  // hermite called with f64 cast
-            || (generated.contains("pub fn hermitef") && generated.contains("return hermite_u32("))
-            || (generated.contains("pub fn hermitel") && generated.contains("return hermite_u32("))
-            || (generated.contains("pub fn hermite_1") && generated.contains("return hermite_u32("))
-            // __constexpr_memcmp that ends without returning (incomplete body)
-            || (generated.contains("pub fn __constexpr_memcmp") && generated.contains("__n as u64;\n}"))
-            || (generated.contains("pub fn __constexpr_memcmp") && !generated.contains("return"))
+            // NOTE: __gthread_create/join/key_create/getspecific/setspecific patterns removed
+            // (is_broken_function guard skips these before generation)
+            // NOTE: hermite_u32/hermitef/hermitel/hermite_1 patterns removed
+            // (is_broken_function guard skips hermite/hermitef/hermitel before generation)
+            // NOTE: __constexpr_memcmp patterns removed
+            // (is_broken_function guard skips __constexpr_memcmp before generation)
             // logic_error/runtime_error constructors with wrong argument type
             || (generated.contains("logic_error::new_1(__s)") && generated.contains("__s: *const i8"))
             || (generated.contains("runtime_error::new_1(__s)") && generated.contains("__s: *const i8"))
@@ -10700,10 +10723,8 @@ impl AstCodeGen {
             // These can't be fixed at call site - roll back the whole constructor
             || (generated.contains("logic_error::new_1(__s)") && generated.contains("__s: &std::ffi::c_void"))
             || (generated.contains("runtime_error::new_1(__s)") && generated.contains("__s: &std::ffi::c_void"))
-            // pthread TLS functions with type mismatches
-            || (generated.contains("pub fn __libcpp_tls_create") && generated.contains("fn(*mut c_void)"))
-            || (generated.contains("pub fn __libcpp_tls_get") && generated.contains("-> *mut ()"))
-            || (generated.contains("pub fn __libcpp_tls_set") && generated.contains("*mut ()"))
+            // NOTE: __libcpp_tls_create/get/set patterns removed
+            // (is_broken_function guard skips these before generation)
             // __builtin_is* called with f32 instead of f64
             || (generated.contains("return __builtin_isfinite(__x)") && generated.contains("__x: f32"))
             || (generated.contains("return __builtin_isinf(__x)") && generated.contains("__x: f32"))
@@ -10724,10 +10745,8 @@ impl AstCodeGen {
             || (generated.contains("Box::from_raw(self)") && generated.contains("&self,"))
             // system_error constructor with wrong inheritance
             || (generated.contains("system_error::new_2(") && generated.contains("__base: system_error"))
-            // hermite function with wrong argument types (calls nonexistent hermite_u32)
-            || (generated.contains("return hermite_u32(") && generated.contains("__x as f64"))
-            // __constexpr_memcmp with incomplete body (no return)
-            || (generated.contains("pub fn __constexpr_memcmp") && generated.contains("__n as u64;") && !generated.contains("return"))
+            // NOTE: hermite_u32 call-site pattern removed (is_broken_function guard skips hermite)
+            // NOTE: __constexpr_memcmp (2nd) pattern removed (is_broken_function guard)
             // uselocale with reference instead of pointer
             || (generated.contains("uselocale(__loc)") && generated.contains("&mut *mut c_void"))
             // hash functions returning wrong type
@@ -10746,10 +10765,8 @@ impl AstCodeGen {
             || (generated.contains("impl Drop for sentry") && generated.contains("_dependent_type::new_"))
             // Functions with unresolved _M_os._unnamed field
             || (generated.contains("_M_os._unnamed") && generated.contains("_unnamed"))
-            // __gthread_mutex_timedlock with wrong types (gthread types vs pthread c_void)
-            || (generated.contains("pub fn __gthread_mutex_timedlock") && generated.contains("pthread_mutex_timedlock"))
-            // __gthread_recursive_mutex_timedlock references rolled-back __gthread_mutex_timedlock
-            || (generated.contains("pub fn __gthread_recursive_mutex_timedlock") && generated.contains("__gthread_mutex_timedlock"))
+            // NOTE: __gthread_mutex_timedlock/recursive_mutex_timedlock patterns removed
+            // (is_broken_function guard skips these before generation)
             // __to_wstring_numeric not defined
             || (generated.contains("__to_wstring_numeric("))
             // locale constructors with __base field that doesn't exist
@@ -10790,8 +10807,7 @@ impl AstCodeGen {
             || (generated.contains(".op_bitor(") && generated.contains("memory_order"))
             // __cmpexch_failure_order2 returns memory_order but uses i32 constants
             || (generated.contains("-> memory_order") && generated.contains("memory_order_acquire") && generated.contains("memory_order_relaxed"))
-            // __waiter_pool functions with wrong array/type handling
-            || (generated.contains("[__waiter_pool_base; 16] = __ct"))
+            // NOTE: duplicate __waiter_pool pattern removed (simple form below already catches this)
             // __gthread_cond_timedwait with wrong argument types
             || generated.contains("__gthread_cond_timedwait(")
             // pthread_cond_clockwait with wrong argument types
@@ -10817,29 +10833,20 @@ impl AstCodeGen {
             || generated.contains("sem_destroy(&mut")
             // _S_do_try_acquire with wrong pointer types
             || generated.contains("_S_do_try_acquire(&mut")
-            // __cxx_atomic_thread_fence/__cxx_atomic_signal_fence with u32 cast (should be i32)
-            || generated.contains("__c11_atomic_thread_fence(__order as u32)")
-            || generated.contains("__c11_atomic_signal_fence(__order as u32)")
-            // atomic_thread_fence/atomic_signal_fence calling nonexistent __cxx_atomic_* functions
-            || (generated.contains("pub fn atomic_thread_fence") && generated.contains("__cxx_atomic_thread_fence("))
-            || (generated.contains("pub fn atomic_signal_fence") && generated.contains("__cxx_atomic_signal_fence("))
-            // __base_10_u64 with && instead of & for bitwise AND
-            || (generated.contains("pub fn __base_10_u64") && generated.contains("&& 4294967295"))
-            // __find_idx_return with __ambiguous (wrong type - i32 instead of u64)
-            || (generated.contains("pub fn __find_idx_return") && generated.contains("__ambiguous"))
+            // NOTE: __c11_atomic_thread_fence/__c11_atomic_signal_fence u32 patterns removed
+            // (is_broken_function guard skips __cxx_atomic_thread_fence/signal_fence before generation)
+            // NOTE: atomic_thread_fence/atomic_signal_fence patterns removed
+            // (is_broken_function guard skips these before generation)
+            // NOTE: __base_10_u64 and __find_idx_return patterns removed
+            // (is_broken_function guard skips these before generation)
             // op_eq for error_code/error_condition with equivalent method signature mismatch
             || (generated.contains("pub fn op_eq") && generated.contains(".equivalent(") && generated.contains("error_condition"))
-            // __append10 with wrong __value type (u64 instead of i8)
-            || (generated.contains("pub fn __append10_i8") && generated.contains("__value: u64"))
-            || (generated.contains("pub fn __append9_i8") && generated.contains("__value: u32"))
-            // __append9_i8 callers with wrong type (u32 instead of i8)
-            || (generated.contains("__append10_i8(__first, __value)") && generated.contains("__value: u32"))
-            // __base_10_u32 caller with wrong value type
-            || (generated.contains("pub fn __base_10_u32") && generated.contains("__append10_i8(") && generated.contains("__value)"))
+            // NOTE: __append10_i8/__append9_i8/__base_10_u32 patterns removed
+            // (is_broken_function guard skips __append10/__append9/__base_10_u32 before generation)
             // atomic_flag test method with 1 && (integer where bool expected)
             || (generated.contains("return 1 &&") && generated.contains("__cxx_atomic_load"))
-            // __libcpp_tls_create calling pthread_key_create with wrong function pointer type
-            || (generated.contains("pthread_key_create(__key,") && generated.contains("fn(*mut ())"))
+            // NOTE: __libcpp_tls_create/pthread_key_create pattern removed
+            // (is_broken_function guard skips __libcpp_tls_create before generation)
             // op_call returning c_void placeholder instead of actual return type
             || (generated.contains("-> std___backoff_results") && generated.contains("return __continue_poll"))
             // __atomic_wait_address_bare with wrong closure type
@@ -10859,12 +10866,10 @@ impl AstCodeGen {
             || (generated.contains("swap_std_thread_id_std_thread_id(") && generated.contains("__t._M_id"))
             // get_stop_source calling clone on stop_source (Clone impl was skipped)
             || (generated.contains("self._M_stop_source.clone()"))
-            // atomic_flag_clear calling rolled-back atomic_flag_clear_explicit
-            || (generated.contains("pub fn atomic_flag_clear") && generated.contains("atomic_flag_clear_explicit("))
-            // atomic_flag_wait functions calling rolled-back wait method
-            || (generated.contains("pub fn atomic_flag_wait") && generated.contains(").wait("))
-            // __platform_notify calling syscall with wrong number of arguments
-            || (generated.contains("fn __platform_notify") && generated.contains("syscall("))
+            // NOTE: atomic_flag_clear/atomic_flag_wait patterns removed
+            // (is_broken_function guard skips these before generation)
+            // NOTE: __platform_notify pattern removed
+            // (is_broken_function guard skips __platform_notify before generation)
             // NOTE: inf.0 and NaN.0 patterns removed - fixed by proper handling of special float values
             // thread::swap calling swap_std_thread_id with wrong argument types
             || (generated.contains("swap_std_thread_id_std_thread_id(&mut self._M_id"))
@@ -10872,8 +10877,8 @@ impl AstCodeGen {
             || (generated.contains("self._M_id._M_thread"))
             // operator== on thread_id accessing _M_thread field on u64 type alias
             || (generated.contains("pub fn op_eq") && generated.contains("._M_thread =="))
-            // atomic_flag_test functions calling .test() method (not available in libstdc++)
-            || (generated.contains("pub fn atomic_flag_test") && generated.contains(").test("))
+            // NOTE: atomic_flag_test pattern removed
+            // (is_broken_function guard skips atomic_flag_test/atomic_flag_test_explicit before generation)
             // op_____ functions accessing _M_thread on thread_id type
             || (generated.contains("__x._M_thread.cmp("))
             // __condvar Drop with bool/int mixing in condition
@@ -10898,8 +10903,8 @@ impl AstCodeGen {
             || (generated.contains("__hypot_f64(__") && generated.contains(", __z)"))
             // ctype do_is with 3 args (overloaded method - different signature)
             || (generated.contains(".do_is(") && generated.contains(", __vec)"))
-            // __common_trait returning u32 type alias but using _Trait enum variant
-            || (generated.contains("fn __common_trait") && generated.contains("_Trait::_TriviallyAvailable"))
+            // NOTE: __common_trait pattern removed
+            // (is_broken_function guard skips __common_trait before generation)
             // align function with *mut () vs *mut i8 mismatch
             || (generated.contains("fn align(") && generated.contains("__r = __p2") && generated.contains("*mut ()"))
             // Functions using _Size as a value (type alias used incorrectly)

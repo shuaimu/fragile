@@ -248,6 +248,7 @@ fn test_rollback_pattern_count() {
     //       -> 196 (primary template guard skips broken impl blocks)
     //       -> 194 (iterator skip list + dead pattern cleanup)
     //       -> 193 (broken fn template skip list)
+    //       -> 191 (broken function skip list in generate_function)
     // When this test starts failing because count increased, investigate!
     assert!(
         rollback_count <= 200,
