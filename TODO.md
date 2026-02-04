@@ -175,9 +175,10 @@ Semantic mapping would be incorrect. Absolute transpilation preserves exact C++ 
     - Added pattern for __keep_ field access on iterator types
     - Reduced errors significantly (~49 → ~22 at best)
 
-  - [ ] **27.5.2** Fix E0070 (invalid assignment) errors
-    - Cause: Trying to assign to expression that isn't an lvalue
-    - Solution: Check for additional unsafe block wrapping issues
+  - [x] **27.5.2** Fix E0070 (invalid assignment) errors ✅
+    - Cause: Trying to assign to "unsafe { expr }" which is a block expression, not a valid lvalue
+    - Solution: Extract inner expression from unsafe blocks in assignment LHS
+    - Fixed pointer arithmetic assignment: "unsafe { (unsafe { expr }) = ... }" → "unsafe { expr = ... }"
 
   - [ ] **27.5.3** Fix E0308 (mismatched types) errors
     - Cause: Type inference issues in generated code

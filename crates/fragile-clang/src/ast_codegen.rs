@@ -16919,9 +16919,11 @@ impl AstCodeGen {
                         } else {
                             left.clone()
                         };
-                        // For lvalue assignment, unsafe blocks need parentheses
-                        let left_for_assign = if left.contains("unsafe {") {
-                            format!("({})", left)
+                        // For lvalue assignment, extract the inner expression from unsafe blocks
+                        // because "(unsafe { expr })" is not a valid lvalue in Rust
+                        let left_for_assign = if left.starts_with("unsafe { ") && left.ends_with(" }") {
+                            // Extract inner expression: "unsafe { (*self).__ninp_ }" -> "(*self).__ninp_"
+                            left[9..left.len()-2].to_string()
                         } else {
                             left.clone()
                         };
@@ -17001,7 +17003,19 @@ impl AstCodeGen {
                             r
                         };
 
-                        format!("unsafe {{ {} {} {} }}", left_raw, op_str, right_raw)
+                        // Unwrap nested unsafe blocks from LHS to avoid "(unsafe { expr }) = ..." pattern
+                        // which is invalid because a block expression is not a valid lvalue
+                        let left_for_assign = if left_raw.starts_with("(unsafe { ") && left_raw.ends_with(" })") {
+                            // Extract the inner expression from "(unsafe { expr })"
+                            left_raw[10..left_raw.len()-3].to_string()
+                        } else if left_raw.starts_with("unsafe { ") && left_raw.ends_with(" }") {
+                            // Extract the inner expression from "unsafe { expr }"
+                            left_raw[9..left_raw.len()-2].to_string()
+                        } else {
+                            left_raw
+                        };
+
+                        format!("unsafe {{ {} {} {} }}", left_for_assign, op_str, right_raw)
                     } else if matches!(
                         op,
                         BinaryOp::Assign
