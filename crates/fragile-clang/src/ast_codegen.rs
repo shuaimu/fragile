@@ -3103,6 +3103,71 @@ impl AstCodeGen {
                         || generated.contains(".__keep_")
                         // Iterator types: rollback methods with c_void + operations
                         || generated.contains("c_void + &mut")
+                        // Methods with *mut () type - failed type inference
+                        || generated.contains("*mut ()")
+                        // Methods accessing __tie_ field (stream tie pointer)
+                        || generated.contains(".__tie_")
+                        // Methods accessing .__st_ field that's not properly resolved
+                        || (generated.contains(".__st_") && !generated.contains("fpos"))
+                        // Methods accessing .__i_ field on iterator types
+                        || (generated.contains(".__i_") && (rust_name.contains("counted_iterator") || rust_name.contains("move_iterator") || rust_name.contains("owning_view")))
+                        // Methods accessing .__val_ field on basic_ios or map types
+                        || (generated.contains(".__val_") && (rust_name.contains("basic_ios") || rust_name.starts_with("std_map")))
+                        // Methods accessing .__cat_ field
+                        || generated.contains(".__cat_")
+                        // Methods accessing .__value_ field on unique_ptr types
+                        || (rust_name.starts_with("unique_ptr_") && generated.contains(".__value_"))
+                        // Methods accessing __get_long_size or __get_short_size as fields
+                        || generated.contains(".__get_long_size")
+                        || generated.contains(".__get_short_size")
+                        // Methods accessing __elems_ on wrong types
+                        || (generated.contains(".__elems_") && (rust_name.contains("owning_view") || rust_name.contains("basic_string_view")))
+                        // Methods accessing .cbegin as field (it's a method)
+                        || generated.contains(".cbegin ")
+                        // Methods calling __is_long as method on wrong types
+                        || (generated.contains("__is_long(") && (rust_name.contains("owning_view") || rust_name.contains("initializer_list") || rust_name.contains("subrange") || rust_name.contains("basic_string_view")))
+                        // Methods accessing .__size_ on owning_view (wrong type)
+                        || (rust_name.contains("owning_view") && generated.contains(".__size_"))
+                        // Methods accessing .cend as field (it's a method)
+                        || generated.contains(".cend ")
+                        // Methods calling __libcpp_unreachable()
+                        || generated.contains("__libcpp_unreachable(")
+                        // Methods accessing .fail on wrong types
+                        || (generated.contains(".fail") && (rust_name.contains("unique_ptr") || rust_name.contains("unique_lock") || rust_name.contains("__bit_reference") || rust_name.contains("__bit_const_reference")))
+                        // Methods accessing __exceptions_ on basic_ios
+                        || (rust_name.contains("basic_ios") && generated.contains(".__exceptions_"))
+                        // Methods accessing __bufptr_ on basic_ios
+                        || (rust_name.contains("basic_ios") && generated.contains(".__bufptr_"))
+                        // Methods accessing __ptr_ on counted_iterator
+                        || (rust_name.contains("counted_iterator") && generated.contains(".__ptr_"))
+                        // Methods calling __constexpr_wmemchr
+                        || generated.contains("__constexpr_wmemchr(")
+                        // Methods accessing .good as field
+                        || generated.contains(".good ")
+                        // Methods accessing __data_ on owning_view
+                        || (rust_name.contains("owning_view") && generated.contains(".__data_"))
+                        // Methods accessing __current_ on wrong types (not reverse_iterator)
+                        || (generated.contains(".__current_") && (rust_name.contains("unique_ptr") || rust_name.contains("common_iterator") || rust_name.contains("ostreambuf_iterator") || rust_name.contains("__map_iterator") || rust_name.contains("__map_const_iterator") || rust_name.contains("insert_iterator") || rust_name.contains("__hash_") || rust_name.contains("front_insert_iterator")))
+                        // Methods accessing __owns_ on wrong types
+                        || (generated.contains(".__owns_") && (rust_name.contains("unique_ptr") || rust_name.contains("__bit_reference") || rust_name.contains("__bit_const_reference") || rust_name.contains("basic_ios")))
+                        // Methods accessing __val_ on bit references and unique_ptr
+                        || (generated.contains(".__val_") && (rust_name.contains("__bit_reference") || rust_name.contains("__bit_const_reference") || rust_name.contains("unique_ptr")))
+                        // Methods accessing __begin_ on owning_view and basic_string_view
+                        || (generated.contains(".__begin_") && (rust_name.contains("owning_view") || rust_name.contains("basic_string_view")))
+                        // Methods accessing __i_ on wrong iterator types
+                        || (generated.contains(".__i_") && (rust_name.contains("ostreambuf_iterator") || rust_name.contains("__hash_local") || rust_name.contains("__hash_iterator") || rust_name.contains("unique_ptr")))
+                        // Methods accessing _unnamed on __tuple_leaf
+                        || (rust_name.contains("__tuple_leaf") && generated.contains("._unnamed"))
+                        // Methods calling do_narrow (wrong type)
+                        || (rust_name.contains("basic_ios") && generated.contains("do_narrow("))
+                        // Methods with _TreeIterator dereference
+                        || generated.contains("*_TreeIterator")
+                        // Methods with duration cast
+                        || (generated.contains("as duration__Rep"))
+                        // Methods returning __current_ as c_void when expecting pointer (counted_iterator)
+                        || (rust_name.contains("counted_iterator") && generated.contains("-> *const") && generated.contains(".__current_"))
+                        // Methods accessing __value_ on counted_iterator
+                        || (rust_name.contains("counted_iterator") && generated.contains(".__value_"))
                     {
                         self.output.truncate(method_output_start);
                     }
