@@ -245,7 +245,8 @@ fn test_rollback_pattern_count() {
 
     // Track the count - it should decrease over time, NEVER increase
     // History: 210 -> 204 (float literal fix) -> 201 (undeclared var cleanup)
-    //       -> 195 (primary template guard skips broken impl blocks)
+    //       -> 196 (primary template guard skips broken impl blocks)
+    //       -> 194 (iterator skip list + dead pattern cleanup)
     // When this test starts failing because count increased, investigate!
     assert!(
         rollback_count <= 200,

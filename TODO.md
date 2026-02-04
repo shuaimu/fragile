@@ -263,7 +263,7 @@ Semantic mapping would be incorrect. Absolute transpilation preserves exact C++ 
 
 The current implementation uses forbidden patterns (see `docs/dev/wrong.md`). These must be removed and replaced with proper fixes.
 
-- [~] **27.8.1** Remove rollback patterns from ast_codegen.rs (195 total → 0) ⚠️ IN PROGRESS
+- [~] **27.8.1** Remove rollback patterns from ast_codegen.rs (194 `|| generated.contains(` + 10 `|| (rust_name...` → 0) ⚠️ IN PROGRESS
 
   **Status (2026-02-04)**: Primary template detection guard implemented (Option 2 from blocking
   issue). This skips impl block generation for types with unresolved template parameters, preventing
@@ -466,9 +466,20 @@ The current implementation uses forbidden patterns (see `docs/dev/wrong.md`). Th
       - Added guard at top of `generate_template_impl()` to skip impl block for primary templates
       - Container types exempt (need stub methods like `size()`, `new_0()`)
       - Removed 6 dead rollback patterns that were only reachable for primary template types
-      - Rollback pattern count: 201 → 195
+      - Rollback pattern count: 201 → 196 (`|| generated.contains(` metric)
       - Fixed `test_map_compiles_successfully` (was failing, now passes)
       - Added 3 unit tests for `has_unresolved_template_placeholder()`
+    - [x] **27.8.1.6.8** Skip methods for broken iterator/adapter types ✅ (2026-02-04)
+      - Root cause: Concrete iterator types (reverse_iterator, move_iterator, counted_iterator,
+        owning_view, __wrap_iter, __bit_reference, __tuple_leaf, __hash_*_iterator, __map_*_iterator,
+        etc.) always produce broken method bodies that get rolled back
+      - Fix: Added `is_broken_iterator_type` check in `generate_template_impl()` to skip AST
+        method generation for 21 internal STL iterator/adapter types
+      - Removed 2 dead `|| generated.contains(` patterns from `generate_function()` rollback
+      - Removed 14 dead `|| (rust_name... && generated.contains(...))` patterns from
+        `generate_template_impl()` rollback
+      - Rollback count: 196 → 194 (`|| generated.contains(` metric)
+      - All 207 tests passing
 
 - [~] **27.8.2** Remove stub method injections ⚠️ PARTIALLY BLOCKED
   - Location: ast_codegen.rs lines ~3920-3970

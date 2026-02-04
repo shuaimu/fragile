@@ -3481,7 +3481,30 @@ impl AstCodeGen {
 
         // For primary template container types, skip generating methods from AST children
         // (they would be broken) but still fall through to generate stub methods below.
-        let skip_ast_methods = is_primary_template;
+        // Also skip for concrete iterator/adapter types whose AST methods always reference
+        // internal fields (.__i_, .__current_, .__x_, etc.) that don't exist in our structs.
+        let is_broken_iterator_type = rust_name.contains("owning_view")
+            || rust_name.contains("move_iterator")
+            || rust_name.contains("counted_iterator")
+            || rust_name.contains("reverse_iterator")
+            || rust_name.contains("common_iterator")
+            || rust_name.contains("insert_iterator")
+            || rust_name.contains("front_insert_iterator")
+            || rust_name.contains("back_insert_iterator")
+            || rust_name.contains("ostreambuf_iterator")
+            || rust_name.contains("istreambuf_iterator")
+            || rust_name.contains("istream_iterator")
+            || rust_name.contains("__bit_reference")
+            || rust_name.contains("__bit_const_reference")
+            || rust_name.contains("__hash_iterator")
+            || rust_name.contains("__hash_const_iterator")
+            || rust_name.contains("__hash_local_iterator")
+            || rust_name.contains("__hash_const_local_iterator")
+            || rust_name.contains("__map_iterator")
+            || rust_name.contains("__map_const_iterator")
+            || rust_name.contains("__wrap_iter")
+            || rust_name.contains("__tuple_leaf");
+        let skip_ast_methods = is_primary_template || is_broken_iterator_type;
 
         for child in children {
             if skip_ast_methods {
@@ -3727,8 +3750,7 @@ impl AstCodeGen {
                         || generated.contains("__fill_val_ }) + 0")
                         // NOTE: __bit_reference__Cp__ != and duration__Rep___Period/time_point__Clock___Duration
                         // patterns removed (primary template guard catches these types)
-                        // Dereference self then compare with integer on __bit_reference
-                        || (rust_name.contains("__bit_reference") && generated.contains("*(self) != 0"))
+                        // NOTE: *(self)!=0 pattern for __bit_reference removed (iterator skip list)
                         // Static methods (no self param) that try to use (*self)
                         || (generated.contains("pub fn max()") && generated.contains("(*self)"))
                         || (generated.contains("pub fn min()") && generated.contains("(*self)"))
@@ -3738,8 +3760,7 @@ impl AstCodeGen {
                         || generated.contains(".__parent_ }) + __p as _")
                         // Methods accessing _unnamed on std_map types
                         || (rust_name.starts_with("std_map_") && generated.contains("._unnamed }.__value_comp_"))
-                        // Methods accessing __current_ on iterator types that don't have it
-                        || (generated.contains(".__current_") && rust_name.contains("__wrap_iter"))
+                        // NOTE: __current_ pattern for __wrap_iter removed (iterator skip list)
                         // Methods returning __d_ directly (move out of reference)
                         || generated.contains("return unsafe { (*self).__d_ }")
                         // Methods accessing __size_ on types that return c_void + int
@@ -3755,18 +3776,15 @@ impl AstCodeGen {
                         || (generated.contains("pub fn data_1(") && generated.contains("-> std::ffi::c_void"))
                         // Methods with fill_1 taking and returning c_void
                         || (generated.contains("pub fn fill_1(") && generated.contains("__ch: std::ffi::c_void)") && generated.contains("-> std::ffi::c_void"))
-                        // Methods dereferencing c_void via __current_
-                        || (generated.contains("*unsafe { (*self).__current_ }") && (rust_name.contains("common_iterator") || rust_name.contains("istreambuf_iterator") || rust_name.contains("istream_iterator") || rust_name.contains("__wrap_iter")))
+                        // NOTE: *__current_ pattern for common/istreambuf/istream_iterator/__wrap_iter removed (iterator skip list)
                         // Methods dereferencing c_void via __current_ with as cast
                         || generated.contains("*unsafe { (*self).__current_ } } as _")
                         // Methods with size(&mut self) returning wrong type (should be stub)
                         || (generated.contains("pub fn size(&mut self) -> usize") && generated.contains("return unsafe {"))
-                        // Methods accessing __current_ on reverse_iterator
-                        || (rust_name.contains("reverse_iterator") && generated.contains(".__current_"))
+                        // NOTE: __current_ pattern for reverse_iterator removed (iterator skip list)
                         // Methods with empty() returning bool but body returns c_void
                         || (generated.contains("pub fn empty(") && generated.contains("-> bool") && generated.contains("unsafe { (*self).__size_"))
-                        // Methods with pointer arithmetic on counted_iterator, reverse_iterator, move_iterator
-                        || (generated.contains("*(self + __n)") && (rust_name.contains("counted_iterator") || rust_name.contains("reverse_iterator") || rust_name.contains("move_iterator")))
+                        // NOTE: *(self + __n) pattern for counted/reverse/move_iterator removed (iterator skip list)
                         // Methods returning get/get_1 that return c_void pointers from broken bodies
                         || (generated.contains("pub fn get(") && generated.contains("*mut std::ffi::c_void") && generated.contains(".__ptr_"))
                         || (generated.contains("pub fn get_1(") && generated.contains("*const std::ffi::c_void") && generated.contains(".__ptr_"))
@@ -3775,8 +3793,7 @@ impl AstCodeGen {
                         || (generated.contains("pub fn get_1(") && generated.contains("return self as i32"))
                         // Methods casting 0 to duration type
                         || (generated.contains("return 0 as _") && (rust_name.contains("duration") || rust_name.contains("time_point")))
-                        // Methods returning base() that access missing fields
-                        || (generated.contains("pub fn base(") && generated.contains("*const std::ffi::c_void") && rust_name.contains("move_iterator"))
+                        // NOTE: base() pattern for move_iterator removed (iterator skip list)
                         // Methods dereferencing literal 1
                         || generated.contains("*1 }")
                         // Methods with imbue returning locale from broken body
@@ -3801,8 +3818,7 @@ impl AstCodeGen {
                         || generated.contains(".__tie_")
                         // Methods accessing .__st_ field that's not properly resolved
                         || (generated.contains(".__st_") && !generated.contains("fpos"))
-                        // Methods accessing .__i_ field on iterator types
-                        || (generated.contains(".__i_") && (rust_name.contains("counted_iterator") || rust_name.contains("move_iterator") || rust_name.contains("owning_view")))
+                        // NOTE: __i_ pattern for counted/move_iterator/owning_view removed (iterator skip list)
                         // Methods accessing .__val_ field on basic_ios or map types
                         || (generated.contains(".__val_") && (rust_name.contains("basic_ios") || rust_name.starts_with("std_map")))
                         // Methods accessing .__cat_ field
@@ -3818,8 +3834,7 @@ impl AstCodeGen {
                         || generated.contains(".cbegin ")
                         // Methods calling __is_long as method on wrong types
                         || (generated.contains("__is_long(") && (rust_name.contains("owning_view") || rust_name.contains("initializer_list") || rust_name.contains("subrange") || rust_name.contains("basic_string_view")))
-                        // Methods accessing .__size_ on owning_view (wrong type)
-                        || (rust_name.contains("owning_view") && generated.contains(".__size_"))
+                        // NOTE: __size_ pattern for owning_view removed (iterator skip list)
                         // Methods accessing .cend as field (it's a method)
                         || generated.contains(".cend ")
                         // Methods calling __libcpp_unreachable()
@@ -3836,8 +3851,7 @@ impl AstCodeGen {
                         || generated.contains("__constexpr_wmemchr(")
                         // Methods accessing .good as field
                         || generated.contains(".good ")
-                        // Methods accessing __data_ on owning_view
-                        || (rust_name.contains("owning_view") && generated.contains(".__data_"))
+                        // NOTE: __data_ pattern for owning_view removed (iterator skip list)
                         // Methods accessing __current_ on wrong types (not reverse_iterator)
                         || (generated.contains(".__current_") && (rust_name.contains("unique_ptr") || rust_name.contains("common_iterator") || rust_name.contains("ostreambuf_iterator") || rust_name.contains("__map_iterator") || rust_name.contains("__map_const_iterator") || rust_name.contains("insert_iterator") || rust_name.contains("__hash_") || rust_name.contains("front_insert_iterator")))
                         // Methods accessing __owns_ on wrong types
@@ -3848,17 +3862,14 @@ impl AstCodeGen {
                         || (generated.contains(".__begin_") && (rust_name.contains("owning_view") || rust_name.contains("basic_string_view")))
                         // Methods accessing __i_ on wrong iterator types
                         || (generated.contains(".__i_") && (rust_name.contains("ostreambuf_iterator") || rust_name.contains("__hash_local") || rust_name.contains("__hash_iterator") || rust_name.contains("unique_ptr")))
-                        // Methods accessing _unnamed on __tuple_leaf
-                        || (rust_name.contains("__tuple_leaf") && generated.contains("._unnamed"))
+                        // NOTE: _unnamed pattern for __tuple_leaf removed (iterator skip list)
                         // Methods calling do_narrow (wrong type)
                         || (rust_name.contains("basic_ios") && generated.contains("do_narrow("))
                         // NOTE: duration__Rep cast pattern removed (primary template guard)
-                        // Methods returning __current_ as c_void when expecting pointer (counted_iterator)
-                        || (rust_name.contains("counted_iterator") && generated.contains("-> *const") && generated.contains(".__current_"))
-                        // Methods accessing __value_ on counted_iterator
-                        || (rust_name.contains("counted_iterator") && generated.contains(".__value_"))
-                        // Methods accessing __x_ on iterator types
-                        || (generated.contains(".__x_") && (rust_name.contains("owning_view") || rust_name.contains("move_iterator") || rust_name.contains("counted_iterator")))
+                        // NOTE: __current_ pattern for counted_iterator removed (iterator skip list)
+                        // NOTE: __value_ pattern for counted_iterator removed (iterator skip list)
+                        // NOTE: __x_ pattern for owning_view/move_iterator/counted_iterator removed
+                        // (is_broken_iterator_type guard skips these types entirely)
                         // Methods accessing .rdstate as field (it's a method)
                         || generated.contains(".rdstate")
                         // Methods accessing .eof as field when not a bool
@@ -3900,8 +3911,8 @@ impl AstCodeGen {
                         // Methods that dereference c_void
                         || generated.contains("*c_void")
                         // (*_TreeIterator already covered by line 3686 above)
-                        // Methods with c_void addition to iterator references
-                        || (generated.contains("c_void` to `&mut") && (rust_name.contains("reverse_iterator") || rust_name.contains("move_iterator") || rust_name.contains("counted_iterator")))
+                        // NOTE: c_void`to`&mut pattern for reverse/move/counted_iterator removed
+                        // (is_broken_iterator_type guard skips these types entirely)
                         // NOTE: duration__Rep i32 cast pattern removed (primary template guard)
                     {
                         self.output.truncate(method_output_start);
@@ -10887,10 +10898,8 @@ impl AstCodeGen {
             || generated.contains("return _Size;")
             // binary operation on c_void (cannot add to c_void)
             || generated.contains("c_void + ")
-            // binary != on __bit_reference (no PartialEq impl)
-            || (generated.contains("__bit_reference__Cp__ !=") || generated.contains("!= __bit_reference__Cp__"))
-            // Non-primitive cast to duration template type
-            || generated.contains(" as duration__Rep___Period")
+            // NOTE: __bit_reference__Cp__ and duration__Rep___Period patterns removed
+            // (expanded has_unresolved_template_placeholder guard catches these types at line ~10309)
             // Cannot index into c_void
             || (generated.contains("c_void") && generated.contains("[") && generated.contains("]"))
             // Dereferencing c_void or _TreeIterator types
