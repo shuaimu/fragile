@@ -388,6 +388,13 @@ The current implementation uses forbidden patterns (see `docs/dev/wrong.md`). Th
       - Return integer value directly instead of transmute::<i32, memory_order>
     - [x] **27.8.1.6.3** Fix hermite/math function patterns ✅ (2026-02-04)
       - Map hermite_u32, hermitef, hermitel, hermite_1 → __hermite_u32 stub
+    - [x] **27.8.1.6.6** Fix inf.0/NaN.0 special float literal patterns ✅ (2026-02-04)
+      - Root cause: When converting float values to string, `inf` and `NaN` don't contain '.'
+      - The code would append `.0` to make them valid float literals, creating `inf.0` and `NaN.0`
+      - Fix: Check for special float values (is_infinite(), is_nan()) and generate proper constants
+      - `inf` → `f64::INFINITY`, `-inf` → `-f64::INFINITY`, `NaN` → `f64::NAN`
+      - Removed 6 rollback patterns for `inf.0` and `NaN.0`
+      - Rollback pattern count reduced from 210 to 204
 
     **Remaining subtasks** (break down further as needed):
     - [ ] **27.8.1.6.4** Reduce undeclared variable patterns (~100) - BLOCKED by 27.8.3

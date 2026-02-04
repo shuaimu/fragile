@@ -54,8 +54,17 @@ fn is_integer_literal_str(s: &str) -> bool {
 
 /// Convert an integer literal string to a float literal.
 /// E.g., "0" -> "0.0", "123i32" -> "123.0", "-5" -> "-5.0"
+/// Special values like "inf", "NaN" are converted to proper Rust constants.
 fn int_literal_to_float(s: &str) -> String {
     let stripped = strip_literal_suffix(s);
+    // Handle special float values
+    if stripped == "inf" {
+        return "f64::INFINITY".to_string();
+    } else if stripped == "-inf" {
+        return "-f64::INFINITY".to_string();
+    } else if stripped.to_lowercase() == "nan" {
+        return "f64::NAN".to_string();
+    }
     // If it's already a float literal (contains '.'), return as-is
     if stripped.contains('.') {
         return stripped;
@@ -4402,8 +4411,7 @@ impl AstCodeGen {
             || generated.contains(".op_bitand(")  // bitwise and as method on enum (libstdc++ atomics)
             || generated.contains("c_void::new_")  // c_void placeholder used as constructable type
             || generated.contains("c_void.op_")   // c_void placeholder used as callable object
-            || generated.contains("inf.0")        // Broken infinity literal (should be just inf)
-            || generated.contains("NaN.0")        // Broken NaN literal (should be just NaN)
+            // NOTE: inf.0 and NaN.0 patterns removed - fixed by proper handling of special float values
             // __platform_notify calling syscall with wrong number of arguments
             || (generated.contains("fn __platform_notify") && generated.contains("syscall("))
             // __atomic_wait_address_bare calling methods on wrong types
@@ -10844,9 +10852,7 @@ impl AstCodeGen {
             || (generated.contains("pub fn atomic_flag_wait") && generated.contains(").wait("))
             // __platform_notify calling syscall with wrong number of arguments
             || (generated.contains("fn __platform_notify") && generated.contains("syscall("))
-            // numeric_limits methods with inf.0 pattern (accessing field on f64)
-            || (generated.contains("return inf.0") || generated.contains("return -inf.0"))
-            || (generated.contains("return NaN.0"))
+            // NOTE: inf.0 and NaN.0 patterns removed - fixed by proper handling of special float values
             // thread::swap calling swap_std_thread_id with wrong argument types
             || (generated.contains("swap_std_thread_id_std_thread_id(&mut self._M_id"))
             // thread::native_handle accessing _M_thread on id (wrong type)
@@ -15337,10 +15343,7 @@ impl AstCodeGen {
                     || (generated.contains("pub fn native_handle(") && generated.contains("self._M_id._M_thread"))
                     // thread::get_id returning clone of _M_id (id is u64, needs no clone)
                     || (generated.contains("pub fn get_id(") && generated.contains("self._M_id.clone()"))
-                    // numeric_limits methods with inf.0 pattern (accessing field on f64)
-                    || generated.contains("return inf.0")
-                    || generated.contains("return -inf.0")
-                    || generated.contains("return NaN.0")
+                    // NOTE: inf.0 and NaN.0 patterns removed - fixed by proper handling of special float values
                     // numeric_limits __float128 helper methods that call _S_4p with wrong arg count
                     || (generated.contains("_S_1pm4088(") && generated.contains("numeric_limits::_S_4p("))
                     || (generated.contains("_S_1pm16352(") && generated.contains("numeric_limits::_S_4p("))
@@ -17725,17 +17728,47 @@ impl AstCodeGen {
                 if self.skip_literal_suffix {
                     // For floats, we need to ensure there's a decimal point
                     let s = value.to_string();
-                    if s.contains('.') || s.contains('e') || s.contains('E') {
+                    // Handle special float values (inf, NaN) - don't append .0
+                    if s == "inf" || s == "-inf" || s == "NaN" || s.to_lowercase() == "nan" {
+                        let suffix = match cpp_type {
+                            Some(CppType::Float) => "f32",
+                            _ => "f64",
+                        };
+                        match s.as_str() {
+                            "inf" => format!("{}::INFINITY", suffix),
+                            "-inf" => format!("-{}::INFINITY", suffix),
+                            _ => format!("{}::NAN", suffix),
+                        }
+                    } else if s.contains('.') || s.contains('e') || s.contains('E') {
                         s
                     } else {
                         format!("{}.0", s)
                     }
                 } else {
-                    let suffix = match cpp_type {
-                        Some(CppType::Float) => "f32",
-                        _ => "f64",
-                    };
-                    format!("{}{}", value, suffix)
+                    // Handle special float values with explicit suffix
+                    if value.is_infinite() {
+                        let suffix = match cpp_type {
+                            Some(CppType::Float) => "f32",
+                            _ => "f64",
+                        };
+                        if value.is_sign_positive() {
+                            format!("{}::INFINITY", suffix)
+                        } else {
+                            format!("-{}::INFINITY", suffix)
+                        }
+                    } else if value.is_nan() {
+                        let suffix = match cpp_type {
+                            Some(CppType::Float) => "f32",
+                            _ => "f64",
+                        };
+                        format!("{}::NAN", suffix)
+                    } else {
+                        let suffix = match cpp_type {
+                            Some(CppType::Float) => "f32",
+                            _ => "f64",
+                        };
+                        format!("{}{}", value, suffix)
+                    }
                 }
             }
             ClangNodeKind::EvaluatedExpr {
@@ -17797,7 +17830,24 @@ impl AstCodeGen {
                         format!("{}{}", val, suffix)
                     }
                 } else if let Some(val) = float_value {
-                    if self.skip_literal_suffix {
+                    // Handle special float values (inf, NaN)
+                    if val.is_infinite() {
+                        let suffix = match ty {
+                            CppType::Float => "f32",
+                            _ => "f64",
+                        };
+                        if val.is_sign_positive() {
+                            format!("{}::INFINITY", suffix)
+                        } else {
+                            format!("-{}::INFINITY", suffix)
+                        }
+                    } else if val.is_nan() {
+                        let suffix = match ty {
+                            CppType::Float => "f32",
+                            _ => "f64",
+                        };
+                        format!("{}::NAN", suffix)
+                    } else if self.skip_literal_suffix {
                         let s = val.to_string();
                         if s.contains('.') || s.contains('e') || s.contains('E') {
                             s
