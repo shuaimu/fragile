@@ -17039,6 +17039,11 @@ impl AstCodeGen {
                                 | "std::float_denorm_style"
                         );
                         if is_enum {
+                            // memory_order is represented as i32 constants in generated code,
+                            // so just return the integer value directly (no transmute needed)
+                            if name == "memory_order" || name == "std::memory_order" {
+                                return format!("{}i32", val);
+                            }
                             let rust_type = ty.to_rust_type_str();
                             return format!(
                                 "unsafe {{ std::mem::transmute::<i32, {}>({}i32) }}",
@@ -17245,6 +17250,11 @@ impl AstCodeGen {
                                 | "std::float_denorm_style"
                         );
                         if is_enum {
+                            // memory_order is represented as i32 constants in generated code,
+                            // so just return the integer value directly (no transmute needed)
+                            if name == "memory_order" || name == "std::memory_order" {
+                                return format!("{}i32", val);
+                            }
                             let rust_type = ty.to_rust_type_str();
                             return format!(
                                 "unsafe {{ std::mem::transmute::<i32, {}>({}i32) }}",
