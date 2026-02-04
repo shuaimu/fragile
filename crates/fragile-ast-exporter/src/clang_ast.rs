@@ -8,9 +8,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::io::{Error, ErrorKind};
 
-use crate::ffi::{
-    ASTEntryTag, AccessSpecifier, BinaryOperatorKind, CastKind, UnaryOperatorKind,
-};
+use crate::ffi::ASTEntryTag;
 
 /// Source location in a file
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -269,13 +267,6 @@ fn expect_opt_u64(val: &Value) -> Result<Option<u64>, Error> {
         Value::Null => Ok(None),
         Value::Integer(n) => Ok(Some(*n as u64)),
         _ => Err(Error::new(ErrorKind::InvalidData, "Expected integer or null")),
-    }
-}
-
-fn expect_string(val: &Value) -> Result<String, Error> {
-    match val {
-        Value::Text(s) => Ok(s.clone()),
-        _ => Err(Error::new(ErrorKind::InvalidData, "Expected string")),
     }
 }
 

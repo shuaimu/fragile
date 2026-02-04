@@ -137,7 +137,6 @@ fn generate_bindings() {
 struct LLVMInfo {
     lib_dir: PathBuf,
     include_dir: PathBuf,
-    libs: Vec<String>,
     version: String,
 }
 
@@ -161,13 +160,7 @@ impl LLVMInfo {
             Path::new(&path_str).canonicalize().unwrap_or_else(|_| PathBuf::from(&path_str))
         };
 
-        let libs: Vec<String> = invoke_llvm_config(&Some(llvm_config), &["--libs", "support", "core"])
-            .unwrap_or_else(|| "-lLLVM".to_string())
-            .split_whitespace()
-            .map(|lib| lib.trim_start_matches("-l").to_string())
-            .collect();
-
-        Self { lib_dir, include_dir, libs, version }
+        Self { lib_dir, include_dir, version }
     }
 }
 

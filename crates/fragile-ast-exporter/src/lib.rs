@@ -22,6 +22,9 @@ mod ffi {
     include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 }
 
+// Re-export FFI types for use by dependent crates
+// Some types may not be currently used internally but are part of the public API
+#[allow(unused_imports)]
 pub use ffi::{
     ASTEntryTag, AccessSpecifier, BinaryOperatorKind, CastKind, UnaryExprOrTypeTrait,
     UnaryOperatorKind,
