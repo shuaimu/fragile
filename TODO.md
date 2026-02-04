@@ -383,10 +383,13 @@ The current implementation uses forbidden patterns (see `docs/dev/wrong.md`). Th
       - These builtins were referenced as constants in numeric_limits without call parens
       - Added direct value mappings in DeclRefExpr handling
       - f64::INFINITY, f32::INFINITY, f64::NAN, f32::NAN
+    - [x] **27.8.1.6.2** Fix transmute::<i32, memory_order> patterns ✅ (2026-02-04)
+      - memory_order is represented as i32 constants, not an enum type
+      - Return integer value directly instead of transmute::<i32, memory_order>
+    - [x] **27.8.1.6.3** Fix hermite/math function patterns ✅ (2026-02-04)
+      - Map hermite_u32, hermitef, hermitel, hermite_1 → __hermite_u32 stub
 
     **Remaining subtasks** (break down further as needed):
-    - [ ] **27.8.1.6.2** Fix transmute::<i32, memory_order> patterns (~5)
-    - [ ] **27.8.1.6.3** Fix hermite/math function patterns (~5)
     - [ ] **27.8.1.6.4** Reduce undeclared variable patterns (~100)
     - [ ] **27.8.1.6.5** Reduce field access patterns (~80) - related to 27.8.3
 
