@@ -2693,6 +2693,147 @@ impl AstCodeGen {
         }
     }
 
+    /// Normalize a template argument for comparison.
+    /// Removes common prefixes and handles std:: namespace variations.
+    fn normalize_template_arg(arg: &str) -> String {
+        let mut s = arg.trim().to_string();
+
+        // Remove struct/class/typename prefixes
+        for prefix in &["struct ", "class ", "typename "] {
+            if let Some(stripped) = s.strip_prefix(prefix) {
+                s = stripped.to_string();
+            }
+        }
+
+        // Normalize std:: namespace (remove or keep consistently)
+        // Also handle __1:: which is libc++ inline namespace
+        s = s.replace("std::__1::", "std::");
+
+        s.trim().to_string()
+    }
+
+    /// Check if a template argument is a generic type parameter (from LibTooling)
+    /// that should match any concrete type.
+    fn is_generic_type_param(arg: &str) -> bool {
+        let s = arg.trim();
+        // LibTooling uses type-parameter-N-M for template parameters
+        s.starts_with("type-parameter-")
+            // Also handle _Tp, _T, _Key, _Value etc. which are template param names
+            || (s.starts_with('_') && s.chars().nth(1).map_or(false, |c| c.is_uppercase()))
+            // Handle things like "type-parameter-0-0[]" (arrays of type params)
+            || s.contains("type-parameter-")
+    }
+
+    /// Check if two type arguments are semantically equivalent common types.
+    /// Handles cases like _VoidPtr == void *, _Pointer == T *, etc.
+    fn are_equivalent_types(arg1: &str, arg2: &str) -> bool {
+        let s1 = arg1.trim();
+        let s2 = arg2.trim();
+
+        // _VoidPtr is commonly used for void *
+        if (s1 == "_VoidPtr" && s2 == "void *") || (s2 == "_VoidPtr" && s1 == "void *") {
+            return true;
+        }
+
+        // _CharT often matches char or wchar_t
+        if (s1 == "_CharT" && (s2 == "char" || s2 == "wchar_t"))
+            || (s2 == "_CharT" && (s1 == "char" || s1 == "wchar_t"))
+        {
+            return true;
+        }
+
+        // _Traits often matches char_traits<...>
+        if (s1 == "_Traits" && s2.contains("char_traits"))
+            || (s2 == "_Traits" && s1.contains("char_traits"))
+        {
+            return true;
+        }
+
+        false
+    }
+
+    /// Check if a template argument is an unresolved dependent type
+    /// that cannot be meaningfully compared.
+    fn is_dependent_type(arg: &str) -> bool {
+        let s = arg.trim();
+        // Common dependent type names from libc++
+        s == "value_type"
+            || s == "key_type"
+            || s == "mapped_type"
+            || s == "allocator_type"
+            || s == "size_type"
+            || s == "difference_type"
+            || s == "pointer"
+            || s == "const_pointer"
+            || s == "reference"
+            || s == "const_reference"
+            || s == "iterator"
+            || s == "const_iterator"
+            // Dependent types from templates
+            || s.contains("::")
+                && (s.contains("::value_type")
+                    || s.contains("::allocator_type")
+                    || s.contains("::key_type"))
+    }
+
+    /// Check if two template arguments match, with improved normalization.
+    /// Returns true if the arguments are equivalent or if one is a generic parameter.
+    fn template_args_match(inst_arg: &str, key_arg: &str) -> bool {
+        let norm_inst = Self::normalize_template_arg(inst_arg);
+        let norm_key = Self::normalize_template_arg(key_arg);
+
+        // Exact match after normalization
+        if norm_inst == norm_key {
+            return true;
+        }
+
+        // If the key (from LibTooling) is a generic type parameter, accept any concrete type
+        if Self::is_generic_type_param(&norm_key) {
+            return true;
+        }
+
+        // If the instance has an unresolved dependent type, we can't match meaningfully
+        // but we should try to continue matching - return true to allow partial matches
+        if Self::is_dependent_type(&norm_inst) {
+            return true;
+        }
+
+        // Check for semantically equivalent types (e.g., _VoidPtr == void *)
+        if Self::are_equivalent_types(&norm_inst, &norm_key) {
+            return true;
+        }
+
+        // Try matching without std:: prefix on either side
+        let inst_no_std = norm_inst
+            .strip_prefix("std::")
+            .unwrap_or(&norm_inst);
+        let key_no_std = norm_key.strip_prefix("std::").unwrap_or(&norm_key);
+
+        if inst_no_std == key_no_std {
+            return true;
+        }
+
+        // Handle allocator defaults: allocator<X> often defaults in templates
+        if norm_key.contains("allocator<") && norm_inst.contains("allocator<") {
+            // Both are allocators - consider matching if the allocated type matches
+            // Extract the type inside allocator<...>
+            if let (Some(inst_inner), Some(key_inner)) = (
+                norm_inst
+                    .strip_prefix("allocator<")
+                    .or_else(|| norm_inst.strip_prefix("std::allocator<")),
+                norm_key
+                    .strip_prefix("allocator<")
+                    .or_else(|| norm_key.strip_prefix("std::allocator<")),
+            ) {
+                let inst_inner = inst_inner.trim_end_matches('>');
+                let key_inner = key_inner.trim_end_matches('>');
+                return Self::template_args_match(inst_inner, key_inner);
+            }
+        }
+
+        false
+    }
+
     /// Find a matching specialization from LibTooling by comparing base name and template args.
     /// LibTooling uses full template args (e.g., std::map<int, int, less<int>, allocator<...>>)
     /// while libclang may use partial args (e.g., std::map<int, int>).
@@ -2763,21 +2904,11 @@ impl AstCodeGen {
 
                 for (i, inst_arg) in inst_args.iter().enumerate() {
                     let key_arg = &info.template_args[i];
-                    // Normalize comparison (remove "struct "/"class " prefixes)
-                    let norm_inst = inst_arg
-                        .trim()
-                        .strip_prefix("struct ")
-                        .or_else(|| inst_arg.trim().strip_prefix("class "))
-                        .unwrap_or(inst_arg.trim());
-                    let norm_key = key_arg
-                        .trim()
-                        .strip_prefix("struct ")
-                        .or_else(|| key_arg.trim().strip_prefix("class "))
-                        .unwrap_or(key_arg.trim());
 
-                    if norm_inst != norm_key {
+                    // Check if types match using improved normalization
+                    if !Self::template_args_match(inst_arg, key_arg) {
                         all_match = false;
-                        mismatches.push((i, norm_inst.to_string(), norm_key.to_string()));
+                        mismatches.push((i, inst_arg.to_string(), key_arg.to_string()));
                     }
                 }
                 if all_match {

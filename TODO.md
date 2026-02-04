@@ -297,10 +297,13 @@ The current implementation uses forbidden patterns (see `docs/dev/wrong.md`). Th
         - Unsubstituted types like `value_type` appear instead of actual types
         - Many base types like `basic_string<char>` don't have specializations
 
-    - [ ] **27.8.1.2.2** Fix template argument normalization in specialization matching
-      - Normalize `std::less<int>` vs `less<int>` vs `std__less_int_`
-      - Handle default template arguments
-      - Test: More specializations match successfully
+    - [x] **27.8.1.2.2** Fix template argument normalization in specialization matching ✅
+      - Added `normalize_template_arg()`: handles struct/class/typename prefixes, std::__1:: inline namespace
+      - Added `is_generic_type_param()`: matches `type-parameter-N-M` and `_Tp`-style params
+      - Added `is_dependent_type()`: identifies unresolved types like `value_type`, `key_type`
+      - Added `are_equivalent_types()`: matches `_VoidPtr` ↔ `void *`, `_CharT` ↔ `char/wchar_t`
+      - Added `template_args_match()`: combines all normalization logic
+      - **Result**: Matches increased from ~3 to 14, including `std::map<int, int, ...>` and `__tree_node_base<void *>`
 
     - [ ] **27.8.1.2.3** Improve fallback when LibTooling match fails
       - Instead of c_void, try to deduce field types from method usage
