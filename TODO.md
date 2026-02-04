@@ -461,12 +461,21 @@ The current implementation uses forbidden patterns (see `docs/dev/wrong.md`). Th
          - Skip names with `::` after template closing `>`
     - Result: Many more specializations now match (e.g., `unique_lock<_Mutex>`, `__map_value_compare`, etc.)
 
-  - [ ] **27.8.3.5** Fix internal field generation for STL containers
-    - Issue: map::operator[] body references `.__tree_` but our struct doesn't have this field
-    - Root cause: LibClang exposes primary template fields, not specialization-specific fields
-    - The `__tree_` field is actually present in libc++ map implementation
-    - Need to: Extract and generate fields from LibTooling specialization data
-    - Location: find_matching_specialization(), generate_template_instantiation()
+  - [~] **27.8.3.5** Fix LibTooling method body generation issues ⚠️ PARTIALLY DONE
+    - **Investigation (2026-02-04)**:
+      - Original issue description was INCORRECT - `__tree_` field IS being generated
+      - Real issue: Rollback pattern was too aggressive for `.__tree_` access
+      - **FIXED**: Made rollback conditional on whether struct has `__tree_` field
+      - **NEW FINDING**: When body is generated, it has unresolved function calls:
+        - `_::new_N()` - type constructors not defined
+        - `piecewise_construct` - std constant not defined
+        - `forward_as_tuple` - helper function not defined
+      - Added rollback for these unresolved patterns to keep compilation working
+    - **Remaining work**: Implement proper transpilation for:
+      - `std::forward_as_tuple` → generate tuple construction
+      - `std::piecewise_construct` → generate struct initialization
+      - `std::move` → generate std::mem::take or similar
+      - Type constructor calls from LibTooling → proper Rust constructor calls
 
   - **Progress Update**:
     - Fixed unresolved template struct generation (skip structs with generic type args like `_CharT`)

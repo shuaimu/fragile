@@ -4082,14 +4082,32 @@ impl AstCodeGen {
             self.writeln("");
 
             // Check for broken patterns and rollback if needed
+            // Note: We check if the struct has specific fields before rolling back field access
             let generated = &self.output[method_output_start..];
-            if generated.contains("todo!(")
+
+            // Check if struct has __tree_ field (maps, sets)
+            let has_tree_field = rust_name.starts_with("std_map_")
+                || rust_name.starts_with("std_set_")
+                || rust_name.starts_with("std_multimap_")
+                || rust_name.starts_with("std_multiset_");
+
+            // Check for patterns that indicate unresolved function calls
+            // _::new_N patterns indicate calls to type constructors that aren't defined
+            let has_unresolved_calls = generated.contains("_::new_")
+                || generated.contains("piecewise_construct")
+                || generated.contains("forward_as_tuple");
+
+            let should_rollback = generated.contains("todo!(")
                 || generated.contains("._M_")
-                || generated.contains(".__tree_")
+                // Only rollback __tree_ access if the struct doesn't have __tree_ field
+                || (generated.contains(".__tree_") && !has_tree_field)
                 || generated.contains(".__comp_")
                 || generated.contains("c_void")
                 || generated.contains("*0")
-            {
+                // Rollback if there are unresolved function/constructor calls
+                || has_unresolved_calls;
+
+            if should_rollback {
                 // Rollback - this method body has issues
                 self.output.truncate(method_output_start);
             }
