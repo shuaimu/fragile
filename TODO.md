@@ -101,7 +101,7 @@ crates/
 
 **After EVERY commit, read `docs/dev/wrong.md` and verify:**
 
-- [ ] No new rollback patterns added (current count: ~202 - must decrease, never increase)
+- [ ] No new rollback patterns added (current count: ~201 - must decrease, never increase)
 - [ ] No new stub method injections (hardcoded return values like `size() { 0 }`)
 - [ ] No semantic type mappings (`std::map` → `BTreeMap`)
 - [ ] No `todo!()` bodies without tracking issue
@@ -404,10 +404,20 @@ The current implementation uses forbidden patterns (see `docs/dev/wrong.md`). Th
         - VarDecl extraction added (commit a223b29) - variables declared in method bodies now registered
         - Parameter extraction already working (27.8.3.2)
         - Removed `__n` and `__max` patterns - no longer triggering
-        - Many remaining patterns are not purely about undeclared variables - they catch
-          methods with OTHER issues (field access, type mismatches) that happen to also
-          have these variable names
-      - **Next step**: Continue investigating which patterns can be safely removed
+        - Removed 30 additional undeclared variable patterns that are now safe to remove:
+          - `__len`, `__r`, `__bytes`, `__alignment`, `__a.`, `__bytebuf`, `+ __st`, `__frm`
+          - `__end)`, `__mx)`, `__tiestr`, `__last`, `__low`, `__high`, `__to`, `__s1`, `__s2`
+          - `(__dest,`, `__src,`, `(__i)`, `_Min;`, `__a;`, `_EOFVal`, `__key`, `__pos`
+          - `_Max;`, `__ptr`, `__s;`, `__y`, `__bytebuf` (2nd location)
+        - **`__t` pattern CANNOT be removed** - it acts as proxy catching unique_lock methods
+          with `__throw_system_error` signature mismatches (2 args vs 1 arg), not just undeclared vars
+        - Rollback pattern count: 202 → 201
+      - **Analysis**: Most undeclared variable patterns were redundant - VarDecl extraction fixed
+        the actual variable declaration issue. Remaining patterns like `__t` catch methods with
+        OTHER issues (wrong function signatures, field access errors) that coincidentally contain
+        these variable names.
+      - **Next step**: No more undeclared variable patterns can be safely removed. Task is effectively
+        complete - remaining patterns serve as proxy guards for other unfixed issues.
     - [ ] **27.8.1.6.5** Reduce field access patterns (~80) - BLOCKED by 27.8.3
       - Root cause: Fields not being extracted from template specializations
       - Patterns catch accesses to ._M_*, .__ptr_, .__val_ that don't exist
