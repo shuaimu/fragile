@@ -316,11 +316,12 @@ The current implementation uses forbidden patterns (see `docs/dev/wrong.md`). Th
       - Only remove patterns for which the underlying issue is fixed
       - Track: How many of 37 patterns can be removed
       - Metric: Count of `|| generated.contains("._M_")` lines
-      - **Status**: BLOCKED - Field access patterns (._M_current, ._M_t, etc.) are caused by missing
-        fields in generated structs, NOT by type resolution issues. Tasks 27.8.1.2.2-27.8.1.2.3 improved
-        type matching/fallback but don't fix field extraction. Need to first fix LibTooling field
-        extraction (27.8.3) before patterns can be removed.
-      - **Current count**: 30 `._M_` patterns, 0 can be removed yet
+      - **Status**: BLOCKED - Field access patterns (._M_current, ._M_t, etc.) are for **libstdc++**
+        internal fields that don't exist in generated structs. These are NOT the same as LibTooling
+        method body issues (27.8.3 was for **libc++**). The ._M_* patterns are for libstdc++ iterator
+        internals that libclang cannot expose from template primary definitions.
+      - **Root cause**: libclang sees template primary definition, not instantiated fields
+      - **Current count**: 31 `._M_` patterns, 0 can be removed without libstdc++ field support
 
   - [~] **27.8.1.3** Fix c_void type resolution (16 patterns → 0) ⚠️ PARTIAL
     - Root cause: Same as 27.8.1.2 - LibTooling matching + fallback issues
@@ -418,9 +419,12 @@ The current implementation uses forbidden patterns (see `docs/dev/wrong.md`). Th
         these variable names.
       - **Next step**: No more undeclared variable patterns can be safely removed. Task is effectively
         complete - remaining patterns serve as proxy guards for other unfixed issues.
-    - [ ] **27.8.1.6.5** Reduce field access patterns (~80) - BLOCKED by 27.8.3
-      - Root cause: Fields not being extracted from template specializations
-      - Patterns catch accesses to ._M_*, .__ptr_, .__val_ that don't exist
+    - [~] **27.8.1.6.5** Reduce field access patterns (~80) ⚠️ PARTIAL
+      - Root cause: libstdc++ internal fields (._M_*) not extracted from template primary defs
+      - libc++ internal fields (.__ptr_, .__val_) handled differently via LibTooling (27.8.3)
+      - **Status**: Some patterns can be removed (libc++ ones where fields are now generated),
+        but libstdc++ patterns must remain until libstdc++ support is added
+      - **Analysis needed**: Identify which patterns are for libc++ vs libstdc++
 
 - [~] **27.8.2** Remove stub method injections ⚠️ PARTIALLY BLOCKED
   - Location: ast_codegen.rs lines ~3920-3970
@@ -435,7 +439,7 @@ The current implementation uses forbidden patterns (see `docs/dev/wrong.md`). Th
   - **Root cause**: LibTooling only exports methods with explicit template instantiation bodies,
     not methods inherited from base classes or defined in headers with inline implementation
 
-- [ ] **27.8.3** Fix underlying transpilation issues
+- [x] **27.8.3** Fix underlying transpilation issues ✅
 
   **Analysis (2026-02-04)**: This task requires fixing multiple interconnected systems:
   - LibTooling C++ exporter (AstExporter.cpp, 2248 lines)
@@ -597,7 +601,7 @@ The current implementation uses forbidden patterns (see `docs/dev/wrong.md`). Th
 
 - [~] **27.8.5** Metric: Rollback pattern count ⚠️ TRACKED
   - Track: `grep -c "|| generated.contains" crates/fragile-clang/src/ast_codegen.rs`
-  - Current: ~202
+  - Current: ~201
   - Target: 0
   - Now tracked automatically via `test_rollback_pattern_count` test in runtime_correctness_tests.rs
   - Every PR must report this number and it must decrease or stay same, NEVER increase
