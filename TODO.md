@@ -263,7 +263,19 @@ Semantic mapping would be incorrect. Absolute transpilation preserves exact C++ 
 
 The current implementation uses forbidden patterns (see `docs/dev/wrong.md`). These must be removed and replaced with proper fixes.
 
-- [ ] **27.8.1** Remove rollback patterns from ast_codegen.rs (202 total → 0)
+- [~] **27.8.1** Remove rollback patterns from ast_codegen.rs (201 total → 0) ⚠️ BLOCKED
+
+  **Status (2026-02-04)**: All actionable subtasks are complete. Remaining 201 patterns cannot be
+  removed without fundamental architectural changes:
+  - ~164 field access patterns: Protect against accessing non-existent fields on PRIMARY TEMPLATE
+    types (with unresolved generic params like `_Iter`, `_Rp`). libclang sees primary definitions,
+    not instantiated types with resolved fields.
+  - ~37 other patterns: Guard against c_void type issues, signature mismatches, etc.
+
+  **Blocking issue**: To remove these patterns, we would need to:
+  1. Have LibTooling extract fields from ALL template instantiations (not just explicit ones)
+  2. Or, detect at code-gen time whether a type is instantiated vs primary template
+  Neither of these is currently implemented.
 
   **Analysis**: The 204 patterns break down into these categories:
   - ~37 patterns: Internal field access (`._M_*`, `.__ptr_`, `.__val_`, etc.)
@@ -279,7 +291,7 @@ The current implementation uses forbidden patterns (see `docs/dev/wrong.md`). Th
     - Output: `docs/dev/rollback-audit.md`
     - Categories: 37 field access, 16 c_void, 10 vtable, 8 builtin, 133 other
 
-  - [ ] **27.8.1.2** Fix internal field access patterns (37 patterns → 0)
+  - [~] **27.8.1.2** Fix internal field access patterns (37 patterns → 0) ⚠️ BLOCKED
 
     **Analysis** (2026-02-04): Investigation found that:
     - Fields ARE being extracted (LibClang, LibTooling work correctly)
@@ -358,7 +370,7 @@ The current implementation uses forbidden patterns (see `docs/dev/wrong.md`). Th
       - `__libcpp_unreachable` → `std::hint::unreachable_unchecked()`
       - `__libcpp_atomic_refcount_increment/decrement` → atomic-like operations
 
-  - [ ] **27.8.1.6** Fix remaining patterns (656 total clauses across 7 rollback sites → 0)
+  - [~] **27.8.1.6** Fix remaining patterns (656 total clauses across 7 rollback sites → 0) ⚠️ BLOCKED
 
     **Analysis (2026-02-04)**: Full audit found rollback patterns in 7 locations:
     - Lines 3348-3713: 201 patterns (template method bodies in generate_template_impl)
