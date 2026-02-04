@@ -14,7 +14,7 @@ We just convert the fully-resolved AST to equivalent Rust code.
 ## Current Status
 
 **Grammar Tests**: 22/22 passing
-**E2E Tests**: 133/133 passing (2 ignored: 2 STL header limitations)
+**E2E Tests**: 135/135 passing (2 ignored: 2 STL header limitations)
 **libc++ Transpilation Tests**: 8/8 passing (cstddef, cstdint, type_traits, initializer_list, vector, cstddef_compilation, iostream, thread)
 **Runtime Linking Tests**: 2/2 passing (FILE I/O, pthread)
 **Runtime Function Mapping Tests**: 1/1 passing
@@ -101,7 +101,7 @@ crates/
 
 **After EVERY commit, read `docs/dev/wrong.md` and verify:**
 
-- [ ] No new rollback patterns added (current count: ~201 - must decrease, never increase)
+- [ ] No new rollback patterns added (current count: ~195 - must decrease, never increase)
 - [ ] No new stub method injections (hardcoded return values like `size() { 0 }`)
 - [ ] No semantic type mappings (`std::map` → `BTreeMap`)
 - [ ] No `todo!()` bodies without tracking issue
@@ -158,7 +158,7 @@ Semantic mapping would be incorrect. Absolute transpilation preserves exact C++ 
 **Current State** (BROKEN - uses forbidden patterns, must be fixed):
 
 ⚠️ **WARNING**: The current implementation cheats by:
-1. Using ~202 "rollback patterns" that delete broken methods instead of fixing them
+1. Using ~195 "rollback patterns" that delete broken methods instead of fixing them
 2. Injecting stub methods (`size() { 0 }`, `op_index() { null_mut() }`)
 3. Methods marked `todo!("Template method body")` instead of actual transpiled code
 
@@ -263,19 +263,30 @@ Semantic mapping would be incorrect. Absolute transpilation preserves exact C++ 
 
 The current implementation uses forbidden patterns (see `docs/dev/wrong.md`). These must be removed and replaced with proper fixes.
 
-- [~] **27.8.1** Remove rollback patterns from ast_codegen.rs (201 total → 0) ⚠️ BLOCKED
+- [~] **27.8.1** Remove rollback patterns from ast_codegen.rs (195 total → 0) ⚠️ IN PROGRESS
 
-  **Status (2026-02-04)**: All actionable subtasks are complete. Remaining 201 patterns cannot be
-  removed without fundamental architectural changes:
-  - ~164 field access patterns: Protect against accessing non-existent fields on PRIMARY TEMPLATE
-    types (with unresolved generic params like `_Iter`, `_Rp`). libclang sees primary definitions,
-    not instantiated types with resolved fields.
-  - ~37 other patterns: Guard against c_void type issues, signature mismatches, etc.
+  **Status (2026-02-04)**: Primary template detection guard implemented (Option 2 from blocking
+  issue). This skips impl block generation for types with unresolved template parameters, preventing
+  broken methods from being generated in the first place. Reduced from 201 to 195 patterns.
 
-  **Blocking issue**: To remove these patterns, we would need to:
+  **Progress**:
+  - Extended `has_unresolved_template_placeholder()` to detect 15+ additional template param names
+    (`__Iter`, `__Sent`, `__Rp`, `__Mutex`, `__Cp`, `__Rep`, `__Period`, `__Clock`, `__Duration`,
+    `__State`, `__Size`, `__Kind`, `__Container`, `__NodePtr`, `__ConstNodePtr`, `__Iterator`)
+  - Added guard in `generate_template_impl()` that skips impl blocks for primary template types
+  - Container types (std_map_, std_list_, etc.) exempt from guard to preserve stub methods
+  - Removed 6 dead rollback patterns that were only reachable for primary template types
+  - Fixed `test_map_compiles_successfully` (was previously failing)
+
+  **Remaining**: ~195 patterns still needed for:
+  - ~31 `._M_*` patterns: libstdc++ internal fields on concrete iterator types
+  - ~100+ patterns: Concrete type method generation issues (field access, c_void types,
+    signature mismatches, undefined functions)
+  - Patterns protect concrete instantiation types where methods are generated but broken
+
+  **Original blocking issue** (partially resolved):
   1. Have LibTooling extract fields from ALL template instantiations (not just explicit ones)
-  2. Or, detect at code-gen time whether a type is instantiated vs primary template
-  Neither of these is currently implemented.
+  2. ~~Or, detect at code-gen time whether a type is instantiated vs primary template~~ ✅ DONE
 
   **Analysis**: The 204 patterns break down into these categories:
   - ~37 patterns: Internal field access (`._M_*`, `.__ptr_`, `.__val_`, etc.)
@@ -446,6 +457,18 @@ The current implementation uses forbidden patterns (see `docs/dev/wrong.md`). Th
         Only patterns for FULLY INSTANTIATED types could potentially be removed.
       - **Current count**: ~106 `.__` patterns (libc++), ~58 `._M_` patterns (libstdc++) = 164 total
       - **Removable**: ~0 patterns (all serve valid purposes for primary template types)
+    - [x] **27.8.1.6.7** Skip impl blocks for primary template types ✅ (2026-02-04)
+      - Root cause: `generate_template_impl()` was generating methods for PRIMARY TEMPLATE types
+        (with unresolved params like `_Iter`, `_Rp`) and then rolling them back via pattern matching
+      - Fix: Extended `has_unresolved_template_placeholder()` with 15+ new template param names
+        (`__Iter`, `__Sent`, `__Rp`, `__Mutex`, `__Cp`, `__Rep`, `__Period`, `__Clock`,
+        `__Duration`, `__State`, `__Size`, `__Kind`, `__Container`, `__NodePtr`, `__ConstNodePtr`)
+      - Added guard at top of `generate_template_impl()` to skip impl block for primary templates
+      - Container types exempt (need stub methods like `size()`, `new_0()`)
+      - Removed 6 dead rollback patterns that were only reachable for primary template types
+      - Rollback pattern count: 201 → 195
+      - Fixed `test_map_compiles_successfully` (was failing, now passes)
+      - Added 3 unit tests for `has_unresolved_template_placeholder()`
 
 - [~] **27.8.2** Remove stub method injections ⚠️ PARTIALLY BLOCKED
   - Location: ast_codegen.rs lines ~3920-3970
@@ -622,7 +645,7 @@ The current implementation uses forbidden patterns (see `docs/dev/wrong.md`). Th
 
 - [~] **27.8.5** Metric: Rollback pattern count ⚠️ TRACKED
   - Track: `grep -c "|| generated.contains" crates/fragile-clang/src/ast_codegen.rs`
-  - Current: ~201
+  - Current: ~195 (was ~201, reduced by primary template guard)
   - Target: 0
   - Now tracked automatically via `test_rollback_pattern_count` test in runtime_correctness_tests.rs
   - Every PR must report this number and it must decrease or stay same, NEVER increase

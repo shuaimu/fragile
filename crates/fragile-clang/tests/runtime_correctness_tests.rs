@@ -244,12 +244,13 @@ fn test_rollback_pattern_count() {
     println!("Current rollback pattern count: {}", rollback_count);
 
     // Track the count - it should decrease over time, NEVER increase
-    // Current baseline: around 200+
+    // History: 210 -> 204 (float literal fix) -> 201 (undeclared var cleanup)
+    //       -> 195 (primary template guard skips broken impl blocks)
     // When this test starts failing because count increased, investigate!
-    // For now, we just print the count as documentation
     assert!(
-        rollback_count < 300,
-        "Rollback pattern count ({}) seems too high - investigate",
+        rollback_count <= 200,
+        "Rollback pattern count ({}) increased beyond 200 - investigate! \
+         The primary template guard should keep this under 200.",
         rollback_count
     );
 }

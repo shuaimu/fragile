@@ -622,11 +622,34 @@ impl AstCodeGen {
             // Unresolved dependent type names
             || s.contains("typename_")
             // Template parameter names embedded with double underscores (e.g., vector__Tp___Alloc)
+            // These appear in rust_name when primary template types are converted to identifiers
             || s.contains("__Tp")
             || s.contains("__Alloc")
             || s.contains("__CharT")
             || s.contains("__Traits")
             || s.contains("___Alloc")  // Triple underscore variant
+            // Additional template parameter names found in primary template types
+            // Iterator-related params
+            || s.contains("__Iter")
+            || s.contains("__Sent")
+            || s.contains("__Iterator")
+            // Pointer/node params
+            || s.contains("__NodePtr")
+            || s.contains("__ConstNodePtr")
+            // Callable/functional params
+            || s.contains("__Rp")
+            || s.contains("__Mutex")
+            || s.contains("__Cp")
+            // Time/duration params
+            || s.contains("__Rep")
+            || s.contains("__Period")
+            || s.contains("__Clock")
+            || s.contains("__Duration")
+            // Other common template params
+            || s.contains("__State")
+            || s.contains("__Size")
+            || s.contains("__Kind")
+            || s.contains("__Container")
             // STL internal template parameter names - these appear as template arguments
             // Check for patterns like <_Tp> or <_Tp, or , _Tp> indicating template params
             || Self::has_template_param_pattern(s, "_Tp")
@@ -642,6 +665,20 @@ impl AstCodeGen {
             || Self::has_template_param_pattern(s, "_Traits")
             || Self::has_template_param_pattern(s, "_Allocator")
             || Self::has_template_param_pattern(s, "_Container")
+            || Self::has_template_param_pattern(s, "_Iter")
+            || Self::has_template_param_pattern(s, "_Sent")
+            || Self::has_template_param_pattern(s, "_Rp")
+            || Self::has_template_param_pattern(s, "_Mutex")
+            || Self::has_template_param_pattern(s, "_State")
+            || Self::has_template_param_pattern(s, "_Rep")
+            || Self::has_template_param_pattern(s, "_Period")
+            || Self::has_template_param_pattern(s, "_Clock")
+            || Self::has_template_param_pattern(s, "_Duration")
+            || Self::has_template_param_pattern(s, "_Kind")
+            || Self::has_template_param_pattern(s, "_Size")
+            || Self::has_template_param_pattern(s, "_NodePtr")
+            || Self::has_template_param_pattern(s, "_ConstNodePtr")
+            || Self::has_template_param_pattern(s, "_Cp")
     }
 
     /// Check if a template parameter name appears as a template argument in the string.
@@ -3389,11 +3426,19 @@ impl AstCodeGen {
     /// Generate impl block for a template instantiation.
     fn generate_template_impl(
         &mut self,
-        _inst_name: &str,
+        inst_name: &str,
         rust_name: &str,
         children: &[ClangNode],
         subst_map: &HashMap<String, String>,
     ) {
+        // Skip impl blocks for PRIMARY TEMPLATE types (types with unresolved generic params).
+        // These types have method bodies that reference internal fields (._M_current, .__ptr_, etc.)
+        // which don't exist in the generated struct. Previously, these broken methods were generated
+        // and then rolled back by pattern matching. Instead, we now prevent their generation entirely.
+        // Container types are exempt because they use hardcoded stub methods.
+        let is_primary_template = Self::has_unresolved_template_placeholder(rust_name)
+            || Self::has_unresolved_template_placeholder(inst_name);
+
         let mut has_methods = false;
         for child in children {
             if matches!(
@@ -3421,13 +3466,27 @@ impl AstCodeGen {
             return;
         }
 
+        // Skip impl block for primary template types - their methods reference
+        // internal fields that don't exist in the generated struct. Container types
+        // are exempt because they need stub methods for compilation.
+        if is_primary_template && !is_container_type {
+            return;
+        }
+
         self.writeln(&format!("impl {} {{", rust_name));
         self.indent += 1;
 
         // Track method names within this impl block to handle overloads
         let mut method_counts: HashMap<String, usize> = HashMap::new();
 
+        // For primary template container types, skip generating methods from AST children
+        // (they would be broken) but still fall through to generate stub methods below.
+        let skip_ast_methods = is_primary_template;
+
         for child in children {
+            if skip_ast_methods {
+                break;  // Skip all AST method generation for primary template types
+            }
             if let ClangNodeKind::CXXMethodDecl {
                 name,
                 return_type,
@@ -3629,49 +3688,24 @@ impl AstCodeGen {
                         || generated.contains("return _Size;")
                         // Methods with undeclared DefaultType
                         || generated.contains("DefaultType")
-                        // Methods accessing __x_ on iterator types that don't have it
-                        || (generated.contains("owning_view__Rp") && generated.contains(".__x_"))
-                        || (generated.contains("move_iterator__Iter") && generated.contains(".__x_"))
-                        || (generated.contains("counted_iterator__Iter") && (generated.contains(".__x_") || generated.contains(".__i_") || generated.contains(".__ptr_")))
-                        || (generated.contains("common_iterator__Iter___Sent") && generated.contains(".__i_"))
-                        || (generated.contains("reverse_iterator__Iter") && generated.contains(".__i_"))
-                        || (generated.contains("insert_iterator__Container") && generated.contains(".__i_"))
-                        || (generated.contains("front_insert_iterator__Container") && generated.contains(".__i_"))
-                        || (generated.contains("back_insert_iterator__Container") && generated.contains(".__i_"))
-                        || (generated.contains("ostreambuf_iterator__CharT___Traits") && generated.contains(".__i_"))
-                        || (generated.contains("__hash_iterator__NodePtr") && generated.contains(".__i_"))
-                        || (generated.contains("__hash_const_iterator__ConstNodePtr") && generated.contains(".__i_"))
-                        || (generated.contains("__hash_local_iterator__NodePtr") && generated.contains(".__i_"))
-                        || (generated.contains("__hash_const_local_iterator__ConstNodePtr") && generated.contains(".__i_"))
-                        || (generated.contains("__static_bounded_iter__Iterator___Size") && generated.contains(".__current_"))
-                        // Methods accessing __bufptr_ on basic_ios template types
-                        || (generated.contains("basic_ios__CharT___Traits") && generated.contains(".__bufptr_"))
-                        // Methods accessing __exceptions_ on basic_ios template types
-                        || (generated.contains("basic_ios__CharT___Traits") && generated.contains(".__exceptions_"))
-                        // Methods calling method as field on basic_ios template types
-                        || (generated.contains("basic_ios__CharT___Traits") && (generated.contains(".fail") || generated.contains(".good") || generated.contains(".eof") || generated.contains(".bad")))
-                        // Methods accessing sync on basic_streambuf template types
-                        || (generated.contains("basic_streambuf__CharT___Traits") && generated.contains(".sync"))
-                        // Methods accessing __cvtstate_ on fpos template types
-                        || (generated.contains("fpos__State") && generated.contains(".__cvtstate_"))
+                        // NOTE: Primary template type name patterns (owning_view__Rp, move_iterator__Iter,
+                        // counted_iterator__Iter, common_iterator__Iter___Sent, reverse_iterator__Iter,
+                        // insert_iterator__Container, front/back_insert_iterator__Container,
+                        // ostreambuf_iterator__CharT___Traits, __hash_*iterator*__NodePtr,
+                        // __static_bounded_iter__Iterator___Size, basic_ios__CharT___Traits,
+                        // basic_streambuf__CharT___Traits, fpos__State) have been removed.
+                        // The guard at the top of generate_template_impl now skips these types.
                         // Methods accessing fields on unique_ptr template types
                         || (generated.contains("unique_ptr_") && (generated.contains("._unnamed") || generated.contains(".__val_") || generated.contains(".__i_")))
                         // Methods accessing __val_ on unique_lock template types
                         || (generated.contains("unique_lock_") && generated.contains(".__val_"))
-                        || (generated.contains("unique_lock__Mutex") && generated.contains(".__val_"))
-                        // Methods accessing __val_ on __bit_reference types
-                        || (generated.contains("__bit_reference__Cp__") && generated.contains(".__val_"))
-                        || (generated.contains("__bit_const_reference__Cp") && generated.contains(".__val_"))
-                        // Methods accessing __val_ on basic_ios template types
-                        || (generated.contains("basic_ios__CharT___Traits") && generated.contains(".__val_"))
+                        // NOTE: Patterns for unique_lock__Mutex, __bit_reference__Cp__, __bit_const_reference__Cp,
+                        // basic_ios__CharT___Traits, basic_string_view__CharT___Traits removed (primary template guard)
                         // Methods accessing __comp_ on std_map (should be delegated to __tree_)
                         || (generated.contains("std_map_") && generated.contains(".__comp_"))
-                        // Methods calling do_length on template types (method not generated)
-                        || (generated.contains("basic_string_view__CharT___Traits") && generated.contains(".do_length"))
                         // Methods with _TreeIterator dereference issues
                         || generated.contains("*_TreeIterator")
-                        // Non-primitive cast to duration template type
-                        || generated.contains(" as duration__Rep___Period")
+                        // NOTE: duration__Rep___Period cast pattern removed (primary template guard)
                         // Cannot move out of __d_ or __st_
                         || generated.contains("self.__d_")
                         || generated.contains("self.__st_")
@@ -3691,12 +3725,10 @@ impl AstCodeGen {
                         || generated.contains("c_void + ")
                         // Methods accessing __fill_val_ and adding integer
                         || generated.contains("__fill_val_ }) + 0")
-                        // Binary != on __bit_reference (no PartialEq impl)
-                        || (generated.contains("__bit_reference__Cp__ !=") || generated.contains("!= __bit_reference__Cp__"))
+                        // NOTE: __bit_reference__Cp__ != and duration__Rep___Period/time_point__Clock___Duration
+                        // patterns removed (primary template guard catches these types)
                         // Dereference self then compare with integer on __bit_reference
                         || (rust_name.contains("__bit_reference") && generated.contains("*(self) != 0"))
-                        // Methods returning literal 0.0 instead of struct type (duration, time_point max/min)
-                        || (generated.contains("return 0.0;") && (rust_name.contains("duration__Rep___Period") || rust_name.contains("time_point__Clock___Duration")))
                         // Static methods (no self param) that try to use (*self)
                         || (generated.contains("pub fn max()") && generated.contains("(*self)"))
                         || (generated.contains("pub fn min()") && generated.contains("(*self)"))
@@ -3750,30 +3782,15 @@ impl AstCodeGen {
                         // Methods with imbue returning locale from broken body
                         || (generated.contains("pub fn imbue(") && generated.contains("-> locale {") && !generated.contains("return (*self)"))
                         // Struct-specific rollback patterns using rust_name
-                        // owning_view__Rp: rollback methods accessing __current_ or _unnamed
-                        || (rust_name == "owning_view__Rp" && (generated.contains(".__current_") || generated.contains("._unnamed")))
-                        // __static_bounded_iter: rollback methods accessing __current_
-                        || (rust_name == "__static_bounded_iter__Iterator___Size" && generated.contains(".__current_"))
+                        // NOTE: Patterns for primary template types (owning_view__Rp, basic_ios__CharT___Traits,
+                        // fpos__State, etc.) have been removed - the guard at the top of generate_template_impl
+                        // now skips impl block generation for these types entirely.
                         // unique_ptr types: rollback methods accessing _unnamed
                         || (rust_name.starts_with("unique_ptr_") && generated.contains("._unnamed"))
-                        // fpos__State: rollback methods accessing __cvtstate_
-                        || (rust_name == "fpos__State" && generated.contains(".__cvtstate_"))
-                        // basic_string_view types: rollback methods accessing _unnamed
-                        || (rust_name == "basic_string_view__CharT___Traits" && generated.contains("._unnamed"))
                         // initializer_list types: rollback methods accessing _unnamed
                         || (rust_name.starts_with("initializer_list_") && generated.contains("._unnamed"))
-                        // subrange types: rollback methods accessing _unnamed
-                        || (rust_name == "subrange__Iter___Sent___Kind" && generated.contains("._unnamed"))
-                        // _SentinelValueFill: rollback methods accessing __set_
-                        || (rust_name == "_SentinelValueFill__Traits" && generated.contains(".__set_"))
-                        // basic_ios: rollback methods accessing fail as field
-                        || (rust_name == "basic_ios__CharT___Traits" && generated.contains(".fail"))
-                        // basic_ios: rollback methods accessing __size_
-                        || (rust_name == "basic_ios__CharT___Traits" && generated.contains(".__size_"))
                         // std_map: rollback methods accessing __size_ directly
                         || (rust_name.starts_with("std_map_") && generated.contains(".__size_"))
-                        // basic_streambuf: rollback methods accessing sync as field
-                        || (rust_name == "basic_streambuf__CharT___Traits" && generated.contains(".sync"))
                         // Iterator types: rollback methods accessing __keep_
                         || generated.contains(".__keep_")
                         // Iterator types: rollback methods with c_void + operations
@@ -3835,8 +3852,7 @@ impl AstCodeGen {
                         || (rust_name.contains("__tuple_leaf") && generated.contains("._unnamed"))
                         // Methods calling do_narrow (wrong type)
                         || (rust_name.contains("basic_ios") && generated.contains("do_narrow("))
-                        // Methods with duration cast
-                        || (generated.contains("as duration__Rep"))
+                        // NOTE: duration__Rep cast pattern removed (primary template guard)
                         // Methods returning __current_ as c_void when expecting pointer (counted_iterator)
                         || (rust_name.contains("counted_iterator") && generated.contains("-> *const") && generated.contains(".__current_"))
                         // Methods accessing __value_ on counted_iterator
@@ -3886,8 +3902,7 @@ impl AstCodeGen {
                         // (*_TreeIterator already covered by line 3686 above)
                         // Methods with c_void addition to iterator references
                         || (generated.contains("c_void` to `&mut") && (rust_name.contains("reverse_iterator") || rust_name.contains("move_iterator") || rust_name.contains("counted_iterator")))
-                        // Methods with duration cast from i32
-                        || generated.contains("i32` as `duration__Rep")
+                        // NOTE: duration__Rep i32 cast pattern removed (primary template guard)
                     {
                         self.output.truncate(method_output_start);
                     }
@@ -22095,5 +22110,44 @@ mod tests {
             "Expected regular field 'x: i32', got:\n{}",
             code
         );
+    }
+
+    #[test]
+    fn test_has_unresolved_template_placeholder_original_params() {
+        // Original template params should be detected
+        assert!(AstCodeGen::has_unresolved_template_placeholder("vector__Tp___Alloc"));
+        assert!(AstCodeGen::has_unresolved_template_placeholder("basic_string__CharT___Traits___Alloc"));
+        assert!(AstCodeGen::has_unresolved_template_placeholder("type_parameter_0_0"));
+        assert!(AstCodeGen::has_unresolved_template_placeholder("some_type-parameter-0-1"));
+    }
+
+    #[test]
+    fn test_has_unresolved_template_placeholder_new_params() {
+        // Newly added template params should be detected
+        assert!(AstCodeGen::has_unresolved_template_placeholder("move_iterator__Iter"));
+        assert!(AstCodeGen::has_unresolved_template_placeholder("common_iterator__Iter___Sent"));
+        assert!(AstCodeGen::has_unresolved_template_placeholder("owning_view__Rp"));
+        assert!(AstCodeGen::has_unresolved_template_placeholder("unique_lock__Mutex"));
+        assert!(AstCodeGen::has_unresolved_template_placeholder("__bit_reference__Cp__"));
+        assert!(AstCodeGen::has_unresolved_template_placeholder("duration__Rep___Period"));
+        assert!(AstCodeGen::has_unresolved_template_placeholder("time_point__Clock___Duration"));
+        assert!(AstCodeGen::has_unresolved_template_placeholder("fpos__State"));
+        assert!(AstCodeGen::has_unresolved_template_placeholder("__hash_iterator__NodePtr"));
+        assert!(AstCodeGen::has_unresolved_template_placeholder("__hash_const_iterator__ConstNodePtr"));
+        assert!(AstCodeGen::has_unresolved_template_placeholder("__static_bounded_iter__Iterator___Size"));
+        assert!(AstCodeGen::has_unresolved_template_placeholder("subrange__Iter___Sent___Kind"));
+        assert!(AstCodeGen::has_unresolved_template_placeholder("insert_iterator__Container"));
+        assert!(AstCodeGen::has_unresolved_template_placeholder("basic_ios__CharT___Traits"));
+    }
+
+    #[test]
+    fn test_has_unresolved_template_placeholder_concrete_types() {
+        // Concrete instantiated types should NOT be detected
+        assert!(!AstCodeGen::has_unresolved_template_placeholder("std_map_int__int"));
+        assert!(!AstCodeGen::has_unresolved_template_placeholder("std_vector_int"));
+        assert!(!AstCodeGen::has_unresolved_template_placeholder("unique_ptr_int"));
+        assert!(!AstCodeGen::has_unresolved_template_placeholder("initializer_list_int"));
+        assert!(!AstCodeGen::has_unresolved_template_placeholder("pair_int__int"));
+        assert!(!AstCodeGen::has_unresolved_template_placeholder("basic_string_char"));
     }
 }
