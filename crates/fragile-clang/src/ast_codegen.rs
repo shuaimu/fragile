@@ -4284,6 +4284,25 @@ impl AstCodeGen {
         {
             return;
         }
+
+        // Skip function templates whose instantiations always produce broken code.
+        // These are libstdc++/libc++ internal functions with known issues:
+        // - wrong argument types (syscall, pred.clone, memmove mutability)
+        // - incomplete bodies (constexpr_memcmp without return)
+        // - unresolved template params (back_inserter<_Container>)
+        // - enum used incorrectly (__common_trait with _Trait enum)
+        let is_broken_fn_template = template_name == "__platform_notify"
+            || template_name == "__atomic_wait_address_bare"
+            || template_name == "__atomic_spin"
+            || template_name == "__constexpr_memcmp"
+            || template_name == "__constexpr_memmove"
+            || template_name == "back_inserter"
+            || template_name == "__common_trait"
+            || template_name == "__append10";
+        if is_broken_fn_template {
+            return;
+        }
+
         let ret_str = if ret_type == "()" || ret_type.is_empty() || ret_type == "_" {
             String::new()
         } else {
@@ -4418,32 +4437,20 @@ impl AstCodeGen {
             || generated.contains("c_void::new_")  // c_void placeholder used as constructable type
             || generated.contains("c_void.op_")   // c_void placeholder used as callable object
             // NOTE: inf.0 and NaN.0 patterns removed - fixed by proper handling of special float values
-            // __platform_notify calling syscall with wrong number of arguments
-            || (generated.contains("fn __platform_notify") && generated.contains("syscall("))
-            // __atomic_wait_address_bare calling methods on wrong types
-            || (generated.contains("fn __atomic_wait_address_bare") && generated.contains("__pred.clone()"))
-            // __atomic_spin with wrong argument types
-            || (generated.contains("fn __atomic_spin") && generated.contains("__pred.clone()"))
+            // NOTE: __platform_notify, __atomic_wait_address_bare, __atomic_spin,
+            // __constexpr_memcmp, __constexpr_memmove, back_inserter, __common_trait
+            // patterns removed - is_broken_fn_template guard skips these functions entirely
             // __bit_iterator template type not substituted
             || generated.contains("__bit_iterator<")
             // hermite_u32 with __x as f64 (wrong type substitution)
             || (generated.contains("hermite_u32(") && generated.contains("__x as f64)"))
-            // __constexpr_memcmp with incomplete body (no return)
-            || (generated.contains("fn __constexpr_memcmp") && !generated.contains("return"))
-            // __constexpr_memmove with mutability mismatch (*const to *mut)
-            || (generated.contains("__constexpr_memmove") && generated.contains("__s2, __n)"))
             // __libcpp_atomic_refcount_increment/decrement with value instead of pointer
             || (generated.contains("__libcpp_atomic_refcount_increment") && generated.contains("self.__shared_owners_)"))
             || (generated.contains("__libcpp_atomic_refcount_increment") && generated.contains("self.__shared_weak_owners_)"))
             || (generated.contains("__libcpp_atomic_refcount_decrement") && generated.contains("self.__shared_owners_)"))
             // __shared_count use_count returning pointer instead of i64
             || (generated.contains("fn use_count") && generated.contains(".add(1 as usize)"))
-            // back_inserter with unresolved _Container template parameter in return type
-            || (generated.contains("fn back_inserter") && generated.contains("<_Container>"))
-            // __common_trait returning u32 type but using enum _Trait
-            || (generated.contains("fn __common_trait") && generated.contains("_Trait::_TriviallyAvailable"))
-            // __append10 instantiated with small type (i8) - literals overflow
-            || (generated.contains("fn __append10_i8") || generated.contains("fn __append10_u8"))
+            // NOTE: __append10_i8/__append10_u8 patterns removed (is_broken_fn_template guard)
             // Any function with large literal (100000000) operating on i8 type
             || (generated.contains("i8)") && generated.contains("100000000"))
         {
