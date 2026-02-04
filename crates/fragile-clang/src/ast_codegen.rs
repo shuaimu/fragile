@@ -16952,6 +16952,14 @@ impl AstCodeGen {
                     }
 
                     let ident = sanitize_identifier(name);
+
+                    // Map C++ math functions to their internal stub implementations
+                    // These stubs exist in the preamble with __ prefix
+                    let ident = match ident.as_str() {
+                        "hermite_u32" | "hermitef" | "hermitel" | "hermite_1" => "__hermite_u32".to_string(),
+                        _ => ident,
+                    };
+
                     // For static member access (class name in namespace path, non-function type),
                     // convert to global variable name (no unsafe wrapper since we're already in unsafe)
                     if !namespace_path.is_empty() && !matches!(ty, CppType::Function { .. }) {
