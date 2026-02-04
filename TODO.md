@@ -101,7 +101,7 @@ crates/
 
 **After EVERY commit, read `docs/dev/wrong.md` and verify:**
 
-- [ ] No new rollback patterns added (current count: ~155 - must decrease, never increase)
+- [ ] No new rollback patterns added (current count: ~145 - must decrease, never increase)
 - [ ] No new stub method injections (hardcoded return values like `size() { 0 }`)
 - [ ] No semantic type mappings (`std::map` → `BTreeMap`)
 - [ ] No `todo!()` bodies without tracking issue
@@ -263,7 +263,7 @@ Semantic mapping would be incorrect. Absolute transpilation preserves exact C++ 
 
 The current implementation uses forbidden patterns (see `docs/dev/wrong.md`). These must be removed and replaced with proper fixes.
 
-- [~] **27.8.1** Remove rollback patterns from ast_codegen.rs (155 `|| generated.contains(` + 10 `|| (rust_name...` → 0) ⚠️ IN PROGRESS
+- [~] **27.8.1** Remove rollback patterns from ast_codegen.rs (145 `|| generated.contains(` + 10 `|| (rust_name...` → 0) ⚠️ IN PROGRESS
 
   **Status (2026-02-04)**: Primary template detection guard implemented (Option 2 from blocking
   issue). This skips impl block generation for types with unresolved template parameters, preventing
@@ -519,6 +519,22 @@ The current implementation uses forbidden patterns (see `docs/dev/wrong.md`). Th
         are called by other generated functions
       - Rollback count: 191 → 155 (`|| generated.contains(` metric)
       - All 207 tests passing
+    - [x] **27.8.1.6.12** Skip methods/constructors/Drop for broken locale types ✅ (2026-02-04)
+      - Root cause: Locale types (ctype<char/wchar_t>, ctype_byname, collate_byname<char/wchar_t>)
+        and bad_weak_ptr always produce broken methods due to vtable function pointer access,
+        c_void types, and boolean/integer mixing - all of which get rolled back every time
+      - Fix: Added locale type checks to `is_broken_method_type` in generate_method(),
+        `is_broken_locale_type` in generate_template_impl(), and `is_broken_drop_type`/`skip_clone`
+        in generate_struct()
+      - Key lesson: struct_name in generate_method() preserves full C++ qualified name including
+        `std::` prefix (e.g., "std::ctype<char>"), so use `contains()` not `starts_with()`
+      - Removed 10 simple + 17 compound = 27 dead rollback patterns across 3 sites:
+        generate_template_impl (4 simple vtable), CXXMethodDecl (2 simple + 16 compound),
+        ConstructorDecl (5 simple + 0 compound), Drop impl (0 - already covered by threading skip)
+      - Note: Some ctype types are generated via both generate_struct(name="ctype<char>") AND
+        generate_struct(name="std::ctype<char>"), producing separate impl blocks
+      - Rollback count: 155 → 145 (`|| generated.contains(` metric)
+      - All 207 tests passing
 
 - [~] **27.8.2** Remove stub method injections ⚠️ PARTIALLY BLOCKED
   - Location: ast_codegen.rs lines ~3920-3970
@@ -695,7 +711,7 @@ The current implementation uses forbidden patterns (see `docs/dev/wrong.md`). Th
 
 - [~] **27.8.5** Metric: Rollback pattern count ⚠️ TRACKED
   - Track: `grep -c "|| generated.contains" crates/fragile-clang/src/ast_codegen.rs`
-  - Current: ~155 (was ~201, reduced by template/iterator/fn/function/method-type guards)
+  - Current: ~145 (was ~201, reduced by template/iterator/fn/function/method-type/locale-type guards)
   - Target: 0
   - Now tracked automatically via `test_rollback_pattern_count` test in runtime_correctness_tests.rs
   - Every PR must report this number and it must decrease or stay same, NEVER increase

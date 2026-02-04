@@ -3504,7 +3504,12 @@ impl AstCodeGen {
             || rust_name.contains("__map_const_iterator")
             || rust_name.contains("__wrap_iter")
             || rust_name.contains("__tuple_leaf");
-        let skip_ast_methods = is_primary_template || is_broken_iterator_type;
+        // Locale types whose AST methods always produce broken code (wrong overloads,
+        // vtable reference issues, type mismatches in method bodies)
+        let is_broken_locale_type = rust_name.contains("ctype_")
+            || rust_name.contains("collate_byname_")
+            || rust_name == "bad_weak_ptr";
+        let skip_ast_methods = is_primary_template || is_broken_iterator_type || is_broken_locale_type;
 
         for child in children {
             if skip_ast_methods {
@@ -3661,12 +3666,10 @@ impl AstCodeGen {
 
                     // Check for broken patterns and rollback if needed
                     let generated = &self.output[method_output_start..];
-                    if generated.contains(".__vtable = &STD_COLLATE_BYNAME_CHAR__VTABLE")
-                        || generated.contains(".__vtable = &STD_COLLATE_BYNAME_WCHAR_T__VTABLE")
-                        || generated.contains(".__vtable = &STD_CTYPE_CHAR__VTABLE")
-                        || generated.contains(".__vtable = &STD_CTYPE_WCHAR_T__VTABLE")
-                        // Methods returning c_void (placeholder for unresolved types) - except actual void functions
-                        || (generated.contains("-> std::ffi::c_void") && generated.contains("todo!("))
+                    // NOTE: STD_COLLATE_BYNAME_*/STD_CTYPE_*__VTABLE patterns removed
+                    // (is_broken_locale_type guard skips ctype/collate_byname types)
+                    // Methods returning c_void (placeholder for unresolved types) - except actual void functions
+                    if (generated.contains("-> std::ffi::c_void") && generated.contains("todo!("))
                         // Methods returning c_void with actual return statements (LibTooling-generated)
                         || (generated.contains("-> std::ffi::c_void") && generated.contains("return ") && !generated.contains("return;"))
                         // Methods with template-dependent return values
@@ -12321,7 +12324,10 @@ impl AstCodeGen {
             "jthread" | "thread" | "stop_token" | "stop_source"
             | "__atomic_semaphore" | "__semaphore_base" | "__platform_semaphore"
             | "__condvar"
-        );
+            // Locale types - vtable reference issues, broken destructor bodies
+            | "bad_weak_ptr"
+        ) || rust_name.contains("ctype_")
+            || rust_name.contains("collate_byname_");
         for child in children {
             if let ClangNodeKind::DestructorDecl {
                 is_definition: true,
@@ -12372,7 +12378,10 @@ impl AstCodeGen {
             || rust_name == "thread"
             || rust_name == "__atomic_semaphore"
             || rust_name == "__semaphore_base"
-            || rust_name == "__platform_semaphore";
+            || rust_name == "__platform_semaphore"
+            || rust_name == "bad_weak_ptr"
+            || rust_name.contains("ctype_")
+            || rust_name.contains("collate_byname_");
         if has_explicit_copy_ctor && !skip_clone {
             self.writeln("");
             self.writeln(&format!("impl Clone for {} {{", rust_name));
@@ -15029,7 +15038,17 @@ impl AstCodeGen {
             "__atomic_semaphore" | "__semaphore_base" | "__platform_semaphore" => true,
             // Condvar type - bool/int mixing in condition
             "__condvar" => true,
-            _ => false,
+            // bad_weak_ptr - vtable reference instead of pointer in constructor
+            "bad_weak_ptr" => true,
+            _ => {
+                // Template types need contains checks (names may have std:: prefix)
+                // ctype - all methods have wrong overload/type issues (toupper_1, tolower_1, etc.)
+                struct_name.contains("ctype<")
+                // collate_byname - vtable reference instead of pointer in constructors
+                || struct_name.contains("collate_byname<")
+                // ctype_byname - inherits ctype broken methods
+                || struct_name.contains("ctype_byname")
+            }
         };
         if is_broken_method_type {
             return;
@@ -15260,36 +15279,26 @@ impl AstCodeGen {
                     || (generated.contains("return __builtin_huge_valf") && !generated.contains("return __builtin_huge_valf("))
                     || (generated.contains("return __builtin_nanf") && !generated.contains("return __builtin_nanf("))
                     || (generated.contains("return __builtin_nansf") && !generated.contains("return __builtin_nansf("))
-                    // ctype methods calling wrong overload (2-arg method calling 1-arg overload or vice versa)
-                    || (generated.contains("pub fn toupper_1") && generated.contains(".do_toupper(__lo"))
-                    || (generated.contains("pub fn tolower_1") && generated.contains(".do_tolower(__lo"))
-                    || (generated.contains("pub fn widen_1") && generated.contains(".do_widen(__lo"))
-                    || (generated.contains("pub fn narrow_1") && generated.contains(".do_narrow(__lo"))
-                    // scan methods with wrong overload
-                    || (generated.contains("pub fn scan_is_1") && !generated.contains("do_scan_is_1"))
-                    || (generated.contains("pub fn scan_not_1") && !generated.contains("do_scan_not_1"))
-                    // is method with wrong overload
-                    || (generated.contains("pub fn is_1") && generated.contains("self.do_is(__lo, __hi"))
+                    // NOTE: ctype toupper_1/tolower_1/widen_1/narrow_1/scan_is_1/scan_not_1/is_1 patterns removed
+                    // (is_broken_method_type guard skips ctype<char>/ctype<wchar_t> methods)
                     // Broken atomic functions that just return their pointer argument
                     || (generated.contains("pub fn __exchange_and_add") && generated.contains("return __mem;"))
                     || (generated.contains("pub fn __atomic_add") && generated.contains("__mem;") && !generated.contains("*__mem"))
                     // iter() on raw pointers - raw pointers don't have iter() method
                     || generated.contains(".iter().")
-                    // ctype methods with bool != 0 comparison
-                    || (generated.contains("do_widen_1") && generated.contains("(__hi != __lo) != 0"))
-                    || (generated.contains("do_narrow_1") && generated.contains("(__hi != __lo) != 0"))
+                    // NOTE: ctype do_widen_1/do_narrow_1 bool != 0 patterns removed
+                    // (is_broken_method_type guard skips ctype types)
                     // facet _M_remove_reference with Box::from_raw on &self
                     || (generated.contains("pub fn _M_remove_reference") && generated.contains("Box::from_raw(self)"))
                     // facet _M_add_reference and _M_narrow assignment on &self
                     || (generated.contains("pub fn _M_add_reference") && generated.contains("self._M_refcount"))
-                    || (generated.contains("pub fn _M_narrow_init") && generated.contains("self._M_narrow["))
+                    // NOTE: _M_narrow_init pattern removed (is_broken_method_type guard skips ctype types)
                     // hash functions with &&__e.category() double-reference cast
                     || generated.contains("&&__e.category() as *const")
                     // iword/pword returning reference to temporary
                     || (generated.contains("pub fn iword") && generated.contains("&mut __word._M_iword"))
                     || (generated.contains("pub fn pword") && generated.contains("&mut __word._M_pword"))
-                    // narrow method with &self mutating _M_narrow array
-                    || (generated.contains("pub fn narrow(&self") && generated.contains("self._M_narrow["))
+                    // NOTE: narrow with _M_narrow pattern removed (is_broken_method_type guard skips ctype types)
                     // memory_order enum used as struct (libstdc++ internal pattern)
                     || generated.contains("memory_order::new_0()")
                     // bitwise and as method on enum (libstdc++ atomics)
@@ -15366,8 +15375,7 @@ impl AstCodeGen {
                     || (generated.contains("pub fn lowest") && generated.contains("max_f32()"))
                     || (generated.contains("pub fn lowest") && generated.contains("max_f64()"))
                     || (generated.contains("pub fn lowest") && generated.contains("max_bool()"))
-                    // ctype do_is with 3 args (overloaded method - different signature)
-                    || (generated.contains(".do_is(") && generated.contains(", __vec)"))
+                    // NOTE: ctype do_is with __vec pattern removed (is_broken_method_type guard skips ctype types)
                     // atomic_flag wait methods with &mut self on &self method
                     || (generated.contains("pub fn wait(&self") && generated.contains("&mut self,"))
                     || (generated.contains("pub fn wait_1(&self") && generated.contains("&mut self,"))
@@ -15385,12 +15393,8 @@ impl AstCodeGen {
                     // numpunct methods with i8 return calling i32 do_* methods
                     || (generated.contains("pub fn decimal_point") && generated.contains("-> i8") && generated.contains("do_decimal_point()"))
                     || (generated.contains("pub fn thousands_sep") && generated.contains("-> i8") && generated.contains("do_thousands_sep()"))
-                    // ctype methods with u16 mask arg instead of u32
-                    || (generated.contains("pub fn is(") && generated.contains("__m: u16"))
-                    || (generated.contains("pub fn scan_is(") && generated.contains("__m: u16"))
-                    || (generated.contains("pub fn scan_not(") && generated.contains("__m: u16"))
-                    // ctype narrow with &__c instead of i32
-                    || (generated.contains("pub fn narrow(&self") && generated.contains("&__c,"))
+                    // NOTE: ctype is/scan_is/scan_not u16 and narrow &__c patterns removed
+                    // (is_broken_method_type guard skips ctype types)
                     // atomic_flag __atomic_contention_address missing & on addressof argument
                     || (generated.contains("pub fn __atomic_contention_address") && generated.contains("addressof(__a.__a_)"))
                     // hash op_call returning u32 instead of u64 (XOR of two u32 fields)
@@ -15417,9 +15421,8 @@ impl AstCodeGen {
                     || (generated.contains("pub fn use_count") && generated.contains("__base.use_count()"))
                     // exception_ptr swap with wrong type - expecting *mut c_void, got c_void
                     || (generated.contains("exception_ptr::new_1(") && generated.contains("*__other"))
-                    // collate_byname new_0 methods with vtable reference instead of pointer
-                    || generated.contains(".__vtable = &STD_COLLATE_BYNAME_CHAR__VTABLE")
-                    || generated.contains(".__vtable = &STD_COLLATE_BYNAME_WCHAR_T__VTABLE")
+                    // NOTE: collate_byname vtable patterns removed
+                    // (is_broken_method_type guard skips collate_byname types)
                     // __tree __set method using __gv___s global with wrong type (i64 vs u64)
                     || (generated.contains("pub fn __set(") && generated.contains("__gv___s"))
                     // Iterator op_index methods with c_void offset - self + c_void is invalid
@@ -16033,8 +16036,8 @@ impl AstCodeGen {
                     || (generated.contains("if __refs { 1 }") && generated.contains("__refs: u64"))
                     || (generated.contains("Box::from_raw(self)") && generated.contains("&self,"))
                     || generated.contains("__base: locale::new_")
-                    || generated.contains(".__vtable = &STD_CTYPE_CHAR__VTABLE")
-                    || generated.contains(".__vtable = &STD_CTYPE_WCHAR_T__VTABLE")
+                    // NOTE: STD_CTYPE_CHAR/WCHAR_T__VTABLE patterns removed
+                    // (is_broken_method_type guard skips ctype types)
                     // system_error constructor with wrong __base type
                     || (generated.contains("__base: system_error::new_2(") && generated.contains("__what: *const i8"))
                     // c_void placeholder used as constructable base type
@@ -16053,11 +16056,8 @@ impl AstCodeGen {
                     // __narrow_to_utf8/__widen_from_utf8 constructors with wrong base class type
                     // These call __mbstate_t::new_1(1) but base is codecvt_charXX_t__char__mbstate_t
                     || generated.contains("__mbstate_t::new_1(1)")
-                    // bad_weak_ptr constructor with vtable reference instead of pointer
-                    || generated.contains(".__vtable = &BAD_WEAK_PTR_VTABLE")
-                    // collate_byname constructors with vtable reference instead of pointer
-                    || generated.contains(".__vtable = &STD_COLLATE_BYNAME_CHAR__VTABLE")
-                    || generated.contains(".__vtable = &STD_COLLATE_BYNAME_WCHAR_T__VTABLE")
+                    // NOTE: BAD_WEAK_PTR_VTABLE and STD_COLLATE_BYNAME_*__VTABLE patterns removed
+                    // (is_broken_method_type guard skips bad_weak_ptr and collate_byname types)
                     // __locale_guard constructor with uselocale(&mut) instead of uselocale(*mut)
                     || (generated.contains("uselocale(__loc)") && generated.contains("__loc: &mut"))
                     // Exception class constructors using global __gv___s instead of __s parameter

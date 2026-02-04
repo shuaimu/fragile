@@ -250,11 +250,12 @@ fn test_rollback_pattern_count() {
     //       -> 193 (broken fn template skip list)
     //       -> 191 (broken function skip list in generate_function)
     //       -> 155 (broken method type skip list: threading/semaphore/condvar)
+    //       -> 145 (broken locale type skip list: ctype/collate_byname/bad_weak_ptr)
     // When this test starts failing because count increased, investigate!
     assert!(
-        rollback_count <= 160,
-        "Rollback pattern count ({}) increased beyond 160 - investigate! \
-         The method type skip list should keep this under 160.",
+        rollback_count <= 150,
+        "Rollback pattern count ({}) increased beyond 150 - investigate! \
+         The locale type skip list should keep this under 150.",
         rollback_count
     );
 }
