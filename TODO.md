@@ -471,11 +471,24 @@ The current implementation uses forbidden patterns (see `docs/dev/wrong.md`). Th
         - `piecewise_construct` - std constant not defined
         - `forward_as_tuple` - helper function not defined
       - Added rollback for these unresolved patterns to keep compilation working
+    - **Investigation (2026-02-04 continued)**:
+      - Added debug flags `FRAGILE_DEBUG_LIBTOOLING` and `FRAGILE_DEBUG_ROLLBACK`
+      - Confirmed: map::operator[] body IS found and transpiled from LibTooling
+      - Transpiled body example:
+        ```rust
+        return unsafe { (*_::new_1(_::new_4(unsafe { (*self).__tree_ }.__emplace_unique,
+          piecewise_construct, _::new_2(forward_as_tuple, _::new_2(r#move, __k)),
+          _::new_1(forward_as_tuple).first)).second };
+        ```
+      - Root cause: LibTooling AST conversion treats function calls as constructor calls
+      - The type `_` comes from `auto` types being converted to Rust's inference placeholder
+      - `forward_as_tuple(...)` becomes `_::new_2(forward_as_tuple, ...)` - treating function as arg
     - **Remaining work**: Implement proper transpilation for:
       - `std::forward_as_tuple` → generate tuple construction
       - `std::piecewise_construct` → generate struct initialization
       - `std::move` → generate std::mem::take or similar
       - Type constructor calls from LibTooling → proper Rust constructor calls
+      - **Key fix needed**: Distinguish between CXXConstructExpr and CallExpr properly in LibTooling conversion
 
   - **Progress Update**:
     - Fixed unresolved template struct generation (skip structs with generic type args like `_CharT`)
