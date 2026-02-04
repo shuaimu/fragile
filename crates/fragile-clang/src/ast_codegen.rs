@@ -2695,6 +2695,8 @@ impl AstCodeGen {
             || (generated.contains("__libcpp_atomic_refcount_decrement") && generated.contains("self.__shared_owners_)"))
             // __shared_count use_count returning pointer instead of i64
             || (generated.contains("fn use_count") && generated.contains(".add(1 as usize)"))
+            // back_inserter with unresolved _Container template parameter in return type
+            || (generated.contains("fn back_inserter") && generated.contains("<_Container>"))
         {
             // Rollback - remove the generated function
             self.output.truncate(output_start);
