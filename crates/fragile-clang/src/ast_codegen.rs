@@ -348,6 +348,13 @@ pub struct AstCodeGen {
     /// LibTooling AST context for template method bodies
     /// Key: (class_name, method_name), Value: method body as ClangNode
     libtooling_method_bodies: HashMap<(String, String), Vec<ClangNode>>,
+    /// Resolved field types from LibTooling template specializations
+    /// Key: qualified type name (e.g., "std::pair"), Value: field info
+    specialization_field_types: HashMap<String, crate::libtooling::SpecializationFieldInfo>,
+    /// Set of struct names that have been defined (to track for stub generation)
+    defined_structs: HashSet<String>,
+    /// Set of struct names that are referenced but not defined (need stub generation)
+    referenced_but_undefined_structs: HashSet<String>,
 }
 
 /// Information about a function template definition
@@ -420,6 +427,9 @@ impl AstCodeGen {
             void_placeholder_types: HashSet::new(),
             inline_namespace_aliases: HashMap::new(),
             libtooling_method_bodies: HashMap::new(),
+            specialization_field_types: HashMap::new(),
+            defined_structs: HashSet::new(),
+            referenced_but_undefined_structs: HashSet::new(),
         }
     }
 
@@ -427,6 +437,15 @@ impl AstCodeGen {
     /// This enables generating actual code instead of `todo!()` for template methods.
     pub fn set_libtooling_bodies(&mut self, bodies: HashMap<(String, String), Vec<ClangNode>>) {
         self.libtooling_method_bodies = bodies;
+    }
+
+    /// Set resolved field types from LibTooling template specializations.
+    /// This enables using actual concrete types for fields in template instantiations.
+    pub fn set_specialization_field_types(
+        &mut self,
+        field_types: HashMap<String, crate::libtooling::SpecializationFieldInfo>,
+    ) {
+        self.specialization_field_types = field_types;
     }
 
     /// Log a diagnostic message if diagnostic mode is enabled.
@@ -567,6 +586,78 @@ impl AstCodeGen {
         for (from, to) in patterns {
             result = result.replace(&from, &to);
         }
+        result
+    }
+
+    /// Replace remaining unsubstituted type-parameter-N-M patterns with a placeholder.
+    /// This handles defaulted template parameters that weren't in the instantiation.
+    fn replace_unsubstituted_type_params(s: &str) -> String {
+        let mut result = String::with_capacity(s.len());
+        let mut chars = s.chars().peekable();
+
+        while let Some(c) = chars.next() {
+            // Check for "type-parameter-"
+            if c == 't' {
+                let prefix = "type-parameter-";
+                let mut matched = String::from(c);
+                let mut temp_chars = chars.clone();
+                let mut is_match = true;
+
+                for expected in prefix.chars().skip(1) {
+                    if let Some(&next) = temp_chars.peek() {
+                        if next == expected {
+                            matched.push(temp_chars.next().unwrap());
+                        } else {
+                            is_match = false;
+                            break;
+                        }
+                    } else {
+                        is_match = false;
+                        break;
+                    }
+                }
+
+                if is_match && matched == prefix {
+                    // Found "type-parameter-", now consume digits-digits
+                    chars = temp_chars;
+                    // Consume first number
+                    while let Some(&d) = chars.peek() {
+                        if d.is_ascii_digit() {
+                            chars.next();
+                        } else {
+                            break;
+                        }
+                    }
+                    // Expect and consume '-'
+                    if chars.peek() == Some(&'-') {
+                        chars.next();
+                        // Consume second number
+                        while let Some(&d) = chars.peek() {
+                            if d.is_ascii_digit() {
+                                chars.next();
+                            } else {
+                                break;
+                            }
+                        }
+                    }
+                    // Replace with DefaultType
+                    result.push_str("DefaultType");
+                } else {
+                    result.push(c);
+                }
+            } else if c == 't' && s[result.len()..].starts_with("typename ") {
+                // Check for "typename X::Y" pattern - replace with DefaultType
+                // Skip "typename " prefix
+                result.push(c);
+            } else {
+                result.push(c);
+            }
+        }
+
+        // Also handle "typename X::Y" patterns (dependent type expressions)
+        // Simple heuristic: replace "typename __type_identity<...>::type" with "DefaultType"
+        let result = result.replace("typename __type_identity<DefaultType>::type", "DefaultType");
+
         result
     }
 
@@ -895,8 +986,11 @@ impl AstCodeGen {
             if Self::has_unresolved_template_placeholder(cpp_name) {
                 continue;
             }
-            // Skip internal types
-            if rust_name.starts_with("__") && !rust_name.starts_with("__cxx11") {
+            // Skip internal types (except __tree which is used by std::map and needs stubs)
+            if rust_name.starts_with("__")
+                && !rust_name.starts_with("__cxx11")
+                && !rust_name.starts_with("__tree")
+            {
                 continue;
             }
             // Skip invalid Rust identifiers
@@ -941,6 +1035,44 @@ impl AstCodeGen {
             }
 
             missing_types.push((rust_name.clone(), cpp_name.clone()));
+        }
+
+        // Also include types that were referenced in struct fields but not defined
+        // This handles cases where LibTooling resolves field types to internal types
+        // like __tree<...> that are never exposed as ClassDecl by libclang
+        for rust_name in &self.referenced_but_undefined_structs {
+            // Skip if already in missing_types
+            if missing_types.iter().any(|(n, _)| n == rust_name) {
+                continue;
+            }
+            // Skip if already generated
+            if self.generated_structs.contains(rust_name) {
+                continue;
+            }
+            // Skip if it's a type alias
+            if self.generated_aliases.contains(rust_name) {
+                continue;
+            }
+            // Skip array types (not valid struct names)
+            if rust_name.starts_with('[') || rust_name.contains("; ") {
+                continue;
+            }
+            // Skip empty or invalid identifiers
+            if rust_name.is_empty()
+                || !rust_name
+                    .chars()
+                    .next()
+                    .map(|c| c.is_alphabetic() || c == '_')
+                    .unwrap_or(false)
+            {
+                continue;
+            }
+            // Skip types that are defined in the preamble
+            if rust_name == "std_ffi_c_void" {
+                continue;
+            }
+            // Use the rust name as the cpp name since we don't have the original
+            missing_types.push((rust_name.clone(), rust_name.replace('_', "::")));
         }
 
         if missing_types.is_empty() {
@@ -2199,10 +2331,158 @@ impl AstCodeGen {
             subst_map.insert(format!("type-parameter-0-{}", idx), rust_arg);
         }
 
+        // DISABLED: BTreeMap shortcut - working on full transpilation of std::map
+        if false && (inst_name.starts_with("std::map<") || inst_name.starts_with("map<")) {
+            // Parse key and value types from inst_name: std::map<int, int> or map<int, int>
+            let args_start = inst_name.find('<').unwrap() + 1;
+            let args_end = inst_name.rfind('>').unwrap_or(inst_name.len());
+            let args_str = &inst_name[args_start..args_end];
+
+            // Parse template args (key, value, comparator, allocator - we only need key, value)
+            let args: Vec<&str> = args_str.split(',').map(|s| s.trim()).collect();
+            if args.len() >= 2 {
+                let key_type = CppType::Named(args[0].to_string()).to_rust_type_str();
+                let value_type = CppType::Named(args[1].to_string()).to_rust_type_str();
+
+                self.writeln(&format!("/// C++ template instantiation `{}`", inst_name));
+                self.writeln(&format!("/// Implemented using Rust's BTreeMap (libc++ __tree not fully transpilable yet)"));
+                self.writeln(&format!("pub struct {} {{", rust_name));
+                self.indent += 1;
+                self.writeln(&format!("__data: std::collections::BTreeMap<{}, {}>,", key_type, value_type));
+                self.indent -= 1;
+                self.writeln("}");
+                self.writeln("");
+
+                // Generate impl with working methods
+                self.writeln(&format!("impl {} {{", rust_name));
+                self.indent += 1;
+
+                // Default constructor (new)
+                self.writeln("pub fn new() -> Self {");
+                self.indent += 1;
+                self.writeln("Self { __data: std::collections::BTreeMap::new() }");
+                self.indent -= 1;
+                self.writeln("}");
+                self.writeln("");
+
+                // operator[] - returns mutable reference, inserting default if not present
+                self.writeln(&format!("pub fn op_index(&mut self, key: {}) -> *mut {} {{", key_type, value_type));
+                self.indent += 1;
+                self.writeln("self.__data.entry(key).or_default() as *mut _");
+                self.indent -= 1;
+                self.writeln("}");
+                self.writeln("");
+
+                // at() - returns reference, panics if not found
+                self.writeln(&format!("pub fn at(&self, key: &{}) -> &{} {{", key_type, value_type));
+                self.indent += 1;
+                self.writeln("self.__data.get(key).expect(\"map::at: key not found\")");
+                self.indent -= 1;
+                self.writeln("}");
+                self.writeln("");
+
+                // size
+                self.writeln("pub fn size(&self) -> usize {");
+                self.indent += 1;
+                self.writeln("self.__data.len()");
+                self.indent -= 1;
+                self.writeln("}");
+                self.writeln("");
+
+                // empty
+                self.writeln("pub fn empty(&self) -> bool {");
+                self.indent += 1;
+                self.writeln("self.__data.is_empty()");
+                self.indent -= 1;
+                self.writeln("}");
+                self.writeln("");
+
+                // clear
+                self.writeln("pub fn clear(&mut self) {");
+                self.indent += 1;
+                self.writeln("self.__data.clear()");
+                self.indent -= 1;
+                self.writeln("}");
+                self.writeln("");
+
+                // contains (C++20)
+                self.writeln(&format!("pub fn contains(&self, key: &{}) -> bool {{", key_type));
+                self.indent += 1;
+                self.writeln("self.__data.contains_key(key)");
+                self.indent -= 1;
+                self.writeln("}");
+                self.writeln("");
+
+                // count
+                self.writeln(&format!("pub fn count(&self, key: &{}) -> usize {{", key_type));
+                self.indent += 1;
+                self.writeln("if self.__data.contains_key(key) { 1 } else { 0 }");
+                self.indent -= 1;
+                self.writeln("}");
+                self.writeln("");
+
+                // insert (simplified - just key/value)
+                self.writeln(&format!("pub fn insert(&mut self, key: {}, value: {}) {{", key_type, value_type));
+                self.indent += 1;
+                self.writeln("self.__data.insert(key, value);");
+                self.indent -= 1;
+                self.writeln("}");
+                self.writeln("");
+
+                // erase
+                self.writeln(&format!("pub fn erase(&mut self, key: &{}) -> usize {{", key_type));
+                self.indent += 1;
+                self.writeln("if self.__data.remove(key).is_some() { 1 } else { 0 }");
+                self.indent -= 1;
+                self.writeln("}");
+                self.writeln("");
+
+                // find - returns pointer (null if not found)
+                self.writeln(&format!("pub fn find(&mut self, key: &{}) -> *mut {} {{", key_type, value_type));
+                self.indent += 1;
+                self.writeln("match self.__data.get_mut(key) {");
+                self.indent += 1;
+                self.writeln("Some(v) => v as *mut _,");
+                self.writeln("None => std::ptr::null_mut(),");
+                self.indent -= 1;
+                self.writeln("}");
+                self.indent -= 1;
+                self.writeln("}");
+                self.writeln("");
+
+                self.indent -= 1;
+                self.writeln("}");
+                self.writeln("");
+
+                // Implement Default for the map
+                self.writeln(&format!("impl Default for {} {{", rust_name));
+                self.indent += 1;
+                self.writeln("fn default() -> Self {");
+                self.indent += 1;
+                self.writeln("Self::new()");
+                self.indent -= 1;
+                self.writeln("}");
+                self.indent -= 1;
+                self.writeln("}");
+                self.writeln("");
+
+                return; // Skip normal struct generation
+            }
+        }
+
         self.writeln(&format!("/// C++ template instantiation `{}`", inst_name));
         self.writeln("#[repr(C)]");
         self.writeln(&format!("pub struct {} {{", rust_name));
         self.indent += 1;
+
+        // Track this struct as defined
+        self.defined_structs.insert(rust_name.clone());
+
+        // Check if we have LibTooling-resolved field types for this specialization
+        // LibTooling uses full template args (std::map<int, int, less<int>, allocator<...>>)
+        // while libclang may use partial args (std::map<int, int>)
+        // So we need to find a match by comparing the base name and first N args
+        let resolved_fields = self.find_matching_specialization(inst_name);
 
         // Generate fields with substituted types
         let mut fields = Vec::new();
@@ -2223,14 +2503,57 @@ impl AstCodeGen {
                 } else {
                     sanitize_identifier(name)
                 };
-                // Substitute template parameters in type
-                let rust_type = self.substitute_template_type(ty, &subst_map);
-                // If field type has unresolved template params, use c_void placeholder
-                let rust_type = if Self::has_unresolved_template_placeholder(&rust_type) {
-                    "std::ffi::c_void".to_string()
+
+                // Try to get resolved type from LibTooling first
+                let rust_type = if let Some(ref info) = resolved_fields {
+                    if let Some(resolved_type) = info.field_types.get(name) {
+                        // Use the LibTooling-resolved type
+                        resolved_type.to_rust_type_str()
+                    } else {
+                        // Fall back to template substitution
+                        let rust_type = self.substitute_template_type(ty, &subst_map);
+                        if Self::has_unresolved_template_placeholder(&rust_type) {
+                            "std::ffi::c_void".to_string()
+                        } else {
+                            rust_type
+                        }
+                    }
                 } else {
-                    rust_type
+                    // No LibTooling info - use template substitution
+                    let rust_type = self.substitute_template_type(ty, &subst_map);
+                    if Self::has_unresolved_template_placeholder(&rust_type) {
+                        "std::ffi::c_void".to_string()
+                    } else {
+                        rust_type
+                    }
                 };
+
+                // Track referenced struct types that might need stub generation
+                // Extract the base type name (without pointer/reference modifiers)
+                let base_type_name = rust_type
+                    .trim_start_matches("*mut ")
+                    .trim_start_matches("*const ")
+                    .trim_start_matches("&mut ")
+                    .trim_start_matches("& ")
+                    .to_string();
+                if !base_type_name.starts_with("i8")
+                    && !base_type_name.starts_with("i16")
+                    && !base_type_name.starts_with("i32")
+                    && !base_type_name.starts_with("i64")
+                    && !base_type_name.starts_with("u8")
+                    && !base_type_name.starts_with("u16")
+                    && !base_type_name.starts_with("u32")
+                    && !base_type_name.starts_with("u64")
+                    && !base_type_name.starts_with("f32")
+                    && !base_type_name.starts_with("f64")
+                    && !base_type_name.starts_with("bool")
+                    && !base_type_name.starts_with("()")
+                    && !base_type_name.starts_with("std::ffi::c_void")
+                    && !self.defined_structs.contains(&base_type_name)
+                {
+                    self.referenced_but_undefined_structs.insert(base_type_name);
+                }
+
                 let vis = access_to_visibility(*access);
                 self.writeln(&format!("{}{}: {},", vis, sanitized_name, rust_type));
                 fields.push((sanitized_name, ty.clone()));
@@ -2323,6 +2646,11 @@ impl AstCodeGen {
                     }
                 }
 
+                // Handle remaining unsubstituted type-parameter-N-M patterns
+                // These occur when template has defaulted parameters not in the instantiation
+                // Replace with a concrete placeholder type to allow compilation
+                result = Self::replace_unsubstituted_type_params(&result);
+
                 // Convert the result to a valid Rust type
                 CppType::Named(result).to_rust_type_str()
             }
@@ -2363,6 +2691,77 @@ impl AstCodeGen {
             }
             _ => ty.to_rust_type_str(),
         }
+    }
+
+    /// Find a matching specialization from LibTooling by comparing base name and template args.
+    /// LibTooling uses full template args (e.g., std::map<int, int, less<int>, allocator<...>>)
+    /// while libclang may use partial args (e.g., std::map<int, int>).
+    fn find_matching_specialization(
+        &self,
+        inst_name: &str,
+    ) -> Option<crate::libtooling::SpecializationFieldInfo> {
+        // First try exact match
+        if let Some(info) = self.specialization_field_types.get(inst_name) {
+            return Some(info.clone());
+        }
+
+        // Parse base name and args from inst_name
+        let Some(angle_pos) = inst_name.find('<') else {
+            return None;
+        };
+        let base_name = &inst_name[..angle_pos];
+        let args_str = &inst_name[angle_pos + 1..inst_name.len() - 1]; // Remove < and >
+        let inst_args: Vec<String> = crate::types::parse_template_args(args_str);
+
+        // Search for a specialization with the same base name and matching first N args
+        for (key, info) in &self.specialization_field_types {
+            // Check if base names match
+            let Some(key_angle) = key.find('<') else {
+                continue;
+            };
+            let key_base = &key[..key_angle];
+
+            // Normalize base names (remove "struct " or "class " prefixes)
+            let normalized_base = base_name
+                .strip_prefix("std::")
+                .unwrap_or(base_name);
+            let normalized_key_base = key_base
+                .strip_prefix("std::")
+                .unwrap_or(key_base);
+
+            if normalized_base != normalized_key_base {
+                continue;
+            }
+
+            // Check if the first N template args match (N = number of args in inst_name)
+            if info.template_args.len() >= inst_args.len() {
+                let mut all_match = true;
+                for (i, inst_arg) in inst_args.iter().enumerate() {
+                    let key_arg = &info.template_args[i];
+                    // Normalize comparison (remove "struct "/"class " prefixes)
+                    let norm_inst = inst_arg
+                        .trim()
+                        .strip_prefix("struct ")
+                        .or_else(|| inst_arg.trim().strip_prefix("class "))
+                        .unwrap_or(inst_arg.trim());
+                    let norm_key = key_arg
+                        .trim()
+                        .strip_prefix("struct ")
+                        .or_else(|| key_arg.trim().strip_prefix("class "))
+                        .unwrap_or(key_arg.trim());
+
+                    if norm_inst != norm_key {
+                        all_match = false;
+                        break;
+                    }
+                }
+                if all_match {
+                    return Some(info.clone());
+                }
+            }
+        }
+
+        None
     }
 
     /// Generate impl block for a template instantiation.
@@ -2564,6 +2963,91 @@ impl AstCodeGen {
                         || (generated.contains(" value") && !generated.contains("value:") && !generated.contains("_value") && !generated.contains("let value") && !generated.contains("let mut value"))
                         // Methods accessing _M_array field
                         || generated.contains("._M_array")
+                        // Methods using _Size as a value (type alias used incorrectly)
+                        || generated.contains("return _Size + 0")
+                        || generated.contains("return _Size;")
+                        // Methods with undeclared __bytebuf variable (overloaded method parameter issues)
+                        || (generated.contains("__bytebuf") && !generated.contains("__bytebuf:") && !generated.contains("let __bytebuf") && !generated.contains("let mut __bytebuf"))
+                        // Methods with undeclared __st variable (appears as + __st at end of expression)
+                        || (generated.contains("+ __st") && !generated.contains("__st:") && !generated.contains("let __st") && !generated.contains("let mut __st"))
+                        // Methods with undeclared __frm variable
+                        || (generated.contains("__frm") && !generated.contains("__frm:") && !generated.contains("let __frm") && !generated.contains("let mut __frm"))
+                        // Methods with undeclared __end variable (in method body)
+                        || (generated.contains("__end)") && !generated.contains("__end:") && !generated.contains("let __end") && !generated.contains("let mut __end") && !generated.contains("__ctype_byname"))
+                        // Methods with undeclared __mx variable
+                        || (generated.contains("__mx)") && !generated.contains("__mx:") && !generated.contains("let __mx") && !generated.contains("let mut __mx"))
+                        // Methods with undeclared DefaultType
+                        || generated.contains("DefaultType")
+                        // Methods accessing __x_ on iterator types that don't have it
+                        || (generated.contains("owning_view__Rp") && generated.contains(".__x_"))
+                        || (generated.contains("move_iterator__Iter") && generated.contains(".__x_"))
+                        || (generated.contains("counted_iterator__Iter") && (generated.contains(".__x_") || generated.contains(".__i_") || generated.contains(".__ptr_")))
+                        || (generated.contains("common_iterator__Iter___Sent") && generated.contains(".__i_"))
+                        || (generated.contains("reverse_iterator__Iter") && generated.contains(".__i_"))
+                        || (generated.contains("insert_iterator__Container") && generated.contains(".__i_"))
+                        || (generated.contains("front_insert_iterator__Container") && generated.contains(".__i_"))
+                        || (generated.contains("back_insert_iterator__Container") && generated.contains(".__i_"))
+                        || (generated.contains("ostreambuf_iterator__CharT___Traits") && generated.contains(".__i_"))
+                        || (generated.contains("__hash_iterator__NodePtr") && generated.contains(".__i_"))
+                        || (generated.contains("__hash_const_iterator__ConstNodePtr") && generated.contains(".__i_"))
+                        || (generated.contains("__hash_local_iterator__NodePtr") && generated.contains(".__i_"))
+                        || (generated.contains("__hash_const_local_iterator__ConstNodePtr") && generated.contains(".__i_"))
+                        || (generated.contains("__static_bounded_iter__Iterator___Size") && generated.contains(".__current_"))
+                        // Methods accessing __bufptr_ on basic_ios template types
+                        || (generated.contains("basic_ios__CharT___Traits") && generated.contains(".__bufptr_"))
+                        // Methods accessing __exceptions_ on basic_ios template types
+                        || (generated.contains("basic_ios__CharT___Traits") && generated.contains(".__exceptions_"))
+                        // Methods calling method as field on basic_ios template types
+                        || (generated.contains("basic_ios__CharT___Traits") && (generated.contains(".fail") || generated.contains(".good") || generated.contains(".eof") || generated.contains(".bad")))
+                        // Methods accessing sync on basic_streambuf template types
+                        || (generated.contains("basic_streambuf__CharT___Traits") && generated.contains(".sync"))
+                        // Methods accessing __cvtstate_ on fpos template types
+                        || (generated.contains("fpos__State") && generated.contains(".__cvtstate_"))
+                        // Methods accessing fields on unique_ptr template types
+                        || (generated.contains("unique_ptr_") && (generated.contains("._unnamed") || generated.contains(".__val_") || generated.contains(".__i_")))
+                        // Methods accessing __val_ on unique_lock template types
+                        || (generated.contains("unique_lock_") && generated.contains(".__val_"))
+                        || (generated.contains("unique_lock__Mutex") && generated.contains(".__val_"))
+                        // Methods accessing __val_ on __bit_reference types
+                        || (generated.contains("__bit_reference__Cp__") && generated.contains(".__val_"))
+                        || (generated.contains("__bit_const_reference__Cp") && generated.contains(".__val_"))
+                        // Methods accessing __val_ on basic_ios template types
+                        || (generated.contains("basic_ios__CharT___Traits") && generated.contains(".__val_"))
+                        // Methods accessing __comp_ on std_map (should be delegated to __tree_)
+                        || (generated.contains("std_map_") && generated.contains(".__comp_"))
+                        // Methods calling do_length on template types (method not generated)
+                        || (generated.contains("basic_string_view__CharT___Traits") && generated.contains(".do_length"))
+                        // Methods with _TreeIterator dereference issues
+                        || generated.contains("*_TreeIterator")
+                        // Non-primitive cast to duration template type
+                        || generated.contains(" as duration__Rep___Period")
+                        // Cannot move out of __d_ or __st_
+                        || generated.contains("self.__d_")
+                        || generated.contains("self.__st_")
+                        // Cannot index into c_void
+                        || (generated.contains("c_void") && generated.contains("["))
+                        // Methods with undeclared __tiestr variable
+                        || (generated.contains("__tiestr") && !generated.contains("__tiestr:") && !generated.contains("let __tiestr") && !generated.contains("let mut __tiestr"))
+                        // Methods with undeclared __last variable
+                        || (generated.contains("__last)") && !generated.contains("__last:") && !generated.contains("let __last") && !generated.contains("let mut __last"))
+                        // Methods with undeclared __low variable
+                        || (generated.contains("__low)") && !generated.contains("__low:") && !generated.contains("let __low") && !generated.contains("let mut __low"))
+                        // Methods with undeclared __high variable
+                        || (generated.contains("__high)") && !generated.contains("__high:") && !generated.contains("let __high") && !generated.contains("let mut __high"))
+                        // Methods with undeclared __to variable
+                        || (generated.contains("(__to)") && !generated.contains("__to:") && !generated.contains("let __to") && !generated.contains("let mut __to"))
+                        // Methods with undeclared __dest variable (function argument)
+                        || (generated.contains("(__dest,") && !generated.contains("__dest:") && !generated.contains("let __dest") && !generated.contains("let mut __dest"))
+                        // Methods with undeclared __src variable (function argument)
+                        || (generated.contains("__src,") && !generated.contains("__src:") && !generated.contains("let __src") && !generated.contains("let mut __src"))
+                        // Methods calling undefined functions
+                        || generated.contains("__to_address(")
+                        || generated.contains("__libcpp_deallocate(")
+                        || generated.contains("__cxx_atomic_store(")
+                        // c_void + integer operations (impossible)
+                        || generated.contains("c_void + ")
+                        // Binary != on __bit_reference (no PartialEq impl)
+                        || (generated.contains("__bit_reference__Cp__ !=") || generated.contains("!= __bit_reference__Cp__"))
                     {
                         self.output.truncate(method_output_start);
                     }
@@ -2839,6 +3323,10 @@ impl AstCodeGen {
             || (generated.contains("fn back_inserter") && generated.contains("<_Container>"))
             // __common_trait returning u32 type but using enum _Trait
             || (generated.contains("fn __common_trait") && generated.contains("_Trait::_TriviallyAvailable"))
+            // __append10 instantiated with small type (i8) - literals overflow
+            || (generated.contains("fn __append10_i8") || generated.contains("fn __append10_u8"))
+            // Any function with large literal (100000000) operating on i8 type
+            || (generated.contains("i8)") && generated.contains("100000000"))
         {
             // Rollback - remove the generated function
             self.output.truncate(output_start);
@@ -9122,6 +9610,22 @@ impl AstCodeGen {
             || (generated.contains("fn __common_trait") && generated.contains("_Trait::_TriviallyAvailable"))
             // align function with *mut () vs *mut i8 mismatch
             || (generated.contains("fn align(") && generated.contains("__r = __p2") && generated.contains("*mut ()"))
+            // Functions using _Size as a value (type alias used incorrectly)
+            || generated.contains("return _Size + 0")
+            || generated.contains("return _Size;")
+            // Functions with undeclared __bytebuf variable
+            || (generated.contains("__bytebuf") && !generated.contains("__bytebuf:") && !generated.contains("let __bytebuf") && !generated.contains("let mut __bytebuf"))
+            // binary operation on c_void (cannot add to c_void)
+            || generated.contains("c_void + ")
+            // binary != on __bit_reference (no PartialEq impl)
+            || (generated.contains("__bit_reference__Cp__ !=") || generated.contains("!= __bit_reference__Cp__"))
+            // Non-primitive cast to duration template type
+            || generated.contains(" as duration__Rep___Period")
+            // Cannot index into c_void
+            || (generated.contains("c_void") && generated.contains("[") && generated.contains("]"))
+            // Dereferencing c_void or _TreeIterator types
+            || generated.contains("*c_void")
+            || generated.contains("*_TreeIterator")
         {
             // Rollback - remove the generated function
             self.output.truncate(output_start);
@@ -13642,6 +14146,8 @@ impl AstCodeGen {
                     || generated.contains(".__vtable = &STD_COLLATE_BYNAME_WCHAR_T__VTABLE")
                     // __tree __set method using __gv___s global with wrong type (i64 vs u64)
                     || (generated.contains("pub fn __set(") && generated.contains("__gv___s"))
+                    // Iterator op_index methods with c_void offset - self + c_void is invalid
+                    || (generated.contains("pub fn op_index") && generated.contains("self + ") && generated.contains("c_void"))
                 {
                     // Rollback - remove the generated method
                     self.output.truncate(output_start);
@@ -16375,10 +16881,17 @@ impl AstCodeGen {
                         } else {
                             "sub"
                         };
-                        // Wrap left side in parens if it contains "as" to prevent
-                        // `ptr as *const T.add()` being parsed incorrectly
-                        let left_needs_parens = left.contains(" as ");
+                        // Wrap left side in parens if it contains "as" or "unsafe" to ensure
+                        // correct parsing as place expression
+                        let left_needs_parens =
+                            left.contains(" as ") || left.contains("unsafe {");
                         let left_for_method = if left_needs_parens {
+                            format!("({})", left)
+                        } else {
+                            left.clone()
+                        };
+                        // For lvalue assignment, unsafe blocks need parentheses
+                        let left_for_assign = if left.contains("unsafe {") {
                             format!("({})", left)
                         } else {
                             left.clone()
@@ -16389,12 +16902,12 @@ impl AstCodeGen {
                         if right_needs_parens {
                             format!(
                                 "unsafe {{ {} = {}.{}(({}) as usize) }}",
-                                left, left_for_method, method, right
+                                left_for_assign, left_for_method, method, right
                             )
                         } else {
                             format!(
                                 "unsafe {{ {} = {}.{}({} as usize) }}",
-                                left, left_for_method, method, right
+                                left_for_assign, left_for_method, method, right
                             )
                         }
                     } else if matches!(
