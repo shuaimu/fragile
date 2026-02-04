@@ -2481,8 +2481,21 @@ impl AstCodeGen {
         for inst_name in instantiations {
             // Parse template arguments
             if let Some(open_idx) = inst_name.find('<') {
+                // Find matching closing > (accounting for nested templates)
+                let close_idx = Self::find_matching_close_angle(&inst_name, open_idx);
+                if close_idx.is_none() {
+                    continue; // Malformed template name
+                }
+                let close_idx = close_idx.unwrap();
+
+                // Skip nested types like __time_get_storage<char>::string_type
+                // These have :: after the template arguments
+                if close_idx + 1 < inst_name.len() && inst_name[close_idx + 1..].starts_with("::") {
+                    continue;
+                }
+
                 let template_name = &inst_name[..open_idx];
-                let args_str = &inst_name[open_idx + 1..inst_name.len() - 1]; // Strip < and >
+                let args_str = &inst_name[open_idx + 1..close_idx];
                 let type_args = parse_template_args(args_str);
 
                 // Use inline namespace-aware lookup
@@ -2964,6 +2977,11 @@ impl AstCodeGen {
             || (s.starts_with('_') && s.chars().nth(1).map_or(false, |c| c.is_uppercase()))
             // Handle things like "type-parameter-0-0[]" (arrays of type params)
             || s.contains("type-parameter-")
+            // Handle variadic template parameters like "_Types..."
+            || s.ends_with("...")
+            // Handle dependent type expressions like "__is_reference_or_unpadded_object<__rep>"
+            // These are type traits that depend on template parameters
+            || (s.starts_with("__") && s.contains('<') && !s.contains("::"))
     }
 
     /// Check if two type arguments are semantically equivalent common types.
@@ -3031,6 +3049,13 @@ impl AstCodeGen {
 
         // If the key (from LibTooling) is a generic type parameter, accept any concrete type
         if Self::is_generic_type_param(&norm_key) {
+            return true;
+        }
+
+        // If the instance (from libclang) is a generic type parameter (like _Ip, _Hp, _CharT),
+        // accept any concrete type from LibTooling. This happens when libclang gives us
+        // unresolved template parameter names.
+        if Self::is_generic_type_param(&norm_inst) {
             return true;
         }
 
@@ -3186,6 +3211,25 @@ impl AstCodeGen {
             }
         }
 
+        None
+    }
+
+    /// Find the position of the matching closing `>` for a template argument list.
+    /// Returns None if the string is malformed or doesn't have a matching close.
+    fn find_matching_close_angle(s: &str, open_pos: usize) -> Option<usize> {
+        let mut depth = 0;
+        for (i, ch) in s[open_pos..].char_indices() {
+            match ch {
+                '<' => depth += 1,
+                '>' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some(open_pos + i);
+                    }
+                }
+                _ => {}
+            }
+        }
         None
     }
 

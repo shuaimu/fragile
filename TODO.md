@@ -404,9 +404,50 @@ The current implementation uses forbidden patterns (see `docs/dev/wrong.md`). Th
   - Replace with: actual transpiled libc++ method bodies
 
 - [ ] **27.8.3** Fix underlying transpilation issues
-  - Why are `._M_current`, `._M_t`, `._M_impl` fields not being generated?
-  - Why are template method bodies not being extracted by LibTooling?
-  - Why do type mismatches occur (c_void instead of actual types)?
+
+  **Analysis (2026-02-04)**: This task requires fixing multiple interconnected systems:
+  - LibTooling C++ exporter (AstExporter.cpp, 2248 lines)
+  - LibTooling Rust parser (libtooling.rs, 1232 lines)
+  - AST code generator integration (ast_codegen.rs, 19000+ lines)
+
+  **Root causes identified**:
+  1. Field extraction: Fields like `._M_current`, `._M_t` exist in C++ but aren't extracted
+     because libclang only sees the primary template, not instantiations
+  2. Method body extraction: LibTooling DOES export method bodies, but:
+     - Parameter names don't match (parameters aren't captured with correct names)
+     - Variable declarations in bodies don't propagate to transpiled code
+  3. Type resolution: Template arguments get normalized incorrectly, falling back to c_void
+
+  **Subtasks** (each <500 LOC):
+
+  - [x] **27.8.3.1** Investigate field extraction from ClassTemplateSpecializationDecl ✅
+    - **FINDINGS**: Field extraction ALREADY WORKS correctly!
+    - debug_libtooling_types.rs shows 117 specializations with fields extracted:
+      - `std::pair<const int, int>` → fields `first: Int`, `second: Int`
+      - `std::__tree_node_base<void *>` → fields `__parent_`, `__right_`, `__is_black_`
+    - extract_specialization_field_types() in libtooling.rs correctly extracts fields
+    - The problem is NOT extraction, but MATCHING (see 27.8.3.4)
+
+  - [ ] **27.8.3.2** Fix parameter extraction in method body conversion
+    - Issue: Parameters appear as ParmVarDecl but aren't tracked by name
+    - Location: libtooling.rs `convert_to_clang_node()` and `extract_method_bodies()`
+    - Fix: Extract parameter names from CXXMethodDecl children before CompoundStmt
+
+  - [ ] **27.8.3.3** Fix variable declaration propagation in method bodies
+    - Issue: Variables like __n, __max declared in C++ body aren't captured
+    - Location: libtooling.rs VarDecl handling, DeclStmt handling
+    - Fix: Ensure DeclStmt children are properly converted with names
+
+  - [x] **27.8.3.4** Improve field type matching in find_matching_specialization ✅
+    - **FIXED** two issues:
+      1. Generic type params from libclang (`_Ip`, `_Hp`, `_Mutex`, etc.) now treated as wildcards
+         - Added check for `is_generic_type_param(&norm_inst)` in `template_args_match()`
+         - Also added support for variadic params (`_Types...`) and dependent type expressions
+      2. Nested type names like `__time_get_storage<char>::string_type` now skipped
+         - Added `find_matching_close_angle()` helper to properly parse template args
+         - Skip names with `::` after template closing `>`
+    - Result: Many more specializations now match (e.g., `unique_lock<_Mutex>`, `__map_value_compare`, etc.)
+    - Remaining issues are type mismatches in return types (task 27.8.3.2-3)
 
 - [ ] **27.8.4** Add runtime correctness tests
   - Compilation success is NOT sufficient
