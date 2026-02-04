@@ -357,9 +357,38 @@ The current implementation uses forbidden patterns (see `docs/dev/wrong.md`). Th
       - `__libcpp_unreachable` → `std::hint::unreachable_unchecked()`
       - `__libcpp_atomic_refcount_increment/decrement` → atomic-like operations
 
-  - [ ] **27.8.1.6** Fix remaining patterns (133 patterns → 0)
-    - After 27.8.1.2-27.8.1.5, reassess remaining patterns
-    - Break down further if >500 LOC each
+  - [ ] **27.8.1.6** Fix remaining patterns (656 total clauses across 7 rollback sites → 0)
+
+    **Analysis (2026-02-04)**: Full audit found rollback patterns in 7 locations:
+    - Lines 3348-3713: 201 patterns (template method bodies in generate_template_impl)
+    - Lines 3958-4017: 45 patterns (function template instantiation)
+    - Lines 4360-4361: 1 pattern (variadic templates)
+    - Lines 10063-10404: 229 patterns (standalone function generation)
+    - Lines 11826-11839: 8 patterns (Drop impl generation)
+    - Lines 14710-14930: 143 patterns (method generation in impl blocks)
+    - Lines 15538-15584: 29 patterns (constructor generation)
+
+    **Pattern Categories** (by root cause):
+    - ~100: Undeclared variables (__n, __max, __len, __r, __bytes, __s, __t, etc.)
+    - ~80: Field access on wrong types (._M_*, .__ptr_, .__val_, .__i_, etc.)
+    - ~60: c_void type issues (c_void+, *c_void, c_void[], c_void.clone())
+    - ~50: Method/function signature mismatches (wrong arg count, types)
+    - ~40: Template-dependent code (DefaultType, _Tp, _Args, type-parameter-N-M)
+    - ~30: vtable/iterator issues (vtable assignments, iterator field access)
+    - ~20: Builtin function calls (__builtin_*, __libcpp_*, __constexpr_*)
+    - ~10: Return type mismatches (c_void return, wrong pointer types)
+
+    **Completed subtasks**:
+    - [x] **27.8.1.6.1** Add __builtin_nan/huge_val DeclRefExpr mappings ✅ (2026-02-04)
+      - These builtins were referenced as constants in numeric_limits without call parens
+      - Added direct value mappings in DeclRefExpr handling
+      - f64::INFINITY, f32::INFINITY, f64::NAN, f32::NAN
+
+    **Remaining subtasks** (break down further as needed):
+    - [ ] **27.8.1.6.2** Fix transmute::<i32, memory_order> patterns (~5)
+    - [ ] **27.8.1.6.3** Fix hermite/math function patterns (~5)
+    - [ ] **27.8.1.6.4** Reduce undeclared variable patterns (~100)
+    - [ ] **27.8.1.6.5** Reduce field access patterns (~80) - related to 27.8.3
 
 - [ ] **27.8.2** Remove stub method injections
   - Location: ast_codegen.rs lines ~3300-3350
