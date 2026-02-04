@@ -19209,6 +19209,78 @@ impl AstCodeGen {
                     // A function call has a DeclRefExpr child with Function type
                     let is_function_call = node.children.iter().any(Self::is_function_reference);
 
+                    // Special handling for auto-typed CallExpr from LibTooling
+                    // When return type is "auto" (_), the first child might be the callee
+                    // (MemberExpr for method call, DeclRefExpr for function call)
+                    // We detect these by checking if first child is MemberExpr/DeclRefExpr
+                    // that can be resolved to a valid expression (not template-dependent placeholder)
+                    if struct_name == "_" && !node.children.is_empty() && !is_function_call {
+                        let first_child = &node.children[0];
+
+                        // Check for method call pattern: CallExpr{auto} -> MemberExpr{method}
+                        if let ClangNodeKind::MemberExpr { member_name, is_arrow, .. } = &first_child.kind {
+                            // Get the base object and check if it's resolvable
+                            if !first_child.children.is_empty() {
+                                let base = self.expr_to_string(&first_child.children[0]);
+                                // Only treat as method call if base resolves to something valid
+                                // (not template-dependent placeholder)
+                                if !base.contains("template-dependent") && !base.starts_with("0") {
+                                    let method_args: Vec<String> = node.children[1..]
+                                        .iter()
+                                        .map(|c| self.expr_to_string(c))
+                                        .collect();
+
+                                    let method_name = sanitize_identifier(member_name);
+
+                                    if *is_arrow {
+                                        return format!("unsafe {{ (*{}).{}({}) }}", base, method_name, method_args.join(", "));
+                                    } else {
+                                        return format!("{}.{}({})", base, method_name, method_args.join(", "));
+                                    }
+                                }
+                            }
+                        }
+
+                        // Check for known function call pattern: CallExpr{auto} -> DeclRefExpr{known_function}
+                        let maybe_func_ref = match &first_child.kind {
+                            ClangNodeKind::DeclRefExpr { name, .. } => {
+                                if name == "forward_as_tuple" || name == "move" || name == "forward"
+                                    || name.starts_with("__builtin_") || name.starts_with("__libcpp_")
+                                    || name.ends_with("_as_tuple")
+                                {
+                                    Some(sanitize_identifier(name))
+                                } else {
+                                    None
+                                }
+                            }
+                            ClangNodeKind::ImplicitCastExpr { .. } => {
+                                first_child.children.first().and_then(|inner| {
+                                    if let ClangNodeKind::DeclRefExpr { name, .. } = &inner.kind {
+                                        if name == "forward_as_tuple" || name == "move" || name == "forward"
+                                            || name.starts_with("__builtin_") || name.starts_with("__libcpp_")
+                                            || name.ends_with("_as_tuple")
+                                        {
+                                            Some(sanitize_identifier(name))
+                                        } else {
+                                            None
+                                        }
+                                    } else {
+                                        None
+                                    }
+                                })
+                            }
+                            _ => None,
+                        };
+
+                        if let Some(func_name) = maybe_func_ref {
+                            let args: Vec<String> = node.children[1..]
+                                .iter()
+                                .map(|c| self.expr_to_string(c))
+                                .collect();
+                            return format!("{}({})", func_name, args.join(", "));
+                        }
+                    }
+
                     if is_function_call && !node.children.is_empty() {
                         // Regular function call that returns a struct
                         let func = self.expr_to_string(&node.children[0]);
@@ -19598,6 +19670,36 @@ impl AstCodeGen {
                                 .map(|c| self.expr_to_string(c))
                                 .collect();
                             return format!("{}({})", func_name, remaining_args.join(", "));
+                        }
+
+                        // Pattern 3: CXXConstructExpr{auto} -> MemberExpr{method} -> args...
+                        // This is a method call with auto return type, wrapped as a constructor
+                        // Example: __tree_.__emplace_unique(piecewise_construct, ...)
+                        // The MemberExpr contains: base object, method name
+                        // Remaining children are the actual arguments
+                        if let ClangNodeKind::MemberExpr { member_name, is_arrow, .. } = &first_child.kind {
+                            // Get the base object (e.g., __tree_)
+                            let base = if !first_child.children.is_empty() {
+                                self.expr_to_string(&first_child.children[0])
+                            } else {
+                                "self".to_string()
+                            };
+
+                            // Get the method arguments (remaining children after MemberExpr)
+                            let method_args: Vec<String> = arg_nodes[1..]
+                                .iter()
+                                .map(|c| self.expr_to_string(c))
+                                .collect();
+
+                            let access = if *is_arrow { "->" } else { "." };
+                            let method_name = sanitize_identifier(member_name);
+
+                            // Generate: base.method(args...) or (*base).method(args...)
+                            if *is_arrow {
+                                return format!("unsafe {{ (*{}).{}({}) }}", base, method_name, method_args.join(", "));
+                            } else {
+                                return format!("{}.{}({})", base, method_name, method_args.join(", "));
+                            }
                         }
                     }
 

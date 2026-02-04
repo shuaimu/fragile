@@ -522,11 +522,24 @@ The current implementation uses forbidden patterns (see `docs/dev/wrong.md`). Th
         (`forward_as_tuple`, `move`, `forward`, `__builtin_*`, `__libcpp_*`), generate function call
       - Example: `_::new_2(forward_as_tuple, arg)` → `forward_as_tuple(arg)`
       - All tests pass (157+ tests including map/vector compilation tests)
+    - **Fix (2026-02-04)**: Handle auto-typed CallExpr from LibTooling as method/function calls
+      - **Root cause**: LibTooling converts method calls with `auto` return type to `CallExpr{auto}`,
+        NOT `CXXConstructExpr`. The `CXXConstructExpr` fix wasn't being triggered.
+      - **Investigation**: Added debug tracing in `generate_stmt` - found `CallExpr{Named("auto")}` nodes
+        instead of `CXXConstructExpr` nodes. The CallExpr handler was treating these as constructor calls.
+      - **Solution**: Added special handling in CallExpr branch for `struct_name == "_"` (auto type):
+        1. Detect MemberExpr as first child → method call pattern (`base.method(args)`)
+        2. Detect DeclRefExpr with known function names → function call pattern (`func(args)`)
+        3. Only apply when base expression resolves properly (not template-dependent)
+      - **Before**: `_::new_4((*self).__tree_.__emplace_unique, piecewise_construct, _::new_2(forward_as_tuple, _::new_2(r#move, __k)), _::new_1(forward_as_tuple))`
+      - **After**: `(*self).__tree_.__emplace_unique(piecewise_construct, forward_as_tuple(r#move(__k)), forward_as_tuple())`
+      - All 135 integration tests + 4 runtime correctness tests pass
 
   - **Progress Update**:
     - Fixed unresolved template struct generation (skip structs with generic type args like `_CharT`)
     - Fixed memory_order enum value generation (use `memory_order::seq_cst` instead of `5i32`)
     - Map test now compiles with **0 errors** (down from 14 errors)
+    - Method calls with auto return type now properly generate method syntax instead of constructor syntax
 
 - [x] **27.8.4** Add runtime correctness tests ✅
   - Added `crates/fragile-clang/tests/runtime_correctness_tests.rs`
