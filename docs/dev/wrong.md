@@ -136,7 +136,7 @@ Before every commit, verify:
 - [ ] No semantic type mappings (std::X → Rust std::X)
 - [ ] No `todo!()` bodies without tracking issue
 - [ ] No silent skips without logging/tracking
-- [ ] Existing rollback count has not increased (currently ~204 patterns - must decrease)
+- [ ] Existing rollback count has not increased (currently ~202 patterns - must decrease)
 
 ---
 

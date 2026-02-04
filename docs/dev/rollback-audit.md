@@ -1,7 +1,7 @@
 # Rollback Pattern Audit Report
 
-**Date**: 2026-02-04
-**Total Patterns**: 204
+**Date**: 2026-02-04 (Updated)
+**Total Patterns**: 202
 **Location**: `crates/fragile-clang/src/ast_codegen.rs`
 
 ## Overview
@@ -135,7 +135,7 @@ The rollback patterns are concentrated in these areas:
 
 ## Metrics Tracking
 
-Current state: **204 patterns**
+Current state: **202 patterns**
 
 To track progress:
 ```bash
