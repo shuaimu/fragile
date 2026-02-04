@@ -3219,11 +3219,13 @@ impl AstCodeGen {
             }
         }
 
-        // Special case: add size() method for std::map and std::set types if not already present
-        // These containers delegate to __tree_ but the size() method often gets filtered out
+        // Special case: add size() method for std::map, std::set, and hash-based containers
+        // These containers delegate to internal types but the size() method often gets filtered out
         // due to unresolved template types
         if rust_name.starts_with("std_map_") || rust_name.starts_with("std_set_")
             || rust_name.starts_with("std_multimap_") || rust_name.starts_with("std_multiset_")
+            || rust_name.starts_with("std_unordered_map_") || rust_name.starts_with("std_unordered_set_")
+            || rust_name.starts_with("std_unordered_multimap_") || rust_name.starts_with("std_unordered_multiset_")
         {
             let impl_start = self.output.rfind(&format!("impl {} {{", rust_name)).unwrap_or(0);
             let has_size = self.output[impl_start..].contains("pub fn size(");
@@ -3234,8 +3236,8 @@ impl AstCodeGen {
                 self.writeln("");
             }
 
-            // Add op_index for map types if not present
-            if rust_name.starts_with("std_map_") && !has_op_index {
+            // Add op_index for map types (ordered and unordered) if not present
+            if (rust_name.starts_with("std_map_") || rust_name.starts_with("std_unordered_map_")) && !has_op_index {
                 // Parse value type from map name (e.g., std_map_int__int -> second int)
                 // For now, just use a generic stub
                 self.writeln("pub fn op_index(&mut self, _key: i32) -> *mut i32 {");
