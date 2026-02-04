@@ -219,7 +219,9 @@ Semantic mapping would be incorrect. Absolute transpilation preserves exact C++ 
     - These are common issues across all STL containers, not unordered_map specific
 
 - [ ] **27.7** std::list transpilation
-  - [ ] **27.7.1** Create test case for basic operations
+  - [x] **27.7.1** Create test case for basic operations ✅
+    - Created list_test_runner.rs example
+    - Current state: 17 compilation errors (c_void clone, type mismatches)
   - [ ] **27.7.2** Fix linked list node type generation
   - [ ] **27.7.3** Fix iterator code generation
 
