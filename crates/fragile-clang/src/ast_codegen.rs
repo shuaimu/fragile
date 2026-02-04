@@ -19551,11 +19551,13 @@ impl AstCodeGen {
                         })
                         .collect();
 
-                    // Check if this is a function call wrapped in auto-typed CXXConstructExpr
-                    // Pattern: CXXConstructExpr{auto} -> DeclRefExpr{function_name} -> actual_args...
+                    // Check if this is a function/method call wrapped in auto-typed CXXConstructExpr
+                    // Pattern 1: CXXConstructExpr{auto} -> DeclRefExpr{function_name} -> actual_args...
+                    // Pattern 2: CXXConstructExpr{auto} -> MemberExpr{method_name} -> actual_args...
                     if struct_name == "_" && !arg_nodes.is_empty() {
-                        // Check if first child is a function reference
                         let first_child = arg_nodes[0];
+
+                        // Check if first child is a function reference
                         let maybe_func_name = match &first_child.kind {
                             ClangNodeKind::DeclRefExpr { name, .. } => {
                                 // Check if this is a known function (not a variable)

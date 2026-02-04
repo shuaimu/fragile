@@ -398,10 +398,18 @@ The current implementation uses forbidden patterns (see `docs/dev/wrong.md`). Th
       - Root cause: Fields not being extracted from template specializations
       - Patterns catch accesses to ._M_*, .__ptr_, .__val_ that don't exist
 
-- [ ] **27.8.2** Remove stub method injections
-  - Location: ast_codegen.rs lines ~3300-3350
-  - Remove: `size() { 0 }`, `op_index() { null_mut() }`, `push_back() { }`, `new_0() { zeroed() }`
-  - Replace with: actual transpiled libc++ method bodies
+- [~] **27.8.2** Remove stub method injections ⚠️ BLOCKED by 27.8.3.5
+  - Location: ast_codegen.rs lines ~3920-3970
+  - Stubs: `size() { 0 }`, `op_index() { null_mut() }`, `push_back() { }`, `new_0() { zeroed() }`
+  - **Status**: BLOCKED - Stubs exist as fallback when LibTooling method bodies fail
+  - **Investigation (2026-02-04)**:
+    - Stubs are only injected when methods aren't already present
+    - LibTooling method bodies ARE found but get rolled back due to issues:
+      - `_::new_N()` patterns from auto-typed CallExpr treated as constructors
+      - `piecewise_construct`, `forward_as_tuple` not defined
+    - Attempted fix: Adding `"_"` to is_non_struct check broke other code paths
+    - Example: `__tree_.__emplace_unique(...)` becomes field access instead of method call
+  - **Requires**: Fix in 27.8.3.5 - proper handling of auto-return method calls
 
 - [ ] **27.8.3** Fix underlying transpilation issues
 
