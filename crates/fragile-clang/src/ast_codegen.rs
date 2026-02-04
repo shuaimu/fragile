@@ -3198,6 +3198,20 @@ impl AstCodeGen {
                         || (rust_name.contains("__tuple_leaf") && generated.contains(".__f_"))
                         // Methods accessing .bad as field (it's a method)
                         || generated.contains(".bad ")
+                        // Methods accessing __policy_ on wrong types
+                        || (generated.contains(".__policy_") && (rust_name.contains("unique_ptr") || rust_name.contains("unique_lock") || rust_name.contains("__bit_reference") || rust_name.contains("__bit_const_reference") || rust_name.contains("basic_ios")))
+                        // Methods accessing __end_ on wrong types
+                        || (generated.contains(".__end_") && (rust_name.contains("owning_view") || rust_name.contains("initializer_list") || rust_name.contains("basic_string_view")))
+                        // Methods accessing __value_ on iterator types (not valid fields)
+                        || (generated.contains(".__value_") && (rust_name.contains("common_iterator") || rust_name.contains("reverse_iterator") || rust_name.contains("ostreambuf_iterator") || rust_name.contains("move_iterator") || rust_name.contains("__map_iterator") || rust_name.contains("__map_const_iterator") || rust_name.contains("insert_iterator") || rust_name.contains("__hash_")))
+                        // Methods that dereference c_void
+                        || generated.contains("*c_void")
+                        // Methods that dereference _TreeIterator
+                        || generated.contains("*_TreeIterator")
+                        // Methods with c_void addition to iterator references
+                        || (generated.contains("c_void` to `&mut") && (rust_name.contains("reverse_iterator") || rust_name.contains("move_iterator") || rust_name.contains("counted_iterator")))
+                        // Methods with duration cast from i32
+                        || generated.contains("i32` as `duration__Rep")
                     {
                         self.output.truncate(method_output_start);
                     }
