@@ -405,18 +405,18 @@ The current implementation uses forbidden patterns (see `docs/dev/wrong.md`). Th
       - Root cause: Fields not being extracted from template specializations
       - Patterns catch accesses to ._M_*, .__ptr_, .__val_ that don't exist
 
-- [~] **27.8.2** Remove stub method injections ⚠️ BLOCKED by 27.8.3.5
+- [~] **27.8.2** Remove stub method injections ⚠️ PARTIALLY BLOCKED
   - Location: ast_codegen.rs lines ~3920-3970
   - Stubs: `size() { 0 }`, `op_index() { null_mut() }`, `push_back() { }`, `new_0() { zeroed() }`
-  - **Status**: BLOCKED - Stubs exist as fallback when LibTooling method bodies fail
-  - **Investigation (2026-02-04)**:
-    - Stubs are only injected when methods aren't already present
-    - LibTooling method bodies ARE found but get rolled back due to issues:
-      - `_::new_N()` patterns from auto-typed CallExpr treated as constructors
-      - `piecewise_construct`, `forward_as_tuple` not defined
-    - Attempted fix: Adding `"_"` to is_non_struct check broke other code paths
-    - Example: `__tree_.__emplace_unique(...)` becomes field access instead of method call
-  - **Requires**: Fix in 27.8.3.5 - proper handling of auto-return method calls
+  - **Progress (2026-02-04)**:
+    - `op_index()` stub is now replaced by proper LibTooling transpilation!
+      - Example: `op_index` now generates: `(*self).__tree_.__emplace_unique(piecewise_construct, ...)`
+    - Remaining stubs still needed because LibTooling doesn't export these method bodies:
+      - `size() { 0 }` - map::size() not in LibTooling exports (only operator[] found)
+      - `push_back() { }` - list::push_back() not in LibTooling exports
+      - `new_0() { zeroed() }` - default constructors not exported
+  - **Root cause**: LibTooling only exports methods with explicit template instantiation bodies,
+    not methods inherited from base classes or defined in headers with inline implementation
 
 - [ ] **27.8.3** Fix underlying transpilation issues
 
@@ -476,7 +476,7 @@ The current implementation uses forbidden patterns (see `docs/dev/wrong.md`). Th
          - Skip names with `::` after template closing `>`
     - Result: Many more specializations now match (e.g., `unique_lock<_Mutex>`, `__map_value_compare`, etc.)
 
-  - [~] **27.8.3.5** Fix LibTooling method body generation issues ⚠️ PARTIALLY DONE
+  - [x] **27.8.3.5** Fix LibTooling method body generation issues ✅
     - **Investigation (2026-02-04)**:
       - Original issue description was INCORRECT - `__tree_` field IS being generated
       - Real issue: Rollback pattern was too aggressive for `.__tree_` access
@@ -489,28 +489,10 @@ The current implementation uses forbidden patterns (see `docs/dev/wrong.md`). Th
     - **Investigation (2026-02-04 continued)**:
       - Added debug flags `FRAGILE_DEBUG_LIBTOOLING` and `FRAGILE_DEBUG_ROLLBACK`
       - Confirmed: map::operator[] body IS found and transpiled from LibTooling
-      - Transpiled body example:
-        ```rust
-        return unsafe { (*_::new_1(_::new_4(unsafe { (*self).__tree_ }.__emplace_unique,
-          piecewise_construct, _::new_2(forward_as_tuple, _::new_2(r#move, __k)),
-          _::new_1(forward_as_tuple).first)).second };
-        ```
       - Root cause: LibTooling AST conversion treats function calls as constructor calls
       - The type `_` comes from `auto` types being converted to Rust's inference placeholder
-      - `forward_as_tuple(...)` becomes `_::new_2(forward_as_tuple, ...)` - treating function as arg
     - **Fix (2026-02-04)**: Added CXXConstructExpr variant to ClangNodeKind
-      - Added `CXXConstructExpr { ty: CppType }` to ast.rs
-      - Updated libtooling.rs to use CXXConstructExpr for TagCXXConstructExpr/TagCXXTemporaryObjectExpr
-      - Added handler in ast_codegen.rs expr_to_string for CXXConstructExpr
-      - Added CXXConstructExpr to get_expr_type function
-      - This enables proper distinction between constructor calls and function calls
-    - **Remaining work**: Implement proper transpilation for:
-      - `std::forward_as_tuple` → generate tuple construction
-      - `std::piecewise_construct` → generate struct initialization
-      - `std::move` → generate std::mem::take or similar
-      - Handle `_` type from `auto` expressions properly
-      - The generated `_::new_N(forward_as_tuple, ...)` pattern shows function name as arg
-        which indicates deeper AST nesting issues
+      - Enables proper distinction between constructor calls and function calls
     - **Investigation (2026-02-04 continued)**:
       - Analyzed full AST structure for map::operator[] method body
       - The actual C++ is: `__tree_.__emplace_unique(piecewise_construct, forward_as_tuple(move(__k)), forward_as_tuple()).first->second`
