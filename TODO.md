@@ -397,10 +397,17 @@ The current implementation uses forbidden patterns (see `docs/dev/wrong.md`). Th
       - Rollback pattern count reduced from 210 to 204
 
     **Remaining subtasks** (break down further as needed):
-    - [ ] **27.8.1.6.4** Reduce undeclared variable patterns (~100) - BLOCKED by 27.8.3
+    - [~] **27.8.1.6.4** Reduce undeclared variable patterns (~100) ⚠️ PARTIAL
       - Root cause: LibTooling method bodies don't capture parameter declarations
       - Variables like __n, __max, __len, __r appear in body but not declared
-      - Need to fix parameter extraction in LibTooling integration first
+      - **Progress (2026-02-04)**:
+        - VarDecl extraction added (commit a223b29) - variables declared in method bodies now registered
+        - Parameter extraction already working (27.8.3.2)
+        - Removed `__n` and `__max` patterns - no longer triggering
+        - Many remaining patterns are not purely about undeclared variables - they catch
+          methods with OTHER issues (field access, type mismatches) that happen to also
+          have these variable names
+      - **Next step**: Continue investigating which patterns can be safely removed
     - [ ] **27.8.1.6.5** Reduce field access patterns (~80) - BLOCKED by 27.8.3
       - Root cause: Fields not being extracted from template specializations
       - Patterns catch accesses to ._M_*, .__ptr_, .__val_ that don't exist
