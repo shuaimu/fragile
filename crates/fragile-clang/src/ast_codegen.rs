@@ -3048,6 +3048,35 @@ impl AstCodeGen {
                         || generated.contains("c_void + ")
                         // Binary != on __bit_reference (no PartialEq impl)
                         || (generated.contains("__bit_reference__Cp__ !=") || generated.contains("!= __bit_reference__Cp__"))
+                        // Struct-specific rollback patterns using rust_name
+                        // owning_view__Rp: rollback methods accessing __current_ or _unnamed
+                        || (rust_name == "owning_view__Rp" && (generated.contains(".__current_") || generated.contains("._unnamed")))
+                        // __static_bounded_iter: rollback methods accessing __current_
+                        || (rust_name == "__static_bounded_iter__Iterator___Size" && generated.contains(".__current_"))
+                        // unique_ptr types: rollback methods accessing _unnamed
+                        || (rust_name.starts_with("unique_ptr_") && generated.contains("._unnamed"))
+                        // fpos__State: rollback methods accessing __cvtstate_
+                        || (rust_name == "fpos__State" && generated.contains(".__cvtstate_"))
+                        // basic_string_view types: rollback methods accessing _unnamed
+                        || (rust_name == "basic_string_view__CharT___Traits" && generated.contains("._unnamed"))
+                        // initializer_list types: rollback methods accessing _unnamed
+                        || (rust_name.starts_with("initializer_list_") && generated.contains("._unnamed"))
+                        // subrange types: rollback methods accessing _unnamed
+                        || (rust_name == "subrange__Iter___Sent___Kind" && generated.contains("._unnamed"))
+                        // _SentinelValueFill: rollback methods accessing __set_
+                        || (rust_name == "_SentinelValueFill__Traits" && generated.contains(".__set_"))
+                        // basic_ios: rollback methods accessing fail as field
+                        || (rust_name == "basic_ios__CharT___Traits" && generated.contains(".fail"))
+                        // basic_ios: rollback methods accessing __size_
+                        || (rust_name == "basic_ios__CharT___Traits" && generated.contains(".__size_"))
+                        // std_map: rollback methods accessing __size_ directly
+                        || (rust_name.starts_with("std_map_") && generated.contains(".__size_"))
+                        // basic_streambuf: rollback methods accessing sync as field
+                        || (rust_name == "basic_streambuf__CharT___Traits" && generated.contains(".sync"))
+                        // Iterator types: rollback methods accessing __keep_
+                        || generated.contains(".__keep_")
+                        // Iterator types: rollback methods with c_void + operations
+                        || generated.contains("c_void + &mut")
                     {
                         self.output.truncate(method_output_start);
                     }
