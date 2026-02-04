@@ -206,7 +206,9 @@ Semantic mapping would be incorrect. Absolute transpilation preserves exact C++ 
     - Error count reduced from ~4-11 to ~6-23 (some variance due to HashMap ordering)
 
 - [ ] **27.6** std::unordered_map transpilation
-  - [ ] **27.6.1** Create test case for basic operations
+  - [x] **27.6.1** Create test case for basic operations ✅
+    - Created unordered_map_test_runner.rs example
+    - Current state: 34 compilation errors (missing op_index, size methods)
   - [ ] **27.6.2** Fix hash table internal type generation
   - [ ] **27.6.3** Fix bucket/node traversal code generation
 
