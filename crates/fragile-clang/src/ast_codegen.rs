@@ -2696,22 +2696,45 @@ impl AstCodeGen {
     /// Find a matching specialization from LibTooling by comparing base name and template args.
     /// LibTooling uses full template args (e.g., std::map<int, int, less<int>, allocator<...>>)
     /// while libclang may use partial args (e.g., std::map<int, int>).
+    ///
+    /// Set FRAGILE_DEBUG_SPECIALIZATION=1 to enable debug logging for matching failures.
     fn find_matching_specialization(
         &self,
         inst_name: &str,
     ) -> Option<crate::libtooling::SpecializationFieldInfo> {
+        let debug = std::env::var("FRAGILE_DEBUG_SPECIALIZATION").is_ok();
+
         // First try exact match
         if let Some(info) = self.specialization_field_types.get(inst_name) {
+            if debug {
+                eprintln!("[SPEC DEBUG] Exact match found for: {}", inst_name);
+            }
             return Some(info.clone());
         }
 
         // Parse base name and args from inst_name
         let Some(angle_pos) = inst_name.find('<') else {
+            if debug {
+                eprintln!("[SPEC DEBUG] No template args in name: {}", inst_name);
+            }
             return None;
         };
         let base_name = &inst_name[..angle_pos];
         let args_str = &inst_name[angle_pos + 1..inst_name.len() - 1]; // Remove < and >
         let inst_args: Vec<String> = crate::types::parse_template_args(args_str);
+
+        if debug {
+            eprintln!(
+                "[SPEC DEBUG] Looking for: base='{}', args={:?}",
+                base_name, inst_args
+            );
+            eprintln!(
+                "[SPEC DEBUG] Available specializations: {}",
+                self.specialization_field_types.len()
+            );
+        }
+
+        let mut best_candidate: Option<(&str, Vec<(usize, String, String)>)> = None;
 
         // Search for a specialization with the same base name and matching first N args
         for (key, info) in &self.specialization_field_types {
@@ -2736,6 +2759,8 @@ impl AstCodeGen {
             // Check if the first N template args match (N = number of args in inst_name)
             if info.template_args.len() >= inst_args.len() {
                 let mut all_match = true;
+                let mut mismatches: Vec<(usize, String, String)> = Vec::new();
+
                 for (i, inst_arg) in inst_args.iter().enumerate() {
                     let key_arg = &info.template_args[i];
                     // Normalize comparison (remove "struct "/"class " prefixes)
@@ -2752,12 +2777,39 @@ impl AstCodeGen {
 
                     if norm_inst != norm_key {
                         all_match = false;
-                        break;
+                        mismatches.push((i, norm_inst.to_string(), norm_key.to_string()));
                     }
                 }
                 if all_match {
+                    if debug {
+                        eprintln!(
+                            "[SPEC DEBUG] Match found! key='{}', fields={:?}",
+                            key,
+                            info.field_types.keys().collect::<Vec<_>>()
+                        );
+                    }
                     return Some(info.clone());
+                } else if debug && best_candidate.is_none() {
+                    // Track first candidate for debugging
+                    best_candidate = Some((key, mismatches));
                 }
+            }
+        }
+
+        if debug {
+            if let Some((key, mismatches)) = best_candidate {
+                eprintln!(
+                    "[SPEC DEBUG] No match for '{}'. Closest candidate: '{}'",
+                    inst_name, key
+                );
+                for (i, inst, key) in mismatches {
+                    eprintln!("[SPEC DEBUG]   Arg {} mismatch: '{}' vs '{}'", i, inst, key);
+                }
+            } else {
+                eprintln!(
+                    "[SPEC DEBUG] No match found for '{}' (no candidates with matching base name)",
+                    inst_name
+                );
             }
         }
 

@@ -280,13 +280,42 @@ The current implementation uses forbidden patterns (see `docs/dev/wrong.md`). Th
     - Categories: 37 field access, 16 c_void, 10 vtable, 8 builtin, 133 other
 
   - [ ] **27.8.1.2** Fix internal field access patterns (37 patterns → 0)
-    - Root cause: Fields like `_M_current`, `_M_t`, `_M_impl` not being generated in struct definitions
-    - Fix: Ensure LibTooling extracts all fields from ClassTemplateSpecializationDecl
-    - Test: Internal fields appear in generated Rust structs
+
+    **Analysis** (2026-02-04): Investigation found that:
+    - Fields ARE being extracted (LibClang, LibTooling work correctly)
+    - Issue: LibTooling `find_matching_specialization()` fails to match specializations
+    - Result: Field types fall back to c_void, methods then get rolled back
+    - This is SAME root cause as 27.8.1.3 (c_void issues)
+
+    **Subtasks** (each <500 LOC):
+
+    - [x] **27.8.1.2.1** Add debug logging to find_matching_specialization() ✅
+      - Added `FRAGILE_DEBUG_SPECIALIZATION=1` env var for debug output
+      - Logs: exact matches, base name matches, arg mismatches, closest candidates
+      - **Findings from debug output**:
+        - LibTooling has generic params like `type-parameter-0-0` not concrete types
+        - Unsubstituted types like `value_type` appear instead of actual types
+        - Many base types like `basic_string<char>` don't have specializations
+
+    - [ ] **27.8.1.2.2** Fix template argument normalization in specialization matching
+      - Normalize `std::less<int>` vs `less<int>` vs `std__less_int_`
+      - Handle default template arguments
+      - Test: More specializations match successfully
+
+    - [ ] **27.8.1.2.3** Improve fallback when LibTooling match fails
+      - Instead of c_void, try to deduce field types from method usage
+      - Or: Generate fields as generic type parameters
+      - Test: Fields have meaningful types, not c_void
+
+    - [ ] **27.8.1.2.4** Remove field access rollback patterns after fixes
+      - Only remove patterns for which the underlying issue is fixed
+      - Track: How many of 37 patterns can be removed
+      - Metric: Count of `|| generated.contains("._M_")` lines
 
   - [ ] **27.8.1.3** Fix c_void type resolution (16 patterns → 0)
-    - Root cause: Template parameter types resolving to c_void instead of actual types
-    - Fix: Improve type deduction in template instantiations
+    - Root cause: Same as 27.8.1.2 - LibTooling matching + fallback issues
+    - Note: Completing 27.8.1.2.2 and 27.8.1.2.3 should fix most c_void issues
+    - Remaining: Handle explicit c_void patterns (pointer arithmetic, etc.)
     - Test: Template types resolve to concrete types, not c_void
 
   - [ ] **27.8.1.4** Fix vtable generation (10 patterns → 0)
