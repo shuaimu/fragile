@@ -332,7 +332,7 @@ The current implementation uses forbidden patterns (see `docs/dev/wrong.md`). Th
     - Remaining: Handle explicit c_void patterns (pointer arithmetic, etc.)
     - Test: Template types resolve to concrete types, not c_void
 
-  - [ ] **27.8.1.4** Fix vtable generation (10 patterns → 0)
+  - [x] **27.8.1.4** Fix vtable generation (10 patterns → 0) ✅
     - Root cause: Virtual table references in constructor initializers
     - Fix: Handle vtable initialization properly
     - Test: Classes with virtual functions compile without vtable errors
@@ -340,8 +340,11 @@ The current implementation uses forbidden patterns (see `docs/dev/wrong.md`). Th
       - Vtable constants ARE generated in preamble (STD_CTYPE_CHAR__VTABLE, etc.)
       - Problem: Constructor code does `.__vtable = &STD_XXX_VTABLE` but struct layout mismatch
       - Affects: ctype<char>, ctype<wchar_t>, collate_byname<char/wchar_t>
-      - Current count: 16 vtable-related rollback patterns
-      - Fix requires: Coordinating struct layout with constructor vtable init code
+    - **Fix (2026-02-04)**:
+      - Added `skip_vtable` check to `new_0()` default constructor generation (line ~11102)
+      - Added `skip_vtable` check to parameterized constructor vtable init (line ~15483)
+      - Types in `skip_vtable_generation` now skip vtable init in constructors
+      - Rollback patterns remain as safety net but should rarely trigger now
 
   - [x] **27.8.1.5** Fix builtin/intrinsic calls (8 patterns → 0) ✅
     - Root cause: Calls to `__builtin_*`, `__libcpp_*` not being transpiled

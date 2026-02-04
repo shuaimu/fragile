@@ -11100,10 +11100,14 @@ impl AstCodeGen {
                 self.indent += 1;
 
                 // Check if this is a polymorphic class that needs vtable initialization
+                // Skip vtable init for types with pre-generated vtable stubs (ctype, collate, etc.)
+                let skip_vtable = self.skip_vtable_generation.contains(name)
+                    || self.skip_vtable_generation.contains(&format!("std::{}", name));
                 if let Some(vtable_info) = self.vtables.get(name).cloned() {
                     let sanitized = sanitize_identifier(name);
                     // Abstract classes don't have vtable instances, use Default
-                    if vtable_info.is_abstract {
+                    // Also skip vtable init for types with pre-generated stubs
+                    if vtable_info.is_abstract || skip_vtable {
                         self.writeln("Default::default()");
                     } else if vtable_info.base_class.is_none() {
                         // Root polymorphic class - set vtable directly
@@ -15476,7 +15480,10 @@ impl AstCodeGen {
 
                         // Set vtable pointer for derived polymorphic classes
                         // The base constructor set base's vtable, we need to override it
-                        if is_derived_polymorphic {
+                        // Skip for types with pre-generated vtable stubs (ctype, collate, etc.)
+                        let skip_vtable = self.skip_vtable_generation.contains(struct_name)
+                            || self.skip_vtable_generation.contains(&format!("std::{}", struct_name));
+                        if is_derived_polymorphic && !skip_vtable {
                             let sanitized = sanitize_identifier(struct_name);
                             // Find the path to __vtable through inheritance chain
                             // For deep inheritance, this could be __base.__base.__vtable etc.
