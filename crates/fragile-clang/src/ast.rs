@@ -428,6 +428,13 @@ pub enum ClangNodeKind {
         /// The first ClangNode is the expanded function body (with children)
         template_instantiation: Option<Box<ClangNode>>,
     },
+    /// C++ constructor call expression (e.g., T(...) or Type(...))
+    /// Distinct from CallExpr which is for regular function calls.
+    /// Children are the constructor arguments.
+    CXXConstructExpr {
+        /// The type being constructed
+        ty: CppType,
+    },
     /// Member access (a.b or a->b)
     MemberExpr {
         member_name: String,

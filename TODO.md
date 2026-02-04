@@ -483,12 +483,19 @@ The current implementation uses forbidden patterns (see `docs/dev/wrong.md`). Th
       - Root cause: LibTooling AST conversion treats function calls as constructor calls
       - The type `_` comes from `auto` types being converted to Rust's inference placeholder
       - `forward_as_tuple(...)` becomes `_::new_2(forward_as_tuple, ...)` - treating function as arg
+    - **Fix (2026-02-04)**: Added CXXConstructExpr variant to ClangNodeKind
+      - Added `CXXConstructExpr { ty: CppType }` to ast.rs
+      - Updated libtooling.rs to use CXXConstructExpr for TagCXXConstructExpr/TagCXXTemporaryObjectExpr
+      - Added handler in ast_codegen.rs expr_to_string for CXXConstructExpr
+      - Added CXXConstructExpr to get_expr_type function
+      - This enables proper distinction between constructor calls and function calls
     - **Remaining work**: Implement proper transpilation for:
       - `std::forward_as_tuple` → generate tuple construction
       - `std::piecewise_construct` → generate struct initialization
       - `std::move` → generate std::mem::take or similar
-      - Type constructor calls from LibTooling → proper Rust constructor calls
-      - **Key fix needed**: Distinguish between CXXConstructExpr and CallExpr properly in LibTooling conversion
+      - Handle `_` type from `auto` expressions properly
+      - The generated `_::new_N(forward_as_tuple, ...)` pattern shows function name as arg
+        which indicates deeper AST nesting issues
 
   - **Progress Update**:
     - Fixed unresolved template struct generation (skip structs with generic type args like `_CharT`)

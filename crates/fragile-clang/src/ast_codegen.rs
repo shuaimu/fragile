@@ -13781,6 +13781,7 @@ impl AstCodeGen {
             ClangNodeKind::UnaryOperator { ty, .. } => Some(ty.clone()),
             ClangNodeKind::MemberExpr { ty, .. } => Some(ty.clone()),
             ClangNodeKind::CallExpr { ty, .. } => Some(ty.clone()),
+            ClangNodeKind::CXXConstructExpr { ty } => Some(ty.clone()),
             ClangNodeKind::ImplicitCastExpr { ty, .. } => Some(ty.clone()),
             ClangNodeKind::CastExpr { ty, .. } => Some(ty.clone()),
             ClangNodeKind::ArraySubscriptExpr { ty } => Some(ty.clone()),
@@ -19521,6 +19522,79 @@ impl AstCodeGen {
                     }
                 } else {
                     "/* call error */".to_string()
+                }
+            }
+            ClangNodeKind::CXXConstructExpr { ty } => {
+                // Direct constructor call - all children are arguments
+                // This is distinct from CallExpr which has a function reference as first child
+                if let CppType::Named(cpp_struct_name) = ty {
+                    let struct_name = CppType::Named(cpp_struct_name.clone()).to_rust_type_str();
+
+                    // Filter out TypeRef nodes from arguments
+                    let arg_nodes: Vec<&ClangNode> = node
+                        .children
+                        .iter()
+                        .filter(|c| {
+                            if let ClangNodeKind::Unknown(s) = &c.kind {
+                                if s.starts_with("TypeRef:") || s == "TypeRef" {
+                                    return false;
+                                }
+                            }
+                            true
+                        })
+                        .collect();
+
+                    // Check if this is a copy constructor call (single arg of same type)
+                    let is_copy_ctor = arg_nodes.len() == 1 && {
+                        let arg_type = Self::get_expr_type(arg_nodes[0]);
+                        let arg_class = Self::extract_class_name(&arg_type);
+                        arg_class
+                            .map(|name| name == *cpp_struct_name)
+                            .unwrap_or(false)
+                    };
+
+                    if is_copy_ctor {
+                        let arg_str = self.expr_to_string(arg_nodes[0]);
+                        format!("{}.clone()", arg_str)
+                    } else {
+                        let args: Vec<String> =
+                            arg_nodes.iter().map(|c| self.expr_to_string(c)).collect();
+                        let num_args = args.len();
+
+                        // Check if the type maps to a non-struct type
+                        let is_non_struct = struct_name.starts_with('*')
+                            || struct_name.starts_with('&')
+                            || struct_name == "std::ffi::c_void"
+                            || struct_name == "()"
+                            || struct_name == "bool"
+                            || matches!(struct_name.as_str(),
+                                "i8" | "i16" | "i32" | "i64" | "i128" |
+                                "u8" | "u16" | "u32" | "u64" | "u128" |
+                                "f32" | "f64" | "isize" | "usize" | "char")
+                            || self.primitive_aliases.contains(&struct_name);
+
+                        if is_non_struct {
+                            if num_args == 0 {
+                                "Default::default()".to_string()
+                            } else {
+                                args[0].clone()
+                            }
+                        } else {
+                            format!("{}::new_{}({})", struct_name, num_args, args.join(", "))
+                        }
+                    }
+                } else {
+                    // Fallback for non-named types
+                    let args: Vec<String> = node
+                        .children
+                        .iter()
+                        .map(|c| self.expr_to_string(c))
+                        .collect();
+                    if args.is_empty() {
+                        "Default::default()".to_string()
+                    } else {
+                        args[0].clone()
+                    }
                 }
             }
             ClangNodeKind::MemberExpr {

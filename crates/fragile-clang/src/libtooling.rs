@@ -611,12 +611,9 @@ fn convert_node_with_depth(
         }
 
         ASTEntryTag::TagCXXConstructExpr | ASTEntryTag::TagCXXTemporaryObjectExpr => {
-            // CXXConstructExpr doesn't exist in our AST, use a CallExpr as placeholder
+            // Use dedicated CXXConstructExpr node to distinguish from function calls
             let ty = extract_type_from_node(ctx, node);
-            ClangNodeKind::CallExpr {
-                ty,
-                template_instantiation: None,
-            }
+            ClangNodeKind::CXXConstructExpr { ty }
         }
 
         ASTEntryTag::TagInitListExpr => {
