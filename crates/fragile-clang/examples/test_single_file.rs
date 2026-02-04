@@ -26,22 +26,10 @@ fn main() {
         project_root.join("vendor/mako/third-party/erpc/third_party/masstree-beta");
     let erpc_path = project_root.join("vendor/mako/third-party/erpc/src");
 
-    let mut system_include_paths = vec![];
-    if stubs_path.exists() {
-        system_include_paths.push(stubs_path.to_string_lossy().to_string());
-    }
-    let clang_paths = vec![
-        "/usr/lib/llvm-19/lib/clang/19/include",
-        "/usr/lib/llvm-18/lib/clang/18/include",
-    ];
-    for clang_path in &clang_paths {
-        if Path::new(clang_path).exists() {
-            system_include_paths.push(clang_path.to_string());
-            break;
-        }
-    }
-
     let mut include_paths = vec![];
+    if stubs_path.exists() {
+        include_paths.push(stubs_path.to_string_lossy().to_string());
+    }
     include_paths.push(mako_rrr_path.to_string_lossy().to_string());
     include_paths.push(mako_src_path.to_string_lossy().to_string());
     if mako_mako_path.exists() {
@@ -65,7 +53,7 @@ fn main() {
         "HAVE_EXECINFO_H=1".to_string(), // Enable execinfo.h inclusion before config.h is parsed
     ];
 
-    let parser = ClangParser::with_paths_and_defines(include_paths, system_include_paths, defines)
+    let parser = ClangParser::with_paths_and_defines(include_paths, defines)
         .expect("Failed to create parser");
 
     let path = project_root.join(&file);

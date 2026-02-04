@@ -135,6 +135,22 @@ pub enum ClangNodeKind {
         /// Whether the function is declared noexcept
         is_noexcept: bool,
     },
+    /// Function template instantiation (monomorphized from a variadic template)
+    /// This represents a concrete instantiation like `sum<int, int, int>` from `template<typename... Args> sum(Args...)`
+    FunctionTemplateInstantiation {
+        /// Original template name (e.g., "sum")
+        name: String,
+        /// Mangled name for linking
+        mangled_name: String,
+        /// Concrete return type after substitution
+        return_type: CppType,
+        /// Concrete parameters after pack expansion (e.g., [(args, int), (args, int), (args, int)])
+        params: Vec<(String, CppType)>,
+        /// Template arguments used for this instantiation (e.g., [int, int, int])
+        template_args: Vec<CppType>,
+        /// Whether the function is declared noexcept
+        is_noexcept: bool,
+    },
     /// Class template declaration (e.g., template<typename T> class Box { ... })
     ClassTemplateDecl {
         name: String,
@@ -262,6 +278,9 @@ pub enum ClangNodeKind {
     NamespaceDecl {
         /// Namespace name (None for anonymous namespaces)
         name: Option<String>,
+        /// Whether this is an inline namespace (C++11)
+        /// Inline namespaces make their contents visible in the enclosing namespace
+        is_inline: bool,
     },
     /// Language linkage specification (e.g., `extern "C" { ... }`)
     /// This is a container for declarations with different linkage.
@@ -347,6 +366,18 @@ pub enum ClangNodeKind {
     },
     /// Default statement in switch
     DefaultStmt,
+    /// Null statement (semicolon only)
+    NullStmt,
+    /// Goto statement
+    GotoStmt {
+        /// Target label name
+        label: String,
+    },
+    /// Label statement
+    LabelStmt {
+        /// Label name
+        label: String,
+    },
 
     // Expressions
     /// Integer literal with value and type
@@ -391,7 +422,12 @@ pub enum ClangNodeKind {
     /// Unary operator
     UnaryOperator { op: UnaryOp, ty: CppType },
     /// Function call
-    CallExpr { ty: CppType },
+    CallExpr {
+        ty: CppType,
+        /// For calls to variadic template functions, this contains the instantiation info
+        /// The first ClangNode is the expanded function body (with children)
+        template_instantiation: Option<Box<ClangNode>>,
+    },
     /// Member access (a.b or a->b)
     MemberExpr {
         member_name: String,
@@ -418,6 +454,20 @@ pub enum ClangNodeKind {
     /// Children contain the individual initializer expressions.
     InitListExpr {
         /// Result type of the initialization (the struct/array type)
+        ty: CppType,
+    },
+
+    /// sizeof, alignof, or other type trait expression
+    UnaryExprOrTypeTraitExpr {
+        /// The kind of trait (sizeof, alignof, etc.)
+        kind: String,
+        /// The argument type (for sizeof(type))
+        argument_type: Option<CppType>,
+    },
+
+    /// Default initialization expression (e.g., value initialization)
+    CXXDefaultInitExpr {
+        /// The type being initialized
         ty: CppType,
     },
 

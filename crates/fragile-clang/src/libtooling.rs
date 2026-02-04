@@ -43,6 +43,61 @@ impl LibToolingParser {
         self
     }
 
+    /// Detect the path to vendored libc++ headers.
+    /// Looks for vendor/llvm-project/libcxx/include/.
+    fn detect_vendored_libcxx_path() -> Option<String> {
+        // Try relative paths from the current working directory
+        let candidates = [
+            "vendor/llvm-project/libcxx/include",
+            "../vendor/llvm-project/libcxx/include",
+            "../../vendor/llvm-project/libcxx/include",
+        ];
+
+        for candidate in candidates {
+            if Path::new(candidate).exists() {
+                return std::fs::canonicalize(candidate)
+                    .ok()
+                    .map(|p| p.to_string_lossy().to_string());
+            }
+        }
+
+        // Try from FRAGILE_ROOT environment variable
+        if let Ok(root) = std::env::var("FRAGILE_ROOT") {
+            let path = Path::new(&root).join("vendor/llvm-project/libcxx/include");
+            if path.exists() {
+                return Some(path.to_string_lossy().to_string());
+            }
+        }
+
+        None
+    }
+
+    /// Detect the path to vendored libc++ config (contains __config_site).
+    fn detect_vendored_libcxx_config_path() -> Option<String> {
+        let candidates = [
+            "vendor/libcxx-config",
+            "../vendor/libcxx-config",
+            "../../vendor/libcxx-config",
+        ];
+
+        for candidate in candidates {
+            if Path::new(candidate).exists() {
+                return std::fs::canonicalize(candidate)
+                    .ok()
+                    .map(|p| p.to_string_lossy().to_string());
+            }
+        }
+
+        if let Ok(root) = std::env::var("FRAGILE_ROOT") {
+            let path = Path::new(&root).join("vendor/libcxx-config");
+            if path.exists() {
+                return Some(path.to_string_lossy().to_string());
+            }
+        }
+
+        None
+    }
+
     /// Parse a file and return the LibTooling AST context.
     ///
     /// This provides access to the full AST including template instantiations
@@ -79,7 +134,23 @@ impl LibToolingParser {
                 .map_err(|e| miette!("Failed to create compile_commands.json: {}", e))?;
         }
 
-        let extra_args: Vec<&str> = self.extra_args.iter().map(|s| s.as_str()).collect();
+        // Build extra args: combine user-specified args with vendored libc++ paths
+        let mut all_extra_args: Vec<String> = self.extra_args.clone();
+
+        // Auto-detect vendored libc++ paths (same as ClangParser)
+        // This ensures LibTooling uses the same headers as libclang
+        if let Some(libcxx_config_path) = Self::detect_vendored_libcxx_config_path() {
+            if let Some(libcxx_include_path) = Self::detect_vendored_libcxx_path() {
+                // Add libc++ flags
+                all_extra_args.push("-stdlib=libc++".to_string());
+                all_extra_args.push("-nostdinc++".to_string());
+                // Config path first for __config_site
+                all_extra_args.push(format!("-isystem{}", libcxx_config_path));
+                all_extra_args.push(format!("-isystem{}", libcxx_include_path));
+            }
+        }
+
+        let extra_args: Vec<&str> = all_extra_args.iter().map(|s| s.as_str()).collect();
 
         export_ast(path, &compile_dir, &extra_args, false)
             .map_err(|e| miette!("LibTooling parse failed: {}", e))
@@ -494,6 +565,168 @@ fn convert_node_with_depth(
             }
         }
 
+        // Declaration nodes that appear within method bodies
+        ASTEntryTag::TagFieldDecl => {
+            // Field declarations - we treat these as DeclRefExpr for transpilation
+            let name = node.get_string(0).unwrap_or("").to_string();
+            let ty = extract_type_from_node(ctx, node);
+            ClangNodeKind::DeclRefExpr {
+                name,
+                ty,
+                namespace_path: vec![],
+            }
+        }
+
+        ASTEntryTag::TagCXXMethodDecl => {
+            // Method declarations within bodies - skip (these are inline definitions)
+            // Return a placeholder that won't generate code
+            ClangNodeKind::Unknown("InlineMethodDecl".to_string())
+        }
+
+        ASTEntryTag::TagCXXConstructorDecl | ASTEntryTag::TagCXXDestructorDecl => {
+            // Constructor/destructor declarations - skip
+            ClangNodeKind::Unknown("InlineSpecialMemberDecl".to_string())
+        }
+
+        ASTEntryTag::TagParmVarDecl => {
+            // Parameter declarations
+            let name = node.get_string(0).unwrap_or("").to_string();
+            let ty = extract_type_from_node(ctx, node);
+            ClangNodeKind::VarDecl { name, ty, has_init: false }
+        }
+
+        // Additional statement types
+        ASTEntryTag::TagDoStmt => ClangNodeKind::DoStmt,
+
+        ASTEntryTag::TagSwitchStmt => ClangNodeKind::SwitchStmt,
+
+        ASTEntryTag::TagCaseStmt => {
+            // Case statements have a value expression and body
+            // Try to extract the case value
+            let value = node.get_int(0).unwrap_or(0) as i128;
+            ClangNodeKind::CaseStmt { value }
+        }
+
+        ASTEntryTag::TagDefaultStmt => ClangNodeKind::DefaultStmt,
+
+        ASTEntryTag::TagGotoStmt => {
+            let label = node.get_string(0).unwrap_or("").to_string();
+            ClangNodeKind::GotoStmt { label }
+        }
+
+        ASTEntryTag::TagLabelStmt => {
+            let label = node.get_string(0).unwrap_or("").to_string();
+            ClangNodeKind::LabelStmt { label }
+        }
+
+        ASTEntryTag::TagNullStmt => ClangNodeKind::NullStmt,
+
+        ASTEntryTag::TagCXXForRangeStmt => {
+            // Range-based for loop - extract var name and type
+            let var_name = node.get_string(0).unwrap_or("item").to_string();
+            let var_type = extract_type_from_node(ctx, node);
+            ClangNodeKind::CXXForRangeStmt { var_name, var_type }
+        }
+
+        ASTEntryTag::TagCXXTryStmt => ClangNodeKind::TryStmt,
+
+        ASTEntryTag::TagCXXCatchStmt => {
+            let exception_ty = Some(extract_type_from_node(ctx, node));
+            ClangNodeKind::CatchStmt { exception_ty }
+        }
+
+        ASTEntryTag::TagCXXThrowExpr => {
+            let exception_ty = Some(extract_type_from_node(ctx, node));
+            ClangNodeKind::ThrowExpr { exception_ty }
+        }
+
+        // Additional expression types
+        ASTEntryTag::TagUnaryExprOrTypeTraitExpr => {
+            // sizeof, alignof, etc.
+            let kind_str = node.get_string(0).unwrap_or("sizeof").to_string();
+            let ty = extract_type_from_node(ctx, node);
+            ClangNodeKind::UnaryExprOrTypeTraitExpr {
+                kind: kind_str,
+                argument_type: Some(ty),
+            }
+        }
+
+        ASTEntryTag::TagCXXStdInitializerListExpr => {
+            let ty = extract_type_from_node(ctx, node);
+            ClangNodeKind::InitListExpr { ty }
+        }
+
+        ASTEntryTag::TagLambdaExpr => {
+            ClangNodeKind::LambdaExpr {
+                params: vec![],
+                return_type: CppType::Void,
+                capture_default: crate::ast::CaptureDefault::None,
+                captures: vec![],
+            }
+        }
+
+        ASTEntryTag::TagTypeTraitExpr => {
+            // Type traits like std::is_same_v
+            ClangNodeKind::BoolLiteral(false) // Placeholder
+        }
+
+        ASTEntryTag::TagImplicitValueInitExpr | ASTEntryTag::TagCXXScalarValueInitExpr => {
+            // Value initialization - generates default/zero value
+            let ty = extract_type_from_node(ctx, node);
+            ClangNodeKind::CXXDefaultInitExpr { ty }
+        }
+
+        // Record/class related declarations that might appear in bodies
+        ASTEntryTag::TagCXXRecordDecl | ASTEntryTag::TagClassTemplateSpecializationDecl => {
+            // Inline class/struct definition within method - skip
+            ClangNodeKind::Unknown("InlineClassDecl".to_string())
+        }
+
+        ASTEntryTag::TagTypedefDecl | ASTEntryTag::TagTypeAliasDecl => {
+            // Inline typedef/using - skip
+            ClangNodeKind::Unknown("InlineTypedef".to_string())
+        }
+
+        ASTEntryTag::TagEnumDecl => {
+            ClangNodeKind::Unknown("InlineEnumDecl".to_string())
+        }
+
+        ASTEntryTag::TagEnumConstantDecl => {
+            let name = node.get_string(0).unwrap_or("").to_string();
+            ClangNodeKind::DeclRefExpr {
+                name,
+                ty: CppType::Int { signed: true },
+                namespace_path: vec![],
+            }
+        }
+
+        ASTEntryTag::TagAccessSpecDecl => {
+            // public/private/protected - skip
+            ClangNodeKind::Unknown("AccessSpec".to_string())
+        }
+
+        ASTEntryTag::TagStaticAssertDecl => {
+            ClangNodeKind::Unknown("StaticAssert".to_string())
+        }
+
+        ASTEntryTag::TagFunctionDecl | ASTEntryTag::TagFunctionTemplateDecl => {
+            // Inline function declaration - skip
+            ClangNodeKind::Unknown("InlineFunctionDecl".to_string())
+        }
+
+        ASTEntryTag::TagClassTemplateDecl => {
+            ClangNodeKind::Unknown("InlineClassTemplateDecl".to_string())
+        }
+
+        ASTEntryTag::TagNamespaceDecl | ASTEntryTag::TagUsingDecl | ASTEntryTag::TagUsingDirectiveDecl => {
+            ClangNodeKind::Unknown("NamespaceRelated".to_string())
+        }
+
+        ASTEntryTag::TagTemplateTypeParmDecl | ASTEntryTag::TagNonTypeTemplateParmDecl
+        | ASTEntryTag::TagTemplateTemplateParmDecl => {
+            ClangNodeKind::Unknown("TemplateParam".to_string())
+        }
+
         _ => {
             // For unknown nodes, create an Unknown variant
             ClangNodeKind::Unknown(format!("{:?}", node.tag))
@@ -632,6 +865,357 @@ fn parse_unary_op(op: &str) -> crate::ast::UnaryOp {
         "++_post" => UnaryOp::PostInc,
         "--_post" => UnaryOp::PostDec,
         _ => UnaryOp::Plus, // Default fallback
+    }
+}
+
+/// Information about a template specialization's fields with resolved types.
+#[derive(Debug, Clone)]
+pub struct SpecializationFieldInfo {
+    /// Name of the specialized type (e.g., "map" for std::map<int, int>)
+    pub type_name: String,
+    /// Qualified name with template args (e.g., "std::map<int, int>")
+    pub qualified_name: String,
+    /// Template arguments as strings (e.g., ["int", "int", "std::less<int>", ...])
+    pub template_args: Vec<String>,
+    /// Map from field name to its resolved C++ type
+    pub field_types: HashMap<String, CppType>,
+}
+
+/// Extract resolved field types from template specializations.
+///
+/// This function looks at ClassTemplateSpecializationDecl nodes and extracts
+/// the fully-substituted types for each field. This is crucial for generating
+/// correct Rust struct definitions where template parameters have been replaced
+/// with concrete types.
+///
+/// # Returns
+/// A map from specialized type qualified name to field information.
+pub fn extract_specialization_field_types(ctx: &AstContext) -> HashMap<String, SpecializationFieldInfo> {
+    use fragile_ast_exporter::CborValue;
+
+    let mut result = HashMap::new();
+
+    for (spec_id, node) in &ctx.ast_nodes {
+        if node.tag != ASTEntryTag::TagClassTemplateSpecializationDecl {
+            continue;
+        }
+
+        let type_name = node.get_string(0).unwrap_or("").to_string();
+        let qualified_name = node.get_string(1).unwrap_or("").to_string();
+
+        // Extract template arguments from extras[2] (an array of [kind, value] pairs)
+        let mut template_args = Vec::new();
+        if let Some(CborValue::Array(args)) = node.extras.get(2) {
+            for arg in args {
+                if let CborValue::Array(pair) = arg {
+                    // pair[0] is the kind, pair[1] is the string representation
+                    if let Some(CborValue::Text(arg_str)) = pair.get(1) {
+                        template_args.push(arg_str.clone());
+                    }
+                }
+            }
+        }
+
+        // Extract field types from child FieldDecl nodes
+        let mut field_types = HashMap::new();
+        for child_id_opt in &node.children {
+            if let Some(child_id) = child_id_opt {
+                if let Some(child_node) = ctx.ast_nodes.get(child_id) {
+                    if child_node.tag == ASTEntryTag::TagFieldDecl {
+                        let field_name = child_node.get_string(0).unwrap_or("").to_string();
+                        if field_name.is_empty() {
+                            continue;
+                        }
+
+                        // Get the resolved type
+                        if let Some(type_id) = child_node.type_id {
+                            if let Some(resolved_type) = resolve_type(ctx, type_id) {
+                                field_types.insert(field_name, resolved_type);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Only add if we have useful information
+        if !qualified_name.is_empty() && !field_types.is_empty() {
+            // Build the full specialization name: std::pair<const int, int>
+            // This matches the format used in generate_template_struct
+            let full_name = if template_args.is_empty() {
+                qualified_name.clone()
+            } else {
+                format!("{}<{}>", qualified_name, template_args.join(", "))
+            };
+
+            result.insert(
+                full_name.clone(),
+                SpecializationFieldInfo {
+                    type_name,
+                    qualified_name: full_name,
+                    template_args,
+                    field_types,
+                },
+            );
+        }
+    }
+
+    result
+}
+
+/// Format a CppType as a C++ type string for use in template arguments.
+fn format_cpp_type(ty: &CppType) -> String {
+    match ty {
+        CppType::Void => "void".to_string(),
+        CppType::Bool => "bool".to_string(),
+        CppType::Char { signed: true } => "char".to_string(),
+        CppType::Char { signed: false } => "unsigned char".to_string(),
+        CppType::Short { signed: true } => "short".to_string(),
+        CppType::Short { signed: false } => "unsigned short".to_string(),
+        CppType::Int { signed: true } => "int".to_string(),
+        CppType::Int { signed: false } => "unsigned int".to_string(),
+        CppType::Long { signed: true } => "long".to_string(),
+        CppType::Long { signed: false } => "unsigned long".to_string(),
+        CppType::LongLong { signed: true } => "long long".to_string(),
+        CppType::LongLong { signed: false } => "unsigned long long".to_string(),
+        CppType::Float => "float".to_string(),
+        CppType::Double => "double".to_string(),
+        CppType::Named(name) => name.clone(),
+        CppType::Pointer { pointee, is_const } => {
+            if *is_const {
+                format!("const {} *", format_cpp_type(pointee))
+            } else {
+                format!("{} *", format_cpp_type(pointee))
+            }
+        }
+        CppType::Reference { referent, is_const, is_rvalue } => {
+            let ref_sym = if *is_rvalue { "&&" } else { "&" };
+            if *is_const {
+                format!("const {}{}", format_cpp_type(referent), ref_sym)
+            } else {
+                format!("{}{}", format_cpp_type(referent), ref_sym)
+            }
+        }
+        CppType::Array { element, size } => {
+            if let Some(n) = size {
+                format!("{}[{}]", format_cpp_type(element), n)
+            } else {
+                format!("{}[]", format_cpp_type(element))
+            }
+        }
+        CppType::Function { return_type, params, .. } => {
+            let param_strs: Vec<String> = params.iter().map(format_cpp_type).collect();
+            format!("{}({})", format_cpp_type(return_type), param_strs.join(", "))
+        }
+        CppType::TemplateParam { name, .. } => name.clone(),
+        CppType::DependentType { spelling } => spelling.clone(),
+        CppType::ParameterPack { name, .. } => format!("{}...", name),
+    }
+}
+
+/// Resolve a type ID to a concrete CppType, following SubstTemplateTypeParmType
+/// and other wrapper types to get the actual resolved type.
+fn resolve_type(ctx: &AstContext, type_id: u64) -> Option<CppType> {
+    use fragile_ast_exporter::CborValue;
+
+    let type_node = ctx.get_type(type_id)?;
+
+    match type_node.tag {
+        // SubstTemplateTypeParmType contains a reference to the replacement type
+        ASTEntryTag::TagSubstTemplateTypeParmType => {
+            if let Some(CborValue::Integer(replacement_id)) = type_node.extras.first() {
+                let replacement_id = *replacement_id as u64;
+                resolve_type(ctx, replacement_id)
+            } else {
+                None
+            }
+        }
+
+        // ElaboratedType wraps another type (e.g., "typename Foo::bar")
+        ASTEntryTag::TagElaboratedType => {
+            if let Some(CborValue::Integer(inner_id)) = type_node.extras.first() {
+                let inner_id = *inner_id as u64;
+                resolve_type(ctx, inner_id)
+            } else {
+                None
+            }
+        }
+
+        // Typedef type - follow to the underlying type
+        // extras[0] = name, extras[1] = underlying type ID
+        ASTEntryTag::TagTypedefType => {
+            // Always follow the underlying type to get the actual type
+            if let Some(CborValue::Integer(underlying_id)) = type_node.extras.get(1) {
+                let underlying_id = *underlying_id as u64;
+                let result = resolve_type(ctx, underlying_id);
+                if result.is_some() {
+                    return result;
+                }
+                // Fall back to typedef name if underlying can't be resolved
+                let name = type_node.get_string(0).unwrap_or("").to_string();
+                if !name.is_empty() {
+                    Some(CppType::Named(name))
+                } else {
+                    None
+                }
+            } else {
+                // Fallback to typedef name if no underlying type
+                let name = type_node.get_string(0).unwrap_or("").to_string();
+                if name.is_empty() {
+                    None
+                } else {
+                    Some(CppType::Named(name))
+                }
+            }
+        }
+
+        // Record type (struct/class)
+        // extras[0] = decl ID, extras[1] = name
+        ASTEntryTag::TagRecordType => {
+            // Name is at index 1, not index 0
+            let name = type_node.get_string(1).unwrap_or("").to_string();
+            if name.is_empty() {
+                None
+            } else {
+                // Clean up the name if it has "struct " or "class " prefix
+                let clean_name = name
+                    .strip_prefix("struct ")
+                    .or_else(|| name.strip_prefix("class "))
+                    .unwrap_or(&name)
+                    .to_string();
+                Some(CppType::Named(clean_name))
+            }
+        }
+
+        // Pointer type
+        ASTEntryTag::TagPointerType => {
+            if let Some(CborValue::Integer(pointee_id)) = type_node.extras.first() {
+                let pointee_id = *pointee_id as u64;
+                if let Some(pointee_type) = resolve_type(ctx, pointee_id) {
+                    Some(CppType::Pointer {
+                        pointee: Box::new(pointee_type),
+                        is_const: false,
+                    })
+                } else {
+                    Some(CppType::Pointer {
+                        pointee: Box::new(CppType::Void),
+                        is_const: false,
+                    })
+                }
+            } else {
+                Some(CppType::Pointer {
+                    pointee: Box::new(CppType::Void),
+                    is_const: false,
+                })
+            }
+        }
+
+        // Reference type
+        ASTEntryTag::TagLValueReferenceType => {
+            if let Some(CborValue::Integer(ref_id)) = type_node.extras.first() {
+                let ref_id = *ref_id as u64;
+                if let Some(ref_type) = resolve_type(ctx, ref_id) {
+                    Some(CppType::Reference {
+                        referent: Box::new(ref_type),
+                        is_const: false,
+                        is_rvalue: false,
+                    })
+                } else {
+                    Some(CppType::Reference {
+                        referent: Box::new(CppType::Void),
+                        is_const: false,
+                        is_rvalue: false,
+                    })
+                }
+            } else {
+                Some(CppType::Reference {
+                    referent: Box::new(CppType::Void),
+                    is_const: false,
+                    is_rvalue: false,
+                })
+            }
+        }
+
+        // Primitive types
+        ASTEntryTag::TagInt => Some(CppType::Int { signed: true }),
+        ASTEntryTag::TagUInt => Some(CppType::Int { signed: false }),
+        ASTEntryTag::TagLong => Some(CppType::Long { signed: true }),
+        ASTEntryTag::TagULong => Some(CppType::Long { signed: false }),
+        ASTEntryTag::TagLongLong => Some(CppType::LongLong { signed: true }),
+        ASTEntryTag::TagULongLong => Some(CppType::LongLong { signed: false }),
+        ASTEntryTag::TagShort => Some(CppType::Short { signed: true }),
+        ASTEntryTag::TagUShort => Some(CppType::Short { signed: false }),
+        ASTEntryTag::TagChar => Some(CppType::Char { signed: true }),
+        ASTEntryTag::TagSChar => Some(CppType::Char { signed: true }),
+        ASTEntryTag::TagUChar => Some(CppType::Char { signed: false }),
+        ASTEntryTag::TagFloat => Some(CppType::Float),
+        ASTEntryTag::TagDouble => Some(CppType::Double),
+        ASTEntryTag::TagBool => Some(CppType::Bool),
+        ASTEntryTag::TagVoid => Some(CppType::Void),
+
+        // Template specialization type (e.g., std::less<int>)
+        // extras[0] = template name (string)
+        // extras[1] = array of template argument type IDs
+        // extras[2] = aliased type ID (for type alias templates like __type_identity_t)
+        ASTEntryTag::TagTemplateSpecializationType => {
+            let name = type_node.get_string(0).unwrap_or("").to_string();
+
+            // First check if there's an aliased type (for type alias templates)
+            // If so, follow that instead of building the name manually
+            if let Some(CborValue::Integer(aliased_id)) = type_node.extras.get(2) {
+                let aliased_id = *aliased_id as u64;
+                if aliased_id != 0 {
+                    // This is a type alias template - follow to the aliased type
+                    if let Some(resolved) = resolve_type(ctx, aliased_id) {
+                        return Some(resolved);
+                    }
+                    // If aliased type couldn't be resolved, fall through to manual construction
+                }
+            }
+
+            if name.is_empty() {
+                return None;
+            }
+
+            // Try to extract template arguments
+            if let Some(CborValue::Array(arg_ids)) = type_node.extras.get(1) {
+                let mut args = Vec::new();
+                for arg_id in arg_ids {
+                    if let CborValue::Integer(id) = arg_id {
+                        let id = *id as u64;
+                        if id != 0 {
+                            if let Some(arg_type) = resolve_type(ctx, id) {
+                                args.push(format_cpp_type(&arg_type));
+                            }
+                            // Note: If resolve_type returns None, we skip the arg
+                            // This loses information but avoids broken type names
+                        }
+                        // Note: id == 0 means non-type template argument, skip it
+                    }
+                }
+
+                if !args.is_empty() {
+                    // Build full template name with args
+                    let full_name = format!("{}<{}>", name, args.join(", "));
+                    Some(CppType::Named(full_name))
+                } else {
+                    Some(CppType::Named(name))
+                }
+            } else {
+                Some(CppType::Named(name))
+            }
+        }
+
+        // Fallback: return the type's string representation as a named type
+        _ => {
+            let name = type_node.get_string(0).unwrap_or("").to_string();
+            if name.is_empty() {
+                // Try to use tag name as a hint
+                Some(CppType::Named(format!("Unknown{:?}", type_node.tag)))
+            } else {
+                Some(CppType::Named(name))
+            }
+        }
     }
 }
 

@@ -1510,6 +1510,91 @@ fn test_e2e_function_template_multiple_params() {
     );
 }
 
+/// Test C++ variadic template (parameter pack) transpilation.
+/// Verifies that variadic templates like `template<typename... Args>` are
+/// monomorphized correctly with unique function names based on expanded types.
+#[test]
+fn test_variadic_template_transpile() {
+    let parser = ClangParser::new().expect("Failed to create parser");
+
+    let source = r#"
+        template<typename... Args>
+        int count_args(Args... args) {
+            return sizeof...(args);
+        }
+
+        int test() {
+            return count_args(1, 2, 3);  // Should generate count_args_i32
+        }
+    "#;
+
+    let ast = parser
+        .parse_string(source, "variadic_template.cpp")
+        .expect("Failed to parse");
+    let code = AstCodeGen::new().generate(&ast.translation_unit);
+
+    // Check that the call site uses a monomorphized function name
+    assert!(
+        code.contains("count_args_i32(1, 2, 3)"),
+        "Call should use monomorphized function name. Generated code:\n{}",
+        code
+    );
+
+    // Check that a variadic template instantiation function is generated
+    assert!(
+        code.contains("/// Variadic template instantiation: count_args"),
+        "Should generate variadic template instantiation comment. Generated code:\n{}",
+        code
+    );
+
+    // Check that the monomorphized function has unique parameter names
+    // (args, args_1, args_2) instead of all being named "args"
+    assert!(
+        code.contains("args: i32") && code.contains("args_1: i32") && code.contains("args_2: i32"),
+        "Monomorphized function should have uniquely named parameters. Generated code:\n{}",
+        code
+    );
+}
+
+/// Test that regular (non-variadic) function templates don't get duplicate generation.
+/// Verifies that only variadic templates (with parameter packs) trigger the new
+/// monomorphization path, while regular templates continue to work as before.
+#[test]
+fn test_non_variadic_template_no_duplicate() {
+    let parser = ClangParser::new().expect("Failed to create parser");
+
+    let source = r#"
+        template<typename T>
+        T identity(T x) {
+            return x;
+        }
+
+        int test() {
+            return identity(42);
+        }
+    "#;
+
+    let ast = parser
+        .parse_string(source, "non_variadic_template.cpp")
+        .expect("Failed to parse");
+    let code = AstCodeGen::new().generate(&ast.translation_unit);
+
+    // Should NOT contain "Variadic template instantiation" comment
+    // because this is a regular single-type template, not a variadic one
+    assert!(
+        !code.contains("Variadic template instantiation"),
+        "Regular templates should not trigger variadic template path. Generated code:\n{}",
+        code
+    );
+
+    // The function should still be generated correctly
+    assert!(
+        code.contains("fn identity_i32") || code.contains("pub fn identity_i32"),
+        "Regular template should still generate monomorphized function. Generated code:\n{}",
+        code
+    );
+}
+
 /// Test std_string stub operations directly in generated Rust code.
 /// This verifies the std_string stub in the preamble works correctly.
 /// Note: This test compiles hand-written Rust that uses the stub, rather than
@@ -3669,14 +3754,14 @@ fn transpile_and_compile_with_vendored_libcxx(
 fn transpile_with_vendored_libcxx(cpp_source: &str, filename: &str) -> (bool, String, String) {
     use fragile_clang::ClangParser;
 
-    // Try to create parser with vendored libc++
-    let parser = match ClangParser::with_vendored_libcxx() {
+    // Create parser (uses vendored libc++ by default)
+    let parser = match ClangParser::new() {
         Ok(p) => p,
         Err(e) => {
             return (
                 false,
                 String::new(),
-                format!("Failed to create parser with vendored libc++: {}", e),
+                format!("Failed to create parser: {}", e),
             );
         }
     };

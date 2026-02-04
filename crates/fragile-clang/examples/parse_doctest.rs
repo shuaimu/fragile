@@ -66,10 +66,11 @@ fn count_nodes(node: &ClangNode, depth: usize, max_depth: usize) {
                 template_params.join(", ")
             );
         }
-        ClangNodeKind::NamespaceDecl { name } => {
+        ClangNodeKind::NamespaceDecl { name, is_inline } => {
             println!(
-                "{indent}NamespaceDecl: {}",
-                name.as_deref().unwrap_or("(anonymous)")
+                "{indent}NamespaceDecl: {}{}",
+                name.as_deref().unwrap_or("(anonymous)"),
+                if *is_inline { " (inline)" } else { "" }
             );
         }
         ClangNodeKind::Unknown(kind) => {

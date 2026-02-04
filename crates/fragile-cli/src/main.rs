@@ -34,17 +34,9 @@ enum Commands {
         #[arg(long)]
         stubs_only: bool,
 
-        /// Use libc++ (LLVM's C++ standard library) instead of libstdc++.
-        /// Recommended for transpiling STL code as libc++ has cleaner code.
-        /// Requires: `apt install libc++-dev libc++abi-dev` on Debian/Ubuntu.
+        /// Use LibTooling for template method bodies (slower but more complete)
         #[arg(long)]
-        use_libcxx: bool,
-
-        /// Use vendored libc++ from vendor/llvm-project/libcxx/include/.
-        /// This uses the libc++ source code bundled with fragile instead of
-        /// system-installed libc++. Useful for consistent builds across systems.
-        #[arg(long)]
-        use_vendored_libcxx: bool,
+        use_libtooling: bool,
     },
 
     /// Parse C++ files and show AST information (deprecated, use 'transpile')
@@ -92,49 +84,51 @@ fn main() -> Result<()> {
             include,
             define,
             stubs_only,
-            use_libcxx,
-            use_vendored_libcxx,
+            use_libtooling,
         } => {
             let include_paths: Vec<String> = include
                 .iter()
                 .map(|p| p.to_string_lossy().to_string())
                 .collect();
 
-            // Create parser with optional libc++ support
-            let parser = if use_vendored_libcxx {
-                // Use vendored libc++ from vendor/llvm-project/libcxx/include/
-                if !fragile_clang::ClangParser::is_vendored_libcxx_available() {
-                    return Err(miette::miette!(
-                        "Vendored libc++ not found at vendor/llvm-project/libcxx/include/\n\
-                         Set FRAGILE_ROOT environment variable or run from the fragile project root."
-                    ));
-                }
-                fragile_clang::ClangParser::with_vendored_libcxx_and_paths(include_paths)
-            } else if use_libcxx {
-                // Check if system libc++ is available
-                if !fragile_clang::ClangParser::is_libcxx_available() {
-                    return Err(miette::miette!(
-                        "libc++ not found. Please install it:\n  Debian/Ubuntu: apt install libc++-dev libc++abi-dev"
-                    ));
-                }
-                let system_paths = fragile_clang::ClangParser::detect_libcxx_include_paths();
-                fragile_clang::ClangParser::with_full_options(
-                    include_paths,
-                    system_paths,
-                    define.clone(),
-                    Vec::new(),
-                    true,
-                )
-            } else {
-                fragile_clang::ClangParser::with_paths_and_defines(
-                    include_paths,
-                    Vec::new(),
-                    define.clone(),
-                )
-            }
-            .map_err(|e| miette::miette!("Failed to create parser: {}", e))?;
-
             let mut all_output = String::new();
+
+            // If using LibTooling, pre-parse files to extract template method bodies
+            let mut libtooling_results: std::collections::HashMap<
+                std::path::PathBuf,
+                std::collections::HashMap<(String, String), Vec<fragile_clang::ClangNode>>,
+            > = std::collections::HashMap::new();
+
+            // Also store specialization field types when using LibTooling
+            let mut libtooling_field_types: std::collections::HashMap<
+                PathBuf,
+                std::collections::HashMap<String, fragile_clang::SpecializationFieldInfo>,
+            > = std::collections::HashMap::new();
+
+            if use_libtooling {
+                eprintln!("Pre-parsing with LibTooling for template bodies...");
+                let libtooling_parser = fragile_clang::LibToolingParser::new();
+                for file in &files {
+                    eprintln!("  LibTooling parsing: {}", file.display());
+                    match libtooling_parser.parse_file(file) {
+                        Ok(libtooling_ctx) => {
+                            let method_bodies = fragile_clang::extract_method_bodies(&libtooling_ctx);
+                            let field_types = fragile_clang::extract_specialization_field_types(&libtooling_ctx);
+                            eprintln!("    Found {} method body entries, {} specialization field types",
+                                method_bodies.len(), field_types.len());
+                            libtooling_results.insert(file.clone(), method_bodies);
+                            libtooling_field_types.insert(file.clone(), field_types);
+                        }
+                        Err(e) => {
+                            eprintln!("    Warning: LibTooling parse failed: {}", e);
+                        }
+                    }
+                }
+            }
+
+            // Create parser with vendored libc++
+            let parser = fragile_clang::ClangParser::with_paths_and_defines(include_paths, define.clone())
+                .map_err(|e| miette::miette!("Failed to create parser: {}", e))?;
 
             for file in &files {
                 eprintln!("Transpiling: {}", file.display());
@@ -145,6 +139,24 @@ fn main() -> Result<()> {
 
                 let code = if stubs_only {
                     fragile_clang::AstCodeGen::new().generate_stubs(&ast.translation_unit)
+                } else if use_libtooling {
+                    // Use pre-parsed LibTooling bodies and field types if available
+                    let method_bodies = libtooling_results.remove(file);
+                    let field_types = libtooling_field_types.remove(file);
+
+                    if method_bodies.is_some() || field_types.is_some() {
+                        let mut codegen = fragile_clang::AstCodeGen::new();
+                        if let Some(bodies) = method_bodies {
+                            codegen.set_libtooling_bodies(bodies);
+                        }
+                        if let Some(types) = field_types {
+                            codegen.set_specialization_field_types(types);
+                        }
+                        codegen.generate(&ast.translation_unit)
+                    } else {
+                        eprintln!("  No LibTooling data available, falling back to standard transpilation");
+                        fragile_clang::AstCodeGen::new().generate(&ast.translation_unit)
+                    }
                 } else {
                     fragile_clang::AstCodeGen::new().generate(&ast.translation_unit)
                 };
@@ -183,11 +195,7 @@ fn main() -> Result<()> {
                 .map(|p| p.to_string_lossy().to_string())
                 .collect();
 
-            let parser = fragile_clang::ClangParser::with_paths_and_defines(
-                include_paths,
-                Vec::new(),
-                define.clone(),
-            )
+            let parser = fragile_clang::ClangParser::with_paths_and_defines(include_paths, define.clone())
             .map_err(|e| miette::miette!("Failed to create parser: {}", e))?;
 
             let mut all_output = String::new();

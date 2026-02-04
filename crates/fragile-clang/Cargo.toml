@@ -9,6 +9,9 @@ license.workspace = true
 # Clang bindings - using clang-sys for low-level access
 clang-sys.workspace = true
 
+# AST exporter using LibTooling for template instantiation support
+fragile-ast-exporter = { path = "../fragile-ast-exporter" }
+
 # Error handling
 miette.workspace = true
 thiserror.workspace = true

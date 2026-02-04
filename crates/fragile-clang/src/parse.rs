@@ -11,6 +11,8 @@ use std::path::Path;
 use std::ptr;
 
 /// Parser that uses libclang to parse C++ source files.
+///
+/// Always uses vendored libc++ from `vendor/llvm-project/libcxx/include/`.
 pub struct ClangParser {
     index: clang_sys::CXIndex,
     /// Additional include paths for header files (searched with -I)
@@ -21,73 +23,48 @@ pub struct ClangParser {
     defines: Vec<String>,
     /// Error patterns to ignore (substring matches)
     ignored_error_patterns: Vec<String>,
-    /// Use libc++ (LLVM's C++ standard library) instead of libstdc++
-    use_libcxx: bool,
 }
 
 impl ClangParser {
-    /// Create a new Clang parser with default settings.
+    /// Create a new Clang parser with vendored libc++.
+    ///
+    /// Uses vendored libc++ from `vendor/llvm-project/libcxx/include/`.
+    /// The vendored path is detected by looking for the directory relative to:
+    /// 1. FRAGILE_ROOT environment variable
+    /// 2. Current working directory
+    /// 3. Executable's parent directories
     pub fn new() -> Result<Self> {
-        Self::with_include_paths(Vec::new())
+        Self::with_vendored_libcxx()
     }
 
-    /// Create a new Clang parser with custom include paths.
+    /// Create a new Clang parser with custom include paths (and vendored libc++).
     pub fn with_include_paths(include_paths: Vec<String>) -> Result<Self> {
-        Self::with_paths(include_paths, Vec::new())
+        Self::with_vendored_libcxx_and_paths(include_paths)
     }
 
-    /// Create a new Clang parser with both regular and system include paths.
-    /// System paths use -isystem and are searched for angle-bracket includes (<...>).
-    /// Regular paths use -I and are searched for quoted includes ("...").
-    pub fn with_paths(
-        include_paths: Vec<String>,
-        system_include_paths: Vec<String>,
-    ) -> Result<Self> {
-        Self::with_paths_and_defines(include_paths, system_include_paths, Vec::new())
-    }
-
-    /// Create a new Clang parser with include paths and preprocessor defines.
-    /// Defines should be in the form "NAME" or "NAME=VALUE".
+    /// Create a new Clang parser with custom include paths and defines (and vendored libc++).
     pub fn with_paths_and_defines(
         include_paths: Vec<String>,
-        system_include_paths: Vec<String>,
         defines: Vec<String>,
     ) -> Result<Self> {
-        Self::with_paths_defines_and_ignored_errors(
-            include_paths,
-            system_include_paths,
-            defines,
-            Vec::new(),
-        )
+        Self::with_vendored_libcxx_paths_and_defines(include_paths, defines)
     }
 
-    /// Create a new Clang parser with include paths, preprocessor defines, and error patterns to ignore.
-    /// Ignored error patterns are substring matches against error messages.
+    /// Create a new Clang parser with custom include paths, defines, and ignored errors (and vendored libc++).
     pub fn with_paths_defines_and_ignored_errors(
         include_paths: Vec<String>,
-        system_include_paths: Vec<String>,
         defines: Vec<String>,
         ignored_error_patterns: Vec<String>,
     ) -> Result<Self> {
-        Self::with_full_options(
-            include_paths,
-            system_include_paths,
-            defines,
-            ignored_error_patterns,
-            false,
-        )
+        Self::with_vendored_libcxx_full_options(include_paths, defines, ignored_error_patterns)
     }
 
-    /// Create a new Clang parser with all options including libc++ support.
-    /// When `use_libcxx` is true, the parser will use LLVM's libc++ standard library
-    /// instead of GCC's libstdc++. This requires libc++ to be installed
-    /// (e.g., `apt install libc++-dev libc++abi-dev` on Debian/Ubuntu).
-    pub fn with_full_options(
+    /// Internal constructor with all options.
+    fn with_full_options(
         include_paths: Vec<String>,
         system_include_paths: Vec<String>,
         defines: Vec<String>,
         ignored_error_patterns: Vec<String>,
-        use_libcxx: bool,
     ) -> Result<Self> {
         unsafe {
             let index = clang_sys::clang_createIndex(0, 0);
@@ -100,102 +77,8 @@ impl ClangParser {
                 system_include_paths,
                 defines,
                 ignored_error_patterns,
-                use_libcxx,
             })
         }
-    }
-
-    /// Create a Clang parser with system C++ standard library include paths.
-    /// This enables parsing code that includes headers like `<vector>`, `<string>`.
-    pub fn with_system_includes() -> Result<Self> {
-        // Common include paths for C++ standard library
-        let system_paths = Self::detect_system_include_paths();
-        Self::with_include_paths(system_paths)
-    }
-
-    /// Create a Clang parser configured to use libc++ (LLVM's C++ standard library).
-    /// This is recommended for transpiling STL code as libc++ has cleaner, more
-    /// transpiler-friendly code than libstdc++.
-    ///
-    /// Requires libc++ to be installed:
-    /// - Debian/Ubuntu: `apt install libc++-dev libc++abi-dev`
-    /// - Other systems: Install LLVM's C++ standard library package
-    pub fn with_libcxx() -> Result<Self> {
-        let system_paths = Self::detect_libcxx_include_paths();
-        Self::with_full_options(Vec::new(), system_paths, Vec::new(), Vec::new(), true)
-    }
-
-    /// Create a Clang parser with libc++ and custom include paths.
-    pub fn with_libcxx_and_paths(include_paths: Vec<String>) -> Result<Self> {
-        let system_paths = Self::detect_libcxx_include_paths();
-        Self::with_full_options(include_paths, system_paths, Vec::new(), Vec::new(), true)
-    }
-
-    /// Detect system C++ include paths by querying clang (libstdc++ paths).
-    fn detect_system_include_paths() -> Vec<String> {
-        // Common paths for libstdc++ (GCC)
-        let possible_paths = vec![
-            // GCC libstdc++ paths (common on Linux)
-            "/usr/include/c++/14".to_string(),
-            "/usr/include/c++/13".to_string(),
-            "/usr/include/c++/12".to_string(),
-            "/usr/include/c++/11".to_string(),
-            "/usr/lib/gcc/x86_64-linux-gnu/14/include".to_string(),
-            "/usr/lib/gcc/x86_64-linux-gnu/13/include".to_string(),
-            // Platform-specific includes
-            "/usr/include/x86_64-linux-gnu/c++/14".to_string(),
-            "/usr/include/x86_64-linux-gnu/c++/13".to_string(),
-            "/usr/include/x86_64-linux-gnu".to_string(),
-            // Standard includes
-            "/usr/include".to_string(),
-            "/usr/local/include".to_string(),
-            // LLVM/Clang includes
-            "/usr/lib/llvm-19/lib/clang/19/include".to_string(),
-            "/usr/lib/llvm-18/lib/clang/18/include".to_string(),
-        ];
-
-        // Filter to only existing paths
-        possible_paths
-            .into_iter()
-            .filter(|p| std::path::Path::new(p).exists())
-            .collect()
-    }
-
-    /// Detect libc++ (LLVM's C++ standard library) include paths.
-    /// Returns paths where libc++ headers are installed.
-    /// Requires: `apt install libc++-dev libc++abi-dev` on Debian/Ubuntu.
-    pub fn detect_libcxx_include_paths() -> Vec<String> {
-        let possible_paths = vec![
-            // Standard libc++ location
-            "/usr/include/c++/v1".to_string(),
-            // Versioned LLVM installations
-            "/usr/lib/llvm-19/include/c++/v1".to_string(),
-            "/usr/lib/llvm-18/include/c++/v1".to_string(),
-            "/usr/lib/llvm-17/include/c++/v1".to_string(),
-            // Alternative locations
-            "/usr/local/include/c++/v1".to_string(),
-            // Platform-specific
-            "/usr/include/x86_64-linux-gnu".to_string(),
-            // Standard includes
-            "/usr/include".to_string(),
-            "/usr/local/include".to_string(),
-            // LLVM/Clang builtin includes (needed for some intrinsics)
-            "/usr/lib/llvm-19/lib/clang/19/include".to_string(),
-            "/usr/lib/llvm-18/lib/clang/18/include".to_string(),
-        ];
-
-        // Filter to only existing paths
-        possible_paths
-            .into_iter()
-            .filter(|p| std::path::Path::new(p).exists())
-            .collect()
-    }
-
-    /// Check if libc++ headers are available on this system.
-    pub fn is_libcxx_available() -> bool {
-        std::path::Path::new("/usr/include/c++/v1").exists()
-            || std::path::Path::new("/usr/lib/llvm-19/include/c++/v1").exists()
-            || std::path::Path::new("/usr/lib/llvm-18/include/c++/v1").exists()
     }
 
     /// Detect vendored libc++ include path.
@@ -265,7 +148,29 @@ impl ClangParser {
     /// 3. Executable's parent directories
     ///
     /// Also requires `vendor/libcxx-config/` with `__config_site` and `__assertion_handler`.
-    pub fn with_vendored_libcxx() -> Result<Self> {
+    fn with_vendored_libcxx() -> Result<Self> {
+        Self::with_vendored_libcxx_full_options(Vec::new(), Vec::new(), Vec::new())
+    }
+
+    /// Create a Clang parser with vendored libc++ and custom include paths.
+    fn with_vendored_libcxx_and_paths(include_paths: Vec<String>) -> Result<Self> {
+        Self::with_vendored_libcxx_full_options(include_paths, Vec::new(), Vec::new())
+    }
+
+    /// Create a Clang parser with vendored libc++ and custom include paths and defines.
+    fn with_vendored_libcxx_paths_and_defines(
+        include_paths: Vec<String>,
+        defines: Vec<String>,
+    ) -> Result<Self> {
+        Self::with_vendored_libcxx_full_options(include_paths, defines, Vec::new())
+    }
+
+    /// Create a Clang parser with vendored libc++ and all options.
+    fn with_vendored_libcxx_full_options(
+        include_paths: Vec<String>,
+        mut defines: Vec<String>,
+        ignored_error_patterns: Vec<String>,
+    ) -> Result<Self> {
         let vendored_path = Self::detect_vendored_libcxx_path().ok_or_else(|| {
             miette!(
                 "Vendored libc++ not found. Expected at vendor/llvm-project/libcxx/include/\n\
@@ -284,33 +189,9 @@ impl ClangParser {
         // Config path must come first so __config_site is found before including libc++ headers
         let system_paths = vec![config_path, vendored_path];
         // Add defines for libc++ compatibility
-        let defines = vec!["_LIBCPP_HAS_NO_PRAGMA_SYSTEM_HEADER".to_string()];
+        defines.push("_LIBCPP_HAS_NO_PRAGMA_SYSTEM_HEADER".to_string());
 
-        Self::with_full_options(Vec::new(), system_paths, defines, Vec::new(), true)
-    }
-
-    /// Create a Clang parser with vendored libc++ and custom include paths.
-    pub fn with_vendored_libcxx_and_paths(include_paths: Vec<String>) -> Result<Self> {
-        let vendored_path = Self::detect_vendored_libcxx_path().ok_or_else(|| {
-            miette!(
-                "Vendored libc++ not found. Expected at vendor/llvm-project/libcxx/include/\n\
-                 Set FRAGILE_ROOT environment variable or run from the fragile project root."
-            )
-        })?;
-
-        // Config path contains __config_site and __assertion_handler
-        let config_path = Self::detect_vendored_libcxx_config_path().ok_or_else(|| {
-            miette!(
-                "Vendored libc++ config not found. Expected at vendor/libcxx-config/\n\
-                 This directory should contain __config_site and __assertion_handler."
-            )
-        })?;
-
-        // Config path must come first so __config_site is found before including libc++ headers
-        let system_paths = vec![config_path, vendored_path];
-        let defines = vec!["_LIBCPP_HAS_NO_PRAGMA_SYSTEM_HEADER".to_string()];
-
-        Self::with_full_options(include_paths, system_paths, defines, Vec::new(), true)
+        Self::with_full_options(include_paths, system_paths, defines, ignored_error_patterns)
     }
 
     /// Build compiler arguments including include paths.
@@ -325,19 +206,11 @@ impl ClangParser {
             CString::new("-ferror-limit=0").unwrap(),
             // Disable builtin limits on stack depth for templates
             CString::new("-ftemplate-depth=1024").unwrap(),
+            // Always use libc++ (LLVM's C++ standard library)
+            CString::new("-stdlib=libc++").unwrap(),
+            // Disable default C++ includes so vendored libc++ is used
+            CString::new("-nostdinc++").unwrap(),
         ];
-
-        // Use libc++ if requested (LLVM's C++ standard library)
-        // This enables cleaner transpilation of STL code compared to libstdc++
-        if self.use_libcxx {
-            args.push(CString::new("-stdlib=libc++").unwrap());
-        }
-
-        // If we have system include paths configured, disable the default C++ includes
-        // so our stubs are used instead of system headers
-        if !self.system_include_paths.is_empty() {
-            args.push(CString::new("-nostdinc++").unwrap());
-        }
 
         // Add system include paths first (-isystem for angle-bracket includes)
         for path in &self.system_include_paths {
@@ -816,6 +689,31 @@ impl ClangParser {
                     let is_definition = clang_sys::clang_isCursorDefinition(cursor) != 0;
                     let is_variadic = clang_sys::clang_isFunctionTypeVariadic(cursor_type) != 0;
                     let is_noexcept = self.is_function_noexcept(cursor);
+
+                    // Check if this is a template instantiation (monomorphized from a template)
+                    let specialized_template =
+                        clang_sys::clang_getSpecializedCursorTemplate(cursor);
+                    let is_template_instantiation =
+                        clang_sys::clang_Cursor_isNull(specialized_template) == 0;
+
+                    if is_template_instantiation {
+                        // This is a template instantiation - extract the template arguments
+                        let template_args = self.get_template_instantiation_args(cursor);
+
+                        // Only generate instantiation node if we have template args
+                        // (to avoid generating for non-variadic simple templates that we handle differently)
+                        if !template_args.is_empty() {
+                            return ClangNodeKind::FunctionTemplateInstantiation {
+                                name,
+                                mangled_name,
+                                return_type,
+                                params,
+                                template_args,
+                                is_noexcept,
+                            };
+                        }
+                    }
+
                     let is_coroutine = if is_definition {
                         self.contains_coroutine_expressions(cursor)
                     } else {
@@ -1185,7 +1083,8 @@ impl ClangParser {
                 clang_sys::CXCursor_Namespace => {
                     let name = cursor_spelling(cursor);
                     let name_opt = if name.is_empty() { None } else { Some(name) };
-                    ClangNodeKind::NamespaceDecl { name: name_opt }
+                    let is_inline = clang_sys::clang_Cursor_isInlineNamespace(cursor) != 0;
+                    ClangNodeKind::NamespaceDecl { name: name_opt, is_inline }
                 }
 
                 // CXCursor_LinkageSpec = 23 (extern "C" { ... })
@@ -1592,7 +1491,45 @@ impl ClangParser {
 
                 clang_sys::CXCursor_CallExpr => {
                     let ty = self.convert_type(clang_sys::clang_getCursorType(cursor));
-                    ClangNodeKind::CallExpr { ty }
+
+                    // Check if this is a call to a variadic template function
+                    // Get the referenced cursor (the callee)
+                    let referenced = clang_sys::clang_getCursorReferenced(cursor);
+                    let specialized_template =
+                        clang_sys::clang_getSpecializedCursorTemplate(referenced);
+                    let has_specialized_template =
+                        clang_sys::clang_Cursor_isNull(specialized_template) == 0;
+
+                    // Only capture instantiation info for variadic templates (those with parameter packs)
+                    // Regular single-type templates are already handled elsewhere
+                    let is_variadic_template_call = if has_specialized_template {
+                        // Check if the original template has parameter packs
+                        let (_, pack_indices) =
+                            self.get_template_type_params_with_packs(specialized_template);
+                        !pack_indices.is_empty()
+                    } else {
+                        false
+                    };
+
+                    let template_instantiation = if is_variadic_template_call {
+                        // This is a call to an instantiated variadic template function
+                        // Get the definition to capture the expanded body
+                        let definition = clang_sys::clang_getCursorDefinition(referenced);
+                        if clang_sys::clang_Cursor_isNull(definition) == 0 {
+                            // Convert the instantiated function to our AST
+                            let instantiation_node = self.convert_cursor(definition);
+                            Some(Box::new(instantiation_node))
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
+
+                    ClangNodeKind::CallExpr {
+                        ty,
+                        template_instantiation,
+                    }
                 }
 
                 clang_sys::CXCursor_MemberRefExpr => {
@@ -3687,6 +3624,55 @@ impl ClangParser {
         }
     }
 
+    /// Get template instantiation arguments for a function that was instantiated from a template.
+    /// Uses `clang_Cursor_getNumTemplateArguments` and `clang_Cursor_getTemplateArgumentType`.
+    /// For variadic templates, this returns the expanded types (e.g., [int, int, int] for sum<int, int, int>).
+    fn get_template_instantiation_args(&self, cursor: clang_sys::CXCursor) -> Vec<CppType> {
+        unsafe {
+            let num_args = clang_sys::clang_Cursor_getNumTemplateArguments(cursor);
+            if num_args <= 0 {
+                return Vec::new();
+            }
+
+            let mut args = Vec::new();
+            for i in 0..num_args {
+                let arg_kind =
+                    clang_sys::clang_Cursor_getTemplateArgumentKind(cursor, i as u32);
+
+                match arg_kind {
+                    // CXTemplateArgumentKind_Type = 1
+                    1 => {
+                        let arg_type =
+                            clang_sys::clang_Cursor_getTemplateArgumentType(cursor, i as u32);
+                        args.push(self.convert_type(arg_type));
+                    }
+                    // CXTemplateArgumentKind_Pack = 8
+                    // For pack arguments, we need to get the types from the function signature
+                    // since libclang doesn't expose pack expansion directly
+                    8 => {
+                        // The pack types are already expanded in the function's parameter types
+                        // We return an empty vec for the pack marker - the actual types come from params
+                        // This signals to codegen that this is a variadic template instantiation
+                        args.push(CppType::Void); // Placeholder for pack
+                    }
+                    // CXTemplateArgumentKind_Integral = 5
+                    5 => {
+                        // Non-type template parameter (e.g., template<int N>)
+                        let value =
+                            clang_sys::clang_Cursor_getTemplateArgumentValue(cursor, i as u32);
+                        // Store as a named type with the value
+                        args.push(CppType::Named(format!("{}", value)));
+                    }
+                    _ => {
+                        // Other argument kinds - store as placeholder
+                        args.push(CppType::Void);
+                    }
+                }
+            }
+            args
+        }
+    }
+
     /// Get the template specialization arguments from a partial specialization cursor.
     /// Returns the types used in the specialization pattern (e.g., [T, T] for Pair<T, T>).
     fn get_template_specialization_args(&self, cursor: clang_sys::CXCursor) -> Vec<CppType> {
@@ -4226,7 +4212,7 @@ mod tests {
         assert!(!ast.translation_unit.children.is_empty());
         let ns = &ast.translation_unit.children[0];
         match &ns.kind {
-            ClangNodeKind::NamespaceDecl { name } => {
+            ClangNodeKind::NamespaceDecl { name, .. } => {
                 assert_eq!(name.as_deref(), Some("foo"));
             }
             _ => panic!("Expected NamespaceDecl, got {:?}", ns.kind),
@@ -4298,7 +4284,7 @@ mod tests {
         assert!(!ast.translation_unit.children.is_empty());
         let ns = &ast.translation_unit.children[0];
         match &ns.kind {
-            ClangNodeKind::NamespaceDecl { name } => {
+            ClangNodeKind::NamespaceDecl { name, .. } => {
                 assert!(name.is_none(), "Expected anonymous namespace");
             }
             _ => panic!("Expected NamespaceDecl"),
