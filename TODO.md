@@ -496,6 +496,22 @@ The current implementation uses forbidden patterns (see `docs/dev/wrong.md`). Th
       - Handle `_` type from `auto` expressions properly
       - The generated `_::new_N(forward_as_tuple, ...)` pattern shows function name as arg
         which indicates deeper AST nesting issues
+    - **Investigation (2026-02-04 continued)**:
+      - Analyzed full AST structure for map::operator[] method body
+      - The actual C++ is: `__tree_.__emplace_unique(piecewise_construct, forward_as_tuple(move(__k)), forward_as_tuple()).first->second`
+      - Current generated code: `(*_::new_1(_::new_4((*self).__tree_.__emplace_unique, piecewise_construct, _::new_2(forward_as_tuple, _::new_2(r#move, __k)), _::new_1(forward_as_tuple)).first)).second`
+      - **Root cause analysis**:
+        1. The CallExpr for `__tree_.__emplace_unique(...)` is being wrapped in CXXConstructExpr of type `auto`
+        2. This causes `__emplace_unique` (which should be a method call) to appear as an argument to `_::new_4()`
+        3. Same issue affects `forward_as_tuple` - appears as first arg to `_::new_2()` instead of being called
+      - **Attempted fixes** (reverted - caused regressions):
+        - Adding `"_"` to `is_non_struct` checks and generating tuples for multi-arg cases
+        - This broke other code paths that legitimately have function calls with unresolved types
+        - Examples: `return (__builtin_hypotl, __x, __y)` instead of `return __builtin_hypotl(__x, __y)`
+      - **Blocking issue**: The AST structure from LibTooling wraps function calls in CXXConstructExpr of type `auto`
+        when the return type can't be resolved. Need to detect when first child of such expressions
+        is a function reference and treat it as a call, not a constructor.
+      - **Workaround**: Current code rolls back method bodies with `_::new_N` patterns, falling back to stubs
 
   - **Progress Update**:
     - Fixed unresolved template struct generation (skip structs with generic type args like `_CharT`)
