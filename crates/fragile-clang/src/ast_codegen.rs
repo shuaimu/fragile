@@ -12316,12 +12316,21 @@ impl AstCodeGen {
         }
 
         // Generate Drop impl if there's a destructor
+        // Skip Drop impl for types whose destructors always produce broken code
+        let is_broken_drop_type = matches!(rust_name.as_str(),
+            "jthread" | "thread" | "stop_token" | "stop_source"
+            | "__atomic_semaphore" | "__semaphore_base" | "__platform_semaphore"
+            | "__condvar"
+        );
         for child in children {
             if let ClangNodeKind::DestructorDecl {
                 is_definition: true,
                 ..
             } = &child.kind
             {
+                if is_broken_drop_type {
+                    break;
+                }
                 let output_start = self.output.len();
                 self.writeln("");
                 self.writeln(&format!("impl Drop for {} {{", rust_name));
@@ -12343,17 +12352,9 @@ impl AstCodeGen {
                 let generated = &self.output[output_start..];
                 if generated.contains("_dependent_type::new_")
                     || generated.contains("._unnamed")
-                    // c_void type alias (_Stop_state_ref) methods in destructor
-                    || generated.contains("._M_state.op_bool()")
-                    || generated.contains("._M_state.op_arrow()")
-                    // jthread destructor calling rolled-back methods
-                    || generated.contains("self.joinable()")
-                    || generated.contains("self.request_stop()")
-                    || generated.contains("self.join()")
-                    // sem_destroy in destructor with wrong pointer type
-                    || generated.contains("sem_destroy(&mut self")
-                    // __condvar destructor with bool/int mixing in condition
-                    || (generated.contains("impl Drop for __condvar") && generated.contains("&& 16i32"))
+                    // NOTE: ._M_state.op_bool/op_arrow, self.joinable/request_stop/join,
+                    // sem_destroy(&mut self, __condvar patterns removed
+                    // (is_broken_drop_type guard skips Drop impl for threading/condvar types)
                 {
                     self.output.truncate(output_start);
                 }
@@ -15019,6 +15020,21 @@ impl AstCodeGen {
 
     /// Generate a method or constructor.
     fn generate_method(&mut self, node: &ClangNode, struct_name: &str) {
+        // Skip methods/constructors for types whose generated code always gets rolled back
+        // These are internal libstdc++ types with inherent type mismatches
+        let is_broken_method_type = match struct_name {
+            // Threading types - c_void type aliases (_M_state), rolled-back methods
+            "jthread" | "thread" | "stop_token" | "stop_source" => true,
+            // Semaphore types - broken atomic operations and sem_init/sem_destroy
+            "__atomic_semaphore" | "__semaphore_base" | "__platform_semaphore" => true,
+            // Condvar type - bool/int mixing in condition
+            "__condvar" => true,
+            _ => false,
+        };
+        if is_broken_method_type {
+            return;
+        }
+
         // Track current class for inherited member access
         let old_class = self.current_class.take();
         self.current_class = Some(struct_name.to_string());
@@ -15278,42 +15294,21 @@ impl AstCodeGen {
                     || generated.contains("memory_order::new_0()")
                     // bitwise and as method on enum (libstdc++ atomics)
                     || generated.contains(".op_bitand(")
-                    // Methods on c_void type aliases (stop_token's _Stop_state_ref)
-                    // These patterns cover self._M_state, __self._M_state, __other._M_state
-                    || generated.contains("._M_state.op_bool()")
-                    || generated.contains("._M_state.op_arrow()")
-                    || generated.contains("._M_state.swap(")
-                    || generated.contains("._M_state.clone()")
-                    || generated.contains("._M_state.op_eq(")
-                    || generated.contains("._M_state.op_assign(")
-                    // Type alias constructor calls on c_void placeholder types
-                    || generated.contains("stop_token__Stop_state_ref::new_")
-                    // jthread methods calling unavailable thread methods
-                    || generated.contains("._M_thread.joinable()")
-                    || generated.contains("._M_thread.join()")
-                    || generated.contains("._M_thread.detach()")
-                    || generated.contains("._M_thread.get_id()")
-                    || generated.contains("._M_thread.native_handle()")
-                    || generated.contains("thread::hardware_concurrency()")
-                    // stop_source methods referencing rolled-back methods
-                    || generated.contains("_M_stop_source.request_stop()")
-                    || generated.contains("_M_stop_source.get_token()")
+                    // NOTE: ._M_state.* (6), stop_token__Stop_state_ref::new_,
+                    // ._M_thread.* (5), thread::hardware_concurrency(),
+                    // _M_stop_source.* (2) patterns removed
+                    // (is_broken_method_type guard skips all methods for threading types)
                     // Integer swap pattern (broken template instantiation)
                     || generated.contains("0.swap(&self)")
                     // Chrono duration operators not implemented
                     || generated.contains(".op____(")  // spaceship operator <=>
                     || generated.contains(".op_sub(")  // subtraction operator
                     || generated.contains(".count() as i64")  // duration::count() on wrong type
-                    // thread::id comparison (needs PartialEq impl)
-                    || generated.contains("._M_id.clone().op_eq(")
+                    // NOTE: ._M_id.clone().op_eq(, std_nostopstate_t::new_1(,
+                    // std_thread::new_0(, op_assign+joinable patterns removed
+                    // (is_broken_method_type guard skips threading types)
                     // _Hash_impl::hash_u64 not implemented
                     || generated.contains("_Hash_impl::hash_u64(")
-                    // std_nostopstate_t constructor
-                    || generated.contains("std_nostopstate_t::new_1(")
-                    // std_thread constructor
-                    || generated.contains("std_thread::new_0(")
-                    // thread methods calling rolled-back joinable
-                    || (generated.contains("pub fn op_assign") && generated.contains("self.joinable()"))
                     // __gthread_cond_timedwait with wrong argument types
                     || generated.contains("__gthread_cond_timedwait(")
                     // pthread_cond_clockwait with wrong argument types
@@ -15346,32 +15341,18 @@ impl AstCodeGen {
                     || (generated.contains("_M_base.compare_exchange_strong(") && generated.contains("__m1, __m2)"))
                     || (generated.contains("_M_base.compare_exchange_strong(") && generated.contains(", __m)"))
                     || (generated.contains("_M_base.wait(") && generated.contains(", __m)"))
-                    // get_stop_source calling clone on stop_source (Clone impl was skipped)
-                    || generated.contains("self._M_stop_source.clone()")
-                    // thread::swap calling swap_std_thread_id_std_thread_id with wrong argument types
-                    || (generated.contains("pub fn swap(") && generated.contains("swap_std_thread_id_std_thread_id(&mut self._M_id"))
-                    // jthread::swap with wrong argument types for swap functions
-                    || (generated.contains("pub fn swap(") && generated.contains("swap_std_stop_source_std_stop_source(&mut self._M_stop_source"))
-                    || (generated.contains("pub fn swap(") && generated.contains("swap_thread_thread(&mut self._M_thread"))
-                    // thread::native_handle accessing _M_thread on id type (id is u64, not struct)
-                    || (generated.contains("pub fn native_handle(") && generated.contains("self._M_id._M_thread"))
-                    // thread::get_id returning clone of _M_id (id is u64, needs no clone)
-                    || (generated.contains("pub fn get_id(") && generated.contains("self._M_id.clone()"))
+                    // NOTE: self._M_stop_source.clone(), swap+swap_std_thread_id (3),
+                    // native_handle+_M_thread, get_id+clone patterns removed
+                    // (is_broken_method_type guard skips threading types)
                     // NOTE: inf.0 and NaN.0 patterns removed - fixed by proper handling of special float values
                     // numeric_limits __float128 helper methods that call _S_4p with wrong arg count
                     || (generated.contains("_S_1pm4088(") && generated.contains("numeric_limits::_S_4p("))
                     || (generated.contains("_S_1pm16352(") && generated.contains("numeric_limits::_S_4p("))
                     || (generated.contains("_S_1p4064(") && generated.contains("numeric_limits::_S_4p("))
                     || (generated.contains("_S_1p16256(") && generated.contains("numeric_limits::_S_4p("))
-                    // __atomic_semaphore _S_do_try_acquire with wrong load_i32/compare_exchange args
-                    || (generated.contains("pub fn _S_do_try_acquire(") && generated.contains("load_i32(__counter,"))
-                    // __atomic_semaphore _M_acquire/_M_try_acquire calling rolled-back _S_do_try_acquire
-                    || (generated.contains("pub fn _M_acquire(") && generated.contains("_S_do_try_acquire(&mut"))
-                    || (generated.contains("pub fn _M_try_acquire(") && generated.contains("_S_do_try_acquire(&mut"))
-                    // __atomic_semaphore _M_release with memory_order transmute issue
-                    || (generated.contains("pub fn _M_release(") && generated.contains("transmute::<i32, memory_order>"))
-                    // stop_source get_token calling constructor with c_void
-                    || (generated.contains("pub fn get_token(") && generated.contains("stop_token::new_1(self._M_state)"))
+                    // NOTE: __atomic_semaphore _S_do_try_acquire, _M_acquire, _M_try_acquire,
+                    // _M_release, stop_source get_token patterns removed
+                    // (is_broken_method_type guard skips semaphore and stop_source types)
                     // codecvt wrapper methods with wrong pointer/value argument types
                     // These call do_out/do_in/do_unshift/do_length with *__st (value) instead of pointer
                     || (generated.contains("pub fn out(") && generated.contains("self.do_out(*__st,"))
@@ -16060,24 +16041,11 @@ impl AstCodeGen {
                     || generated.contains("c_void::new_")
                     // __base_type typedef resolves to wrong global type
                     || generated.contains("__base_type::new_")
-                    // c_void type alias (_Stop_state_ref) methods in constructor body
-                    || generated.contains("._M_state.op_bool()")
-                    || generated.contains("._M_state.op_arrow()")
-                    || generated.contains("._M_state.swap(")
-                    || generated.contains("._M_state.clone()")
-                    || generated.contains("._M_state.op_eq(")
-                    || generated.contains("._M_state.op_assign(")
-                    || generated.contains("stop_token__Stop_state_ref::new_")
-                    // jthread constructor with missing nostopstate_t and std_thread constructors
-                    || generated.contains("std_nostopstate_t::new_1(")
-                    || generated.contains("std_thread::new_0(")
-                    // sem_init/sem_destroy in constructors
-                    || generated.contains("sem_init(&mut")
-                    || generated.contains("sem_destroy(&mut")
-                    // __self.swap with wrong mutability in thread constructor
-                    || (generated.contains("__self.swap(&__t)") && generated.contains("__t: &mut"))
-                    // stop_token constructor trying to clone c_void reference
-                    || (generated.contains("_M_state: __state.clone()") && generated.contains("&_Stop_state_ref"))
+                    // NOTE: ._M_state.* (6), stop_token__Stop_state_ref::new_,
+                    // std_nostopstate_t::new_1(, std_thread::new_0(,
+                    // sem_init(&mut, sem_destroy(&mut, __self.swap+thread,
+                    // _M_state+clone patterns removed
+                    // (is_broken_method_type guard skips constructors for threading types)
                     // Exception class constructors with &c_void placeholder (unresolved template type)
                     // These call logic_error/runtime_error::new_1 with wrong parameter type
                     || (generated.contains("logic_error::new_1(__s)") && generated.contains("__s: &std::ffi::c_void"))

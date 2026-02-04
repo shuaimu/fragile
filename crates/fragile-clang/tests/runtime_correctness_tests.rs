@@ -249,11 +249,12 @@ fn test_rollback_pattern_count() {
     //       -> 194 (iterator skip list + dead pattern cleanup)
     //       -> 193 (broken fn template skip list)
     //       -> 191 (broken function skip list in generate_function)
+    //       -> 155 (broken method type skip list: threading/semaphore/condvar)
     // When this test starts failing because count increased, investigate!
     assert!(
-        rollback_count <= 200,
-        "Rollback pattern count ({}) increased beyond 200 - investigate! \
-         The primary template guard should keep this under 200.",
+        rollback_count <= 160,
+        "Rollback pattern count ({}) increased beyond 160 - investigate! \
+         The method type skip list should keep this under 160.",
         rollback_count
     );
 }
