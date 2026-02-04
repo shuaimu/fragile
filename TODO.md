@@ -312,14 +312,23 @@ The current implementation uses forbidden patterns (see `docs/dev/wrong.md`). Th
       - Added `generate_opaque_type_stubs()`: generates struct definitions for opaque types with Clone, Copy, Default
       - **Result**: Fields now use type-preserving opaque types (e.g., `__Opaque__Alloc`) instead of generic `c_void`
 
-    - [ ] **27.8.1.2.4** Remove field access rollback patterns after fixes
+    - [~] **27.8.1.2.4** Remove field access rollback patterns after fixes ⚠️ BLOCKED
       - Only remove patterns for which the underlying issue is fixed
       - Track: How many of 37 patterns can be removed
       - Metric: Count of `|| generated.contains("._M_")` lines
+      - **Status**: BLOCKED - Field access patterns (._M_current, ._M_t, etc.) are caused by missing
+        fields in generated structs, NOT by type resolution issues. Tasks 27.8.1.2.2-27.8.1.2.3 improved
+        type matching/fallback but don't fix field extraction. Need to first fix LibTooling field
+        extraction (27.8.3) before patterns can be removed.
+      - **Current count**: 30 `._M_` patterns, 0 can be removed yet
 
-  - [ ] **27.8.1.3** Fix c_void type resolution (16 patterns → 0)
+  - [~] **27.8.1.3** Fix c_void type resolution (16 patterns → 0) ⚠️ PARTIAL
     - Root cause: Same as 27.8.1.2 - LibTooling matching + fallback issues
-    - Note: Completing 27.8.1.2.2 and 27.8.1.2.3 should fix most c_void issues
+    - Note: Completing 27.8.1.2.2 and 27.8.1.2.3 improved field type resolution
+    - **Status**: Field types now use opaque fallback instead of c_void. However, c_void is still
+      generated in method return types, parameter types, and type aliases. Extending opaque type
+      fallback to all type resolution paths would be a significant change.
+    - **Current count**: 38 lines with c_void patterns, patterns still needed
     - Remaining: Handle explicit c_void patterns (pointer arithmetic, etc.)
     - Test: Template types resolve to concrete types, not c_void
 

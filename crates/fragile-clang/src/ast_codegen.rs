@@ -608,6 +608,11 @@ impl AstCodeGen {
             rest = &rest[start + 15 + end_idx..];
         }
 
+        // Check for typename_ prefix (unresolved dependent type names)
+        if s.contains("typename_") && !params.contains(&"typename_".to_string()) {
+            params.push("typename_".to_string());
+        }
+
         // Check for embedded double-underscore param patterns (__Tp, __Alloc, etc.)
         let embedded_params = [
             "__Tp", "__Alloc", "__CharT", "__Traits", "___Alloc",
@@ -639,6 +644,7 @@ impl AstCodeGen {
     /// Examples:
     /// - "type-parameter-0-0" -> "__Opaque_T0_0"
     /// - "type_parameter_0_0" -> "__Opaque_T0_0"
+    /// - "typename_" -> "__Opaque_typename"
     /// - "_Key" -> "__Opaque_Key"
     /// - "__Tp" -> "__Opaque__Tp"
     /// - "_Tp" -> "__Opaque_Tp"
@@ -652,6 +658,9 @@ impl AstCodeGen {
             // Convert type_parameter_N_M to __Opaque_TN_M
             let suffix = &param["type_parameter_".len()..];
             format!("__Opaque_T{}", suffix)
+        } else if param == "typename_" {
+            // Convert typename_ to __Opaque_typename
+            "__Opaque_typename".to_string()
         } else if param.starts_with("___") {
             // Convert ___Alloc to __Opaque___Alloc
             format!("__Opaque{}", param)
@@ -689,6 +698,9 @@ impl AstCodeGen {
             if param.starts_with("type-parameter-") || param.starts_with("type_parameter_") {
                 // Direct replacement for Clang-generated param names
                 result = result.replace(&param, &opaque_name);
+            } else if param == "typename_" {
+                // For typename_ prefix, replace the entire pattern
+                result = result.replace("typename_", &opaque_name);
             } else if param.starts_with("__") || param.starts_with("___") {
                 // For embedded double/triple underscore params, do direct replacement
                 result = result.replace(&param, &opaque_name);
