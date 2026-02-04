@@ -3985,9 +3985,20 @@ impl AstCodeGen {
         // ONLY use exact class name matches - empty class name fallback is too broad
         let methods_to_generate: Vec<(String, String, crate::libtooling::MethodInfo)> = {
             let mut methods = Vec::new();
+            let debug = std::env::var("FRAGILE_DEBUG_LIBTOOLING").is_ok();
+            if debug {
+                eprintln!("=== generate_libtooling_only_methods for rust_name={}, cpp_base_name={} ===", rust_name, cpp_base_name);
+                eprintln!("  libtooling_method_bodies has {} entries", self.libtooling_method_bodies.len());
+                // Show available class names
+                let class_names: std::collections::HashSet<&String> = self.libtooling_method_bodies.keys().map(|(c, _)| c).collect();
+                eprintln!("  Available classes: {:?}", class_names.iter().take(10).collect::<Vec<_>>());
+            }
             for ((class_name, method_name), method_infos) in &self.libtooling_method_bodies {
                 // Match by exact base class name (e.g., "map" matches std_map_int__int)
                 // Don't use empty string fallback as it's too ambiguous
+                if debug && class_name == cpp_base_name {
+                    eprintln!("  Found match: class_name={}, method_name={}, count={}", class_name, method_name, method_infos.len());
+                }
                 if class_name == cpp_base_name {
                     for info in method_infos {
                         // Convert C++ operator name to Rust method name
@@ -4108,6 +4119,12 @@ impl AstCodeGen {
                 || has_unresolved_calls;
 
             if should_rollback {
+                // Debug: print rolled back method body
+                if std::env::var("FRAGILE_DEBUG_ROLLBACK").is_ok() {
+                    eprintln!("=== ROLLBACK {} :: {} ===", rust_name, rust_method_name);
+                    eprintln!("{}", generated);
+                    eprintln!("=== END ROLLBACK ===\n");
+                }
                 // Rollback - this method body has issues
                 self.output.truncate(method_output_start);
             }
