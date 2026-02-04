@@ -3604,9 +3604,6 @@ impl AstCodeGen {
                         || generated.contains("._M_impl")
                         || generated.contains("._M_resource")
                         || generated.contains(".current")
-                        // Methods with missing variables like __n, __max
-                        || (generated.contains("__n") && !generated.contains("__n:") && !generated.contains("let __n") && !generated.contains("let mut __n"))
-                        || (generated.contains("__max") && !generated.contains("__max:") && !generated.contains("let __max") && !generated.contains("let mut __max"))
                         // Methods calling __builtin functions
                         || generated.contains("__builtin_operator_delete")
                         || generated.contains("__builtin_operator_new")
