@@ -16924,6 +16924,18 @@ impl AstCodeGen {
                     return "0 /* template-dependent */".to_string();
                 }
 
+                // Map __builtin_* constants to their values when referenced as DeclRefExpr
+                // (i.e., without function call parentheses - used as constants in numeric_limits)
+                match name.as_str() {
+                    "__builtin_huge_val" | "__builtin_huge_vall" => return "f64::INFINITY".to_string(),
+                    "__builtin_huge_valf" => return "f32::INFINITY".to_string(),
+                    "__builtin_nan" | "__builtin_nanl" | "__builtin_nans" | "__builtin_nansl" => {
+                        return "f64::NAN".to_string()
+                    }
+                    "__builtin_nanf" | "__builtin_nansf" => return "f32::NAN".to_string(),
+                    _ => {}
+                }
+
                 if name == "this" {
                     "self".to_string()
                 } else {
