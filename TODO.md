@@ -419,12 +419,21 @@ The current implementation uses forbidden patterns (see `docs/dev/wrong.md`). Th
         these variable names.
       - **Next step**: No more undeclared variable patterns can be safely removed. Task is effectively
         complete - remaining patterns serve as proxy guards for other unfixed issues.
-    - [~] **27.8.1.6.5** Reduce field access patterns (~80) ⚠️ PARTIAL
-      - Root cause: libstdc++ internal fields (._M_*) not extracted from template primary defs
-      - libc++ internal fields (.__ptr_, .__val_) handled differently via LibTooling (27.8.3)
-      - **Status**: Some patterns can be removed (libc++ ones where fields are now generated),
-        but libstdc++ patterns must remain until libstdc++ support is added
-      - **Analysis needed**: Identify which patterns are for libc++ vs libstdc++
+    - [~] **27.8.1.6.5** Reduce field access patterns (~80) ⚠️ ANALYSIS COMPLETE
+      - **Analysis (2026-02-04)**:
+        - `._M_*` patterns (31): **libstdc++** internal fields - CANNOT BE REMOVED
+          - Examples: `._M_current`, `._M_node`, `._M_t`, `._M_impl`
+          - libclang sees primary template definitions, not instantiations
+        - `.__*` patterns (50+): **libc++** internal fields - MOSTLY MUST REMAIN
+          - Examples: `.__x_`, `.__i_`, `.__current_`, `.__val_`, `.__ptr_`
+          - Conditioned on type names with unresolved params (e.g., `move_iterator__Iter`)
+          - These are PRIMARY TEMPLATE types, not instantiated specializations
+          - LibTooling (27.8.3) helps with instantiated types, not primary templates
+      - **Conclusion**: Most field access patterns must remain because they protect against
+        accessing non-existent fields on primary template types with generic params.
+        Only patterns for FULLY INSTANTIATED types could potentially be removed.
+      - **Current count**: ~106 `.__` patterns (libc++), ~58 `._M_` patterns (libstdc++) = 164 total
+      - **Removable**: ~0 patterns (all serve valid purposes for primary template types)
 
 - [~] **27.8.2** Remove stub method injections ⚠️ PARTIALLY BLOCKED
   - Location: ast_codegen.rs lines ~3920-3970
