@@ -101,7 +101,7 @@ crates/
 
 **After EVERY commit, read `docs/dev/wrong.md` and verify:**
 
-- [ ] No new rollback patterns added (current count: ~204 - must decrease, never increase)
+- [ ] No new rollback patterns added (current count: ~202 - must decrease, never increase)
 - [ ] No new stub method injections (hardcoded return values like `size() { 0 }`)
 - [ ] No semantic type mappings (`std::map` → `BTreeMap`)
 - [ ] No `todo!()` bodies without tracking issue
@@ -158,7 +158,7 @@ Semantic mapping would be incorrect. Absolute transpilation preserves exact C++ 
 **Current State** (BROKEN - uses forbidden patterns, must be fixed):
 
 ⚠️ **WARNING**: The current implementation cheats by:
-1. Using ~204 "rollback patterns" that delete broken methods instead of fixing them
+1. Using ~202 "rollback patterns" that delete broken methods instead of fixing them
 2. Injecting stub methods (`size() { 0 }`, `op_index() { null_mut() }`)
 3. Methods marked `todo!("Template method body")` instead of actual transpiled code
 
@@ -263,7 +263,7 @@ Semantic mapping would be incorrect. Absolute transpilation preserves exact C++ 
 
 The current implementation uses forbidden patterns (see `docs/dev/wrong.md`). These must be removed and replaced with proper fixes.
 
-- [ ] **27.8.1** Remove rollback patterns from ast_codegen.rs (204 total → 0)
+- [ ] **27.8.1** Remove rollback patterns from ast_codegen.rs (202 total → 0)
 
   **Analysis**: The 204 patterns break down into these categories:
   - ~37 patterns: Internal field access (`._M_*`, `.__ptr_`, `.__val_`, etc.)
@@ -598,7 +598,7 @@ The current implementation uses forbidden patterns (see `docs/dev/wrong.md`). Th
 
 - [~] **27.8.5** Metric: Rollback pattern count ⚠️ TRACKED
   - Track: `grep -c "|| generated.contains" crates/fragile-clang/src/ast_codegen.rs`
-  - Current: ~204
+  - Current: ~202
   - Target: 0
   - Now tracked automatically via `test_rollback_pattern_count` test in runtime_correctness_tests.rs
   - Every PR must report this number and it must decrease or stay same, NEVER increase

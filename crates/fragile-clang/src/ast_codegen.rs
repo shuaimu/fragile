@@ -3885,8 +3885,6 @@ impl AstCodeGen {
                         || (rust_name.contains("__tuple_leaf") && generated.contains("._unnamed"))
                         // Methods calling do_narrow (wrong type)
                         || (rust_name.contains("basic_ios") && generated.contains("do_narrow("))
-                        // Methods with _TreeIterator dereference
-                        || generated.contains("*_TreeIterator")
                         // Methods with duration cast
                         || (generated.contains("as duration__Rep"))
                         // Methods returning __current_ as c_void when expecting pointer (counted_iterator)
@@ -3937,8 +3935,7 @@ impl AstCodeGen {
                         || (generated.contains(".__value_") && (rust_name.contains("common_iterator") || rust_name.contains("reverse_iterator") || rust_name.contains("ostreambuf_iterator") || rust_name.contains("move_iterator") || rust_name.contains("__map_iterator") || rust_name.contains("__map_const_iterator") || rust_name.contains("insert_iterator") || rust_name.contains("__hash_")))
                         // Methods that dereference c_void
                         || generated.contains("*c_void")
-                        // Methods that dereference _TreeIterator
-                        || generated.contains("*_TreeIterator")
+                        // (*_TreeIterator already covered by line 3686 above)
                         // Methods with c_void addition to iterator references
                         || (generated.contains("c_void` to `&mut") && (rust_name.contains("reverse_iterator") || rust_name.contains("move_iterator") || rust_name.contains("counted_iterator")))
                         // Methods with duration cast from i32
