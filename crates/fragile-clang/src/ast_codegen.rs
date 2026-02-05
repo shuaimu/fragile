@@ -1461,8 +1461,7 @@ impl AstCodeGen {
             || (generated.contains("-> strong_ordering") && generated.contains(".op____(&") && generated.contains("let mut __c: strong_ordering ="))
             // wstring char/wchar mismatch
             || (generated.contains("__wout.add(") && generated.contains("*__s.add(") && generated.contains("i32") && generated.contains("i8"))
-            // u64 as bool coercion
-            || (generated.contains("if __refs { 1 }") && generated.contains("__refs: u64"))
+            // (if __refs { 1 } with u64 now fixed by int-to-bool conversion in ConditionalOperator)
             // (Box::from_raw on &self now in has_stdlib_internal_bugs)
             // system_error wrong inheritance
             || (generated.contains("system_error::new_2(") && generated.contains("__base: system_error"))
@@ -1483,8 +1482,7 @@ impl AstCodeGen {
             || (generated.contains("__base: locale::new_") && generated.contains("pub fn new_"))
             // (iword/pword now in has_stdlib_internal_bugs)
             // (vtable patterns dead: ctype/collate_byname types skipped by is_broken_method_type)
-            // bool != 0
-            || generated.contains("(__hi != __lo) != 0")
+            // ((__hi != __lo) != 0 now fixed by int-to-bool conversion)
             // (Double-reference casts now in has_stdlib_internal_bugs)
             // wstring missing methods
             || (generated.contains("wstring::new_3(") && generated.contains("__s.data()"))
@@ -1574,8 +1572,7 @@ impl AstCodeGen {
             || (generated.contains("_M_base.load(") && generated.contains("transmute::<i32, memory_order>"))
             || (generated.contains("_M_base.store(") && generated.contains("transmute::<i32, memory_order>"))
             || (generated.contains("_M_base.exchange(") && generated.contains("transmute::<i32, memory_order>"))
-            // atomic wait/notify bool/int
-            || (generated.contains("pub fn wait") && generated.contains("if __old { 1 } else { 0 }"))
+            // (if __old { 1 } with int now fixed by int-to-bool conversion in ConditionalOperator)
             || (generated.contains("__atomic_wait_address") && generated.contains("bool, || &self"))
             // atomic test_and_set
             || (generated.contains("return __v == 1;") && generated.contains("pub fn test"))
@@ -1642,8 +1639,8 @@ impl AstCodeGen {
             return true;
         }
         // (&_V2::system/generic_category and Box::from_raw on &self now in has_stdlib_internal_bugs)
-        (generated.contains("if __refs { 1 }") && generated.contains("__refs: u64"))
-            || generated.contains("__base: locale::new_")
+        // (if __refs { 1 } with u64 now fixed by int-to-bool conversion in ConditionalOperator)
+        generated.contains("__base: locale::new_")
             || (generated.contains("__base: system_error::new_2(") && generated.contains("__what: *const i8"))
             // (__base_type::new_ now in has_undeclared_variables)
             || generated.contains("__mbstate_t::new_1(1)")
@@ -16861,10 +16858,14 @@ impl AstCodeGen {
 
             // Standard while loop without declaration in condition
             let cond = self.expr_to_string(cond_node);
-            // In C++, pointers can be used in boolean context (non-null = true)
+            // In C++, pointers and integers can be used in boolean context
             let cond_type = Self::get_expr_type(cond_node);
             let cond = if matches!(cond_type, Some(CppType::Pointer { .. })) {
                 format!("!{}.is_null()", cond)
+            } else if cond_type.as_ref().map_or(false, |t| t.is_integral() == Some(true))
+                && !matches!(cond_type, Some(CppType::Bool))
+            {
+                format!("({}) != 0", cond)
             } else {
                 cond
             };
@@ -16887,7 +16888,17 @@ impl AstCodeGen {
             self.generate_stmt(&node.children[0], false);
             // Then condition check
             let cond = self.expr_to_string(&node.children[1]);
-            self.writeln(&format!("if !({}) {{ break; }}", cond));
+            let cond_type = Self::get_expr_type(&node.children[1]);
+            let cond = if matches!(cond_type, Some(CppType::Pointer { .. })) {
+                format!("{}.is_null()", cond)
+            } else if cond_type.as_ref().map_or(false, |t| t.is_integral() == Some(true))
+                && !matches!(cond_type, Some(CppType::Bool))
+            {
+                format!("({}) == 0", cond)
+            } else {
+                format!("!({})", cond)
+            };
+            self.writeln(&format!("if {} {{ break; }}", cond));
             self.indent -= 1;
             self.writeln("}");
         }
@@ -20454,11 +20465,16 @@ impl AstCodeGen {
                     let then_expr = self.expr_to_string(&node.children[1]);
                     let else_expr = self.expr_to_string(&node.children[2]);
 
-                    // Check if condition is a pointer type - needs null check in Rust
+                    // Check if condition is a pointer or integer type - needs conversion in Rust
                     let cond_type = Self::get_expr_type(cond_child);
                     let cond_str = if matches!(cond_type, Some(CppType::Pointer { .. })) {
                         // Pointer used as boolean: convert to !ptr.is_null()
                         format!("!{}.is_null()", cond)
+                    } else if cond_type.as_ref().map_or(false, |t| t.is_integral() == Some(true))
+                        && !matches!(cond_type, Some(CppType::Bool))
+                    {
+                        // Integer used as boolean: convert to != 0
+                        format!("({}) != 0", cond)
                     } else {
                         cond
                     };
