@@ -417,6 +417,8 @@ pub struct AstCodeGen {
     anon_namespace_counter: usize,
     /// Track already generated struct names to avoid duplicates from template instantiation
     generated_structs: HashSet<String>,
+    /// Track generated enums (for CXXConstructExpr to avoid generating ::new_N())
+    generated_enums: HashSet<String>,
     /// Track already generated type aliases to avoid duplicates
     generated_aliases: HashSet<String>,
     /// Track type aliases that resolve to primitive types (e.g., pthread_mutex_t = usize)
@@ -526,6 +528,7 @@ impl AstCodeGen {
             variant_types: HashMap::new(),
             anon_namespace_counter: 0,
             generated_structs: HashSet::new(),
+            generated_enums: HashSet::new(),
             generated_aliases: HashSet::new(),
             primitive_aliases: HashSet::new(),
             generated_modules: HashSet::new(),
@@ -1236,14 +1239,12 @@ impl AstCodeGen {
             || generated.contains(".iter().")
             // Integer swap
             || generated.contains("0.swap(&self)")
-            // AST node leaking into output
-            || generated.contains("BuiltinBitCastExpr")
+            // (BuiltinBitCastExpr now handled as transmute in expr_to_string)
             // Negating pointer address
             || generated.contains("(-__errno_location())")
             // Self clone with &mut self
             || (generated.contains("self.clone()") && generated.contains("&mut self"))
-            // memory_order enum used as struct
-            || generated.contains("memory_order::new_0()")
+            // (memory_order::new_0() now handled by enum detection in CXXConstructExpr)
             // Template-dependent return
             || generated.contains("return 0 /* template-dependent */")
             // _Size type alias used as value
@@ -10319,6 +10320,7 @@ impl AstCodeGen {
         self.writeln(&format!("#[repr({})]", repr_type));
         self.writeln("#[derive(Clone, Copy, PartialEq, Eq, Debug)]");
         self.writeln(&format!("pub enum {} {{", name));
+        self.generated_enums.insert(name.to_string());
         self.indent += 1;
 
         for child in children {
@@ -12795,6 +12797,7 @@ impl AstCodeGen {
             return;
         }
         self.generated_structs.insert(name.to_string());
+        self.generated_enums.insert(name.to_string());
 
         let kind = if is_scoped { "enum class" } else { "enum" };
         self.writeln(&format!("/// C++ {} `{}`", kind, name));
@@ -16430,6 +16433,13 @@ impl AstCodeGen {
                     self.skip_literal_suffix = true;
                     let expr = self.expr_to_string(&node.children[0]);
                     self.skip_literal_suffix = prev_skip;
+                    // Auto-call bare builtin function references
+                    // In template code, __builtin_* can appear as bare DeclRefExpr without CallExpr
+                    let expr = if expr.contains("__builtin_") && !expr.contains('(') {
+                        format!("{}()", expr)
+                    } else {
+                        expr
+                    };
                     // Check if we need to add &mut for reference return types
                     let expr = if let Some(CppType::Reference { is_const, .. }) =
                         &self.current_return_type
@@ -20149,6 +20159,14 @@ impl AstCodeGen {
                             } else {
                                 args[0].clone()
                             }
+                        } else if self.generated_enums.contains(&struct_name) {
+                            // Enum construction: C++ allows constructing enums from integers
+                            // Use transmute since Rust enums can't be constructed from raw values
+                            if num_args == 0 {
+                                format!("unsafe {{ std::mem::transmute::<i32, {}>(0) }}", struct_name)
+                            } else {
+                                format!("unsafe {{ std::mem::transmute::<i32, {}>({} as i32) }}", struct_name, args[0])
+                            }
                         } else if struct_name == "_" && num_args == 1 {
                             // Special case: auto-typed CXXConstructExpr with single argument that
                             // wasn't caught by earlier patterns. Don't generate _::new_1() - just
@@ -21144,8 +21162,25 @@ impl AstCodeGen {
                 }
             }
             _ => {
-                // Log diagnostic for unknown node types
+                // Handle specific Unknown node types
                 if let ClangNodeKind::Unknown(kind_str) = &node.kind {
+                    // BuiltinBitCastExpr: C++ __builtin_bit_cast(TargetType, value)
+                    // Maps to Rust's std::mem::transmute(value)
+                    if kind_str == "BuiltinBitCastExpr" {
+                        // Children: TypeRef (target type) + expression (value)
+                        // Filter out TypeRef children to get the value expression
+                        let value_children: Vec<&ClangNode> = node.children.iter()
+                            .filter(|c| !matches!(&c.kind, ClangNodeKind::Unknown(s) if s.starts_with("TypeRef")))
+                            .collect();
+                        if let Some(value_node) = value_children.first() {
+                            let value = self.expr_to_string(value_node);
+                            return format!("unsafe {{ std::mem::transmute({}) }}", value);
+                        } else if !node.children.is_empty() {
+                            let value = self.expr_to_string(&node.children[0]);
+                            return format!("unsafe {{ std::mem::transmute({}) }}", value);
+                        }
+                    }
+
                     self.log_diagnostic(
                         "Unknown node",
                         &format!(
