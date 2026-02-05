@@ -1198,12 +1198,10 @@ impl AstCodeGen {
             return true;
         }
         // fill/data methods with wrong signatures
-        if (generated.contains("pub fn fill(") && generated.contains("-> std::ffi::c_void"))
-            || (generated.contains("pub fn data(&mut self)") && generated.contains("{\n"))
+        // Patterns with `-> std::ffi::c_void` return type are now caught by has_cvoid_misuse.
+        // Keep only the empty-body data() methods and c_void-pointer variants.
+        if (generated.contains("pub fn data(&mut self)") && generated.contains("{\n"))
             || (generated.contains("pub fn data_1(&mut self)") && generated.contains("{\n"))
-            || (generated.contains("pub fn data(") && generated.contains("return unsafe { (*self)") && generated.contains("-> std::ffi::c_void"))
-            || (generated.contains("pub fn data_1(") && generated.contains("-> std::ffi::c_void"))
-            || (generated.contains("pub fn fill_1(") && generated.contains("__ch: std::ffi::c_void)") && generated.contains("-> std::ffi::c_void"))
         {
             return true;
         }
@@ -1237,10 +1235,7 @@ impl AstCodeGen {
         if generated.contains(".__keep_") {
             return true;
         }
-        // c_void + &mut
-        if generated.contains("c_void + &mut") {
-            return true;
-        }
+        // c_void + &mut — now caught by has_cvoid_misuse (bare c_void in non-pointer context)
         // __tie_ field (stream tie pointer)
         if generated.contains(".__tie_") {
             return true;
@@ -1478,8 +1473,9 @@ impl AstCodeGen {
             || (generated.contains(".do_widen(") && generated.contains(", __to)"))
             || (generated.contains(".do_narrow(") && generated.contains(", __to)"))
             // Exception constructors with wrong types
-            || (generated.contains("logic_error::new_1(__s)") && (generated.contains("__s: *const i8") || generated.contains("__s: &std::ffi::c_void")))
-            || (generated.contains("runtime_error::new_1(__s)") && (generated.contains("__s: *const i8") || generated.contains("__s: &std::ffi::c_void")))
+            // Exception constructors with wrong types (&std::ffi::c_void case now caught by has_cvoid_misuse)
+            || (generated.contains("logic_error::new_1(__s)") && generated.contains("__s: *const i8"))
+            || (generated.contains("runtime_error::new_1(__s)") && generated.contains("__s: *const i8"))
             // __builtin_is* with f32 instead of f64
             || (generated.contains("return __builtin_isfinite(__x)") && generated.contains("__x: f32"))
             || (generated.contains("return __builtin_isinf(__x)") && generated.contains("__x: f32"))
@@ -1536,8 +1532,7 @@ impl AstCodeGen {
             // wstring missing methods
             || (generated.contains("wstring::new_3(") && generated.contains("__s.data()"))
             || (generated.contains("wstring::new_0()") && generated.contains("__to_wstring"))
-            // c_str on c_void
-            || (generated.contains("__s.c_str()") && generated.contains("__s: &std::ffi::c_void"))
+            // c_str on c_void — &std::ffi::c_void is now caught by has_cvoid_misuse
             // pthread_key_delete needs unsafe
             || (generated.contains("pthread_key_delete(__key)") && !generated.contains("unsafe { pthread_key_delete"))
             // _M_refcount through & reference
