@@ -1208,6 +1208,8 @@ impl AstCodeGen {
             || generated.contains("__stoa_extern__C")
             // __gv___s: parameter __s misresolved as global variable reference
             || generated.contains("__gv___s")
+            // todo!() placeholder in generated code
+            || generated.contains("todo!(")
     }
 
     /// Check 5b: Detect bad syntax that requires context (rust_name or function signature).
@@ -1664,7 +1666,7 @@ impl AstCodeGen {
             || Self::has_undeclared_variables(generated)
             || Self::has_unmapped_function_calls(generated)
             || Self::has_stdlib_internal_bugs(generated)
-            || generated.contains("todo!(")
+            // (todo!( now in has_bad_syntax)
             || generated.contains("._M_")
             // Only rollback __tree_ access if struct doesn't have __tree_ field
             || (generated.contains(".__tree_") && !rust_name.starts_with("std_map_")
