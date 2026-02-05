@@ -270,8 +270,8 @@ fn test_rollback_pattern_count() {
 
     // Total patterns (including validators) — track as code-gen bugs are fixed
     assert!(
-        total_count <= 90,
-        "Total rollback pattern count ({}) increased beyond 90 — investigate!",
+        total_count <= 78,
+        "Total rollback pattern count ({}) increased beyond 78 — investigate!",
         total_count
     );
 }

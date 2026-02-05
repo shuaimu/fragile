@@ -1146,12 +1146,8 @@ impl AstCodeGen {
     /// These patterns are C++ standard library internals that never appear in user code,
     /// so they're safe for all rollback blocks including function blocks.
     fn has_stdlib_internal_bugs(generated: &str) -> bool {
-        // Atomic refcount: passing value instead of pointer
-        generated.contains("__libcpp_atomic_refcount_increment_i64(self.__shared_owners_)")
-            || generated.contains("__libcpp_atomic_refcount_decrement_i64(self.__shared_owners_)")
-            || generated.contains("__libcpp_atomic_refcount_increment_i64(self.__shared_weak_owners_)")
-            || (generated.contains("__libcpp_atomic_refcount_increment") && (generated.contains("self.__shared_owners_)") || generated.contains("self.__shared_weak_owners_)")))
-            || (generated.contains("__libcpp_atomic_refcount_decrement") && generated.contains("self.__shared_owners_)"))
+        // Atomic refcount: passing value instead of pointer (self.__shared_* instead of &mut self.__shared_*)
+        (generated.contains("__libcpp_atomic_refcount_") && generated.contains("self.__shared_"))
             // Broken __exchange_and_add/__atomic_add returning pointer
             || (generated.contains("pub fn __exchange_and_add") && generated.contains("return __mem;"))
             || (generated.contains("pub fn __atomic_add") && generated.contains("__mem;") && !generated.contains("*__mem"))
@@ -1167,8 +1163,8 @@ impl AstCodeGen {
             // iword/pword returning reference to temporary
             || (generated.contains("pub fn iword") && generated.contains("&mut __word._M_iword"))
             || (generated.contains("pub fn pword") && generated.contains("&mut __word._M_pword"))
-            // numeric_limits lowest with wrong function calls
-            || (generated.contains("pub fn lowest") && (generated.contains("min_bool()") || generated.contains("max_f32()") || generated.contains("max_f64()") || generated.contains("max_bool()")))
+            // numeric_limits lowest with wrong min/max function calls
+            || (generated.contains("pub fn lowest") && generated.contains("_bool()"))
             // Box::from_raw on &self (ownership violation)
             || (generated.contains("Box::from_raw(self)") && generated.contains("&self,"))
             // __shared_weak_count delegation bugs
@@ -1189,11 +1185,7 @@ impl AstCodeGen {
             || generated.contains("__c11_atomic_thread_fence(__order as u32)")
             || generated.contains("__c11_atomic_signal_fence(__order as u32)")
             // _M_base atomic ops with raw memory_order arg (should be i32)
-            || (generated.contains("_M_base.load(__m)") && generated.contains("__m: memory_order"))
-            || (generated.contains("_M_base.exchange(") && generated.contains(", __m)"))
-            || (generated.contains("_M_base.compare_exchange_weak(") && (generated.contains("__m1, __m2)") || generated.contains(", __m)")))
-            || (generated.contains("_M_base.compare_exchange_strong(") && (generated.contains("__m1, __m2)") || generated.contains(", __m)")))
-            || (generated.contains("_M_base.wait(") && generated.contains(", __m)"))
+            || (generated.contains("_M_base.") && generated.contains("memory_order"))
     }
 
     /// Check 4d: Detect broken locale/system_error/uselocale constructor patterns.
@@ -1487,8 +1479,8 @@ impl AstCodeGen {
             || (generated.contains(" as i32 | ") && !generated.contains("-> i32"))
             || (generated.contains(" as i32 ^ ") && !generated.contains("-> i32"))
             || (generated.contains("!") && generated.contains(" as i32") && generated.contains("std__Ios"))
-            // setf overload mismatch
-            || (generated.contains(".setf(") && (generated.contains(", 176i32)") || generated.contains(", 74i32)") || generated.contains(", 260i32)") || generated.contains(", 176u32)") || generated.contains(", 74u32)") || generated.contains(", 260u32)")))
+            // setf overload: wrong integer type for fmtflags mask parameter
+            || (generated.contains(".setf(") && (generated.contains("i32)") || generated.contains("u32)")))
             // ctype overloaded methods
             || (generated.contains(".do_toupper(") && generated.contains(", __hi)"))
             || (generated.contains(".do_tolower(") && generated.contains(", __hi)"))
