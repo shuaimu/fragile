@@ -1174,6 +1174,44 @@ impl AstCodeGen {
             || (generated.contains("pub fn use_count") && generated.contains("__base.use_count()"))
     }
 
+    /// Check 4c: Detect memory_order type system bugs (transmute, enum-as-struct, bitwise ops).
+    /// Safe for all blocks — memory_order is a C++ stdlib internal type.
+    fn has_bad_memory_order(generated: &str) -> bool {
+        // memory_order transmute (should use named constants, not transmute)
+        (generated.contains("transmute::<i32, memory_order>"))
+            // memory_order with bitwise ops (C++ allows bitwise on enum, Rust doesn't)
+            || (generated.contains(".op_bitand(") && generated.contains("memory_order"))
+            || (generated.contains(".op_bitor(") && generated.contains("memory_order"))
+            // atomic fence with wrong u32 cast
+            || generated.contains("__c11_atomic_thread_fence(__order as u32)")
+            || generated.contains("__c11_atomic_signal_fence(__order as u32)")
+            // _M_base atomic ops with raw memory_order arg (should be i32)
+            || (generated.contains("_M_base.load(__m)") && generated.contains("__m: memory_order"))
+            || (generated.contains("_M_base.exchange(") && generated.contains(", __m)"))
+            || (generated.contains("_M_base.compare_exchange_weak(") && (generated.contains("__m1, __m2)") || generated.contains(", __m)")))
+            || (generated.contains("_M_base.compare_exchange_strong(") && (generated.contains("__m1, __m2)") || generated.contains(", __m)")))
+            || (generated.contains("_M_base.wait(") && generated.contains(", __m)"))
+    }
+
+    /// Check 4d: Detect broken locale/system_error/uselocale constructor patterns.
+    /// Safe for all blocks — these are C++ stdlib internal types.
+    fn has_broken_locale_constructors(generated: &str) -> bool {
+        // locale constructor __base field
+        generated.contains("__base: locale::new_")
+            // system_error wrong inheritance/types
+            || (generated.contains("system_error::new_2(") && generated.contains("__base: system_error"))
+            || (generated.contains("system_error::new_2(") && generated.contains("__what)") && generated.contains("__what: *const i8"))
+            || (generated.contains("__base: system_error::new_2(") && generated.contains("__what: *const i8"))
+            // uselocale pointer type bugs
+            || (generated.contains("uselocale(__loc)") && generated.contains("&mut *mut c_void"))
+            || (generated.contains("uselocale(__loc)") && generated.contains("__loc: &mut"))
+            // __mbstate_t wrong constructor
+            || generated.contains("__mbstate_t::new_1(1)")
+            // exception constructors with wrong *const i8
+            || (generated.contains("logic_error::new_1(__s)") && generated.contains("__s: *const i8"))
+            || (generated.contains("runtime_error::new_1(__s)") && generated.contains("__s: *const i8"))
+    }
+
     /// Check 5: Detect bad syntax patterns in generated code.
     /// Split into universal (safe for all blocks including function) and
     /// operator patterns (only safe for method/template/libtooling/constructor blocks).
@@ -1321,6 +1359,8 @@ impl AstCodeGen {
             || Self::has_unmapped_function_calls(generated)
             || Self::has_bad_syntax(generated)
             || Self::has_stdlib_internal_bugs(generated)
+            || Self::has_bad_memory_order(generated)
+            || Self::has_broken_locale_constructors(generated)
             || Self::has_bad_syntax_in_context(generated, rust_name)
     }
 
@@ -1334,6 +1374,8 @@ impl AstCodeGen {
             || Self::has_unmapped_function_calls(generated)
             || Self::has_bad_syntax(generated)
             || Self::has_stdlib_internal_bugs(generated)
+            || Self::has_bad_memory_order(generated)
+            || Self::has_broken_locale_constructors(generated)
             // fn_template-specific patterns
             || (generated.contains("hermite_u32(") && generated.contains("__x as f64)"))
             // (atomic refcount and use_count now in has_stdlib_internal_bugs)
@@ -1421,10 +1463,12 @@ impl AstCodeGen {
             || Self::has_stdlib_internal_bugs(generated)
             || Self::has_bad_syntax_universal(generated)
             || Self::has_undeclared_variables_universal(generated)
+            || Self::has_bad_memory_order(generated)
+            || Self::has_broken_locale_constructors(generated)
         {
             return true;
         }
-        // Function-specific bad syntax not in has_bad_syntax_universal
+        // Function-specific bad syntax not in shared validators
         if generated.contains("[__waiter_pool_base; 16] = __ct")
             || generated.contains("__atomic_always_lock_free(0, 0)")
         {
@@ -1449,10 +1493,7 @@ impl AstCodeGen {
             || (generated.contains(".do_tolower(") && generated.contains(", __hi)"))
             || (generated.contains(".do_widen(") && generated.contains(", __to)"))
             || (generated.contains(".do_narrow(") && generated.contains(", __to)"))
-            // Exception constructors with wrong types
-            // Exception constructors with wrong types (&std::ffi::c_void case now caught by has_cvoid_misuse)
-            || (generated.contains("logic_error::new_1(__s)") && generated.contains("__s: *const i8"))
-            || (generated.contains("runtime_error::new_1(__s)") && generated.contains("__s: *const i8"))
+            // (exception constructors now in has_broken_locale_constructors)
             // (__builtin_is* f32/f64 now fixed with generic __FloatClassify trait)
             // (__exchange_and_add/__atomic_add now in has_stdlib_internal_bugs)
             // pthread_cond_timedwait wrong type
@@ -1463,10 +1504,7 @@ impl AstCodeGen {
             || (generated.contains("__wout.add(") && generated.contains("*__s.add(") && generated.contains("i32") && generated.contains("i8"))
             // (if __refs { 1 } with u64 now fixed by int-to-bool conversion in ConditionalOperator)
             // (Box::from_raw on &self now in has_stdlib_internal_bugs)
-            // system_error wrong inheritance
-            || (generated.contains("system_error::new_2(") && generated.contains("__base: system_error"))
-            // uselocale pointer type
-            || (generated.contains("uselocale(__loc)") && generated.contains("&mut *mut c_void"))
+            // (system_error and uselocale now in has_broken_locale_constructors)
             // hash functions wrong type
             || (generated.contains("pub fn __hash") && generated.contains("-> u64") && generated.contains(">> "))
             || (generated.contains("pub fn hash_code") && generated.contains("wrapping_mul(0x9e3779b9)"))
@@ -1478,8 +1516,7 @@ impl AstCodeGen {
             || (generated.contains("impl Drop for sentry") && generated.contains("_dependent_type::new_"))
             // _M_os._unnamed
             || (generated.contains("_M_os._unnamed") && generated.contains("_unnamed"))
-            // locale constructor __base field
-            || (generated.contains("__base: locale::new_") && generated.contains("pub fn new_"))
+            // (locale constructor now in has_broken_locale_constructors)
             // (iword/pword now in has_stdlib_internal_bugs)
             // (vtable patterns dead: ctype/collate_byname types skipped by is_broken_method_type)
             // ((__hi != __lo) != 0 now fixed by int-to-bool conversion)
@@ -1496,11 +1533,8 @@ impl AstCodeGen {
             || (generated.contains("self._M_narrow[") && generated.contains("&self,"))
             // equivalent wrong pointer type
             || (generated.contains(".equivalent(") && generated.contains("&*__rhs)"))
-            // system_error wrong __what type
-            || (generated.contains("system_error::new_2(") && generated.contains("__what)") && generated.contains("__what: *const i8"))
-            // memory_order with bitwise ops
-            || (generated.contains(".op_bitand(") && generated.contains("memory_order"))
-            || (generated.contains(".op_bitor(") && generated.contains("memory_order"))
+            // (system_error __what now in has_broken_locale_constructors)
+            // (memory_order bitwise ops now in has_bad_memory_order)
             // (__cmpexch_failure_order2 dead: in is_broken_function skip list)
             // (atomic_flag_wait/clear dead: in is_broken_function skip list)
             // (swap_thread_thread dead: in is_broken_function skip list)
@@ -1511,8 +1545,7 @@ impl AstCodeGen {
             // (return 1 && __cxx_atomic_load now in has_stdlib_internal_bugs)
             // backoff results
             || (generated.contains("-> std___backoff_results") && generated.contains("return __continue_poll"))
-            // fetch_add_i32 memory_order
-            || (generated.contains("fetch_add_i32(") && generated.contains("transmute::<i32, memory_order>"))
+            // (fetch_add memory_order now in has_bad_memory_order)
             // stop_token
             || (generated.contains("stop_token::new_1(") && generated.contains("self._M_state"))
             || (generated.contains("__state.clone()") && generated.contains("_M_state: "))
@@ -1546,6 +1579,8 @@ impl AstCodeGen {
             || Self::has_bad_syntax(generated)
             || Self::has_undeclared_variables(generated)
             || Self::has_stdlib_internal_bugs(generated)
+            || Self::has_bad_memory_order(generated)
+            || Self::has_broken_locale_constructors(generated)
         {
             return true;
         }
@@ -1568,22 +1603,14 @@ impl AstCodeGen {
             || generated.contains("_Hash_impl::hash_u64(")
             // atomic_flag op_assign
             || (generated.contains("_M_base.op_assign(") && generated.contains("-> bool"))
-            // atomic memory_order transmute
-            || (generated.contains("_M_base.load(") && generated.contains("transmute::<i32, memory_order>"))
-            || (generated.contains("_M_base.store(") && generated.contains("transmute::<i32, memory_order>"))
-            || (generated.contains("_M_base.exchange(") && generated.contains("transmute::<i32, memory_order>"))
+            // (atomic memory_order transmute now in has_bad_memory_order)
             // (if __old { 1 } with int now fixed by int-to-bool conversion in ConditionalOperator)
             || (generated.contains("__atomic_wait_address") && generated.contains("bool, || &self"))
             // atomic test_and_set
             || (generated.contains("return __v == 1;") && generated.contains("pub fn test"))
             // __atomic_base_bool store
             || (generated.contains("_M_base.store(") && generated.contains("__m)"))
-            // atomic_flag memory_order passing
-            || (generated.contains("_M_base.load(__m)") && generated.contains("__m: memory_order"))
-            || (generated.contains("_M_base.exchange(") && generated.contains(", __m)"))
-            || (generated.contains("_M_base.compare_exchange_weak(") && (generated.contains("__m1, __m2)") || generated.contains(", __m)")))
-            || (generated.contains("_M_base.compare_exchange_strong(") && (generated.contains("__m1, __m2)") || generated.contains(", __m)")))
-            || (generated.contains("_M_base.wait(") && generated.contains(", __m)"))
+            // (atomic_flag memory_order passing now in has_bad_memory_order)
             // numeric_limits __float128
             || (generated.contains("_S_1pm4088(") && generated.contains("numeric_limits::_S_4p("))
             || (generated.contains("_S_1pm16352(") && generated.contains("numeric_limits::_S_4p("))
@@ -1614,9 +1641,7 @@ impl AstCodeGen {
             || (generated.contains("pub fn __atomic_contention_address") && generated.contains("addressof(__a.__a_)"))
             // hash op_call u32 XOR
             || (generated.contains("pub fn op_call") && generated.contains("__u.__s.__a ^"))
-            // __c11_atomic fences u32
-            || generated.contains("__c11_atomic_thread_fence(__order as u32)")
-            || generated.contains("__c11_atomic_signal_fence(__order as u32)")
+            // (__c11_atomic fences now in has_bad_memory_order)
             // op_call backoff results
             || (generated.contains("pub fn op_call") && generated.contains("-> std___backoff_results") && generated.contains("__continue_poll"))
             // (atomic refcount, use_count, __shared_weak_count now in has_stdlib_internal_bugs)
@@ -1635,17 +1660,12 @@ impl AstCodeGen {
             || Self::has_unmapped_function_calls(generated)
             || Self::has_bad_syntax(generated)
             || Self::has_stdlib_internal_bugs(generated)
+            || Self::has_broken_locale_constructors(generated)
         {
             return true;
         }
-        // (&_V2::system/generic_category and Box::from_raw on &self now in has_stdlib_internal_bugs)
-        // (if __refs { 1 } with u64 now fixed by int-to-bool conversion in ConditionalOperator)
-        generated.contains("__base: locale::new_")
-            || (generated.contains("__base: system_error::new_2(") && generated.contains("__what: *const i8"))
-            // (__base_type::new_ now in has_undeclared_variables)
-            || generated.contains("__mbstate_t::new_1(1)")
-            || (generated.contains("uselocale(__loc)") && generated.contains("__loc: &mut"))
-            // (__gv___s constructor patterns now in has_bad_syntax)
+        // All constructor-specific patterns moved to shared validators
+        false
     }
 
     /// Unified validation for libtooling-generated method bodies.
@@ -1657,7 +1677,8 @@ impl AstCodeGen {
             || Self::has_undeclared_variables(generated)
             || Self::has_unmapped_function_calls(generated)
             || Self::has_stdlib_internal_bugs(generated)
-            // (todo!( now in has_bad_syntax)
+            || Self::has_bad_memory_order(generated)
+            || Self::has_broken_locale_constructors(generated)
             || generated.contains("._M_")
             // Only rollback __tree_ access if struct doesn't have __tree_ field
             || (generated.contains(".__tree_") && !rust_name.starts_with("std_map_")
