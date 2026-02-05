@@ -263,37 +263,36 @@ Semantic mapping would be incorrect. Absolute transpilation preserves exact C++ 
 
 The current implementation uses forbidden patterns (see `docs/dev/wrong.md`). These must be removed and replaced with proper fixes.
 
-- [~] **27.8.1** Remove rollback patterns from ast_codegen.rs (140 `|| generated.contains(` + 10 `|| (rust_name...` → 0) ⚠️ IN PROGRESS
+- [~] **27.8.1** Remove rollback patterns from ast_codegen.rs (140 `|| generated.contains(` + 10 `|| (rust_name...` → 0) ⚠️ SKIP-LISTING EXHAUSTED
 
-  **Status (2026-02-04)**: Primary template detection guard implemented (Option 2 from blocking
-  issue). This skips impl block generation for types with unresolved template parameters, preventing
-  broken methods from being generated in the first place. Reduced from 201 to 195 patterns.
+  **Status (2026-02-04)**: Skip-listing approach has been exhausted at 140 simple patterns.
+  Reduced from 210 → 140 via: primary template guard, iterator skip list, broken fn template
+  skip list, broken function skip list, broken method type skip list (threading, semaphore,
+  condvar, mutex, locale types), and broken swap function skip list.
 
-  **Progress**:
-  - Extended `has_unresolved_template_placeholder()` to detect 15+ additional template param names
-    (`__Iter`, `__Sent`, `__Rp`, `__Mutex`, `__Cp`, `__Rep`, `__Period`, `__Clock`, `__Duration`,
-    `__State`, `__Size`, `__Kind`, `__Container`, `__NodePtr`, `__ConstNodePtr`, `__Iterator`)
-  - Added guard in `generate_template_impl()` that skips impl blocks for primary template types
-  - Container types (std_map_, std_list_, etc.) exempt from guard to preserve stub methods
-  - Removed 6 dead rollback patterns that were only reachable for primary template types
-  - Fixed `test_map_compiles_successfully` (was previously failing)
+  **Why 140 is the floor for skip-listing**: The remaining 140 patterns are genuinely generic
+  safety nets that fire across many different types/functions. They catch:
+  - Generic field access issues (`._M_current`, `._M_t`, `._M_impl`, etc.)
+  - c_void placeholder type issues (`c_void::new_`, `*c_void`, `c_void + `)
+  - Unresolved template parameters (`_unnamed`, `_Pn`, `_Qn`, `__lo1`, etc.)
+  - Undeclared variable references (`__x,`, `__y,`, `: __d`)
+  - Type mismatches (`i8).op_add(`, `*_TreeIterator`, `return _Size;`)
 
-  **Remaining**: ~195 patterns still needed for:
-  - ~31 `._M_*` patterns: libstdc++ internal fields on concrete iterator types
-  - ~100+ patterns: Concrete type method generation issues (field access, c_void types,
-    signature mismatches, undefined functions)
-  - Patterns protect concrete instantiation types where methods are generated but broken
+  Each pattern is needed for multiple different functions/types - no single type or function
+  skip would make any of these patterns dead. The 17 duplicate patterns (same string appears
+  in 2-3 rollback blocks) can't be consolidated because each block independently checks its
+  own generated code.
+
+  **Further reduction requires code-gen bug fixes** (not skip-listing):
+  - Fix c_void placeholder resolution (~17 patterns): improve `find_matching_specialization()`
+  - Fix enum constructor generation (~10 patterns): `memory_order::new_0()` etc.
+  - Fix invalid dereference generation (~14 patterns): `*0`, `*(*self)`, `*1`
+  - Fix undeclared variable generation (~11 patterns): improve `generate_fn_template_body()`
+  - These are blocked on deeper code-gen improvements (subtasks 27.8.1.2-27.8.1.5)
 
   **Original blocking issue** (partially resolved):
   1. Have LibTooling extract fields from ALL template instantiations (not just explicit ones)
   2. ~~Or, detect at code-gen time whether a type is instantiated vs primary template~~ ✅ DONE
-
-  **Analysis**: The 204 patterns break down into these categories:
-  - ~37 patterns: Internal field access (`._M_*`, `.__ptr_`, `.__val_`, etc.)
-  - ~16 patterns: c_void type issues (`c_void +`, `+ c_void`)
-  - ~10 patterns: vtable assignment issues
-  - ~8 patterns: Builtin/libcpp intrinsic calls
-  - ~133 patterns: Other template/type issues
 
   **Subtasks** (each ≤500 LOC, do in order):
 
@@ -552,6 +551,18 @@ The current implementation uses forbidden patterns (see `docs/dev/wrong.md`). Th
         template placeholders) that fire across many types - cannot be eliminated by skip-listing
       - Rollback count: 145 → 140 (`|| generated.contains(` metric)
       - All 207 tests passing
+
+    - [x] **27.8.1.6.14** Analysis: skip-listing approach exhausted at 140 patterns ✅ (2026-02-04)
+      - Comprehensive analysis of all 140 remaining simple patterns across 6 rollback blocks:
+        generate_template_impl (54), generate_fn_template_instance (29), generate_function (24),
+        generate_method (23), generate_libtooling_only_methods (6+2), variadic (1+1)
+      - 17 patterns appear as duplicates across 2-3 rollback blocks (needed in each independently)
+      - All patterns are generic safety nets - no type/function skip would make them dead
+      - Undeclared variable patterns (_Pn, _Qn, __lo1, etc.) come from ratio arithmetic,
+        locale do_compare, chrono duration - too many different templates to skip-list
+      - Safety net patterns (sem_init, __atomic_wait, etc.) intentionally kept for function bodies
+      - Conclusion: further reduction requires fixing code-gen bugs, not more skip-listing
+      - No code changes - analysis only
 
 - [~] **27.8.2** Remove stub method injections ⚠️ PARTIALLY BLOCKED
   - Location: ast_codegen.rs lines ~3920-3970
