@@ -1014,40 +1014,61 @@ impl AstCodeGen {
         false
     }
 
-    /// Check 1: Detect c_void placeholder misuse in generated code.
+    /// Structural check: detect c_void in any non-pointer context.
     /// c_void is used as a placeholder for unresolved template parameters.
-    /// It should only appear as *mut c_void or *const c_void pointer types,
-    /// never in arithmetic, clone, constructors, or non-pointer positions.
+    /// It is ONLY valid as `*mut c_void` or `*const c_void` (with optional
+    /// `std::ffi::` prefix), or as part of a larger identifier (e.g. `std_ffi_c_void`).
+    /// Any other standalone occurrence indicates a type resolution failure.
     fn has_cvoid_misuse(generated: &str) -> bool {
-        // c_void in arithmetic
-        generated.contains("+ c_void")
-            || generated.contains("c_void + ")
-            // c_void clone (can't clone void)
-            || generated.contains("c_void.clone()")
-            || (generated.contains(": std::ffi::c_void)") && generated.contains(".clone()"))
-            // c_void constructor (can't construct void)
-            || generated.contains("c_void::new_")
-            || generated.contains("c_void.op_")
-            // Dereference void
-            || generated.contains("*c_void")
-            // c_void indexing
-            || (generated.contains("c_void") && generated.contains("[") && generated.contains("]"))
-            // Unit pointer (failed type inference)
-            || generated.contains("*mut ()")
-            // Unresolved char pointer type
-            || generated.contains("*const _CP")
-            // Integer to c_void type error
-            || generated.contains("{integer}` to `c_void")
-            // c_void pointer-to-pointer cast
-            || generated.contains("*const c_void` to `*const c_void")
-            // c_void as non-pointer return type with actual return value
-            || (generated.contains("-> std::ffi::c_void") && generated.contains("return ") && !generated.contains("return;"))
-            // c_void as non-pointer return type with todo body
-            || (generated.contains("-> std::ffi::c_void") && generated.contains("todo!("))
-            // c_void as non-pointer parameter type (not behind a pointer)
-            || generated.contains(": std::ffi::c_void)")
-            || generated.contains(": &std::ffi::c_void,")
-            || generated.contains(": &mut std::ffi::c_void,")
+        let bytes = generated.as_bytes();
+        let mut idx = 0;
+        while idx + 6 <= bytes.len() {
+            if let Some(pos) = generated[idx..].find("c_void") {
+                let abs_pos = idx + pos;
+                idx = abs_pos + 6; // len("c_void")
+
+                // Skip if c_void is part of a larger identifier (e.g. std_ffi_c_void)
+                if abs_pos > 0 {
+                    let prev = bytes[abs_pos - 1];
+                    if prev.is_ascii_alphanumeric() || prev == b'_' {
+                        continue; // Part of a larger identifier
+                    }
+                }
+                // Skip if followed by alphanumeric (e.g. c_void_something)
+                if idx < bytes.len() && (bytes[idx].is_ascii_alphanumeric() || bytes[idx] == b'_') {
+                    continue;
+                }
+
+                // Check if this is part of `std::ffi::c_void`
+                let before = &generated[..abs_pos];
+                if before.ends_with("std::ffi::") {
+                    // Check what precedes `std::ffi::`
+                    let prefix = generated[..abs_pos - "std::ffi::".len()].trim_end();
+                    if prefix.ends_with("*mut") || prefix.ends_with("*const") {
+                        continue; // Valid: *mut std::ffi::c_void
+                    }
+                    if prefix.ends_with("use") || prefix.ends_with("=") {
+                        continue; // Valid: use std::ffi::c_void, type alias
+                    }
+                    // Invalid: bare std::ffi::c_void in non-pointer context
+                    return true;
+                }
+
+                // Check for bare `c_void` (without std::ffi:: prefix)
+                let before_trimmed = before.trim_end();
+                if before_trimmed.ends_with("*mut") || before_trimmed.ends_with("*const") {
+                    continue; // Valid: *mut c_void, *const c_void
+                }
+
+                // Any other standalone occurrence of c_void is invalid
+                return true;
+            } else {
+                break;
+            }
+        }
+
+        // Unresolved char pointer type
+        generated.contains("*const _CP")
     }
 
     // has_invalid_field_access() and has_invalid_field_for_type() DELETED.
@@ -1323,37 +1344,12 @@ impl AstCodeGen {
     /// Returns true if the code should be rolled back (is invalid).
     /// NOTE: Uses only the patterns from the original fn_template rollback block.
     fn should_rollback_fn_template(generated: &str) -> bool {
-        // These were the exact patterns in the original fn_template block
-        generated.contains("_dependent_type::new_")
-            || generated.contains("_unnamed)")
-            || generated.contains("_unnamed,")
-            || generated.contains("._unnamed")
-            || generated.contains("_unnamed.clone()")
-            || generated.contains("- _unnamed")
-            || generated.contains("-> std::ffi::c_void")
-            || generated.contains(": std::ffi::c_void)")
-            || generated.contains(": &std::ffi::c_void,")
-            || generated.contains(": &mut std::ffi::c_void,")
-            || generated.contains("__stoa_extern__C")
-            || generated.contains("(-__errno_location())")
-            || generated.contains(") && 11i32")
-            || generated.contains(") && 4i32")
-            || generated.contains("_Pn)")
-            || generated.contains("_Qn)")
-            || generated.contains("__lo1)")
-            || generated.contains("__lo2)")
-            || generated.contains("__hi1)")
-            || generated.contains("__hi2)")
-            || generated.contains("__n0)")
-            || generated.contains("__n1)")
-            || generated.contains("__x,")
-            || generated.contains("__y,")
-            || generated.contains(": __d")
-            || generated.contains("memory_order::new_0()")
-            || generated.contains(".op_bitand(")
-            || generated.contains("c_void::new_")
-            || generated.contains("c_void.op_")
-            || generated.contains("__bit_iterator<")
+        // Structural checks (shared with template_impl)
+        Self::has_cvoid_misuse(generated)
+            || Self::has_undeclared_variables(generated)
+            || Self::has_unmapped_function_calls(generated)
+            || Self::has_bad_syntax(generated)
+            // fn_template-specific patterns
             || (generated.contains("hermite_u32(") && generated.contains("__x as f64)"))
             || (generated.contains("__libcpp_atomic_refcount_increment") && (generated.contains("self.__shared_owners_)") || generated.contains("self.__shared_weak_owners_)")))
             || (generated.contains("__libcpp_atomic_refcount_decrement") && generated.contains("self.__shared_owners_)"))
@@ -1430,20 +1426,17 @@ impl AstCodeGen {
         if Self::has_uncalled_builtin_return(generated) {
             return true;
         }
-        // Direct patterns from the original function rollback block
+        // Only has_cvoid_misuse is safe for function blocks — c_void never appears in user code.
+        // Other structural checks (has_bad_syntax, has_unmapped_function_calls, etc.) contain
+        // patterns that match valid user code and are only safe for template_impl blocks.
+        if Self::has_cvoid_misuse(generated) {
+            return true;
+        }
+        // Patterns specific to function block (from the original rollback block)
         if generated.contains("_unnamed)")
             || generated.contains("_unnamed,")
             || generated.contains("._unnamed")
             || generated.contains("- _unnamed")
-        {
-            return true;
-        }
-        // c_void patterns from original block
-        if generated.contains("c_void::new_")
-            || generated.contains("c_void + ")
-            || generated.contains("*c_void")
-            || generated.contains("*_TreeIterator")
-            || (generated.contains("c_void") && generated.contains("[") && generated.contains("]"))
         {
             return true;
         }
@@ -1610,12 +1603,11 @@ impl AstCodeGen {
     /// Returns true if the code should be rolled back (is invalid).
     /// NOTE: Uses only the patterns from the original method rollback block.
     fn should_rollback_method(generated: &str) -> bool {
-        // Uncalled builtin returns
-        if Self::has_uncalled_builtin_return(generated) {
-            return true;
-        }
-        // c_void patterns from original method block
-        if generated.contains("c_void::new_") {
+        // Only has_cvoid_misuse is safe for method blocks — c_void never appears in user code.
+        // has_bad_syntax contains patterns that could match valid user code.
+        if Self::has_uncalled_builtin_return(generated)
+            || Self::has_cvoid_misuse(generated)
+        {
             return true;
         }
         // Bad syntax from original method block
@@ -1736,26 +1728,23 @@ impl AstCodeGen {
             || (generated.contains("exception_ptr::new_1(") && generated.contains("*__other"))
             // __tree __set
             || (generated.contains("pub fn __set(") && generated.contains("__gv___s"))
-            // op_index c_void offset
-            || (generated.contains("pub fn op_index") && generated.contains("self + ") && generated.contains("c_void"))
-            // Bool/int mixing
-            || generated.contains("&& 16i32 {")
-            || generated.contains("!__e && 16i32")
+            // (c_void patterns and bool/int mixing now handled by structural checks above)
     }
 
     /// Validation for constructor rollback in generate_method().
     /// Returns true if the code should be rolled back (is invalid).
     fn should_rollback_constructor(generated: &str) -> bool {
+        // Structural checks
+        if Self::has_cvoid_misuse(generated) {
+            return true;
+        }
         generated.contains("&_V2::system_category() as *const")
             || generated.contains("&_V2::generic_category() as *const")
             || (generated.contains("if __refs { 1 }") && generated.contains("__refs: u64"))
             || (generated.contains("Box::from_raw(self)") && generated.contains("&self,"))
             || generated.contains("__base: locale::new_")
             || (generated.contains("__base: system_error::new_2(") && generated.contains("__what: *const i8"))
-            || generated.contains("c_void::new_")
             || generated.contains("__base_type::new_")
-            || (generated.contains("logic_error::new_1(__s)") && generated.contains("__s: &std::ffi::c_void"))
-            || (generated.contains("runtime_error::new_1(__s)") && generated.contains("__s: &std::ffi::c_void"))
             || generated.contains("__mbstate_t::new_1(1)")
             || (generated.contains("uselocale(__loc)") && generated.contains("__loc: &mut"))
             || (generated.contains("::new_1(unsafe { __gv___s })") && generated.contains("__s:"))
@@ -1766,7 +1755,10 @@ impl AstCodeGen {
     /// Unified validation for libtooling-generated method bodies.
     /// Returns true if the code should be rolled back (is invalid).
     fn should_rollback_libtooling(generated: &str, rust_name: &str) -> bool {
-        generated.contains("todo!(")
+        // Structural checks
+        Self::has_cvoid_misuse(generated)
+            || Self::has_bad_syntax(generated)
+            || generated.contains("todo!(")
             || generated.contains("._M_")
             // Only rollback __tree_ access if struct doesn't have __tree_ field
             || (generated.contains(".__tree_") && !rust_name.starts_with("std_map_")
@@ -1774,8 +1766,6 @@ impl AstCodeGen {
                 && !rust_name.starts_with("std_multimap_")
                 && !rust_name.starts_with("std_multiset_"))
             || generated.contains(".__comp_")
-            || generated.contains("c_void")
-            || generated.contains("*0")
             // Unresolved function/constructor calls
             || generated.contains("_::new_")
             || generated.contains("piecewise_construct")
