@@ -1153,11 +1153,23 @@ bool ASTExporterVisitor::VisitClassTemplateSpecializationDecl(ClassTemplateSpeci
     std::vector<const void *> children;
 
     // Collect methods, fields, etc.
+    // Also recurse into anonymous struct/union members to capture fields
+    // from _LIBCPP_COMPRESSED_PAIR and similar macros that expand to
+    // anonymous structs containing the actual fields.
     for (auto *D : CTSD->decls()) {
         if (auto *MD = dyn_cast<CXXMethodDecl>(D)) {
             children.push_back(MD);
         } else if (auto *FD = dyn_cast<FieldDecl>(D)) {
             children.push_back(FD);
+        } else if (auto *RD = dyn_cast<RecordDecl>(D)) {
+            // Anonymous struct/union - flatten its fields into the parent
+            if (RD->isAnonymousStructOrUnion()) {
+                for (auto *InnerD : RD->decls()) {
+                    if (auto *InnerFD = dyn_cast<FieldDecl>(InnerD)) {
+                        children.push_back(InnerFD);
+                    }
+                }
+            }
         }
     }
 
@@ -1210,11 +1222,8 @@ void ASTExporterVisitor::ensureFieldTypeSpecializationsExported(
     if (!CTSD->hasDefinition())
         return;
 
-    for (auto *D : CTSD->decls()) {
-        auto *FD = dyn_cast<FieldDecl>(D);
-        if (!FD)
-            continue;
-
+    // Helper lambda to process a single FieldDecl's type for specialization export
+    auto processField = [this](FieldDecl *FD) {
         // Get the canonical type, stripping typedefs, elaborated types, etc.
         QualType FieldType = FD->getType();
         const Type *T = FieldType.getCanonicalType().getTypePtr();
@@ -1240,6 +1249,21 @@ void ASTExporterVisitor::ensureFieldTypeSpecializationsExported(
                 // markExported inside VisitClassTemplateSpecializationDecl prevents
                 // infinite recursion for self-referential types
                 VisitClassTemplateSpecializationDecl(FieldCTSD);
+            }
+        }
+    };
+
+    for (auto *D : CTSD->decls()) {
+        if (auto *FD = dyn_cast<FieldDecl>(D)) {
+            processField(FD);
+        } else if (auto *RD = dyn_cast<RecordDecl>(D)) {
+            // Recurse into anonymous struct/union members (e.g., _LIBCPP_COMPRESSED_PAIR)
+            if (RD->isAnonymousStructOrUnion()) {
+                for (auto *InnerD : RD->decls()) {
+                    if (auto *InnerFD = dyn_cast<FieldDecl>(InnerD)) {
+                        processField(InnerFD);
+                    }
+                }
             }
         }
     }

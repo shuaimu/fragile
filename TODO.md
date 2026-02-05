@@ -18,7 +18,7 @@ We just convert the fully-resolved AST to equivalent Rust code.
 **libc++ Transpilation Tests**: 8/8 passing (cstddef, cstdint, type_traits, initializer_list, vector, cstddef_compilation, iostream, thread)
 **Runtime Linking Tests**: 2/2 passing (FILE I/O, pthread)
 **Runtime Function Mapping Tests**: 1/1 passing
-**Total Tests**: 257 passing
+**Total Tests**: 209 passing (4 ignored)
 
 **Working**:
 - Simple functions with control flow (if/else, while, for, do-while, switch, recursion)
@@ -583,6 +583,24 @@ The current implementation uses forbidden patterns (see `docs/dev/wrong.md`). Th
     - **Foundation for**: Future stub struct replacement with real field layouts,
       and further rollback pattern reduction via code-gen fixes.
 
+- [x] **27.8.1.8** AST exporter: flatten anonymous struct fields from compressed pairs ✅ (2026-02-04)
+    - **Problem**: libc++'s `__tree` class stores fields via `_LIBCPP_COMPRESSED_PAIR` macro,
+      which expands to anonymous struct members. The AST exporter's
+      `VisitClassTemplateSpecializationDecl` and `ensureFieldTypeSpecializationsExported`
+      only iterated direct FieldDecl children, missing fields inside anonymous structs.
+      Result: `__tree` specialization only had 1 field (`__begin_node_`), missing
+      `__size_`, `__end_node_`, `__value_comp_`, `__node_alloc_`.
+    - **Fix (AstExporter.cpp)**:
+      1. In `VisitClassTemplateSpecializationDecl`: added else-if branch for `RecordDecl`
+         children that checks `isAnonymousStructOrUnion()` and flattens inner FieldDecls.
+      2. In `ensureFieldTypeSpecializationsExported`: refactored field processing into a
+         lambda and added anonymous struct recursion to process inner fields.
+    - **Result**: Specialization count increased from 117 to 126. `__tree` specialization
+      now has all fields: `__begin_node_`, `__end_node_`, `__size_`, `__value_comp_`,
+      `__node_alloc_` (plus compressed pair padding fields).
+    - **Foundation for**: Making `__tree` non-opaque (replacing `[u8; 64]` with real fields),
+      which would make `__tree::size()` return actual `__size_` instead of 0.
+
 - [~] **27.8.2** Remove stub method injections ⚠️ PARTIALLY BLOCKED
   - Location: ast_codegen.rs lines ~3920-3970
   - Stubs: `size() { 0 }`, `op_index() { null_mut() }`, `push_back() { }`, `new_0() { zeroed() }`
@@ -755,6 +773,8 @@ The current implementation uses forbidden patterns (see `docs/dev/wrong.md`). Th
     - `test_vector_basic_operations` - verifies vector stubs work
     - `test_map_compiles_successfully` - compilation sanity check
     - `test_rollback_pattern_count` - tracks rollback pattern usage (must stay <300)
+    - `test_map_field_type_specializations_exported` - verifies recursive specialization export
+    - `test_compressed_pair_fields_exported` - verifies anonymous struct field flattening
 
 - [~] **27.8.5** Metric: Rollback pattern count ⚠️ TRACKED
   - Track: `grep -c "|| generated.contains" crates/fragile-clang/src/ast_codegen.rs`
