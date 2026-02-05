@@ -1449,11 +1449,7 @@ impl AstCodeGen {
             // Exception constructors with wrong types (&std::ffi::c_void case now caught by has_cvoid_misuse)
             || (generated.contains("logic_error::new_1(__s)") && generated.contains("__s: *const i8"))
             || (generated.contains("runtime_error::new_1(__s)") && generated.contains("__s: *const i8"))
-            // __builtin_is* with f32 instead of f64
-            || (generated.contains("return __builtin_isfinite(__x)") && generated.contains("__x: f32"))
-            || (generated.contains("return __builtin_isinf(__x)") && generated.contains("__x: f32"))
-            || (generated.contains("return __builtin_isnan(__x)") && generated.contains("__x: f32"))
-            || (generated.contains("return __builtin_isnormal(__x)") && generated.contains("__x: f32"))
+            // (__builtin_is* f32/f64 now fixed with generic __FloatClassify trait)
             // (__exchange_and_add/__atomic_add now in has_stdlib_internal_bugs)
             // pthread_cond_timedwait wrong type
             || (generated.contains("fragile_pthread_cond_timedwait(") && generated.contains("__abs_timeout)"))
@@ -9305,15 +9301,18 @@ impl AstCodeGen {
         self.writeln("");
 
         // Float classification builtins
-        self.writeln("// Float classification builtins");
+        self.writeln("// Float classification builtins (type-generic: f32 and f64 variants)");
+        self.writeln("pub trait __FloatClassify { fn __is_normal(self) -> bool; fn __is_nan(self) -> bool; fn __is_infinite(self) -> bool; fn __is_finite(self) -> bool; }");
+        self.writeln("impl __FloatClassify for f64 { fn __is_normal(self) -> bool { self.is_normal() } fn __is_nan(self) -> bool { self.is_nan() } fn __is_infinite(self) -> bool { self.is_infinite() } fn __is_finite(self) -> bool { self.is_finite() } }");
+        self.writeln("impl __FloatClassify for f32 { fn __is_normal(self) -> bool { self.is_normal() } fn __is_nan(self) -> bool { self.is_nan() } fn __is_infinite(self) -> bool { self.is_infinite() } fn __is_finite(self) -> bool { self.is_finite() } }");
         self.writeln("#[inline]");
-        self.writeln("pub fn __builtin_isnormal(x: f64) -> bool { x.is_normal() }");
+        self.writeln("pub fn __builtin_isnormal(x: impl __FloatClassify) -> bool { x.__is_normal() }");
         self.writeln("#[inline]");
-        self.writeln("pub fn __builtin_isnan(x: f64) -> bool { x.is_nan() }");
+        self.writeln("pub fn __builtin_isnan(x: impl __FloatClassify) -> bool { x.__is_nan() }");
         self.writeln("#[inline]");
-        self.writeln("pub fn __builtin_isinf(x: f64) -> bool { x.is_infinite() }");
+        self.writeln("pub fn __builtin_isinf(x: impl __FloatClassify) -> bool { x.__is_infinite() }");
         self.writeln("#[inline]");
-        self.writeln("pub fn __builtin_isfinite(x: f64) -> bool { x.is_finite() }");
+        self.writeln("pub fn __builtin_isfinite(x: impl __FloatClassify) -> bool { x.__is_finite() }");
         self.writeln("");
 
         // f32 (float) builtins
