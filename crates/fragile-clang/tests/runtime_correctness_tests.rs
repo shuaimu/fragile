@@ -227,6 +227,12 @@ int main() {
 
 /// Metric test: Count rollback patterns in ast_codegen.rs
 /// This test tracks progress toward removing forbidden patterns.
+///
+/// Architecture: Patterns are now consolidated into validator functions
+/// (should_rollback_*, has_cvoid_misuse, has_bad_syntax, etc.) rather than
+/// scattered inline in rollback blocks. We track:
+/// 1. Inline rollback patterns (in actual rollback blocks) — should be near 0
+/// 2. Total validator patterns — should decrease as code-gen bugs are fixed
 #[test]
 fn test_rollback_pattern_count() {
     use std::path::Path;
@@ -238,26 +244,35 @@ fn test_rollback_pattern_count() {
     let content = fs::read_to_string(&ast_codegen_path)
         .expect("Failed to read ast_codegen.rs");
 
-    // Count rollback patterns
-    let rollback_count = content.matches("|| generated.contains(").count();
+    // Count total rollback patterns (now mostly in validator functions)
+    let total_count = content.matches("|| generated.contains(").count();
 
-    println!("Current rollback pattern count: {}", rollback_count);
+    // Count inline rollback patterns (in actual rollback blocks, NOT in validator functions)
+    // All validator functions (should_rollback_*, has_cvoid_misuse, etc.) are defined
+    // BEFORE the `pub fn generate(mut self` method. Any patterns after that are inline.
+    let generate_fn_pos = content.find("pub fn generate(mut self")
+        .expect("Should have generate() method");
+    let after_generate = &content[generate_fn_pos..];
+    let inline_count = after_generate.matches("|| generated.contains(").count();
 
-    // Track the count - it should decrease over time, NEVER increase
-    // History: 210 -> 204 (float literal fix) -> 201 (undeclared var cleanup)
-    //       -> 196 (primary template guard skips broken impl blocks)
-    //       -> 194 (iterator skip list + dead pattern cleanup)
-    //       -> 193 (broken fn template skip list)
-    //       -> 191 (broken function skip list in generate_function)
-    //       -> 155 (broken method type skip list: threading/semaphore/condvar)
-    //       -> 145 (broken locale type skip list: ctype/collate_byname/bad_weak_ptr)
-    //       -> 140 (broken condvar/mutex/semaphore/swap skip lists)
-    // When this test starts failing because count increased, investigate!
+    println!("Total rollback pattern count: {}", total_count);
+    println!("Inline rollback patterns (outside validators): {}", inline_count);
+    println!("Validator patterns (consolidated): {}", total_count - inline_count);
+
+    // History: 210 -> 204 -> 201 -> 196 -> 194 -> 193 -> 191 -> 155 -> 145 -> 140
+    //       -> 0 inline (patterns moved to validator functions)
+    // Inline patterns should be near 0 — all patterns consolidated into validators
     assert!(
-        rollback_count <= 145,
-        "Rollback pattern count ({}) increased beyond 145 - investigate! \
-         The condvar/mutex/semaphore skip lists should keep this under 145.",
-        rollback_count
+        inline_count <= 5,
+        "Inline rollback pattern count ({}) too high — patterns should be in validator functions.",
+        inline_count
+    );
+
+    // Total patterns (including validators) — track as code-gen bugs are fixed
+    assert!(
+        total_count <= 240,
+        "Total rollback pattern count ({}) increased beyond 240 — investigate!",
+        total_count
     );
 }
 

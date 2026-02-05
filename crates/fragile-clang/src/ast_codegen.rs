@@ -972,6 +972,816 @@ impl AstCodeGen {
         result
     }
 
+    // =========================================================================
+    // Generated code validation
+    // =========================================================================
+
+    /// Structural field validation: check if generated code references fields
+    /// that don't exist on the target struct. This replaces type-specific rollback
+    /// patterns (e.g., "unique_lock + .__ptr_") with a generic check using actual
+    /// field data from class_fields.
+    fn references_nonexistent_field(
+        generated: &str,
+        known_fields: &[(String, CppType)],
+    ) -> bool {
+        // Extract field names from known_fields
+        let field_names: HashSet<&str> = known_fields.iter().map(|(n, _)| n.as_str()).collect();
+
+        // Find all `self.FIELD` or `(*self).FIELD` access patterns in generated code
+        // Pattern: after "self)" or "self." followed by a dot and identifier
+        for fragment in generated.split("self)").skip(1) {
+            // After "(*self)" we expect ".field_name"
+            if let Some(rest) = fragment.strip_prefix('.') {
+                if let Some(field) = rest.split(|c: char| !c.is_alphanumeric() && c != '_').next() {
+                    if !field.is_empty() && field.starts_with('_')
+                        && !field_names.contains(field)
+                    {
+                        return true;
+                    }
+                }
+            }
+        }
+        // Also check "self.field" pattern (without dereference)
+        for fragment in generated.split("self.").skip(1) {
+            if let Some(field) = fragment.split(|c: char| !c.is_alphanumeric() && c != '_').next() {
+                if !field.is_empty() && field.starts_with('_')
+                    && !field_names.contains(field)
+                {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// Check 1: Detect c_void placeholder misuse in generated code.
+    /// c_void is used as a placeholder for unresolved template parameters.
+    /// It should only appear as *mut c_void or *const c_void pointer types,
+    /// never in arithmetic, clone, constructors, or non-pointer positions.
+    fn has_cvoid_misuse(generated: &str) -> bool {
+        // c_void in arithmetic
+        generated.contains("+ c_void")
+            || generated.contains("c_void + ")
+            // c_void clone (can't clone void)
+            || generated.contains("c_void.clone()")
+            || (generated.contains(": std::ffi::c_void)") && generated.contains(".clone()"))
+            // c_void constructor (can't construct void)
+            || generated.contains("c_void::new_")
+            || generated.contains("c_void.op_")
+            // Dereference void
+            || generated.contains("*c_void")
+            // c_void indexing
+            || (generated.contains("c_void") && generated.contains("[") && generated.contains("]"))
+            // Unit pointer (failed type inference)
+            || generated.contains("*mut ()")
+            // Unresolved char pointer type
+            || generated.contains("*const _CP")
+            // Integer to c_void type error
+            || generated.contains("{integer}` to `c_void")
+            // c_void pointer-to-pointer cast
+            || generated.contains("*const c_void` to `*const c_void")
+            // c_void as non-pointer return type with actual return value
+            || (generated.contains("-> std::ffi::c_void") && generated.contains("return ") && !generated.contains("return;"))
+            // c_void as non-pointer return type with todo body
+            || (generated.contains("-> std::ffi::c_void") && generated.contains("todo!("))
+            // c_void as non-pointer parameter type (not behind a pointer)
+            || generated.contains(": std::ffi::c_void)")
+            || generated.contains(": &std::ffi::c_void,")
+            || generated.contains(": &mut std::ffi::c_void,")
+    }
+
+    // has_invalid_field_access() and has_invalid_field_for_type() DELETED.
+    // Field validation is now structural: references_nonexistent_field() checks
+    // generated code against actual class_fields data. This eliminated 52
+    // string-matching rollback patterns.
+
+    /// Check 3: Detect undeclared variables from partial template instantiation.
+    /// Template-dependent expressions produce variable references without corresponding
+    /// VarDecl nodes.
+    fn has_undeclared_variables(generated: &str) -> bool {
+        // _unnamed placeholder values (not field declarations)
+        generated.contains("_unnamed)")
+            || generated.contains("_unnamed,")
+            || generated.contains("._unnamed")
+            || generated.contains("_unnamed.clone()")
+            || generated.contains("- _unnamed")
+            // Template parameter variables (ratio, locale, chrono templates)
+            || generated.contains("_Pn)")
+            || generated.contains("_Qn)")
+            // 128-bit math variables
+            || generated.contains("__lo1)")
+            || generated.contains("__lo2)")
+            || generated.contains("__hi1)")
+            || generated.contains("__hi2)")
+            // Other undeclared variables
+            || generated.contains("__n0)")
+            || generated.contains("__n1)")
+            || generated.contains("__x,")
+            || generated.contains("__y,")
+            || generated.contains(": __d")
+            // Template-dependent constructor
+            || generated.contains("_dependent_type::new_")
+            // Wildcard type in variable declaration
+            || generated.contains(": _ =")
+            // _::new syntax (template-dependent constructor)
+            || generated.contains("_::new")
+            // DefaultType placeholder
+            || generated.contains("DefaultType")
+    }
+
+    /// Check 4: Detect calls to unmapped libc++/POSIX functions.
+    fn has_unmapped_function_calls(generated: &str) -> bool {
+        generated.contains("sem_init(&mut")
+            || generated.contains("sem_destroy(&mut")
+            || generated.contains("__atomic_wait_address_bare_i32(")
+            || generated.contains("__atomic_spin___std___detail___default_spin_policy(")
+            || generated.contains("__to_address(")
+            || generated.contains("__libcpp_deallocate(")
+            || generated.contains("__cxx_atomic_store(")
+            || generated.contains("__constexpr_wmemchr(")
+            || generated.contains("__libcpp_unreachable(")
+            || generated.contains("__builtin_operator_delete")
+            || generated.contains("__builtin_operator_new")
+            || generated.contains("_S_do_try_acquire(&mut")
+            || generated.contains("__to_wstring_numeric(")
+            || generated.contains("__constexpr_memcmp_u8_u8(")
+            || generated.contains("__constexpr_memmove_i8_i8(")
+    }
+
+    /// Check 5: Detect bad syntax patterns in generated code.
+    fn has_bad_syntax(generated: &str) -> bool {
+        // Literal dereference (invalid pointer ops)
+        generated.contains("*0")
+            || generated.contains("*(*self)")
+            || generated.contains("*1 }")
+            || generated.contains("*_TreeIterator")
+            // Bool/int confusion from C++ short-circuit evaluation
+            || generated.contains(") && 11i32")
+            || generated.contains(") && 4i32")
+            || generated.contains("&& 16i32")
+            || generated.contains("(-1 && 0)")
+            // Wrong operator methods
+            || generated.contains(".op_bitand(")
+            || generated.contains(".op_sub(")
+            || generated.contains(".op____(")
+            // iter() on raw pointers (not valid in Rust)
+            || generated.contains(".iter().")
+            // Integer swap
+            || generated.contains("0.swap(&self)")
+            // AST node leaking into output
+            || generated.contains("BuiltinBitCastExpr")
+            // Negating pointer address
+            || generated.contains("(-__errno_location())")
+            // Self clone with &mut self
+            || (generated.contains("self.clone()") && generated.contains("&mut self"))
+            // memory_order enum used as struct
+            || generated.contains("memory_order::new_0()")
+            // Template-dependent return
+            || generated.contains("return 0 /* template-dependent */")
+            // _Size type alias used as value
+            || generated.contains("return _Size + 0")
+            || generated.contains("return _Size;")
+            // __bit_iterator template not substituted
+            || generated.contains("__bit_iterator<")
+            || generated.contains("pair<__bit_iterator")
+            // __stoa extern C linkage issues
+            || generated.contains("__stoa_extern__C")
+    }
+
+    /// Check 5b: Detect bad syntax that requires context (rust_name or function signature).
+    fn has_bad_syntax_in_context(generated: &str, rust_name: &str) -> bool {
+        // Static methods (no self) trying to use (*self)
+        if (generated.contains("pub fn max()") || generated.contains("pub fn min()"))
+            && generated.contains("(*self)")
+        {
+            return true;
+        }
+        // __begin_ + __size_ pointer arithmetic on wrong types
+        if generated.contains(".__begin_ }) + (unsafe { (*self).__size_") {
+            return true;
+        }
+        // Tree node pointer arithmetic
+        if generated.contains(".__parent_ }) + __p as _") {
+            return true;
+        }
+        // Return __d_ directly (move out of reference)
+        if generated.contains("return unsafe { (*self).__d_ }") {
+            return true;
+        }
+        // __d_ and __st_ field access on types that shouldn't have them
+        if generated.contains("self.__d_") || generated.contains("self.__st_") {
+            // Allow __st_ on fpos types
+            if generated.contains(".__st_") && rust_name.contains("fpos") {
+                return false;
+            }
+            return true;
+        }
+        // fill/data methods with wrong signatures
+        if (generated.contains("pub fn fill(") && generated.contains("-> std::ffi::c_void"))
+            || (generated.contains("pub fn data(&mut self)") && generated.contains("{\n"))
+            || (generated.contains("pub fn data_1(&mut self)") && generated.contains("{\n"))
+            || (generated.contains("pub fn data(") && generated.contains("return unsafe { (*self)") && generated.contains("-> std::ffi::c_void"))
+            || (generated.contains("pub fn data_1(") && generated.contains("-> std::ffi::c_void"))
+            || (generated.contains("pub fn fill_1(") && generated.contains("__ch: std::ffi::c_void)") && generated.contains("-> std::ffi::c_void"))
+        {
+            return true;
+        }
+        // size() method with wrong body on types that should use stubs
+        if generated.contains("pub fn size(&mut self) -> usize") && generated.contains("return unsafe {") {
+            return true;
+        }
+        // empty() method body returns wrong type
+        if generated.contains("pub fn empty(") && generated.contains("-> bool") && generated.contains("unsafe { (*self).__size_") {
+            return true;
+        }
+        // get/get_1 returning wrong types
+        if (generated.contains("pub fn get(") && generated.contains("*mut std::ffi::c_void") && generated.contains(".__ptr_"))
+            || (generated.contains("pub fn get_1(") && generated.contains("*const std::ffi::c_void") && generated.contains(".__ptr_"))
+            || (generated.contains("pub fn get(") && generated.contains("return self as i32"))
+            || (generated.contains("pub fn get_1(") && generated.contains("return self as i32"))
+        {
+            return true;
+        }
+        // Duration/time_point casting 0
+        if generated.contains("return 0 as _")
+            && (rust_name.contains("duration") || rust_name.contains("time_point"))
+        {
+            return true;
+        }
+        // imbue returning locale with wrong body
+        if generated.contains("pub fn imbue(") && generated.contains("-> locale {") && !generated.contains("return (*self)") {
+            return true;
+        }
+        // __keep_ field on iterator types
+        if generated.contains(".__keep_") {
+            return true;
+        }
+        // c_void + &mut
+        if generated.contains("c_void + &mut") {
+            return true;
+        }
+        // __tie_ field (stream tie pointer)
+        if generated.contains(".__tie_") {
+            return true;
+        }
+        // __cat_ field
+        if generated.contains(".__cat_") {
+            return true;
+        }
+        // __is_long on wrong types
+        if generated.contains("__is_long(")
+            && (rust_name.contains("initializer_list")
+                || rust_name.contains("subrange")
+                || rust_name.contains("basic_string_view"))
+        {
+            return true;
+        }
+        // do_narrow/do_allocate on wrong types
+        if (rust_name.contains("basic_ios") && generated.contains("do_narrow("))
+            || generated.contains(".do_allocate(")
+        {
+            return true;
+        }
+        // Deref c_void via __current_ as cast
+        if generated.contains("*unsafe { (*self).__current_ } } as _") {
+            return true;
+        }
+        // __fill_val_ + 0
+        if generated.contains("__fill_val_ }) + 0") {
+            return true;
+        }
+        // __current_ on wrong types
+        if generated.contains(".__current_")
+            && (rust_name.contains("unique_ptr") || rust_name.contains("__hash_"))
+        {
+            return true;
+        }
+        // __f_ on wrong types
+        if generated.contains(".__f_")
+            && (rust_name.contains("unique_ptr") || rust_name.contains("unique_lock") || rust_name.contains("basic_ios"))
+        {
+            return true;
+        }
+        // __policy_ on wrong types
+        if generated.contains(".__policy_")
+            && (rust_name.contains("unique_ptr") || rust_name.contains("unique_lock") || rust_name.contains("basic_ios"))
+        {
+            return true;
+        }
+        // __end_ on wrong types
+        if generated.contains(".__end_")
+            && (rust_name.contains("initializer_list") || rust_name.contains("basic_string_view"))
+        {
+            return true;
+        }
+        // value on unresolved types (not let, not _value)
+        if generated.contains(" value")
+            && !generated.contains("value:")
+            && !generated.contains("_value")
+            && !generated.contains("let value")
+            && !generated.contains("let mut value")
+        {
+            return true;
+        }
+        // __t variable not declared
+        if generated.contains("__t")
+            && !generated.contains("__t:")
+            && !generated.contains("let __t")
+            && !generated.contains("let mut __t")
+            && !generated.contains("__t_")
+            && !generated.contains("__tr")
+            && !generated.contains("__type")
+            && !generated.contains("__tie")
+        {
+            return true;
+        }
+        // min() call not properly qualified
+        if generated.contains("min(")
+            && !generated.contains("std::cmp::min(")
+            && !generated.contains(".min(")
+            && !generated.contains("_min(")
+        {
+            return true;
+        }
+        false
+    }
+
+    /// Unified validation for generated code in template_impl blocks.
+    /// Returns true if the code should be rolled back (is invalid).
+    fn should_rollback_template_impl(generated: &str, rust_name: &str) -> bool {
+        // Field access validation is now handled structurally by
+        // references_nonexistent_field() using actual class_fields data,
+        // so has_invalid_field_access and has_invalid_field_for_type are no longer needed here.
+        Self::has_cvoid_misuse(generated)
+            || Self::has_undeclared_variables(generated)
+            || Self::has_unmapped_function_calls(generated)
+            || Self::has_bad_syntax(generated)
+            || Self::has_bad_syntax_in_context(generated, rust_name)
+    }
+
+    /// Validation for function template instantiations.
+    /// Returns true if the code should be rolled back (is invalid).
+    /// NOTE: Uses only the patterns from the original fn_template rollback block.
+    fn should_rollback_fn_template(generated: &str) -> bool {
+        // These were the exact patterns in the original fn_template block
+        generated.contains("_dependent_type::new_")
+            || generated.contains("_unnamed)")
+            || generated.contains("_unnamed,")
+            || generated.contains("._unnamed")
+            || generated.contains("_unnamed.clone()")
+            || generated.contains("- _unnamed")
+            || generated.contains("-> std::ffi::c_void")
+            || generated.contains(": std::ffi::c_void)")
+            || generated.contains(": &std::ffi::c_void,")
+            || generated.contains(": &mut std::ffi::c_void,")
+            || generated.contains("__stoa_extern__C")
+            || generated.contains("(-__errno_location())")
+            || generated.contains(") && 11i32")
+            || generated.contains(") && 4i32")
+            || generated.contains("_Pn)")
+            || generated.contains("_Qn)")
+            || generated.contains("__lo1)")
+            || generated.contains("__lo2)")
+            || generated.contains("__hi1)")
+            || generated.contains("__hi2)")
+            || generated.contains("__n0)")
+            || generated.contains("__n1)")
+            || generated.contains("__x,")
+            || generated.contains("__y,")
+            || generated.contains(": __d")
+            || generated.contains("memory_order::new_0()")
+            || generated.contains(".op_bitand(")
+            || generated.contains("c_void::new_")
+            || generated.contains("c_void.op_")
+            || generated.contains("__bit_iterator<")
+            || (generated.contains("hermite_u32(") && generated.contains("__x as f64)"))
+            || (generated.contains("__libcpp_atomic_refcount_increment") && (generated.contains("self.__shared_owners_)") || generated.contains("self.__shared_weak_owners_)")))
+            || (generated.contains("__libcpp_atomic_refcount_decrement") && generated.contains("self.__shared_owners_)"))
+            || (generated.contains("fn use_count") && generated.contains(".add(1 as usize)"))
+            || (generated.contains("i8)") && generated.contains("100000000"))
+    }
+
+    /// Detect builtin functions returned as values instead of being called.
+    /// Pattern: "return __builtin_foo" without "return __builtin_foo("
+    fn has_uncalled_builtin_return(generated: &str) -> bool {
+        // List of long-double math builtins commonly returned without being called
+        const BUILTINS: &[&str] = &[
+            "return __builtin_huge_vall", "return __builtin_nanl",
+            "return __builtin_nansl", "return __builtin_huge_valf",
+            "return __builtin_nanf", "return __builtin_nansf",
+            "return __builtin_huge_val", "return __builtin_nan",
+            "return __builtin_nans",
+            "return __builtin_expl", "return __builtin_frexpl",
+            "return __builtin_ldexpl", "return __builtin_exp2l",
+            "return __builtin_expm1l", "return __builtin_log1pl",
+            "return __builtin_logl", "return __builtin_log10l",
+            "return __builtin_log2l", "return __builtin_sinl",
+            "return __builtin_cosl", "return __builtin_tanl",
+            "return __builtin_powl", "return __builtin_sqrtl",
+            "return __builtin_cbrtl", "return __builtin_fabsl",
+            "return __builtin_floorl", "return __builtin_ceill",
+            "return __builtin_truncl", "return __builtin_roundl",
+            "return __builtin_lroundl", "return __builtin_fmodl",
+            "return __builtin_scalblnl", "return __builtin_scalbnl",
+            "return __builtin_fmaxl", "return __builtin_fminl",
+            "return __builtin_fdiml", "return __builtin_hypotl",
+            "return __builtin_copysignl", "return __builtin_remquol",
+            "return __builtin_remainderl", "return __builtin_asinl",
+            "return __builtin_acosl", "return __builtin_atanl",
+            "return __builtin_atan2l", "return __builtin_sinhl",
+            "return __builtin_coshl", "return __builtin_tanhl",
+            "return __builtin_asinhl", "return __builtin_acoshl",
+            "return __builtin_atanhl", "return __builtin_erfl",
+            "return __builtin_erfcl", "return __builtin_lgammal",
+            "return __builtin_tgammal", "return __builtin_modfl",
+            "return __builtin_nearbyintl", "return __builtin_llroundl",
+            "return __builtin_rintl", "return __builtin_lrintl",
+            "return __builtin_llrintl",
+        ];
+        for builtin in BUILTINS {
+            if generated.contains(builtin) {
+                // Check if the call form (with "(") exists
+                let call_form = format!("{}(", builtin);
+                if !generated.contains(&call_form) {
+                    // Also handle suffix collisions: __builtin_nan should not match __builtin_nanl
+                    // The builtin names are sorted longest-first for disambiguation
+                    let after_idx = generated.find(builtin).unwrap() + builtin.len();
+                    if after_idx < generated.len() {
+                        let next_char = generated.as_bytes()[after_idx];
+                        // If followed by a letter, it's a different builtin (e.g., __builtin_nanl)
+                        if next_char.is_ascii_alphabetic() {
+                            continue;
+                        }
+                    }
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// Validation for generate_function() block.
+    /// Returns true if the code should be rolled back (is invalid).
+    /// NOTE: This must use ONLY the patterns that were in the original function
+    /// rollback block. Generic checks like has_undeclared_variables are too broad
+    /// for user code. The patterns here were carefully curated for the function block.
+    fn should_rollback_function(generated: &str) -> bool {
+        // Uncalled builtin returns are safe to check generically
+        if Self::has_uncalled_builtin_return(generated) {
+            return true;
+        }
+        // Direct patterns from the original function rollback block
+        if generated.contains("_unnamed)")
+            || generated.contains("_unnamed,")
+            || generated.contains("._unnamed")
+            || generated.contains("- _unnamed")
+        {
+            return true;
+        }
+        // c_void patterns from original block
+        if generated.contains("c_void::new_")
+            || generated.contains("c_void + ")
+            || generated.contains("*c_void")
+            || generated.contains("*_TreeIterator")
+            || (generated.contains("c_void") && generated.contains("[") && generated.contains("]"))
+        {
+            return true;
+        }
+        // Bad syntax from original block
+        if generated.contains("__bit_iterator<")
+            || generated.contains("pair<__bit_iterator")
+            || generated.contains(".iter().")
+            || generated.contains("(-__errno_location())")
+            || generated.contains("__stoa_extern__C")
+            || generated.contains("return _Size + 0")
+            || generated.contains("return _Size;")
+            || generated.contains("&& 16i32")
+            || generated.contains("[__waiter_pool_base; 16] = __ct")
+            || generated.contains("__atomic_always_lock_free(0, 0)")
+        {
+            return true;
+        }
+        // Unmapped functions from original block
+        if generated.contains("sem_init(&mut")
+            || generated.contains("sem_destroy(&mut")
+            || generated.contains("_S_do_try_acquire(&mut")
+            || generated.contains("__to_wstring_numeric(")
+            || generated.contains("__atomic_wait_address_bare_i32(")
+            || generated.contains("__atomic_spin___std___detail___default_spin_policy(")
+        {
+            return true;
+        }
+        // Function-specific patterns
+        // String concat on char pointers
+        generated.contains("i8).op_add(")
+            // Wrong operator: 1 + __cxx_atomic_load (should be ==)
+            || generated.contains("1 + __cxx_atomic_load")
+            // u128/u32 division type mismatch
+            || generated.contains("/ __pow_10(")
+            // Enum bitwise ops with type mismatch
+            || (generated.contains(" as i32 & ") && !generated.contains("-> i32"))
+            || (generated.contains(" as i32 | ") && !generated.contains("-> i32"))
+            || (generated.contains(" as i32 ^ ") && !generated.contains("-> i32"))
+            || (generated.contains("!") && generated.contains(" as i32") && generated.contains("std__Ios"))
+            // setf overload mismatch
+            || (generated.contains(".setf(") && (generated.contains(", 176i32)") || generated.contains(", 74i32)") || generated.contains(", 260i32)") || generated.contains(", 176u32)") || generated.contains(", 74u32)") || generated.contains(", 260u32)")))
+            // ctype overloaded methods
+            || (generated.contains(".do_toupper(") && generated.contains(", __hi)"))
+            || (generated.contains(".do_tolower(") && generated.contains(", __hi)"))
+            || (generated.contains(".do_widen(") && generated.contains(", __to)"))
+            || (generated.contains(".do_narrow(") && generated.contains(", __to)"))
+            // Exception constructors with wrong types
+            || (generated.contains("logic_error::new_1(__s)") && (generated.contains("__s: *const i8") || generated.contains("__s: &std::ffi::c_void")))
+            || (generated.contains("runtime_error::new_1(__s)") && (generated.contains("__s: *const i8") || generated.contains("__s: &std::ffi::c_void")))
+            // __builtin_is* with f32 instead of f64
+            || (generated.contains("return __builtin_isfinite(__x)") && generated.contains("__x: f32"))
+            || (generated.contains("return __builtin_isinf(__x)") && generated.contains("__x: f32"))
+            || (generated.contains("return __builtin_isnan(__x)") && generated.contains("__x: f32"))
+            || (generated.contains("return __builtin_isnormal(__x)") && generated.contains("__x: f32"))
+            // Broken atomic functions returning pointer
+            || (generated.contains("pub fn __exchange_and_add") && generated.contains("return __mem;"))
+            || (generated.contains("pub fn __atomic_add") && generated.contains("__mem;") && !generated.contains("*__mem"))
+            // pthread_cond_timedwait wrong type
+            || (generated.contains("fragile_pthread_cond_timedwait(") && generated.contains("__abs_timeout)"))
+            // strong_ordering comparison
+            || (generated.contains("-> strong_ordering") && generated.contains(".op____(&") && generated.contains("let mut __c: strong_ordering ="))
+            // wstring char/wchar mismatch
+            || (generated.contains("__wout.add(") && generated.contains("*__s.add(") && generated.contains("i32") && generated.contains("i8"))
+            // u64 as bool coercion
+            || (generated.contains("if __refs { 1 }") && generated.contains("__refs: u64"))
+            // Box::from_raw on &self
+            || (generated.contains("Box::from_raw(self)") && generated.contains("&self,"))
+            // system_error wrong inheritance
+            || (generated.contains("system_error::new_2(") && generated.contains("__base: system_error"))
+            // uselocale pointer type
+            || (generated.contains("uselocale(__loc)") && generated.contains("&mut *mut c_void"))
+            // hash functions wrong type
+            || (generated.contains("pub fn __hash") && generated.contains("-> u64") && generated.contains(">> "))
+            || (generated.contains("pub fn hash_code") && generated.contains("wrapping_mul(0x9e3779b9)"))
+            // __libcpp_atomic_refcount with value instead of pointer
+            || (generated.contains("__libcpp_atomic_refcount_increment") && (generated.contains("self.__shared_owners_)") || generated.contains("self.__shared_weak_owners_)")))
+            || (generated.contains("__libcpp_atomic_refcount_decrement") && generated.contains("self.__shared_owners_)"))
+            // use_count returning pointer
+            || (generated.contains("pub fn use_count") && generated.contains(".add(1 as usize)"))
+            // setf/unsetf i32 vs u32
+            || (generated.contains("__base.setf(") && generated.contains("i32)"))
+            || (generated.contains("__base.unsetf(") && generated.contains("i32)"))
+            // sentry destructor with template-dependent code
+            || (generated.contains("impl Drop for sentry") && generated.contains("_dependent_type::new_"))
+            // _M_os._unnamed
+            || (generated.contains("_M_os._unnamed") && generated.contains("_unnamed"))
+            // locale constructor __base field
+            || (generated.contains("__base: locale::new_") && generated.contains("pub fn new_"))
+            // iword/pword returning reference to temporary
+            || (generated.contains("pub fn iword") && generated.contains("&mut __word._M_iword"))
+            || (generated.contains("pub fn pword") && generated.contains("&mut __word._M_pword"))
+            // vtable type mismatches
+            || generated.contains("__self.__base.__vtable = &STD_CTYPE_CHAR__VTABLE")
+            || generated.contains("__self.__base.__vtable = &STD_CTYPE_WCHAR_T__VTABLE")
+            || generated.contains("__self.__base.__vtable = &STD_COLLATE_BYNAME_CHAR__VTABLE")
+            || generated.contains("__self.__base.__vtable = &STD_COLLATE_BYNAME_WCHAR_T__VTABLE")
+            // bool != 0
+            || generated.contains("(__hi != __lo) != 0")
+            // Double-reference casts
+            || (generated.contains("&_V2::system_category()") && generated.contains("as *const error_category"))
+            || (generated.contains("&_V2::generic_category()") && generated.contains("as *const error_category"))
+            || generated.contains("&&__e.category() as *const")
+            // wstring missing methods
+            || (generated.contains("wstring::new_3(") && generated.contains("__s.data()"))
+            || (generated.contains("wstring::new_0()") && generated.contains("__to_wstring"))
+            // c_str on c_void
+            || (generated.contains("__s.c_str()") && generated.contains("__s: &std::ffi::c_void"))
+            // pthread_key_delete needs unsafe
+            || (generated.contains("pthread_key_delete(__key)") && !generated.contains("unsafe { pthread_key_delete"))
+            // _M_refcount through & reference
+            || (generated.contains("self._M_refcount") && generated.contains("&self,") && generated.contains("-= 1"))
+            // _M_narrow through & reference
+            || (generated.contains("self._M_narrow[") && generated.contains("&self,"))
+            // equivalent wrong pointer type
+            || (generated.contains(".equivalent(") && generated.contains("&*__rhs)"))
+            // system_error wrong __what type
+            || (generated.contains("system_error::new_2(") && generated.contains("__what)") && generated.contains("__what: *const i8"))
+            // memory_order with bitwise ops
+            || (generated.contains(".op_bitand(") && generated.contains("memory_order"))
+            || (generated.contains(".op_bitor(") && generated.contains("memory_order"))
+            // __cmpexch_failure_order2 wrong return
+            || (generated.contains("-> memory_order") && generated.contains("memory_order_acquire") && generated.contains("memory_order_relaxed"))
+            // atomic_flag functions
+            || (generated.contains("atomic_flag_wait") && generated.contains("(*__a).wait("))
+            || (generated.contains("atomic_flag_clear") && generated.contains("(*__a).clear(__m)"))
+            // __waiter_pool broken init
+            || generated.contains("[__waiter_pool_base; 16] = __ct")
+            // __atomic_always_lock_free
+            || generated.contains("__atomic_always_lock_free(0, 0)")
+            // swap mutability
+            || (generated.contains("pub fn swap") && generated.contains(".swap(&*__"))
+            || (generated.contains("__self.swap(&__t)") && generated.contains("__t: &mut thread"))
+            // error_code/condition op_eq
+            || (generated.contains("pub fn op_eq") && generated.contains(".equivalent(") && generated.contains("error_condition"))
+            // atomic_flag test
+            || (generated.contains("return 1 &&") && generated.contains("__cxx_atomic_load"))
+            // backoff results
+            || (generated.contains("-> std___backoff_results") && generated.contains("return __continue_poll"))
+            // fetch_add_i32 memory_order
+            || (generated.contains("fetch_add_i32(") && generated.contains("transmute::<i32, memory_order>"))
+            // stop_token
+            || (generated.contains("stop_token::new_1(") && generated.contains("self._M_state"))
+            || (generated.contains("__state.clone()") && generated.contains("_M_state: "))
+            // Clone with new_1
+            || (generated.contains("Self::new_1(self)") && generated.contains("impl Clone"))
+            // Variadic __va
+            || (generated.contains("__va_args: ...") && generated.contains("__va)"))
+            // strong_ordering bare values
+            || (generated.contains("-> strong_ordering") && generated.contains("return equal."))
+            || (generated.contains("-> strong_ordering") && generated.contains("return less."))
+            || (generated.contains("-> strong_ordering") && generated.contains("return greater."))
+            // numeric_limits lowest
+            || (generated.contains("pub fn lowest") && (generated.contains("min_bool()") || generated.contains("max_f32()") || generated.contains("max_f64()") || generated.contains("max_bool()")))
+            // __hypot 3-arg
+            || (generated.contains("__hypot_f32(__") && generated.contains(", __z)"))
+            || (generated.contains("__hypot_f64(__") && generated.contains(", __z)"))
+            // do_is 3-arg
+            || (generated.contains(".do_is(") && generated.contains(", __vec)"))
+            // align *mut ()
+            || (generated.contains("fn align(") && generated.contains("__r = __p2") && generated.contains("*mut ()"))
+    }
+
+    /// Validation for generate_method() block.
+    /// Returns true if the code should be rolled back (is invalid).
+    /// NOTE: Uses only the patterns from the original method rollback block.
+    fn should_rollback_method(generated: &str) -> bool {
+        // Uncalled builtin returns
+        if Self::has_uncalled_builtin_return(generated) {
+            return true;
+        }
+        // c_void patterns from original method block
+        if generated.contains("c_void::new_") {
+            return true;
+        }
+        // Bad syntax from original method block
+        if generated.contains(".op_bitand(")
+            || generated.contains(".op____(")
+            || generated.contains(".op_sub(")
+            || generated.contains(".iter().")
+            || generated.contains("0.swap(&self)")
+            || generated.contains("memory_order::new_0()")
+            || generated.contains("(-1 && 0)")
+            || generated.contains("&& 16i32 {")
+            || generated.contains("!__e && 16i32")
+            || generated.contains("&&__e.category() as *const")
+        {
+            return true;
+        }
+        // Method-specific patterns
+        // Template placeholder constructors
+        generated.contains("__iterator::new_")
+            || generated.contains("__const_iterator::new_")
+            || generated.contains("__const_reference::new_")
+            // Wrong operator: 1 + __cxx_atomic_load
+            || generated.contains("1 + __cxx_atomic_load")
+            || generated.contains("return 1 && __cxx_atomic_load")
+            // Invalid TypeId cast
+            || generated.contains("TypeId::of::<()>() as *const")
+            // Ordering conversion type mismatches
+            || (generated.contains("-> partial_ordering") && (generated.contains("WEAK_ORDERING_") || generated.contains("STRONG_ORDERING_")))
+            || (generated.contains("-> weak_ordering") && generated.contains("STRONG_ORDERING_"))
+            // Broken atomic functions
+            || (generated.contains("pub fn __exchange_and_add") && generated.contains("return __mem;"))
+            || (generated.contains("pub fn __atomic_add") && generated.contains("__mem;") && !generated.contains("*__mem"))
+            // facet methods on &self
+            || (generated.contains("pub fn _M_remove_reference") && generated.contains("Box::from_raw(self)"))
+            || (generated.contains("pub fn _M_add_reference") && generated.contains("self._M_refcount"))
+            // Double-reference cast
+            || generated.contains("&&__e.category() as *const")
+            // iword/pword
+            || (generated.contains("pub fn iword") && generated.contains("&mut __word._M_iword"))
+            || (generated.contains("pub fn pword") && generated.contains("&mut __word._M_pword"))
+            // Chrono operators
+            || generated.contains(".count() as i64")
+            // _Hash_impl
+            || generated.contains("_Hash_impl::hash_u64(")
+            // atomic_flag op_assign
+            || (generated.contains("_M_base.op_assign(") && generated.contains("-> bool"))
+            // atomic memory_order transmute
+            || (generated.contains("_M_base.load(") && generated.contains("transmute::<i32, memory_order>"))
+            || (generated.contains("_M_base.store(") && generated.contains("transmute::<i32, memory_order>"))
+            || (generated.contains("_M_base.exchange(") && generated.contains("transmute::<i32, memory_order>"))
+            // atomic wait/notify bool/int
+            || (generated.contains("pub fn wait") && generated.contains("if __old { 1 } else { 0 }"))
+            || (generated.contains("__atomic_wait_address") && generated.contains("bool, || &self"))
+            // atomic test_and_set
+            || (generated.contains("return __v == 1;") && generated.contains("pub fn test"))
+            // __atomic_base_bool store
+            || (generated.contains("_M_base.store(") && generated.contains("__m)"))
+            // atomic_flag memory_order passing
+            || (generated.contains("_M_base.load(__m)") && generated.contains("__m: memory_order"))
+            || (generated.contains("_M_base.exchange(") && generated.contains(", __m)"))
+            || (generated.contains("_M_base.compare_exchange_weak(") && (generated.contains("__m1, __m2)") || generated.contains(", __m)")))
+            || (generated.contains("_M_base.compare_exchange_strong(") && (generated.contains("__m1, __m2)") || generated.contains(", __m)")))
+            || (generated.contains("_M_base.wait(") && generated.contains(", __m)"))
+            // numeric_limits __float128
+            || (generated.contains("_S_1pm4088(") && generated.contains("numeric_limits::_S_4p("))
+            || (generated.contains("_S_1pm16352(") && generated.contains("numeric_limits::_S_4p("))
+            || (generated.contains("_S_1p4064(") && generated.contains("numeric_limits::_S_4p("))
+            || (generated.contains("_S_1p16256(") && generated.contains("numeric_limits::_S_4p("))
+            // codecvt wrapper *__st
+            || (generated.contains("pub fn out(") && generated.contains("self.do_out(*__st,"))
+            || (generated.contains("pub fn unshift(") && generated.contains("self.do_unshift(*__st,"))
+            || (generated.contains("pub fn r#in(") && generated.contains("self.do_in(*__st,"))
+            || (generated.contains("pub fn length(") && generated.contains("self.do_length(&*__st,"))
+            // char_traits __gv___s
+            || (generated.contains("pub fn find(") && generated.contains("__gv___s"))
+            || (generated.contains("pub fn length(") && generated.contains("__gv___s"))
+            || (generated.contains("pub fn assign_1(") && generated.contains("__gv___s"))
+            // numeric_limits lowest
+            || (generated.contains("pub fn lowest") && (generated.contains("min_bool()") || generated.contains("max_f32()") || generated.contains("max_f64()") || generated.contains("max_bool()")))
+            // atomic_flag wait &mut self on &self
+            || (generated.contains("pub fn wait(&self") && generated.contains("&mut self,"))
+            || (generated.contains("pub fn wait_1(&self") && generated.contains("&mut self,"))
+            // error_code vtable access
+            || (generated.contains("pub fn default_error_condition") && generated.contains("__vtable).default_error_condition)"))
+            // type_info op_eq
+            || (generated.contains("pub fn op_eq") && generated.contains("return self == &*__arg as *const"))
+            // hash wrapping_mul without as u64
+            || (generated.contains("-> u64") && generated.contains(".wrapping_mul(") && !generated.contains("as u64"))
+            // __find_idx_return
+            || (generated.contains("pub fn __find_idx_return") && generated.contains("__ambiguous"))
+            // numpunct decimal_point/thousands_sep
+            || (generated.contains("pub fn decimal_point") && generated.contains("-> i8") && generated.contains("do_decimal_point()"))
+            || (generated.contains("pub fn thousands_sep") && generated.contains("-> i8") && generated.contains("do_thousands_sep()"))
+            // __atomic_contention_address
+            || (generated.contains("pub fn __atomic_contention_address") && generated.contains("addressof(__a.__a_)"))
+            // hash op_call u32 XOR
+            || (generated.contains("pub fn op_call") && generated.contains("__u.__s.__a ^"))
+            // __c11_atomic fences u32
+            || generated.contains("__c11_atomic_thread_fence(__order as u32)")
+            || generated.contains("__c11_atomic_signal_fence(__order as u32)")
+            // op_call backoff results
+            || (generated.contains("pub fn op_call") && generated.contains("-> std___backoff_results") && generated.contains("__continue_poll"))
+            // char_traits constexpr
+            || (generated.contains("pub fn compare") && generated.contains("__constexpr_memcmp_u8_u8("))
+            || (generated.contains("pub fn r#move") && generated.contains("__constexpr_memmove_i8_i8(__s1, __s2"))
+            || (generated.contains("pub fn copy") && generated.contains("__constexpr_memmove_i8_i8(__s1, __s2"))
+            // __shared_count atomic refcount
+            || generated.contains("__libcpp_atomic_refcount_increment_i64(self.__shared_owners_)")
+            || generated.contains("__libcpp_atomic_refcount_decrement_i64(self.__shared_owners_)")
+            || generated.contains("__libcpp_atomic_refcount_increment_i64(self.__shared_weak_owners_)")
+            // use_count
+            || (generated.contains("pub fn use_count") && generated.contains(".add(1 as usize)"))
+            // __shared_weak_count delegation
+            || (generated.contains("pub fn __add_shared") && generated.contains("__base.__add_shared()"))
+            || (generated.contains("pub fn __release_shared") && generated.contains("__base.__release_shared()"))
+            || (generated.contains("pub fn use_count") && generated.contains("__base.use_count()"))
+            // exception_ptr swap
+            || (generated.contains("exception_ptr::new_1(") && generated.contains("*__other"))
+            // __tree __set
+            || (generated.contains("pub fn __set(") && generated.contains("__gv___s"))
+            // op_index c_void offset
+            || (generated.contains("pub fn op_index") && generated.contains("self + ") && generated.contains("c_void"))
+            // Bool/int mixing
+            || generated.contains("&& 16i32 {")
+            || generated.contains("!__e && 16i32")
+    }
+
+    /// Validation for constructor rollback in generate_method().
+    /// Returns true if the code should be rolled back (is invalid).
+    fn should_rollback_constructor(generated: &str) -> bool {
+        generated.contains("&_V2::system_category() as *const")
+            || generated.contains("&_V2::generic_category() as *const")
+            || (generated.contains("if __refs { 1 }") && generated.contains("__refs: u64"))
+            || (generated.contains("Box::from_raw(self)") && generated.contains("&self,"))
+            || generated.contains("__base: locale::new_")
+            || (generated.contains("__base: system_error::new_2(") && generated.contains("__what: *const i8"))
+            || generated.contains("c_void::new_")
+            || generated.contains("__base_type::new_")
+            || (generated.contains("logic_error::new_1(__s)") && generated.contains("__s: &std::ffi::c_void"))
+            || (generated.contains("runtime_error::new_1(__s)") && generated.contains("__s: &std::ffi::c_void"))
+            || generated.contains("__mbstate_t::new_1(1)")
+            || (generated.contains("uselocale(__loc)") && generated.contains("__loc: &mut"))
+            || (generated.contains("::new_1(unsafe { __gv___s })") && generated.contains("__s:"))
+            || (generated.contains("::new_1_1(unsafe { __gv___s })") && generated.contains("__s:"))
+            || (generated.contains("unsafe { __gv___s }") && generated.contains("pub fn new_"))
+    }
+
+    /// Unified validation for libtooling-generated method bodies.
+    /// Returns true if the code should be rolled back (is invalid).
+    fn should_rollback_libtooling(generated: &str, rust_name: &str) -> bool {
+        generated.contains("todo!(")
+            || generated.contains("._M_")
+            // Only rollback __tree_ access if struct doesn't have __tree_ field
+            || (generated.contains(".__tree_") && !rust_name.starts_with("std_map_")
+                && !rust_name.starts_with("std_set_")
+                && !rust_name.starts_with("std_multimap_")
+                && !rust_name.starts_with("std_multiset_"))
+            || generated.contains(".__comp_")
+            || generated.contains("c_void")
+            || generated.contains("*0")
+            // Unresolved function/constructor calls
+            || generated.contains("_::new_")
+            || generated.contains("piecewise_construct")
+            || generated.contains("forward_as_tuple")
+    }
+
     /// Generate Rust source code from a Clang AST.
     pub fn generate(mut self, ast: &ClangNode) -> String {
         // First pass: collect polymorphic class information
@@ -3074,6 +3884,50 @@ impl AstCodeGen {
             }
         }
 
+        // If no fields were found from the template definition children, try using
+        // specialization field data from LibTooling. The template definition often has no
+        // FieldDecl children (libclang doesn't expose them for many types), but LibTooling's
+        // ClassTemplateSpecializationDecl visit captures the actual instantiated fields.
+        if fields.is_empty() {
+            let spec_info = self.find_specialization_by_rust_name(&rust_name)
+                .or_else(|| self.find_matching_specialization(inst_name));
+            let has_real_fields = spec_info.as_ref().map_or(false, |info| {
+                info.field_types.keys().any(|k| !k.contains("padding"))
+            });
+
+            if has_real_fields {
+                let info = spec_info.as_ref().unwrap();
+                let mut spec_fields: Vec<_> = info.field_types.iter()
+                    .filter(|(name, _)| !name.contains("padding"))
+                    .collect();
+                spec_fields.sort_by_key(|(name, _)| name.to_string());
+
+                for (field_name, field_type) in &spec_fields {
+                    let sanitized = sanitize_identifier(field_name);
+                    let rust_type = field_type.to_rust_type_str();
+
+                    // Map field types to Rust:
+                    // - Pointers → *mut u8
+                    // - size_type / __size_ → usize
+                    // - Known primitives → as-is
+                    // - Complex/undefined types → [u8; 8] opaque
+                    let effective_type = if rust_type.starts_with('*') {
+                        "*mut u8".to_string()
+                    } else if rust_type == "usize" || *field_name == "__size_" {
+                        "usize".to_string()
+                    } else if matches!(rust_type.as_str(), "bool" | "u8" | "u16" | "u32" | "u64"
+                        | "i8" | "i16" | "i32" | "i64" | "f32" | "f64" | "isize") {
+                        rust_type.clone()
+                    } else {
+                        "[u8; 8]".to_string()
+                    };
+
+                    self.writeln(&format!("pub {}: {},", sanitized, effective_type));
+                    fields.push((sanitized.to_string(), CppType::Named(effective_type)));
+                }
+            }
+        }
+
         // Store field info for constructor generation
         self.class_fields.insert(inst_name.to_string(), fields);
 
@@ -3830,262 +4684,18 @@ impl AstCodeGen {
                     self.writeln("}");
                     self.writeln("");
 
-                    // Check for broken patterns and rollback if needed
+                    // Validate generated method: check field references against actual struct fields
                     let generated = &self.output[method_output_start..];
-                    // NOTE: STD_COLLATE_BYNAME_*/STD_CTYPE_*__VTABLE patterns removed
-                    // (is_broken_locale_type guard skips ctype/collate_byname types)
-                    // Methods returning c_void (placeholder for unresolved types) - except actual void functions
-                    if (generated.contains("-> std::ffi::c_void") && generated.contains("todo!("))
-                        // Methods returning c_void with actual return statements (LibTooling-generated)
-                        || (generated.contains("-> std::ffi::c_void") && generated.contains("return ") && !generated.contains("return;"))
-                        // Methods with template-dependent return values
-                        || generated.contains("return 0 /* template-dependent */")
-                        // Methods using _ type for variables
-                        || generated.contains(": _ =")
-                        // Methods accessing _M_current on iterator types (field doesn't exist in our structs)
-                        || generated.contains("._M_current")
-                        || generated.contains("._M_node")
-                        // Methods calling clone on &mut self
-                        || (generated.contains("self.clone()") && generated.contains("&mut self"))
-                        // Methods with integer dereference issues (0; *0, etc.)
-                        || generated.contains("*0")
-                        || generated.contains("*(*self)")
-                        // Methods accessing _M_t or _M_impl on template types
-                        || generated.contains("._M_t")
-                        || generated.contains("._M_impl")
-                        || generated.contains("._M_resource")
-                        || generated.contains(".current")
-                        // Methods calling __builtin functions
-                        || generated.contains("__builtin_operator_delete")
-                        || generated.contains("__builtin_operator_new")
-                        // Methods adding c_void to iterators
-                        || generated.contains("+ c_void")
-                        // Methods accessing _M_alloc, _M_ptr on template types
-                        || generated.contains("._M_alloc")
-                        || generated.contains("._M_ptr")
-                        // Methods accessing _M_max_size on template types
-                        || generated.contains("._M_max_size")
-                        // Methods accessing _M_f on comparator/hasher types
-                        || generated.contains("._M_f")
-                        // Methods calling do_allocate on polymorphic allocator
-                        || generated.contains(".do_allocate(")
-                        // Methods with _::new syntax (template-dependent constructor)
-                        || generated.contains("_::new")
-                        // Methods with undeclared 'value' variable
-                        || (generated.contains(" value") && !generated.contains("value:") && !generated.contains("_value") && !generated.contains("let value") && !generated.contains("let mut value"))
-                        // Methods accessing _M_array field
-                        || generated.contains("._M_array")
-                        // Methods using _Size as a value (type alias used incorrectly)
-                        || generated.contains("return _Size + 0")
-                        || generated.contains("return _Size;")
-                        // Methods with undeclared DefaultType
-                        || generated.contains("DefaultType")
-                        // NOTE: Primary template type name patterns (owning_view__Rp, move_iterator__Iter,
-                        // counted_iterator__Iter, common_iterator__Iter___Sent, reverse_iterator__Iter,
-                        // insert_iterator__Container, front/back_insert_iterator__Container,
-                        // ostreambuf_iterator__CharT___Traits, __hash_*iterator*__NodePtr,
-                        // __static_bounded_iter__Iterator___Size, basic_ios__CharT___Traits,
-                        // basic_streambuf__CharT___Traits, fpos__State) have been removed.
-                        // The guard at the top of generate_template_impl now skips these types.
-                        // Methods accessing fields on unique_ptr template types
-                        || (generated.contains("unique_ptr_") && (generated.contains("._unnamed") || generated.contains(".__val_") || generated.contains(".__i_")))
-                        // Methods accessing __val_ on unique_lock template types
-                        || (generated.contains("unique_lock_") && generated.contains(".__val_"))
-                        // NOTE: Patterns for unique_lock__Mutex, __bit_reference__Cp__, __bit_const_reference__Cp,
-                        // basic_ios__CharT___Traits, basic_string_view__CharT___Traits removed (primary template guard)
-                        // Methods accessing __comp_ on std_map (should be delegated to __tree_)
-                        || (generated.contains("std_map_") && generated.contains(".__comp_"))
-                        // Methods with _TreeIterator dereference issues
-                        || generated.contains("*_TreeIterator")
-                        // NOTE: duration__Rep___Period cast pattern removed (primary template guard)
-                        // Cannot move out of __d_ or __st_
-                        || generated.contains("self.__d_")
-                        || generated.contains("self.__st_")
-                        // Cannot index into c_void
-                        || (generated.contains("c_void") && generated.contains("["))
-                        // Methods with undeclared __t variable (also catches unique_lock methods with __throw_system_error issues)
-                        || (generated.contains("__t") && !generated.contains("__t:") && !generated.contains("let __t") && !generated.contains("let mut __t") && !generated.contains("__t_") && !generated.contains("__tr") && !generated.contains("__type") && !generated.contains("__tie"))
-                        // Methods calling undefined functions
-                        || generated.contains("__to_address(")
-                        || generated.contains("__libcpp_deallocate(")
-                        || generated.contains("__cxx_atomic_store(")
-                        // Methods with BuiltinBitCastExpr - Clang AST node that shouldn't appear
-                        || generated.contains("BuiltinBitCastExpr")
-                        // Methods calling undefined min function
-                        || (generated.contains("min(") && !generated.contains("std::cmp::min(") && !generated.contains(".min(") && !generated.contains("_min("))
-                        // c_void + integer operations (impossible)
-                        || generated.contains("c_void + ")
-                        // Methods accessing __fill_val_ and adding integer
-                        || generated.contains("__fill_val_ }) + 0")
-                        // NOTE: __bit_reference__Cp__ != and duration__Rep___Period/time_point__Clock___Duration
-                        // patterns removed (primary template guard catches these types)
-                        // NOTE: *(self)!=0 pattern for __bit_reference removed (iterator skip list)
-                        // Static methods (no self param) that try to use (*self)
-                        || (generated.contains("pub fn max()") && generated.contains("(*self)"))
-                        || (generated.contains("pub fn min()") && generated.contains("(*self)"))
-                        // Methods with __begin_ + __size_ pointer arithmetic on wrong types
-                        || (generated.contains(".__begin_ }) + (unsafe { (*self).__size_"))
-                        // Methods with __parent_ + pointer addition (tree node operations)
-                        || generated.contains(".__parent_ }) + __p as _")
-                        // Methods accessing _unnamed on std_map types
-                        || (rust_name.starts_with("std_map_") && generated.contains("._unnamed }.__value_comp_"))
-                        // NOTE: __current_ pattern for __wrap_iter removed (iterator skip list)
-                        // Methods returning __d_ directly (move out of reference)
-                        || generated.contains("return unsafe { (*self).__d_ }")
-                        // Methods accessing __size_ on types that return c_void + int
-                        || (generated.contains(".__size_ }) + 0") && rust_name.contains("basic_string_view"))
-                        // Methods with fill returning c_void
-                        || (generated.contains("pub fn fill(") && generated.contains("-> std::ffi::c_void"))
-                        // Methods with data() or data_1() with empty body returning unit type
-                        || (generated.contains("pub fn data(&mut self)") && generated.contains("{\n"))
-                        || (generated.contains("pub fn data_1(&mut self)") && generated.contains("{\n"))
-                        // Methods with data() returning c_void via empty body
-                        || (generated.contains("pub fn data(") && generated.contains("return unsafe { (*self)") && generated.contains("-> std::ffi::c_void"))
-                        // Methods with data_1 returning c_void
-                        || (generated.contains("pub fn data_1(") && generated.contains("-> std::ffi::c_void"))
-                        // Methods with fill_1 taking and returning c_void
-                        || (generated.contains("pub fn fill_1(") && generated.contains("__ch: std::ffi::c_void)") && generated.contains("-> std::ffi::c_void"))
-                        // NOTE: *__current_ pattern for common/istreambuf/istream_iterator/__wrap_iter removed (iterator skip list)
-                        // Methods dereferencing c_void via __current_ with as cast
-                        || generated.contains("*unsafe { (*self).__current_ } } as _")
-                        // Methods with size(&mut self) returning wrong type (should be stub)
-                        || (generated.contains("pub fn size(&mut self) -> usize") && generated.contains("return unsafe {"))
-                        // NOTE: __current_ pattern for reverse_iterator removed (iterator skip list)
-                        // Methods with empty() returning bool but body returns c_void
-                        || (generated.contains("pub fn empty(") && generated.contains("-> bool") && generated.contains("unsafe { (*self).__size_"))
-                        // NOTE: *(self + __n) pattern for counted/reverse/move_iterator removed (iterator skip list)
-                        // Methods returning get/get_1 that return c_void pointers from broken bodies
-                        || (generated.contains("pub fn get(") && generated.contains("*mut std::ffi::c_void") && generated.contains(".__ptr_"))
-                        || (generated.contains("pub fn get_1(") && generated.contains("*const std::ffi::c_void") && generated.contains(".__ptr_"))
-                        // Methods with get/get_1 on tuple_leaf casting self as i32
-                        || (generated.contains("pub fn get(") && generated.contains("return self as i32"))
-                        || (generated.contains("pub fn get_1(") && generated.contains("return self as i32"))
-                        // Methods casting 0 to duration type
-                        || (generated.contains("return 0 as _") && (rust_name.contains("duration") || rust_name.contains("time_point")))
-                        // NOTE: base() pattern for move_iterator removed (iterator skip list)
-                        // Methods dereferencing literal 1
-                        || generated.contains("*1 }")
-                        // Methods with imbue returning locale from broken body
-                        || (generated.contains("pub fn imbue(") && generated.contains("-> locale {") && !generated.contains("return (*self)"))
-                        // Struct-specific rollback patterns using rust_name
-                        // NOTE: Patterns for primary template types (owning_view__Rp, basic_ios__CharT___Traits,
-                        // fpos__State, etc.) have been removed - the guard at the top of generate_template_impl
-                        // now skips impl block generation for these types entirely.
-                        // unique_ptr types: rollback methods accessing _unnamed
-                        || (rust_name.starts_with("unique_ptr_") && generated.contains("._unnamed"))
-                        // initializer_list types: rollback methods accessing _unnamed
-                        || (rust_name.starts_with("initializer_list_") && generated.contains("._unnamed"))
-                        // std_map: rollback methods accessing __size_ directly
-                        || (rust_name.starts_with("std_map_") && generated.contains(".__size_"))
-                        // Iterator types: rollback methods accessing __keep_
-                        || generated.contains(".__keep_")
-                        // Iterator types: rollback methods with c_void + operations
-                        || generated.contains("c_void + &mut")
-                        // Methods with *mut () type - failed type inference
-                        || generated.contains("*mut ()")
-                        // Methods accessing __tie_ field (stream tie pointer)
-                        || generated.contains(".__tie_")
-                        // Methods accessing .__st_ field that's not properly resolved
-                        || (generated.contains(".__st_") && !generated.contains("fpos"))
-                        // NOTE: __i_ pattern for counted/move_iterator/owning_view removed (iterator skip list)
-                        // Methods accessing .__val_ field on basic_ios or map types
-                        || (generated.contains(".__val_") && (rust_name.contains("basic_ios") || rust_name.starts_with("std_map")))
-                        // Methods accessing .__cat_ field
-                        || generated.contains(".__cat_")
-                        // Methods accessing .__value_ field on unique_ptr types
-                        || (rust_name.starts_with("unique_ptr_") && generated.contains(".__value_"))
-                        // Methods accessing __get_long_size or __get_short_size as fields
-                        || generated.contains(".__get_long_size")
-                        || generated.contains(".__get_short_size")
-                        // Methods accessing __elems_ on wrong types
-                        || (generated.contains(".__elems_") && (rust_name.contains("owning_view") || rust_name.contains("basic_string_view")))
-                        // Methods accessing .cbegin as field (it's a method)
-                        || generated.contains(".cbegin ")
-                        // Methods calling __is_long as method on wrong types
-                        || (generated.contains("__is_long(") && (rust_name.contains("initializer_list") || rust_name.contains("subrange") || rust_name.contains("basic_string_view")))
-                        // NOTE: __size_ pattern for owning_view removed (iterator skip list)
-                        // Methods accessing .cend as field (it's a method)
-                        || generated.contains(".cend ")
-                        // Methods calling __libcpp_unreachable()
-                        || generated.contains("__libcpp_unreachable(")
-                        // Methods accessing .fail on wrong types
-                        || (generated.contains(".fail") && (rust_name.contains("unique_ptr") || rust_name.contains("unique_lock")))
-                        // Methods accessing __exceptions_ on basic_ios
-                        || (rust_name.contains("basic_ios") && generated.contains(".__exceptions_"))
-                        // Methods accessing __bufptr_ on basic_ios
-                        || (rust_name.contains("basic_ios") && generated.contains(".__bufptr_"))
-                        // Methods accessing __ptr_ on types without it (iterator types removed - caught by skip list)
-                        || (generated.contains(".__ptr_") && (rust_name.contains("basic_ios") || rust_name.contains("unique_ptr") || rust_name.contains("unique_lock") || rust_name.contains("__hash_const") || rust_name.contains("__hash_map")))
-                        // Methods calling __constexpr_wmemchr
-                        || generated.contains("__constexpr_wmemchr(")
-                        // Methods accessing .good as field
-                        || generated.contains(".good ")
-                        // NOTE: __data_ pattern for owning_view removed (iterator skip list)
-                        // Methods accessing __current_ on wrong types (not reverse_iterator)
-                        // Methods accessing __current_ on wrong types (iterator types removed - caught by skip list)
-                        || (generated.contains(".__current_") && (rust_name.contains("unique_ptr") || rust_name.contains("__hash_")))
-                        // Methods accessing __owns_ on wrong types
-                        || (generated.contains(".__owns_") && (rust_name.contains("unique_ptr") || rust_name.contains("basic_ios")))
-                        // Methods accessing __val_ on bit references, unique_ptr, and unique_lock
-                        || (generated.contains(".__val_") && (rust_name.contains("unique_ptr") || rust_name.contains("unique_lock")))
-                        // Methods accessing __begin_ on owning_view and basic_string_view
-                        || (generated.contains(".__begin_") && rust_name.contains("basic_string_view"))
-                        // Methods accessing __i_ on wrong iterator types
-                        || (generated.contains(".__i_") && rust_name.contains("unique_ptr"))
-                        // NOTE: _unnamed pattern for __tuple_leaf removed (iterator skip list)
-                        // Methods calling do_narrow (wrong type)
-                        || (rust_name.contains("basic_ios") && generated.contains("do_narrow("))
-                        // NOTE: duration__Rep cast pattern removed (primary template guard)
-                        // NOTE: __current_ pattern for counted_iterator removed (iterator skip list)
-                        // NOTE: __value_ pattern for counted_iterator removed (iterator skip list)
-                        // NOTE: __x_ pattern for owning_view/move_iterator/counted_iterator removed
-                        // (is_broken_iterator_type guard skips these types entirely)
-                        // Methods accessing .rdstate as field (it's a method)
-                        || generated.contains(".rdstate")
-                        // Methods accessing .eof as field when not a bool
-                        || (generated.contains(".eof") && !generated.contains(".eof.clone()") && rust_name.contains("basic_ios"))
-                        // Methods accessing .size as field on basic_string_view
-                        || (rust_name.contains("basic_string_view") && generated.contains(".size"))
-                        // Methods with c_void pointer arithmetic
-                        || (generated.contains("*const c_void` to `*const c_void"))
-                        // Methods with _CP pointer arithmetic
-                        || generated.contains("*const _CP")
-                        // Methods with integer to c_void addition
-                        || generated.contains("{integer}` to `c_void")
-                        // Methods accessing _unnamed on various iterator types
-                        || (generated.contains("._unnamed") && (rust_name.contains("iterator") || rust_name.contains("__hash_")))
-                        // Methods accessing __engaged_ on unique_ptr types
-                        || (rust_name.starts_with("unique_ptr_") && generated.contains(".__engaged_"))
-                        // Methods calling clone on c_void (various patterns)
-                        || generated.contains("c_void.clone()")
-                        || (generated.contains(": std::ffi::c_void)") && generated.contains(".clone()"))
-                        // Methods accessing __tree_ on wrong types
-                        || (generated.contains(".__tree_") && (rust_name.contains("subrange") || rust_name.contains("initializer_list")))
-                        // NOTE: __i_ pattern for common/reverse/insert_iterator narrowed (iterator skip list)
-                        || (generated.contains(".__i_") && rust_name.contains("__hash_const"))
-                        // Methods accessing __f_ on __tuple_leaf and other types without it
-                        || (generated.contains(".__f_") && (rust_name.contains("unique_ptr") || rust_name.contains("unique_lock") || rust_name.contains("basic_ios")))
-                        // Methods accessing .bad as field (it's a method)
-                        || generated.contains(".bad ")
-                        // Methods accessing __policy_ on wrong types
-                        || (generated.contains(".__policy_") && (rust_name.contains("unique_ptr") || rust_name.contains("unique_lock") || rust_name.contains("basic_ios")))
-                        // Methods accessing __end_ on wrong types
-                        || (generated.contains(".__end_") && (rust_name.contains("initializer_list") || rust_name.contains("basic_string_view")))
-                        // Methods calling __ptr_ or __begin_ on map types (broken LibTooling body)
-                        || (generated.contains(".__ptr_(") && rust_name.starts_with("std_map_"))
-                        || (generated.contains(".__begin_(") && rust_name.starts_with("std_map_"))
-                        // Methods calling _M_erase on map types (libstdc++ internal method)
-                        || (generated.contains("._M_erase(") && rust_name.starts_with("std_map_"))
-                        // Methods accessing __value_ on iterator types (not valid fields)
-                        // Methods accessing __value_ on iterator types (most removed - caught by skip list)
-                        || (generated.contains(".__value_") && rust_name.contains("__hash_"))
-                        // Methods that dereference c_void
-                        || generated.contains("*c_void")
-                        // (*_TreeIterator already covered by line 3686 above)
-                        // NOTE: c_void`to`&mut pattern for reverse/move/counted_iterator removed
-                        // (is_broken_iterator_type guard skips these types entirely)
-                        // NOTE: duration__Rep i32 cast pattern removed (primary template guard)
-                    {
+                    let has_wrong_fields = if let Some(known_fields) = self.class_fields.get(inst_name) {
+                        if !known_fields.is_empty() {
+                            Self::references_nonexistent_field(generated, known_fields)
+                        } else {
+                            false
+                        }
+                    } else {
+                        false
+                    };
+                    if has_wrong_fields || Self::should_rollback_template_impl(generated, rust_name) {
                         self.output.truncate(method_output_start);
                     }
                 }
@@ -4349,40 +4959,14 @@ impl AstCodeGen {
             self.writeln("}");
             self.writeln("");
 
-            // Check for broken patterns and rollback if needed
-            // Note: We check if the struct has specific fields before rolling back field access
+            // Validate generated libtooling method and rollback if invalid
             let generated = &self.output[method_output_start..];
-
-            // Check if struct has __tree_ field (maps, sets)
-            let has_tree_field = rust_name.starts_with("std_map_")
-                || rust_name.starts_with("std_set_")
-                || rust_name.starts_with("std_multimap_")
-                || rust_name.starts_with("std_multiset_");
-
-            // Check for patterns that indicate unresolved function calls
-            // _::new_N patterns indicate calls to type constructors that aren't defined
-            let has_unresolved_calls = generated.contains("_::new_")
-                || generated.contains("piecewise_construct")
-                || generated.contains("forward_as_tuple");
-
-            let should_rollback = generated.contains("todo!(")
-                || generated.contains("._M_")
-                // Only rollback __tree_ access if the struct doesn't have __tree_ field
-                || (generated.contains(".__tree_") && !has_tree_field)
-                || generated.contains(".__comp_")
-                || generated.contains("c_void")
-                || generated.contains("*0")
-                // Rollback if there are unresolved function/constructor calls
-                || has_unresolved_calls;
-
-            if should_rollback {
-                // Debug: print rolled back method body
+            if Self::should_rollback_libtooling(generated, rust_name) {
                 if std::env::var("FRAGILE_DEBUG_ROLLBACK").is_ok() {
                     eprintln!("=== ROLLBACK {} :: {} ===", rust_name, rust_method_name);
                     eprintln!("{}", generated);
                     eprintln!("=== END ROLLBACK ===\n");
                 }
-                // Rollback - this method body has issues
                 self.output.truncate(method_output_start);
             }
         }
@@ -4586,54 +5170,7 @@ impl AstCodeGen {
         if body_is_empty && has_return_type {
             // Function body is empty but needs to return something - rollback
             self.output.truncate(output_start);
-        } else if generated.contains("_dependent_type::new_")
-            || generated.contains("_unnamed)")  // Unresolved value in function call
-            || generated.contains("_unnamed,")  // Unresolved value in function call
-            || generated.contains("._unnamed")  // Unresolved member access (e.g., array begin/end)
-            || generated.contains("_unnamed.clone()")  // Unresolved value being cloned (chrono literals)
-            || generated.contains("- _unnamed")  // Unresolved in arithmetic (64 - _unnamed)
-            || generated.contains("-> std::ffi::c_void")  // Returns void type (placeholder)
-            || generated.contains(": std::ffi::c_void)")  // Parameter is c_void placeholder (end of params)
-            || generated.contains(": &std::ffi::c_void,")  // Reference to c_void placeholder (mid-params)
-            || generated.contains(": &mut std::ffi::c_void,")  // Mutable ref to c_void placeholder
-            || generated.contains("__stoa_extern__C")  // wstring stoi/stol with c_str type mismatches
-            || generated.contains("(-__errno_location())")  // Pointer negation used as condition (libstdc++ futex)
-            || generated.contains(") && 11i32")  // C++ short-circuit with int instead of bool
-            || generated.contains(") && 4i32")   // C++ short-circuit with int instead of bool
-            || generated.contains("_Pn)")       // Unresolved template parameter variable
-            || generated.contains("_Qn)")       // Unresolved template parameter variable
-            || generated.contains("__lo1)")     // Unresolved variable from 128-bit math
-            || generated.contains("__lo2)")     // Unresolved variable from 128-bit math
-            || generated.contains("__hi1)")     // Unresolved variable from 128-bit math
-            || generated.contains("__hi2)")     // Unresolved variable from 128-bit math
-            || generated.contains("__n0)")      // Unresolved variable
-            || generated.contains("__n1)")      // Unresolved variable
-            || generated.contains("__x,")       // Unresolved variable in call args
-            || generated.contains("__y,")       // Unresolved variable in call args
-            || generated.contains(": __d")      // Unresolved __d variable in declaration
-            || generated.contains("memory_order::new_0()")  // memory_order enum used as struct
-            || generated.contains(".op_bitand(")  // bitwise and as method on enum (libstdc++ atomics)
-            || generated.contains("c_void::new_")  // c_void placeholder used as constructable type
-            || generated.contains("c_void.op_")   // c_void placeholder used as callable object
-            // NOTE: inf.0 and NaN.0 patterns removed - fixed by proper handling of special float values
-            // NOTE: __platform_notify, __atomic_wait_address_bare, __atomic_spin,
-            // __constexpr_memcmp, __constexpr_memmove, back_inserter, __common_trait
-            // patterns removed - is_broken_fn_template guard skips these functions entirely
-            // __bit_iterator template type not substituted
-            || generated.contains("__bit_iterator<")
-            // hermite_u32 with __x as f64 (wrong type substitution)
-            || (generated.contains("hermite_u32(") && generated.contains("__x as f64)"))
-            // __libcpp_atomic_refcount_increment/decrement with value instead of pointer
-            || (generated.contains("__libcpp_atomic_refcount_increment") && generated.contains("self.__shared_owners_)"))
-            || (generated.contains("__libcpp_atomic_refcount_increment") && generated.contains("self.__shared_weak_owners_)"))
-            || (generated.contains("__libcpp_atomic_refcount_decrement") && generated.contains("self.__shared_owners_)"))
-            // __shared_count use_count returning pointer instead of i64
-            || (generated.contains("fn use_count") && generated.contains(".add(1 as usize)"))
-            // NOTE: __append10_i8/__append10_u8 patterns removed (is_broken_fn_template guard)
-            // Any function with large literal (100000000) operating on i8 type
-            || (generated.contains("i8)") && generated.contains("100000000"))
-        {
-            // Rollback - remove the generated function
+        } else if Self::should_rollback_fn_template(generated) {
             self.output.truncate(output_start);
         }
     }
@@ -10795,293 +11332,9 @@ impl AstCodeGen {
             self.writeln("");
         }
 
-        // Check if the generated function contains broken patterns and rollback if so
+        // Validate generated function and rollback if invalid
         let generated = &self.output[output_start..];
-        if generated.contains("_unnamed)")  // Unresolved value in function call
-            || generated.contains("_unnamed,")  // Unresolved value in function call
-            || generated.contains("._unnamed")  // Unresolved member access
-            || generated.contains("- _unnamed")  // Unresolved in arithmetic (64 - _unnamed)
-            || generated.contains("i8).op_add(")  // String concat on char pointers (not valid Rust)
-            || generated.contains("c_void::new_")  // Constructor call on placeholder type
-            || generated.contains("__bit_iterator<")  // Unsubstituted template type
-            || generated.contains("pair<__bit_iterator")  // Unsubstituted return type
-            || generated.contains("1 + __cxx_atomic_load")  // Wrong operator: 1 == not 1 +
-            || generated.contains("/ __pow_10(")  // u128/u32 division type mismatch
-            || generated.contains("(-__errno_location())")  // Unary minus on pointer (errno check)
-            // Builtin functions returned without being called (should be __builtin_foo() not __builtin_foo)
-            || (generated.contains("return __builtin_huge_vall") && !generated.contains("return __builtin_huge_vall("))
-            || (generated.contains("return __builtin_nanl") && !generated.contains("return __builtin_nanl("))
-            || (generated.contains("return __builtin_nansl") && !generated.contains("return __builtin_nansl("))
-            || (generated.contains("return __builtin_huge_valf") && !generated.contains("return __builtin_huge_valf("))
-            || (generated.contains("return __builtin_nanf") && !generated.contains("return __builtin_nanf("))
-            || (generated.contains("return __builtin_nansf") && !generated.contains("return __builtin_nansf("))
-            || (generated.contains("return __builtin_huge_val") && !generated.contains("return __builtin_huge_val(") && !generated.contains("return __builtin_huge_vall"))
-            || (generated.contains("return __builtin_nan") && !generated.contains("return __builtin_nan(") && !generated.contains("return __builtin_nanl") && !generated.contains("return __builtin_nanf") && !generated.contains("return __builtin_nans"))
-            || (generated.contains("return __builtin_nans") && !generated.contains("return __builtin_nans(") && !generated.contains("return __builtin_nansl") && !generated.contains("return __builtin_nansf"))
-            // More long double math builtins returned without being called
-            || (generated.contains("return __builtin_expl") && !generated.contains("return __builtin_expl("))
-            || (generated.contains("return __builtin_frexpl") && !generated.contains("return __builtin_frexpl("))
-            || (generated.contains("return __builtin_ldexpl") && !generated.contains("return __builtin_ldexpl("))
-            || (generated.contains("return __builtin_exp2l") && !generated.contains("return __builtin_exp2l("))
-            || (generated.contains("return __builtin_expm1l") && !generated.contains("return __builtin_expm1l("))
-            || (generated.contains("return __builtin_log1pl") && !generated.contains("return __builtin_log1pl("))
-            || (generated.contains("return __builtin_logl") && !generated.contains("return __builtin_logl("))
-            || (generated.contains("return __builtin_log10l") && !generated.contains("return __builtin_log10l("))
-            || (generated.contains("return __builtin_log2l") && !generated.contains("return __builtin_log2l("))
-            || (generated.contains("return __builtin_sinl") && !generated.contains("return __builtin_sinl("))
-            || (generated.contains("return __builtin_cosl") && !generated.contains("return __builtin_cosl("))
-            || (generated.contains("return __builtin_tanl") && !generated.contains("return __builtin_tanl("))
-            || (generated.contains("return __builtin_powl") && !generated.contains("return __builtin_powl("))
-            || (generated.contains("return __builtin_sqrtl") && !generated.contains("return __builtin_sqrtl("))
-            || (generated.contains("return __builtin_cbrtl") && !generated.contains("return __builtin_cbrtl("))
-            || (generated.contains("return __builtin_fabsl") && !generated.contains("return __builtin_fabsl("))
-            || (generated.contains("return __builtin_floorl") && !generated.contains("return __builtin_floorl("))
-            || (generated.contains("return __builtin_ceill") && !generated.contains("return __builtin_ceill("))
-            || (generated.contains("return __builtin_truncl") && !generated.contains("return __builtin_truncl("))
-            || (generated.contains("return __builtin_roundl") && !generated.contains("return __builtin_roundl("))
-            || (generated.contains("return __builtin_lroundl") && !generated.contains("return __builtin_lroundl("))
-            || (generated.contains("return __builtin_fmodl") && !generated.contains("return __builtin_fmodl("))
-            || (generated.contains("return __builtin_scalblnl") && !generated.contains("return __builtin_scalblnl("))
-            || (generated.contains("return __builtin_scalbnl") && !generated.contains("return __builtin_scalbnl("))
-            || (generated.contains("return __builtin_fmaxl") && !generated.contains("return __builtin_fmaxl("))
-            || (generated.contains("return __builtin_fminl") && !generated.contains("return __builtin_fminl("))
-            || (generated.contains("return __builtin_fdiml") && !generated.contains("return __builtin_fdiml("))
-            || (generated.contains("return __builtin_hypotl") && !generated.contains("return __builtin_hypotl("))
-            || (generated.contains("return __builtin_copysignl") && !generated.contains("return __builtin_copysignl("))
-            || (generated.contains("return __builtin_remquol") && !generated.contains("return __builtin_remquol("))
-            || (generated.contains("return __builtin_remainderl") && !generated.contains("return __builtin_remainderl("))
-            || (generated.contains("return __builtin_asinl") && !generated.contains("return __builtin_asinl("))
-            || (generated.contains("return __builtin_acosl") && !generated.contains("return __builtin_acosl("))
-            || (generated.contains("return __builtin_atanl") && !generated.contains("return __builtin_atanl("))
-            || (generated.contains("return __builtin_atan2l") && !generated.contains("return __builtin_atan2l("))
-            || (generated.contains("return __builtin_sinhl") && !generated.contains("return __builtin_sinhl("))
-            || (generated.contains("return __builtin_coshl") && !generated.contains("return __builtin_coshl("))
-            || (generated.contains("return __builtin_tanhl") && !generated.contains("return __builtin_tanhl("))
-            || (generated.contains("return __builtin_asinhl") && !generated.contains("return __builtin_asinhl("))
-            || (generated.contains("return __builtin_acoshl") && !generated.contains("return __builtin_acoshl("))
-            || (generated.contains("return __builtin_atanhl") && !generated.contains("return __builtin_atanhl("))
-            || (generated.contains("return __builtin_erfl") && !generated.contains("return __builtin_erfl("))
-            || (generated.contains("return __builtin_erfcl") && !generated.contains("return __builtin_erfcl("))
-            || (generated.contains("return __builtin_lgammal") && !generated.contains("return __builtin_lgammal("))
-            || (generated.contains("return __builtin_tgammal") && !generated.contains("return __builtin_tgammal("))
-            || (generated.contains("return __builtin_modfl") && !generated.contains("return __builtin_modfl("))
-            || (generated.contains("return __builtin_nearbyintl") && !generated.contains("return __builtin_nearbyintl("))
-            || (generated.contains("return __builtin_llroundl") && !generated.contains("return __builtin_llroundl("))
-            || (generated.contains("return __builtin_rintl") && !generated.contains("return __builtin_rintl("))
-            || (generated.contains("return __builtin_lrintl") && !generated.contains("return __builtin_lrintl("))
-            || (generated.contains("return __builtin_llrintl") && !generated.contains("return __builtin_llrintl("))
-            // wstring stoi/stol with c_str type mismatches (__stoa functions call c_str which returns wrong type)
-            || generated.contains("__stoa_extern__C")
-            // Enum bitwise operators with type mismatches (u32 return with i32 expression)
-            // Pattern: "return X as i32 & Y as i32;" where return type is not i32
-            || (generated.contains(" as i32 & ") && !generated.contains("-> i32"))
-            || (generated.contains(" as i32 | ") && !generated.contains("-> i32"))
-            || (generated.contains(" as i32 ^ ") && !generated.contains("-> i32"))
-            || (generated.contains("!") && generated.contains(" as i32") && generated.contains("std__Ios"))  // ~operator
-            // iter() on raw pointers - raw pointers don't have iter() method
-            || generated.contains(".iter().")
-            // __to_wstring_numeric called with wrong number of arguments (1 instead of 3)
-            || (generated.contains("__to_wstring_numeric(") && generated.contains(".op_basic_string_view())"))
-            // setf(x, y) calls where y is an i32/u32 - these should use setf_1 (overloaded method)
-            || (generated.contains(".setf(") && generated.contains(", 176i32)"))
-            || (generated.contains(".setf(") && generated.contains(", 74i32)"))
-            || (generated.contains(".setf(") && generated.contains(", 260i32)"))
-            || (generated.contains(".setf(") && generated.contains(", 176u32)"))
-            || (generated.contains(".setf(") && generated.contains(", 74u32)"))
-            || (generated.contains(".setf(") && generated.contains(", 260u32)"))
-            // ctype do_* methods with multiple arguments (overloaded methods)
-            || (generated.contains(".do_toupper(") && generated.contains(", __hi)"))
-            || (generated.contains(".do_tolower(") && generated.contains(", __hi)"))
-            || (generated.contains(".do_widen(") && generated.contains(", __to)"))
-            || (generated.contains(".do_narrow(") && generated.contains(", __to)"))
-            // NOTE: __gthread_create/join/key_create/getspecific/setspecific patterns removed
-            // (is_broken_function guard skips these before generation)
-            // NOTE: hermite_u32/hermitef/hermitel/hermite_1 patterns removed
-            // (is_broken_function guard skips hermite/hermitef/hermitel before generation)
-            // NOTE: __constexpr_memcmp patterns removed
-            // (is_broken_function guard skips __constexpr_memcmp before generation)
-            // logic_error/runtime_error constructors with wrong argument type
-            || (generated.contains("logic_error::new_1(__s)") && generated.contains("__s: *const i8"))
-            || (generated.contains("runtime_error::new_1(__s)") && generated.contains("__s: *const i8"))
-            // Exception class constructors with &c_void placeholder (unresolved template type)
-            // These can't be fixed at call site - roll back the whole constructor
-            || (generated.contains("logic_error::new_1(__s)") && generated.contains("__s: &std::ffi::c_void"))
-            || (generated.contains("runtime_error::new_1(__s)") && generated.contains("__s: &std::ffi::c_void"))
-            // NOTE: __libcpp_tls_create/get/set patterns removed
-            // (is_broken_function guard skips these before generation)
-            // __builtin_is* called with f32 instead of f64
-            || (generated.contains("return __builtin_isfinite(__x)") && generated.contains("__x: f32"))
-            || (generated.contains("return __builtin_isinf(__x)") && generated.contains("__x: f32"))
-            || (generated.contains("return __builtin_isnan(__x)") && generated.contains("__x: f32"))
-            || (generated.contains("return __builtin_isnormal(__x)") && generated.contains("__x: f32"))
-            // Broken atomic functions (global function versions) that return pointer instead of i32
-            || (generated.contains("pub fn __exchange_and_add") && generated.contains("return __mem;"))
-            || (generated.contains("pub fn __atomic_add") && generated.contains("__mem;") && !generated.contains("*__mem"))
-            // pthread_cond_timedwait with wrong timeout type
-            || (generated.contains("fragile_pthread_cond_timedwait(") && generated.contains("__abs_timeout)"))
-            // error_category comparison operators returning bool instead of strong_ordering
-            || (generated.contains("-> strong_ordering") && generated.contains(".op____(&") && generated.contains("let mut __c: strong_ordering ="))
-            // wstring conversion with char pointer instead of wchar_t pointer
-            || (generated.contains("__wout.add(") && generated.contains("*__s.add(") && generated.contains("i32") && generated.contains("i8"))
-            // locale_facet/facet new_1 with __refs u64 as bool (u64 -> bool coercion)
-            || (generated.contains("if __refs { 1 }") && generated.contains("__refs: u64"))
-            // Box::from_raw on &self (mutability issue)
-            || (generated.contains("Box::from_raw(self)") && generated.contains("&self,"))
-            // system_error constructor with wrong inheritance
-            || (generated.contains("system_error::new_2(") && generated.contains("__base: system_error"))
-            // NOTE: hermite_u32 call-site pattern removed (is_broken_function guard skips hermite)
-            // NOTE: __constexpr_memcmp (2nd) pattern removed (is_broken_function guard)
-            // uselocale with reference instead of pointer
-            || (generated.contains("uselocale(__loc)") && generated.contains("&mut *mut c_void"))
-            // hash functions returning wrong type
-            || (generated.contains("pub fn __hash") && generated.contains("-> u64") && generated.contains(">> "))
-            || (generated.contains("pub fn hash_code") && generated.contains("wrapping_mul(0x9e3779b9)"))
-            // __libcpp_atomic_refcount with value instead of pointer
-            || (generated.contains("__libcpp_atomic_refcount_increment") && generated.contains("self.__shared_owners_)"))
-            || (generated.contains("__libcpp_atomic_refcount_decrement") && generated.contains("self.__shared_owners_)"))
-            || (generated.contains("__libcpp_atomic_refcount_increment") && generated.contains("self.__shared_weak_owners_)"))
-            // use_count returning pointer instead of i64
-            || (generated.contains("pub fn use_count") && generated.contains(".add(1 as usize)"))
-            // ios_base setf/unsetf with i32 instead of u32
-            || (generated.contains("__base.setf(") && generated.contains("i32)"))
-            || (generated.contains("__base.unsetf(") && generated.contains("i32)"))
-            // Template-dependent destructor code with _dependent_type::new_*
-            || (generated.contains("impl Drop for sentry") && generated.contains("_dependent_type::new_"))
-            // Functions with unresolved _M_os._unnamed field
-            || (generated.contains("_M_os._unnamed") && generated.contains("_unnamed"))
-            // NOTE: __gthread_mutex_timedlock/recursive_mutex_timedlock patterns removed
-            // (is_broken_function guard skips these before generation)
-            // __to_wstring_numeric not defined
-            || (generated.contains("__to_wstring_numeric("))
-            // locale constructors with __base field that doesn't exist
-            || (generated.contains("__base: locale::new_") && generated.contains("pub fn new_"))
-            // iword/pword returning reference to temporary
-            || (generated.contains("pub fn iword") && generated.contains("&mut __word._M_iword"))
-            || (generated.contains("pub fn pword") && generated.contains("&mut __word._M_pword"))
-            // ctype constructors with wrong vtable type
-            || (generated.contains("__self.__base.__vtable = &STD_CTYPE_CHAR__VTABLE"))
-            || (generated.contains("__self.__base.__vtable = &STD_CTYPE_WCHAR_T__VTABLE"))
-            // collate_byname constructors with wrong vtable type
-            || (generated.contains("__self.__base.__vtable = &STD_COLLATE_BYNAME_CHAR__VTABLE"))
-            || (generated.contains("__self.__base.__vtable = &STD_COLLATE_BYNAME_WCHAR_T__VTABLE"))
-            // bool comparison to 0 pattern ((__hi != __lo) != 0)
-            || (generated.contains("(__hi != __lo) != 0"))
-            // error_code/condition default constructor with double-reference cast (&_V2::*_category())
-            || (generated.contains("&_V2::system_category()") && generated.contains("as *const error_category"))
-            || (generated.contains("&_V2::generic_category()") && generated.contains("as *const error_category"))
-            // hash functions with &&__e.category() double-reference cast
-            || (generated.contains("&&__e.category() as *const"))
-            // wstring functions with new_3/new_0 (basic_string_wchar_t missing these methods)
-            || (generated.contains("wstring::new_3(") && generated.contains("__s.data()"))
-            || (generated.contains("wstring::new_0()") && generated.contains("__to_wstring"))
-            // locale constructors calling c_str on c_void (__s: &c_void)
-            || (generated.contains("__s.c_str()") && generated.contains("__s: &std::ffi::c_void"))
-            // pthread_key_delete requires unsafe block
-            || (generated.contains("pthread_key_delete(__key)") && !generated.contains("unsafe { pthread_key_delete"))
-            // __M_refcount assignment through & reference
-            || (generated.contains("self._M_refcount") && generated.contains("&self,") && generated.contains("-= 1"))
-            // __M_narrow array assignment through & reference
-            || (generated.contains("self._M_narrow[") && generated.contains("&self,"))
-            // equivalent with wrong pointer type (&*__rhs instead of *const c_void)
-            || (generated.contains(".equivalent(") && generated.contains("&*__rhs)"))
-            // system_error constructor with wrong __what type (*const i8 vs &c_void)
-            || (generated.contains("system_error::new_2(") && generated.contains("__what)") && generated.contains("__what: *const i8"))
-            // memory_order enum used as struct with op_bitand/op_bitor (libstdc++ atomic internals)
-            || (generated.contains(".op_bitand(") && generated.contains("memory_order"))
-            || (generated.contains(".op_bitor(") && generated.contains("memory_order"))
-            // __cmpexch_failure_order2 returns memory_order but uses i32 constants
-            || (generated.contains("-> memory_order") && generated.contains("memory_order_acquire") && generated.contains("memory_order_relaxed"))
-            // NOTE: __gthread_cond_timedwait/pthread_cond_clockwait patterns removed
-            // (is_broken_function guard skips these before generation)
-            // Bool/int mixing in conditions (libstdc++ internal)
-            || generated.contains("&& 16i32")
-            // atomic_flag_wait functions calling rolled-back wait method
-            || (generated.contains("atomic_flag_wait") && generated.contains("(*__a).wait("))
-            // atomic_flag_clear_explicit calling clear with memory_order instead of i32
-            || (generated.contains("atomic_flag_clear") && generated.contains("(*__a).clear(__m)"))
-            // __waiter_pool functions with broken array initialization
-            || generated.contains("[__waiter_pool_base; 16] = __ct")
-            // __atomic_always_lock_free with wrong second argument type
-            || (generated.contains("__atomic_always_lock_free(0, 0)"))
-            // swap functions with mutability issues
-            || (generated.contains("pub fn swap") && generated.contains(".swap(&*__"))
-            // swap with wrong reference type in thread/swap constructor
-            || (generated.contains("__self.swap(&__t)") && generated.contains("__t: &mut thread"))
-            // NOTE: swap_std_thread_id_std_thread_id pattern removed
-            // (is_broken_function guard skips swap_std_thread_id_std_thread_id before generation)
-            // NOTE: sem_init/sem_destroy/try_acquire patterns kept as safety net
-            // (these calls appear in bodies of functions beyond just the skipped ones)
-            || generated.contains("sem_init(&mut")
-            || generated.contains("sem_destroy(&mut")
-            || generated.contains("_S_do_try_acquire(&mut")
-            // NOTE: __c11_atomic_thread_fence/__c11_atomic_signal_fence u32 patterns removed
-            // (is_broken_function guard skips __cxx_atomic_thread_fence/signal_fence before generation)
-            // NOTE: atomic_thread_fence/atomic_signal_fence patterns removed
-            // (is_broken_function guard skips these before generation)
-            // NOTE: __base_10_u64 and __find_idx_return patterns removed
-            // (is_broken_function guard skips these before generation)
-            // op_eq for error_code/error_condition with equivalent method signature mismatch
-            || (generated.contains("pub fn op_eq") && generated.contains(".equivalent(") && generated.contains("error_condition"))
-            // NOTE: __append10_i8/__append9_i8/__base_10_u32 patterns removed
-            // (is_broken_function guard skips __append10/__append9/__base_10_u32 before generation)
-            // atomic_flag test method with 1 && (integer where bool expected)
-            || (generated.contains("return 1 &&") && generated.contains("__cxx_atomic_load"))
-            // NOTE: __libcpp_tls_create/pthread_key_create pattern removed
-            // (is_broken_function guard skips __libcpp_tls_create before generation)
-            // op_call returning c_void placeholder instead of actual return type
-            || (generated.contains("-> std___backoff_results") && generated.contains("return __continue_poll"))
-            // __atomic_wait_address_bare with wrong closure type
-            || generated.contains("__atomic_wait_address_bare_i32(")
-            // __atomic_spin with wrong argument
-            || generated.contains("__atomic_spin___std___detail___default_spin_policy(")
-            // fetch_add_i32 with memory_order transmute
-            || (generated.contains("fetch_add_i32(") && generated.contains("transmute::<i32, memory_order>"))
-            // stop_token methods with c_void type issues
-            || (generated.contains("stop_token::new_1(") && generated.contains("self._M_state"))
-            || (generated.contains("__state.clone()") && generated.contains("_M_state: "))
-            // Clone impl calling new_1 with wrong type
-            || (generated.contains("Self::new_1(self)") && generated.contains("impl Clone"))
-            // NOTE: swap_std_stop_source/swap_thread_thread/swap_std_thread_id compound patterns removed
-            // (is_broken_function guard skips these swap functions before generation)
-            // NOTE: self._M_stop_source.clone(), swap_std_thread_id_std_thread_id(&mut self._M_id),
-            // self._M_id._M_thread, op_eq+._M_thread, __x._M_thread.cmp(,
-            // impl Drop for __condvar, get_token/get_stop_token patterns removed
-            // (is_broken_method_type guard skips threading/condvar types,
-            //  is_broken_function guard skips swap functions)
-            // Variadic functions with __va not defined (should be __va_args)
-            || (generated.contains("__va_args: ...") && generated.contains("__va)"))
-            // strong_ordering returns with bare `equal` (should be strong_ordering::equal)
-            || (generated.contains("-> strong_ordering") && generated.contains("return equal."))
-            || (generated.contains("-> strong_ordering") && generated.contains("return less."))
-            || (generated.contains("-> strong_ordering") && generated.contains("return greater."))
-            // numeric_limits methods incorrectly calling 2-arg min/max shims with 0 args
-            || (generated.contains("pub fn lowest") && generated.contains("min_bool()"))
-            || (generated.contains("pub fn lowest") && generated.contains("max_f32()"))
-            || (generated.contains("pub fn lowest") && generated.contains("max_f64()"))
-            || (generated.contains("pub fn lowest") && generated.contains("max_bool()"))
-            // __hypot with 3 args (should use __hypot3)
-            || (generated.contains("__hypot_f32(__") && generated.contains(", __z)"))
-            || (generated.contains("__hypot_f64(__") && generated.contains(", __z)"))
-            // ctype do_is with 3 args (overloaded method - different signature)
-            || (generated.contains(".do_is(") && generated.contains(", __vec)"))
-            // NOTE: __common_trait pattern removed
-            // (is_broken_function guard skips __common_trait before generation)
-            // align function with *mut () vs *mut i8 mismatch
-            || (generated.contains("fn align(") && generated.contains("__r = __p2") && generated.contains("*mut ()"))
-            // Functions using _Size as a value (type alias used incorrectly)
-            || generated.contains("return _Size + 0")
-            || generated.contains("return _Size;")
-            // binary operation on c_void (cannot add to c_void)
-            || generated.contains("c_void + ")
-            // NOTE: __bit_reference__Cp__ and duration__Rep___Period patterns removed
-            // (expanded has_unresolved_template_placeholder guard catches these types at line ~10309)
-            // Cannot index into c_void
-            || (generated.contains("c_void") && generated.contains("[") && generated.contains("]"))
-            // Dereferencing c_void or _TreeIterator types
-            || generated.contains("*c_void")
-            || generated.contains("*_TreeIterator")
-        {
-            // Rollback - remove the generated function
+        if Self::should_rollback_function(generated) {
             self.output.truncate(output_start);
         }
     }
@@ -15434,174 +15687,9 @@ impl AstCodeGen {
                 self.writeln("}");
                 self.writeln("");
 
-                // Check if the generated method contains broken patterns and rollback if so
+                // Validate generated method and rollback if invalid
                 let generated = &self.output[output_start..];
-                if generated.contains("c_void::new_")  // Constructor call on placeholder type
-                    || generated.contains("__iterator::new_")  // Template placeholder iterator
-                    || generated.contains("__const_iterator::new_")  // Template placeholder const_iterator
-                    || generated.contains("__const_reference::new_")  // Template placeholder const_reference
-                    || generated.contains("1 + __cxx_atomic_load")  // Wrong operator: 1 == not 1 +
-                    || generated.contains("return 1 && __cxx_atomic_load")  // Wrong operator: 1 && not bool
-                    || generated.contains("TypeId::of::<()>() as *const")  // Invalid TypeId cast
-                    // Ordering conversion operators returning wrong type
-                    || (generated.contains("-> partial_ordering") && generated.contains("WEAK_ORDERING_"))
-                    || (generated.contains("-> partial_ordering") && generated.contains("STRONG_ORDERING_"))
-                    || (generated.contains("-> weak_ordering") && generated.contains("STRONG_ORDERING_"))
-                    // Builtin functions returned without being called
-                    || (generated.contains("return __builtin_huge_vall") && !generated.contains("return __builtin_huge_vall("))
-                    || (generated.contains("return __builtin_nanl") && !generated.contains("return __builtin_nanl("))
-                    || (generated.contains("return __builtin_nansl") && !generated.contains("return __builtin_nansl("))
-                    || (generated.contains("return __builtin_huge_valf") && !generated.contains("return __builtin_huge_valf("))
-                    || (generated.contains("return __builtin_nanf") && !generated.contains("return __builtin_nanf("))
-                    || (generated.contains("return __builtin_nansf") && !generated.contains("return __builtin_nansf("))
-                    // NOTE: ctype toupper_1/tolower_1/widen_1/narrow_1/scan_is_1/scan_not_1/is_1 patterns removed
-                    // (is_broken_method_type guard skips ctype<char>/ctype<wchar_t> methods)
-                    // Broken atomic functions that just return their pointer argument
-                    || (generated.contains("pub fn __exchange_and_add") && generated.contains("return __mem;"))
-                    || (generated.contains("pub fn __atomic_add") && generated.contains("__mem;") && !generated.contains("*__mem"))
-                    // iter() on raw pointers - raw pointers don't have iter() method
-                    || generated.contains(".iter().")
-                    // NOTE: ctype do_widen_1/do_narrow_1 bool != 0 patterns removed
-                    // (is_broken_method_type guard skips ctype types)
-                    // facet _M_remove_reference with Box::from_raw on &self
-                    || (generated.contains("pub fn _M_remove_reference") && generated.contains("Box::from_raw(self)"))
-                    // facet _M_add_reference and _M_narrow assignment on &self
-                    || (generated.contains("pub fn _M_add_reference") && generated.contains("self._M_refcount"))
-                    // NOTE: _M_narrow_init pattern removed (is_broken_method_type guard skips ctype types)
-                    // hash functions with &&__e.category() double-reference cast
-                    || generated.contains("&&__e.category() as *const")
-                    // iword/pword returning reference to temporary
-                    || (generated.contains("pub fn iword") && generated.contains("&mut __word._M_iword"))
-                    || (generated.contains("pub fn pword") && generated.contains("&mut __word._M_pword"))
-                    // NOTE: narrow with _M_narrow pattern removed (is_broken_method_type guard skips ctype types)
-                    // memory_order enum used as struct (libstdc++ internal pattern)
-                    || generated.contains("memory_order::new_0()")
-                    // bitwise and as method on enum (libstdc++ atomics)
-                    || generated.contains(".op_bitand(")
-                    // NOTE: ._M_state.* (6), stop_token__Stop_state_ref::new_,
-                    // ._M_thread.* (5), thread::hardware_concurrency(),
-                    // _M_stop_source.* (2) patterns removed
-                    // (is_broken_method_type guard skips all methods for threading types)
-                    // Integer swap pattern (broken template instantiation)
-                    || generated.contains("0.swap(&self)")
-                    // Chrono duration operators not implemented
-                    || generated.contains(".op____(")  // spaceship operator <=>
-                    || generated.contains(".op_sub(")  // subtraction operator
-                    || generated.contains(".count() as i64")  // duration::count() on wrong type
-                    // NOTE: ._M_id.clone().op_eq(, std_nostopstate_t::new_1(,
-                    // std_thread::new_0(, op_assign+joinable patterns removed
-                    // (is_broken_method_type guard skips threading types)
-                    // _Hash_impl::hash_u64 not implemented
-                    || generated.contains("_Hash_impl::hash_u64(")
-                    // NOTE: __gthread_cond_timedwait/pthread_cond_clockwait patterns removed
-                    // (is_broken_method_type guard skips condition_variable/timed_mutex types)
-                    // Bool/int mixing in conditions (libstdc++ internal)
-                    || generated.contains("&& 16i32 {")
-                    || generated.contains("!__e && 16i32")
-                    // NOTE: [__waiter_pool_base; 16] pattern removed
-                    // (is_broken_method_type guard skips __waiter_pool_base type)
-                    // Broken -1 && 0 pattern in numeric_limits
-                    || generated.contains("(-1 && 0)")
-                    // atomic_flag op_assign returning reference instead of bool
-                    || (generated.contains("_M_base.op_assign(") && generated.contains("-> bool"))
-                    // atomic methods with memory_order transmute (wrong argument types)
-                    || (generated.contains("_M_base.load(") && generated.contains("transmute::<i32, memory_order>"))
-                    || (generated.contains("_M_base.store(") && generated.contains("transmute::<i32, memory_order>"))
-                    || (generated.contains("_M_base.exchange(") && generated.contains("transmute::<i32, memory_order>"))
-                    // atomic_flag wait/notify with bool/int mixing
-                    || (generated.contains("pub fn wait") && generated.contains("if __old { 1 } else { 0 }"))
-                    || (generated.contains("__atomic_wait_address") && generated.contains("bool, || &self"))
-                    // atomic test_and_set with bool == 1 comparison
-                    || (generated.contains("return __v == 1;") && generated.contains("pub fn test"))
-                    // __atomic_base_bool methods with wrong store argument types
-                    || (generated.contains("_M_base.store(") && generated.contains("__m)"))
-                    // atomic_flag methods passing memory_order where i32 expected
-                    || (generated.contains("_M_base.load(__m)") && generated.contains("__m: memory_order"))
-                    || (generated.contains("_M_base.exchange(") && generated.contains(", __m)"))
-                    || (generated.contains("_M_base.compare_exchange_weak(") && generated.contains("__m1, __m2)"))
-                    || (generated.contains("_M_base.compare_exchange_weak(") && generated.contains(", __m)"))
-                    || (generated.contains("_M_base.compare_exchange_strong(") && generated.contains("__m1, __m2)"))
-                    || (generated.contains("_M_base.compare_exchange_strong(") && generated.contains(", __m)"))
-                    || (generated.contains("_M_base.wait(") && generated.contains(", __m)"))
-                    // NOTE: self._M_stop_source.clone(), swap+swap_std_thread_id (3),
-                    // native_handle+_M_thread, get_id+clone patterns removed
-                    // (is_broken_method_type guard skips threading types)
-                    // NOTE: inf.0 and NaN.0 patterns removed - fixed by proper handling of special float values
-                    // numeric_limits __float128 helper methods that call _S_4p with wrong arg count
-                    || (generated.contains("_S_1pm4088(") && generated.contains("numeric_limits::_S_4p("))
-                    || (generated.contains("_S_1pm16352(") && generated.contains("numeric_limits::_S_4p("))
-                    || (generated.contains("_S_1p4064(") && generated.contains("numeric_limits::_S_4p("))
-                    || (generated.contains("_S_1p16256(") && generated.contains("numeric_limits::_S_4p("))
-                    // NOTE: __atomic_semaphore _S_do_try_acquire, _M_acquire, _M_try_acquire,
-                    // _M_release, stop_source get_token patterns removed
-                    // (is_broken_method_type guard skips semaphore and stop_source types)
-                    // codecvt wrapper methods with wrong pointer/value argument types
-                    // These call do_out/do_in/do_unshift/do_length with *__st (value) instead of pointer
-                    || (generated.contains("pub fn out(") && generated.contains("self.do_out(*__st,"))
-                    || (generated.contains("pub fn unshift(") && generated.contains("self.do_unshift(*__st,"))
-                    || (generated.contains("pub fn r#in(") && generated.contains("self.do_in(*__st,"))
-                    || (generated.contains("pub fn length(") && generated.contains("self.do_length(&*__st,"))
-                    // char_traits find method with global variable confusion (__gv___s instead of __s parameter)
-                    || (generated.contains("pub fn find(") && generated.contains("__gv___s"))
-                    // numeric_limits methods incorrectly calling 2-arg min/max shims with 0 args
-                    || (generated.contains("pub fn lowest") && generated.contains("min_bool()"))
-                    || (generated.contains("pub fn lowest") && generated.contains("max_f32()"))
-                    || (generated.contains("pub fn lowest") && generated.contains("max_f64()"))
-                    || (generated.contains("pub fn lowest") && generated.contains("max_bool()"))
-                    // NOTE: ctype do_is with __vec pattern removed (is_broken_method_type guard skips ctype types)
-                    // atomic_flag wait methods with &mut self on &self method
-                    || (generated.contains("pub fn wait(&self") && generated.contains("&mut self,"))
-                    || (generated.contains("pub fn wait_1(&self") && generated.contains("&mut self,"))
-                    // error_code default_error_condition with broken vtable access
-                    || (generated.contains("pub fn default_error_condition") && generated.contains("__vtable).default_error_condition)"))
-                    // type_info op_eq comparing &self with *const (type mismatch)
-                    || (generated.contains("pub fn op_eq") && generated.contains("return self == &*__arg as *const"))
-                    // hash functions returning usize instead of u64
-                    || (generated.contains("-> u64") && generated.contains(".wrapping_mul(") && !generated.contains("as u64"))
-                    // __find_idx_return with __ambiguous (wrong type)
-                    || (generated.contains("pub fn __find_idx_return") && generated.contains("__ambiguous"))
-                    // char_traits methods using __gv___s global instead of __s parameter
-                    || (generated.contains("pub fn length(") && generated.contains("__gv___s"))
-                    || (generated.contains("pub fn assign_1(") && generated.contains("__gv___s"))
-                    // numpunct methods with i8 return calling i32 do_* methods
-                    || (generated.contains("pub fn decimal_point") && generated.contains("-> i8") && generated.contains("do_decimal_point()"))
-                    || (generated.contains("pub fn thousands_sep") && generated.contains("-> i8") && generated.contains("do_thousands_sep()"))
-                    // NOTE: ctype is/scan_is/scan_not u16 and narrow &__c patterns removed
-                    // (is_broken_method_type guard skips ctype types)
-                    // atomic_flag __atomic_contention_address missing & on addressof argument
-                    || (generated.contains("pub fn __atomic_contention_address") && generated.contains("addressof(__a.__a_)"))
-                    // hash op_call returning u32 instead of u64 (XOR of two u32 fields)
-                    || (generated.contains("pub fn op_call") && generated.contains("__u.__s.__a ^"))
-                    // __cxx_atomic_thread_fence/__cxx_atomic_signal_fence with u32 instead of i32
-                    || (generated.contains("__c11_atomic_thread_fence(__order as u32)"))
-                    || (generated.contains("__c11_atomic_signal_fence(__order as u32)"))
-                    // op_call returning c_void with __continue_poll (wrong return type)
-                    || (generated.contains("pub fn op_call") && generated.contains("-> std___backoff_results") && generated.contains("__continue_poll"))
-                    // char_traits compare calling rolled-back __constexpr_memcmp_u8_u8
-                    || (generated.contains("pub fn compare") && generated.contains("__constexpr_memcmp_u8_u8("))
-                    // char_traits r#move/copy calling __constexpr_memmove with mutability mismatch
-                    || (generated.contains("pub fn r#move") && generated.contains("__constexpr_memmove_i8_i8(__s1, __s2"))
-                    || (generated.contains("pub fn copy") && generated.contains("__constexpr_memmove_i8_i8(__s1, __s2"))
-                    // __shared_count methods calling __libcpp_atomic_refcount with value instead of pointer
-                    || (generated.contains("__libcpp_atomic_refcount_increment_i64(self.__shared_owners_)"))
-                    || (generated.contains("__libcpp_atomic_refcount_decrement_i64(self.__shared_owners_)"))
-                    || (generated.contains("__libcpp_atomic_refcount_increment_i64(self.__shared_weak_owners_)"))
-                    // __shared_count use_count returning pointer instead of i64
-                    || (generated.contains("pub fn use_count") && generated.contains(".add(1 as usize)"))
-                    // __shared_weak_count methods calling rolled-back __shared_count methods
-                    || (generated.contains("pub fn __add_shared") && generated.contains("__base.__add_shared()"))
-                    || (generated.contains("pub fn __release_shared") && generated.contains("__base.__release_shared()"))
-                    || (generated.contains("pub fn use_count") && generated.contains("__base.use_count()"))
-                    // exception_ptr swap with wrong type - expecting *mut c_void, got c_void
-                    || (generated.contains("exception_ptr::new_1(") && generated.contains("*__other"))
-                    // NOTE: collate_byname vtable patterns removed
-                    // (is_broken_method_type guard skips collate_byname types)
-                    // __tree __set method using __gv___s global with wrong type (i64 vs u64)
-                    || (generated.contains("pub fn __set(") && generated.contains("__gv___s"))
-                    // Iterator op_index methods with c_void offset - self + c_void is invalid
-                    || (generated.contains("pub fn op_index") && generated.contains("self + ") && generated.contains("c_void"))
-                {
-                    // Rollback - remove the generated method
+                if Self::should_rollback_method(generated) {
                     self.output.truncate(output_start);
                 }
             }
@@ -16202,43 +16290,9 @@ impl AstCodeGen {
                     self.writeln("");
                 }
 
-                // Rollback constructors with broken patterns
+                // Validate generated constructor and rollback if invalid
                 let generated = &self.output[output_start..];
-                if generated.contains("&_V2::system_category() as *const")
-                    || generated.contains("&_V2::generic_category() as *const")
-                    || (generated.contains("if __refs { 1 }") && generated.contains("__refs: u64"))
-                    || (generated.contains("Box::from_raw(self)") && generated.contains("&self,"))
-                    || generated.contains("__base: locale::new_")
-                    // NOTE: STD_CTYPE_CHAR/WCHAR_T__VTABLE patterns removed
-                    // (is_broken_method_type guard skips ctype types)
-                    // system_error constructor with wrong __base type
-                    || (generated.contains("__base: system_error::new_2(") && generated.contains("__what: *const i8"))
-                    // c_void placeholder used as constructable base type
-                    || generated.contains("c_void::new_")
-                    // __base_type typedef resolves to wrong global type
-                    || generated.contains("__base_type::new_")
-                    // NOTE: ._M_state.* (6), stop_token__Stop_state_ref::new_,
-                    // std_nostopstate_t::new_1(, std_thread::new_0(,
-                    // sem_init(&mut, sem_destroy(&mut, __self.swap+thread,
-                    // _M_state+clone patterns removed
-                    // (is_broken_method_type guard skips constructors for threading types)
-                    // Exception class constructors with &c_void placeholder (unresolved template type)
-                    // These call logic_error/runtime_error::new_1 with wrong parameter type
-                    || (generated.contains("logic_error::new_1(__s)") && generated.contains("__s: &std::ffi::c_void"))
-                    || (generated.contains("runtime_error::new_1(__s)") && generated.contains("__s: &std::ffi::c_void"))
-                    // __narrow_to_utf8/__widen_from_utf8 constructors with wrong base class type
-                    // These call __mbstate_t::new_1(1) but base is codecvt_charXX_t__char__mbstate_t
-                    || generated.contains("__mbstate_t::new_1(1)")
-                    // NOTE: BAD_WEAK_PTR_VTABLE and STD_COLLATE_BYNAME_*__VTABLE patterns removed
-                    // (is_broken_method_type guard skips bad_weak_ptr and collate_byname types)
-                    // __locale_guard constructor with uselocale(&mut) instead of uselocale(*mut)
-                    || (generated.contains("uselocale(__loc)") && generated.contains("__loc: &mut"))
-                    // Exception class constructors using global __gv___s instead of __s parameter
-                    || (generated.contains("::new_1(unsafe { __gv___s })") && generated.contains("__s:"))
-                    || (generated.contains("::new_1_1(unsafe { __gv___s })") && generated.contains("__s:"))
-                    // Constructors directly assigning __gv___s to a field (type mismatch)
-                    || (generated.contains("unsafe { __gv___s }") && generated.contains("pub fn new_"))
-                {
+                if Self::should_rollback_constructor(generated) {
                     self.output.truncate(output_start);
                 }
             }
