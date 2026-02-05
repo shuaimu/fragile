@@ -1644,8 +1644,12 @@ impl AstCodeGen {
     /// Validation for constructor rollback in generate_method().
     /// Returns true if the code should be rolled back (is invalid).
     fn should_rollback_constructor(generated: &str) -> bool {
-        // Structural checks
-        if Self::has_cvoid_misuse(generated) {
+        // Structural checks safe for constructors (always on library types)
+        if Self::has_cvoid_misuse(generated)
+            || Self::has_undeclared_variables(generated)
+            || Self::has_unmapped_function_calls(generated)
+            || Self::has_bad_syntax(generated)
+        {
             return true;
         }
         generated.contains("&_V2::system_category() as *const")
@@ -1665,9 +1669,11 @@ impl AstCodeGen {
     /// Unified validation for libtooling-generated method bodies.
     /// Returns true if the code should be rolled back (is invalid).
     fn should_rollback_libtooling(generated: &str, rust_name: &str) -> bool {
-        // Structural checks
+        // Structural checks (libtooling generates only library code, all validators safe)
         Self::has_cvoid_misuse(generated)
             || Self::has_bad_syntax(generated)
+            || Self::has_undeclared_variables(generated)
+            || Self::has_unmapped_function_calls(generated)
             || generated.contains("todo!(")
             || generated.contains("._M_")
             // Only rollback __tree_ access if struct doesn't have __tree_ field
@@ -1675,9 +1681,7 @@ impl AstCodeGen {
                 && !rust_name.starts_with("std_set_")
                 && !rust_name.starts_with("std_multimap_")
                 && !rust_name.starts_with("std_multiset_"))
-            || generated.contains(".__comp_")
-            // Unresolved function/constructor calls
-            || generated.contains("_::new_")
+            // .__comp_ now caught by references_nonexistent_field for types with known fields
             || generated.contains("piecewise_construct")
             || generated.contains("forward_as_tuple")
     }
