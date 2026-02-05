@@ -1100,8 +1100,12 @@ impl AstCodeGen {
             || generated.contains("__x,")
             || generated.contains("__y,")
             || generated.contains(": __d")
-            // Template-dependent constructor
+            // Template-dependent constructors (unresolved type placeholders)
             || generated.contains("_dependent_type::new_")
+            || generated.contains("__iterator::new_")
+            || generated.contains("__const_iterator::new_")
+            || generated.contains("__const_reference::new_")
+            || generated.contains("__base_type::new_")
             // Wildcard type in variable declaration
             || generated.contains(": _ =")
             // _::new syntax (template-dependent constructor)
@@ -1552,13 +1556,9 @@ impl AstCodeGen {
             return true;
         }
         // Method-specific patterns
-        // Template placeholder constructors
-        generated.contains("__iterator::new_")
-            || generated.contains("__const_iterator::new_")
-            || generated.contains("__const_reference::new_")
-            // (1 + __cxx_atomic_load, return 1 && __cxx_atomic_load now in has_stdlib_internal_bugs)
-            // Invalid TypeId cast
-            || generated.contains("TypeId::of::<()>() as *const")
+        // (template placeholder constructors now in has_undeclared_variables)
+        // Invalid TypeId cast
+        generated.contains("TypeId::of::<()>() as *const")
             // Ordering conversion type mismatches
             || (generated.contains("-> partial_ordering") && (generated.contains("WEAK_ORDERING_") || generated.contains("STRONG_ORDERING_")))
             || (generated.contains("-> weak_ordering") && generated.contains("STRONG_ORDERING_"))
@@ -1649,7 +1649,7 @@ impl AstCodeGen {
         (generated.contains("if __refs { 1 }") && generated.contains("__refs: u64"))
             || generated.contains("__base: locale::new_")
             || (generated.contains("__base: system_error::new_2(") && generated.contains("__what: *const i8"))
-            || generated.contains("__base_type::new_")
+            // (__base_type::new_ now in has_undeclared_variables)
             || generated.contains("__mbstate_t::new_1(1)")
             || (generated.contains("uselocale(__loc)") && generated.contains("__loc: &mut"))
             // (__gv___s constructor patterns now in has_bad_syntax)
