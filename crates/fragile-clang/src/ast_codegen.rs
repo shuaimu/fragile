@@ -1129,6 +1129,41 @@ impl AstCodeGen {
             || generated.contains("__constexpr_memmove_i8_i8(")
     }
 
+    /// Check 4b: Detect broken atomic/refcount operations and related stdlib bugs.
+    /// These patterns are C++ standard library internals that never appear in user code,
+    /// so they're safe for all rollback blocks including function blocks.
+    fn has_stdlib_internal_bugs(generated: &str) -> bool {
+        // Atomic refcount: passing value instead of pointer
+        generated.contains("__libcpp_atomic_refcount_increment_i64(self.__shared_owners_)")
+            || generated.contains("__libcpp_atomic_refcount_decrement_i64(self.__shared_owners_)")
+            || generated.contains("__libcpp_atomic_refcount_increment_i64(self.__shared_weak_owners_)")
+            || (generated.contains("__libcpp_atomic_refcount_increment") && (generated.contains("self.__shared_owners_)") || generated.contains("self.__shared_weak_owners_)")))
+            || (generated.contains("__libcpp_atomic_refcount_decrement") && generated.contains("self.__shared_owners_)"))
+            // Broken __exchange_and_add/__atomic_add returning pointer
+            || (generated.contains("pub fn __exchange_and_add") && generated.contains("return __mem;"))
+            || (generated.contains("pub fn __atomic_add") && generated.contains("__mem;") && !generated.contains("*__mem"))
+            // use_count with pointer arithmetic instead of value
+            || (generated.contains("pub fn use_count") && generated.contains(".add(1 as usize)"))
+            // Wrong operator: 1 + __cxx_atomic_load (should be ==)
+            || generated.contains("1 + __cxx_atomic_load")
+            || generated.contains("return 1 && __cxx_atomic_load")
+            // Double-reference casts
+            || generated.contains("&&__e.category() as *const")
+            || (generated.contains("&_V2::system_category()") && generated.contains("as *const error_category"))
+            || (generated.contains("&_V2::generic_category()") && generated.contains("as *const error_category"))
+            // iword/pword returning reference to temporary
+            || (generated.contains("pub fn iword") && generated.contains("&mut __word._M_iword"))
+            || (generated.contains("pub fn pword") && generated.contains("&mut __word._M_pword"))
+            // numeric_limits lowest with wrong function calls
+            || (generated.contains("pub fn lowest") && (generated.contains("min_bool()") || generated.contains("max_f32()") || generated.contains("max_f64()") || generated.contains("max_bool()")))
+            // Box::from_raw on &self (ownership violation)
+            || (generated.contains("Box::from_raw(self)") && generated.contains("&self,"))
+            // __shared_weak_count delegation bugs
+            || (generated.contains("pub fn __add_shared") && generated.contains("__base.__add_shared()"))
+            || (generated.contains("pub fn __release_shared") && generated.contains("__base.__release_shared()"))
+            || (generated.contains("pub fn use_count") && generated.contains("__base.use_count()"))
+    }
+
     /// Check 5: Detect bad syntax patterns in generated code.
     fn has_bad_syntax(generated: &str) -> bool {
         // Literal dereference (invalid pointer ops)
@@ -1267,6 +1302,7 @@ impl AstCodeGen {
             || Self::has_undeclared_variables(generated)
             || Self::has_unmapped_function_calls(generated)
             || Self::has_bad_syntax(generated)
+            || Self::has_stdlib_internal_bugs(generated)
             || Self::has_bad_syntax_in_context(generated, rust_name)
     }
 
@@ -1279,11 +1315,10 @@ impl AstCodeGen {
             || Self::has_undeclared_variables(generated)
             || Self::has_unmapped_function_calls(generated)
             || Self::has_bad_syntax(generated)
+            || Self::has_stdlib_internal_bugs(generated)
             // fn_template-specific patterns
             || (generated.contains("hermite_u32(") && generated.contains("__x as f64)"))
-            || (generated.contains("__libcpp_atomic_refcount_increment") && (generated.contains("self.__shared_owners_)") || generated.contains("self.__shared_weak_owners_)")))
-            || (generated.contains("__libcpp_atomic_refcount_decrement") && generated.contains("self.__shared_owners_)"))
-            || (generated.contains("fn use_count") && generated.contains(".add(1 as usize)"))
+            // (atomic refcount and use_count now in has_stdlib_internal_bugs)
             || (generated.contains("i8)") && generated.contains("100000000"))
     }
 
@@ -1357,11 +1392,13 @@ impl AstCodeGen {
             return true;
         }
         // Structural checks safe for function blocks: c_void never appears in user code,
-        // and unmapped __-prefixed functions are internal C++ library calls.
+        // unmapped __-prefixed functions are internal C++ library calls, and stdlib internal
+        // bugs (atomic/refcount/double-ref) are C++ library internals never in user code.
         // NOTE: has_undeclared_variables is NOT safe here — patterns like `: _ =` and `__x,`
         // can appear in valid user code (lambdas, variable naming).
         if Self::has_cvoid_misuse(generated)
             || Self::has_unmapped_function_calls(generated)
+            || Self::has_stdlib_internal_bugs(generated)
         {
             return true;
         }
@@ -1391,8 +1428,7 @@ impl AstCodeGen {
         // Function-specific patterns
         // String concat on char pointers
         generated.contains("i8).op_add(")
-            // Wrong operator: 1 + __cxx_atomic_load (should be ==)
-            || generated.contains("1 + __cxx_atomic_load")
+            // (1 + __cxx_atomic_load now in has_stdlib_internal_bugs)
             // u128/u32 division type mismatch
             || generated.contains("/ __pow_10(")
             // Enum bitwise ops with type mismatch
@@ -1416,9 +1452,7 @@ impl AstCodeGen {
             || (generated.contains("return __builtin_isinf(__x)") && generated.contains("__x: f32"))
             || (generated.contains("return __builtin_isnan(__x)") && generated.contains("__x: f32"))
             || (generated.contains("return __builtin_isnormal(__x)") && generated.contains("__x: f32"))
-            // Broken atomic functions returning pointer
-            || (generated.contains("pub fn __exchange_and_add") && generated.contains("return __mem;"))
-            || (generated.contains("pub fn __atomic_add") && generated.contains("__mem;") && !generated.contains("*__mem"))
+            // (__exchange_and_add/__atomic_add now in has_stdlib_internal_bugs)
             // pthread_cond_timedwait wrong type
             || (generated.contains("fragile_pthread_cond_timedwait(") && generated.contains("__abs_timeout)"))
             // strong_ordering comparison
@@ -1427,8 +1461,7 @@ impl AstCodeGen {
             || (generated.contains("__wout.add(") && generated.contains("*__s.add(") && generated.contains("i32") && generated.contains("i8"))
             // u64 as bool coercion
             || (generated.contains("if __refs { 1 }") && generated.contains("__refs: u64"))
-            // Box::from_raw on &self
-            || (generated.contains("Box::from_raw(self)") && generated.contains("&self,"))
+            // (Box::from_raw on &self now in has_stdlib_internal_bugs)
             // system_error wrong inheritance
             || (generated.contains("system_error::new_2(") && generated.contains("__base: system_error"))
             // uselocale pointer type
@@ -1436,11 +1469,7 @@ impl AstCodeGen {
             // hash functions wrong type
             || (generated.contains("pub fn __hash") && generated.contains("-> u64") && generated.contains(">> "))
             || (generated.contains("pub fn hash_code") && generated.contains("wrapping_mul(0x9e3779b9)"))
-            // __libcpp_atomic_refcount with value instead of pointer
-            || (generated.contains("__libcpp_atomic_refcount_increment") && (generated.contains("self.__shared_owners_)") || generated.contains("self.__shared_weak_owners_)")))
-            || (generated.contains("__libcpp_atomic_refcount_decrement") && generated.contains("self.__shared_owners_)"))
-            // use_count returning pointer
-            || (generated.contains("pub fn use_count") && generated.contains(".add(1 as usize)"))
+            // (__libcpp_atomic_refcount and use_count now in has_stdlib_internal_bugs)
             // setf/unsetf i32 vs u32
             || (generated.contains("__base.setf(") && generated.contains("i32)"))
             || (generated.contains("__base.unsetf(") && generated.contains("i32)"))
@@ -1450,9 +1479,7 @@ impl AstCodeGen {
             || (generated.contains("_M_os._unnamed") && generated.contains("_unnamed"))
             // locale constructor __base field
             || (generated.contains("__base: locale::new_") && generated.contains("pub fn new_"))
-            // iword/pword returning reference to temporary
-            || (generated.contains("pub fn iword") && generated.contains("&mut __word._M_iword"))
-            || (generated.contains("pub fn pword") && generated.contains("&mut __word._M_pword"))
+            // (iword/pword now in has_stdlib_internal_bugs)
             // vtable type mismatches
             || generated.contains("__self.__base.__vtable = &STD_CTYPE_CHAR__VTABLE")
             || generated.contains("__self.__base.__vtable = &STD_CTYPE_WCHAR_T__VTABLE")
@@ -1460,10 +1487,7 @@ impl AstCodeGen {
             || generated.contains("__self.__base.__vtable = &STD_COLLATE_BYNAME_WCHAR_T__VTABLE")
             // bool != 0
             || generated.contains("(__hi != __lo) != 0")
-            // Double-reference casts
-            || (generated.contains("&_V2::system_category()") && generated.contains("as *const error_category"))
-            || (generated.contains("&_V2::generic_category()") && generated.contains("as *const error_category"))
-            || generated.contains("&&__e.category() as *const")
+            // (Double-reference casts now in has_stdlib_internal_bugs)
             // wstring missing methods
             || (generated.contains("wstring::new_3(") && generated.contains("__s.data()"))
             || (generated.contains("wstring::new_0()") && generated.contains("__to_wstring"))
@@ -1495,8 +1519,7 @@ impl AstCodeGen {
             || (generated.contains("__self.swap(&__t)") && generated.contains("__t: &mut thread"))
             // error_code/condition op_eq
             || (generated.contains("pub fn op_eq") && generated.contains(".equivalent(") && generated.contains("error_condition"))
-            // atomic_flag test
-            || (generated.contains("return 1 &&") && generated.contains("__cxx_atomic_load"))
+            // (return 1 && __cxx_atomic_load now in has_stdlib_internal_bugs)
             // backoff results
             || (generated.contains("-> std___backoff_results") && generated.contains("return __continue_poll"))
             // fetch_add_i32 memory_order
@@ -1512,8 +1535,7 @@ impl AstCodeGen {
             || (generated.contains("-> strong_ordering") && generated.contains("return equal."))
             || (generated.contains("-> strong_ordering") && generated.contains("return less."))
             || (generated.contains("-> strong_ordering") && generated.contains("return greater."))
-            // numeric_limits lowest
-            || (generated.contains("pub fn lowest") && (generated.contains("min_bool()") || generated.contains("max_f32()") || generated.contains("max_f64()") || generated.contains("max_bool()")))
+            // (numeric_limits lowest now in has_stdlib_internal_bugs)
             // __hypot 3-arg
             || (generated.contains("__hypot_f32(__") && generated.contains(", __z)"))
             || (generated.contains("__hypot_f64(__") && generated.contains(", __z)"))
@@ -1534,6 +1556,7 @@ impl AstCodeGen {
             || Self::has_unmapped_function_calls(generated)
             || Self::has_bad_syntax(generated)
             || Self::has_undeclared_variables(generated)
+            || Self::has_stdlib_internal_bugs(generated)
         {
             return true;
         }
@@ -1542,25 +1565,18 @@ impl AstCodeGen {
         generated.contains("__iterator::new_")
             || generated.contains("__const_iterator::new_")
             || generated.contains("__const_reference::new_")
-            // Wrong operator: 1 + __cxx_atomic_load
-            || generated.contains("1 + __cxx_atomic_load")
-            || generated.contains("return 1 && __cxx_atomic_load")
+            // (1 + __cxx_atomic_load, return 1 && __cxx_atomic_load now in has_stdlib_internal_bugs)
             // Invalid TypeId cast
             || generated.contains("TypeId::of::<()>() as *const")
             // Ordering conversion type mismatches
             || (generated.contains("-> partial_ordering") && (generated.contains("WEAK_ORDERING_") || generated.contains("STRONG_ORDERING_")))
             || (generated.contains("-> weak_ordering") && generated.contains("STRONG_ORDERING_"))
-            // Broken atomic functions
-            || (generated.contains("pub fn __exchange_and_add") && generated.contains("return __mem;"))
-            || (generated.contains("pub fn __atomic_add") && generated.contains("__mem;") && !generated.contains("*__mem"))
+            // (__exchange_and_add/__atomic_add now in has_stdlib_internal_bugs)
             // facet methods on &self
             || (generated.contains("pub fn _M_remove_reference") && generated.contains("Box::from_raw(self)"))
             || (generated.contains("pub fn _M_add_reference") && generated.contains("self._M_refcount"))
-            // Double-reference cast
-            || generated.contains("&&__e.category() as *const")
-            // iword/pword
-            || (generated.contains("pub fn iword") && generated.contains("&mut __word._M_iword"))
-            || (generated.contains("pub fn pword") && generated.contains("&mut __word._M_pword"))
+            // (&&__e.category() now in has_stdlib_internal_bugs)
+            // (iword/pword now in has_stdlib_internal_bugs)
             // Chrono operators
             || generated.contains(".count() as i64")
             // _Hash_impl
@@ -1598,8 +1614,7 @@ impl AstCodeGen {
             || (generated.contains("pub fn find(") && generated.contains("__gv___s"))
             || (generated.contains("pub fn length(") && generated.contains("__gv___s"))
             || (generated.contains("pub fn assign_1(") && generated.contains("__gv___s"))
-            // numeric_limits lowest
-            || (generated.contains("pub fn lowest") && (generated.contains("min_bool()") || generated.contains("max_f32()") || generated.contains("max_f64()") || generated.contains("max_bool()")))
+            // (numeric_limits lowest now in has_stdlib_internal_bugs)
             // atomic_flag wait &mut self on &self
             || (generated.contains("pub fn wait(&self") && generated.contains("&mut self,"))
             || (generated.contains("pub fn wait_1(&self") && generated.contains("&mut self,"))
@@ -1623,17 +1638,7 @@ impl AstCodeGen {
             || generated.contains("__c11_atomic_signal_fence(__order as u32)")
             // op_call backoff results
             || (generated.contains("pub fn op_call") && generated.contains("-> std___backoff_results") && generated.contains("__continue_poll"))
-            // char_traits constexpr — now caught by has_unmapped_function_calls above
-            // __shared_count atomic refcount
-            || generated.contains("__libcpp_atomic_refcount_increment_i64(self.__shared_owners_)")
-            || generated.contains("__libcpp_atomic_refcount_decrement_i64(self.__shared_owners_)")
-            || generated.contains("__libcpp_atomic_refcount_increment_i64(self.__shared_weak_owners_)")
-            // use_count
-            || (generated.contains("pub fn use_count") && generated.contains(".add(1 as usize)"))
-            // __shared_weak_count delegation
-            || (generated.contains("pub fn __add_shared") && generated.contains("__base.__add_shared()"))
-            || (generated.contains("pub fn __release_shared") && generated.contains("__base.__release_shared()"))
-            || (generated.contains("pub fn use_count") && generated.contains("__base.use_count()"))
+            // (atomic refcount, use_count, __shared_weak_count now in has_stdlib_internal_bugs)
             // exception_ptr swap
             || (generated.contains("exception_ptr::new_1(") && generated.contains("*__other"))
             // __tree __set
@@ -1649,13 +1654,12 @@ impl AstCodeGen {
             || Self::has_undeclared_variables(generated)
             || Self::has_unmapped_function_calls(generated)
             || Self::has_bad_syntax(generated)
+            || Self::has_stdlib_internal_bugs(generated)
         {
             return true;
         }
-        generated.contains("&_V2::system_category() as *const")
-            || generated.contains("&_V2::generic_category() as *const")
-            || (generated.contains("if __refs { 1 }") && generated.contains("__refs: u64"))
-            || (generated.contains("Box::from_raw(self)") && generated.contains("&self,"))
+        // (&_V2::system/generic_category and Box::from_raw on &self now in has_stdlib_internal_bugs)
+        (generated.contains("if __refs { 1 }") && generated.contains("__refs: u64"))
             || generated.contains("__base: locale::new_")
             || (generated.contains("__base: system_error::new_2(") && generated.contains("__what: *const i8"))
             || generated.contains("__base_type::new_")
@@ -1674,6 +1678,7 @@ impl AstCodeGen {
             || Self::has_bad_syntax(generated)
             || Self::has_undeclared_variables(generated)
             || Self::has_unmapped_function_calls(generated)
+            || Self::has_stdlib_internal_bugs(generated)
             || generated.contains("todo!(")
             || generated.contains("._M_")
             // Only rollback __tree_ access if struct doesn't have __tree_ field
