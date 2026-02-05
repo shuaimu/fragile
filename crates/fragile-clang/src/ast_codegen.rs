@@ -1169,16 +1169,25 @@ impl AstCodeGen {
     }
 
     /// Check 5: Detect bad syntax patterns in generated code.
+    /// Split into universal (safe for all blocks including function) and
+    /// operator patterns (only safe for method/template/libtooling/constructor blocks).
     fn has_bad_syntax(generated: &str) -> bool {
+        Self::has_bad_syntax_universal(generated)
+            // Wrong operator methods — NOT safe for function blocks because
+            // user operator overloads like Vec2::operator+ produce .op_add() calls
+            || generated.contains(".op_bitand(")
+            || generated.contains(".op_sub(")
+            || generated.contains(".op____(")
+    }
+
+    /// Bad syntax patterns that are safe for ALL blocks including function blocks.
+    /// These patterns reference C++ internals that never appear in user code.
+    fn has_bad_syntax_universal(generated: &str) -> bool {
         // Literal dereference (invalid pointer ops)
         generated.contains("*0")
             || generated.contains("*(*self)")
             || generated.contains("*1 }")
             || generated.contains("*_TreeIterator")
-            // Wrong operator methods
-            || generated.contains(".op_bitand(")
-            || generated.contains(".op_sub(")
-            || generated.contains(".op____(")
             // iter() on raw pointers (not valid in Rust)
             || generated.contains(".iter().")
             // Integer swap
@@ -1399,13 +1408,16 @@ impl AstCodeGen {
         // bugs (atomic/refcount/double-ref) are C++ library internals never in user code.
         // NOTE: has_undeclared_variables is NOT safe here — patterns like `: _ =` and `__x,`
         // can appear in valid user code (lambdas, variable naming).
+        // NOTE: has_bad_syntax_universal is safe (excludes .op_sub/.op_bitand/.op____ which
+        // match user operator overloads). Full has_bad_syntax is NOT safe.
         if Self::has_cvoid_misuse(generated)
             || Self::has_unmapped_function_calls(generated)
             || Self::has_stdlib_internal_bugs(generated)
+            || Self::has_bad_syntax_universal(generated)
         {
             return true;
         }
-        // Patterns specific to function block (from the original rollback block)
+        // _unnamed patterns (subset of has_undeclared_variables that's safe for function blocks)
         if generated.contains("_unnamed)")
             || generated.contains("_unnamed,")
             || generated.contains("._unnamed")
@@ -1413,15 +1425,8 @@ impl AstCodeGen {
         {
             return true;
         }
-        // Bad syntax from original block
-        if generated.contains("__bit_iterator<")
-            || generated.contains("pair<__bit_iterator")
-            || generated.contains(".iter().")
-            || generated.contains("(-__errno_location())")
-            || generated.contains("__stoa_extern__C")
-            || generated.contains("return _Size + 0")
-            || generated.contains("return _Size;")
-            || generated.contains("[__waiter_pool_base; 16] = __ct")
+        // Function-specific bad syntax not in has_bad_syntax_universal
+        if generated.contains("[__waiter_pool_base; 16] = __ct")
             || generated.contains("__atomic_always_lock_free(0, 0)")
         {
             return true;
