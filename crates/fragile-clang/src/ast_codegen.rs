@@ -1426,10 +1426,13 @@ impl AstCodeGen {
         if Self::has_uncalled_builtin_return(generated) {
             return true;
         }
-        // Only has_cvoid_misuse is safe for function blocks — c_void never appears in user code.
-        // Other structural checks (has_bad_syntax, has_unmapped_function_calls, etc.) contain
-        // patterns that match valid user code and are only safe for template_impl blocks.
-        if Self::has_cvoid_misuse(generated) {
+        // Structural checks safe for function blocks: c_void never appears in user code,
+        // and unmapped __-prefixed functions are internal C++ library calls.
+        // NOTE: has_undeclared_variables is NOT safe here — patterns like `: _ =` and `__x,`
+        // can appear in valid user code (lambdas, variable naming).
+        if Self::has_cvoid_misuse(generated)
+            || Self::has_unmapped_function_calls(generated)
+        {
             return true;
         }
         // Patterns specific to function block (from the original rollback block)
@@ -1454,16 +1457,7 @@ impl AstCodeGen {
         {
             return true;
         }
-        // Unmapped functions from original block
-        if generated.contains("sem_init(&mut")
-            || generated.contains("sem_destroy(&mut")
-            || generated.contains("_S_do_try_acquire(&mut")
-            || generated.contains("__to_wstring_numeric(")
-            || generated.contains("__atomic_wait_address_bare_i32(")
-            || generated.contains("__atomic_spin___std___detail___default_spin_policy(")
-        {
-            return true;
-        }
+        // (Unmapped function patterns now covered by has_unmapped_function_calls above)
         // Function-specific patterns
         // String concat on char pointers
         generated.contains("i8).op_add(")
@@ -1603,10 +1597,11 @@ impl AstCodeGen {
     /// Returns true if the code should be rolled back (is invalid).
     /// NOTE: Uses only the patterns from the original method rollback block.
     fn should_rollback_method(generated: &str) -> bool {
-        // Only has_cvoid_misuse is safe for method blocks — c_void never appears in user code.
-        // has_bad_syntax contains patterns that could match valid user code.
+        // Structural checks safe for method blocks: c_void and __-prefixed function calls
+        // never appear in user code.
         if Self::has_uncalled_builtin_return(generated)
             || Self::has_cvoid_misuse(generated)
+            || Self::has_unmapped_function_calls(generated)
         {
             return true;
         }
@@ -1710,10 +1705,7 @@ impl AstCodeGen {
             || generated.contains("__c11_atomic_signal_fence(__order as u32)")
             // op_call backoff results
             || (generated.contains("pub fn op_call") && generated.contains("-> std___backoff_results") && generated.contains("__continue_poll"))
-            // char_traits constexpr
-            || (generated.contains("pub fn compare") && generated.contains("__constexpr_memcmp_u8_u8("))
-            || (generated.contains("pub fn r#move") && generated.contains("__constexpr_memmove_i8_i8(__s1, __s2"))
-            || (generated.contains("pub fn copy") && generated.contains("__constexpr_memmove_i8_i8(__s1, __s2"))
+            // char_traits constexpr — now caught by has_unmapped_function_calls above
             // __shared_count atomic refcount
             || generated.contains("__libcpp_atomic_refcount_increment_i64(self.__shared_owners_)")
             || generated.contains("__libcpp_atomic_refcount_decrement_i64(self.__shared_owners_)")
