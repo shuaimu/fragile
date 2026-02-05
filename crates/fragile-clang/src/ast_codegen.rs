@@ -1077,9 +1077,21 @@ impl AstCodeGen {
     // string-matching rollback patterns.
 
     /// Check 3: Detect undeclared variables from partial template instantiation.
-    /// Template-dependent expressions produce variable references without corresponding
-    /// VarDecl nodes.
+    /// Split into universal (safe for all blocks) and full (includes patterns that
+    /// could false-positive on user code like `__x,` and `: _ =`).
     fn has_undeclared_variables(generated: &str) -> bool {
+        Self::has_undeclared_variables_universal(generated)
+            // These patterns could match valid user code, only safe for library blocks
+            || generated.contains("__x,")
+            || generated.contains("__y,")
+            || generated.contains(": _ =")
+            || generated.contains("DefaultType")
+    }
+
+    /// Undeclared variable patterns safe for ALL blocks including function blocks.
+    /// All patterns use `__` prefixed names or template-specific names that never
+    /// appear in user code.
+    fn has_undeclared_variables_universal(generated: &str) -> bool {
         // _unnamed placeholder values (not field declarations)
         generated.contains("_unnamed)")
             || generated.contains("_unnamed,")
@@ -1097,8 +1109,6 @@ impl AstCodeGen {
             // Other undeclared variables
             || generated.contains("__n0)")
             || generated.contains("__n1)")
-            || generated.contains("__x,")
-            || generated.contains("__y,")
             || generated.contains(": __d")
             // Template-dependent constructors (unresolved type placeholders)
             || generated.contains("_dependent_type::new_")
@@ -1106,12 +1116,8 @@ impl AstCodeGen {
             || generated.contains("__const_iterator::new_")
             || generated.contains("__const_reference::new_")
             || generated.contains("__base_type::new_")
-            // Wildcard type in variable declaration
-            || generated.contains(": _ =")
             // _::new syntax (template-dependent constructor)
             || generated.contains("_::new")
-            // DefaultType placeholder
-            || generated.contains("DefaultType")
     }
 
     /// Check 4: Detect calls to unmapped libc++/POSIX functions.
@@ -1406,22 +1412,15 @@ impl AstCodeGen {
         // Structural checks safe for function blocks: c_void never appears in user code,
         // unmapped __-prefixed functions are internal C++ library calls, and stdlib internal
         // bugs (atomic/refcount/double-ref) are C++ library internals never in user code.
-        // NOTE: has_undeclared_variables is NOT safe here — patterns like `: _ =` and `__x,`
-        // can appear in valid user code (lambdas, variable naming).
-        // NOTE: has_bad_syntax_universal is safe (excludes .op_sub/.op_bitand/.op____ which
-        // match user operator overloads). Full has_bad_syntax is NOT safe.
+        // NOTE: has_undeclared_variables_universal excludes patterns like `: _ =`, `__x,`,
+        // `__y,`, `DefaultType` that can appear in valid user code.
+        // NOTE: has_bad_syntax_universal excludes .op_sub/.op_bitand/.op____ which
+        // match user operator overloads. Full has_bad_syntax is NOT safe.
         if Self::has_cvoid_misuse(generated)
             || Self::has_unmapped_function_calls(generated)
             || Self::has_stdlib_internal_bugs(generated)
             || Self::has_bad_syntax_universal(generated)
-        {
-            return true;
-        }
-        // _unnamed patterns (subset of has_undeclared_variables that's safe for function blocks)
-        if generated.contains("_unnamed)")
-            || generated.contains("_unnamed,")
-            || generated.contains("._unnamed")
-            || generated.contains("- _unnamed")
+            || Self::has_undeclared_variables_universal(generated)
         {
             return true;
         }
