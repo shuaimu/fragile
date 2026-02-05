@@ -1025,6 +1025,10 @@ pub fn extract_specialization_field_types(ctx: &AstContext) -> HashMap<String, S
         }
     }
 
+    if std::env::var("FRAGILE_DEBUG_SPECIALIZATION").is_ok() {
+        eprintln!("[SPEC DEBUG] Total specializations extracted: {}", result.len());
+    }
+
     result
 }
 

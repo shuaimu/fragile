@@ -564,6 +564,25 @@ The current implementation uses forbidden patterns (see `docs/dev/wrong.md`). Th
       - Conclusion: further reduction requires fixing code-gen bugs, not more skip-listing
       - No code changes - analysis only
 
+- [~] **27.8.1.7** AST exporter: recursive field type specialization export ✅ (2026-02-04)
+    - **Problem**: When transpiling `std::map<int,int>`, the `__tree<...>` field type's
+      ClassTemplateSpecializationDecl was not always exported by the AST exporter.
+      Additionally, `TypeEncoder::visitRecordType` only encoded bare record names
+      (e.g., `"__tree"`) without template arguments, making it impossible for the Rust
+      side to match field types to specific specializations.
+    - **Fix (AstExporter.cpp)**:
+      1. Added `ensureFieldTypeSpecializationsExported()` helper that recursively visits
+         field type specializations after encoding each ClassTemplateSpecializationDecl.
+         Uses `markExported()` dedup to prevent infinite recursion on self-referential types.
+      2. Enhanced `visitRecordType` to encode full name with template arguments when the
+         RecordDecl is a ClassTemplateSpecializationDecl (e.g., `__tree<__value_type<int, int>, ...>`
+         instead of just `__tree`).
+    - **Result**: Specialization count increased from ~100 to 117 for a simple map test.
+      `__tree` and 11 related sub-types now have specialization data (field names/types)
+      available on the Rust side.
+    - **Foundation for**: Future stub struct replacement with real field layouts,
+      and further rollback pattern reduction via code-gen fixes.
+
 - [~] **27.8.2** Remove stub method injections ⚠️ PARTIALLY BLOCKED
   - Location: ast_codegen.rs lines ~3920-3970
   - Stubs: `size() { 0 }`, `op_index() { null_mut() }`, `push_back() { }`, `new_0() { zeroed() }`

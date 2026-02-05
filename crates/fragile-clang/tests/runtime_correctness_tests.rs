@@ -260,3 +260,81 @@ fn test_rollback_pattern_count() {
         rollback_count
     );
 }
+
+/// Test that the AST exporter recursively exports field type specializations.
+/// When transpiling std::map<int,int>, the __tree<...> field type should also
+/// have its specialization exported, providing field information.
+#[test]
+fn test_map_field_type_specializations_exported() {
+    let temp_dir = std::path::PathBuf::from("/tmp/fragile_runtime_test_map_spec");
+    let _ = fs::create_dir_all(&temp_dir);
+
+    let cpp_code = r#"
+#include <map>
+
+int main() {
+    std::map<int, int> m;
+    m[1] = 10;
+    return 0;
+}
+"#;
+    let cpp_path = temp_dir.join("test.cpp");
+    fs::write(&cpp_path, cpp_code).expect("Failed to write C++ source");
+
+    let rust_code = transpile_cpp_to_rust_with_libtooling(&cpp_path)
+        .expect("Transpilation should succeed");
+
+    // The std_map struct should reference a __tree type with template args
+    // (not just bare "__tree") in its field type
+    assert!(
+        rust_code.contains("pub struct std_map_int__int"),
+        "Should generate std_map_int__int struct"
+    );
+
+    // The __tree field type name should contain template argument info
+    // (i.e., it should be more specific than just "__tree")
+    let map_struct_start = rust_code.find("pub struct std_map_int__int").unwrap();
+    let map_struct_end = rust_code[map_struct_start..].find('}').unwrap() + map_struct_start;
+    let map_struct = &rust_code[map_struct_start..=map_struct_end];
+
+    // Field should reference a __tree type with template args encoded in the name
+    assert!(
+        map_struct.contains("__tree_: __tree_"),
+        "Map struct should have __tree_ field referencing a __tree type: {}",
+        map_struct
+    );
+
+    // The __tree type name should include value_type info (not just bare __tree)
+    assert!(
+        map_struct.contains("__value_type") || map_struct.contains("value_type"),
+        "Map's __tree field type should encode value_type template arg: {}",
+        map_struct
+    );
+
+    // The __tree stub struct should exist and have __emplace_unique
+    assert!(
+        rust_code.contains("pub fn __emplace_unique"),
+        "Should generate __emplace_unique stub method on __tree type"
+    );
+
+    // Verify compilation still works
+    let rs_path = temp_dir.join("test.rs");
+    fs::write(&rs_path, &rust_code).expect("Failed to write Rust source");
+
+    let compile_output = Command::new("rustc")
+        .arg("--edition")
+        .arg("2021")
+        .arg("-A")
+        .arg("warnings")
+        .arg(&rs_path)
+        .arg("-o")
+        .arg(temp_dir.join("test_binary"))
+        .output()
+        .expect("Failed to run rustc");
+
+    assert!(
+        compile_output.status.success(),
+        "std::map with __tree field specialization should compile.\nErrors:\n{}",
+        String::from_utf8_lossy(&compile_output.stderr)
+    );
+}

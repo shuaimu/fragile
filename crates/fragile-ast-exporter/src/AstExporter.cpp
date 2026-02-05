@@ -238,6 +238,9 @@ private:
                      const std::vector<const void *> &children,
                      QualType type = QualType(),
                      std::function<void(CborEncoder *)> extra = [](CborEncoder *) {});
+
+    // Recursively ensure field type specializations are exported
+    void ensureFieldTypeSpecializationsExported(ClassTemplateSpecializationDecl *CTSD);
 };
 
 // ============================================================================
@@ -507,7 +510,25 @@ void TypeEncoder::visitRecordType(const RecordType *T) {
     auto *RD = T->getDecl();
     encodeType(T, TagRecordType, [RD](CborEncoder *enc) {
         cbor_encode_uint(enc, reinterpret_cast<uint64_t>(RD));
-        cbor_encode_string(enc, RD->getNameAsString());
+
+        // For template specializations, encode the full name with template arguments
+        // so the Rust side can match field types to exported specializations
+        if (auto *CTSD = dyn_cast<ClassTemplateSpecializationDecl>(RD)) {
+            std::string name = CTSD->getNameAsString();
+            const auto &args = CTSD->getTemplateArgs();
+            name += "<";
+            for (unsigned i = 0; i < args.size(); ++i) {
+                if (i > 0) name += ", ";
+                std::string argStr;
+                llvm::raw_string_ostream os(argStr);
+                args[i].print(PrintingPolicy(LangOptions()), os, true);
+                name += os.str();
+            }
+            name += ">";
+            cbor_encode_string(enc, name);
+        } else {
+            cbor_encode_string(enc, RD->getNameAsString());
+        }
     });
 }
 
@@ -1178,7 +1199,50 @@ bool ASTExporterVisitor::VisitClassTemplateSpecializationDecl(ClassTemplateSpeci
                                                  TSK_ExplicitSpecialization);
                 });
 
+    // Recursively ensure field type specializations are exported
+    ensureFieldTypeSpecializationsExported(CTSD);
+
     return true;
+}
+
+void ASTExporterVisitor::ensureFieldTypeSpecializationsExported(
+    ClassTemplateSpecializationDecl *CTSD) {
+    if (!CTSD->hasDefinition())
+        return;
+
+    for (auto *D : CTSD->decls()) {
+        auto *FD = dyn_cast<FieldDecl>(D);
+        if (!FD)
+            continue;
+
+        // Get the canonical type, stripping typedefs, elaborated types, etc.
+        QualType FieldType = FD->getType();
+        const Type *T = FieldType.getCanonicalType().getTypePtr();
+
+        // Peel through pointers/references to find the underlying record
+        while (true) {
+            if (auto *PT = dyn_cast<clang::PointerType>(T)) {
+                T = PT->getPointeeType().getTypePtr();
+            } else if (auto *RT = dyn_cast<ReferenceType>(T)) {
+                T = RT->getPointeeType().getTypePtr();
+            } else {
+                break;
+            }
+        }
+
+        // If the underlying type is a class template specialization, visit it
+        if (auto *RT = dyn_cast<RecordType>(T)) {
+            if (auto *FieldCTSD = dyn_cast<ClassTemplateSpecializationDecl>(RT->getDecl())) {
+                if (debug) {
+                    llvm::errs() << "  Ensuring field type specialization exported: "
+                                 << FieldCTSD->getQualifiedNameAsString() << "\n";
+                }
+                // markExported inside VisitClassTemplateSpecializationDecl prevents
+                // infinite recursion for self-referential types
+                VisitClassTemplateSpecializationDecl(FieldCTSD);
+            }
+        }
+    }
 }
 
 bool ASTExporterVisitor::VisitNamespaceDecl(NamespaceDecl *ND) {
