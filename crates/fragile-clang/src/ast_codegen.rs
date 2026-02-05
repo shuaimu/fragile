@@ -1480,11 +1480,7 @@ impl AstCodeGen {
             // locale constructor __base field
             || (generated.contains("__base: locale::new_") && generated.contains("pub fn new_"))
             // (iword/pword now in has_stdlib_internal_bugs)
-            // vtable type mismatches
-            || generated.contains("__self.__base.__vtable = &STD_CTYPE_CHAR__VTABLE")
-            || generated.contains("__self.__base.__vtable = &STD_CTYPE_WCHAR_T__VTABLE")
-            || generated.contains("__self.__base.__vtable = &STD_COLLATE_BYNAME_CHAR__VTABLE")
-            || generated.contains("__self.__base.__vtable = &STD_COLLATE_BYNAME_WCHAR_T__VTABLE")
+            // (vtable patterns dead: ctype/collate_byname types skipped by is_broken_method_type)
             // bool != 0
             || generated.contains("(__hi != __lo) != 0")
             // (Double-reference casts now in has_stdlib_internal_bugs)
@@ -1505,18 +1501,11 @@ impl AstCodeGen {
             // memory_order with bitwise ops
             || (generated.contains(".op_bitand(") && generated.contains("memory_order"))
             || (generated.contains(".op_bitor(") && generated.contains("memory_order"))
-            // __cmpexch_failure_order2 wrong return
-            || (generated.contains("-> memory_order") && generated.contains("memory_order_acquire") && generated.contains("memory_order_relaxed"))
-            // atomic_flag functions
-            || (generated.contains("atomic_flag_wait") && generated.contains("(*__a).wait("))
-            || (generated.contains("atomic_flag_clear") && generated.contains("(*__a).clear(__m)"))
-            // __waiter_pool broken init
-            || generated.contains("[__waiter_pool_base; 16] = __ct")
-            // __atomic_always_lock_free
-            || generated.contains("__atomic_always_lock_free(0, 0)")
-            // swap mutability
+            // (__cmpexch_failure_order2 dead: in is_broken_function skip list)
+            // (atomic_flag_wait/clear dead: in is_broken_function skip list)
+            // (swap_thread_thread dead: in is_broken_function skip list)
+            // swap mutability (non-thread swap patterns)
             || (generated.contains("pub fn swap") && generated.contains(".swap(&*__"))
-            || (generated.contains("__self.swap(&__t)") && generated.contains("__t: &mut thread"))
             // error_code/condition op_eq
             || (generated.contains("pub fn op_eq") && generated.contains(".equivalent(") && generated.contains("error_condition"))
             // (return 1 && __cxx_atomic_load now in has_stdlib_internal_bugs)
