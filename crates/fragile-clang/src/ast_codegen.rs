@@ -1141,7 +1141,7 @@ impl AstCodeGen {
             // use_count with pointer arithmetic instead of value
             || (generated.contains("pub fn use_count") && generated.contains(".add(1 as usize)"))
             // Wrong operator: 1 + __cxx_atomic_load (should be ==), 1 && ... (should be ==)
-            || (generated.contains("__cxx_atomic_load") && (generated.contains("1 + __cxx") || generated.contains("1 && __cxx")))
+            || (generated.contains("__cxx_atomic_load") && (generated.contains("1 + __cxx") || (generated.contains("1 && __cxx"))))
             // Double-reference casts
             || (generated.contains("&&__e.category()") && generated.contains("as *const"))
             || (generated.contains("&_V2::system_category()") && generated.contains("as *const error_category"))
@@ -1242,7 +1242,7 @@ impl AstCodeGen {
     /// __end_, __begin_, __parent_, __fill_val_) were moved to references_nonexistent_field().
     fn has_bad_syntax_in_context(generated: &str, rust_name: &str) -> bool {
         // Static methods (no self) trying to use (*self)
-        if (generated.contains("pub fn max()") || generated.contains("pub fn min()"))
+        if ["pub fn max()", "pub fn min()"].iter().any(|p| generated.contains(p))
             && generated.contains("(*self)")
         {
             return true;
@@ -1289,7 +1289,7 @@ impl AstCodeGen {
         }
         // do_narrow/do_allocate on wrong types
         if (rust_name.contains("basic_ios") && generated.contains("do_narrow("))
-            || generated.contains(".do_allocate(")
+            || (generated.contains(".do_allocate("))
         {
             return true;
         }
@@ -1446,25 +1446,21 @@ impl AstCodeGen {
             return true;
         }
         // Function-specific bad syntax not in shared validators
-        if generated.contains("[__waiter_pool_base; 16] = __ct")
-            || generated.contains("__atomic_always_lock_free(0, 0)")
+        if ["[__waiter_pool_base; 16] = __ct", "__atomic_always_lock_free(0, 0)",
+            "i8).op_add(", "/ __pow_10("].iter().any(|p| generated.contains(p))
         {
             return true;
         }
         // (Unmapped function patterns now covered by has_unmapped_function_calls above)
         // Function-specific patterns
-        // String concat on char pointers
-        generated.contains("i8).op_add(")
-            // (1 + __cxx_atomic_load now in has_stdlib_internal_bugs)
-            // u128/u32 division type mismatch
-            || generated.contains("/ __pow_10(")
+        false
             // Enum bitwise ops with type mismatch
             || (generated.contains(" as i32 & ") && !generated.contains("-> i32"))
             || (generated.contains(" as i32 | ") && !generated.contains("-> i32"))
             || (generated.contains(" as i32 ^ ") && !generated.contains("-> i32"))
             || (generated.contains("!") && generated.contains(" as i32") && generated.contains("std__Ios"))
             // setf overload: wrong integer type for fmtflags mask parameter
-            || (generated.contains(".setf(") && (generated.contains("i32)") || generated.contains("u32)")))
+            || (generated.contains(".setf(") && (generated.contains("i32)") || (generated.contains("u32)"))))
             // ctype overloaded methods
             || (generated.contains(".do_toupper(") && generated.contains(", __hi)"))
             || (generated.contains(".do_tolower(") && generated.contains(", __hi)"))
@@ -1566,7 +1562,7 @@ impl AstCodeGen {
         // Invalid TypeId cast
         generated.contains("TypeId::of::<()>() as *const")
             // Ordering conversion type mismatches
-            || (generated.contains("-> partial_ordering") && (generated.contains("WEAK_ORDERING_") || generated.contains("STRONG_ORDERING_")))
+            || (generated.contains("-> partial_ordering") && (generated.contains("WEAK_ORDERING_") || (generated.contains("STRONG_ORDERING_"))))
             || (generated.contains("-> weak_ordering") && generated.contains("STRONG_ORDERING_"))
             // (__exchange_and_add/__atomic_add now in has_stdlib_internal_bugs)
             // facet methods on &self
@@ -1575,9 +1571,9 @@ impl AstCodeGen {
             // (&&__e.category() now in has_stdlib_internal_bugs)
             // (iword/pword now in has_stdlib_internal_bugs)
             // Chrono operators
-            || generated.contains(".count() as i64")
+            || (generated.contains(".count() as i64"))
             // _Hash_impl
-            || generated.contains("_Hash_impl::hash_u64(")
+            || (generated.contains("_Hash_impl::hash_u64("))
             // atomic_flag op_assign
             || (generated.contains("_M_base.op_assign(") && generated.contains("-> bool"))
             // (atomic memory_order transmute now in has_bad_memory_order)
@@ -1656,15 +1652,15 @@ impl AstCodeGen {
             || Self::has_stdlib_internal_bugs(generated)
             || Self::has_bad_memory_order(generated)
             || Self::has_broken_locale_constructors(generated)
-            || generated.contains("._M_")
+            || (generated.contains("._M_"))
             // Only rollback __tree_ access if struct doesn't have __tree_ field
             || (generated.contains(".__tree_") && !rust_name.starts_with("std_map_")
                 && !rust_name.starts_with("std_set_")
                 && !rust_name.starts_with("std_multimap_")
                 && !rust_name.starts_with("std_multiset_"))
             // .__comp_ now caught by references_nonexistent_field for types with known fields
-            || generated.contains("piecewise_construct")
-            || generated.contains("forward_as_tuple")
+            || (generated.contains("piecewise_construct"))
+            || (generated.contains("forward_as_tuple"))
     }
 
     /// Generate Rust source code from a Clang AST.
@@ -5397,7 +5393,7 @@ impl AstCodeGen {
 
         // Check for broken patterns and rollback if necessary
         let generated = &self.output[output_start..];
-        if generated.contains("Args...") || generated.contains("_unnamed") {
+        if ["Args...", "_unnamed"].iter().any(|p| generated.contains(p)) {
             self.output.truncate(output_start);
         }
     }
@@ -12659,8 +12655,7 @@ impl AstCodeGen {
 
                 // Rollback if the Drop impl contains template-dependent code
                 let generated = &self.output[output_start..];
-                if generated.contains("_dependent_type::new_")
-                    || generated.contains("._unnamed")
+                if ["_dependent_type::new_", "._unnamed"].iter().any(|p| generated.contains(p))
                     // NOTE: ._M_state.op_bool/op_arrow, self.joinable/request_stop/join,
                     // sem_destroy(&mut self, __condvar patterns removed
                     // (is_broken_drop_type guard skips Drop impl for threading/condvar types)
