@@ -1202,6 +1202,8 @@ impl AstCodeGen {
             || generated.contains("pair<__bit_iterator")
             // __stoa extern C linkage issues
             || generated.contains("__stoa_extern__C")
+            // __gv___s: parameter __s misresolved as global variable reference
+            || generated.contains("__gv___s")
     }
 
     /// Check 5b: Detect bad syntax that requires context (rust_name or function signature).
@@ -1599,10 +1601,7 @@ impl AstCodeGen {
             || (generated.contains("pub fn unshift(") && generated.contains("self.do_unshift(*__st,"))
             || (generated.contains("pub fn r#in(") && generated.contains("self.do_in(*__st,"))
             || (generated.contains("pub fn length(") && generated.contains("self.do_length(&*__st,"))
-            // char_traits __gv___s
-            || (generated.contains("pub fn find(") && generated.contains("__gv___s"))
-            || (generated.contains("pub fn length(") && generated.contains("__gv___s"))
-            || (generated.contains("pub fn assign_1(") && generated.contains("__gv___s"))
+            // (char_traits __gv___s now in has_bad_syntax)
             // (numeric_limits lowest now in has_stdlib_internal_bugs)
             // atomic_flag wait &mut self on &self
             || (generated.contains("pub fn wait(&self") && generated.contains("&mut self,"))
@@ -1630,8 +1629,7 @@ impl AstCodeGen {
             // (atomic refcount, use_count, __shared_weak_count now in has_stdlib_internal_bugs)
             // exception_ptr swap
             || (generated.contains("exception_ptr::new_1(") && generated.contains("*__other"))
-            // __tree __set
-            || (generated.contains("pub fn __set(") && generated.contains("__gv___s"))
+            // (__set __gv___s now in has_bad_syntax)
             // (c_void patterns and bool/int mixing now handled by structural checks above)
     }
 
@@ -1654,9 +1652,7 @@ impl AstCodeGen {
             || generated.contains("__base_type::new_")
             || generated.contains("__mbstate_t::new_1(1)")
             || (generated.contains("uselocale(__loc)") && generated.contains("__loc: &mut"))
-            || (generated.contains("::new_1(unsafe { __gv___s })") && generated.contains("__s:"))
-            || (generated.contains("::new_1_1(unsafe { __gv___s })") && generated.contains("__s:"))
-            || (generated.contains("unsafe { __gv___s }") && generated.contains("pub fn new_"))
+            // (__gv___s constructor patterns now in has_bad_syntax)
     }
 
     /// Unified validation for libtooling-generated method bodies.
