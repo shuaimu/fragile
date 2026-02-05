@@ -1471,31 +1471,97 @@ impl AstCodeGen {
         self.writeln("");
 
         for (rust_name, cpp_name) in missing_types {
+            // Check if we have specialization field data for this type
+            let spec_info = self.find_specialization_by_rust_name(&rust_name);
+            let has_real_fields = spec_info.as_ref().map_or(false, |info| {
+                // Only use real fields if we have non-padding fields
+                info.field_types.keys().any(|k| !k.contains("padding"))
+            });
+
             self.writeln(&format!("/// Placeholder for C++ `{}`", cpp_name));
             self.writeln("#[repr(C)]");
-            // Use an opaque array to match the C++ struct size
-            // For now, use a placeholder size - in the future we could query libclang for actual size
             self.writeln(&format!("pub struct {} {{", rust_name));
             self.indent += 1;
-            self.writeln("_opaque: [u8; 64], // placeholder - actual size may differ");
+
+            // Track field names and their default expressions for Default impl
+            let mut field_defaults: Vec<(String, String)> = Vec::new();
+
+            if has_real_fields {
+                let info = spec_info.as_ref().unwrap();
+                // Generate fields from specialization data.
+                // For complex internal types (tree nodes, allocators, comparators), use opaque
+                // representations since these types aren't defined. Only map well-known types
+                // (size_type, pointers) to real Rust types.
+                let mut fields: Vec<_> = info.field_types.iter()
+                    .filter(|(name, _)| !name.contains("padding"))
+                    .collect();
+                fields.sort_by_key(|(name, _)| name.to_string());
+
+                for (field_name, field_type) in &fields {
+                    let sanitized = sanitize_identifier(field_name);
+                    let rust_type = field_type.to_rust_type_str();
+
+                    // Determine the Rust type for this field:
+                    // - Pointer fields: use *mut u8 (all internal node pointers are opaque)
+                    // - size_type / unsigned long fields: use usize
+                    // - Known primitive types: use as-is
+                    // - Complex/undefined types: use [u8; 8] as opaque placeholder
+                    let (effective_type, default_val) = if rust_type.starts_with("*") {
+                        ("*mut u8".to_string(), "std::ptr::null_mut()".to_string())
+                    } else if rust_type == "usize" || *field_name == "__size_" {
+                        // __size_ is size_type (unsigned long) regardless of what the
+                        // AST resolver reports (may come through as decltype)
+                        ("usize".to_string(), "0".to_string())
+                    } else if matches!(rust_type.as_str(), "bool" | "u8" | "u16" | "u32" | "u64"
+                        | "i8" | "i16" | "i32" | "i64" | "f32" | "f64" | "isize") {
+                        (rust_type.clone(), "0".into())
+                    } else {
+                        // Complex internal type (tree_end_node, allocator, comparator, etc.)
+                        // Use pointer-sized opaque bytes since these are typically pointer-sized
+                        // or empty (zero-size comparators/allocators use EBO)
+                        ("[u8; 8]".to_string(), "[0u8; 8]".to_string())
+                    };
+
+                    self.writeln(&format!("pub {}: {},", sanitized, effective_type));
+                    field_defaults.push((sanitized.to_string(), default_val));
+                }
+                // Add padding for layout compatibility (tree nodes have vtable pointers, etc.)
+                self.writeln("_padding: [u8; 16], // padding for layout compatibility");
+                field_defaults.push(("_padding".to_string(), "[0u8; 16]".to_string()));
+            } else {
+                // Opaque placeholder
+                self.writeln("_opaque: [u8; 64], // placeholder - actual size may differ");
+                field_defaults.push(("_opaque".to_string(), "[0u8; 64]".to_string()));
+            }
+
             self.indent -= 1;
             self.writeln("}");
             self.writeln("");
 
-            // Generate Default and Copy impls
-            // Note: Copy is added as a workaround for code generation issues where
-            // (*self).__tree_ tries to move instead of borrow. This is semantically
-            // incorrect but allows compilation for stub purposes.
+            // Generate Default impl
             self.writeln(&format!("impl Default for {} {{", rust_name));
             self.indent += 1;
             self.writeln("fn default() -> Self {");
             self.indent += 1;
-            self.writeln("Self { _opaque: [0u8; 64] }");
+            if field_defaults.len() == 1 {
+                let (name, val) = &field_defaults[0];
+                self.writeln(&format!("Self {{ {}: {} }}", name, val));
+            } else {
+                self.writeln("Self {");
+                self.indent += 1;
+                for (name, val) in &field_defaults {
+                    self.writeln(&format!("{}: {},", name, val));
+                }
+                self.indent -= 1;
+                self.writeln("}");
+            }
             self.indent -= 1;
             self.writeln("}");
             self.indent -= 1;
             self.writeln("}");
             self.writeln("");
+
+            // Copy and Clone impls
             self.writeln(&format!("impl Copy for {} {{}}", rust_name));
             self.writeln(&format!("impl Clone for {} {{", rust_name));
             self.indent += 1;
@@ -1509,16 +1575,19 @@ impl AstCodeGen {
                 self.writeln(&format!("impl {} {{", rust_name));
                 self.indent += 1;
                 self.writeln("/// Stub for __emplace_unique - returns a stub result for map::operator[]");
-                // Use Copy bound to allow passing by value (piecewise_construct_t is empty and Copy)
                 self.writeln("pub fn __emplace_unique<T1, T2>(&mut self, _tag: impl Copy, _key_tuple: T1, _val_tuple: T2) -> __tree_emplace_result {");
                 self.indent += 1;
                 self.writeln("__tree_emplace_result::default()");
                 self.indent -= 1;
                 self.writeln("}");
                 self.writeln("");
-                // Add size() stub for map::size() delegation
-                self.writeln("/// Stub for size - returns 0 (tree size not tracked)");
-                self.writeln("pub fn size(&self) -> usize { 0 }");
+                // Generate size() - use real __size_ field if available, otherwise stub
+                if has_real_fields && spec_info.as_ref().map_or(false, |i| i.field_types.contains_key("__size_")) {
+                    self.writeln("pub fn size(&self) -> usize { self.__size_ as usize }");
+                } else {
+                    self.writeln("/// Stub for size - returns 0 (tree size not tracked)");
+                    self.writeln("pub fn size(&self) -> usize { 0 }");
+                }
                 self.indent -= 1;
                 self.writeln("}");
                 self.writeln("");
@@ -3404,6 +3473,103 @@ impl AstCodeGen {
         None
     }
 
+    /// Find a specialization by matching its qualified name against a rust_name.
+    /// This is used by generate_missing_type_stubs to find field data for types
+    /// that go through the opaque stub path (like __tree).
+    ///
+    /// The rust_name comes from field types encoded as `__tree<...>` (short base name)
+    /// while specialization keys use `std::__tree<...>` (qualified name). We try both forms.
+    /// Normalize a sanitized rust_name for fuzzy matching by removing noise words
+    /// that differ between encoding paths (visitRecordType vs VisitClassTemplateSpecializationDecl).
+    /// The specialization key includes "struct ", "class ", "std::" in template args,
+    /// while the field type from visitRecordType may or may not include them.
+    fn normalize_rust_name_for_matching(s: &str) -> String {
+        let mut result = s.to_string();
+        // Remove struct_, class_ prefixes that appear inside template arg encoding
+        // These come from elaborated type specifiers in Clang's args[i].print()
+        // Use loop to handle repeated patterns
+        loop {
+            let prev = result.clone();
+            result = result.replace("_struct_", "_");
+            result = result.replace("_class_", "_");
+            // Also at start
+            if result.starts_with("struct_") {
+                result = result["struct_".len()..].to_string();
+            }
+            if result.starts_with("class_") {
+                result = result["class_".len()..].to_string();
+            }
+            if result == prev {
+                break;
+            }
+        }
+        // Remove std_ prefixes before internal type names
+        // The key has std:: but visitRecordType uses getNameAsString() without std::
+        loop {
+            let prev = result.clone();
+            result = result.replace("_std_", "_");
+            if result.starts_with("std_") {
+                result = result["std_".len()..].to_string();
+            }
+            if result == prev {
+                break;
+            }
+        }
+        // Remove const_ qualifiers that may differ between encoding paths
+        // (e.g., pair<const int, int> vs pair<int, int>)
+        loop {
+            let prev = result.clone();
+            result = result.replace("_const_", "_");
+            if result.starts_with("const_") {
+                result = result["const_".len()..].to_string();
+            }
+            if result == prev {
+                break;
+            }
+        }
+        // Collapse multiple underscores that result from stripping
+        while result.contains("___") {
+            result = result.replace("___", "__");
+        }
+        // Remove trailing underscore
+        while result.ends_with('_') && result.len() > 1 {
+            result.pop();
+        }
+        result
+    }
+
+    fn find_specialization_by_rust_name(
+        &self,
+        rust_name: &str,
+    ) -> Option<crate::libtooling::SpecializationFieldInfo> {
+        let target_normalized = Self::normalize_rust_name_for_matching(rust_name);
+        for (key, info) in &self.specialization_field_types {
+            // Try exact match first
+            let key_rust = CppType::Named(key.clone()).to_rust_type_str();
+            if key_rust == rust_name {
+                return Some(info.clone());
+            }
+            // Try with std:: prefix stripped
+            if let Some(stripped) = key.strip_prefix("std::") {
+                let stripped_rust = CppType::Named(stripped.to_string()).to_rust_type_str();
+                if stripped_rust == rust_name {
+                    return Some(info.clone());
+                }
+            }
+            // Try normalized fuzzy matching - strip struct_, class_, std_ noise words
+            let key_rust_stripped = if let Some(stripped) = key.strip_prefix("std::") {
+                CppType::Named(stripped.to_string()).to_rust_type_str()
+            } else {
+                key_rust.clone()
+            };
+            let key_normalized = Self::normalize_rust_name_for_matching(&key_rust_stripped);
+            if key_normalized == target_normalized {
+                return Some(info.clone());
+            }
+        }
+        None
+    }
+
     /// Find the position of the matching closing `>` for a template argument list.
     /// Returns None if the string is malformed or doesn't have a matching close.
     fn find_matching_close_angle(s: &str, open_pos: usize) -> Option<usize> {
@@ -3947,7 +4113,17 @@ impl AstCodeGen {
             let has_new_0 = self.output[impl_start..].contains("pub fn new_0(");
 
             if !has_size {
-                self.writeln("pub fn size(&self) -> usize { 0 }");
+                // std::map, std::set, std::multimap, std::multiset use __tree_ internally.
+                // Delegate size() to __tree_.size() which reads the real __size_ field.
+                let is_tree_based = rust_name.starts_with("std_map_")
+                    || rust_name.starts_with("std_set_")
+                    || rust_name.starts_with("std_multimap_")
+                    || rust_name.starts_with("std_multiset_");
+                if is_tree_based {
+                    self.writeln("pub fn size(&self) -> usize { self.__tree_.size() }");
+                } else {
+                    self.writeln("pub fn size(&self) -> usize { 0 }");
+                }
                 self.writeln("");
             }
 

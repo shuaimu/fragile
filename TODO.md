@@ -601,14 +601,35 @@ The current implementation uses forbidden patterns (see `docs/dev/wrong.md`). Th
     - **Foundation for**: Making `__tree` non-opaque (replacing `[u8; 64]` with real fields),
       which would make `__tree::size()` return actual `__size_` instead of 0.
 
+- [x] **27.8.1.9** Use specialization field data to generate non-opaque `__tree` struct ✅ (2026-02-04)
+    - **Problem**: `__tree` stub struct used `_opaque: [u8; 64]` placeholder, making
+      `__tree::size()` always return 0 and `map::size()` incorrect.
+    - **Fix (ast_codegen.rs)**:
+      1. Added `normalize_rust_name_for_matching()` to fuzzy-match specialization keys to
+         rust_names by stripping `struct_`, `class_`, `std_`, `const_` noise words that
+         differ between encoding paths (visitRecordType vs VisitClassTemplateSpecializationDecl).
+      2. Updated `find_specialization_by_rust_name()` to try exact match, std::-stripped match,
+         and normalized fuzzy match.
+      3. Updated `generate_missing_type_stubs()` to generate real fields when specialization
+         data is available: `__begin_node_: *mut u8`, `__end_node_: [u8; 8]`,
+         `__size_: usize`, etc. Complex internal types use opaque `[u8; 8]` placeholders.
+      4. Updated `__tree::size()` to return `self.__size_ as usize` when `__size_` field exists.
+      5. Updated `map::size()` to delegate to `self.__tree_.size()` for tree-based containers.
+    - **Result**: `map::size()` → `__tree_.size()` → `self.__size_ as usize` (was → 0).
+      `__tree` struct now has 5 named fields + padding instead of opaque bytes.
+    - **Tests**: `test_tree_struct_has_real_fields` verifies non-opaque struct, field types,
+      and size delegation chain. All 210 tests pass (46 unit + 22 grammar + 135 e2e + 7 runtime).
+
 - [~] **27.8.2** Remove stub method injections ⚠️ PARTIALLY BLOCKED
   - Location: ast_codegen.rs lines ~3920-3970
   - Stubs: `size() { 0 }`, `op_index() { null_mut() }`, `push_back() { }`, `new_0() { zeroed() }`
   - **Progress (2026-02-04)**:
     - `op_index()` stub is now replaced by proper LibTooling transpilation!
       - Example: `op_index` now generates: `(*self).__tree_.__emplace_unique(piecewise_construct, ...)`
-    - Remaining stubs still needed because LibTooling doesn't export these method bodies:
-      - `size() { 0 }` - map::size() not in LibTooling exports (only operator[] found)
+    - `size()` for tree-based containers (map/set) now delegates to `__tree_.size()` which
+      reads the real `__size_` field (27.8.1.9). No longer returns 0.
+    - Remaining stubs still needed:
+      - `size() { 0 }` - still used for non-tree containers (unordered_map, list)
       - `push_back() { }` - list::push_back() not in LibTooling exports
       - `new_0() { zeroed() }` - default constructors not exported
   - **Root cause**: LibTooling only exports methods with explicit template instantiation bodies,

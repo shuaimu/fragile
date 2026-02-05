@@ -413,3 +413,76 @@ int main() {
         real_fields
     );
 }
+
+/// Test that __tree stub struct uses real fields from specialization data instead of opaque bytes.
+/// When specialization field data is available, the __tree struct should have named fields
+/// like __size_, __begin_node_, etc. instead of just `_opaque: [u8; 64]`.
+#[test]
+fn test_tree_struct_has_real_fields() {
+    let temp_dir = std::path::PathBuf::from("/tmp/fragile_runtime_test_tree_real_fields");
+    let _ = fs::create_dir_all(&temp_dir);
+
+    let cpp_code = r#"
+#include <map>
+
+int main() {
+    std::map<int, int> m;
+    m[1] = 10;
+    return 0;
+}
+"#;
+    let cpp_path = temp_dir.join("test.cpp");
+    fs::write(&cpp_path, cpp_code).expect("Failed to write C++ source");
+
+    let rust_code = transpile_cpp_to_rust_with_libtooling(&cpp_path)
+        .expect("Transpilation should succeed");
+
+    // The __tree struct should NOT be opaque
+    // Find the __tree struct that has __value_type in its name (the actual tree instantiation)
+    let tree_struct_start = rust_code.find("pub struct __tree___value_type")
+        .or_else(|| {
+            // Fallback: find any __tree_ struct in the placeholder section
+            let placeholder_section = rust_code.find("Placeholder structs for template").unwrap_or(0);
+            rust_code[placeholder_section..].find("pub struct __tree_")
+                .map(|pos| placeholder_section + pos)
+        })
+        .expect("Should have a __tree struct definition with template args");
+    let tree_struct_end = rust_code[tree_struct_start..].find('}').unwrap() + tree_struct_start;
+    let tree_struct = &rust_code[tree_struct_start..=tree_struct_end];
+
+    // Should NOT have _opaque field (old opaque representation)
+    assert!(
+        !tree_struct.contains("_opaque"),
+        "__tree struct should use real fields, not _opaque. Got:\n{}",
+        tree_struct
+    );
+
+    // Should have __size_ field with usize type
+    assert!(
+        tree_struct.contains("__size_: usize"),
+        "__tree struct should have __size_: usize field. Got:\n{}",
+        tree_struct
+    );
+
+    // Should have __begin_node_ field (pointer type)
+    assert!(
+        tree_struct.contains("__begin_node_:"),
+        "__tree struct should have __begin_node_ field. Got:\n{}",
+        tree_struct
+    );
+
+    // __tree::size() should use self.__size_ (not return 0)
+    assert!(
+        rust_code.contains("pub fn size(&self) -> usize { self.__size_ as usize }"),
+        "__tree::size() should return self.__size_ as usize"
+    );
+
+    // map::size() should delegate to __tree_.size()
+    let map_impl_start = rust_code.find("impl std_map_int__int")
+        .expect("Should have map impl block");
+    let map_impl_section = &rust_code[map_impl_start..];
+    assert!(
+        map_impl_section.contains("pub fn size(&self) -> usize { self.__tree_.size() }"),
+        "map::size() should delegate to self.__tree_.size()"
+    );
+}
