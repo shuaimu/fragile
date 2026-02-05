@@ -1170,6 +1170,8 @@ impl AstCodeGen {
     }
 
     /// Check 5b: Detect bad syntax that requires context (rust_name or function signature).
+    /// Field-access patterns (__d_, __st_, __keep_, __tie_, __cat_, __current_, __f_, __policy_,
+    /// __end_, __begin_, __parent_, __fill_val_) were moved to references_nonexistent_field().
     fn has_bad_syntax_in_context(generated: &str, rust_name: &str) -> bool {
         // Static methods (no self) trying to use (*self)
         if (generated.contains("pub fn max()") || generated.contains("pub fn min()"))
@@ -1177,29 +1179,7 @@ impl AstCodeGen {
         {
             return true;
         }
-        // __begin_ + __size_ pointer arithmetic on wrong types
-        if generated.contains(".__begin_ }) + (unsafe { (*self).__size_") {
-            return true;
-        }
-        // Tree node pointer arithmetic
-        if generated.contains(".__parent_ }) + __p as _") {
-            return true;
-        }
-        // Return __d_ directly (move out of reference)
-        if generated.contains("return unsafe { (*self).__d_ }") {
-            return true;
-        }
-        // __d_ and __st_ field access on types that shouldn't have them
-        if generated.contains("self.__d_") || generated.contains("self.__st_") {
-            // Allow __st_ on fpos types
-            if generated.contains(".__st_") && rust_name.contains("fpos") {
-                return false;
-            }
-            return true;
-        }
-        // fill/data methods with wrong signatures
-        // Patterns with `-> std::ffi::c_void` return type are now caught by has_cvoid_misuse.
-        // Keep only the empty-body data() methods and c_void-pointer variants.
+        // Empty-body data() methods
         if (generated.contains("pub fn data(&mut self)") && generated.contains("{\n"))
             || (generated.contains("pub fn data_1(&mut self)") && generated.contains("{\n"))
         {
@@ -1231,19 +1211,6 @@ impl AstCodeGen {
         if generated.contains("pub fn imbue(") && generated.contains("-> locale {") && !generated.contains("return (*self)") {
             return true;
         }
-        // __keep_ field on iterator types
-        if generated.contains(".__keep_") {
-            return true;
-        }
-        // c_void + &mut — now caught by has_cvoid_misuse (bare c_void in non-pointer context)
-        // __tie_ field (stream tie pointer)
-        if generated.contains(".__tie_") {
-            return true;
-        }
-        // __cat_ field
-        if generated.contains(".__cat_") {
-            return true;
-        }
         // __is_long on wrong types
         if generated.contains("__is_long(")
             && (rust_name.contains("initializer_list")
@@ -1255,38 +1222,6 @@ impl AstCodeGen {
         // do_narrow/do_allocate on wrong types
         if (rust_name.contains("basic_ios") && generated.contains("do_narrow("))
             || generated.contains(".do_allocate(")
-        {
-            return true;
-        }
-        // Deref c_void via __current_ as cast
-        if generated.contains("*unsafe { (*self).__current_ } } as _") {
-            return true;
-        }
-        // __fill_val_ + 0
-        if generated.contains("__fill_val_ }) + 0") {
-            return true;
-        }
-        // __current_ on wrong types
-        if generated.contains(".__current_")
-            && (rust_name.contains("unique_ptr") || rust_name.contains("__hash_"))
-        {
-            return true;
-        }
-        // __f_ on wrong types
-        if generated.contains(".__f_")
-            && (rust_name.contains("unique_ptr") || rust_name.contains("unique_lock") || rust_name.contains("basic_ios"))
-        {
-            return true;
-        }
-        // __policy_ on wrong types
-        if generated.contains(".__policy_")
-            && (rust_name.contains("unique_ptr") || rust_name.contains("unique_lock") || rust_name.contains("basic_ios"))
-        {
-            return true;
-        }
-        // __end_ on wrong types
-        if generated.contains(".__end_")
-            && (rust_name.contains("initializer_list") || rust_name.contains("basic_string_view"))
         {
             return true;
         }
