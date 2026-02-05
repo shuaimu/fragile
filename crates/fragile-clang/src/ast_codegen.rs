@@ -1083,63 +1083,50 @@ impl AstCodeGen {
     /// Split into universal (safe for all blocks) and full (includes patterns that
     /// could false-positive on user code like `__x,` and `: _ =`).
     fn has_undeclared_variables(generated: &str) -> bool {
-        Self::has_undeclared_variables_universal(generated)
-            // These patterns could match valid user code, only safe for library blocks
-            || generated.contains("__x,")
-            || generated.contains("__y,")
-            || generated.contains(": _ =")
-            || generated.contains("DefaultType")
+        if Self::has_undeclared_variables_universal(generated) {
+            return true;
+        }
+        // These patterns could match valid user code, only safe for library blocks
+        const LIBRARY_ONLY_VARS: &[&str] = &["__x,", "__y,", ": _ =", "DefaultType"];
+        LIBRARY_ONLY_VARS.iter().any(|p| generated.contains(p))
     }
 
     /// Undeclared variable patterns safe for ALL blocks including function blocks.
     /// All patterns use `__` prefixed names or template-specific names that never
     /// appear in user code.
     fn has_undeclared_variables_universal(generated: &str) -> bool {
-        // _unnamed placeholder values (not field declarations)
-        generated.contains("_unnamed)")
-            || generated.contains("_unnamed,")
-            || generated.contains("._unnamed")
-            || generated.contains("_unnamed.clone()")
-            || generated.contains("- _unnamed")
-            // Template parameter variables (ratio, locale, chrono templates)
-            || generated.contains("_Pn)")
-            || generated.contains("_Qn)")
-            // 128-bit math variables
-            || generated.contains("__lo1)")
-            || generated.contains("__lo2)")
-            || generated.contains("__hi1)")
-            || generated.contains("__hi2)")
-            // Other undeclared variables
-            || generated.contains("__n0)")
-            || generated.contains("__n1)")
-            || generated.contains(": __d")
-            // Template-dependent constructors (unresolved type placeholders)
-            || generated.contains("_dependent_type::new_")
-            || generated.contains("__iterator::new_")
-            || generated.contains("__const_iterator::new_")
-            || generated.contains("__const_reference::new_")
-            || generated.contains("__base_type::new_")
-            // _::new syntax (template-dependent constructor)
-            || generated.contains("_::new")
+        // _unnamed placeholder: used as value in expressions (not field declarations)
+        if generated.contains("_unnamed") && !generated.contains("pub _unnamed") {
+            return true;
+        }
+        // Template-dependent constructors (unresolved type placeholders)
+        const DEPENDENT_CTORS: &[&str] = &[
+            "_dependent_type::new_", "__iterator::new_", "__const_iterator::new_",
+            "__const_reference::new_", "__base_type::new_", "_::new",
+        ];
+        if DEPENDENT_CTORS.iter().any(|p| generated.contains(p)) {
+            return true;
+        }
+        // Undeclared variables from partial template instantiation
+        const UNDECLARED_VARS: &[&str] = &[
+            "_Pn)", "_Qn)", "__lo1)", "__lo2)", "__hi1)", "__hi2)",
+            "__n0)", "__n1)", ": __d",
+        ];
+        UNDECLARED_VARS.iter().any(|p| generated.contains(p))
     }
 
     /// Check 4: Detect calls to unmapped libc++/POSIX functions.
     fn has_unmapped_function_calls(generated: &str) -> bool {
-        generated.contains("sem_init(&mut")
-            || generated.contains("sem_destroy(&mut")
-            || generated.contains("__atomic_wait_address_bare_i32(")
-            || generated.contains("__atomic_spin___std___detail___default_spin_policy(")
-            || generated.contains("__to_address(")
-            || generated.contains("__libcpp_deallocate(")
-            || generated.contains("__cxx_atomic_store(")
-            || generated.contains("__constexpr_wmemchr(")
-            || generated.contains("__libcpp_unreachable(")
-            || generated.contains("__builtin_operator_delete")
-            || generated.contains("__builtin_operator_new")
-            || generated.contains("_S_do_try_acquire(&mut")
-            || generated.contains("__to_wstring_numeric(")
-            || generated.contains("__constexpr_memcmp_u8_u8(")
-            || generated.contains("__constexpr_memmove_i8_i8(")
+        const UNMAPPED_FUNCTIONS: &[&str] = &[
+            "sem_init(&mut", "sem_destroy(&mut",
+            "__atomic_wait_address_bare_i32(", "__atomic_spin___std___detail___default_spin_policy(",
+            "__to_address(", "__libcpp_deallocate(", "__cxx_atomic_store(",
+            "__constexpr_wmemchr(", "__libcpp_unreachable(",
+            "__builtin_operator_delete", "__builtin_operator_new",
+            "_S_do_try_acquire(&mut", "__to_wstring_numeric(",
+            "__constexpr_memcmp_u8_u8(", "__constexpr_memmove_i8_i8(",
+        ];
+        UNMAPPED_FUNCTIONS.iter().any(|p| generated.contains(p))
     }
 
     /// Check 4b: Detect broken atomic/refcount operations and related stdlib bugs.
@@ -1153,11 +1140,10 @@ impl AstCodeGen {
             || (generated.contains("pub fn __atomic_add") && generated.contains("__mem;") && !generated.contains("*__mem"))
             // use_count with pointer arithmetic instead of value
             || (generated.contains("pub fn use_count") && generated.contains(".add(1 as usize)"))
-            // Wrong operator: 1 + __cxx_atomic_load (should be ==)
-            || generated.contains("1 + __cxx_atomic_load")
-            || generated.contains("return 1 && __cxx_atomic_load")
+            // Wrong operator: 1 + __cxx_atomic_load (should be ==), 1 && ... (should be ==)
+            || (generated.contains("__cxx_atomic_load") && (generated.contains("1 + __cxx") || generated.contains("1 && __cxx")))
             // Double-reference casts
-            || generated.contains("&&__e.category() as *const")
+            || (generated.contains("&&__e.category()") && generated.contains("as *const"))
             || (generated.contains("&_V2::system_category()") && generated.contains("as *const error_category"))
             || (generated.contains("&_V2::generic_category()") && generated.contains("as *const error_category"))
             // iword/pword returning reference to temporary
@@ -1182,8 +1168,7 @@ impl AstCodeGen {
             || (generated.contains(".op_bitand(") && generated.contains("memory_order"))
             || (generated.contains(".op_bitor(") && generated.contains("memory_order"))
             // atomic fence with wrong u32 cast
-            || generated.contains("__c11_atomic_thread_fence(__order as u32)")
-            || generated.contains("__c11_atomic_signal_fence(__order as u32)")
+            || (generated.contains("__c11_atomic_") && generated.contains("_fence(__order as u32)"))
             // _M_base atomic ops with raw memory_order arg (should be i32)
             || (generated.contains("_M_base.") && generated.contains("memory_order"))
     }
@@ -1192,7 +1177,7 @@ impl AstCodeGen {
     /// Safe for all blocks — these are C++ stdlib internal types.
     fn has_broken_locale_constructors(generated: &str) -> bool {
         // locale constructor __base field
-        generated.contains("__base: locale::new_")
+        (generated.contains("__base: locale::new_"))
             // system_error wrong inheritance/types
             || (generated.contains("system_error::new_2(") && generated.contains("__base: system_error"))
             || (generated.contains("system_error::new_2(") && generated.contains("__what)") && generated.contains("__what: *const i8"))
@@ -1201,7 +1186,7 @@ impl AstCodeGen {
             || (generated.contains("uselocale(__loc)") && generated.contains("&mut *mut c_void"))
             || (generated.contains("uselocale(__loc)") && generated.contains("__loc: &mut"))
             // __mbstate_t wrong constructor
-            || generated.contains("__mbstate_t::new_1(1)")
+            || (generated.contains("__mbstate_t::new_") && generated.contains("(1)"))
             // exception constructors with wrong *const i8
             || (generated.contains("logic_error::new_1(__s)") && generated.contains("__s: *const i8"))
             || (generated.contains("runtime_error::new_1(__s)") && generated.contains("__s: *const i8"))
@@ -1211,46 +1196,45 @@ impl AstCodeGen {
     /// Split into universal (safe for all blocks including function) and
     /// operator patterns (only safe for method/template/libtooling/constructor blocks).
     fn has_bad_syntax(generated: &str) -> bool {
-        Self::has_bad_syntax_universal(generated)
-            // Wrong operator methods — NOT safe for function blocks because
-            // user operator overloads like Vec2::operator+ produce .op_add() calls
-            || generated.contains(".op_bitand(")
-            || generated.contains(".op_sub(")
-            || generated.contains(".op____(")
+        if Self::has_bad_syntax_universal(generated) {
+            return true;
+        }
+        // Wrong operator methods — NOT safe for function blocks because
+        // user operator overloads like Vec2::operator+ produce .op_add() calls
+        const BAD_OPS: &[&str] = &[".op_bitand(", ".op_sub(", ".op____("];
+        BAD_OPS.iter().any(|p| generated.contains(p))
     }
 
     /// Bad syntax patterns that are safe for ALL blocks including function blocks.
     /// These patterns reference C++ internals that never appear in user code.
     fn has_bad_syntax_universal(generated: &str) -> bool {
-        // Literal dereference (invalid pointer ops)
-        generated.contains("*0")
-            || generated.contains("*(*self)")
-            || generated.contains("*1 }")
-            || generated.contains("*_TreeIterator")
+        const BAD_SYNTAX_PATTERNS: &[&str] = &[
+            // Literal dereference (invalid pointer ops)
+            "*0", "*(*self)", "*1 }", "*_TreeIterator",
             // iter() on raw pointers (not valid in Rust)
-            || generated.contains(".iter().")
+            ".iter().",
             // Integer swap
-            || generated.contains("0.swap(&self)")
-            // (BuiltinBitCastExpr now handled as transmute in expr_to_string)
+            "0.swap(&self)",
             // Negating pointer address
-            || generated.contains("(-__errno_location())")
-            // Self clone with &mut self
-            || (generated.contains("self.clone()") && generated.contains("&mut self"))
-            // (memory_order::new_0() now handled by enum detection in CXXConstructExpr)
+            "(-__errno_location())",
             // Template-dependent return
-            || generated.contains("return 0 /* template-dependent */")
+            "return 0 /* template-dependent */",
             // _Size type alias used as value
-            || generated.contains("return _Size + 0")
-            || generated.contains("return _Size;")
+            "return _Size + 0", "return _Size;",
             // __bit_iterator template not substituted
-            || generated.contains("__bit_iterator<")
-            || generated.contains("pair<__bit_iterator")
+            "__bit_iterator<", "pair<__bit_iterator",
             // __stoa extern C linkage issues
-            || generated.contains("__stoa_extern__C")
+            "__stoa_extern__C",
             // __gv___s: parameter __s misresolved as global variable reference
-            || generated.contains("__gv___s")
+            "__gv___s",
             // todo!() placeholder in generated code
-            || generated.contains("todo!(")
+            "todo!(",
+        ];
+        if BAD_SYNTAX_PATTERNS.iter().any(|p| generated.contains(p)) {
+            return true;
+        }
+        // Self clone with &mut self (compound check)
+        generated.contains("self.clone()") && generated.contains("&mut self")
     }
 
     /// Check 5b: Detect bad syntax that requires context (rust_name or function signature).
@@ -17267,7 +17251,12 @@ impl AstCodeGen {
                                     return operand;
                                 }
                             }
-                            format!("*{}", operand)
+                            // Wrap cast expressions in parens: *0 as *mut T → *(0 as *mut T)
+                            if operand.contains(" as ") {
+                                format!("*({})", operand)
+                            } else {
+                                format!("*{}", operand)
+                            }
                         }
                         UnaryOp::Minus => {
                             // C++ allows -bool which converts bool to int then negates
@@ -19104,11 +19093,21 @@ impl AstCodeGen {
                                     operand
                                 } else {
                                     // Raw pointer dereference needs unsafe
-                                    format!("unsafe {{ *{} }}", operand)
+                                    // Wrap cast expressions in parens: *0 as *mut T → *(0 as *mut T)
+                                    if operand.contains(" as ") {
+                                        format!("unsafe {{ *({}) }}", operand)
+                                    } else {
+                                        format!("unsafe {{ *{} }}", operand)
+                                    }
                                 }
                             } else {
                                 // Raw pointer dereference needs unsafe
-                                format!("unsafe {{ *{} }}", operand)
+                                // Wrap cast expressions in parens: *0 as *mut T → *(0 as *mut T)
+                                if operand.contains(" as ") {
+                                    format!("unsafe {{ *({}) }}", operand)
+                                } else {
+                                    format!("unsafe {{ *{} }}", operand)
+                                }
                             }
                         }
                         UnaryOp::PreInc | UnaryOp::PreDec => {
