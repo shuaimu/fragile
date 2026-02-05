@@ -1175,11 +1175,6 @@ impl AstCodeGen {
             || generated.contains("*(*self)")
             || generated.contains("*1 }")
             || generated.contains("*_TreeIterator")
-            // Bool/int confusion from C++ short-circuit evaluation
-            || generated.contains(") && 11i32")
-            || generated.contains(") && 4i32")
-            || generated.contains("&& 16i32")
-            || generated.contains("(-1 && 0)")
             // Wrong operator methods
             || generated.contains(".op_bitand(")
             || generated.contains(".op_sub(")
@@ -1426,7 +1421,6 @@ impl AstCodeGen {
             || generated.contains("__stoa_extern__C")
             || generated.contains("return _Size + 0")
             || generated.contains("return _Size;")
-            || generated.contains("&& 16i32")
             || generated.contains("[__waiter_pool_base; 16] = __ct")
             || generated.contains("__atomic_always_lock_free(0, 0)")
         {
@@ -17781,9 +17775,43 @@ impl AstCodeGen {
                         return format!("{{ {}; {} }}", left, right);
                     }
                     let op_str = binop_to_string(op);
-                    let left = wrap_unsafe_for_binop(&self.expr_to_string_raw(&node.children[0]));
-                    let right = wrap_unsafe_for_binop(&self.expr_to_string_raw(&node.children[1]));
-                    format!("{} {} {}", left, op_str, right)
+                    if matches!(op, BinaryOp::LAnd | BinaryOp::LOr) {
+                        // C++ allows integer operands with && and || (non-zero = true).
+                        // Rust requires bool operands. Convert non-bool operands with != 0.
+                        let left_str = self.expr_to_string_raw(&node.children[0]);
+                        let right_str = self.expr_to_string_raw(&node.children[1]);
+                        let left_type = Self::get_expr_type(&node.children[0]);
+                        let right_type = Self::get_expr_type(&node.children[1]);
+                        let left_orig = Self::get_original_expr_type(&node.children[0]);
+                        let right_orig = Self::get_original_expr_type(&node.children[1]);
+
+                        let left_is_bool = matches!(left_type, Some(CppType::Bool))
+                            || matches!(left_orig, Some(CppType::Bool));
+                        let right_is_bool = matches!(right_type, Some(CppType::Bool))
+                            || matches!(right_orig, Some(CppType::Bool));
+                        let left_is_int = left_type.as_ref().map_or(false, |t| t.is_integral() == Some(true))
+                            && !left_is_bool;
+                        let right_is_int = right_type.as_ref().map_or(false, |t| t.is_integral() == Some(true))
+                            && !right_is_bool;
+
+                        let left = if left_is_int {
+                            let s = strip_literal_suffix(&left_str);
+                            format!("({} != 0)", s)
+                        } else {
+                            wrap_unsafe_for_binop(&left_str)
+                        };
+                        let right = if right_is_int {
+                            let s = strip_literal_suffix(&right_str);
+                            format!("({} != 0)", s)
+                        } else {
+                            wrap_unsafe_for_binop(&right_str)
+                        };
+                        format!("{} {} {}", left, op_str, right)
+                    } else {
+                        let left = wrap_unsafe_for_binop(&self.expr_to_string_raw(&node.children[0]));
+                        let right = wrap_unsafe_for_binop(&self.expr_to_string_raw(&node.children[1]));
+                        format!("{} {} {}", left, op_str, right)
+                    }
                 } else {
                     "/* binary op error */".to_string()
                 }
@@ -18791,6 +18819,38 @@ impl AstCodeGen {
                         // Wrap unsafe blocks in parentheses for binary expressions
                         let left = wrap_unsafe_for_binop(&left);
                         let right = wrap_unsafe_for_binop(&right);
+                        format!("{} {} {}", left, op_str, right)
+                    } else if matches!(op, BinaryOp::LAnd | BinaryOp::LOr) {
+                        // C++ allows integer operands with && and || (non-zero = true).
+                        // Rust requires bool operands. Convert non-bool operands with != 0.
+                        let left_str = self.expr_to_string(&node.children[0]);
+                        let right_str = self.expr_to_string(&node.children[1]);
+                        let left_type = Self::get_expr_type(&node.children[0]);
+                        let right_type = Self::get_expr_type(&node.children[1]);
+                        let left_orig = Self::get_original_expr_type(&node.children[0]);
+                        let right_orig = Self::get_original_expr_type(&node.children[1]);
+
+                        let left_is_bool = matches!(left_type, Some(CppType::Bool))
+                            || matches!(left_orig, Some(CppType::Bool));
+                        let right_is_bool = matches!(right_type, Some(CppType::Bool))
+                            || matches!(right_orig, Some(CppType::Bool));
+                        let left_is_int = left_type.as_ref().map_or(false, |t| t.is_integral() == Some(true))
+                            && !left_is_bool;
+                        let right_is_int = right_type.as_ref().map_or(false, |t| t.is_integral() == Some(true))
+                            && !right_is_bool;
+
+                        let left = if left_is_int {
+                            let s = strip_literal_suffix(&left_str);
+                            format!("({} != 0)", s)
+                        } else {
+                            wrap_unsafe_for_binop(&left_str)
+                        };
+                        let right = if right_is_int {
+                            let s = strip_literal_suffix(&right_str);
+                            format!("({} != 0)", s)
+                        } else {
+                            wrap_unsafe_for_binop(&right_str)
+                        };
                         format!("{} {} {}", left, op_str, right)
                     } else {
                         let left = self.expr_to_string(&node.children[0]);
