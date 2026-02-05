@@ -1597,25 +1597,13 @@ impl AstCodeGen {
     /// Returns true if the code should be rolled back (is invalid).
     /// NOTE: Uses only the patterns from the original method rollback block.
     fn should_rollback_method(generated: &str) -> bool {
-        // Structural checks safe for method blocks: c_void and __-prefixed function calls
-        // never appear in user code.
+        // Structural checks safe for method blocks: these patterns are C++ standard library
+        // artifacts that never appear in user-written method bodies.
         if Self::has_uncalled_builtin_return(generated)
             || Self::has_cvoid_misuse(generated)
             || Self::has_unmapped_function_calls(generated)
-        {
-            return true;
-        }
-        // Bad syntax from original method block
-        if generated.contains(".op_bitand(")
-            || generated.contains(".op____(")
-            || generated.contains(".op_sub(")
-            || generated.contains(".iter().")
-            || generated.contains("0.swap(&self)")
-            || generated.contains("memory_order::new_0()")
-            || generated.contains("(-1 && 0)")
-            || generated.contains("&& 16i32 {")
-            || generated.contains("!__e && 16i32")
-            || generated.contains("&&__e.category() as *const")
+            || Self::has_bad_syntax(generated)
+            || Self::has_undeclared_variables(generated)
         {
             return true;
         }
