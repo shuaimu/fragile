@@ -1149,8 +1149,8 @@ impl AstCodeGen {
             // iword/pword returning reference to temporary
             || (generated.contains("pub fn iword") && generated.contains("&mut __word._M_iword"))
             || (generated.contains("pub fn pword") && generated.contains("&mut __word._M_pword"))
-            // numeric_limits lowest with wrong min/max function calls
-            || (generated.contains("pub fn lowest") && generated.contains("_bool()"))
+            // numeric_limits lowest with wrong min/max function calls (no-arg calls to functions needing args)
+            || (generated.contains("pub fn lowest") && (generated.contains("_bool()") || generated.contains("max_f32()") || generated.contains("max_f64()")))
             // Box::from_raw on &self (ownership violation)
             || (generated.contains("Box::from_raw(self)") && generated.contains("&self,"))
             // __shared_weak_count delegation bugs
@@ -16404,13 +16404,9 @@ impl AstCodeGen {
                     self.skip_literal_suffix = true;
                     let expr = self.expr_to_string(&node.children[0]);
                     self.skip_literal_suffix = prev_skip;
-                    // Auto-call bare builtin function references
-                    // In template code, __builtin_* can appear as bare DeclRefExpr without CallExpr
-                    let expr = if expr.contains("__builtin_") && !expr.contains('(') {
-                        format!("{}()", expr)
-                    } else {
-                        expr
-                    };
+                    // Note: bare __builtin_* function references (without call parens) are caught
+                    // by has_uncalled_builtin_return validator, which rolls back the entire function.
+                    // Do NOT auto-add () here — builtins may require arguments.
                     // Check if we need to add &mut for reference return types
                     let expr = if let Some(CppType::Reference { is_const, .. }) =
                         &self.current_return_type
