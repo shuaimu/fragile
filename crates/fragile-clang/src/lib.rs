@@ -22,7 +22,7 @@ pub use ast::{
     TypeTraitKind, UnaryOp,
 };
 pub use ast_codegen::AstCodeGen;
-pub use libtooling::{LibToolingParser, TemplateMethodInstantiation, MethodInfo, convert_to_clang_node, extract_method_bodies, extract_method_bodies_with_params, extract_specialization_field_types, SpecializationFieldInfo};
+pub use libtooling::{LibToolingParser, TemplateMethodInstantiation, MethodInfo, MethodSignature, convert_to_clang_node, extract_method_bodies, extract_method_bodies_with_params, extract_specialization_field_types, extract_specialization_method_signatures, SpecializationFieldInfo};
 pub use parse::ClangParser;
 pub use types::{CppType, TypeProperties, TypeTraitEvaluator, TypeTraitResult};
 
@@ -88,9 +88,13 @@ pub fn transpile_cpp_to_rust_with_libtooling(path: &Path) -> Result<String> {
     // Extract resolved field types for template specializations
     let field_types = extract_specialization_field_types(&libtooling_ctx);
 
-    // Generate code with LibTooling bodies and resolved field types
+    // Extract resolved method signatures for template specializations
+    let method_sigs = extract_specialization_method_signatures(&libtooling_ctx);
+
+    // Generate code with LibTooling bodies, resolved field types, and resolved method signatures
     let mut codegen = AstCodeGen::new();
     codegen.set_libtooling_bodies(method_bodies);
     codegen.set_specialization_field_types(field_types);
+    codegen.set_specialization_method_signatures(method_sigs);
     Ok(codegen.generate(&ast.translation_unit))
 }

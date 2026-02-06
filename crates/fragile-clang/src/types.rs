@@ -334,29 +334,30 @@ impl CppType {
                     // Allocator types
                     "allocator_type" => "std::ffi::c_void".to_string(),
                     // Common template parameter names that appear unresolved
+                    // Use () instead of c_void so they're valid as bare types (params, return types)
                     "_Tp" | "_CharT" | "_Traits" | "_Allocator" | "_Alloc" => {
-                        "std::ffi::c_void".to_string()
+                        "()".to_string()
                     }
                     "_Pointer" | "_Iter" | "_Iterator" | "_Size" | "_Ep" => {
-                        "std::ffi::c_void".to_string()
+                        "()".to_string()
                     }
-                    "_Rp" | "_Ip" | "_Container" | "_BaseT" | "_It" => {
-                        "std::ffi::c_void".to_string()
+                    "_Rp" | "_Ip" | "_Container" | "_BaseT" | "_It" | "_CP" => {
+                        "()".to_string()
                     }
                     "_Gen" | "_Func" | "_Rollback" | "_StorageAlloc" => {
-                        "std::ffi::c_void".to_string()
+                        "()".to_string()
                     }
                     "_ControlBlockAlloc" | "_ControlBlockAllocator" => {
-                        "std::ffi::c_void".to_string()
+                        "()".to_string()
                     }
-                    "_Sp" | "_Dp" | "_Up" | "_Yp" => "std::ffi::c_void".to_string(), // Smart pointer params
+                    "_Sp" | "_Dp" | "_Up" | "_Yp" => "()".to_string(), // Smart pointer params
                     // libstdc++ bit vector internal types
                     "_Bit_type" => "u64".to_string(), // Typically unsigned long
-                    "_Tp_alloc_type" | "_Bit_alloc_type" => "std::ffi::c_void".to_string(), // Allocator type alias
+                    "_Tp_alloc_type" | "_Bit_alloc_type" => "()".to_string(), // Allocator type alias
                     // Smart pointer internal types
-                    "_Sp___rep" => "std::ffi::c_void".to_string(), // shared_ptr refcount
+                    "_Sp___rep" => "()".to_string(), // shared_ptr refcount
                     // Dependent types from templates
-                    "_dependent_type" => "std::ffi::c_void".to_string(),
+                    "_dependent_type" => "()".to_string(),
                     // libstdc++ comparison category types
                     "__cmp_cat_type" | "__cmp_cat__Ord" | "__cmp_cat__Ncmp" => "i8".to_string(),
                     "__cmp_cat___unspec" => "i8".to_string(),
@@ -411,7 +412,7 @@ impl CppType {
                     "streambuf_type" | "char_type" => "std::ffi::c_void".to_string(),
                     "memory_resource" => "std::ffi::c_void".to_string(),
                     // More template parameter placeholders
-                    "_ValueType" | "_Sent" | "_Hp" => "std::ffi::c_void".to_string(),
+                    "_ValueType" | "_Sent" | "_Hp" => "()".to_string(),
                     "__storage_type" => "usize".to_string(),
                     // NOTE: STL string type mappings removed - types pass through as-is
                     // See Section 22 in TODO.md for rationale
@@ -455,7 +456,7 @@ impl CppType {
                         // Handle "type" which is a Rust keyword - can appear from unresolved
                         // template parameters or typename expressions
                         if normalized_name == "type" {
-                            return "std::ffi::c_void".to_string();
+                            return "()".to_string();
                         }
                         // Handle Clang template parameter placeholders like type-parameter-0-0
                         // These are unresolved template parameters from template definitions
@@ -463,7 +464,7 @@ impl CppType {
                         if normalized_name.starts_with("type-parameter-")
                             || normalized_name.starts_with("type_parameter_")
                         {
-                            return "std::ffi::c_void".to_string();
+                            return "()".to_string();
                         }
                         // Handle complex conditional types from libc++ template metaprogramming
                         // These are SFINAE/conditional type expressions that can't be represented
@@ -474,21 +475,21 @@ impl CppType {
                             || normalized_name.contains("__conditional_t")
                         // Also catch it in middle
                         {
-                            return "std::ffi::c_void".to_string();
+                            return "()".to_string();
                         }
                         // Handle typename-prefixed dependent types
                         if normalized_name.starts_with("typename")
                             || normalized_name.starts_with("typename_")
                         {
-                            return "std::ffi::c_void".to_string();
+                            return "()".to_string();
                         }
                         // Handle libc++ variant implementation detail types
                         if normalized_name.starts_with("__variant_detail") {
-                            return "std::ffi::c_void".to_string();
+                            return "()".to_string();
                         }
                         // Handle iterator traits types
                         if normalized_name.starts_with("iter_") {
-                            return "std::ffi::c_void".to_string();
+                            return "()".to_string();
                         }
                         // Handle type trait result types (add_pointer_t, make_unsigned_t, etc.)
                         if normalized_name.starts_with("add_pointer_t")
@@ -497,8 +498,9 @@ impl CppType {
                             || normalized_name.starts_with("iterator_t")
                             || normalized_name.starts_with("__insert_iterator")
                             || normalized_name.starts_with("__impl_")
+                            || normalized_name.starts_with("__add_lvalue_reference")
                         {
-                            return "std::ffi::c_void".to_string();
+                            return "()".to_string();
                         }
                         // Strip C++ qualifiers that aren't valid in Rust type names
                         let cleaned = name

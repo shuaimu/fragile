@@ -1032,6 +1032,181 @@ pub fn extract_specialization_field_types(ctx: &AstContext) -> HashMap<String, S
     result
 }
 
+/// A resolved method signature from a template specialization.
+#[derive(Debug, Clone)]
+pub struct MethodSignature {
+    pub name: String,
+    pub return_type: Option<CppType>,
+    pub param_names: Vec<String>,
+    pub param_types: Vec<CppType>,
+    pub is_static: bool,
+}
+
+/// Extract resolved method signatures from template specializations.
+///
+/// For each ClassTemplateSpecializationDecl, extracts CXXMethodDecl children
+/// and resolves their return types and parameter types via the FunctionProtoType.
+/// This gives us fully substituted types (e.g., `int*` instead of `_Tp*`).
+pub fn extract_specialization_method_signatures(
+    ctx: &AstContext,
+) -> HashMap<String, Vec<MethodSignature>> {
+    use fragile_ast_exporter::CborValue;
+
+    let mut result = HashMap::new();
+
+    for (_spec_id, node) in &ctx.ast_nodes {
+        if node.tag != ASTEntryTag::TagClassTemplateSpecializationDecl {
+            continue;
+        }
+
+        let _type_name = node.get_string(0).unwrap_or("").to_string();
+        let qualified_name = node.get_string(1).unwrap_or("").to_string();
+
+        // Build full specialization name (same as extract_specialization_field_types)
+        let mut template_args = Vec::new();
+        if let Some(CborValue::Array(args)) = node.extras.get(2) {
+            for arg in args {
+                if let CborValue::Array(pair) = arg {
+                    if let Some(CborValue::Text(arg_str)) = pair.get(1) {
+                        template_args.push(arg_str.clone());
+                    }
+                }
+            }
+        }
+
+        let full_name = if template_args.is_empty() {
+            qualified_name.clone()
+        } else {
+            format!("{}<{}>", qualified_name, template_args.join(", "))
+        };
+
+        if full_name.is_empty() {
+            continue;
+        }
+
+        let mut methods = Vec::new();
+
+        for child_id_opt in &node.children {
+            let Some(child_id) = child_id_opt else { continue };
+            let Some(child_node) = ctx.ast_nodes.get(child_id) else { continue };
+            if child_node.tag != ASTEntryTag::TagCXXMethodDecl {
+                continue;
+            }
+
+            let method_name = child_node.get_string(0).unwrap_or("").to_string();
+            if method_name.is_empty() {
+                continue;
+            }
+            let is_static = child_node.get_bool(1).unwrap_or(false);
+
+            // Resolve return type and param types via FunctionProtoType
+            let (return_type, fn_param_types) = if let Some(type_id) = child_node.type_id {
+                resolve_function_proto_type(ctx, type_id)
+            } else {
+                (None, Vec::new())
+            };
+
+            // Extract parameter names from ParmVarDecl children,
+            // and resolve their types directly from their type_id
+            let mut param_names = Vec::new();
+            let mut param_types = Vec::new();
+            let mut parm_idx = 0;
+            for grandchild_opt in &child_node.children {
+                let Some(grandchild_id) = grandchild_opt else { continue };
+                let Some(grandchild) = ctx.ast_nodes.get(grandchild_id) else { continue };
+                if grandchild.tag != ASTEntryTag::TagParmVarDecl {
+                    continue;
+                }
+                let pname = grandchild.get_string(0).unwrap_or("").to_string();
+                param_names.push(pname);
+
+                // Prefer ParmVarDecl's own type_id (most direct),
+                // fall back to FunctionProtoType's param type
+                let ptype = grandchild.type_id
+                    .and_then(|tid| resolve_type(ctx, tid))
+                    .or_else(|| fn_param_types.get(parm_idx).cloned());
+                if let Some(t) = ptype {
+                    param_types.push(t);
+                }
+                parm_idx += 1;
+            }
+
+            methods.push(MethodSignature {
+                name: method_name,
+                return_type,
+                param_names,
+                param_types,
+                is_static,
+            });
+        }
+
+        if !methods.is_empty() {
+            // Store under full specialization name AND simple name for fuzzy lookup
+            result.insert(full_name.clone(), methods.clone());
+
+            // Also store under "qualified_name<args>" without "std::" prefix for matching
+            if let Some(stripped) = full_name.strip_prefix("std::") {
+                result.insert(stripped.to_string(), methods);
+            }
+        }
+    }
+
+    if std::env::var("FRAGILE_DEBUG_SPECIALIZATION").is_ok() {
+        eprintln!("[SPEC DEBUG] Specialization method signatures extracted: {}", result.len());
+        for (key, methods) in &result {
+            eprintln!("  {}: {} methods", key, methods.len());
+            for m in methods {
+                eprintln!("    {}({}) -> {:?}",
+                    m.name,
+                    m.param_types.iter().map(|t| format!("{:?}", t)).collect::<Vec<_>>().join(", "),
+                    m.return_type,
+                );
+            }
+        }
+    }
+
+    result
+}
+
+/// Resolve a FunctionProtoType to extract return type and parameter types.
+fn resolve_function_proto_type(ctx: &AstContext, type_id: u64) -> (Option<CppType>, Vec<CppType>) {
+    use fragile_ast_exporter::CborValue;
+    use fragile_ast_exporter::clang_ast::TypeNode;
+
+    let type_node = match ctx.get_type(TypeNode::unqualified_id(type_id)) {
+        Some(t) => t,
+        None => return (None, Vec::new()),
+    };
+
+    if type_node.tag != ASTEntryTag::TagFunctionProtoType {
+        return (None, Vec::new());
+    }
+
+    // extras[0] = return type ID
+    let return_type = match type_node.extras.first() {
+        Some(CborValue::Integer(ret_id)) => {
+            let ret_id = *ret_id as u64;
+            resolve_type(ctx, ret_id)
+        }
+        _ => None,
+    };
+
+    // extras[1] = array of parameter type IDs
+    let mut param_types = Vec::new();
+    if let Some(CborValue::Array(param_ids)) = type_node.extras.get(1) {
+        for param_id in param_ids {
+            if let CborValue::Integer(id) = param_id {
+                let id = *id as u64;
+                if let Some(ptype) = resolve_type(ctx, id) {
+                    param_types.push(ptype);
+                }
+            }
+        }
+    }
+
+    (return_type, param_types)
+}
+
 /// Format a CppType as a C++ type string for use in template arguments.
 fn format_cpp_type(ty: &CppType) -> String {
     match ty {
@@ -1110,6 +1285,17 @@ fn resolve_type(ctx: &AstContext, type_id: u64) -> Option<CppType> {
             }
         }
 
+        // DecltypeType - follow to the underlying type
+        // extras[0] = underlying type ID
+        ASTEntryTag::TagDecltypeType => {
+            if let Some(CborValue::Integer(underlying_id)) = type_node.extras.first() {
+                let underlying_id = *underlying_id as u64;
+                resolve_type(ctx, underlying_id)
+            } else {
+                None
+            }
+        }
+
         // Typedef type - follow to the underlying type
         // extras[0] = name, extras[1] = underlying type ID
         ASTEntryTag::TagTypedefType => {
@@ -1160,15 +1346,17 @@ fn resolve_type(ctx: &AstContext, type_id: u64) -> Option<CppType> {
         ASTEntryTag::TagPointerType => {
             if let Some(CborValue::Integer(pointee_id)) = type_node.extras.first() {
                 let pointee_id = *pointee_id as u64;
+                // Check const qualifier bit (bit 0) from encodeQualType
+                let is_const = (pointee_id & 0x1) != 0;
                 if let Some(pointee_type) = resolve_type(ctx, pointee_id) {
                     Some(CppType::Pointer {
                         pointee: Box::new(pointee_type),
-                        is_const: false,
+                        is_const,
                     })
                 } else {
                     Some(CppType::Pointer {
                         pointee: Box::new(CppType::Void),
-                        is_const: false,
+                        is_const,
                     })
                 }
             } else {
@@ -1183,16 +1371,18 @@ fn resolve_type(ctx: &AstContext, type_id: u64) -> Option<CppType> {
         ASTEntryTag::TagLValueReferenceType => {
             if let Some(CborValue::Integer(ref_id)) = type_node.extras.first() {
                 let ref_id = *ref_id as u64;
+                // Check const qualifier bit (bit 0) from encodeQualType
+                let is_const = (ref_id & 0x1) != 0;
                 if let Some(ref_type) = resolve_type(ctx, ref_id) {
                     Some(CppType::Reference {
                         referent: Box::new(ref_type),
-                        is_const: false,
+                        is_const,
                         is_rvalue: false,
                     })
                 } else {
                     Some(CppType::Reference {
                         referent: Box::new(CppType::Void),
-                        is_const: false,
+                        is_const,
                         is_rvalue: false,
                     })
                 }
