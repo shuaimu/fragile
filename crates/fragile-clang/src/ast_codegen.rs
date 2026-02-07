@@ -1100,7 +1100,7 @@ impl AstCodeGen {
             return true;
         }
         // These patterns could match valid user code, only safe for library blocks
-        const LIBRARY_ONLY_VARS: &[&str] = &["__x,", "__y,", ": _ =", "DefaultType", "{ max }"];
+        const LIBRARY_ONLY_VARS: &[&str] = &["__x,", "__y,", ": _ =", "DefaultType", "return max"];
         LIBRARY_ONLY_VARS.iter().any(|p| generated.contains(p))
     }
 
@@ -3845,7 +3845,7 @@ impl AstCodeGen {
         self.writeln("");
 
         // Generate impl block with methods
-        self.generate_template_impl(inst_name, &rust_name, children, &subst_map);
+        self.generate_template_impl(inst_name, &rust_name, children);
     }
 
     /// Substitute template parameters in a type.
@@ -4470,7 +4470,6 @@ impl AstCodeGen {
         inst_name: &str,
         rust_name: &str,
         children: &[ClangNode],
-        subst_map: &HashMap<String, String>,
     ) {
         // Skip impl blocks for PRIMARY TEMPLATE types (types with unresolved generic params).
         // These types have method bodies that reference internal fields (._M_current, .__ptr_, etc.)
@@ -4562,138 +4561,62 @@ impl AstCodeGen {
             }
             if let ClangNodeKind::CXXMethodDecl {
                 name,
-                return_type,
                 params,
-                is_static,
                 ..
             } = &child.kind
             {
-                // Generate method stub (for templates, most methods are declarations not definitions)
+                // Generate method stub using resolved types from LibTooling only.
+                // Methods without resolved signatures or with non-primitive types are skipped.
                 {
-                    // Try to use resolved types from LibTooling specialization data (Path 2).
-                    // This gives us fully substituted types (e.g., int* instead of _Tp*).
-                    // Fall back to libclang types + substitute_template_type (Path 1) if not available.
-                    let resolved_sig = self.find_resolved_method_signature(inst_name, name, params.len());
-
-                    let (ret_type, param_strs) = if let Some(sig) = &resolved_sig {
-                        // Use resolved types from LibTooling, converting to transpiler conventions
-                        let ret = sig.return_type.as_ref()
-                            .map(|t| Self::cpp_type_to_rust_str(t))
-                            .unwrap_or_default();
-
-                        // Validate resolved types are usable in generated code.
-                        // Only use resolved types when they produce "safe" Rust type names.
-                        // Complex C++ types (iterators, internal STL types) may reference
-                        // structs that don't exist in the output.
-                        let is_safe_resolved_type = |s: &str| -> bool {
-                            // Strip pointer/reference wrappers
-                            let inner = s.trim_start_matches("*mut ")
-                                .trim_start_matches("*const ")
-                                .trim_start_matches("&mut ")
-                                .trim_start_matches("&");
-                            // Allow primitives, void, and well-known types
-                            matches!(inner,
-                                "i8" | "i16" | "i32" | "i64" | "i128" |
-                                "u8" | "u16" | "u32" | "u64" | "u128" |
-                                "f32" | "f64" | "bool" | "char" | "()" |
-                                "usize" | "isize" | "std::ffi::c_void" | "")
-                            || inner.starts_with("[u8;")
-                        };
-                        let ret_safe = is_safe_resolved_type(&ret);
-                        let params_safe = sig.param_types.iter().all(|t| is_safe_resolved_type(&Self::cpp_type_to_rust_str(t)));
-                        if !ret_safe || !params_safe {
-                            // Fall back to libclang path if resolved types are broken
-                            let mut ret2 = self.substitute_template_type(return_type, subst_map);
-                            if (name == "size" || name == "capacity" || name == "max_size")
-                                && params.is_empty()
-                                && Self::has_unresolved_template_placeholder(&ret2)
-                            {
-                                ret2 = "usize".to_string();
-                            }
-                            if Self::has_unresolved_template_placeholder(&ret2) {
-                                continue;
-                            }
-                            let has_unresolved = params.iter().any(|(_, ty)| {
-                                let rust_ty = self.substitute_template_type(ty, subst_map);
-                                Self::has_unresolved_template_placeholder(&rust_ty)
-                            });
-                            if has_unresolved {
-                                continue;
-                            }
-                            let mut pstrs2 = Vec::new();
-                            if !*is_static {
-                                pstrs2.push("&mut self".to_string());
-                            }
-                            for (pname, ptype) in params.iter() {
-                                let rust_ty = self.substitute_template_type(ptype, subst_map);
-                                pstrs2.push(format!("{}: {}", sanitize_identifier(pname), rust_ty));
-                            }
-                            (ret2, pstrs2)
-                        } else {
-                            let mut pstrs = Vec::new();
-                            if !sig.is_static {
-                                pstrs.push("&mut self".to_string());
-                            }
-                            let mut param_name_counts: HashMap<String, usize> = HashMap::new();
-                            for (i, ptype) in sig.param_types.iter().enumerate() {
-                                let pname_raw = sig.param_names.get(i)
-                                    .map(|s| s.as_str())
-                                    .unwrap_or("_arg");
-                                let mut pname = sanitize_identifier(pname_raw);
-                                let count = param_name_counts.entry(pname.clone()).or_insert(0);
-                                if *count > 0 {
-                                    pname = format!("{}_{}", pname, *count);
-                                }
-                                *param_name_counts.get_mut(&sanitize_identifier(pname_raw)).unwrap() += 1;
-                                let rust_ty = Self::cpp_type_to_rust_str(ptype);
-                                pstrs.push(format!("{}: {}", pname, rust_ty));
-                            }
-                            (ret, pstrs)
-                        }
-                    } else {
-                        // Fall back to libclang types + substitute_template_type
-                        let mut ret = self.substitute_template_type(return_type, subst_map);
-
-                        // Special case: size() and capacity() should always return usize
-                        if (name == "size" || name == "capacity" || name == "max_size")
-                            && params.is_empty()
-                            && Self::has_unresolved_template_placeholder(&ret)
-                        {
-                            ret = "usize".to_string();
-                        }
-
-                        // Skip methods with unresolved template types
-                        if Self::has_unresolved_template_placeholder(&ret) {
-                            continue;
-                        }
-
-                        let has_unresolved_params = params.iter().any(|(_, ty)| {
-                            let rust_ty = self.substitute_template_type(ty, subst_map);
-                            Self::has_unresolved_template_placeholder(&rust_ty)
-                        });
-                        if has_unresolved_params {
-                            continue;
-                        }
-
-                        let mut pstrs = Vec::new();
-                        if !*is_static {
-                            pstrs.push("&mut self".to_string());
-                        }
-                        let mut param_name_counts: HashMap<String, usize> = HashMap::new();
-                        for (param_name, param_ty) in params {
-                            let rust_ty = self.substitute_template_type(param_ty, subst_map);
-                            let mut pname = sanitize_identifier(param_name);
-                            let count = param_name_counts.entry(pname.clone()).or_insert(0);
-                            if *count > 0 {
-                                pname = format!("{}_{}", pname, *count);
-                            }
-                            *param_name_counts
-                                .get_mut(&sanitize_identifier(param_name))
-                                .unwrap() += 1;
-                            pstrs.push(format!("{}: {}", pname, rust_ty));
-                        }
-                        (ret, pstrs)
+                    let resolved_sig = match self.find_resolved_method_signature(inst_name, name, params.len()) {
+                        Some(sig) => sig,
+                        None => continue, // No resolved signature — skip method
                     };
+
+                    let ret = resolved_sig.return_type.as_ref()
+                        .map(|t| Self::cpp_type_to_rust_str(t))
+                        .unwrap_or_default();
+
+                    // Only generate methods where all types are "safe" (primitives, pointers, usize).
+                    // Complex C++ types (iterators, internal STL types) reference structs
+                    // that may not exist in the output.
+                    let is_safe_resolved_type = |s: &str| -> bool {
+                        let inner = s.trim_start_matches("*mut ")
+                            .trim_start_matches("*const ")
+                            .trim_start_matches("&mut ")
+                            .trim_start_matches("&");
+                        matches!(inner,
+                            "i8" | "i16" | "i32" | "i64" | "i128" |
+                            "u8" | "u16" | "u32" | "u64" | "u128" |
+                            "f32" | "f64" | "bool" | "char" | "()" |
+                            "usize" | "isize" | "std::ffi::c_void" | "")
+                        || inner.starts_with("[u8;")
+                    };
+                    if !is_safe_resolved_type(&ret) || !resolved_sig.param_types.iter().all(|t| is_safe_resolved_type(&Self::cpp_type_to_rust_str(t))) {
+                        continue; // Non-primitive types — skip method
+                    }
+
+                    let mut param_strs = Vec::new();
+                    if !resolved_sig.is_static {
+                        param_strs.push("&mut self".to_string());
+                    }
+                    let mut param_name_counts: HashMap<String, usize> = HashMap::new();
+                    for (i, ptype) in resolved_sig.param_types.iter().enumerate() {
+                        let pname_raw = resolved_sig.param_names.get(i)
+                            .map(|s| s.as_str())
+                            .unwrap_or("_arg");
+                        let mut pname = sanitize_identifier(pname_raw);
+                        let count = param_name_counts.entry(pname.clone()).or_insert(0);
+                        if *count > 0 {
+                            pname = format!("{}_{}", pname, *count);
+                        }
+                        *param_name_counts.get_mut(&sanitize_identifier(pname_raw)).unwrap() += 1;
+                        let rust_ty = Self::cpp_type_to_rust_str(ptype);
+                        param_strs.push(format!("{}: {}", pname, rust_ty));
+                    }
+
+                    let ret_type = ret;
+                    let resolved_return_type = resolved_sig.return_type.clone().unwrap_or(CppType::Void);
 
                     let ret_str = if ret_type == "()" || ret_type.is_empty() || ret_type == "_" {
                         String::new()
@@ -4777,7 +4700,7 @@ impl AstCodeGen {
                             self.local_vars.insert(sanitize_identifier(var_name));
                         }
                         // Generate the actual method body
-                        self.generate_block_contents(&method_info.body.children, return_type);
+                        self.generate_block_contents(&method_info.body.children, &resolved_return_type);
                     } else {
                         self.writeln("todo!(\"Template method body\")");
                     }
