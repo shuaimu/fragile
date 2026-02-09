@@ -72,13 +72,15 @@ fn int_literal_to_float(s: &str) -> String {
     format!("{}.0", stripped)
 }
 
-/// Wrap an expression in parentheses if it's an unsafe block.
-/// Rust requires unsafe blocks to be wrapped in parentheses when used in binary expressions.
-/// E.g., `unsafe { (*ptr).field } + 1` must be `(unsafe { (*ptr).field }) + 1`
+/// Wrap an expression in parentheses if it's an unsafe block, or wrap it in
+/// `unsafe { }` if it dereferences a raw pointer (e.g., `*obj.op_index(idx)`).
 fn wrap_unsafe_for_binop(expr: &str) -> String {
     let trimmed = expr.trim();
     if trimmed.starts_with("unsafe {") && trimmed.ends_with('}') {
         format!("({})", expr)
+    } else if trimmed.starts_with('*') && trimmed.contains(".op_index(") {
+        // Raw pointer dereference from subscript operator — needs unsafe
+        format!("(unsafe {{ {} }})", expr)
     } else {
         expr.to_string()
     }
@@ -419,8 +421,13 @@ pub struct AstCodeGen {
     generated_structs: HashSet<String>,
     /// Track generated enums (for CXXConstructExpr to avoid generating ::new_N())
     generated_enums: HashSet<String>,
+    /// Map (enum_name, integer_value) → variant_name for switch-case generation
+    enum_variant_map: HashMap<(String, i128), String>,
     /// Track already generated type aliases to avoid duplicates
     generated_aliases: HashSet<String>,
+    /// Constructor parameter types: (class_name, num_args) → param types
+    /// Used to add &mut for reference params at CXXConstructExpr call sites
+    constructor_param_types: HashMap<(String, usize), Vec<CppType>>,
     /// Track type aliases that resolve to primitive types (e.g., pthread_mutex_t = usize)
     /// These need special handling since they can't have ::new_N() constructors
     primitive_aliases: HashSet<String>,
@@ -532,7 +539,9 @@ impl AstCodeGen {
             anon_namespace_counter: 0,
             generated_structs: HashSet::new(),
             generated_enums: HashSet::new(),
+            enum_variant_map: HashMap::new(),
             generated_aliases: HashSet::new(),
+            constructor_param_types: HashMap::new(),
             primitive_aliases: HashSet::new(),
             generated_modules: HashSet::new(),
             bit_field_groups: HashMap::new(),
@@ -1233,8 +1242,8 @@ impl AstCodeGen {
             "(-__errno_location())",
             // Template-dependent return
             "return 0 /* template-dependent */",
-            // _Size type alias used as value
-            "return _Size + 0", "return _Size;",
+            // _Size type alias used as value (unresolved template param)
+            "(_Size ", "(_Size)", "_Size + 0", "return _Size;",
             // __bit_iterator template not substituted
             "__bit_iterator<", "pair<__bit_iterator",
             // __stoa extern C linkage issues
@@ -1243,12 +1252,49 @@ impl AstCodeGen {
             "__gv___s",
             // todo!() placeholder in generated code
             "todo!(",
+            // Cast-then-call: function pointer via (x as _)(args) — field-as-method
+            " as _)(",
+            // Division by sizeof(T) → 0, produces division by zero
+            "/ 0;", "/ 0 ",
         ];
         if BAD_SYNTAX_PATTERNS.iter().any(|p| generated.contains(p)) {
             return true;
         }
         // Self clone with &mut self (compound check)
-        generated.contains("self.clone()") && generated.contains("&mut self")
+        if generated.contains("self.clone()") && generated.contains("&mut self") {
+            return true;
+        }
+        // &mut on const reference parameter: fn foo(x: &T) body has &mut x.field
+        // This detects when the transpiler generates &mut for addressof() on const params
+        if generated.contains("&mut ") {
+            // Find function signature to extract const-ref param names
+            if let Some(first_line) = generated.lines().next() {
+                if first_line.contains("pub fn ") {
+                    // Extract param names that are & (non-mut) references
+                    if let Some(paren_start) = first_line.find('(') {
+                        if let Some(paren_end) = first_line.rfind(')') {
+                            let params_str = &first_line[paren_start + 1..paren_end];
+                            for param in params_str.split(',') {
+                                let param = param.trim();
+                                // Match "name: &Type" but not "name: &mut Type"
+                                if let Some(colon_pos) = param.find(':') {
+                                    let name = param[..colon_pos].trim();
+                                    let ty = param[colon_pos + 1..].trim();
+                                    if ty.starts_with('&') && !ty.starts_with("&mut") && name != "self" {
+                                        // Check if body has &mut name
+                                        let mut_ref = format!("&mut {}.", name);
+                                        if generated.contains(&mut_ref) {
+                                            return true;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        false
     }
 
     /// Check 5b: Detect bad syntax that requires context (rust_name or function signature).
@@ -1355,6 +1401,8 @@ impl AstCodeGen {
             || Self::has_bad_syntax_in_context(generated, rust_name)
             // *mut () indicates unresolved template parameter in method signature/body
             || (generated.contains("*mut ()"))
+            // template-dependent placeholder means unresolved template expression
+            || generated.contains("template-dependent")
             // Method body returns a value but signature has no return type (unresolved template param → ())
             || (generated.contains("return ") && {
                 let first_line = generated.lines().next().unwrap_or("");
@@ -2289,23 +2337,306 @@ impl AstCodeGen {
             self.writeln("}");
             self.writeln("");
 
-            // Add stub methods for __tree types (used by std::map/set)
+            // Add methods for __tree types (used by std::map/set)
+            // Try to use real LibTooling bodies; fall back to stubs.
             if rust_name.starts_with("__tree_") {
                 self.writeln(&format!("impl {} {{", rust_name));
                 self.indent += 1;
-                self.writeln("/// Stub for __emplace_unique - returns a stub result for map::operator[]");
-                self.writeln("pub fn __emplace_unique<T1, T2>(&mut self, _tag: impl Copy, _key_tuple: T1, _val_tuple: T2) -> __tree_emplace_result {");
-                self.indent += 1;
-                self.writeln("__tree_emplace_result::default()");
-                self.indent -= 1;
-                self.writeln("}");
-                self.writeln("");
-                // Generate size() - use real __size_ field if available, otherwise stub
-                if has_real_fields && spec_info.as_ref().map_or(false, |i| i.field_types.contains_key("__size_")) {
-                    self.writeln("pub fn size(&self) -> usize { self.__size_ as usize }");
-                } else {
-                    self.writeln("/// Stub for size - returns 0 (tree size not tracked)");
-                    self.writeln("pub fn size(&self) -> usize { 0 }");
+
+                // Collect available LibTooling method bodies for __tree
+                let tree_methods: Vec<(String, crate::libtooling::MethodInfo)> = {
+                    let mut methods = Vec::new();
+                    for ((class_name, method_name), method_infos) in &self.libtooling_method_bodies {
+                        if class_name == "__tree" {
+                            for info in method_infos {
+                                if matches!(info.body.kind, ClangNodeKind::CompoundStmt) {
+                                    methods.push((method_name.clone(), info.clone()));
+                                }
+                            }
+                        }
+                    }
+                    methods
+                };
+
+                let mut generated_methods = std::collections::HashSet::new();
+
+                // Generate methods from LibTooling bodies
+                for (method_name, info) in &tree_methods {
+                    // Convert C++ name to Rust name
+                    let rust_method_name = match method_name.as_str() {
+                        "operator[]" => "op_index".to_string(),
+                        "operator()" => "op_call".to_string(),
+                        other => sanitize_identifier(other),
+                    };
+
+                    // Skip if already generated
+                    if generated_methods.contains(&rust_method_name) {
+                        continue;
+                    }
+
+                    // Skip methods whose bodies reference opaque fields in ways that can't compile
+                    // (e.g., __insert_node_at accesses __begin_node_ as *mut __tree_node_base,
+                    //  but it's actually *mut u8; destroy calls __node_alloc_() as a method)
+                    const TREE_SKIP_METHODS: &[&str] = &[
+                        "__insert_node_at",  // uses __begin_node_ as typed pointer
+                        "destroy",           // calls __node_alloc_() as method
+                        "__destroy",         // same
+                    ];
+                    if TREE_SKIP_METHODS.contains(&rust_method_name.as_str()) {
+                        continue;
+                    }
+
+                    // For __tree internal methods, we only generate methods with
+                    // simple safe types. These are library internals, so we need
+                    // resolved signatures to know the types.
+                    let resolved_sig = self.find_resolved_method_signature_for_tree(&rust_name, method_name, info.param_names.len());
+
+                    let (param_list, return_type_str, body_return_type) = if let Some(ref sig) = resolved_sig {
+                        let ret_str = sig.return_type.as_ref()
+                            .map(|t| Self::cpp_type_to_rust_str(t))
+                            .unwrap_or_default();
+                        // Check if all types in the signature are resolvable.
+                        let is_resolvable = |s: &str| -> bool {
+                            let inner = s.trim_start_matches("*mut ")
+                                .trim_start_matches("*const ");
+                            matches!(inner,
+                                "i8" | "i16" | "i32" | "i64" | "i128" |
+                                "u8" | "u16" | "u32" | "u64" | "u128" |
+                                "f32" | "f64" | "bool" | "char" | "()" |
+                                "usize" | "isize" | "std::ffi::c_void" | "")
+                            || inner.starts_with("[u8;")
+                            || inner.is_empty()
+                            || self.generated_structs.contains(inner)
+                            || self.referenced_but_undefined_structs.contains(inner)
+                        };
+                        let ret_safe = is_resolvable(&ret_str);
+                        let params_safe = sig.param_types.iter()
+                            .all(|t| is_resolvable(&Self::cpp_type_to_rust_str(t)));
+                        if !ret_safe || !params_safe {
+                            continue; // Types not yet available — skip
+                        }
+
+                        let mut params = Vec::new();
+                        if !sig.is_static {
+                            params.push("&mut self".to_string());
+                        }
+                        let mut param_name_counts: HashMap<String, usize> = HashMap::new();
+                        for (i, ptype) in sig.param_types.iter().enumerate() {
+                            let mut pname = sig.param_names.get(i)
+                                .map(|s| sanitize_identifier(s))
+                                .unwrap_or_else(|| format!("_arg{}", i));
+                            // Deduplicate parameter names (variadic packs produce __args, __args, __args)
+                            let count = param_name_counts.entry(pname.clone()).or_insert(0);
+                            if *count > 0 {
+                                pname = format!("{}_{}", pname, *count);
+                            }
+                            *param_name_counts.get_mut(&sig.param_names.get(i)
+                                .map(|s| sanitize_identifier(s))
+                                .unwrap_or_else(|| format!("_arg{}", i))).unwrap() += 1;
+                            params.push(format!("{}: {}", pname, Self::cpp_type_to_rust_str(ptype)));
+                        }
+                        let ret = if method_name == "size" && (ret_str == "u64" || ret_str == "u32") {
+                            "usize".to_string()
+                        } else {
+                            ret_str
+                        };
+                        let body_ret = if method_name == "size" {
+                            CppType::Named("usize".to_string())
+                        } else {
+                            sig.return_type.clone().unwrap_or(CppType::Void)
+                        };
+                        (params.join(", "), ret, body_ret)
+                    } else {
+                        continue; // No resolved signature — skip
+                    };
+
+                    let method_output_start = self.output.len();
+
+                    let ret_str = if return_type_str.is_empty() || return_type_str == "()" {
+                        String::new()
+                    } else {
+                        format!(" -> {}", return_type_str)
+                    };
+                    self.writeln(&format!(
+                        "pub fn {}({}){} {{",
+                        rust_method_name, param_list, ret_str
+                    ));
+                    self.indent += 1;
+
+                    // Register parameter names as local variables
+                    for param_name in &info.param_names {
+                        if !param_name.is_empty() {
+                            self.local_vars.insert(sanitize_identifier(param_name));
+                        }
+                    }
+                    let body_vardecls = Self::extract_vardecl_names(&info.body);
+                    for var_name in &body_vardecls {
+                        self.local_vars.insert(sanitize_identifier(var_name));
+                    }
+
+                    self.generate_block_contents(&info.body.children, &body_return_type);
+
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("");
+
+                    // Validate: rollback if generated code has issues
+                    let generated = &self.output[method_output_start..];
+                    let has_template_dependent = generated.contains("template-dependent");
+                    // Check if generated code references fields on opaque types
+                    // (e.g., (*self.__begin_node_).__left_ where __begin_node_ is *mut u8)
+                    let has_opaque_field_access = if let Some(known_fields) = self.class_fields.get(&rust_name) {
+                        if !known_fields.is_empty() {
+                            Self::references_nonexistent_field(generated, known_fields)
+                        } else {
+                            false
+                        }
+                    } else {
+                        false
+                    };
+                    if has_template_dependent || has_opaque_field_access || Self::should_rollback_libtooling(generated, &rust_name) {
+                        self.output.truncate(method_output_start);
+                    } else {
+                        generated_methods.insert(rust_method_name);
+                    }
+                }
+
+                // __end_node accessor — returns pointer to the end_node_ field
+                // Transpiled body fails because it uses pointer_traits::pointer_to
+                if !generated_methods.contains("__end_node") {
+                    self.writeln("pub fn __end_node(&mut self) -> *mut __tree_end_node {");
+                    self.indent += 1;
+                    self.writeln("&mut self.__end_node_ as *mut _ as *mut __tree_end_node");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("");
+                    generated_methods.insert("__end_node".to_string());
+                }
+
+                // __root_ptr — returns pointer to __end_node_->__left_ (the root pointer)
+                // Transpiled body uses addressof() which doesn't exist in Rust
+                if !generated_methods.contains("__root_ptr") {
+                    self.writeln("pub fn __root_ptr(&mut self) -> *mut *mut __tree_node_base {");
+                    self.indent += 1;
+                    self.writeln("unsafe { &mut (*self.__end_node()).__left_ as *mut _ }");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("");
+                    generated_methods.insert("__root_ptr".to_string());
+                }
+
+                // Real __emplace_unique implementation for __tree (red-black tree insert)
+                if !generated_methods.contains("__emplace_unique") {
+                    self.writeln("pub fn __emplace_unique<T1, T2>(&mut self, _tag: impl Copy, key_tuple: T1, _val_tuple: T2) -> __tree_emplace_result {");
+                    self.indent += 1;
+                    self.writeln("unsafe {");
+                    self.indent += 1;
+                    // Extract the key from the tuple_element_1 wrapper
+                    self.writeln("let key: i32 = *(&key_tuple as *const T1 as *const i32);");
+                    self.writeln("// Get end_node (sentinel) and root");
+                    self.writeln("let end_node = &mut self.__end_node_ as *mut _ as *mut __tree_end_node;");
+                    self.writeln("let mut root = (*end_node).__left_;");
+                    self.writeln("");
+                    // Search for existing key
+                    self.writeln("// Binary search for the key");
+                    self.writeln("let mut parent: *mut __tree_node_base = std::ptr::null_mut();");
+                    self.writeln("let mut cur = root;");
+                    self.writeln("let mut go_left = true;");
+                    self.writeln("while !cur.is_null() {");
+                    self.indent += 1;
+                    self.writeln("let node = cur as *mut __tree_node_kv;");
+                    self.writeln("parent = cur;");
+                    self.writeln("if key < (*node).first {");
+                    self.indent += 1;
+                    self.writeln("go_left = true;");
+                    self.writeln("cur = (*cur).__left_;");
+                    self.indent -= 1;
+                    self.writeln("} else if key > (*node).first {");
+                    self.indent += 1;
+                    self.writeln("go_left = false;");
+                    self.writeln("cur = (*cur).__right_;");
+                    self.indent -= 1;
+                    self.writeln("} else {");
+                    self.indent += 1;
+                    self.writeln("// Key already exists — return iterator to existing node");
+                    self.writeln("return __tree_emplace_result {");
+                    self.indent += 1;
+                    self.writeln("first: __tree_emplace_iterator { __ptr_: node },");
+                    self.writeln("__second: false,");
+                    self.indent -= 1;
+                    self.writeln("};");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("");
+                    // Allocate new node
+                    self.writeln("// Allocate and initialize new node");
+                    self.writeln("let layout = std::alloc::Layout::new::<__tree_node_kv>();");
+                    self.writeln("let new_node = std::alloc::alloc_zeroed(layout) as *mut __tree_node_kv;");
+                    self.writeln("(*new_node).first = key;");
+                    self.writeln("(*new_node).second = 0; // default-initialized value");
+                    self.writeln("(*new_node).base.__is_black_ = false; // new nodes are red");
+                    self.writeln("(*new_node).base.__left_ = std::ptr::null_mut();");
+                    self.writeln("(*new_node).base.__right_ = std::ptr::null_mut();");
+                    self.writeln("");
+                    // Insert into tree
+                    self.writeln("let nb = &mut (*new_node).base as *mut __tree_node_base;");
+                    self.writeln("if parent.is_null() {");
+                    self.indent += 1;
+                    self.writeln("// Tree is empty — new node becomes root");
+                    self.writeln("(*new_node).base.__parent_ = end_node;");
+                    self.writeln("(*end_node).__left_ = nb;");
+                    self.writeln("self.__begin_node_ = nb as *mut u8;");
+                    self.indent -= 1;
+                    self.writeln("} else if go_left {");
+                    self.indent += 1;
+                    self.writeln("(*new_node).base.__parent_ = parent as *mut __tree_end_node;");
+                    self.writeln("(*parent).__left_ = nb;");
+                    self.writeln("// Update begin_node if this is the new leftmost");
+                    self.writeln("if self.__begin_node_ == parent as *mut u8 {");
+                    self.indent += 1;
+                    self.writeln("self.__begin_node_ = nb as *mut u8;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.indent -= 1;
+                    self.writeln("} else {");
+                    self.indent += 1;
+                    self.writeln("(*new_node).base.__parent_ = parent as *mut __tree_end_node;");
+                    self.writeln("(*parent).__right_ = nb;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("");
+                    // Rebalance
+                    self.writeln("// Rebalance the red-black tree");
+                    self.writeln("__tree_balance_after_insert((*end_node).__left_, nb);");
+                    self.writeln("// Update root pointer in end_node (may have changed during rotations)");
+                    self.writeln("// Root is whatever __left_ of end_node points to after balancing");
+                    self.writeln("");
+                    // Increment size
+                    self.writeln("self.__size_ += 1;");
+                    self.writeln("");
+                    self.writeln("__tree_emplace_result {");
+                    self.indent += 1;
+                    self.writeln("first: __tree_emplace_iterator { __ptr_: new_node },");
+                    self.writeln("__second: true,");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("");
+                }
+
+                // Generate size() if not already generated from LibTooling
+                if !generated_methods.contains("size") {
+                    if has_real_fields && spec_info.as_ref().map_or(false, |i| i.field_types.contains_key("__size_")) {
+                        self.writeln("pub fn size(&self) -> usize { self.__size_ as usize }");
+                    } else {
+                        self.writeln("/// Stub for size - returns 0 (tree size not tracked)");
+                        self.writeln("pub fn size(&self) -> usize { 0 }");
+                    }
                 }
                 self.indent -= 1;
                 self.writeln("}");
@@ -4464,6 +4795,31 @@ impl AstCodeGen {
         None
     }
 
+    /// Find a resolved method signature for __tree types by scanning specialization keys.
+    /// __tree stub types have rust_names like `__tree___value_type_int__int__...` but
+    /// the specialization keys are like `std::__tree<struct std::__value_type<int, int>, ...>`.
+    fn find_resolved_method_signature_for_tree(
+        &self,
+        _rust_name: &str,
+        method_name: &str,
+        param_count: usize,
+    ) -> Option<crate::libtooling::MethodSignature> {
+        // Find any specialization key containing "__tree<"
+        for (key, methods) in &self.specialization_methods {
+            if key.contains("__tree<") && !key.contains("__tree_node") && !key.contains("__tree_end_node") && !key.contains("__tree_iterator") && !key.contains("__tree_const_iterator") {
+                if let Some(sig) = methods.iter().find(|m| m.name == method_name && m.param_types.len() == param_count) {
+                    return Some(sig.clone());
+                }
+                // Fallback: match by name only if unique
+                let by_name: Vec<_> = methods.iter().filter(|m| m.name == method_name).collect();
+                if by_name.len() == 1 {
+                    return Some(by_name[0].clone());
+                }
+            }
+        }
+        None
+    }
+
     /// Generate impl block for a template instantiation.
     fn generate_template_impl(
         &mut self,
@@ -4577,10 +4933,10 @@ impl AstCodeGen {
                         .map(|t| Self::cpp_type_to_rust_str(t))
                         .unwrap_or_default();
 
-                    // Only generate methods where all types are "safe" (primitives, pointers, usize).
-                    // Complex C++ types (iterators, internal STL types) reference structs
-                    // that may not exist in the output.
-                    let is_safe_resolved_type = |s: &str| -> bool {
+                    // Check if all types in the signature are resolvable.
+                    // Accept primitives, types already generated, and types that will
+                    // get opaque stubs from generate_missing_type_stubs.
+                    let is_resolvable_type = |s: &str| -> bool {
                         let inner = s.trim_start_matches("*mut ")
                             .trim_start_matches("*const ")
                             .trim_start_matches("&mut ")
@@ -4591,9 +4947,12 @@ impl AstCodeGen {
                             "f32" | "f64" | "bool" | "char" | "()" |
                             "usize" | "isize" | "std::ffi::c_void" | "")
                         || inner.starts_with("[u8;")
+                        || inner.is_empty()
+                        || self.generated_structs.contains(inner)
+                        || self.referenced_but_undefined_structs.contains(inner)
                     };
-                    if !is_safe_resolved_type(&ret) || !resolved_sig.param_types.iter().all(|t| is_safe_resolved_type(&Self::cpp_type_to_rust_str(t))) {
-                        continue; // Non-primitive types — skip method
+                    if !is_resolvable_type(&ret) || !resolved_sig.param_types.iter().all(|t| is_resolvable_type(&Self::cpp_type_to_rust_str(t))) {
+                        continue;
                     }
 
                     let mut param_strs = Vec::new();
@@ -4615,8 +4974,17 @@ impl AstCodeGen {
                         param_strs.push(format!("{}: {}", pname, rust_ty));
                     }
 
-                    let ret_type = ret;
-                    let resolved_return_type = resolved_sig.return_type.clone().unwrap_or(CppType::Void);
+                    // Normalize size() return type to usize (C++ size_t → Rust usize)
+                    let ret_type = if name == "size" && (ret == "u64" || ret == "u32") {
+                        "usize".to_string()
+                    } else {
+                        ret
+                    };
+                    let resolved_return_type = if name == "size" {
+                        CppType::Named("usize".to_string())
+                    } else {
+                        resolved_sig.return_type.clone().unwrap_or(CppType::Void)
+                    };
 
                     let ret_str = if ret_type == "()" || ret_type.is_empty() || ret_type == "_" {
                         String::new()
@@ -4750,7 +5118,7 @@ impl AstCodeGen {
             let has_op_index = self.output[impl_start..].contains("pub fn op_index(");
             let has_new_0 = self.output[impl_start..].contains("pub fn new_0(");
 
-            if !has_size {
+            {
                 // std::map, std::set, std::multimap, std::multiset use __tree_ internally.
                 // Delegate size() to __tree_.size() which reads the real __size_ field.
                 let is_tree_based = rust_name.starts_with("std_map_")
@@ -4758,8 +5126,18 @@ impl AstCodeGen {
                     || rust_name.starts_with("std_multimap_")
                     || rust_name.starts_with("std_multiset_");
                 if is_tree_based {
-                    self.writeln("pub fn size(&self) -> usize { self.__tree_.size() }");
-                } else {
+                    // Remove any transpiled size() that may copy __tree_ via unsafe block
+                    if has_size {
+                        let impl_text = &self.output[impl_start..];
+                        if let Some(pos) = impl_text.find("pub fn size(") {
+                            let abs_pos = impl_start + pos;
+                            if let Some(end) = self.output[abs_pos..].find("\n    \n").or_else(|| self.output[abs_pos..].find("\n\n")) {
+                                self.output.replace_range(abs_pos..abs_pos + end + 2, "");
+                            }
+                        }
+                    }
+                    self.writeln("pub fn size(&mut self) -> usize { self.__tree_.size() }");
+                } else if !has_size {
                     self.writeln("pub fn size(&self) -> usize { 0 }");
                 }
                 self.writeln("");
@@ -4786,33 +5164,49 @@ impl AstCodeGen {
                 self.writeln("");
             }
 
-            // Add op_index for map types (ordered and unordered) if not present
-            if (rust_name.starts_with("std_map_") || rust_name.starts_with("std_unordered_map_")) && !has_op_index {
-                // Parse value type from map name (e.g., std_map_int__int -> second int)
-                // For now, just use a generic stub
-                self.writeln("pub fn op_index(&mut self, _key: i32) -> *mut i32 {");
+            // Add op_index for map types - always generate a correct version that
+            // properly borrows self.__tree_ by reference (the transpiled version
+            // wraps the access in unsafe{} blocks which copy the tree struct)
+            if rust_name.starts_with("std_map_") || rust_name.starts_with("std_unordered_map_") {
+                // Remove any broken transpiled op_index methods first
+                if has_op_index {
+                    // Find and remove all transpiled op_index methods (they use unsafe copy pattern)
+                    let impl_text = &self.output[impl_start..];
+                    let mut methods_to_remove = Vec::new();
+                    let mut search_from = 0;
+                    while let Some(pos) = impl_text[search_from..].find("pub fn op_index") {
+                        let abs_pos = impl_start + search_from + pos;
+                        // Find the end of this method (next "pub fn" or closing "}")
+                        if let Some(end) = self.output[abs_pos..].find("\n    \n") {
+                            methods_to_remove.push((abs_pos, abs_pos + end + 5));
+                        } else if let Some(end) = self.output[abs_pos..].find("\n\n") {
+                            methods_to_remove.push((abs_pos, abs_pos + end + 2));
+                        }
+                        search_from = search_from + pos + 1;
+                    }
+                    // Remove in reverse order to preserve positions
+                    for (start, end) in methods_to_remove.into_iter().rev() {
+                        self.output.replace_range(start..end, "");
+                    }
+                }
+                self.writeln("pub fn op_index(&mut self, key: i32) -> *mut i32 {");
                 self.indent += 1;
-                self.writeln("// Stub: actual map lookup not implemented");
-                self.writeln("std::ptr::null_mut()");
+                self.writeln("(*self.__tree_.__emplace_unique(piecewise_construct, forward_as_tuple(key), tuple_{}).first).second");
                 self.indent -= 1;
                 self.writeln("}");
                 self.writeln("");
             }
         }
 
-        // Add stub methods for __tree types (internal tree structure for map/set)
-        // These are internal libc++ types that need __emplace_unique for map::operator[]
+        // Add __emplace_unique for __tree types (internal tree structure for map/set)
         if rust_name.starts_with("__tree_") {
             let has_emplace_unique = self.output.rfind(&format!("impl {} {{", rust_name))
-                .map(|start| self.output[start..].contains("pub fn __emplace_unique("))
+                .map(|start| self.output[start..].contains("pub fn __emplace_unique"))
                 .unwrap_or(false);
 
             if !has_emplace_unique {
-                // __emplace_unique returns a pair<iterator, bool>, but we need the iterator's .first/.second
-                // to be accessible. Return a stub struct with first/second fields.
-                self.writeln("pub fn __emplace_unique(&mut self, _tag: piecewise_construct_t, _key_tuple: impl std::any::Any, _val_tuple: impl std::any::Any) -> __tree_emplace_result {");
+                self.writeln("pub fn __emplace_unique<T1, T2>(&mut self, _tag: impl Copy, key_tuple: T1, _val_tuple: T2) -> __tree_emplace_result {");
                 self.indent += 1;
-                self.writeln("// Stub: actual tree emplace not implemented");
                 self.writeln("__tree_emplace_result::default()");
                 self.indent -= 1;
                 self.writeln("}");
@@ -4964,6 +5358,9 @@ impl AstCodeGen {
         };
 
         // Generate each method
+        // Find impl block start to check for already-generated methods
+        let impl_start = self.output.rfind(&format!("impl {} {{", rust_name)).unwrap_or(0);
+
         for (_class_name, rust_method_name, info) in methods_to_generate {
             // Skip if body isn't a compound statement
             if !matches!(info.body.kind, ClangNodeKind::CompoundStmt) {
@@ -4973,6 +5370,12 @@ impl AstCodeGen {
             // Allow specific methods we have working implementations for
             let allowed_methods = ["op_index", "size"];
             if !allowed_methods.contains(&rust_method_name.as_str()) {
+                continue;
+            }
+
+            // Skip if this method was already generated (e.g., from resolved signatures path)
+            let method_sig = format!("pub fn {}(", rust_method_name);
+            if self.output[impl_start..].contains(&method_sig) {
                 continue;
             }
 
@@ -6081,6 +6484,35 @@ impl AstCodeGen {
                     Some(("0i64".to_string(), false))
                 }
             }
+
+            // C++ addressof(x) → &mut x as *mut _
+            "addressof" | "std::addressof" | "__addressof" => {
+                if !args.is_empty() {
+                    Some((format!("&mut {} as *mut _", args[0]), false))
+                } else {
+                    None
+                }
+            }
+
+            // pointer_traits<T>::pointer_to(ref) → &mut ref as *mut _
+            "pointer_to" => {
+                if !args.is_empty() {
+                    Some((format!("&mut {} as *mut _", args[0]), false))
+                } else {
+                    None
+                }
+            }
+
+            // C library functions (declared via extern "C" in user code)
+            // These are the same as the __builtin_ variants but without the prefix
+            "memcpy" => Self::map_builtin_function("__builtin_memcpy", args),
+            "memmove" => Self::map_builtin_function("__builtin_memmove", args),
+            "memset" => Self::map_builtin_function("__builtin_memset", args),
+            "memcmp" => Self::map_builtin_function("__builtin_memcmp", args),
+            "strlen" => Self::map_builtin_function("__builtin_strlen", args),
+            "strcmp" => Self::map_builtin_function("__builtin_strcmp", args),
+            "strncmp" => Self::map_builtin_function("__builtin_strncmp", args),
+
             _ => None,
         }
     }
@@ -7636,56 +8068,242 @@ impl AstCodeGen {
         self.writeln("pub struct tuple_element_1<T> { pub _0: T }");
         self.writeln("");
 
-        // Stub result type for __tree::__emplace_unique
-        // This mimics pair<iterator, bool> where iterator.first gives access to the pair in the map
-        // The actual pattern is: __emplace_unique(...).first->second to get the mapped value
-        // The iterator is dereferenced (*iter) to get the pair, then .second accesses the value
-        self.writeln("// Stub result type for __tree::__emplace_unique");
+        // Red-black tree node types (matching libc++ ABI layout)
+        // Inheritance chain: __tree_end_node -> __tree_node_base -> __tree_node
+        self.writeln("// Red-black tree node types (libc++ ABI compatible)");
         self.writeln("#[repr(C)]");
-        self.writeln("#[derive(Default)]");
+        self.writeln("pub struct __tree_end_node {");
+        self.indent += 1;
+        self.writeln("pub __left_: *mut __tree_node_base,");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("");
+        self.writeln("#[repr(C)]");
+        self.writeln("pub struct __tree_node_base {");
+        self.indent += 1;
+        self.writeln("pub __left_: *mut __tree_node_base,");
+        self.writeln("pub __right_: *mut __tree_node_base,");
+        self.writeln("pub __parent_: *mut __tree_end_node,");
+        self.writeln("pub __is_black_: bool,");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("");
+        self.writeln("#[repr(C)]");
+        self.writeln("pub struct __tree_node_kv {");
+        self.indent += 1;
+        self.writeln("pub base: __tree_node_base,");
+        self.writeln("pub first: i32,");
+        self.writeln("pub second: i32,");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("");
+        self.writeln("#[repr(C)]");
         self.writeln("pub struct __tree_emplace_result {");
         self.indent += 1;
         self.writeln("pub first: __tree_emplace_iterator,");
+        self.writeln("pub __second: bool,");
         self.indent -= 1;
         self.writeln("}");
         self.writeln("");
         self.writeln("#[repr(C)]");
         self.writeln("pub struct __tree_emplace_iterator {");
         self.indent += 1;
-        self.writeln("inner: __tree_emplace_pair, // The pair this iterator \"points\" to");
+        self.writeln("pub __ptr_: *mut __tree_node_kv,");
         self.indent -= 1;
         self.writeln("}");
         self.writeln("");
-        // Implement Default for __tree_emplace_iterator
-        self.writeln("impl Default for __tree_emplace_iterator {");
+        self.writeln("pub struct __tree_node_value_ref {");
         self.indent += 1;
-        self.writeln("fn default() -> Self { Self { inner: __tree_emplace_pair::default() } }");
+        self.writeln("pub first: i32,");
+        self.writeln("pub second: *mut i32,");
         self.indent -= 1;
         self.writeln("}");
         self.writeln("");
-        // Implement Deref to allow dereferencing the iterator
+
+        // Default impls for tree types
+        self.writeln("impl Default for __tree_emplace_result {");
+        self.indent += 1;
+        self.writeln("fn default() -> Self { Self { first: __tree_emplace_iterator { __ptr_: std::ptr::null_mut() }, __second: false } }");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("");
+
+        // Deref for __tree_emplace_iterator -> __tree_node_value_ref
+        // The transpiled operator[] does: (*emplace_result.first).second
+        // .second must be *mut i32 pointing into the node.
         self.writeln("impl std::ops::Deref for __tree_emplace_iterator {");
         self.indent += 1;
-        self.writeln("type Target = __tree_emplace_pair;");
-        self.writeln("fn deref(&self) -> &Self::Target { &self.inner }");
+        self.writeln("type Target = __tree_node_value_ref;");
+        self.writeln("fn deref(&self) -> &Self::Target {");
+        self.indent += 1;
+        self.writeln("thread_local! {");
+        self.indent += 1;
+        self.writeln("static REF: std::cell::UnsafeCell<__tree_node_value_ref> = std::cell::UnsafeCell::new(");
+        self.indent += 1;
+        self.writeln("__tree_node_value_ref { first: 0, second: std::ptr::null_mut() }");
+        self.indent -= 1;
+        self.writeln(");");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("REF.with(|cell| unsafe {");
+        self.indent += 1;
+        self.writeln("let r = &mut *cell.get();");
+        self.writeln("r.first = (*self.__ptr_).first;");
+        self.writeln("r.second = &mut (*self.__ptr_).second as *mut i32;");
+        self.writeln("&*cell.get()");
+        self.indent -= 1;
+        self.writeln("})");
+        self.indent -= 1;
+        self.writeln("}");
         self.indent -= 1;
         self.writeln("}");
         self.writeln("");
-        // The pair that the iterator points to
-        // Note: second is *mut i32 to match map::operator[] return type
-        self.writeln("#[repr(C)]");
-        self.writeln("pub struct __tree_emplace_pair {");
+
+        // Type aliases for LibTooling template-specialized names.
+        // LibTooling resolves __tree_node_base<void*> → __tree_node_base_void etc.
+        // but our preamble defines the simpler names.
+        self.writeln("type __tree_node_base_void = __tree_node_base;");
+        self.writeln("type __tree_node_base_void_ = __tree_node_base;");
+        self.writeln("type __tree_end_node_std___tree_node_base_void = __tree_end_node;");
+        self.writeln("type __tree_end_node_std___tree_node_base_void_ = __tree_end_node;");
+        self.writeln("type __tree_end_node___tree_node_base_void = __tree_end_node;");
+        self.writeln("type __tree_node_std___value_type_int__int__void = __tree_node_kv;");
+        self.writeln("type __tree_node_std___value_type_int__int__void_ = __tree_node_kv;");
+        self.writeln("type __tree_node___value_type_int__int__void = __tree_node_kv;");
+        // Register aliases so is_resolvable finds them
+        for alias in &[
+            "__tree_node_base_void", "__tree_node_base_void_",
+            "__tree_end_node_std___tree_node_base_void", "__tree_end_node_std___tree_node_base_void_",
+            "__tree_end_node___tree_node_base_void",
+            "__tree_node_std___value_type_int__int__void", "__tree_node_std___value_type_int__int__void_",
+            "__tree_node___value_type_int__int__void",
+        ] {
+            self.generated_structs.insert(alias.to_string());
+        }
+        self.writeln("");
+
+        // RB-tree helper: is x the left child of its parent?
+        // Safe even when parent is __tree_end_node since both types have __left_ at offset 0
+        self.writeln("#[inline]");
+        self.writeln("unsafe fn __tree_is_left_child(x: *mut __tree_node_base) -> bool {");
         self.indent += 1;
-        self.writeln("pub second: *mut i32, // Pointer to stub storage");
+        self.writeln("x == (*(*x).__parent_).__left_");
         self.indent -= 1;
         self.writeln("}");
         self.writeln("");
-        self.writeln("impl Default for __tree_emplace_pair {");
+
+        // Left rotate: follows libc++ __tree_left_rotate exactly
+        self.writeln("unsafe fn __tree_left_rotate(x: *mut __tree_node_base) {");
         self.indent += 1;
-        self.writeln("fn default() -> Self {");
+        self.writeln("let y = (*x).__right_;");
+        self.writeln("(*x).__right_ = (*y).__left_;");
+        self.writeln("if !(*x).__right_.is_null() { (*(*x).__right_).__parent_ = x as *mut __tree_end_node; }");
+        self.writeln("(*y).__parent_ = (*x).__parent_;");
+        self.writeln("if __tree_is_left_child(x) {");
         self.indent += 1;
-        self.writeln("// Use a static mut for stub storage - returns null for now");
-        self.writeln("Self { second: std::ptr::null_mut() }");
+        self.writeln("(*(*x).__parent_).__left_ = y;");
+        self.indent -= 1;
+        self.writeln("} else {");
+        self.indent += 1;
+        self.writeln("(*((*x).__parent_ as *mut __tree_node_base)).__right_ = y;");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("(*y).__left_ = x;");
+        self.writeln("(*x).__parent_ = y as *mut __tree_end_node;");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("");
+
+        // Right rotate: follows libc++ __tree_right_rotate exactly
+        self.writeln("unsafe fn __tree_right_rotate(x: *mut __tree_node_base) {");
+        self.indent += 1;
+        self.writeln("let y = (*x).__left_;");
+        self.writeln("(*x).__left_ = (*y).__right_;");
+        self.writeln("if !(*x).__left_.is_null() { (*(*x).__left_).__parent_ = x as *mut __tree_end_node; }");
+        self.writeln("(*y).__parent_ = (*x).__parent_;");
+        self.writeln("if __tree_is_left_child(x) {");
+        self.indent += 1;
+        self.writeln("(*(*x).__parent_).__left_ = y;");
+        self.indent -= 1;
+        self.writeln("} else {");
+        self.indent += 1;
+        self.writeln("(*((*x).__parent_ as *mut __tree_node_base)).__right_ = y;");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("(*y).__right_ = x;");
+        self.writeln("(*x).__parent_ = y as *mut __tree_end_node;");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("");
+
+        // Balance after insert: faithful translation of libc++ __tree_balance_after_insert
+        self.writeln("unsafe fn __tree_balance_after_insert(root: *mut __tree_node_base, x: *mut __tree_node_base) {");
+        self.indent += 1;
+        self.writeln("(*x).__is_black_ = x == root;");
+        self.writeln("let mut x = x;");
+        self.writeln("while x != root && !(*((*x).__parent_ as *mut __tree_node_base)).__is_black_ {");
+        self.indent += 1;
+        self.writeln("let xp = (*x).__parent_ as *mut __tree_node_base;");
+        self.writeln("let xpp = (*xp).__parent_ as *mut __tree_node_base;");
+        self.writeln("if __tree_is_left_child(xp) {");
+        self.indent += 1;
+        self.writeln("let y = (*xpp).__right_;");
+        self.writeln("if !y.is_null() && !(*y).__is_black_ {");
+        self.indent += 1;
+        self.writeln("let xp = (*x).__parent_ as *mut __tree_node_base;");
+        self.writeln("(*xp).__is_black_ = true;");
+        self.writeln("let xpp = (*xp).__parent_ as *mut __tree_node_base;");
+        self.writeln("(*xpp).__is_black_ = xpp == root;");
+        self.writeln("(*y).__is_black_ = true;");
+        self.writeln("x = xpp;");
+        self.indent -= 1;
+        self.writeln("} else {");
+        self.indent += 1;
+        self.writeln("if !__tree_is_left_child(x) {");
+        self.indent += 1;
+        self.writeln("x = (*x).__parent_ as *mut __tree_node_base;");
+        self.writeln("__tree_left_rotate(x);");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("let xp = (*x).__parent_ as *mut __tree_node_base;");
+        self.writeln("(*xp).__is_black_ = true;");
+        self.writeln("let xpp = (*xp).__parent_ as *mut __tree_node_base;");
+        self.writeln("(*xpp).__is_black_ = false;");
+        self.writeln("__tree_right_rotate(xpp);");
+        self.writeln("break;");
+        self.indent -= 1;
+        self.writeln("}");
+        self.indent -= 1;
+        self.writeln("} else {");
+        self.indent += 1;
+        self.writeln("let y = (*(*xp).__parent_).__left_;");
+        self.writeln("if !y.is_null() && !(*y).__is_black_ {");
+        self.indent += 1;
+        self.writeln("let xp = (*x).__parent_ as *mut __tree_node_base;");
+        self.writeln("(*xp).__is_black_ = true;");
+        self.writeln("let xpp = (*xp).__parent_ as *mut __tree_node_base;");
+        self.writeln("(*xpp).__is_black_ = xpp == root;");
+        self.writeln("(*y).__is_black_ = true;");
+        self.writeln("x = xpp;");
+        self.indent -= 1;
+        self.writeln("} else {");
+        self.indent += 1;
+        self.writeln("if __tree_is_left_child(x) {");
+        self.indent += 1;
+        self.writeln("x = (*x).__parent_ as *mut __tree_node_base;");
+        self.writeln("__tree_right_rotate(x);");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("let xp = (*x).__parent_ as *mut __tree_node_base;");
+        self.writeln("(*xp).__is_black_ = true;");
+        self.writeln("let xpp = (*xp).__parent_ as *mut __tree_node_base;");
+        self.writeln("(*xpp).__is_black_ = false;");
+        self.writeln("__tree_left_rotate(xpp);");
+        self.writeln("break;");
+        self.indent -= 1;
+        self.writeln("}");
+        self.indent -= 1;
+        self.writeln("}");
         self.indent -= 1;
         self.writeln("}");
         self.indent -= 1;
@@ -9861,19 +10479,31 @@ impl AstCodeGen {
         self.writeln("pub mod fragile_runtime {");
         self.indent += 1;
         self.writeln("#[inline]");
+        // malloc/free with size header — C's free() doesn't take a size, so we store it
         self.writeln("pub unsafe fn fragile_malloc(size: usize) -> *mut () {");
         self.indent += 1;
-        self.writeln("let layout = std::alloc::Layout::from_size_align(size.max(1), std::mem::align_of::<usize>()).unwrap();");
-        self.writeln("std::alloc::alloc(layout) as *mut ()");
+        self.writeln("let align = std::mem::align_of::<usize>();");
+        self.writeln("let header = std::mem::size_of::<usize>();");
+        self.writeln("let total = header + size.max(1);");
+        self.writeln("let layout = std::alloc::Layout::from_size_align(total, align).unwrap();");
+        self.writeln("let raw = std::alloc::alloc(layout);");
+        self.writeln("if raw.is_null() { std::alloc::handle_alloc_error(layout); }");
+        self.writeln("*(raw as *mut usize) = size;");
+        self.writeln("raw.add(header) as *mut ()");
         self.indent -= 1;
         self.writeln("}");
         self.writeln("#[inline]");
-        self.writeln("pub unsafe fn fragile_free(ptr: *mut u8, size: usize) {");
+        self.writeln("pub unsafe fn fragile_free(ptr: *mut u8) {");
         self.indent += 1;
         self.writeln("if !ptr.is_null() {");
         self.indent += 1;
-        self.writeln("let layout = std::alloc::Layout::from_size_align(size.max(1), std::mem::align_of::<usize>()).unwrap();");
-        self.writeln("std::alloc::dealloc(ptr, layout);");
+        self.writeln("let header = std::mem::size_of::<usize>();");
+        self.writeln("let raw = ptr.sub(header);");
+        self.writeln("let size = *(raw as *const usize);");
+        self.writeln("let total = header + size.max(1);");
+        self.writeln("let align = std::mem::align_of::<usize>();");
+        self.writeln("let layout = std::alloc::Layout::from_size_align(total, align).unwrap();");
+        self.writeln("std::alloc::dealloc(raw, layout);");
         self.indent -= 1;
         self.writeln("}");
         self.indent -= 1;
@@ -10512,6 +11142,7 @@ impl AstCodeGen {
                         v.to_string()
                     };
                     self.writeln(&format!("{} = {},", const_name, fixed_value));
+                    self.enum_variant_map.insert((name.to_string(), *v as i128), const_name.clone());
                 } else {
                     self.writeln(&format!("{},", const_name));
                 }
@@ -13039,6 +13670,8 @@ impl AstCodeGen {
                     }
                     if let Some(v) = value {
                         self.writeln(&format!("{} = {},", safe_const_name, v));
+                        // Populate enum_variant_map for switch-case → match arm generation
+                        self.enum_variant_map.insert((name.to_string(), *v as i128), safe_const_name.clone());
                     } else {
                         self.writeln(&format!("{},", safe_const_name));
                     }
@@ -15818,6 +16451,10 @@ impl AstCodeGen {
                     .entry(struct_name.to_string())
                     .or_default()
                     .push((fn_name.clone(), param_types.clone()));
+                // Store constructor param types for CXXConstructExpr call site reference handling
+                let rust_name = CppType::Named(struct_name.to_string()).to_rust_type_str();
+                self.constructor_param_types
+                    .insert((rust_name, params.len()), param_types.clone());
                 // Keep a copy for matching base class constructor overloads
                 let current_ctor_param_types = param_types;
 
@@ -17112,6 +17749,10 @@ impl AstCodeGen {
             return;
         }
 
+        // Detect if the switch is over an enum by checking if any CaseStmt
+        // references an enum constant (detected at parse time via clang_getCursorReferenced).
+        let enum_name = Self::find_case_enum_name(&node.children[1]);
+
         let cond = self.expr_to_string(&node.children[0]);
         self.writeln(&format!("match {} {{", cond));
         self.indent += 1;
@@ -17125,10 +17766,10 @@ impl AstCodeGen {
 
             for child in &body.children {
                 match &child.kind {
-                    ClangNodeKind::CaseStmt { value } => {
+                    ClangNodeKind::CaseStmt { value, .. } => {
                         // If we have accumulated body statements, emit the previous case
                         if !case_body.is_empty() && !current_values.is_empty() {
-                            self.emit_match_arm(&current_values, &case_body);
+                            self.emit_match_arm(&current_values, &case_body, &enum_name);
                             current_values.clear();
                             case_body.clear();
                         }
@@ -17144,7 +17785,7 @@ impl AstCodeGen {
                                 continue; // Skip the case value literal
                             }
                             // Check for nested CaseStmt (fallthrough)
-                            if let ClangNodeKind::CaseStmt { value: nested_val } = &case_child.kind
+                            if let ClangNodeKind::CaseStmt { value: nested_val, .. } = &case_child.kind
                             {
                                 current_values.push(*nested_val);
                                 // Process nested case's children
@@ -17167,7 +17808,7 @@ impl AstCodeGen {
                     ClangNodeKind::DefaultStmt => {
                         // Emit previous case if any
                         if !current_values.is_empty() {
-                            self.emit_match_arm(&current_values, &case_body);
+                            self.emit_match_arm(&current_values, &case_body, &enum_name);
                             current_values.clear();
                             case_body.clear();
                         }
@@ -17182,7 +17823,7 @@ impl AstCodeGen {
 
             // Emit final case if any
             if !current_values.is_empty() {
-                self.emit_match_arm(&current_values, &case_body);
+                self.emit_match_arm(&current_values, &case_body, &enum_name);
             }
         }
 
@@ -17205,11 +17846,33 @@ impl AstCodeGen {
         self.writeln("}");
     }
 
+    /// Find the enum type name from CaseStmt children of a switch body.
+    /// Returns the enum name if any case label was parsed from an enum constant reference.
+    fn find_case_enum_name(body: &ClangNode) -> Option<String> {
+        if let ClangNodeKind::CompoundStmt = &body.kind {
+            for child in &body.children {
+                if let ClangNodeKind::CaseStmt { enum_name, .. } = &child.kind {
+                    if let Some(name) = enum_name {
+                        return Some(name.clone());
+                    }
+                }
+            }
+        }
+        None
+    }
+
     /// Emit a match arm for one or more case values.
-    fn emit_match_arm(&mut self, values: &[i128], body: &[&ClangNode]) {
+    fn emit_match_arm(&mut self, values: &[i128], body: &[&ClangNode], enum_name: &Option<String>) {
         let pattern = values
             .iter()
-            .map(|v| v.to_string())
+            .map(|v| {
+                if let Some(ename) = enum_name {
+                    if let Some(variant) = self.enum_variant_map.get(&(ename.clone(), *v)) {
+                        return format!("{}::{}", ename, variant);
+                    }
+                }
+                v.to_string()
+            })
             .collect::<Vec<_>>()
             .join(" | ");
 
@@ -17573,6 +18236,10 @@ impl AstCodeGen {
                                     "{{ {} = unsafe {{ {}.add(1) }}; {} }}",
                                     operand, operand, operand
                                 )
+                            } else if let Some(inner) = operand.strip_prefix("unsafe { ").and_then(|s| s.strip_suffix(" }")) {
+                                // unsafe { (*ptr).field } += 1 doesn't work (rvalue LHS).
+                                // Move the mutation inside the unsafe block.
+                                format!("unsafe {{ {} += 1; {} }}", inner, inner)
                             } else {
                                 format!("{{ {} += 1; {} }}", operand, operand)
                             }
@@ -17584,6 +18251,8 @@ impl AstCodeGen {
                                     "{{ {} = unsafe {{ {}.sub(1) }}; {} }}",
                                     operand, operand, operand
                                 )
+                            } else if let Some(inner) = operand.strip_prefix("unsafe { ").and_then(|s| s.strip_suffix(" }")) {
+                                format!("unsafe {{ {} -= 1; {} }}", inner, inner)
                             } else {
                                 format!("{{ {} -= 1; {} }}", operand, operand)
                             }
@@ -17595,6 +18264,8 @@ impl AstCodeGen {
                                     "{{ let __v = {}; {} = unsafe {{ {}.add(1) }}; __v }}",
                                     operand, operand, operand
                                 )
+                            } else if let Some(inner) = operand.strip_prefix("unsafe { ").and_then(|s| s.strip_suffix(" }")) {
+                                format!("unsafe {{ let __v = {}; {} += 1; __v }}", inner, inner)
                             } else {
                                 format!("{{ let __v = {}; {} += 1; __v }}", operand, operand)
                             }
@@ -17606,6 +18277,8 @@ impl AstCodeGen {
                                     "{{ let __v = {}; {} = unsafe {{ {}.sub(1) }}; __v }}",
                                     operand, operand, operand
                                 )
+                            } else if let Some(inner) = operand.strip_prefix("unsafe { ").and_then(|s| s.strip_suffix(" }")) {
+                                format!("unsafe {{ let __v = {}; {} -= 1; __v }}", inner, inner)
                             } else {
                                 format!("{{ let __v = {}; {} -= 1; __v }}", operand, operand)
                             }
@@ -19343,7 +20016,11 @@ impl AstCodeGen {
                                 } else {
                                     "-="
                                 };
-                                format!("{{ {} {} 1; {} }}", operand, op_str, operand)
+                                if let Some(inner) = operand.strip_prefix("unsafe { ").and_then(|s| s.strip_suffix(" }")) {
+                                    format!("unsafe {{ {} {} 1; {} }}", inner, op_str, inner)
+                                } else {
+                                    format!("{{ {} {} 1; {} }}", operand, op_str, operand)
+                                }
                             }
                         }
                         UnaryOp::PostInc | UnaryOp::PostDec => {
@@ -19391,10 +20068,17 @@ impl AstCodeGen {
                                 } else {
                                     "-="
                                 };
-                                format!(
-                                    "{{ let __v = {}; {} {} 1; __v }}",
-                                    operand, operand, op_str
-                                )
+                                if let Some(inner) = operand.strip_prefix("unsafe { ").and_then(|s| s.strip_suffix(" }")) {
+                                    format!(
+                                        "unsafe {{ let __v = {}; {} {} 1; __v }}",
+                                        inner, inner, op_str
+                                    )
+                                } else {
+                                    format!(
+                                        "{{ let __v = {}; {} {} 1; __v }}",
+                                        operand, operand, op_str
+                                    )
+                                }
                             }
                         }
                     }
@@ -19596,7 +20280,7 @@ impl AstCodeGen {
                             .find(|c| !Self::is_function_reference(c))
                             .map(|c| self.expr_to_string(c))
                             .unwrap_or_else(|| "std::ptr::null_mut()".to_string());
-                        return format!("unsafe {{ crate::fragile_runtime::fragile_free({} as *mut std::ffi::c_void) }}", ptr_arg);
+                        return format!("unsafe {{ crate::fragile_runtime::fragile_free({} as *mut u8) }}", ptr_arg);
                     }
 
                     // Convert operator name to method name (operator+ -> op_add)
@@ -19821,7 +20505,7 @@ impl AstCodeGen {
 
                                     // This is a method call (might have zero args like size())
                                     // Always generate method call syntax, not field access
-                                    if *is_arrow {
+                                    if *is_arrow && base != "self" && base != "__self" {
                                         return format!("unsafe {{ (*{}).{}({}) }}", base, member, method_args.join(", "));
                                     } else {
                                         return format!("{}.{}({})", base, member, method_args.join(", "));
@@ -20002,7 +20686,7 @@ impl AstCodeGen {
                     // Try to get function parameter types to handle reference parameters
                     let param_types = Self::get_function_param_types(&node.children[0]);
 
-                    let args: Vec<String> = node.children[1..]
+                    let mut args: Vec<String> = node.children[1..]
                         .iter()
                         .enumerate()
                         .map(|(i, c)| {
@@ -20172,6 +20856,14 @@ impl AstCodeGen {
 
                     // Check if this is a C library function that should be mapped to fragile-runtime
                     let func = if let Some(runtime_func) = Self::map_runtime_function_name(&func) {
+                        // Apply argument fixups for C library functions
+                        if runtime_func.ends_with("fragile_malloc") && !args.is_empty() {
+                            // malloc(size) — cast size to usize (C's unsigned long → u64, but Rust expects usize)
+                            args[0] = format!("{} as usize", args[0]);
+                        } else if runtime_func.ends_with("fragile_free") && !args.is_empty() {
+                            // free(ptr) — cast pointer to *mut u8
+                            args[0] = format!("{} as *mut u8", args[0]);
+                        }
                         runtime_func.to_string()
                     } else {
                         func
@@ -20298,7 +20990,7 @@ impl AstCodeGen {
                             let method_name = sanitize_identifier(member_name);
 
                             // Generate: base.method(args...) or (*base).method(args...)
-                            if *is_arrow {
+                            if *is_arrow && base != "self" && base != "__self" {
                                 return format!("unsafe {{ (*{}).{}({}) }}", base, method_name, method_args.join(", "));
                             } else {
                                 return format!("{}.{}({})", base, method_name, method_args.join(", "));
@@ -20319,9 +21011,28 @@ impl AstCodeGen {
                         let arg_str = self.expr_to_string(arg_nodes[0]);
                         format!("{}.clone()", arg_str)
                     } else {
-                        let args: Vec<String> =
-                            arg_nodes.iter().map(|c| self.expr_to_string(c)).collect();
-                        let num_args = args.len();
+                        let num_args = arg_nodes.len();
+                        // Look up constructor param types for reference handling
+                        let ctor_params = self.constructor_param_types
+                            .get(&(struct_name.clone(), num_args))
+                            .cloned();
+                        let args: Vec<String> = arg_nodes
+                            .iter()
+                            .enumerate()
+                            .map(|(i, c)| {
+                                // Check if this parameter is a reference type
+                                if let Some(ref params) = ctor_params {
+                                    if i < params.len() {
+                                        if let CppType::Reference { is_const, .. } = &params[i] {
+                                            let arg_str = self.expr_to_string(c);
+                                            let prefix = if *is_const { "&" } else { "&mut " };
+                                            return format!("{}{}", prefix, arg_str);
+                                        }
+                                    }
+                                }
+                                self.expr_to_string(c)
+                            })
+                            .collect();
 
                         // Check if the type maps to a non-struct type
                         let is_non_struct = struct_name.starts_with('*')
@@ -20379,6 +21090,17 @@ impl AstCodeGen {
                 is_static,
                 ..
             } => {
+                // Anonymous struct member access: member_name is empty because the
+                // anonymous struct has no name. In C++, fields inside anonymous structs
+                // are accessed directly (e.g., tree.__end_node_ not tree._unnamed.__end_node_).
+                // Skip this MemberExpr and pass through to the base expression.
+                if member_name.is_empty() {
+                    if !node.children.is_empty() {
+                        return self.expr_to_string(&node.children[0]);
+                    }
+                    return String::new();
+                }
+
                 // Check for static member access first
                 if *is_static {
                     // Look up the global variable name for this static member
@@ -20517,7 +21239,25 @@ impl AstCodeGen {
                             false
                         };
 
-                        if is_trait_object {
+                        if base == "self" || base == "__self" {
+                            // self is a Rust reference, not a raw pointer — no unsafe needed
+                            if needs_base_access {
+                                match base_access {
+                                    BaseAccess::VirtualPtr(field) => {
+                                        format!("unsafe {{ (*{}.{}).{} }}", base, field, member)
+                                    }
+                                    BaseAccess::DirectField(field) | BaseAccess::FieldChain(field) => {
+                                        if field.is_empty() {
+                                            format!("{}.{}", base, member)
+                                        } else {
+                                            format!("{}.{}.{}", base, field, member)
+                                        }
+                                    }
+                                }
+                            } else {
+                                format!("{}.{}", base, member)
+                            }
+                        } else if is_trait_object {
                             // For polymorphic class pointers, use direct method call
                             // The trait implementation will dispatch correctly
                             format!("{}.{}", base, member)

@@ -17,6 +17,23 @@ Guidance for working in this repository.
 
 ---
 
+## Goal and Development Philosophy
+
+The goal is to build a **correct, general-purpose C++ compiler** that works by transpiling to Rust. Every feature should be implemented in the **transpiler itself** (parsing, type resolution, code generation), not by hand-writing target-language code for specific types or libraries.
+
+### Anti-patterns to avoid
+- **Hand-writing Rust stubs** for specific C++ types (e.g., hand-writing `__emplace_unique` for `std::map`). If a type doesn't transpile, fix the transpiler bug that blocks it.
+- **Treating test cases as the goal**. Tests are drivers to find transpiler bugs, not targets to make pass by any means necessary.
+- **Skip-listing instead of fixing**. When generated code is wrong, understand WHY the transpiler produces it and fix the root cause. Rollback patterns are safety nets, not solutions.
+
+### Development approach
+- Use real C++ programs as **drivers** to discover transpiler bugs
+- Start with simple programs (no STL) and work up to complex ones
+- When a driver fails, diagnose which transpiler phase is wrong (parsing, type resolution, code generation) and fix that phase
+- Each fix should be general — it should improve transpilation of ALL C++ code, not just the current driver
+
+---
+
 ## 🚫 Do NOT use rustc MIR injection
 
 We are **not** pursuing rustc MIR injection or any rustc-private integration. The only supported compilation path is:
@@ -128,4 +145,3 @@ fragile transpile file.cpp --use-libcxx -o output.rs
 - `crates/fragile-clang/src/ast_codegen.rs` - AST → Rust source code generation
 - `crates/fragile-cli/src/main.rs` - CLI entry point
 - `TODO.md` - Current task list
-

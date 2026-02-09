@@ -10829,3 +10829,120 @@ fn test_e2e_builtin_overflow() {
 
     assert_eq!(exit_code, 0, "__builtin_*_overflow functions should work correctly");
 }
+
+/// Transpilation test: long double and missing primitive types
+/// Verifies that long double, wchar_t, char16_t, char32_t are mapped to
+/// correct Rust primitives in generated code.
+#[test]
+fn test_long_double_type_mapping() {
+    let parser = ClangParser::new().expect("Failed to create parser");
+
+    let source = r#"
+        long double sinl(long double __x) { return __builtin_sinl(__x); }
+        long double cosl(long double __x) { return __builtin_cosl(__x); }
+    "#;
+
+    let ast = parser.parse_string(source, "long_double_test.cpp").expect("Failed to parse");
+    let code = AstCodeGen::new().generate(&ast.translation_unit);
+
+    // long double should map to f64, not to a Named type
+    assert!(code.contains("pub fn sinl(__x: f64) -> f64"), "sinl should have f64 params and return type, got:\n{}",
+        code.lines().find(|l| l.contains("pub fn sinl")).unwrap_or("NOT FOUND"));
+    assert!(code.contains("pub fn cosl(__x: f64) -> f64"), "cosl should have f64 params and return type");
+
+    // The function body should contain the builtin call WITH arguments
+    assert!(code.contains("__builtin_sinl(__x)"), "sinl should call __builtin_sinl with argument __x");
+    assert!(code.contains("__builtin_cosl(__x)"), "cosl should call __builtin_cosl with argument __x");
+
+    // Should NOT contain bare builtin reference (without parens)
+    assert!(!code.contains("return __builtin_sinl;"), "sinl should not have bare builtin reference");
+    assert!(!code.contains("return __builtin_cosl;"), "cosl should not have bare builtin reference");
+}
+
+/// E2E test: long double type handling
+/// Verifies that `long double` is correctly mapped to f64 and that
+/// builtin math functions with long double work correctly.
+#[test]
+fn test_e2e_long_double() {
+    let source = r#"
+        long double sinl(long double __x) { return __builtin_sinl(__x); }
+        long double cosl(long double __x) { return __builtin_cosl(__x); }
+        long double fabsl(long double __x) { return __builtin_fabsl(__x); }
+        long double sqrtl(long double __x) { return __builtin_sqrtl(__x); }
+
+        int main() {
+            // Test sinl: sin(0) == 0
+            long double s = sinl(0.0L);
+            if (s != 0.0L) return 1;
+
+            // Test cosl: cos(0) == 1
+            long double c = cosl(0.0L);
+            if (c != 1.0L) return 2;
+
+            // Test fabsl: fabs(-5.0) == 5.0
+            long double a = fabsl(-5.0L);
+            if (a != 5.0L) return 3;
+
+            // Test sqrtl: sqrt(4.0) == 2.0
+            long double sq = sqrtl(4.0L);
+            if (sq != 2.0L) return 4;
+
+            return 0;
+        }
+    "#;
+
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_long_double.cpp").expect("E2E test failed");
+
+    assert_eq!(exit_code, 0, "long double builtin functions should work correctly");
+}
+
+/// E2E test: wchar_t type handling
+/// Verifies that wchar_t is correctly mapped to i32.
+#[test]
+fn test_e2e_wchar_t() {
+    let source = r#"
+        int main() {
+            wchar_t c = L'A';
+            wchar_t d = c + 1;  // L'B'
+            if (d != L'B') return 1;
+
+            wchar_t e = d - c;  // 1
+            if (e != 1) return 2;
+
+            return 0;
+        }
+    "#;
+
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_wchar_t.cpp").expect("E2E test failed");
+
+    assert_eq!(exit_code, 0, "wchar_t operations should work correctly");
+}
+
+/// E2E test: char16_t and char32_t type handling
+/// Verifies that char16_t maps to u16 and char32_t maps to u32.
+#[test]
+fn test_e2e_char16_char32() {
+    let source = r#"
+        int main() {
+            char16_t c16 = u'A';
+            char32_t c32 = U'A';
+
+            // char16_t arithmetic
+            char16_t next16 = c16 + 1;
+            if (next16 != u'B') return 1;
+
+            // char32_t arithmetic
+            char32_t next32 = c32 + 1;
+            if (next32 != U'B') return 2;
+
+            return 0;
+        }
+    "#;
+
+    let (exit_code, _stdout, _stderr) =
+        transpile_compile_run(source, "e2e_char16_char32.cpp").expect("E2E test failed");
+
+    assert_eq!(exit_code, 0, "char16_t and char32_t operations should work correctly");
+}

@@ -1170,6 +1170,15 @@ bool ASTExporterVisitor::VisitClassTemplateSpecializationDecl(ClassTemplateSpeci
                     }
                 }
             }
+        } else if (auto *FTD = dyn_cast<FunctionTemplateDecl>(D)) {
+            // Member function templates (e.g., __emplace_unique<Args...>)
+            // Visit each concrete instantiation — these are normal CXXMethodDecls
+            // with fully resolved types and bodies.
+            for (auto *Spec : FTD->specializations()) {
+                if (auto *SpecMD = dyn_cast<CXXMethodDecl>(Spec)) {
+                    children.push_back(SpecMD);
+                }
+            }
         }
     }
 

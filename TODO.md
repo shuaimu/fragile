@@ -14,11 +14,11 @@ We just convert the fully-resolved AST to equivalent Rust code.
 ## Current Status
 
 **Grammar Tests**: 22/22 passing
-**E2E Tests**: 135/135 passing (2 ignored: 2 STL header limitations)
+**E2E Tests**: 139/139 passing (2 ignored: 2 STL header limitations)
 **libc++ Transpilation Tests**: 8/8 passing (cstddef, cstdint, type_traits, initializer_list, vector, cstddef_compilation, iostream, thread)
 **Runtime Linking Tests**: 2/2 passing (FILE I/O, pthread)
 **Runtime Function Mapping Tests**: 1/1 passing
-**Total Tests**: 209 passing (4 ignored)
+**Total Tests**: 213 passing (4 ignored)
 
 **Working**:
 - Simple functions with control flow (if/else, while, for, do-while, switch, recursion)
@@ -551,6 +551,24 @@ The current implementation uses forbidden patterns (see `docs/dev/wrong.md`). Th
         template placeholders) that fire across many types - cannot be eliminated by skip-listing
       - Rollback count: 145 → 140 (`|| generated.contains(` metric)
       - All 207 tests passing
+
+    - [x] **27.8.1.6.15** Fix CXType_LongDouble and missing primitive types in convert_type ✅ (2026-02-09)
+      - **Root cause**: `long double` was not handled in `convert_type()` (parse.rs), falling
+        through to `CppType::Named("long double")` instead of `CppType::Double`. This caused
+        ALL long double function calls (including `__builtin_sinl`, `__builtin_cosl`, etc.) to
+        be treated as struct constructor calls instead of function calls. The CallExpr handler
+        entered the `CppType::Named` branch and generated `return __builtin_sinl;` (bare
+        reference) instead of `return __builtin_sinl(__x)` (function call with arguments).
+      - **Fix (parse.rs)**: Added `CXType_LongDouble` → `CppType::Double` mapping (long double
+        has no Rust equivalent, approximated as f64). Also added `CXType_WChar` → `i32`,
+        `CXType_Char16` → `u16`, `CXType_Char32` → `u32` for completeness.
+      - **Impact**: 53 builtins in `has_uncalled_builtin_return` validator no longer trigger
+        for their intended pattern — functions like `sinl`, `cosl`, `tanl`, `sqrtl`, `powl`,
+        `fabsl`, `logl`, etc. are now correctly transpiled instead of being rolled back.
+        The validator remains as a safety net for edge cases.
+      - **Tests**: Added 4 new tests: `test_long_double_type_mapping` (transpilation check),
+        `test_e2e_long_double` (runtime), `test_e2e_wchar_t` (runtime), `test_e2e_char16_char32`
+        (runtime). All 213 tests passing (139 e2e + 22 grammar + 9 runtime + 43 other).
 
     - [x] **27.8.1.6.14** Analysis: skip-listing approach exhausted at 140 patterns ✅ (2026-02-04)
       - Comprehensive analysis of all 140 remaining simple patterns across 6 rollback blocks:

@@ -1208,6 +1208,11 @@ impl ClangParser {
                     // This can be an IntegerLiteral, CharacterLiteral, DeclRefExpr (for const vars), etc.
                     // We need to handle all these cases by evaluating the first child
 
+                    struct CaseInfo {
+                        value: i128,
+                        enum_name: Option<String>,
+                    }
+
                     extern "C" fn find_case_value(
                         child: clang_sys::CXCursor,
                         _parent: clang_sys::CXCursor,
@@ -1215,6 +1220,24 @@ impl ClangParser {
                     ) -> clang_sys::CXChildVisitResult {
                         unsafe {
                             let child_kind = clang_sys::clang_getCursorKind(child);
+
+                            // Check if this is a DeclRefExpr referencing an EnumConstantDecl
+                            if child_kind == clang_sys::CXCursor_DeclRefExpr {
+                                let referenced = clang_sys::clang_getCursorReferenced(child);
+                                if clang_sys::clang_getCursorKind(referenced) == clang_sys::CXCursor_EnumConstantDecl {
+                                    // Get the enum type from the semantic parent of the enum constant
+                                    let enum_decl = clang_sys::clang_getCursorSemanticParent(referenced);
+                                    if clang_sys::clang_getCursorKind(enum_decl) == clang_sys::CXCursor_EnumDecl {
+                                        let info = &mut *(data as *mut CaseInfo);
+                                        let spelling = clang_sys::clang_getCursorSpelling(enum_decl);
+                                        let name = cx_string_to_string(spelling);
+                                        if !name.is_empty() {
+                                            info.enum_name = Some(name);
+                                        }
+                                    }
+                                }
+                            }
+
                             // Try to evaluate any constant expression (IntegerLiteral, CharacterLiteral,
                             // DeclRefExpr to const vars, UnaryExpr with minus, etc.)
                             // clang_Cursor_Evaluate handles all these cases
@@ -1228,8 +1251,8 @@ impl ClangParser {
                                 // CXCursor_ConstantExpr = 113
                                 let eval = clang_sys::clang_Cursor_Evaluate(child);
                                 if !eval.is_null() {
-                                    let value_ptr = data as *mut i128;
-                                    *value_ptr = clang_sys::clang_EvalResult_getAsInt(eval) as i128;
+                                    let info = &mut *(data as *mut CaseInfo);
+                                    info.value = clang_sys::clang_EvalResult_getAsInt(eval) as i128;
                                     clang_sys::clang_EvalResult_dispose(eval);
                                     return clang_sys::CXChildVisit_Break;
                                 }
@@ -1238,14 +1261,14 @@ impl ClangParser {
                         }
                     }
 
-                    let mut case_value: i128 = 0;
+                    let mut case_info = CaseInfo { value: 0, enum_name: None };
                     clang_sys::clang_visitChildren(
                         cursor,
                         find_case_value,
-                        &mut case_value as *mut i128 as clang_sys::CXClientData,
+                        &mut case_info as *mut CaseInfo as clang_sys::CXClientData,
                     );
 
-                    ClangNodeKind::CaseStmt { value: case_value }
+                    ClangNodeKind::CaseStmt { value: case_info.value, enum_name: case_info.enum_name }
                 }
                 clang_sys::CXCursor_DefaultStmt => ClangNodeKind::DefaultStmt,
 
@@ -1749,6 +1772,15 @@ impl ClangParser {
                     }
                 }
 
+                // CXCursor_UnaryExpr = 136 - sizeof, alignof, etc.
+                clang_sys::CXCursor_UnaryExpr => {
+                    if let Some(eval_kind) = self.try_evaluate_expr(cursor) {
+                        eval_kind
+                    } else {
+                        ClangNodeKind::Unknown("UnaryExpr".to_string())
+                    }
+                }
+
                 _ => {
                     let kind_spelling = clang_sys::clang_getCursorKindSpelling(kind);
                     ClangNodeKind::Unknown(cx_string_to_string(kind_spelling))
@@ -1779,7 +1811,12 @@ impl ClangParser {
                 clang_sys::CXType_LongLong => CppType::LongLong { signed: true },
                 clang_sys::CXType_ULongLong => CppType::LongLong { signed: false },
                 clang_sys::CXType_Float => CppType::Float,
-                clang_sys::CXType_Double => CppType::Double,
+                clang_sys::CXType_Double | clang_sys::CXType_LongDouble => CppType::Double,
+
+                // Wide and Unicode character types
+                clang_sys::CXType_WChar => CppType::Int { signed: true }, // wchar_t is 32-bit signed on Linux
+                clang_sys::CXType_Char16 => CppType::Short { signed: false }, // char16_t = u16
+                clang_sys::CXType_Char32 => CppType::Int { signed: false }, // char32_t = u32
 
                 clang_sys::CXType_Pointer => {
                     let pointee = clang_sys::clang_getPointeeType(ty);
@@ -2002,8 +2039,9 @@ impl ClangParser {
             let cursor_type = self.get_cursor_type(cursor);
             let result_is_bool = matches!(cursor_type.as_deref(), Some("bool") | Some("_Bool"));
 
-            // If the BinaryOperator returns bool but we found an arithmetic operator,
-            // this is likely a macro expansion issue. Look for logical operators instead.
+            // If the BinaryOperator returns bool but we found an arithmetic operator
+            // (or no operator at all), this is likely a macro expansion issue.
+            // Look for comparison/logical operators instead.
             if result_is_bool {
                 let current_op = result.unwrap_or(BinaryOp::Add);
                 let is_arithmetic = matches!(
@@ -2021,21 +2059,26 @@ impl ClangParser {
                 );
 
                 if is_arithmetic {
-                    // First, try to find a logical operator from candidates
-                    let mut found_logical = false;
+                    // First, try to find a comparison or logical operator from candidates
+                    let mut found_bool_op = false;
                     for (op, _) in &candidates {
-                        if matches!(op, BinaryOp::LAnd | BinaryOp::LOr) {
+                        if matches!(op,
+                            BinaryOp::Eq | BinaryOp::Ne |
+                            BinaryOp::Lt | BinaryOp::Le |
+                            BinaryOp::Gt | BinaryOp::Ge |
+                            BinaryOp::LAnd | BinaryOp::LOr
+                        ) {
                             result = Some(*op);
-                            found_logical = true;
+                            found_bool_op = true;
                             break;
                         }
                     }
 
-                    // If no logical operator in candidates but the expression returns bool,
-                    // and we detected an arithmetic operator, default to LAnd.
-                    // This handles macro-expanded code where && tokens aren't in the expansion.
-                    if !found_logical {
-                        result = Some(BinaryOp::LAnd);
+                    // If no bool-returning operator in candidates but the expression returns bool,
+                    // and we detected an arithmetic operator, default to Ne.
+                    // This handles macro-expanded code where != tokens aren't in the expansion.
+                    if !found_bool_op {
+                        result = Some(BinaryOp::Ne);
                     }
                 }
             }

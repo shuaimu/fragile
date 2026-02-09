@@ -430,8 +430,8 @@ fn convert_node_with_depth(
         }
 
         ASTEntryTag::TagBinaryOperator => {
-            // Extract operator from extras
-            let op_str = node.get_string(0).unwrap_or("+");
+            // extras[0] = opcode uint, extras[1] = opcode string (from getOpcodeStr)
+            let op_str = node.get_string(1).unwrap_or("+");
             let op = parse_binary_op(op_str);
             let ty = extract_type_from_node(ctx, node);
             ClangNodeKind::BinaryOperator { op, ty }
@@ -489,8 +489,12 @@ fn convert_node_with_depth(
         }
 
         ASTEntryTag::TagUnaryOperator => {
-            let op_str = node.get_string(0).unwrap_or("*");
-            let op = parse_unary_op(op_str);
+            // extras[0] = opcode uint (UO_PostInc=0..UO_Coawait=13), extras[1] = isPrefix bool
+            let op = if let Some(opcode) = node.get_int(0) {
+                parse_unary_op_from_opcode(opcode as u32)
+            } else {
+                crate::ast::UnaryOp::Plus // fallback
+            };
             let ty = extract_type_from_node(ctx, node);
             ClangNodeKind::UnaryOperator { op, ty }
         }
@@ -574,7 +578,8 @@ fn convert_node_with_depth(
         }
 
         ASTEntryTag::TagCompoundAssignOperator => {
-            let op_str = node.get_string(0).unwrap_or("+=");
+            // extras[0] = opcode uint, extras[1] = opcode string (from getOpcodeStr)
+            let op_str = node.get_string(1).unwrap_or("+=");
             let op = parse_binary_op(op_str);
             let ty = extract_type_from_node(ctx, node);
             ClangNodeKind::BinaryOperator { op, ty }
@@ -669,7 +674,7 @@ fn convert_node_with_depth(
             // Case statements have a value expression and body
             // Try to extract the case value
             let value = node.get_int(0).unwrap_or(0) as i128;
-            ClangNodeKind::CaseStmt { value }
+            ClangNodeKind::CaseStmt { value, enum_name: None }
         }
 
         ASTEntryTag::TagDefaultStmt => ClangNodeKind::DefaultStmt,
@@ -916,20 +921,21 @@ fn parse_binary_op(op: &str) -> crate::ast::BinaryOp {
     }
 }
 
-fn parse_unary_op(op: &str) -> crate::ast::UnaryOp {
+fn parse_unary_op_from_opcode(opcode: u32) -> crate::ast::UnaryOp {
     use crate::ast::UnaryOp;
-    match op {
-        "*" => UnaryOp::Deref,
-        "&" => UnaryOp::AddrOf,
-        "!" => UnaryOp::LNot,
-        "~" => UnaryOp::Not,
-        "-" => UnaryOp::Minus,
-        "+" => UnaryOp::Plus,
-        "++" | "++_pre" => UnaryOp::PreInc,
-        "--" | "--_pre" => UnaryOp::PreDec,
-        "++_post" => UnaryOp::PostInc,
-        "--_post" => UnaryOp::PostDec,
-        _ => UnaryOp::Plus, // Default fallback
+    // Matches Clang's UnaryOperatorKind enum (ast_tags.hpp)
+    match opcode {
+        0 => UnaryOp::PostInc,   // UO_PostInc
+        1 => UnaryOp::PostDec,   // UO_PostDec
+        2 => UnaryOp::PreInc,    // UO_PreInc
+        3 => UnaryOp::PreDec,    // UO_PreDec
+        4 => UnaryOp::AddrOf,    // UO_AddrOf
+        5 => UnaryOp::Deref,     // UO_Deref
+        6 => UnaryOp::Plus,      // UO_Plus
+        7 => UnaryOp::Minus,     // UO_Minus
+        8 => UnaryOp::Not,       // UO_Not (~)
+        9 => UnaryOp::LNot,      // UO_LNot (!)
+        _ => UnaryOp::Plus,      // fallback
     }
 }
 
@@ -1367,8 +1373,9 @@ fn resolve_type(ctx: &AstContext, type_id: u64) -> Option<CppType> {
             }
         }
 
-        // Reference type
-        ASTEntryTag::TagLValueReferenceType => {
+        // Reference types (lvalue & rvalue)
+        ASTEntryTag::TagLValueReferenceType | ASTEntryTag::TagRValueReferenceType => {
+            let is_rvalue = type_node.tag == ASTEntryTag::TagRValueReferenceType;
             if let Some(CborValue::Integer(ref_id)) = type_node.extras.first() {
                 let ref_id = *ref_id as u64;
                 // Check const qualifier bit (bit 0) from encodeQualType
@@ -1377,20 +1384,20 @@ fn resolve_type(ctx: &AstContext, type_id: u64) -> Option<CppType> {
                     Some(CppType::Reference {
                         referent: Box::new(ref_type),
                         is_const,
-                        is_rvalue: false,
+                        is_rvalue,
                     })
                 } else {
                     Some(CppType::Reference {
                         referent: Box::new(CppType::Void),
                         is_const,
-                        is_rvalue: false,
+                        is_rvalue,
                     })
                 }
             } else {
                 Some(CppType::Reference {
                     referent: Box::new(CppType::Void),
                     is_const: false,
-                    is_rvalue: false,
+                    is_rvalue,
                 })
             }
         }

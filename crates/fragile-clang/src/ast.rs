@@ -363,6 +363,8 @@ pub enum ClangNodeKind {
     CaseStmt {
         /// The case value (constant expression)
         value: i128,
+        /// If the case references an enum constant, the enum type name
+        enum_name: Option<String>,
     },
     /// Default statement in switch
     DefaultStmt,

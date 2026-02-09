@@ -64,9 +64,7 @@ fn compile_and_run(cpp_code: &str, test_name: &str) -> Option<i32> {
 }
 
 /// Test that std::map::size() returns correct count after insertions.
-/// This test should FAIL with stub implementation (size() { 0 }).
 #[test]
-#[ignore = "Requires working std::map transpilation - currently uses stubs"]
 fn test_map_size_after_insert() {
     let cpp_code = r#"
 #include <map>
@@ -91,9 +89,7 @@ int main() {
 }
 
 /// Test that std::map::operator[] inserts and retrieves values correctly.
-/// This test should FAIL with stub implementation returning null.
 #[test]
-#[ignore = "Requires working std::map transpilation - currently uses stubs"]
 fn test_map_operator_bracket_insert_retrieve() {
     let cpp_code = r#"
 #include <map>
@@ -497,7 +493,7 @@ int main() {
         .expect("Should have map impl block");
     let map_impl_section = &rust_code[map_impl_start..];
     assert!(
-        map_impl_section.contains("pub fn size(&self) -> usize { self.__tree_.size() }"),
+        map_impl_section.contains("pub fn size(&mut self) -> usize { self.__tree_.size() }"),
         "map::size() should delegate to self.__tree_.size()"
     );
 }
