@@ -398,7 +398,7 @@ impl CppType {
                     "bad_alloc" | "std::bad_alloc" => "bad_alloc".to_string(),
                     "exception" | "std::exception" => "exception".to_string(),
                     // Time and stream types
-                    "timespec" => "i64".to_string(), // Simplify to i64 timestamp
+                    "timespec" => "timespec".to_string(),
                     "streambuf_type" | "char_type" => "std::ffi::c_void".to_string(),
                     "memory_resource" => "std::ffi::c_void".to_string(),
                     // More template parameter placeholders

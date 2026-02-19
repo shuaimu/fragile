@@ -201,6 +201,100 @@ fn clone_expr(expr: &str) -> String {
     }
 }
 
+/// Convert a C string literal to a fixed Rust byte array literal with trailing NUL.
+fn string_literal_to_char_array_init(
+    s: &str,
+    signed: bool,
+    size: Option<&usize>,
+) -> Option<String> {
+    let suffix = if signed { "i8" } else { "u8" };
+    let decoded = decode_c_string_escapes(s);
+    let mut elems: Vec<String> = decoded
+        .as_bytes()
+        .iter()
+        .map(|b| format!("{}{}", *b, suffix))
+        .collect();
+    elems.push(format!("0{}", suffix));
+
+    if let Some(n) = size {
+        let target = *n as usize;
+        if elems.len() > target {
+            elems.truncate(target);
+        } else {
+            while elems.len() < target {
+                elems.push(format!("0{}", suffix));
+            }
+        }
+    }
+
+    Some(format!("[{}]", elems.join(", ")))
+}
+
+/// Decode common C string escapes from libclang string-literal payloads.
+fn decode_c_string_escapes(s: &str) -> String {
+    let mut out = String::new();
+    let mut chars = s.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch != '\\' {
+            out.push(ch);
+            continue;
+        }
+
+        let Some(esc) = chars.next() else {
+            out.push('\\');
+            break;
+        };
+
+        match esc {
+            'n' => out.push('\n'),
+            'r' => out.push('\r'),
+            't' => out.push('\t'),
+            'a' => out.push('\u{0007}'),
+            'b' => out.push('\u{0008}'),
+            'f' => out.push('\u{000C}'),
+            'v' => out.push('\u{000B}'),
+            '\\' => out.push('\\'),
+            '\'' => out.push('\''),
+            '"' => out.push('"'),
+            '?' => out.push('?'),
+            '0'..='7' => {
+                let mut val = esc.to_digit(8).unwrap_or(0);
+                for _ in 0..2 {
+                    if let Some(next) = chars.peek().copied() {
+                        if let Some(d) = next.to_digit(8) {
+                            chars.next();
+                            val = (val << 3) + d;
+                        } else {
+                            break;
+                        }
+                    }
+                }
+                out.push((val as u8) as char);
+            }
+            'x' => {
+                let mut val: u32 = 0;
+                let mut seen = 0usize;
+                while let Some(next) = chars.peek().copied() {
+                    if let Some(d) = next.to_digit(16) {
+                        chars.next();
+                        val = (val << 4) + d;
+                        seen += 1;
+                    } else {
+                        break;
+                    }
+                }
+                if seen == 0 {
+                    out.push('x');
+                } else {
+                    out.push((val as u8) as char);
+                }
+            }
+            other => out.push(other),
+        }
+    }
+    out
+}
+
 /// Check if a name looks like a C++ AST class name that was incorrectly encoded as an identifier.
 /// The C++ AST exporter encodes unknown expression types as DeclRefExpr with the class name
 /// (e.g., "CXXDependentScopeMemberExpr", "UnresolvedMemberExpr") as the identifier.
@@ -12303,14 +12397,24 @@ impl AstCodeGen {
                 } else {
                     sanitize_identifier(field_name)
                 };
+                let effective_ty = if (name == "stat"
+                    || name == "stat64"
+                    || name.ends_with("stat")
+                    || name.ends_with("stat64"))
+                    && matches!(field_name.as_str(), "st_atim" | "st_mtim" | "st_ctim")
+                {
+                    CppType::Named("timespec".to_string())
+                } else {
+                    ty.clone()
+                };
                 let vis = access_to_visibility(*access);
                 self.writeln(&format!(
                     "{}{}: {},",
                     vis,
                     sanitized_name,
-                    ty.to_rust_type_str()
+                    effective_ty.to_rust_type_str()
                 ));
-                fields.push((sanitized_name, ty.clone()));
+                fields.push((sanitized_name, effective_ty));
             } else if let ClangNodeKind::RecordDecl {
                 name: anon_name, ..
             } = &child.kind
@@ -13943,14 +14047,24 @@ impl AstCodeGen {
                 } else {
                     sanitize_identifier(fname)
                 };
+                let effective_ty = if (name == "stat"
+                    || name == "stat64"
+                    || name.ends_with("stat")
+                    || name.ends_with("stat64"))
+                    && matches!(fname.as_str(), "st_atim" | "st_mtim" | "st_ctim")
+                {
+                    CppType::Named("timespec".to_string())
+                } else {
+                    ty.clone()
+                };
                 let vis = access_to_visibility(*access);
                 self.writeln(&format!(
                     "{}{}: {},",
                     vis,
                     sanitized_name,
-                    ty.to_rust_type_str_for_field()
+                    effective_ty.to_rust_type_str_for_field()
                 ));
-                fields.push((sanitized_name, ty.clone()));
+                fields.push((sanitized_name, effective_ty));
             } else if let ClangNodeKind::RecordDecl {
                 name: anon_name, ..
             } = &child.kind
@@ -15516,18 +15630,30 @@ impl AstCodeGen {
                 Some(0)
             };
 
-            if let Some(idx) = init_idx {
-                let init_node = &children[idx];
-                // Check if this is an array type
-                if matches!(ty, CppType::Array { .. }) {
-                    // For arrays, only use children if the child is an InitListExpr
-                    if matches!(&init_node.kind, ClangNodeKind::InitListExpr { .. }) {
-                        self.expr_to_string(init_node)
-                    } else {
-                        // IntegerLiteral child is the array size, not initializer
-                        Self::default_value_for_static(ty)
+            if let CppType::Array { element, size } = ty {
+                // Array declarations often include extra children (TypeRef, IntegerLiteral sizes).
+                // Prefer a real initializer child when present.
+                let array_init_node = children.iter().find(|child| {
+                    matches!(
+                        &child.kind,
+                        ClangNodeKind::InitListExpr { .. } | ClangNodeKind::StringLiteral(_)
+                    )
+                });
+
+                if let Some(init_node) = array_init_node {
+                    match (&init_node.kind, element.as_ref()) {
+                        (ClangNodeKind::StringLiteral(s), CppType::Char { signed }) => {
+                            string_literal_to_char_array_init(s, *signed, size.as_ref())
+                                .unwrap_or_else(|| self.expr_to_string(init_node))
+                        }
+                        _ => self.expr_to_string(init_node),
                     }
                 } else {
+                    Self::default_value_for_static(ty)
+                }
+            } else if let Some(idx) = init_idx {
+                let init_node = &children[idx];
+                {
                     // Non-array: the child is the initializer
                     // Skip literal suffixes - Rust will infer type from variable declaration
                     self.skip_literal_suffix = true;
@@ -21121,6 +21247,7 @@ impl AstCodeGen {
                 is_static,
                 is_arrow,
                 declaring_class,
+                ty,
                 ..
             } => {
                 // For static member access, return the global name without unsafe wrapper
@@ -21146,9 +21273,25 @@ impl AstCodeGen {
                     let member = sanitize_identifier(member_name);
                     let base_type = Self::get_expr_type(&node.children[0]);
                     let base_is_ptr = base_type.as_ref().is_some_and(Self::is_pointer_like_type);
+                    let member_is_array = matches!(ty, CppType::Array { .. });
+                    let array_ref_prefix = if base_type.as_ref().is_some_and(|t| {
+                        matches!(
+                            t,
+                            CppType::Pointer { is_const: true, .. }
+                                | CppType::Reference { is_const: true, .. }
+                        )
+                    }) {
+                        "&"
+                    } else {
+                        "&mut "
+                    };
                     if *is_arrow || base_is_ptr {
                         // Arrow access without unsafe wrapper (caller handles unsafe)
-                        format!("(*{}).{}", base, member)
+                        if member_is_array {
+                            format!("({}(*{}).{})", array_ref_prefix, base, member)
+                        } else {
+                            format!("(*{}).{}", base, member)
+                        }
                     } else {
                         // For dot access, if base starts with '*' (dereference) or contains 'as' (cast),
                         // we need to parenthesize it to get correct precedence.
@@ -21662,7 +21805,8 @@ impl AstCodeGen {
             ClangNodeKind::StringLiteral(s) => {
                 // Convert C++ string literal to Rust *const i8 using byte string
                 // "hello" -> b"hello\0".as_ptr() as *const i8
-                format!("b\"{}\\0\".as_ptr() as *const i8", s.escape_default())
+                let decoded = decode_c_string_escapes(s);
+                format!("b\"{}\\0\".as_ptr() as *const i8", decoded.escape_default())
             }
             ClangNodeKind::DeclRefExpr {
                 name,
@@ -25168,6 +25312,7 @@ impl AstCodeGen {
                 is_arrow,
                 declaring_class,
                 is_static,
+                ty,
                 ..
             } => {
                 // Anonymous struct member access: member_name is empty because the
@@ -25273,6 +25418,18 @@ impl AstCodeGen {
                             || Self::get_expr_type(&node.children[0])
                                 .as_ref()
                                 .is_some_and(Self::is_pointer_like_type);
+                    let member_is_array = matches!(ty, CppType::Array { .. });
+                    let array_ref_prefix = if base_type.as_ref().is_some_and(|t| {
+                        matches!(
+                            t,
+                            CppType::Pointer { is_const: true, .. }
+                                | CppType::Reference { is_const: true, .. }
+                        )
+                    }) {
+                        "&"
+                    } else {
+                        "&mut "
+                    };
                     let base_is_union = base_type
                         .as_ref()
                         .is_some_and(|t| self.is_union_named_type(t))
@@ -25367,7 +25524,14 @@ impl AstCodeGen {
                                 BaseAccess::DirectField(field) | BaseAccess::FieldChain(field) => {
                                     // If field is empty, this is a template/stub type without base class info
                                     if field.is_empty() {
-                                        format!("unsafe {{ (*{}).{} }}", base, member)
+                                        if member_is_array {
+                                            format!(
+                                                "unsafe {{ ({}(*{}).{}) }}",
+                                                array_ref_prefix, base, member
+                                            )
+                                        } else {
+                                            format!("unsafe {{ (*{}).{} }}", base, member)
+                                        }
                                     } else {
                                         // Dereferencing raw pointers requires unsafe
                                         format!("unsafe {{ (*{}).{}.{} }}", base, field, member)
@@ -25376,7 +25540,14 @@ impl AstCodeGen {
                             }
                         } else {
                             // Dereferencing raw pointers requires unsafe
-                            format!("unsafe {{ (*{}).{} }}", base, member)
+                            if member_is_array {
+                                format!(
+                                    "unsafe {{ ({}(*{}).{}) }}",
+                                    array_ref_prefix, base, member
+                                )
+                            } else {
+                                format!("unsafe {{ (*{}).{} }}", base, member)
+                            }
                         }
                     } else if needs_base_access {
                         match base_access {
@@ -25388,7 +25559,14 @@ impl AstCodeGen {
                                 // Just access the member directly
                                 if field.is_empty() {
                                     if base_is_ptr {
-                                        format!("unsafe {{ (*{}).{} }}", base, member)
+                                        if member_is_array {
+                                            format!(
+                                                "unsafe {{ ({}(*{}).{}) }}",
+                                                array_ref_prefix, base, member
+                                            )
+                                        } else {
+                                            format!("unsafe {{ (*{}).{} }}", base, member)
+                                        }
                                     } else {
                                         format!("{}.{}", base, member)
                                     }
@@ -25400,7 +25578,14 @@ impl AstCodeGen {
                     } else if base_is_ptr {
                         // Some C ASTs surface pointer member access as dot instead of arrow.
                         // Normalize to explicit dereference.
-                        format!("unsafe {{ (*{}).{} }}", base, member)
+                        if member_is_array {
+                            format!(
+                                "unsafe {{ ({}(*{}).{}) }}",
+                                array_ref_prefix, base, member
+                            )
+                        } else {
+                            format!("unsafe {{ (*{}).{} }}", base, member)
+                        }
                     } else {
                         // Check if base involves pointer subscript - if so, we need to use
                         // raw access and wrap in unsafe to avoid nested unsafe blocks and
@@ -26154,7 +26339,7 @@ impl AstCodeGen {
                     }
                 } else if let CppType::Array { element, size } = ty {
                     // Array type - use array literal syntax
-                    let elems: Vec<String> = node
+                    let mut elems: Vec<String> = node
                         .children
                         .iter()
                         .map(|c| correct_initializer_for_type(&self.expr_to_string(c), element))
@@ -26164,6 +26349,17 @@ impl AstCodeGen {
                             let elem_zero = correct_initializer_for_type("0", element);
                             format!("[{}; {}]", elem_zero, n)
                         } else {
+                            if elems.len() < *n {
+                                let elem_default = correct_initializer_for_type(
+                                    &default_value_for_type(element),
+                                    element,
+                                );
+                                while elems.len() < *n {
+                                    elems.push(elem_default.clone());
+                                }
+                            } else if elems.len() > *n {
+                                elems.truncate(*n);
+                            }
                             format!("[{}]", elems.join(", "))
                         }
                     } else {
