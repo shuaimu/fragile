@@ -170,17 +170,18 @@ impl LibToolingParser {
             if node.tag == ASTEntryTag::TagCXXMethodDecl {
                 // Check if this is a template instantiation
                 // extras[6] is typically the isInstantiation flag
-                let is_instantiation = node
-                    .get_bool(6)
-                    .unwrap_or(false);
+                let is_instantiation = node.get_bool(6).unwrap_or(false);
 
                 if is_instantiation {
                     let name = node.get_string(0).unwrap_or("").to_string();
 
                     // Get body (first child if present)
-                    let has_body = node.children.first().and_then(|c| *c).map(|body_id| {
-                        ctx.ast_nodes.get(&body_id).is_some()
-                    }).unwrap_or(false);
+                    let has_body = node
+                        .children
+                        .first()
+                        .and_then(|c| *c)
+                        .map(|body_id| ctx.ast_nodes.get(&body_id).is_some())
+                        .unwrap_or(false);
 
                     let instantiation = TemplateMethodInstantiation {
                         name: name.clone(),
@@ -227,7 +228,9 @@ pub struct MethodInfo {
 ///
 /// Returns a map with key (class_name, method_name) and value list of MethodInfo structs.
 /// Each MethodInfo contains parameter names and the method body.
-pub fn extract_method_bodies_with_params(ctx: &AstContext) -> HashMap<(String, String), Vec<MethodInfo>> {
+pub fn extract_method_bodies_with_params(
+    ctx: &AstContext,
+) -> HashMap<(String, String), Vec<MethodInfo>> {
     // First, build a map from method node ID to parent class name
     let mut method_to_class: HashMap<u64, String> = HashMap::new();
 
@@ -348,13 +351,12 @@ pub fn extract_method_bodies(ctx: &AstContext) -> HashMap<(String, String), Vec<
             }
 
             // Find the body - it's typically the last non-None child, or a child that is a CompoundStmt
-            let body_id = node.children.iter()
-                .filter_map(|c| *c)
-                .find(|child_id| {
-                    ctx.ast_nodes.get(child_id)
-                        .map(|child| child.tag == ASTEntryTag::TagCompoundStmt)
-                        .unwrap_or(false)
-                });
+            let body_id = node.children.iter().filter_map(|c| *c).find(|child_id| {
+                ctx.ast_nodes
+                    .get(child_id)
+                    .map(|child| child.tag == ASTEntryTag::TagCompoundStmt)
+                    .unwrap_or(false)
+            });
 
             if let Some(body_id) = body_id {
                 // Convert the body to ClangNode
@@ -554,9 +556,12 @@ fn convert_node_with_depth(
             ClangNodeKind::ConditionalOperator { ty }
         }
 
-        ASTEntryTag::TagCStyleCastExpr | ASTEntryTag::TagCXXStaticCastExpr
-        | ASTEntryTag::TagCXXReinterpretCastExpr | ASTEntryTag::TagCXXConstCastExpr
-        | ASTEntryTag::TagCXXFunctionalCastExpr | ASTEntryTag::TagCXXDynamicCastExpr => {
+        ASTEntryTag::TagCStyleCastExpr
+        | ASTEntryTag::TagCXXStaticCastExpr
+        | ASTEntryTag::TagCXXReinterpretCastExpr
+        | ASTEntryTag::TagCXXConstCastExpr
+        | ASTEntryTag::TagCXXFunctionalCastExpr
+        | ASTEntryTag::TagCXXDynamicCastExpr => {
             let ty = extract_type_from_node(ctx, node);
             ClangNodeKind::CastExpr {
                 cast_kind: crate::ast::CastKind::LValueToRValue,
@@ -617,9 +622,7 @@ fn convert_node_with_depth(
             }
         }
 
-        ASTEntryTag::TagCXXDeleteExpr => {
-            ClangNodeKind::CXXDeleteExpr { is_array: false }
-        }
+        ASTEntryTag::TagCXXDeleteExpr => ClangNodeKind::CXXDeleteExpr { is_array: false },
 
         ASTEntryTag::TagStringLiteral => {
             let value = node.get_string(0).unwrap_or("").to_string();
@@ -662,7 +665,11 @@ fn convert_node_with_depth(
             // Parameter declarations
             let name = node.get_string(0).unwrap_or("").to_string();
             let ty = extract_type_from_node(ctx, node);
-            ClangNodeKind::VarDecl { name, ty, has_init: false }
+            ClangNodeKind::VarDecl {
+                name,
+                ty,
+                has_init: false,
+            }
         }
 
         // Additional statement types
@@ -674,7 +681,10 @@ fn convert_node_with_depth(
             // Case statements have a value expression and body
             // Try to extract the case value
             let value = node.get_int(0).unwrap_or(0) as i128;
-            ClangNodeKind::CaseStmt { value, enum_name: None }
+            ClangNodeKind::CaseStmt {
+                value,
+                enum_name: None,
+            }
         }
 
         ASTEntryTag::TagDefaultStmt => ClangNodeKind::DefaultStmt,
@@ -726,14 +736,12 @@ fn convert_node_with_depth(
             ClangNodeKind::InitListExpr { ty }
         }
 
-        ASTEntryTag::TagLambdaExpr => {
-            ClangNodeKind::LambdaExpr {
-                params: vec![],
-                return_type: CppType::Void,
-                capture_default: crate::ast::CaptureDefault::None,
-                captures: vec![],
-            }
-        }
+        ASTEntryTag::TagLambdaExpr => ClangNodeKind::LambdaExpr {
+            params: vec![],
+            return_type: CppType::Void,
+            capture_default: crate::ast::CaptureDefault::None,
+            captures: vec![],
+        },
 
         ASTEntryTag::TagTypeTraitExpr => {
             // Type traits like std::is_same_v
@@ -757,9 +765,7 @@ fn convert_node_with_depth(
             ClangNodeKind::Unknown("InlineTypedef".to_string())
         }
 
-        ASTEntryTag::TagEnumDecl => {
-            ClangNodeKind::Unknown("InlineEnumDecl".to_string())
-        }
+        ASTEntryTag::TagEnumDecl => ClangNodeKind::Unknown("InlineEnumDecl".to_string()),
 
         ASTEntryTag::TagEnumConstantDecl => {
             let name = node.get_string(0).unwrap_or("").to_string();
@@ -775,9 +781,7 @@ fn convert_node_with_depth(
             ClangNodeKind::Unknown("AccessSpec".to_string())
         }
 
-        ASTEntryTag::TagStaticAssertDecl => {
-            ClangNodeKind::Unknown("StaticAssert".to_string())
-        }
+        ASTEntryTag::TagStaticAssertDecl => ClangNodeKind::Unknown("StaticAssert".to_string()),
 
         ASTEntryTag::TagFunctionDecl | ASTEntryTag::TagFunctionTemplateDecl => {
             // Inline function declaration - skip
@@ -788,11 +792,14 @@ fn convert_node_with_depth(
             ClangNodeKind::Unknown("InlineClassTemplateDecl".to_string())
         }
 
-        ASTEntryTag::TagNamespaceDecl | ASTEntryTag::TagUsingDecl | ASTEntryTag::TagUsingDirectiveDecl => {
+        ASTEntryTag::TagNamespaceDecl
+        | ASTEntryTag::TagUsingDecl
+        | ASTEntryTag::TagUsingDirectiveDecl => {
             ClangNodeKind::Unknown("NamespaceRelated".to_string())
         }
 
-        ASTEntryTag::TagTemplateTypeParmDecl | ASTEntryTag::TagNonTypeTemplateParmDecl
+        ASTEntryTag::TagTemplateTypeParmDecl
+        | ASTEntryTag::TagNonTypeTemplateParmDecl
         | ASTEntryTag::TagTemplateTemplateParmDecl => {
             ClangNodeKind::Unknown("TemplateParam".to_string())
         }
@@ -819,7 +826,10 @@ fn convert_node_with_depth(
     })
 }
 
-fn extract_type_from_node(ctx: &AstContext, node: &fragile_ast_exporter::clang_ast::AstNode) -> CppType {
+fn extract_type_from_node(
+    ctx: &AstContext,
+    node: &fragile_ast_exporter::clang_ast::AstNode,
+) -> CppType {
     if let Some(type_id) = node.type_id {
         if let Some(type_node) = ctx.type_nodes.get(&type_id) {
             // Convert type node tag to a proper CppType
@@ -835,7 +845,9 @@ fn extract_type_from_node(ctx: &AstContext, node: &fragile_ast_exporter::clang_a
                 ASTEntryTag::TagULongLong => return CppType::LongLong { signed: false },
                 ASTEntryTag::TagShort => return CppType::Short { signed: true },
                 ASTEntryTag::TagUShort => return CppType::Short { signed: false },
-                ASTEntryTag::TagChar | ASTEntryTag::TagSChar => return CppType::Char { signed: true },
+                ASTEntryTag::TagChar | ASTEntryTag::TagSChar => {
+                    return CppType::Char { signed: true }
+                }
                 ASTEntryTag::TagUChar => return CppType::Char { signed: false },
                 ASTEntryTag::TagFloat => return CppType::Float,
                 ASTEntryTag::TagDouble => return CppType::Double,
@@ -863,7 +875,8 @@ fn extract_type_from_node(ctx: &AstContext, node: &fragile_ast_exporter::clang_a
                     };
                 }
                 // For record/class types, use the type name if available
-                ASTEntryTag::TagRecordType | ASTEntryTag::TagElaboratedType
+                ASTEntryTag::TagRecordType
+                | ASTEntryTag::TagElaboratedType
                 | ASTEntryTag::TagTemplateSpecializationType => {
                     // Try to get a name from the type node
                     if let Some(name) = type_node.get_string(0) {
@@ -900,9 +913,9 @@ fn parse_binary_op(op: &str) -> crate::ast::BinaryOp {
         ">=" => BinaryOp::Ge,
         "&&" => BinaryOp::LAnd,
         "||" => BinaryOp::LOr,
-        "&" => BinaryOp::And,  // Bitwise AND
-        "|" => BinaryOp::Or,   // Bitwise OR
-        "^" => BinaryOp::Xor,  // Bitwise XOR
+        "&" => BinaryOp::And, // Bitwise AND
+        "|" => BinaryOp::Or,  // Bitwise OR
+        "^" => BinaryOp::Xor, // Bitwise XOR
         "<<" => BinaryOp::Shl,
         ">>" => BinaryOp::Shr,
         "=" => BinaryOp::Assign,
@@ -925,17 +938,17 @@ fn parse_unary_op_from_opcode(opcode: u32) -> crate::ast::UnaryOp {
     use crate::ast::UnaryOp;
     // Matches Clang's UnaryOperatorKind enum (ast_tags.hpp)
     match opcode {
-        0 => UnaryOp::PostInc,   // UO_PostInc
-        1 => UnaryOp::PostDec,   // UO_PostDec
-        2 => UnaryOp::PreInc,    // UO_PreInc
-        3 => UnaryOp::PreDec,    // UO_PreDec
-        4 => UnaryOp::AddrOf,    // UO_AddrOf
-        5 => UnaryOp::Deref,     // UO_Deref
-        6 => UnaryOp::Plus,      // UO_Plus
-        7 => UnaryOp::Minus,     // UO_Minus
-        8 => UnaryOp::Not,       // UO_Not (~)
-        9 => UnaryOp::LNot,      // UO_LNot (!)
-        _ => UnaryOp::Plus,      // fallback
+        0 => UnaryOp::PostInc, // UO_PostInc
+        1 => UnaryOp::PostDec, // UO_PostDec
+        2 => UnaryOp::PreInc,  // UO_PreInc
+        3 => UnaryOp::PreDec,  // UO_PreDec
+        4 => UnaryOp::AddrOf,  // UO_AddrOf
+        5 => UnaryOp::Deref,   // UO_Deref
+        6 => UnaryOp::Plus,    // UO_Plus
+        7 => UnaryOp::Minus,   // UO_Minus
+        8 => UnaryOp::Not,     // UO_Not (~)
+        9 => UnaryOp::LNot,    // UO_LNot (!)
+        _ => UnaryOp::Plus,    // fallback
     }
 }
 
@@ -961,7 +974,9 @@ pub struct SpecializationFieldInfo {
 ///
 /// # Returns
 /// A map from specialized type qualified name to field information.
-pub fn extract_specialization_field_types(ctx: &AstContext) -> HashMap<String, SpecializationFieldInfo> {
+pub fn extract_specialization_field_types(
+    ctx: &AstContext,
+) -> HashMap<String, SpecializationFieldInfo> {
     use fragile_ast_exporter::CborValue;
 
     let mut result = HashMap::new();
@@ -1032,7 +1047,10 @@ pub fn extract_specialization_field_types(ctx: &AstContext) -> HashMap<String, S
     }
 
     if std::env::var("FRAGILE_DEBUG_SPECIALIZATION").is_ok() {
-        eprintln!("[SPEC DEBUG] Total specializations extracted: {}", result.len());
+        eprintln!(
+            "[SPEC DEBUG] Total specializations extracted: {}",
+            result.len()
+        );
     }
 
     result
@@ -1093,8 +1111,12 @@ pub fn extract_specialization_method_signatures(
         let mut methods = Vec::new();
 
         for child_id_opt in &node.children {
-            let Some(child_id) = child_id_opt else { continue };
-            let Some(child_node) = ctx.ast_nodes.get(child_id) else { continue };
+            let Some(child_id) = child_id_opt else {
+                continue;
+            };
+            let Some(child_node) = ctx.ast_nodes.get(child_id) else {
+                continue;
+            };
             if child_node.tag != ASTEntryTag::TagCXXMethodDecl {
                 continue;
             }
@@ -1118,8 +1140,12 @@ pub fn extract_specialization_method_signatures(
             let mut param_types = Vec::new();
             let mut parm_idx = 0;
             for grandchild_opt in &child_node.children {
-                let Some(grandchild_id) = grandchild_opt else { continue };
-                let Some(grandchild) = ctx.ast_nodes.get(grandchild_id) else { continue };
+                let Some(grandchild_id) = grandchild_opt else {
+                    continue;
+                };
+                let Some(grandchild) = ctx.ast_nodes.get(grandchild_id) else {
+                    continue;
+                };
                 if grandchild.tag != ASTEntryTag::TagParmVarDecl {
                     continue;
                 }
@@ -1128,7 +1154,8 @@ pub fn extract_specialization_method_signatures(
 
                 // Prefer ParmVarDecl's own type_id (most direct),
                 // fall back to FunctionProtoType's param type
-                let ptype = grandchild.type_id
+                let ptype = grandchild
+                    .type_id
                     .and_then(|tid| resolve_type(ctx, tid))
                     .or_else(|| fn_param_types.get(parm_idx).cloned());
                 if let Some(t) = ptype {
@@ -1158,13 +1185,21 @@ pub fn extract_specialization_method_signatures(
     }
 
     if std::env::var("FRAGILE_DEBUG_SPECIALIZATION").is_ok() {
-        eprintln!("[SPEC DEBUG] Specialization method signatures extracted: {}", result.len());
+        eprintln!(
+            "[SPEC DEBUG] Specialization method signatures extracted: {}",
+            result.len()
+        );
         for (key, methods) in &result {
             eprintln!("  {}: {} methods", key, methods.len());
             for m in methods {
-                eprintln!("    {}({}) -> {:?}",
+                eprintln!(
+                    "    {}({}) -> {:?}",
                     m.name,
-                    m.param_types.iter().map(|t| format!("{:?}", t)).collect::<Vec<_>>().join(", "),
+                    m.param_types
+                        .iter()
+                        .map(|t| format!("{:?}", t))
+                        .collect::<Vec<_>>()
+                        .join(", "),
                     m.return_type,
                 );
             }
@@ -1176,8 +1211,8 @@ pub fn extract_specialization_method_signatures(
 
 /// Resolve a FunctionProtoType to extract return type and parameter types.
 fn resolve_function_proto_type(ctx: &AstContext, type_id: u64) -> (Option<CppType>, Vec<CppType>) {
-    use fragile_ast_exporter::CborValue;
     use fragile_ast_exporter::clang_ast::TypeNode;
+    use fragile_ast_exporter::CborValue;
 
     let type_node = match ctx.get_type(TypeNode::unqualified_id(type_id)) {
         Some(t) => t,
@@ -1238,7 +1273,11 @@ fn format_cpp_type(ty: &CppType) -> String {
                 format!("{} *", format_cpp_type(pointee))
             }
         }
-        CppType::Reference { referent, is_const, is_rvalue } => {
+        CppType::Reference {
+            referent,
+            is_const,
+            is_rvalue,
+        } => {
             let ref_sym = if *is_rvalue { "&&" } else { "&" };
             if *is_const {
                 format!("const {}{}", format_cpp_type(referent), ref_sym)
@@ -1253,9 +1292,17 @@ fn format_cpp_type(ty: &CppType) -> String {
                 format!("{}[]", format_cpp_type(element))
             }
         }
-        CppType::Function { return_type, params, .. } => {
+        CppType::Function {
+            return_type,
+            params,
+            ..
+        } => {
             let param_strs: Vec<String> = params.iter().map(format_cpp_type).collect();
-            format!("{}({})", format_cpp_type(return_type), param_strs.join(", "))
+            format!(
+                "{}({})",
+                format_cpp_type(return_type),
+                param_strs.join(", ")
+            )
         }
         CppType::TemplateParam { name, .. } => name.clone(),
         CppType::DependentType { spelling } => spelling.clone(),

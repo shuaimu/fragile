@@ -91,8 +91,6 @@ fn main() -> Result<()> {
                 .map(|p| p.to_string_lossy().to_string())
                 .collect();
 
-            let mut all_output = String::new();
-
             // If using LibTooling, pre-parse files to extract template method bodies
             let mut libtooling_results: std::collections::HashMap<
                 std::path::PathBuf,
@@ -130,40 +128,58 @@ fn main() -> Result<()> {
             let parser = fragile_clang::ClangParser::with_paths_and_defines(include_paths, define.clone())
                 .map_err(|e| miette::miette!("Failed to create parser: {}", e))?;
 
+            // Parse all files first, then generate a single combined output.
+            // This avoids duplicate crate preambles and allows cross-file symbol references.
+            let mut combined_children = Vec::new();
             for file in &files {
                 eprintln!("Transpiling: {}", file.display());
 
                 let ast = parser
                     .parse_file(file)
                     .map_err(|e| miette::miette!("Failed to parse {}: {}", file.display(), e))?;
-
-                let code = if stubs_only {
-                    fragile_clang::AstCodeGen::new().generate_stubs(&ast.translation_unit)
-                } else if use_libtooling {
-                    // Use pre-parsed LibTooling bodies and field types if available
-                    let method_bodies = libtooling_results.remove(file);
-                    let field_types = libtooling_field_types.remove(file);
-
-                    if method_bodies.is_some() || field_types.is_some() {
-                        let mut codegen = fragile_clang::AstCodeGen::new();
-                        if let Some(bodies) = method_bodies {
-                            codegen.set_libtooling_bodies(bodies);
-                        }
-                        if let Some(types) = field_types {
-                            codegen.set_specialization_field_types(types);
-                        }
-                        codegen.generate(&ast.translation_unit)
-                    } else {
-                        eprintln!("  No LibTooling data available, falling back to standard transpilation");
-                        fragile_clang::AstCodeGen::new().generate(&ast.translation_unit)
-                    }
-                } else {
-                    fragile_clang::AstCodeGen::new().generate(&ast.translation_unit)
-                };
-
-                all_output.push_str(&code);
-                all_output.push('\n');
+                combined_children.extend(ast.translation_unit.children);
             }
+
+            let combined_tu =
+                fragile_clang::ClangNode::new(fragile_clang::ClangNodeKind::TranslationUnit)
+                    .with_children(combined_children);
+
+            let all_output = if stubs_only {
+                fragile_clang::AstCodeGen::new().generate_stubs(&combined_tu)
+            } else if use_libtooling {
+                let mut merged_method_bodies: std::collections::HashMap<
+                    (String, String),
+                    Vec<fragile_clang::MethodInfo>,
+                > = std::collections::HashMap::new();
+                let mut merged_field_types: std::collections::HashMap<
+                    String,
+                    fragile_clang::SpecializationFieldInfo,
+                > = std::collections::HashMap::new();
+
+                for file in &files {
+                    if let Some(methods) = libtooling_results.remove(file) {
+                        for (key, mut infos) in methods {
+                            merged_method_bodies.entry(key).or_default().append(&mut infos);
+                        }
+                    }
+                    if let Some(field_types) = libtooling_field_types.remove(file) {
+                        for (key, value) in field_types {
+                            merged_field_types.entry(key).or_insert(value);
+                        }
+                    }
+                }
+
+                let mut codegen = fragile_clang::AstCodeGen::new();
+                if !merged_method_bodies.is_empty() {
+                    codegen.set_libtooling_bodies(merged_method_bodies);
+                }
+                if !merged_field_types.is_empty() {
+                    codegen.set_specialization_field_types(merged_field_types);
+                }
+                codegen.generate(&combined_tu)
+            } else {
+                fragile_clang::AstCodeGen::new().generate(&combined_tu)
+            };
 
             if let Some(out_path) = output {
                 if let Some(parent) = out_path.parent() {

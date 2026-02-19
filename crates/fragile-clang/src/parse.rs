@@ -1084,7 +1084,10 @@ impl ClangParser {
                     let name = cursor_spelling(cursor);
                     let name_opt = if name.is_empty() { None } else { Some(name) };
                     let is_inline = clang_sys::clang_Cursor_isInlineNamespace(cursor) != 0;
-                    ClangNodeKind::NamespaceDecl { name: name_opt, is_inline }
+                    ClangNodeKind::NamespaceDecl {
+                        name: name_opt,
+                        is_inline,
+                    }
                 }
 
                 // CXCursor_LinkageSpec = 23 (extern "C" { ... })
@@ -1118,10 +1121,31 @@ impl ClangParser {
                 // CXCursor_TypedefDecl = 20 (typedef Y X;)
                 clang_sys::CXCursor_TypedefDecl => {
                     let name = cursor_spelling(cursor);
-                    // Skip implicit/builtin typedefs (like __int128_t)
+                    // Skip implicit/builtin/system typedefs.
+                    // Keep typedefs from user headers (e.g. xxhash.h), not just the main file.
                     let loc = clang_sys::clang_getCursorLocation(cursor);
-                    if clang_sys::clang_Location_isFromMainFile(loc) == 0 {
-                        // Not from main file, likely a builtin typedef
+                    let is_system_header = clang_sys::clang_Location_isInSystemHeader(loc) != 0;
+                    let mut spelling_file: clang_sys::CXFile = ptr::null_mut();
+                    clang_sys::clang_getSpellingLocation(
+                        loc,
+                        &mut spelling_file,
+                        ptr::null_mut(),
+                        ptr::null_mut(),
+                        ptr::null_mut(),
+                    );
+                    // For macro-expanded typedef names, spelling location can be in Clang scratch
+                    // space. Expansion location still points to the originating user/header file.
+                    let mut expansion_file: clang_sys::CXFile = ptr::null_mut();
+                    clang_sys::clang_getExpansionLocation(
+                        loc,
+                        &mut expansion_file,
+                        ptr::null_mut(),
+                        ptr::null_mut(),
+                        ptr::null_mut(),
+                    );
+                    let has_real_file = !spelling_file.is_null() || !expansion_file.is_null();
+                    if !has_real_file || is_system_header {
+                        // Likely an implicit/builtin typedef (no file) or a system typedef
                         ClangNodeKind::Unknown("implicit_typedef".to_string())
                     } else {
                         let underlying_type = self.get_typedef_underlying_type(cursor);
@@ -1224,12 +1248,18 @@ impl ClangParser {
                             // Check if this is a DeclRefExpr referencing an EnumConstantDecl
                             if child_kind == clang_sys::CXCursor_DeclRefExpr {
                                 let referenced = clang_sys::clang_getCursorReferenced(child);
-                                if clang_sys::clang_getCursorKind(referenced) == clang_sys::CXCursor_EnumConstantDecl {
+                                if clang_sys::clang_getCursorKind(referenced)
+                                    == clang_sys::CXCursor_EnumConstantDecl
+                                {
                                     // Get the enum type from the semantic parent of the enum constant
-                                    let enum_decl = clang_sys::clang_getCursorSemanticParent(referenced);
-                                    if clang_sys::clang_getCursorKind(enum_decl) == clang_sys::CXCursor_EnumDecl {
+                                    let enum_decl =
+                                        clang_sys::clang_getCursorSemanticParent(referenced);
+                                    if clang_sys::clang_getCursorKind(enum_decl)
+                                        == clang_sys::CXCursor_EnumDecl
+                                    {
                                         let info = &mut *(data as *mut CaseInfo);
-                                        let spelling = clang_sys::clang_getCursorSpelling(enum_decl);
+                                        let spelling =
+                                            clang_sys::clang_getCursorSpelling(enum_decl);
                                         let name = cx_string_to_string(spelling);
                                         if !name.is_empty() {
                                             info.enum_name = Some(name);
@@ -1261,14 +1291,20 @@ impl ClangParser {
                         }
                     }
 
-                    let mut case_info = CaseInfo { value: 0, enum_name: None };
+                    let mut case_info = CaseInfo {
+                        value: 0,
+                        enum_name: None,
+                    };
                     clang_sys::clang_visitChildren(
                         cursor,
                         find_case_value,
                         &mut case_info as *mut CaseInfo as clang_sys::CXClientData,
                     );
 
-                    ClangNodeKind::CaseStmt { value: case_info.value, enum_name: case_info.enum_name }
+                    ClangNodeKind::CaseStmt {
+                        value: case_info.value,
+                        enum_name: case_info.enum_name,
+                    }
                 }
                 clang_sys::CXCursor_DefaultStmt => ClangNodeKind::DefaultStmt,
 
@@ -1933,6 +1969,15 @@ impl ClangParser {
     /// For `a + b * c`, the root operator depends on which BinaryOperator cursor we're examining.
     fn get_binary_op(&self, cursor: clang_sys::CXCursor) -> BinaryOp {
         unsafe {
+            // Prefer libclang's direct binary-op query when available.
+            // This is much more robust than token-span heuristics for macro-expanded expressions.
+            let direct_kind = clang_sys::clang_getCursorBinaryOperatorKind(cursor);
+            if direct_kind != clang_sys::CXBinaryOperator_Invalid {
+                if let Some(op) = cx_binary_op_to_binary_op(direct_kind) {
+                    return op;
+                }
+            }
+
             let tu = clang_sys::clang_Cursor_getTranslationUnit(cursor);
 
             // Get the two children (left and right operands)
@@ -2026,7 +2071,9 @@ impl ClangParser {
                         // If offsets are valid, try position-based matching first
                         if offsets_valid && result.is_none() {
                             // Only consider tokens between the two children
-                            if token_offset >= first_end_offset && token_offset < second_start_offset {
+                            if token_offset >= first_end_offset
+                                && token_offset < second_start_offset
+                            {
                                 result = Some(op);
                             }
                         }
@@ -2039,11 +2086,25 @@ impl ClangParser {
             let cursor_type = self.get_cursor_type(cursor);
             let result_is_bool = matches!(cursor_type.as_deref(), Some("bool") | Some("_Bool"));
 
-            // If the BinaryOperator returns bool but we found an arithmetic operator
-            // (or no operator at all), this is likely a macro expansion issue.
-            // Look for comparison/logical operators instead.
+            // If the BinaryOperator returns bool, tokenization of macro-expanded code can
+            // pick a child operator (e.g. `<`) instead of the root (e.g. `&&`).
             if result_is_bool {
                 let current_op = result.unwrap_or(BinaryOp::Add);
+                let logical_candidate = candidates.iter().find_map(|(op, _)| {
+                    if matches!(op, BinaryOp::LAnd | BinaryOp::LOr) {
+                        Some(*op)
+                    } else {
+                        None
+                    }
+                });
+
+                // Prefer logical operators when present in the token set.
+                if let Some(logical_op) = logical_candidate {
+                    if !matches!(current_op, BinaryOp::LAnd | BinaryOp::LOr) {
+                        result = Some(logical_op);
+                    }
+                }
+
                 let is_arithmetic = matches!(
                     current_op,
                     BinaryOp::Add
@@ -2058,26 +2119,24 @@ impl ClangParser {
                         | BinaryOp::Shr
                 );
 
-                if is_arithmetic {
-                    // First, try to find a comparison or logical operator from candidates
-                    let mut found_bool_op = false;
-                    for (op, _) in &candidates {
-                        if matches!(op,
-                            BinaryOp::Eq | BinaryOp::Ne |
-                            BinaryOp::Lt | BinaryOp::Le |
-                            BinaryOp::Gt | BinaryOp::Ge |
-                            BinaryOp::LAnd | BinaryOp::LOr
-                        ) {
-                            result = Some(*op);
-                            found_bool_op = true;
-                            break;
-                        }
-                    }
-
-                    // If no bool-returning operator in candidates but the expression returns bool,
-                    // and we detected an arithmetic operator, default to Ne.
-                    // This handles macro-expanded code where != tokens aren't in the expansion.
-                    if !found_bool_op {
+                // If we still have an arithmetic operator, prefer a comparison operator.
+                if is_arithmetic && !matches!(result, Some(BinaryOp::LAnd | BinaryOp::LOr)) {
+                    if let Some((op, _)) = candidates.iter().find(|(op, _)| {
+                        matches!(
+                            op,
+                            BinaryOp::Eq
+                                | BinaryOp::Ne
+                                | BinaryOp::Lt
+                                | BinaryOp::Le
+                                | BinaryOp::Gt
+                                | BinaryOp::Ge
+                        )
+                    }) {
+                        result = Some(*op);
+                    } else if let Some(logical_op) = logical_candidate {
+                        result = Some(logical_op);
+                    } else {
+                        // Last-resort fallback for malformed macro token spans.
                         result = Some(BinaryOp::Ne);
                     }
                 }
@@ -2116,6 +2175,14 @@ impl ClangParser {
     /// Get unary operator from cursor by tokenizing and finding the operator token.
     fn get_unary_op(&self, cursor: clang_sys::CXCursor) -> UnaryOp {
         unsafe {
+            // Prefer libclang's direct unary-op query when available.
+            let direct_kind = clang_sys::clang_getCursorUnaryOperatorKind(cursor);
+            if direct_kind != clang_sys::CXUnaryOperator_Invalid {
+                if let Some(op) = cx_unary_op_to_unary_op(direct_kind) {
+                    return op;
+                }
+            }
+
             let tu = clang_sys::clang_Cursor_getTranslationUnit(cursor);
             let extent = clang_sys::clang_getCursorExtent(cursor);
             let mut tokens: *mut clang_sys::CXToken = std::ptr::null_mut();
@@ -3679,8 +3746,7 @@ impl ClangParser {
 
             let mut args = Vec::new();
             for i in 0..num_args {
-                let arg_kind =
-                    clang_sys::clang_Cursor_getTemplateArgumentKind(cursor, i as u32);
+                let arg_kind = clang_sys::clang_Cursor_getTemplateArgumentKind(cursor, i as u32);
 
                 match arg_kind {
                     // CXTemplateArgumentKind_Type = 1
@@ -4982,6 +5048,69 @@ mod tests {
         } else {
             panic!("Expected ModuleImportDecl for header unit");
         }
+    }
+}
+
+/// Convert a libclang binary-op kind into our AST binary-op enum.
+fn cx_binary_op_to_binary_op(kind: clang_sys::CXBinaryOperatorKind) -> Option<BinaryOp> {
+    match kind {
+        clang_sys::CXBinaryOperator_Mul => Some(BinaryOp::Mul),
+        clang_sys::CXBinaryOperator_Div => Some(BinaryOp::Div),
+        clang_sys::CXBinaryOperator_Rem => Some(BinaryOp::Rem),
+        clang_sys::CXBinaryOperator_Add => Some(BinaryOp::Add),
+        clang_sys::CXBinaryOperator_Sub => Some(BinaryOp::Sub),
+        clang_sys::CXBinaryOperator_Shl => Some(BinaryOp::Shl),
+        clang_sys::CXBinaryOperator_Shr => Some(BinaryOp::Shr),
+        clang_sys::CXBinaryOperator_LT => Some(BinaryOp::Lt),
+        clang_sys::CXBinaryOperator_GT => Some(BinaryOp::Gt),
+        clang_sys::CXBinaryOperator_LE => Some(BinaryOp::Le),
+        clang_sys::CXBinaryOperator_GE => Some(BinaryOp::Ge),
+        clang_sys::CXBinaryOperator_EQ => Some(BinaryOp::Eq),
+        clang_sys::CXBinaryOperator_NE => Some(BinaryOp::Ne),
+        clang_sys::CXBinaryOperator_And => Some(BinaryOp::And),
+        clang_sys::CXBinaryOperator_Xor => Some(BinaryOp::Xor),
+        clang_sys::CXBinaryOperator_Or => Some(BinaryOp::Or),
+        clang_sys::CXBinaryOperator_LAnd => Some(BinaryOp::LAnd),
+        clang_sys::CXBinaryOperator_LOr => Some(BinaryOp::LOr),
+        clang_sys::CXBinaryOperator_Assign => Some(BinaryOp::Assign),
+        clang_sys::CXBinaryOperator_MulAssign => Some(BinaryOp::MulAssign),
+        clang_sys::CXBinaryOperator_DivAssign => Some(BinaryOp::DivAssign),
+        clang_sys::CXBinaryOperator_RemAssign => Some(BinaryOp::RemAssign),
+        clang_sys::CXBinaryOperator_AddAssign => Some(BinaryOp::AddAssign),
+        clang_sys::CXBinaryOperator_SubAssign => Some(BinaryOp::SubAssign),
+        clang_sys::CXBinaryOperator_ShlAssign => Some(BinaryOp::ShlAssign),
+        clang_sys::CXBinaryOperator_ShrAssign => Some(BinaryOp::ShrAssign),
+        clang_sys::CXBinaryOperator_AndAssign => Some(BinaryOp::AndAssign),
+        clang_sys::CXBinaryOperator_XorAssign => Some(BinaryOp::XorAssign),
+        clang_sys::CXBinaryOperator_OrAssign => Some(BinaryOp::OrAssign),
+        clang_sys::CXBinaryOperator_Comma => Some(BinaryOp::Comma),
+        clang_sys::CXBinaryOperator_Cmp => Some(BinaryOp::Spaceship),
+        clang_sys::CXBinaryOperator_PtrMemD
+        | clang_sys::CXBinaryOperator_PtrMemI
+        | clang_sys::CXBinaryOperator_Invalid => None,
+        _ => None,
+    }
+}
+
+/// Convert a libclang unary-op kind into our AST unary-op enum.
+fn cx_unary_op_to_unary_op(kind: clang_sys::CXUnaryOperatorKind) -> Option<UnaryOp> {
+    match kind {
+        clang_sys::CXUnaryOperator_PostInc => Some(UnaryOp::PostInc),
+        clang_sys::CXUnaryOperator_PostDec => Some(UnaryOp::PostDec),
+        clang_sys::CXUnaryOperator_PreInc => Some(UnaryOp::PreInc),
+        clang_sys::CXUnaryOperator_PreDec => Some(UnaryOp::PreDec),
+        clang_sys::CXUnaryOperator_AddrOf => Some(UnaryOp::AddrOf),
+        clang_sys::CXUnaryOperator_Deref => Some(UnaryOp::Deref),
+        clang_sys::CXUnaryOperator_Plus => Some(UnaryOp::Plus),
+        clang_sys::CXUnaryOperator_Minus => Some(UnaryOp::Minus),
+        clang_sys::CXUnaryOperator_Not => Some(UnaryOp::Not),
+        clang_sys::CXUnaryOperator_LNot => Some(UnaryOp::LNot),
+        clang_sys::CXUnaryOperator_Invalid
+        | clang_sys::CXUnaryOperator_Real
+        | clang_sys::CXUnaryOperator_Imag
+        | clang_sys::CXUnaryOperator_Extension
+        | clang_sys::CXUnaryOperator_Coawait => None,
+        _ => None,
     }
 }
 

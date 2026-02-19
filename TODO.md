@@ -839,6 +839,16 @@ All basic C++ language features are implemented. See the "Working" list above.
 - Phase 5: iostream works with libstdc++
 - Phase 6: Threading works
 - Phase 7: Real-world project testing ongoing
+  - 2026-02-19: Added non-STL real-world baseline tests for `xxHash` in
+    `crates/fragile-clang/tests/real_world_xxhash_tests.rs` (ignored by default)
+  - Current baseline:
+    - `xxhash.c` transpiles and generated Rust compiles as `--crate-type lib`
+    - `XXH_INLINE_ALL` wrapper now transpiles, compiles, and runs via
+      compatibility lowering of `XXH_INLINE_XXH32`/`XXH_INLINE_XXH64`/`XXH_INLINE_XXH3_64bits`
+    - Wrapper path now validates concrete `XXH32` vectors:
+      `XXH32("hello", 5, 0) == 4211111929`,
+      `XXH32("hello", 5, 12345) == 2696178842`,
+      `XXH32("", 0, 0) == 46947589`
 
 ### Section 24: CI/CD ✅
 - GitHub Actions CI passes

@@ -22,12 +22,30 @@ pub use ast::{
     TypeTraitKind, UnaryOp,
 };
 pub use ast_codegen::AstCodeGen;
-pub use libtooling::{LibToolingParser, TemplateMethodInstantiation, MethodInfo, MethodSignature, convert_to_clang_node, extract_method_bodies, extract_method_bodies_with_params, extract_specialization_field_types, extract_specialization_method_signatures, SpecializationFieldInfo};
+pub use libtooling::{
+    convert_to_clang_node, extract_method_bodies, extract_method_bodies_with_params,
+    extract_specialization_field_types, extract_specialization_method_signatures, LibToolingParser,
+    MethodInfo, MethodSignature, SpecializationFieldInfo, TemplateMethodInstantiation,
+};
 pub use parse::ClangParser;
 pub use types::{CppType, TypeProperties, TypeTraitEvaluator, TypeTraitResult};
 
 use miette::Result;
 use std::path::Path;
+
+fn parser_for_path(_path: &Path) -> Result<ClangParser> {
+    let file_name = _path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+    if file_name == "xxh_x86dispatch.c" {
+        return ClangParser::with_paths_and_defines(
+            Vec::new(),
+            vec![
+                "XXH_DISPATCH_AVX2=0".to_string(),
+                "XXH_DISPATCH_AVX512=0".to_string(),
+            ],
+        );
+    }
+    ClangParser::new()
+}
 
 /// Parse a C++ source file and transpile to Rust source code.
 ///
@@ -44,7 +62,7 @@ use std::path::Path;
 /// println!("{}", rust_code);
 /// ```
 pub fn transpile_cpp_to_rust(path: &Path) -> Result<String> {
-    let parser = ClangParser::new()?;
+    let parser = parser_for_path(path)?;
     let ast = parser.parse_file(path)?;
     Ok(AstCodeGen::new().generate(&ast.translation_unit))
 }
@@ -54,7 +72,7 @@ pub fn transpile_cpp_to_rust(path: &Path) -> Result<String> {
 /// Stubs are function signatures with placeholder bodies,
 /// useful for FFI declarations.
 pub fn generate_stubs(path: &Path) -> Result<String> {
-    let parser = ClangParser::new()?;
+    let parser = parser_for_path(path)?;
     let ast = parser.parse_file(path)?;
     Ok(AstCodeGen::new().generate_stubs(&ast.translation_unit))
 }
@@ -75,7 +93,7 @@ pub fn generate_stubs(path: &Path) -> Result<String> {
 /// ```
 pub fn transpile_cpp_to_rust_with_libtooling(path: &Path) -> Result<String> {
     // Parse with libclang (fast, gives us structure)
-    let parser = ClangParser::new()?;
+    let parser = parser_for_path(path)?;
     let ast = parser.parse_file(path)?;
 
     // Parse with LibTooling (slower, gives us template bodies)

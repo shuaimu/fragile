@@ -335,21 +335,11 @@ impl CppType {
                     "allocator_type" => "std::ffi::c_void".to_string(),
                     // Common template parameter names that appear unresolved
                     // Use () instead of c_void so they're valid as bare types (params, return types)
-                    "_Tp" | "_CharT" | "_Traits" | "_Allocator" | "_Alloc" => {
-                        "()".to_string()
-                    }
-                    "_Pointer" | "_Iter" | "_Iterator" | "_Size" | "_Ep" => {
-                        "()".to_string()
-                    }
-                    "_Rp" | "_Ip" | "_Container" | "_BaseT" | "_It" | "_CP" => {
-                        "()".to_string()
-                    }
-                    "_Gen" | "_Func" | "_Rollback" | "_StorageAlloc" => {
-                        "()".to_string()
-                    }
-                    "_ControlBlockAlloc" | "_ControlBlockAllocator" => {
-                        "()".to_string()
-                    }
+                    "_Tp" | "_CharT" | "_Traits" | "_Allocator" | "_Alloc" => "()".to_string(),
+                    "_Pointer" | "_Iter" | "_Iterator" | "_Size" | "_Ep" => "()".to_string(),
+                    "_Rp" | "_Ip" | "_Container" | "_BaseT" | "_It" | "_CP" => "()".to_string(),
+                    "_Gen" | "_Func" | "_Rollback" | "_StorageAlloc" => "()".to_string(),
+                    "_ControlBlockAlloc" | "_ControlBlockAllocator" => "()".to_string(),
                     "_Sp" | "_Dp" | "_Up" | "_Yp" => "()".to_string(), // Smart pointer params
                     // libstdc++ bit vector internal types
                     "_Bit_type" => "u64".to_string(), // Typically unsigned long
