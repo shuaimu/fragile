@@ -27,7 +27,7 @@ pub use libtooling::{
     extract_specialization_field_types, extract_specialization_method_signatures, LibToolingParser,
     MethodInfo, MethodSignature, SpecializationFieldInfo, TemplateMethodInstantiation,
 };
-pub use parse::ClangParser;
+pub use parse::{ClangParser, ParserLanguage};
 pub use types::{CppType, TypeProperties, TypeTraitEvaluator, TypeTraitResult};
 
 use miette::Result;

@@ -14,7 +14,7 @@ use std::process::{Command, Output};
 use std::thread::sleep;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use fragile_clang::{AstCodeGen, ClangParser};
+use fragile_clang::{AstCodeGen, ClangParser, ParserLanguage};
 
 const ZLIB_REPO_URL: &str = "https://github.com/madler/zlib.git";
 const ZLIB_PINNED_COMMIT: &str = "51b7f2abdade71cd9bb0e7a373ef2610ec6f9daf"; // v1.3.1
@@ -1244,13 +1244,18 @@ fn transpile_source_with_driver_command(
 ) -> Result<String, String> {
     let (include_paths, defines) =
         extract_parser_args_from_driver_tokens(command_tokens, command_cwd);
-    let parser = ClangParser::with_paths_and_defines(include_paths, defines).map_err(|e| {
-        format!(
-            "failed to create parser for {}: {}",
-            source_path.display(),
-            e
-        )
-    })?;
+    let language = match source_path.extension().and_then(|ext| ext.to_str()) {
+        Some("c") => ParserLanguage::C,
+        _ => ParserLanguage::Cpp,
+    };
+    let parser = ClangParser::with_paths_defines_and_language(include_paths, defines, language)
+        .map_err(|e| {
+            format!(
+                "failed to create parser for {}: {}",
+                source_path.display(),
+                e
+            )
+        })?;
     let ast = parser
         .parse_file(source_path)
         .map_err(|e| format!("failed to parse {}: {}", source_path.display(), e))?;
@@ -2560,6 +2565,41 @@ fn test_fragile_objz_replay_build_local_fixture_success() {
 }
 
 #[test]
+fn test_fragile_objz_replay_parses_c_register_storage_class() {
+    let root = unique_temp_dir("zlib_fragile_objz_replay_register_c");
+    fs::create_dir_all(&root).expect("failed to create test root");
+
+    let project_dir = create_local_libza_replay_plan_project(&root, None)
+        .expect("failed to create libza replay-plan project");
+    fs::write(
+        project_dir.join("deflate.c"),
+        "int deflate_with_register(void) { register int x = 7; return x; }\n",
+    )
+    .expect("failed to write deflate.c fixture with register storage class");
+
+    let log_dir = root.join("logs");
+    run_fragile_objz_replay_in_tree(&project_dir, &log_dir)
+        .expect("OBJZ replay should parse C register storage class");
+
+    let rustc_step = rustc_replay_step_name("OBJZ", "deflate.o");
+    assert_eq!(
+        fs::read_to_string(log_dir.join(format!("{}.status", rustc_step)))
+            .expect("failed to read deflate rustc replay status")
+            .trim(),
+        "0",
+        "deflate OBJZ replay should compile after C parser-mode fix"
+    );
+    assert!(
+        fs::read_to_string(log_dir.join("fragile_objz_manifest.txt"))
+            .expect("failed to read fragile_objz_manifest.txt")
+            .contains("object=deflate.o"),
+        "manifest should include deflate.o replay entry"
+    );
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
 fn test_fragile_objz_replay_build_detects_missing_compile_unit() {
     let root = unique_temp_dir("zlib_fragile_objz_replay_missing_unit");
     fs::create_dir_all(&root).expect("failed to create test root");
@@ -2858,18 +2898,7 @@ fn test_real_world_zlib_libza_replay_plan_for_objz_objg_scope() {
 #[test]
 #[ignore = "real-world external project test (downloads and transpiles zlib OBJZ objects)"]
 fn test_real_world_zlib_fragile_objz_objects_replay() {
-    let err = run_zlib_fragile_objz_objects_baseline()
-        .expect_err("OBJZ replay is expected to fail until C-source parsing mode is fixed");
-    assert!(
-        err.contains("deflate.c"),
-        "failure should surface deflate.c parser blocker: {}",
-        err
-    );
-    assert!(
-        err.contains("register"),
-        "failure should surface register-specifier parser mismatch: {}",
-        err
-    );
+    let replay_result = run_zlib_fragile_objz_objects_baseline();
 
     let log_dir = Path::new(ZLIB_FRAGILE_OBJZ_OBJECTS_BASELINE_DIR).join("driver_logs");
     for rel in ZLIB_FRAGILE_OBJZ_LOG_FILES {
@@ -2879,13 +2908,14 @@ fn test_real_world_zlib_fragile_objz_objects_replay() {
             log_dir.join(rel).display()
         );
     }
+    let replay_err = replay_result.err();
 
-    let manifest = fs::read_to_string(log_dir.join("libza_replay_plan.txt"))
+    let replay_plan = fs::read_to_string(log_dir.join("libza_replay_plan.txt"))
         .expect("failed to read libza_replay_plan.txt");
     assert!(
-        manifest.contains("libza_target_count=15"),
-        "replay plan should still be generated before OBJZ replay failure: {}",
-        manifest
+        replay_plan.contains("libza_target_count=15"),
+        "replay plan should be generated before OBJZ replay: {}",
+        replay_plan
     );
 
     assert_eq!(
@@ -2900,10 +2930,36 @@ fn test_real_world_zlib_fragile_objz_objects_replay() {
             .trim(),
         "0"
     );
+
+    if let Some(err) = replay_err {
+        assert!(
+            !err.contains("ISO C++17 does not allow 'register' storage class specifier"),
+            "C-source parsing mode mismatch persists: {}",
+            err
+        );
+        return;
+    }
+
+    let manifest = fs::read_to_string(log_dir.join("fragile_objz_manifest.txt"))
+        .expect("failed to read fragile_objz_manifest.txt");
     assert!(
-        !log_dir.join("fragile_objz_manifest.txt").exists(),
-        "OBJZ replay manifest should not be written when replay aborts before full OBJZ completion"
+        manifest.contains("replay_scope=OBJZ"),
+        "manifest should include replay scope: {}",
+        manifest
     );
+    assert!(
+        manifest.contains(&format!("replayed_count={}", ZLIB_OBJZ_OBJECTS.len())),
+        "manifest should include full OBJZ replay count: {}",
+        manifest
+    );
+    for object in ZLIB_OBJZ_OBJECTS {
+        assert!(
+            manifest.contains(&format!("object={}", object)),
+            "manifest should include OBJZ object {}: {}",
+            object,
+            manifest
+        );
+    }
 }
 
 #[test]

@@ -10,6 +10,12 @@ use std::ffi::{CStr, CString};
 use std::path::Path;
 use std::ptr;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParserLanguage {
+    Cpp,
+    C,
+}
+
 /// Parser that uses libclang to parse C++ source files.
 ///
 /// Always uses vendored libc++ from `vendor/llvm-project/libcxx/include/`.
@@ -23,6 +29,8 @@ pub struct ClangParser {
     defines: Vec<String>,
     /// Error patterns to ignore (substring matches)
     ignored_error_patterns: Vec<String>,
+    /// Parser language mode (`-x` / `-std`)
+    language: ParserLanguage,
 }
 
 impl ClangParser {
@@ -47,7 +55,16 @@ impl ClangParser {
         include_paths: Vec<String>,
         defines: Vec<String>,
     ) -> Result<Self> {
-        Self::with_vendored_libcxx_paths_and_defines(include_paths, defines)
+        Self::with_paths_defines_and_language(include_paths, defines, ParserLanguage::Cpp)
+    }
+
+    /// Create a new Clang parser with custom include paths, defines, and language mode.
+    pub fn with_paths_defines_and_language(
+        include_paths: Vec<String>,
+        defines: Vec<String>,
+        language: ParserLanguage,
+    ) -> Result<Self> {
+        Self::with_vendored_libcxx_paths_defines_and_language(include_paths, defines, language)
     }
 
     /// Create a new Clang parser with custom include paths, defines, and ignored errors (and vendored libc++).
@@ -56,7 +73,12 @@ impl ClangParser {
         defines: Vec<String>,
         ignored_error_patterns: Vec<String>,
     ) -> Result<Self> {
-        Self::with_vendored_libcxx_full_options(include_paths, defines, ignored_error_patterns)
+        Self::with_vendored_libcxx_full_options(
+            include_paths,
+            defines,
+            ignored_error_patterns,
+            ParserLanguage::Cpp,
+        )
     }
 
     /// Internal constructor with all options.
@@ -65,6 +87,7 @@ impl ClangParser {
         system_include_paths: Vec<String>,
         defines: Vec<String>,
         ignored_error_patterns: Vec<String>,
+        language: ParserLanguage,
     ) -> Result<Self> {
         unsafe {
             let index = clang_sys::clang_createIndex(0, 0);
@@ -77,6 +100,7 @@ impl ClangParser {
                 system_include_paths,
                 defines,
                 ignored_error_patterns,
+                language,
             })
         }
     }
@@ -149,20 +173,31 @@ impl ClangParser {
     ///
     /// Also requires `vendor/libcxx-config/` with `__config_site` and `__assertion_handler`.
     fn with_vendored_libcxx() -> Result<Self> {
-        Self::with_vendored_libcxx_full_options(Vec::new(), Vec::new(), Vec::new())
+        Self::with_vendored_libcxx_full_options(
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            ParserLanguage::Cpp,
+        )
     }
 
     /// Create a Clang parser with vendored libc++ and custom include paths.
     fn with_vendored_libcxx_and_paths(include_paths: Vec<String>) -> Result<Self> {
-        Self::with_vendored_libcxx_full_options(include_paths, Vec::new(), Vec::new())
+        Self::with_vendored_libcxx_full_options(
+            include_paths,
+            Vec::new(),
+            Vec::new(),
+            ParserLanguage::Cpp,
+        )
     }
 
     /// Create a Clang parser with vendored libc++ and custom include paths and defines.
-    fn with_vendored_libcxx_paths_and_defines(
+    fn with_vendored_libcxx_paths_defines_and_language(
         include_paths: Vec<String>,
         defines: Vec<String>,
+        language: ParserLanguage,
     ) -> Result<Self> {
-        Self::with_vendored_libcxx_full_options(include_paths, defines, Vec::new())
+        Self::with_vendored_libcxx_full_options(include_paths, defines, Vec::new(), language)
     }
 
     /// Create a Clang parser with vendored libc++ and all options.
@@ -170,6 +205,7 @@ impl ClangParser {
         include_paths: Vec<String>,
         mut defines: Vec<String>,
         ignored_error_patterns: Vec<String>,
+        language: ParserLanguage,
     ) -> Result<Self> {
         let vendored_path = Self::detect_vendored_libcxx_path().ok_or_else(|| {
             miette!(
@@ -191,26 +227,40 @@ impl ClangParser {
         // Add defines for libc++ compatibility
         defines.push("_LIBCPP_HAS_NO_PRAGMA_SYSTEM_HEADER".to_string());
 
-        Self::with_full_options(include_paths, system_paths, defines, ignored_error_patterns)
+        Self::with_full_options(
+            include_paths,
+            system_paths,
+            defines,
+            ignored_error_patterns,
+            language,
+        )
     }
 
     /// Build compiler arguments including include paths.
     fn build_compiler_args(&self) -> Vec<CString> {
-        let mut args = vec![
-            CString::new("-x").unwrap(),
-            CString::new("c++").unwrap(),
-            CString::new("-std=c++20").unwrap(),
-            // Suppress some warnings that may cause issues with system headers
-            CString::new("-w").unwrap(),
-            // Don't limit the number of errors
-            CString::new("-ferror-limit=0").unwrap(),
-            // Disable builtin limits on stack depth for templates
-            CString::new("-ftemplate-depth=1024").unwrap(),
-            // Always use libc++ (LLVM's C++ standard library)
-            CString::new("-stdlib=libc++").unwrap(),
-            // Disable default C++ includes so vendored libc++ is used
-            CString::new("-nostdinc++").unwrap(),
-        ];
+        let mut args = match self.language {
+            ParserLanguage::Cpp => vec![
+                CString::new("-x").unwrap(),
+                CString::new("c++").unwrap(),
+                CString::new("-std=c++20").unwrap(),
+                // Always use libc++ (LLVM's C++ standard library)
+                CString::new("-stdlib=libc++").unwrap(),
+                // Disable default C++ includes so vendored libc++ is used
+                CString::new("-nostdinc++").unwrap(),
+                // Disable builtin limits on stack depth for templates
+                CString::new("-ftemplate-depth=1024").unwrap(),
+            ],
+            ParserLanguage::C => vec![
+                CString::new("-x").unwrap(),
+                CString::new("c").unwrap(),
+                CString::new("-std=gnu11").unwrap(),
+            ],
+        };
+
+        // Suppress warnings to reduce noise from vendor/system headers.
+        args.push(CString::new("-w").unwrap());
+        // Don't limit the number of errors.
+        args.push(CString::new("-ferror-limit=0").unwrap());
 
         // Add system include paths first (-isystem for angle-bracket includes)
         for path in &self.system_include_paths {
@@ -4298,6 +4348,44 @@ mod tests {
             ClangNodeKind::TranslationUnit => {}
             _ => panic!("Expected TranslationUnit"),
         }
+    }
+
+    #[test]
+    fn test_parse_c_source_with_register_in_c_mode() {
+        let parser =
+            ClangParser::with_paths_defines_and_language(Vec::new(), Vec::new(), ParserLanguage::C)
+                .unwrap();
+        let ast = parser
+            .parse_string(
+                r#"
+                int c_register_fn(void) {
+                    register int value = 7;
+                    return value;
+                }
+                "#,
+                "test.c",
+            )
+            .unwrap();
+
+        assert!(matches!(
+            ast.translation_unit.kind,
+            ClangNodeKind::TranslationUnit
+        ));
+        let function = ast
+            .translation_unit
+            .children
+            .iter()
+            .find(|child| {
+                matches!(
+                    &child.kind,
+                    ClangNodeKind::FunctionDecl { name, .. } if name == "c_register_fn"
+                )
+            })
+            .expect("expected c_register_fn in translation unit");
+        assert!(
+            matches!(&function.kind, ClangNodeKind::FunctionDecl { .. }),
+            "expected FunctionDecl for c_register_fn"
+        );
     }
 
     #[test]
