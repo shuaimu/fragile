@@ -56,8 +56,10 @@ Run upstream-style tests through the Fragile transpiler with runtime parity:
             - Replay evidence (`/tmp/fragile_real_world_zlib_fragile_objz_objects/driver_logs/objz_deflate_o_transpiled.rs` + `rustc_objz_deflate_o.status`): `deflate` now emits explicit int casts on comparison assignments (e.g., `bflush = (((sym_next) == (sym_end))) as i32`), `rustc_objz_deflate_o.status` is `0`, and `rustc_objz_deflate_o.stderr` is empty.
           - [x] Fix enum/integer normalization in `infback` replay output (`inflate_mode` / `codetype` assignments and call arguments).
             - Replay evidence (`/tmp/fragile_real_world_zlib_fragile_objz_objects/driver_logs/objz_infback_o_transpiled.rs` + `rustc_objz_infback_o.stderr`): enum-typed assignments/call args now emit variants (e.g., `(*state).mode = inflate_mode::TYPE`, `inflate_table(codetype::CODES, ...)`), and enum mismatch diagnostics are cleared.
-          - [ ] Fix signedness normalization for `infback` state flags assignment (`(*state).last` expects `i32`, rhs currently `u32` bitmask expression).
-            - Current first blocker class (`/tmp/fragile_real_world_zlib_fragile_objz_objects/driver_logs/rustc_objz_infback_o.stderr`): `expected i32, found u32` at `(*state).last = (...)`.
+          - [x] Fix signedness normalization for `infback` state flags assignment (`(*state).last` expects `i32`, rhs currently `u32` bitmask expression).
+            - Replay evidence (`/tmp/fragile_real_world_zlib_fragile_objz_objects/driver_logs/rustc_objz_infback_o.status` + `rustc_objz_infback_o.stderr`): `infback` now compiles (`status` = `0`) and the `(*state).last` signedness diagnostic is cleared.
+          - [ ] Fix `inflate` replay cast/shift parse regression where casts are emitted without shift-safe parentheses (`value as u32 << (*state).bits` parsed as generic args).
+            - Current first blocker class (`/tmp/fragile_real_world_zlib_fragile_objz_objects/driver_logs/rustc_objz_inflate_o.stderr`): `expected mut or const keyword in raw pointer type` / `<< interpreted as generic arguments` at `objz_inflate_o_transpiled.rs:6914`.
     - [ ] Replay `OBJG` units through Fragile to `.o` outputs and validate object completeness.
   - [ ] Link transpiled static/shared test binaries used by upstream tests (`example`, `minigzip`, `examplesh`, `minigzipsh`, `example64`, `minigzip64`).
 - [ ] Make transpiled build pass zlib test commands used by upstream `make test`.

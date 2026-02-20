@@ -79,9 +79,23 @@ fn is_unsigned_rust_int_type(ty: &str) -> bool {
     matches!(ty, "u8" | "u16" | "u32" | "u64" | "u128" | "usize")
 }
 
-/// Check whether a Rust primitive type string is exactly u32 or u64.
-fn is_u32_u64_rust_int_type(ty: &str) -> bool {
-    matches!(ty, "u32" | "u64")
+/// Check whether a Rust primitive type string is an integral type (excluding bool).
+fn is_rust_integral_non_bool_type(ty: &str) -> bool {
+    matches!(
+        ty,
+        "i8"
+            | "i16"
+            | "i32"
+            | "i64"
+            | "i128"
+            | "isize"
+            | "u8"
+            | "u16"
+            | "u32"
+            | "u64"
+            | "u128"
+            | "usize"
+    )
 }
 
 /// Check whether a Rust type string is an Option-wrapped function pointer.
@@ -23504,22 +23518,9 @@ impl AstCodeGen {
                                 right_raw = casted;
                             }
                         }
-                        let left_is_integral_non_bool = left_rust_type.as_ref().is_some_and(|t| {
-                            matches!(
-                                t.as_str(),
-                                "i8" | "i16"
-                                    | "i32"
-                                    | "i64"
-                                    | "i128"
-                                    | "isize"
-                                    | "u8"
-                                    | "u16"
-                                    | "u32"
-                                    | "u64"
-                                    | "u128"
-                                    | "usize"
-                            )
-                        });
+                        let left_is_integral_non_bool = left_rust_type
+                            .as_ref()
+                            .is_some_and(|t| is_rust_integral_non_bool_type(t));
                         let right_is_bool = matches!(right_type, Some(CppType::Bool));
                         let right_is_boolish =
                             right_is_bool || Self::is_booleanish_expr_node(&node.children[1]);
@@ -23528,9 +23529,6 @@ impl AstCodeGen {
                                 right_raw = format!("({}) as {}", right_raw, lhs_ty);
                             }
                         }
-                        let left_needs_width_norm = left_rust_type
-                            .as_ref()
-                            .is_some_and(|t| is_u32_u64_rust_int_type(t));
                         let right_is_integral_non_bool =
                             (right_type
                                 .as_ref()
@@ -23540,7 +23538,13 @@ impl AstCodeGen {
                                     .is_some_and(|t| t.is_integral() == Some(true) && !matches!(t, CppType::Bool))
                                 || is_integer_literal_str(&right_raw))
                                 && !right_is_boolish;
-                        if left_needs_width_norm && right_is_integral_non_bool {
+                        let left_needs_width_norm = left_rust_type
+                            .as_ref()
+                            .is_some_and(|t| matches!(t.as_str(), "u32" | "u64"));
+                        let should_cast_integral_rhs = (matches!(op, BinaryOp::Assign)
+                            && left_is_integral_non_bool)
+                            || (!matches!(op, BinaryOp::Assign) && left_needs_width_norm);
+                        if should_cast_integral_rhs && right_is_integral_non_bool {
                             if let Some(ref lhs_ty) = left_rust_type {
                                 right_raw = format!("(({}) as {})", right_raw, lhs_ty);
                             }
@@ -23799,22 +23803,9 @@ impl AstCodeGen {
                                 right = casted;
                             }
                         }
-                        let left_is_integral_non_bool = left_rust_type.as_ref().is_some_and(|t| {
-                            matches!(
-                                t.as_str(),
-                                "i8" | "i16"
-                                    | "i32"
-                                    | "i64"
-                                    | "i128"
-                                    | "isize"
-                                    | "u8"
-                                    | "u16"
-                                    | "u32"
-                                    | "u64"
-                                    | "u128"
-                                    | "usize"
-                            )
-                        });
+                        let left_is_integral_non_bool = left_rust_type
+                            .as_ref()
+                            .is_some_and(|t| is_rust_integral_non_bool_type(t));
                         let right_is_bool = matches!(right_type, Some(CppType::Bool));
                         let right_is_boolish =
                             right_is_bool || Self::is_booleanish_expr_node(&node.children[1]);
@@ -23823,9 +23814,6 @@ impl AstCodeGen {
                                 right = format!("({}) as {}", right, lhs_ty);
                             }
                         }
-                        let left_needs_width_norm = left_rust_type
-                            .as_ref()
-                            .is_some_and(|t| is_u32_u64_rust_int_type(t));
                         let right_is_integral_non_bool =
                             (right_type
                                 .as_ref()
@@ -23835,7 +23823,13 @@ impl AstCodeGen {
                                     .is_some_and(|t| t.is_integral() == Some(true) && !matches!(t, CppType::Bool))
                                 || is_integer_literal_str(&right))
                                 && !right_is_boolish;
-                        if left_needs_width_norm && right_is_integral_non_bool {
+                        let left_needs_width_norm = left_rust_type
+                            .as_ref()
+                            .is_some_and(|t| matches!(t.as_str(), "u32" | "u64"));
+                        let should_cast_integral_rhs = (matches!(op, BinaryOp::Assign)
+                            && left_is_integral_non_bool)
+                            || (!matches!(op, BinaryOp::Assign) && left_needs_width_norm);
+                        if should_cast_integral_rhs && right_is_integral_non_bool {
                             if let Some(ref lhs_ty) = left_rust_type {
                                 right = format!("(({}) as {})", right, lhs_ty);
                             }
@@ -29108,6 +29102,139 @@ mod tests {
         assert!(
             code.contains("out = (a == b) as i32") || code.contains("out = ((a == b)) as i32"),
             "integer lvalue assignment from comparison should cast bool to i32, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_i32_member_assignment_from_unsigned_bitmask_is_casted() {
+        let state_ty = CppType::Named("inflate_state".to_string());
+        let state_ptr_ty = CppType::Pointer {
+            pointee: Box::new(state_ty.clone()),
+            is_const: false,
+        };
+        let hold_ty = CppType::Long { signed: false };
+
+        let assign_expr = make_node(
+            ClangNodeKind::BinaryOperator {
+                op: BinaryOp::Assign,
+                ty: CppType::Int { signed: true },
+            },
+            vec![
+                make_node(
+                    ClangNodeKind::MemberExpr {
+                        member_name: "last".to_string(),
+                        is_arrow: true,
+                        ty: CppType::Int { signed: true },
+                        declaring_class: None,
+                        is_static: false,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::DeclRefExpr {
+                            name: "state".to_string(),
+                            ty: state_ptr_ty.clone(),
+                            namespace_path: vec![],
+                        },
+                        vec![],
+                    )],
+                ),
+                make_node(
+                    ClangNodeKind::BinaryOperator {
+                        op: BinaryOp::And,
+                        ty: CppType::Int { signed: false },
+                    },
+                    vec![
+                        make_node(
+                            ClangNodeKind::CastExpr {
+                                ty: CppType::Int { signed: false },
+                                cast_kind: CastKind::IntegralCast,
+                            },
+                            vec![make_node(
+                                ClangNodeKind::DeclRefExpr {
+                                    name: "hold".to_string(),
+                                    ty: hold_ty.clone(),
+                                    namespace_path: vec![],
+                                },
+                                vec![],
+                            )],
+                        ),
+                        make_node(
+                            ClangNodeKind::IntegerLiteral {
+                                value: 1,
+                                cpp_type: Some(CppType::Int { signed: false }),
+                            },
+                            vec![],
+                        ),
+                    ],
+                ),
+            ],
+        );
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![
+                make_node(
+                    ClangNodeKind::RecordDecl {
+                        name: "inflate_state".to_string(),
+                        is_class: false,
+                        is_definition: true,
+                        fields: vec![],
+                    },
+                    vec![make_node(
+                        ClangNodeKind::FieldDecl {
+                            name: "last".to_string(),
+                            ty: CppType::Int { signed: true },
+                            access: crate::ast::AccessSpecifier::Public,
+                            is_static: false,
+                            bit_field_width: None,
+                        },
+                        vec![],
+                    )],
+                ),
+                make_node(
+                    ClangNodeKind::FunctionDecl {
+                        name: "set_last".to_string(),
+                        mangled_name: "set_last".to_string(),
+                        return_type: CppType::Int { signed: true },
+                        params: vec![
+                            ("state".to_string(), state_ptr_ty),
+                            ("hold".to_string(), hold_ty),
+                        ],
+                        is_definition: true,
+                        is_variadic: false,
+                        is_noexcept: false,
+                        is_coroutine: false,
+                        coroutine_info: None,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![
+                            make_node(ClangNodeKind::ExprStmt, vec![assign_expr]),
+                            make_node(
+                                ClangNodeKind::ReturnStmt,
+                                vec![make_node(
+                                    ClangNodeKind::IntegerLiteral {
+                                        value: 0,
+                                        cpp_type: Some(CppType::Int { signed: true }),
+                                    },
+                                    vec![],
+                                )],
+                            ),
+                        ],
+                    )],
+                ),
+            ],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        let assign_line = code
+            .lines()
+            .find(|line| line.contains("(*state).last ="))
+            .unwrap_or("");
+        assert!(
+            assign_line.contains("as i32"),
+            "expected unsigned bitmask RHS assigned to i32 member to be cast back to i32, got line:\n{}\nfull code:\n{}",
+            assign_line,
             code
         );
     }
