@@ -626,6 +626,14 @@ impl BitFieldGroup {
     }
 }
 
+#[derive(Clone, Debug)]
+struct MethodOverloadInfo {
+    rust_name: String,
+    param_types: Vec<CppType>,
+    return_type: CppType,
+    is_const: bool,
+}
+
 /// Rust code generator that works directly with Clang AST.
 pub struct AstCodeGen {
     output: String,
@@ -742,6 +750,11 @@ pub struct AstCodeGen {
     module_depth: usize,
     /// Track method names within current struct impl to handle overloads: name -> count
     current_struct_methods: HashMap<String, usize>,
+    /// Per-class method overload metadata used to resolve member call suffixes.
+    /// Key: class name (C++/Rust variants), Value: base method name -> overloads.
+    class_method_overloads: HashMap<String, HashMap<String, Vec<MethodOverloadInfo>>>,
+    /// Whether the currently-generated method is `const` in C++ terms.
+    current_method_is_const: bool,
     /// Merged namespace contents: path -> list of child node indices from all occurrences
     /// Used for two-pass namespace merging (C++ can reopen namespaces, Rust cannot)
     merged_namespace_children: HashMap<String, Vec<usize>>,
@@ -894,6 +907,8 @@ impl AstCodeGen {
             emitted_extern_c_functions: HashSet::new(),
             module_depth: 0,
             current_struct_methods: HashMap::new(),
+            class_method_overloads: HashMap::new(),
+            current_method_is_const: false,
             merged_namespace_children: HashMap::new(),
             collected_nodes: Vec::new(),
             template_definitions: HashMap::new(),
@@ -4320,7 +4335,7 @@ impl AstCodeGen {
             // For composite function names, use sanitize_identifier_for_composite
             // to avoid r# prefixes in function names like Class_vtable_type
             let base_method_name_for_fn = sanitize_identifier_for_composite(&entry.name);
-            let method_name = sanitize_identifier(&entry.name);
+            let base_method_name = sanitize_identifier(&entry.name);
 
             // Handle overloaded methods by adding suffix for duplicates
             let wrapper_key = format!("{}_vtable_{}", sanitized_class, base_method_name_for_fn);
@@ -4333,6 +4348,22 @@ impl AstCodeGen {
                 format!("{}_{}", base_method_name_for_fn, *count - 1)
             };
             let return_type = Self::sanitize_return_type(&entry.return_type.to_rust_type_str());
+            let entry_param_types: Vec<CppType> =
+                entry.params.iter().map(|(_, ty)| ty.clone()).collect();
+            let call_target_class = if is_inherited_from_abstract {
+                entry.declaring_class.as_str()
+            } else {
+                class_name.as_str()
+            };
+            let resolved_method_name = self
+                .select_method_overload_name(
+                    call_target_class,
+                    &base_method_name,
+                    entry_param_types.len(),
+                    Some((entry_param_types.as_slice(), &entry.return_type)),
+                    entry.is_const,
+                )
+                .unwrap_or(base_method_name);
 
             // Build parameter list
             let self_ptr = if entry.is_const {
@@ -4404,9 +4435,9 @@ impl AstCodeGen {
             if sanitized_class == sanitized_root {
                 // Same class, call directly
                 if args.is_empty() {
-                    self.writeln(&format!("(*this).{}()", method_name));
+                    self.writeln(&format!("(*this).{}()", resolved_method_name));
                 } else {
-                    self.writeln(&format!("(*this).{}({})", method_name, args));
+                    self.writeln(&format!("(*this).{}({})", resolved_method_name, args));
                 }
             } else {
                 // Different class, need to cast through pointer
@@ -4419,14 +4450,17 @@ impl AstCodeGen {
                 if is_inherited_from_abstract {
                     // Method is inherited from abstract base - call through __base
                     if args.is_empty() {
-                        self.writeln(&format!("(*derived).__base.{}()", method_name));
+                        self.writeln(&format!("(*derived).__base.{}()", resolved_method_name));
                     } else {
-                        self.writeln(&format!("(*derived).__base.{}({})", method_name, args));
+                        self.writeln(&format!(
+                            "(*derived).__base.{}({})",
+                            resolved_method_name, args
+                        ));
                     }
                 } else if args.is_empty() {
-                    self.writeln(&format!("(*derived).{}()", method_name));
+                    self.writeln(&format!("(*derived).{}()", resolved_method_name));
                 } else {
-                    self.writeln(&format!("(*derived).{}({})", method_name, args));
+                    self.writeln(&format!("(*derived).{}({})", resolved_method_name, args));
                 }
             }
 
@@ -8460,6 +8494,278 @@ impl AstCodeGen {
             }
             _ => None,
         }
+    }
+
+    /// Pre-register emitted method overload names for a class so member calls can
+    /// resolve to the correct Rust suffixed method during body generation.
+    fn register_class_method_overloads(
+        &mut self,
+        class_name: &str,
+        rust_name: &str,
+        children: &[ClangNode],
+    ) {
+        let mut method_counts: HashMap<String, usize> = HashMap::new();
+        let mut overloads: HashMap<String, Vec<MethodOverloadInfo>> = HashMap::new();
+
+        for child in children {
+            let ClangNodeKind::CXXMethodDecl {
+                name,
+                return_type,
+                params,
+                is_definition,
+                is_static,
+                is_const,
+                ..
+            } = &child.kind
+            else {
+                continue;
+            };
+
+            if !*is_definition {
+                continue;
+            }
+
+            let return_type_str = return_type.to_rust_type_str();
+            if Self::has_unresolved_template_placeholder(&return_type_str)
+                || params
+                    .iter()
+                    .any(|(_, t)| Self::has_unresolved_template_placeholder(&t.to_rust_type_str()))
+                || Self::has_unresolved_template_placeholder(class_name)
+            {
+                continue;
+            }
+
+            let returns_mut_ref = matches!(
+                return_type,
+                CppType::Reference {
+                    is_const: false,
+                    ..
+                }
+            );
+            let is_iterator_mutating_op = matches!(name.as_str(), "operator++" | "operator--");
+            let is_mutable_method = !*is_const || returns_mut_ref || is_iterator_mutating_op;
+
+            // Keep naming in sync with `generate_method`.
+            if name == "operator*" && params.is_empty() && !is_mutable_method {
+                continue;
+            }
+
+            let base_method_name = if name == "operator*" && params.is_empty() {
+                "op_deref".to_string()
+            } else if name == "operator->" {
+                "op_arrow".to_string()
+            } else {
+                sanitize_identifier(name)
+            };
+
+            let count = method_counts.entry(base_method_name.clone()).or_insert(0);
+            let rust_method_name = if *count == 0 {
+                *count += 1;
+                base_method_name.clone()
+            } else {
+                *count += 1;
+                format!("{}_{}", base_method_name, *count - 1)
+            };
+
+            overloads
+                .entry(base_method_name)
+                .or_default()
+                .push(MethodOverloadInfo {
+                    rust_name: rust_method_name,
+                    param_types: params.iter().map(|(_, ty)| ty.clone()).collect(),
+                    return_type: return_type.clone(),
+                    is_const: *is_const && !*is_static,
+                });
+        }
+
+        let class_key = class_name.to_string();
+        let rust_key = rust_name.to_string();
+
+        self.class_method_overloads
+            .insert(class_key, overloads.clone());
+        self.class_method_overloads.insert(rust_key, overloads);
+    }
+
+    fn get_class_method_overloads(
+        &self,
+        class_name: &str,
+    ) -> Option<&HashMap<String, Vec<MethodOverloadInfo>>> {
+        let rust_name = CppType::Named(class_name.to_string()).to_rust_type_str();
+
+        self.class_method_overloads
+            .get(class_name)
+            .or_else(|| self.class_method_overloads.get(&rust_name))
+    }
+
+    fn select_method_overload_name(
+        &self,
+        class_name: &str,
+        base_method_name: &str,
+        arg_count: usize,
+        signature: Option<(&[CppType], &CppType)>,
+        prefer_const: bool,
+    ) -> Option<String> {
+        let class_overloads = self.get_class_method_overloads(class_name)?;
+        let method_overloads = class_overloads.get(base_method_name)?;
+
+        let mut candidates: Vec<&MethodOverloadInfo> = method_overloads
+            .iter()
+            .filter(|entry| entry.param_types.len() == arg_count)
+            .collect();
+        if candidates.is_empty() {
+            return None;
+        }
+
+        let mut has_exact_signature = false;
+        if let Some((params, return_type)) = signature {
+            let signature_matches: Vec<&MethodOverloadInfo> = candidates
+                .iter()
+                .copied()
+                .filter(|entry| {
+                    entry.param_types.as_slice() == params && entry.return_type == *return_type
+                })
+                .collect();
+            if !signature_matches.is_empty() {
+                candidates = signature_matches;
+                has_exact_signature = true;
+            }
+        }
+
+        // Avoid guessing across ambiguous overloads when we don't have an exact signature match.
+        if candidates.len() > 1 && !has_exact_signature {
+            return None;
+        }
+
+        let selected = if prefer_const {
+            candidates
+                .iter()
+                .copied()
+                .find(|entry| entry.is_const)
+                .or_else(|| candidates.first().copied())
+        } else {
+            candidates
+                .iter()
+                .copied()
+                .find(|entry| !entry.is_const)
+                .or_else(|| candidates.first().copied())
+        }?;
+
+        Some(selected.rust_name.clone())
+    }
+
+    fn member_call_prefers_const(&self, member_expr: &ClangNode, func: &str) -> bool {
+        if let Some(base) = member_expr.children.first() {
+            let base_type = Self::get_original_expr_type(base).or_else(|| Self::get_expr_type(base));
+            if matches!(
+                base_type,
+                Some(CppType::Pointer { is_const: true, .. })
+                    | Some(CppType::Reference { is_const: true, .. })
+            ) {
+                return true;
+            }
+        }
+
+        if self.current_method_is_const {
+            let f = func.trim_start();
+            if f.starts_with("self.")
+                || f.starts_with("__self.")
+                || f.starts_with("(*self).")
+                || f.starts_with("(*__self).")
+                || f.starts_with("unsafe { (*self)")
+                || f.starts_with("unsafe { (*__self)")
+            {
+                return true;
+            }
+        }
+
+        false
+    }
+
+    fn rewrite_member_callee_name(func: &str, old_name: &str, new_name: &str) -> Option<String> {
+        if old_name == new_name {
+            return None;
+        }
+
+        let needle = format!(".{}", old_name);
+        let pos = func.rfind(&needle)?;
+        let suffix = &func[pos + needle.len()..];
+        if !suffix.is_empty() && !suffix.starts_with('}') && !suffix.starts_with(' ') {
+            return None;
+        }
+
+        let reserve = if new_name.len() >= old_name.len() {
+            func.len() + (new_name.len() - old_name.len())
+        } else {
+            func.len() - (old_name.len() - new_name.len())
+        };
+        let mut out = String::with_capacity(reserve);
+        out.push_str(&func[..pos]);
+        out.push('.');
+        out.push_str(new_name);
+        out.push_str(suffix);
+        Some(out)
+    }
+
+    fn resolve_member_call_overload_name(
+        &self,
+        callee: &ClangNode,
+        func: &str,
+        arg_count: usize,
+    ) -> Option<String> {
+        let member_expr = Self::find_member_expr(callee)?;
+        let ClangNodeKind::MemberExpr {
+            member_name,
+            declaring_class,
+            ty,
+            ..
+        } = &member_expr.kind
+        else {
+            return None;
+        };
+
+        let base_method_name = sanitize_identifier(member_name);
+        let signature = if let CppType::Function {
+            params,
+            return_type,
+            ..
+        } = ty
+        {
+            Some((params.as_slice(), return_type.as_ref()))
+        } else {
+            None
+        };
+        let mut class_candidates: Vec<String> = Vec::new();
+        if let Some(class_name) = declaring_class {
+            class_candidates.push(class_name.clone());
+        }
+        if let Some(base) = member_expr.children.first() {
+            if let Some(base_class) = Self::extract_class_name(&Self::get_original_expr_type(base))
+                .or_else(|| Self::extract_class_name(&Self::get_expr_type(base)))
+            {
+                class_candidates.push(base_class);
+            }
+        }
+
+        for class_name in class_candidates {
+            let prefer_const = self.member_call_prefers_const(member_expr, func);
+            if let Some(method_name) = self.select_method_overload_name(
+                &class_name,
+                &base_method_name,
+                arg_count,
+                signature,
+                prefer_const,
+            ) {
+                if let Some(rewritten) = Self::rewrite_member_callee_name(
+                    func,
+                    &base_method_name,
+                    &method_name,
+                ) {
+                    return Some(rewritten);
+                }
+            }
+        }
+
+        None
     }
 
     /// Get the path to access __vtable from a derived class pointer
@@ -15295,6 +15601,8 @@ impl AstCodeGen {
             })
             .collect();
 
+        self.register_class_method_overloads(name, &rust_name, children);
+
         // Check if we have bit fields that need accessor methods
         let has_bit_fields = self.bit_field_groups.contains_key(name);
 
@@ -20326,6 +20634,9 @@ impl AstCodeGen {
                 ));
                 self.indent += 1;
 
+                let old_method_is_const = self.current_method_is_const;
+                self.current_method_is_const = *is_const && !*is_static;
+
                 // Track return type for reference return handling
                 let old_return_type = self.current_return_type.take();
                 self.current_return_type = Some(return_type.clone());
@@ -20364,6 +20675,7 @@ impl AstCodeGen {
                 self.arr_vars = saved_arr_vars;
 
                 self.current_return_type = old_return_type;
+                self.current_method_is_const = old_method_is_const;
                 self.indent -= 1;
                 self.writeln("}");
                 self.writeln("");
@@ -26786,7 +27098,14 @@ impl AstCodeGen {
                         let func = self.expr_to_string(callee);
                         // Strip Some() wrapper if present - callee shouldn't be wrapped
                         // (FunctionToPointerDecay on callee is just a C++ technicality)
-                        let func = Self::strip_some_wrapper(&func);
+                        let mut func = Self::strip_some_wrapper(&func);
+                        if let Some(resolved) = self.resolve_member_call_overload_name(
+                            callee,
+                            &func,
+                            node.children.len().saturating_sub(1),
+                        ) {
+                            func = resolved;
+                        }
                         let is_fn_ptr_call = Self::is_function_pointer_variable(callee);
                         let param_types = Self::get_function_param_types(callee);
                         let args: Vec<String> = node.children[1..]
@@ -27230,7 +27549,14 @@ impl AstCodeGen {
                     let func = self.expr_to_string(&node.children[0]);
                     // Strip Some() wrapper if present - callee shouldn't be wrapped
                     // (FunctionToPointerDecay on callee is just a C++ technicality)
-                    let func = Self::strip_some_wrapper(&func);
+                    let mut func = Self::strip_some_wrapper(&func);
+                    if let Some(resolved) = self.resolve_member_call_overload_name(
+                        &node.children[0],
+                        &func,
+                        node.children.len().saturating_sub(1),
+                    ) {
+                        func = resolved;
+                    }
 
                     // `__builtin_assume` is hint-only. Skip argument lowering entirely
                     // to avoid cascading parse artifacts from macro-expanded conditions.
@@ -30043,6 +30369,287 @@ mod tests {
         let code = AstCodeGen::new().generate(&ast);
         assert!(code.contains("pub fn add(a: i32, b: i32) -> i32"));
         assert!(code.contains("return a + b"));
+    }
+
+    #[test]
+    fn test_member_call_rewrites_to_const_overload_for_self_receiver() {
+        let int_ty = CppType::Int { signed: true };
+        let foo_const_this = CppType::Pointer {
+            pointee: Box::new(CppType::Named("Foo".to_string())),
+            is_const: true,
+        };
+
+        let foo_record = make_node(
+            ClangNodeKind::RecordDecl {
+                name: "Foo".to_string(),
+                is_class: true,
+                is_definition: true,
+                fields: vec![],
+            },
+            vec![
+                make_node(
+                    ClangNodeKind::CXXMethodDecl {
+                        name: "bar".to_string(),
+                        return_type: int_ty.clone(),
+                        params: vec![],
+                        is_definition: true,
+                        is_static: false,
+                        is_virtual: false,
+                        is_pure_virtual: false,
+                        is_override: false,
+                        is_final: false,
+                        is_const: false,
+                        access: AccessSpecifier::Public,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![make_node(
+                            ClangNodeKind::ReturnStmt,
+                            vec![make_node(
+                                ClangNodeKind::IntegerLiteral {
+                                    value: 1,
+                                    cpp_type: Some(int_ty.clone()),
+                                },
+                                vec![],
+                            )],
+                        )],
+                    )],
+                ),
+                make_node(
+                    ClangNodeKind::CXXMethodDecl {
+                        name: "bar".to_string(),
+                        return_type: int_ty.clone(),
+                        params: vec![],
+                        is_definition: true,
+                        is_static: false,
+                        is_virtual: false,
+                        is_pure_virtual: false,
+                        is_override: false,
+                        is_final: false,
+                        is_const: true,
+                        access: AccessSpecifier::Public,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![make_node(
+                            ClangNodeKind::ReturnStmt,
+                            vec![make_node(
+                                ClangNodeKind::IntegerLiteral {
+                                    value: 2,
+                                    cpp_type: Some(int_ty.clone()),
+                                },
+                                vec![],
+                            )],
+                        )],
+                    )],
+                ),
+                make_node(
+                    ClangNodeKind::CXXMethodDecl {
+                        name: "call".to_string(),
+                        return_type: int_ty.clone(),
+                        params: vec![],
+                        is_definition: true,
+                        is_static: false,
+                        is_virtual: false,
+                        is_pure_virtual: false,
+                        is_override: false,
+                        is_final: false,
+                        is_const: true,
+                        access: AccessSpecifier::Public,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![make_node(
+                            ClangNodeKind::ReturnStmt,
+                            vec![make_node(
+                                ClangNodeKind::CallExpr {
+                                    ty: int_ty.clone(),
+                                    template_instantiation: None,
+                                },
+                                vec![make_node(
+                                    ClangNodeKind::MemberExpr {
+                                        member_name: "bar".to_string(),
+                                        is_arrow: false,
+                                        ty: CppType::Function {
+                                            return_type: Box::new(int_ty.clone()),
+                                            params: vec![],
+                                            is_variadic: false,
+                                        },
+                                        declaring_class: Some("Foo".to_string()),
+                                        is_static: false,
+                                    },
+                                    vec![make_node(
+                                        ClangNodeKind::CXXThisExpr {
+                                            ty: foo_const_this.clone(),
+                                        },
+                                        vec![],
+                                    )],
+                                )],
+                            )],
+                        )],
+                    )],
+                ),
+            ],
+        );
+
+        let ast = make_node(ClangNodeKind::TranslationUnit, vec![foo_record]);
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("pub fn bar(&mut self, ) -> i32"),
+            "expected non-const overload to be generated, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("pub fn bar_1(&self, ) -> i32"),
+            "expected const overload to be suffixed, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("return self.bar_1()"),
+            "const self-receiver call should target suffixed const overload, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_member_call_rewrites_to_const_overload_for_const_pointer_receiver() {
+        let int_ty = CppType::Int { signed: true };
+        let attr_ptr_const = CppType::Pointer {
+            pointee: Box::new(CppType::Named("Attr".to_string())),
+            is_const: true,
+        };
+
+        let attr_record = make_node(
+            ClangNodeKind::RecordDecl {
+                name: "Attr".to_string(),
+                is_class: true,
+                is_definition: true,
+                fields: vec![],
+            },
+            vec![
+                make_node(
+                    ClangNodeKind::CXXMethodDecl {
+                        name: "Query".to_string(),
+                        return_type: int_ty.clone(),
+                        params: vec![],
+                        is_definition: true,
+                        is_static: false,
+                        is_virtual: false,
+                        is_pure_virtual: false,
+                        is_override: false,
+                        is_final: false,
+                        is_const: false,
+                        access: AccessSpecifier::Public,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![make_node(
+                            ClangNodeKind::ReturnStmt,
+                            vec![make_node(
+                                ClangNodeKind::IntegerLiteral {
+                                    value: 1,
+                                    cpp_type: Some(int_ty.clone()),
+                                },
+                                vec![],
+                            )],
+                        )],
+                    )],
+                ),
+                make_node(
+                    ClangNodeKind::CXXMethodDecl {
+                        name: "Query".to_string(),
+                        return_type: int_ty.clone(),
+                        params: vec![],
+                        is_definition: true,
+                        is_static: false,
+                        is_virtual: false,
+                        is_pure_virtual: false,
+                        is_override: false,
+                        is_final: false,
+                        is_const: true,
+                        access: AccessSpecifier::Public,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![make_node(
+                            ClangNodeKind::ReturnStmt,
+                            vec![make_node(
+                                ClangNodeKind::IntegerLiteral {
+                                    value: 2,
+                                    cpp_type: Some(int_ty.clone()),
+                                },
+                                vec![],
+                            )],
+                        )],
+                    )],
+                ),
+            ],
+        );
+
+        let elem_record = make_node(
+            ClangNodeKind::RecordDecl {
+                name: "Elem".to_string(),
+                is_class: true,
+                is_definition: true,
+                fields: vec![],
+            },
+            vec![make_node(
+                ClangNodeKind::CXXMethodDecl {
+                    name: "call_attr".to_string(),
+                    return_type: int_ty.clone(),
+                    params: vec![("a".to_string(), attr_ptr_const.clone())],
+                    is_definition: true,
+                    is_static: false,
+                    is_virtual: false,
+                    is_pure_virtual: false,
+                    is_override: false,
+                    is_final: false,
+                    is_const: false,
+                    access: AccessSpecifier::Public,
+                },
+                vec![make_node(
+                    ClangNodeKind::CompoundStmt,
+                    vec![make_node(
+                        ClangNodeKind::ReturnStmt,
+                        vec![make_node(
+                            ClangNodeKind::CallExpr {
+                                ty: int_ty.clone(),
+                                template_instantiation: None,
+                            },
+                            vec![make_node(
+                                ClangNodeKind::MemberExpr {
+                                    member_name: "Query".to_string(),
+                                    is_arrow: true,
+                                    ty: CppType::Function {
+                                        return_type: Box::new(int_ty.clone()),
+                                        params: vec![],
+                                        is_variadic: false,
+                                    },
+                                    declaring_class: Some("Attr".to_string()),
+                                    is_static: false,
+                                },
+                                vec![make_node(
+                                    ClangNodeKind::DeclRefExpr {
+                                        name: "a".to_string(),
+                                        ty: attr_ptr_const.clone(),
+                                        namespace_path: vec![],
+                                    },
+                                    vec![],
+                                )],
+                            )],
+                        )],
+                    )],
+                )],
+            )],
+        );
+
+        let ast = make_node(ClangNodeKind::TranslationUnit, vec![attr_record, elem_record]);
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("(*a).Query_1()"),
+            "const pointer receiver should target const overload suffix, got:\n{}",
+            code
+        );
     }
 
     #[test]
