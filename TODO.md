@@ -175,7 +175,9 @@ Run upstream-style tests through the Fragile transpiler with runtime parity:
   - Evidence (`cargo test -p fragile-clang --test zlib_failure_repro_command_tests -- --nocapture && ./scripts/repro_zlib_failure.sh --print`, 2026-02-20): passes; wrapper command contract is tested and documented in `docs/zlib_failure_repro.md`.
 
 ## Phase 2: tinyxml2 (Starts only after Phase 1 exit)
-- [ ] Add pinned `tinyxml2` fixture checkout.
+- [x] Add pinned `tinyxml2` fixture checkout (`leethomason/tinyxml2` pinned to `9148bdf719e997d1f474be6bcc7943881046dba1`, v11.0.0).
+  - Analysis: scoped to a small (<500 LOC) fixture-bootstrap change by adding a dedicated tinyxml2 checkout helper/tests that enforce deterministic pinning, rewind-to-pin, and missing-required-file recovery behavior.
+  - Evidence (`cargo test -p fragile-clang --test real_world_tinyxml2_tests -- --nocapture && cargo test -p fragile-clang --test real_world_tinyxml2_tests test_real_world_tinyxml2_fixture_checkout_is_pinned -- --ignored --nocapture`, 2026-02-20): passes; local deterministic fixture checks and ignored real-world pinned checkout validation are both green.
 - [ ] Capture native baseline (`make test` / upstream equivalent test command).
 - [ ] Reuse the zlib harness pattern for transpiler-vs-native parity.
 - [ ] Ensure transpiled `tinyxml2` test binary passes upstream test scope.
