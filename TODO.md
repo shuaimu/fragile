@@ -15,8 +15,8 @@ Run upstream-style tests through the Fragile transpiler with runtime parity:
 
 ## Phase 1: zlib (Current Priority)
 - [x] Add pinned `zlib` fixture checkout in the real-world test harness (`madler/zlib` pinned to `51b7f2abdade71cd9bb0e7a373ef2610ec6f9daf`, v1.3.1).
-- [ ] Capture native baseline with upstream flow (`./configure && make test`).
-- [ ] Add transpiler driver path so `CC` in zlib build invokes Fragile flow.
+- [x] Capture native baseline with upstream flow (`./configure && make test`) via `real_world_zlib_tests` (logs captured under `/tmp/fragile_real_world_zlib_native_baseline/native_logs`).
+- [x] Add transpiler driver path so `CC` in zlib build invokes Fragile flow via a logging `CC` wrapper in `real_world_zlib_tests` (driver logs under `/tmp/fragile_real_world_zlib_cc_driver/driver_logs`).
 - [ ] Transpile and compile all required zlib objects and test binaries (`example`, `minigzip`, shared/static variants used by `make test`).
 - [ ] Make transpiled build pass zlib test commands used by upstream `make test`.
 - [ ] Add parity assertions vs native:
