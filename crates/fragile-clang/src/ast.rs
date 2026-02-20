@@ -192,6 +192,9 @@ pub enum ClangNodeKind {
         name: String,
         ty: CppType,
         has_init: bool,
+        /// C/C++ `static` storage class on this variable declaration.
+        /// For local variables, this means static storage duration.
+        is_static: bool,
     },
     /// Struct/class declaration
     RecordDecl {

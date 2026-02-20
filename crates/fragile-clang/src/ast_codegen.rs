@@ -606,9 +606,18 @@ pub struct AstCodeGen {
     /// Map from original variable name to prefixed global variable name
     /// This is needed to resolve DeclRefExpr references to globals with __gv_ prefix
     global_var_mapping: HashMap<String, String>,
+    /// Declared C++ type for each generated global variable name (`__gv_*`).
+    global_var_types: HashMap<String, CppType>,
     /// Local variables in current function (parameters and locals)
     /// Used to determine whether a DeclRefExpr should use local or global variable
     local_vars: HashSet<String>,
+    /// Function-scope static local variables in current function: source name -> generated static name.
+    /// These require `unsafe` access just like globals.
+    function_static_var_mapping: HashMap<String, String>,
+    /// Current function identifier used for generating unique local-static symbol names.
+    current_function_ident: Option<String>,
+    /// Monotonic counter for local-static symbol uniqueness.
+    function_static_counter: usize,
     /// Current namespace path during code generation (for relative path computation)
     /// Each entry is (namespace_name, is_inline) where is_inline indicates C++ inline namespaces
     current_namespace: Vec<(String, bool)>,
@@ -751,7 +760,11 @@ impl AstCodeGen {
             static_members: HashMap::new(),
             global_vars: HashSet::new(),
             global_var_mapping: HashMap::new(),
+            global_var_types: HashMap::new(),
             local_vars: HashSet::new(),
+            function_static_var_mapping: HashMap::new(),
+            current_function_ident: None,
+            function_static_counter: 0,
             current_namespace: Vec::new(),
             use_ctor_self: false,
             current_return_type: None,
@@ -11748,39 +11761,23 @@ impl AstCodeGen {
         self.writeln("pub mod fragile_runtime {");
         self.indent += 1;
         self.writeln("#[inline]");
-        // malloc/free with size header — C's free() doesn't take a size, so we store it
         self.writeln("pub unsafe fn fragile_malloc(size: usize) -> *mut () {");
         self.indent += 1;
-        self.writeln("let align = std::mem::align_of::<usize>();");
-        self.writeln("let header = std::mem::size_of::<usize>();");
-        self.writeln("let total = header + size.max(1);");
-        self.writeln("let layout = std::alloc::Layout::from_size_align(total, align).unwrap();");
-        self.writeln("let raw = std::alloc::alloc(layout);");
-        self.writeln("if raw.is_null() { std::alloc::handle_alloc_error(layout); }");
-        self.writeln("*(raw as *mut usize) = size;");
-        self.writeln("raw.add(header) as *mut ()");
+        self.writeln("c_malloc(size) as *mut ()");
         self.indent -= 1;
         self.writeln("}");
         self.writeln("#[inline]");
         self.writeln("pub unsafe fn fragile_free(ptr: *mut u8) {");
         self.indent += 1;
-        self.writeln("if !ptr.is_null() {");
-        self.indent += 1;
-        self.writeln("let header = std::mem::size_of::<usize>();");
-        self.writeln("let raw = ptr.sub(header);");
-        self.writeln("let size = *(raw as *const usize);");
-        self.writeln("let total = header + size.max(1);");
-        self.writeln("let align = std::mem::align_of::<usize>();");
-        self.writeln("let layout = std::alloc::Layout::from_size_align(total, align).unwrap();");
-        self.writeln("std::alloc::dealloc(raw, layout);");
-        self.indent -= 1;
-        self.writeln("}");
+        self.writeln("c_free(ptr as *mut std::ffi::c_void);");
         self.indent -= 1;
         self.writeln("}");
         self.writeln("unsafe extern \"C\" {");
         self.indent += 1;
+        self.writeln("#[link_name = \"malloc\"] fn c_malloc(size: usize) -> *mut std::ffi::c_void;");
         self.writeln("#[link_name = \"calloc\"] fn c_calloc(nmemb: usize, size: usize) -> *mut std::ffi::c_void;");
         self.writeln("#[link_name = \"realloc\"] fn c_realloc(ptr: *mut std::ffi::c_void, size: usize) -> *mut std::ffi::c_void;");
+        self.writeln("#[link_name = \"free\"] fn c_free(ptr: *mut std::ffi::c_void);");
         self.writeln("#[link_name = \"fopen\"] fn c_fopen(path: *const i8, mode: *const i8) -> *mut std::ffi::c_void;");
         self.writeln("#[link_name = \"fclose\"] fn c_fclose(stream: *mut std::ffi::c_void) -> i32;");
         self.writeln("#[link_name = \"fread\"] fn c_fread(ptr: *mut std::ffi::c_void, size: usize, nmemb: usize, stream: *mut std::ffi::c_void) -> usize;");
@@ -12749,7 +12746,12 @@ impl AstCodeGen {
             } => {
                 self.generate_type_alias(name, underlying_type);
             }
-            ClangNodeKind::VarDecl { name, ty, has_init } => {
+            ClangNodeKind::VarDecl {
+                name,
+                ty,
+                has_init,
+                ..
+            } => {
                 // Header-only declaration (typically `extern`) without initializer.
                 // Prefer emitting the definition from the `.c/.cc` translation unit.
                 if !*has_init
@@ -13322,6 +13324,9 @@ impl AstCodeGen {
         self.arr_vars.clear();
         // Track local variables (parameters) to avoid using global variable prefixes
         self.local_vars.clear();
+        self.function_static_var_mapping.clear();
+        self.function_static_counter = 0;
+        self.current_function_ident = Some(func_name.clone());
         for (param_name, param_type) in params {
             // Add parameter to local vars set
             self.local_vars.insert(sanitize_identifier(param_name));
@@ -13482,6 +13487,9 @@ impl AstCodeGen {
             self.writeln("}");
             self.writeln("");
         }
+
+        self.current_function_ident = None;
+        self.function_static_var_mapping.clear();
 
         // Generate Rust main wrapper for C++ main
         if is_main {
@@ -15608,6 +15616,7 @@ impl AstCodeGen {
         self.global_vars.insert(safe_name.clone());
         self.global_var_mapping
             .insert(base_name.clone(), safe_name.clone());
+        self.global_var_types.insert(safe_name.clone(), ty.clone());
         self.writeln(&format!("/// C++ global variable `{}`", name));
 
         // Get initial value if present
@@ -16815,6 +16824,65 @@ impl AstCodeGen {
             || e.starts_with("std::ptr::null_mut()")
     }
 
+    /// Apply array-to-pointer decay for expressions used by ImplicitCastExpr.
+    /// Returns None when no decay is needed.
+    fn decay_array_to_pointer_expr(
+        &self,
+        child: &ClangNode,
+        inner_expr: &str,
+        target_ty: &CppType,
+    ) -> Option<String> {
+        if Self::expr_string_is_pointer_value(inner_expr) {
+            return None;
+        }
+
+        let child_is_sized_array = Self::get_expr_type(child)
+            .as_ref()
+            .is_some_and(|t| matches!(t, CppType::Array { size: Some(_), .. }))
+            || Self::get_original_expr_type(child)
+                .as_ref()
+                .is_some_and(|t| matches!(t, CppType::Array { size: Some(_), .. }));
+        let base_name = self.get_raw_var_name(child);
+        let declared_global_array = base_name.as_ref().is_some_and(|name| {
+            self.global_var_types
+                .get(name)
+                .is_some_and(|t| matches!(t, CppType::Array { size: Some(_), .. }))
+        });
+        if !child_is_sized_array && !declared_global_array {
+            return None;
+        }
+
+        let mut base = base_name.unwrap_or_else(|| inner_expr.to_string());
+        if base.contains(" as ")
+            || base.starts_with("unsafe { ")
+            || base.contains(' ')
+            || base.starts_with('*')
+        {
+            base = format!("({})", base);
+        }
+
+        let ptr_expr = if declared_global_array {
+            // Global arrays are emitted as mutable statics; use mut pointer so
+            // both reads and writes through decayed expressions are valid.
+            format!("{}.as_mut_ptr()", base)
+        } else {
+            match target_ty {
+                CppType::Pointer { is_const: true, .. } => format!("{}.as_ptr()", base),
+                CppType::Pointer {
+                    is_const: false, ..
+                } => format!("{}.as_mut_ptr()", base),
+                _ => format!("{}.as_ptr()", base),
+            }
+        };
+
+        // Accessing mutable static arrays requires unsafe.
+        if ptr_expr.contains("__gv_") || ptr_expr.contains("__fsv_") {
+            Some(format!("unsafe {{ {} }}", ptr_expr))
+        } else {
+            Some(ptr_expr)
+        }
+    }
+
     /// Check whether a type resolves to a generated union type.
     fn is_union_named_type(&self, ty: &CppType) -> bool {
         if let Some(class_name) = Self::extract_class_name_from_type(ty) {
@@ -16864,6 +16932,9 @@ impl AstCodeGen {
         match &node.kind {
             ClangNodeKind::DeclRefExpr { name, .. } => {
                 let sanitized = sanitize_identifier(name);
+                if self.function_static_var_mapping.contains_key(&sanitized) {
+                    return true;
+                }
                 self.global_var_mapping.contains_key(&sanitized)
             }
             ClangNodeKind::ImplicitCastExpr { .. } | ClangNodeKind::Unknown(_) => {
@@ -16881,6 +16952,9 @@ impl AstCodeGen {
         match &node.kind {
             ClangNodeKind::DeclRefExpr { name, .. } => {
                 let sanitized = sanitize_identifier(name);
+                if let Some(mapped) = self.function_static_var_mapping.get(&sanitized) {
+                    return Some(mapped.clone());
+                }
                 // Check if this is a local variable (parameter or local declaration)
                 // Local variables shadow globals, so don't use the __gv_ prefix
                 if self.local_vars.contains(&sanitized) {
@@ -16902,6 +16976,22 @@ impl AstCodeGen {
             }
             _ => None,
         }
+    }
+
+    /// Generate a unique symbol name for a function-scope static local variable.
+    fn next_function_static_name(&mut self, var_name: &str) -> String {
+        let func = self
+            .current_function_ident
+            .as_deref()
+            .unwrap_or("__func");
+        let idx = self.function_static_counter;
+        self.function_static_counter += 1;
+        format!(
+            "__fsv_{}_{}_{}",
+            sanitize_identifier(func),
+            sanitize_identifier(var_name),
+            idx
+        )
     }
 
     /// Check if an expression is an array variable and get its identifier.
@@ -17426,6 +17516,18 @@ impl AstCodeGen {
         } else {
             unqual.to_string()
         }
+    }
+
+    /// If the expression is a single outer `unsafe { ... }` block,
+    /// return the inner expression text.
+    fn strip_outer_unsafe_block(expr: &str) -> Option<&str> {
+        let s = expr.trim();
+        let prefix = "unsafe {";
+        if !s.starts_with(prefix) || !s.ends_with('}') {
+            return None;
+        }
+        let inner = &s[prefix.len()..s.len() - 1];
+        Some(inner.trim())
     }
 
     /// Get the base access path for a member declared in a specific base class.
@@ -18004,15 +18106,27 @@ impl AstCodeGen {
     /// Find the va_list variable name in a function body.
     /// Looks for VarDecl with a va_list type.
     fn find_va_list_var_name(stmts: &[ClangNode]) -> Option<String> {
-        for stmt in stmts {
-            if let ClangNodeKind::DeclStmt = &stmt.kind {
-                for child in &stmt.children {
+        fn find_in_node(node: &ClangNode) -> Option<String> {
+            if let ClangNodeKind::DeclStmt = &node.kind {
+                for child in &node.children {
                     if let ClangNodeKind::VarDecl { name, ty, .. } = &child.kind {
-                        if Self::is_va_list_type(ty) {
+                        if AstCodeGen::is_va_list_type(ty) {
                             return Some(name.clone());
                         }
                     }
                 }
+            }
+            for child in &node.children {
+                if let Some(found) = find_in_node(child) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+
+        for stmt in stmts {
+            if let Some(found) = find_in_node(stmt) {
+                return Some(found);
             }
         }
         None
@@ -19322,7 +19436,13 @@ impl AstCodeGen {
             ClangNodeKind::DeclStmt => {
                 // Variable declaration
                 for child in &node.children {
-                    if let ClangNodeKind::VarDecl { name, ty, .. } = &child.kind {
+                    if let ClangNodeKind::VarDecl {
+                        name,
+                        ty,
+                        is_static,
+                        ..
+                    } = &child.kind
+                    {
                         // Skip va_list variable declarations in variadic functions
                         // The va_list is accessed through the named variadic parameter instead
                         if self.va_list_mapping.is_some() && Self::is_va_list_type(ty) {
@@ -19346,8 +19466,22 @@ impl AstCodeGen {
                             self.ptr_vars.insert(name.clone());
                         }
 
-                        // Track all local variables to avoid using global prefixes
-                        self.local_vars.insert(sanitize_identifier(name));
+                        let var_ident = sanitize_identifier(name);
+                        let static_local_name = if *is_static {
+                            if let Some(existing) = self.function_static_var_mapping.get(&var_ident)
+                            {
+                                existing.clone()
+                            } else {
+                                let generated = self.next_function_static_name(name);
+                                self.function_static_var_mapping
+                                    .insert(var_ident.clone(), generated.clone());
+                                generated
+                            }
+                        } else {
+                            // Track all local variables to avoid using global prefixes
+                            self.local_vars.insert(var_ident.clone());
+                            String::new()
+                        };
 
                         // Find the actual initializer, skipping reference nodes and type nodes
                         // ParmVarDecl nodes appear in function pointer VarDecls to describe parameter types
@@ -19482,7 +19616,8 @@ impl AstCodeGen {
                                             base
                                         };
                                         let rust_ty = ty.to_rust_type_str();
-                                        let is_global_base = base.contains("__gv_");
+                                        let is_global_base =
+                                            base.contains("__gv_") || base.contains("__fsv_");
                                         let ptr_inner = if rust_ty.starts_with("*const ") {
                                             format!("{}.as_ptr()", base)
                                         } else {
@@ -19714,13 +19849,17 @@ impl AstCodeGen {
                             }
                         }
 
-                        self.writeln(&format!(
-                            "let {}{}: {}{};",
-                            mut_kw,
-                            sanitize_identifier(name),
-                            final_type,
-                            final_init
-                        ));
+                        if *is_static {
+                            self.writeln(&format!(
+                                "static mut {}: {}{};",
+                                static_local_name, final_type, final_init
+                            ));
+                        } else {
+                            self.writeln(&format!(
+                                "let {}{}: {}{};",
+                                mut_kw, var_ident, final_type, final_init
+                            ));
+                        }
                     }
                 }
             }
@@ -19844,7 +19983,8 @@ impl AstCodeGen {
                                     } else {
                                         format!("{}.as_mut_ptr()", base)
                                     };
-                                    let ptr = if base.contains("__gv_") {
+                                    let ptr =
+                                        if base.contains("__gv_") || base.contains("__fsv_") {
                                         format!("unsafe {{ {} }}", ptr_inner)
                                     } else {
                                         ptr_inner
@@ -20309,72 +20449,79 @@ impl AstCodeGen {
         // Find the body (CompoundStmt with cases)
         let body = &node.children[1];
         if let ClangNodeKind::CompoundStmt = &body.kind {
-            // Process each case/default in the body
+            // Process each case/default while preserving non-case siblings
+            // as part of the current active arm.
             let mut current_values: Vec<i128> = Vec::new();
-            let mut case_body: Vec<&ClangNode> = Vec::new();
-
+            let mut current_body: Vec<&ClangNode> = Vec::new();
+            let mut in_default = false;
+            let mut default_body_to_emit: Option<Vec<&ClangNode>> = None;
             for child in &body.children {
                 match &child.kind {
                     ClangNodeKind::CaseStmt { value, .. } => {
-                        // If we have accumulated body statements, emit the previous case
-                        if !case_body.is_empty() && !current_values.is_empty() {
-                            self.emit_match_arm(&current_values, &case_body, &enum_name);
+                        // Emit any previous arm before starting a new case arm.
+                        if !current_values.is_empty() {
+                            self.emit_match_arm(&current_values, &current_body, &enum_name);
                             current_values.clear();
-                            case_body.clear();
+                            current_body.clear();
+                        } else if in_default {
+                            default_body_to_emit = Some(current_body.clone());
+                            current_body.clear();
+                            in_default = false;
                         }
 
                         current_values.push(*value);
 
-                        // Case children: the value literal, then the body statements
-                        // Body can be inside the CaseStmt as children after the literal
+                        // Case children include the label expression first, then
+                        // the actual substatement. Nested CaseStmt nodes represent
+                        // collapsed fallthrough labels (e.g. case 0: case 1: ...).
                         for (i, case_child) in child.children.iter().enumerate() {
-                            if i == 0
-                                && matches!(&case_child.kind, ClangNodeKind::IntegerLiteral { .. })
-                            {
-                                continue; // Skip the case value literal
+                            if i == 0 {
+                                continue;
                             }
-                            // Check for nested CaseStmt (fallthrough)
-                            if let ClangNodeKind::CaseStmt {
-                                value: nested_val, ..
-                            } = &case_child.kind
-                            {
-                                current_values.push(*nested_val);
-                                // Process nested case's children
-                                for (j, nested_child) in case_child.children.iter().enumerate() {
-                                    if j == 0
-                                        && matches!(
-                                            &nested_child.kind,
-                                            ClangNodeKind::IntegerLiteral { .. }
-                                        )
-                                    {
-                                        continue;
-                                    }
-                                    case_body.push(nested_child);
+                            match &case_child.kind {
+                                ClangNodeKind::CaseStmt { .. } => {
+                                    Self::collect_case_arm_parts(
+                                        case_child,
+                                        &mut current_values,
+                                        &mut current_body,
+                                    );
                                 }
-                            } else {
-                                case_body.push(case_child);
+                                _ => current_body.push(case_child),
                             }
                         }
                     }
                     ClangNodeKind::DefaultStmt => {
-                        // Emit previous case if any
+                        // Emit any previous case arm before starting default.
                         if !current_values.is_empty() {
-                            self.emit_match_arm(&current_values, &case_body, &enum_name);
+                            self.emit_match_arm(&current_values, &current_body, &enum_name);
                             current_values.clear();
-                            case_body.clear();
+                            current_body.clear();
+                        } else if in_default {
+                            default_body_to_emit = Some(current_body.clone());
+                            current_body.clear();
                         }
 
-                        // Collect default body
-                        let default_body: Vec<&ClangNode> = child.children.iter().collect();
-                        self.emit_default_arm(&default_body);
+                        in_default = true;
+                        current_body.extend(child.children.iter());
                     }
-                    _ => {}
+                    _ => {
+                        if !current_values.is_empty() || in_default {
+                            current_body.push(child);
+                        }
+                    }
                 }
             }
 
-            // Emit final case if any
+            // Emit final arm if any.
             if !current_values.is_empty() {
-                self.emit_match_arm(&current_values, &case_body, &enum_name);
+                self.emit_match_arm(&current_values, &current_body, &enum_name);
+            } else if in_default {
+                default_body_to_emit = Some(current_body.clone());
+            }
+
+            // C `default` can appear anywhere in source, but Rust `_` must be last.
+            if let Some(default_body) = default_body_to_emit {
+                self.emit_default_arm(&default_body);
             }
         }
 
@@ -20396,6 +20543,27 @@ impl AstCodeGen {
         self.indent -= 1;
         self.writeln("}");
         let _ = self.switch_loop_depth_stack.pop();
+    }
+
+    /// Collect values/body from a (possibly nested) CaseStmt subtree.
+    fn collect_case_arm_parts<'a>(
+        case_node: &'a ClangNode,
+        values: &mut Vec<i128>,
+        body: &mut Vec<&'a ClangNode>,
+    ) {
+        if let ClangNodeKind::CaseStmt { value, .. } = &case_node.kind {
+            values.push(*value);
+        }
+
+        for (i, child) in case_node.children.iter().enumerate() {
+            if i == 0 {
+                continue;
+            }
+            match &child.kind {
+                ClangNodeKind::CaseStmt { .. } => Self::collect_case_arm_parts(child, values, body),
+                _ => body.push(child),
+            }
+        }
     }
 
     /// Find the enum type name from CaseStmt children of a switch body.
@@ -20484,6 +20652,15 @@ impl AstCodeGen {
                 self.writeln(&format!("{};", inc));
             }
 
+            self.loop_depth -= 1;
+            self.indent -= 1;
+            self.writeln("}");
+        } else if node.children.len() == 1 {
+            // C-style infinite loop `for (;;) { ... }` may surface with only body child.
+            self.writeln("loop {");
+            self.indent += 1;
+            self.loop_depth += 1;
+            self.generate_for_body(&node.children[0], "");
             self.loop_depth -= 1;
             self.indent -= 1;
             self.writeln("}");
@@ -20804,10 +20981,13 @@ impl AstCodeGen {
                             // For pointer types, use .add(1)
                             if matches!(ty, CppType::Pointer { .. }) {
                                 if let Some(inner) = unwrap_outer_unsafe_expr(&operand) {
-                                    format!("unsafe {{ {} = {}.add(1); {} }}", inner, inner, inner)
+                                    format!(
+                                        "unsafe {{ {} = ({}).add(1); {} }}",
+                                        inner, inner, inner
+                                    )
                                 } else {
                                     format!(
-                                        "{{ {} = unsafe {{ {}.add(1) }}; {} }}",
+                                        "{{ {} = unsafe {{ ({}) .add(1) }}; {} }}",
                                         operand, operand, operand
                                     )
                                 }
@@ -20823,10 +21003,13 @@ impl AstCodeGen {
                             // For pointer types, use .sub(1)
                             if matches!(ty, CppType::Pointer { .. }) {
                                 if let Some(inner) = unwrap_outer_unsafe_expr(&operand) {
-                                    format!("unsafe {{ {} = {}.sub(1); {} }}", inner, inner, inner)
+                                    format!(
+                                        "unsafe {{ {} = ({}).sub(1); {} }}",
+                                        inner, inner, inner
+                                    )
                                 } else {
                                     format!(
-                                        "{{ {} = unsafe {{ {}.sub(1) }}; {} }}",
+                                        "{{ {} = unsafe {{ ({}) .sub(1) }}; {} }}",
                                         operand, operand, operand
                                     )
                                 }
@@ -20840,10 +21023,13 @@ impl AstCodeGen {
                             // For pointer types, use .add(1)
                             if matches!(ty, CppType::Pointer { .. }) {
                                 if let Some(inner) = unwrap_outer_unsafe_expr(&operand) {
-                                    format!("unsafe {{ let __v = {}; {} = {}.add(1); __v }}", inner, inner, inner)
+                                    format!(
+                                        "unsafe {{ let __v = {}; {} = ({}).add(1); __v }}",
+                                        inner, inner, inner
+                                    )
                                 } else {
                                     format!(
-                                        "{{ let __v = {}; {} = unsafe {{ {}.add(1) }}; __v }}",
+                                        "{{ let __v = {}; {} = unsafe {{ ({}) .add(1) }}; __v }}",
                                         operand, operand, operand
                                     )
                                 }
@@ -20857,10 +21043,13 @@ impl AstCodeGen {
                             // For pointer types, use .sub(1)
                             if matches!(ty, CppType::Pointer { .. }) {
                                 if let Some(inner) = unwrap_outer_unsafe_expr(&operand) {
-                                    format!("unsafe {{ let __v = {}; {} = {}.sub(1); __v }}", inner, inner, inner)
+                                    format!(
+                                        "unsafe {{ let __v = {}; {} = ({}).sub(1); __v }}",
+                                        inner, inner, inner
+                                    )
                                 } else {
                                     format!(
-                                        "{{ let __v = {}; {} = unsafe {{ {}.sub(1) }}; __v }}",
+                                        "{{ let __v = {}; {} = unsafe {{ ({}) .sub(1) }}; __v }}",
                                         operand, operand, operand
                                     )
                                 }
@@ -20961,6 +21150,15 @@ impl AstCodeGen {
                         CastKind::FunctionToPointerDecay => {
                             // Function to pointer decay - wrap in Some() for Option<fn(...)> type
                             format!("Some({})", inner)
+                        }
+                        CastKind::ArrayToPointerDecay => {
+                            if let Some(decayed) =
+                                self.decay_array_to_pointer_expr(child, &inner, ty)
+                            {
+                                decayed
+                            } else {
+                                inner
+                            }
                         }
                         _ => {
                             // Check for derived-to-base pointer cast for polymorphic types
@@ -21085,6 +21283,9 @@ impl AstCodeGen {
                     // Check if this is a global variable (already in unsafe context, no wrapper needed)
                     // Global variables are prefixed with __gv_ to avoid parameter shadowing
                     // But only if it's not a local variable (local vars shadow globals)
+                    if let Some(static_name) = self.function_static_var_mapping.get(&ident) {
+                        return static_name.clone();
+                    }
                     if !self.local_vars.contains(&ident) {
                         if let Some(prefixed_name) = self.global_var_mapping.get(&ident) {
                             return prefixed_name.clone();
@@ -21194,7 +21395,7 @@ impl AstCodeGen {
                 // For array subscript in raw context (inside unsafe block),
                 // generate pointer arithmetic without wrapping in unsafe
                 if node.children.len() >= 2 {
-                    let arr_raw = self.expr_to_string_raw(&node.children[0]);
+                    let mut arr_raw = self.expr_to_string_raw(&node.children[0]);
                     let idx = self.expr_to_string_raw(&node.children[1]);
                     // Check if the array expression is a pointer type
                     let arr_type = Self::get_expr_type(&node.children[0]);
@@ -21205,6 +21406,13 @@ impl AstCodeGen {
                         _ => self.is_ptr_var_expr(&node.children[0]),
                     };
                     if is_pointer {
+                        if let Some(arr_ty) = arr_type.as_ref() {
+                            if let Some(decayed) =
+                                self.decay_array_to_pointer_expr(&node.children[0], &arr_raw, arr_ty)
+                            {
+                                arr_raw = decayed;
+                            }
+                        }
                         let arr = if arr_raw.contains(" as ")
                             || arr_raw.starts_with("unsafe { ")
                             || arr_raw.contains(' ')
@@ -21895,6 +22103,9 @@ impl AstCodeGen {
                     // Check if this is a global variable (needs unsafe access)
                     // Global variables are prefixed with __gv_ to avoid parameter shadowing
                     // But only if it's not a local variable (local vars shadow globals)
+                    if let Some(static_name) = self.function_static_var_mapping.get(&ident) {
+                        return format!("unsafe {{ {} }}", static_name);
+                    }
                     if !self.local_vars.contains(&ident) {
                         if let Some(prefixed_name) = self.global_var_mapping.get(&ident) {
                             return format!("unsafe {{ {} }}", prefixed_name);
@@ -22261,7 +22472,8 @@ impl AstCodeGen {
                                     } else {
                                         format!("{}.as_mut_ptr()", base)
                                     };
-                                    let rhs_ptr = if base.contains("__gv_") {
+                                    let rhs_ptr =
+                                        if base.contains("__gv_") || base.contains("__fsv_") {
                                         format!("unsafe {{ {} }}", rhs_ptr_inner)
                                     } else {
                                         rhs_ptr_inner
@@ -22359,10 +22571,19 @@ impl AstCodeGen {
                                 left_for_assign.clone()
                             };
                             return match op {
-                                BinaryOp::Assign => format!(
-                                    "unsafe {{ {} = {}; {} }}",
-                                    left_for_assign, right_raw, left_for_assign
-                                ),
+                                BinaryOp::Assign => {
+                                    if left_for_assign.contains("let __v =") {
+                                        format!(
+                                            "unsafe {{ let __lhs: *mut _ = &mut ({}); *__lhs = {}; std::ptr::read(__lhs) }}",
+                                            left_for_assign, right_raw
+                                        )
+                                    } else {
+                                        format!(
+                                            "unsafe {{ {} = {}; {} }}",
+                                            left_for_assign, right_raw, left_for_assign
+                                        )
+                                    }
+                                }
                                 BinaryOp::AddAssign => format!(
                                     "unsafe {{ {} = {}.wrapping_add({}) }}",
                                     left_for_assign, left_for_read, right_raw
@@ -22383,10 +22604,17 @@ impl AstCodeGen {
                         }
 
                         if matches!(op, BinaryOp::Assign) {
-                            format!(
-                                "unsafe {{ {} = {}; {} }}",
-                                left_for_assign, right_raw, left_for_assign
-                            )
+                            if left_for_assign.contains("let __v =") {
+                                format!(
+                                    "unsafe {{ let __lhs: *mut _ = &mut ({}); *__lhs = {}; std::ptr::read(__lhs) }}",
+                                    left_for_assign, right_raw
+                                )
+                            } else {
+                                format!(
+                                    "unsafe {{ {} = {}; {} }}",
+                                    left_for_assign, right_raw, left_for_assign
+                                )
+                            }
                         } else {
                             format!("unsafe {{ {} {} {} }}", left_for_assign, op_str, right_raw)
                         }
@@ -22492,7 +22720,8 @@ impl AstCodeGen {
                                     } else {
                                         format!("{}.as_mut_ptr()", base)
                                     };
-                                    let rhs_ptr = if base.contains("__gv_") {
+                                    let rhs_ptr =
+                                        if base.contains("__gv_") || base.contains("__fsv_") {
                                         format!("unsafe {{ {} }}", rhs_ptr_inner)
                                     } else {
                                         rhs_ptr_inner
@@ -22581,7 +22810,12 @@ impl AstCodeGen {
                             };
                             return match op {
                                 BinaryOp::Assign => {
-                                    if assign_needs_unsafe {
+                                    if left_for_assign.contains("let __v =") {
+                                        format!(
+                                            "unsafe {{ let __lhs: *mut _ = &mut ({}); *__lhs = {}; std::ptr::read(__lhs) }}",
+                                            left_for_assign, right
+                                        )
+                                    } else if assign_needs_unsafe {
                                         format!(
                                             "unsafe {{ {} = {}; {} }}",
                                             left_for_assign, right, left_for_assign
@@ -22606,7 +22840,12 @@ impl AstCodeGen {
                             };
                         }
                         if matches!(op, BinaryOp::Assign) {
-                            if assign_needs_unsafe {
+                            if left_for_assign.contains("let __v =") {
+                                format!(
+                                    "unsafe {{ let __lhs: *mut _ = &mut ({}); *__lhs = {}; std::ptr::read(__lhs) }}",
+                                    left_for_assign, right
+                                )
+                            } else if assign_needs_unsafe {
                                 format!(
                                     "unsafe {{ {} = {}; {} }}",
                                     left_for_assign, right, left_for_assign
@@ -22714,7 +22953,9 @@ impl AstCodeGen {
                                 } else {
                                     format!("{}.as_ptr()", right_base)
                                 };
-                                let right_ptr = if right_base.contains("__gv_") {
+                                let right_ptr = if right_base.contains("__gv_")
+                                    || right_base.contains("__fsv_")
+                                {
                                     format!("unsafe {{ {} }}", right_ptr_inner)
                                 } else {
                                     right_ptr_inner
@@ -22749,7 +22990,9 @@ impl AstCodeGen {
                                 } else {
                                     format!("{}.as_ptr()", left_base)
                                 };
-                                let left_ptr = if left_base.contains("__gv_") {
+                                let left_ptr = if left_base.contains("__gv_")
+                                    || left_base.contains("__fsv_")
+                                {
                                     format!("unsafe {{ {} }}", left_ptr_inner)
                                 } else {
                                     left_ptr_inner
@@ -23579,7 +23822,7 @@ impl AstCodeGen {
                                         "sub"
                                     };
                                     format!(
-                                        "unsafe {{ {} = {}.{}(1); {} }}",
+                                        "unsafe {{ {} = ({}).{}(1); {} }}",
                                         raw_name, raw_name, method, raw_name
                                     )
                                 } else {
@@ -23598,10 +23841,13 @@ impl AstCodeGen {
                                     "sub"
                                 };
                                 if let Some(inner) = unwrap_outer_unsafe_expr(&operand) {
-                                    format!("unsafe {{ {} = {}.{}(1); {} }}", inner, inner, method, inner)
+                                    format!(
+                                        "unsafe {{ {} = ({}).{}(1); {} }}",
+                                        inner, inner, method, inner
+                                    )
                                 } else {
                                     format!(
-                                        "unsafe {{ {} = {}.{}(1); {} }}",
+                                        "unsafe {{ {} = ({}).{}(1); {} }}",
                                         operand, operand, method, operand
                                     )
                                 }
@@ -23632,7 +23878,7 @@ impl AstCodeGen {
                                         "sub"
                                     };
                                     format!(
-                                        "unsafe {{ let __v = {}; {} = {}.{}(1); __v }}",
+                                        "unsafe {{ let __v = {}; {} = ({}).{}(1); __v }}",
                                         raw_name, raw_name, raw_name, method
                                     )
                                 } else {
@@ -23654,10 +23900,13 @@ impl AstCodeGen {
                                     "sub"
                                 };
                                 if let Some(inner) = unwrap_outer_unsafe_expr(&operand) {
-                                    format!("unsafe {{ let __v = {}; {} = {}.{}(1); __v }}", inner, inner, inner, method)
+                                    format!(
+                                        "unsafe {{ let __v = {}; {} = ({}).{}(1); __v }}",
+                                        inner, inner, inner, method
+                                    )
                                 } else {
                                     format!(
-                                        "unsafe {{ let __v = {}; {} = {}.{}(1); __v }}",
+                                        "unsafe {{ let __v = {}; {} = ({}).{}(1); __v }}",
                                         operand, operand, operand, method
                                     )
                                 }
@@ -24346,7 +24595,8 @@ impl AstCodeGen {
                                                 } else {
                                                     base_raw
                                                 };
-                                                let is_global_base = base.contains("__gv_");
+                                                let is_global_base = base.contains("__gv_")
+                                                    || base.contains("__fsv_");
                                                 let decayed_inner = if target_is_const {
                                                     format!("{}.as_ptr()", base)
                                                 } else {
@@ -24465,7 +24715,7 @@ impl AstCodeGen {
                                             base_raw
                                         };
                                         let decayed_inner = format!("{}.as_ptr()", base);
-                                        if base.contains("__gv_") {
+                                        if base.contains("__gv_") || base.contains("__fsv_") {
                                             format!("unsafe {{ {} }}", decayed_inner)
                                         } else {
                                             decayed_inner
@@ -24780,7 +25030,8 @@ impl AstCodeGen {
                                             } else {
                                                 base_raw
                                             };
-                                            let is_global_base = base.contains("__gv_");
+                                            let is_global_base = base.contains("__gv_")
+                                                || base.contains("__fsv_");
                                             let decayed_inner = if target_is_const {
                                                 format!("{}.as_ptr()", base)
                                             } else {
@@ -24988,7 +25239,7 @@ impl AstCodeGen {
                                         base_raw
                                     };
                                     let decayed_inner = format!("{}.as_ptr()", base);
-                                    if base.contains("__gv_") {
+                                    if base.contains("__gv_") || base.contains("__fsv_") {
                                         format!("unsafe {{ {} }}", decayed_inner)
                                     } else {
                                         decayed_inner
@@ -25023,6 +25274,7 @@ impl AstCodeGen {
                             args[1] = format!("({}) as usize", args[1]);
                         } else if runtime_func.ends_with("fragile_realloc") && args.len() >= 2 {
                             // realloc(ptr, size)
+                            args[0] = format!("({}) as *mut u8", args[0]);
                             args[1] = format!("({}) as usize", args[1]);
                         } else if runtime_func.ends_with("fragile_free") && !args.is_empty() {
                             // free(ptr) — cast pointer to *mut u8
@@ -25607,15 +25859,20 @@ impl AstCodeGen {
                             // since Rust's '*' and 'as' have lower precedence than '.'
                             // - `*x.y` means `*(x.y)` in Rust, we want `(*x).y`
                             // - `x as T.y` is invalid, we want `(x as T).y`
+                            let base_for_union = if base_is_union {
+                                Self::strip_outer_unsafe_block(&base).unwrap_or(base.as_str())
+                            } else {
+                                base.as_str()
+                            };
                             if base.starts_with('*') || base.contains(" as ") {
                                 if base_is_union {
-                                    format!("unsafe {{ ({}).{} }}", base, member)
+                                    format!("unsafe {{ ({}).{} }}", base_for_union, member)
                                 } else {
                                     format!("({}).{}", base, member)
                                 }
                             } else {
                                 if base_is_union {
-                                    format!("unsafe {{ {}.{} }}", base, member)
+                                    format!("unsafe {{ ({}).{} }}", base_for_union, member)
                                 } else {
                                     format!("{}.{}", base, member)
                                 }
@@ -25681,6 +25938,7 @@ impl AstCodeGen {
                     // Check if the array expression is a pointer type
                     // (also check for unsized arrays which decay to pointers)
                     let arr_type = Self::get_expr_type(&node.children[0]);
+                    let mut arr_expr = self.expr_to_string(&node.children[0]);
                     let is_pointer = match arr_type {
                         Some(CppType::Pointer { .. }) => true,
                         Some(CppType::Array { size: None, .. }) => true,
@@ -25689,7 +25947,14 @@ impl AstCodeGen {
                     };
 
                     if is_pointer {
-                        let arr = self.expr_to_string(&node.children[0]);
+                        if let Some(arr_ty) = arr_type.as_ref() {
+                            if let Some(decayed) = self
+                                .decay_array_to_pointer_expr(&node.children[0], &arr_expr, arr_ty)
+                            {
+                                arr_expr = decayed;
+                            }
+                        }
+                        let arr = arr_expr;
                         // Parenthesize if arr contains a cast (`as`) since Rust's `as` has lower
                         // precedence than method calls, and `ptr as T.add()` is invalid
                         let arr = if arr.contains(" as ")
@@ -25716,11 +25981,11 @@ impl AstCodeGen {
                         // For true global arrays (not pointers), index directly in unsafe.
                         let raw_name = self
                             .get_raw_var_name(&node.children[0])
-                            .unwrap_or_else(|| self.expr_to_string(&node.children[0]));
+                            .unwrap_or(arr_expr);
                         // Parenthesize idx to handle operator precedence (e.g., size_ - 1 as usize)
                         format!("unsafe {{ {}[({}) as usize] }}", raw_name, idx)
                     } else {
-                        let arr = self.expr_to_string(&node.children[0]);
+                        let arr = arr_expr;
                         // Parenthesize if arr contains a cast (`as`) since Rust's `as` has lower
                         // precedence than indexing, and `ptr as T[idx]` is invalid
                         let arr = if arr.contains(" as ")
@@ -25806,7 +26071,9 @@ impl AstCodeGen {
                                         } else {
                                             format!("{}.as_mut_ptr()", base)
                                         };
-                                        let ptr = if base.contains("__gv_") {
+                                        let ptr = if base.contains("__gv_")
+                                            || base.contains("__fsv_")
+                                        {
                                             format!("unsafe {{ {} }}", ptr_inner)
                                         } else {
                                             ptr_inner
@@ -25931,6 +26198,15 @@ impl AstCodeGen {
                         CastKind::FunctionToPointerDecay => {
                             // Function to pointer decay - wrap in Some() for Option<fn(...)> type
                             format!("Some({})", inner)
+                        }
+                        CastKind::ArrayToPointerDecay => {
+                            if let Some(decayed) =
+                                self.decay_array_to_pointer_expr(child, &inner, ty)
+                            {
+                                decayed
+                            } else {
+                                inner
+                            }
                         }
                         CastKind::NullToPointer => {
                             // Integer 0 to pointer - use std::ptr::null() or null_mut()
@@ -26065,7 +26341,8 @@ impl AstCodeGen {
                             } else {
                                 base
                             };
-                            let is_global_base = base.contains("__gv_");
+                            let is_global_base =
+                                base.contains("__gv_") || base.contains("__fsv_");
                             let ptr_inner = if rust_type.starts_with("*const ") {
                                 format!("{}.as_ptr()", base)
                             } else {

@@ -873,7 +873,12 @@ impl ClangParser {
                     } else {
                         // Regular variable declaration
                         let has_init = false; // Will be determined by children
-                        ClangNodeKind::VarDecl { name, ty, has_init }
+                        ClangNodeKind::VarDecl {
+                            name,
+                            ty,
+                            has_init,
+                            is_static,
+                        }
                     }
                 }
 

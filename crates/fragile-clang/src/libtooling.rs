@@ -487,7 +487,12 @@ fn convert_node_with_depth(
             let name = node.get_string(0).unwrap_or("").to_string();
             let ty = extract_type_from_node(ctx, node);
             let has_init = node.children.iter().any(|c| c.is_some());
-            ClangNodeKind::VarDecl { name, ty, has_init }
+            ClangNodeKind::VarDecl {
+                name,
+                ty,
+                has_init,
+                is_static: false,
+            }
         }
 
         ASTEntryTag::TagUnaryOperator => {
@@ -669,6 +674,7 @@ fn convert_node_with_depth(
                 name,
                 ty,
                 has_init: false,
+                is_static: false,
             }
         }
 
