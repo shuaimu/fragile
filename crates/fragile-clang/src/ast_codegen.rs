@@ -765,6 +765,10 @@ pub struct AstCodeGen {
     anon_union_defs: HashMap<String, Vec<(String, CppType)>>,
     /// Set of Rust union type names generated in this translation unit.
     union_types: HashSet<String>,
+    /// Recovered member layouts for unnamed unions referenced by type but lacking
+    /// explicit UnionDecl definitions in the AST.
+    /// Key: generated Rust union type name, Value: (field_name, field_type) list.
+    missing_union_member_types: HashMap<String, Vec<(String, CppType)>>,
     /// Current nested loop depth (`while`, `for`, `do`, range-for).
     loop_depth: usize,
     /// Stack of loop depths at each enclosing switch statement entry.
@@ -860,6 +864,7 @@ impl AstCodeGen {
             generated_top_level_consts: HashSet::new(),
             anon_union_defs: HashMap::new(),
             union_types: HashSet::new(),
+            missing_union_member_types: HashMap::new(),
             loop_depth: 0,
             switch_loop_depth_stack: Vec::new(),
         }
@@ -872,6 +877,81 @@ impl AstCodeGen {
         bodies: HashMap<(String, String), Vec<crate::libtooling::MethodInfo>>,
     ) {
         self.libtooling_method_bodies = bodies;
+    }
+
+    /// Return true when a nested union declaration corresponds to a named field type
+    /// in the same record, which requires emitting a concrete union definition.
+    fn record_has_field_backed_by_union(children: &[ClangNode], union_name: &str) -> bool {
+        let normalized = union_name.trim();
+        if normalized.is_empty() {
+            return false;
+        }
+
+        let mut candidate_cpp_names = vec![normalized.to_string()];
+        if let Some(stripped) = normalized.strip_prefix("union ") {
+            candidate_cpp_names.push(stripped.trim().to_string());
+        } else {
+            candidate_cpp_names.push(format!("union {}", normalized));
+        }
+
+        let candidate_rust_names: HashSet<String> = candidate_cpp_names
+            .into_iter()
+            .filter(|n| !n.is_empty())
+            .map(|n| CppType::Named(n).to_rust_type_str())
+            .collect();
+
+        children.iter().any(|child| {
+            if let ClangNodeKind::FieldDecl { ty, .. } = &child.kind {
+                candidate_rust_names.contains(&ty.to_rust_type_str())
+            } else {
+                false
+            }
+        })
+    }
+
+    /// True when a lowered type name can safely be used as a Rust item identifier.
+    fn is_valid_rust_item_identifier(name: &str) -> bool {
+        if name.is_empty() || name == "_" || name == "()" {
+            return false;
+        }
+        if Self::is_primitive_type_name(name) {
+            return false;
+        }
+        if name.contains("::")
+            || name.contains('<')
+            || name.contains('>')
+            || name.contains('[')
+            || name.contains(']')
+            || name.contains('*')
+            || name.contains('&')
+            || name.contains(' ')
+            || name.contains(',')
+            || name.contains('(')
+            || name.contains(')')
+        {
+            return false;
+        }
+
+        let mut chars = name.chars();
+        let Some(first) = chars.next() else {
+            return false;
+        };
+        if !(first == '_' || first.is_ascii_alphabetic()) {
+            return false;
+        }
+        name.chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '#')
+    }
+
+    /// Use CppType lowering for union names when possible (needed for unnamed unions),
+    /// but avoid invalid item names like `()` from placeholder lowering.
+    fn union_decl_rust_name(name: &str) -> String {
+        let lowered = CppType::Named(name.to_string()).to_rust_type_str();
+        if Self::is_valid_rust_item_identifier(&lowered) {
+            lowered
+        } else {
+            sanitize_identifier(name)
+        }
     }
 
     /// Resolve bare enum constants (e.g., `algo_xxh64`) to qualified Rust paths
@@ -2251,6 +2331,7 @@ impl AstCodeGen {
             self.collect_unsafe_function_names(ast);
             self.collect_defined_function_names(ast);
             self.collect_anon_union_defs(ast);
+            self.collect_missing_union_member_types(ast);
         }
         self.compute_virtual_bases();
         self.build_all_vtables();
@@ -2948,6 +3029,42 @@ impl AstCodeGen {
                 // Only use real fields if we have non-padding fields
                 info.field_types.keys().any(|k| !k.contains("padding"))
             });
+
+            let recovered_union_fields = self
+                .missing_union_member_types
+                .get(&rust_name)
+                .cloned()
+                .filter(|fields| !fields.is_empty());
+            if let Some(union_fields) = recovered_union_fields {
+                self.writeln(&format!("/// Recovered union for C++ `{}`", cpp_name));
+                self.writeln("#[repr(C)]");
+                self.writeln("#[derive(Copy, Clone)]");
+                self.writeln(&format!("pub union {} {{", rust_name));
+                self.indent += 1;
+                for (field_name, field_ty) in &union_fields {
+                    self.writeln(&format!(
+                        "pub {}: {},",
+                        field_name,
+                        field_ty.to_rust_type_str_for_field()
+                    ));
+                }
+                self.indent -= 1;
+                self.writeln("}");
+                self.writeln("");
+                self.writeln(&format!("impl Default for {} {{", rust_name));
+                self.indent += 1;
+                self.writeln("fn default() -> Self {");
+                self.indent += 1;
+                self.writeln("unsafe { std::mem::zeroed() }");
+                self.indent -= 1;
+                self.writeln("}");
+                self.indent -= 1;
+                self.writeln("}");
+                self.writeln("");
+                self.generated_structs.insert(rust_name.clone());
+                self.union_types.insert(rust_name.clone());
+                continue;
+            }
 
             self.writeln(&format!("/// Placeholder for C++ `{}`", cpp_name));
             self.writeln("#[repr(C)]");
@@ -12452,6 +12569,19 @@ impl AstCodeGen {
         }
         self.generated_structs.insert(rust_name.clone());
 
+        // Emit nested union declarations when a named field in this record uses that
+        // union type (e.g., `union { ... } fc;` in zlib's `ct_data_s`).
+        for child in children {
+            if let ClangNodeKind::UnionDecl {
+                name: union_name, ..
+            } = &child.kind
+            {
+                if Self::record_has_field_backed_by_union(children, union_name) {
+                    self.generate_union_stub(union_name, &child.children);
+                }
+            }
+        }
+
         let kind = if is_class { "class" } else { "struct" };
         self.writeln(&format!("/// C++ {} `{}`", kind, name));
         self.writeln("#[repr(C)]");
@@ -12679,9 +12809,9 @@ impl AstCodeGen {
 
     /// Generate a union stub (fields only).
     fn generate_union_stub(&mut self, name: &str, children: &[ClangNode]) {
-        // For union DEFINITIONS, use sanitize_identifier() instead of to_rust_type_str()
-        // sanitize_identifier properly escapes Rust keywords with r#
-        let rust_name = sanitize_identifier(name);
+        // Keep unnamed-union compatibility with field-type lowering while falling back
+        // to a sanitized identifier for invalid lowered item names (e.g., `type` -> `()`).
+        let rust_name = Self::union_decl_rust_name(name);
 
         // Skip if already generated
         if self.generated_structs.contains(&rust_name) {
@@ -14083,6 +14213,19 @@ impl AstCodeGen {
         }
 
         self.generated_structs.insert(rust_name.clone());
+
+        // Emit nested union declarations when a named field in this record uses that
+        // union type (e.g., `union { ... } fc;` in zlib's `ct_data_s`).
+        for child in children {
+            if let ClangNodeKind::UnionDecl {
+                name: union_name, ..
+            } = &child.kind
+            {
+                if Self::record_has_field_backed_by_union(children, union_name) {
+                    self.generate_union(union_name, &child.children);
+                }
+            }
+        }
 
         // Check if there's an explicit copy constructor - if so, we'll generate Clone impl later
         // Otherwise, derive Clone along with Default
@@ -15621,11 +15764,9 @@ impl AstCodeGen {
 
     /// Generate a Rust union from a C++ union declaration.
     fn generate_union(&mut self, name: &str, children: &[ClangNode]) {
-        // For union DEFINITIONS, use sanitize_identifier() instead of to_rust_type_str()
-        // to_rust_type_str() maps some types to primitives (e.g., type -> void)
-        // which is wrong for union definitions - we want the actual union name
-        // sanitize_identifier also properly escapes Rust keywords with r#
-        let rust_name = sanitize_identifier(name);
+        // Keep unnamed-union compatibility with field-type lowering while falling back
+        // to a sanitized identifier for invalid lowered item names (e.g., `type` -> `()`).
+        let rust_name = Self::union_decl_rust_name(name);
 
         // Skip if already generated as struct/union
         if self.generated_structs.contains(&rust_name) {
@@ -17537,6 +17678,46 @@ impl AstCodeGen {
         }
         for child in &node.children {
             self.collect_anon_union_defs(child);
+        }
+    }
+
+    /// Recover unnamed-union member layouts from member-expression usage when explicit
+    /// UnionDecl definitions are unavailable in the exported AST.
+    fn collect_missing_union_member_types(&mut self, node: &ClangNode) {
+        if let ClangNodeKind::MemberExpr {
+            member_name,
+            ty: member_ty,
+            ..
+        } = &node.kind
+        {
+            if let Some(base_expr) = node.children.first() {
+                if let Some(CppType::Named(base_name)) = Self::get_expr_type(base_expr) {
+                    let normalized = base_name
+                        .trim_start_matches("const ")
+                        .trim_start_matches("volatile ")
+                        .trim();
+                    if normalized.contains("unnamed union at") {
+                        let rust_union_name = CppType::Named(normalized.to_string()).to_rust_type_str();
+                        if !rust_union_name.is_empty()
+                            && !rust_union_name.starts_with('*')
+                            && !rust_union_name.starts_with('&')
+                            && !Self::is_primitive_type_name(&rust_union_name)
+                        {
+                            let field_name = sanitize_identifier(member_name);
+                            let entry = self
+                                .missing_union_member_types
+                                .entry(rust_union_name)
+                                .or_default();
+                            if !entry.iter().any(|(name, _)| name == &field_name) {
+                                entry.push((field_name, member_ty.clone()));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        for child in &node.children {
+            self.collect_missing_union_member_types(child);
         }
     }
 
@@ -29822,6 +30003,117 @@ mod tests {
             w_size_assign_line.contains(" as u32)"),
             "u32 field assignment should normalize shift/math rhs width, got line:\n{}\nfull code:\n{}",
             w_size_assign_line,
+            code
+        );
+    }
+
+    #[test]
+    fn test_named_field_backed_by_nested_unnamed_union_emits_real_union_fields() {
+        let union_name = "union (unnamed union at /tmp/deflate.h:73:5)".to_string();
+        let union_ty = CppType::Named(union_name.clone());
+        let rust_union_name = union_ty.to_rust_type_str();
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![make_node(
+                ClangNodeKind::RecordDecl {
+                    name: "ct_data_s".to_string(),
+                    is_class: false,
+                    is_definition: true,
+                    fields: vec![],
+                },
+                vec![
+                    make_node(
+                        ClangNodeKind::FieldDecl {
+                            name: "fc".to_string(),
+                            ty: union_ty.clone(),
+                            access: crate::ast::AccessSpecifier::Public,
+                            is_static: false,
+                            bit_field_width: None,
+                        },
+                        vec![],
+                    ),
+                    make_node(
+                        ClangNodeKind::UnionDecl {
+                            name: union_name,
+                            fields: vec![],
+                        },
+                        vec![
+                            make_node(
+                                ClangNodeKind::FieldDecl {
+                                    name: "freq".to_string(),
+                                    ty: CppType::Short { signed: false },
+                                    access: crate::ast::AccessSpecifier::Public,
+                                    is_static: false,
+                                    bit_field_width: None,
+                                },
+                                vec![],
+                            ),
+                            make_node(
+                                ClangNodeKind::FieldDecl {
+                                    name: "code".to_string(),
+                                    ty: CppType::Short { signed: false },
+                                    access: crate::ast::AccessSpecifier::Public,
+                                    is_static: false,
+                                    bit_field_width: None,
+                                },
+                                vec![],
+                            ),
+                        ],
+                    ),
+                ],
+            )],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains(&format!("pub union {} {{", rust_union_name)),
+            "expected nested union declaration to be emitted, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("pub freq: u16,") && code.contains("pub code: u16,"),
+            "expected nested union fields to be preserved, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains(&format!("pub struct {} {{\n    _opaque: [u8; 64]", rust_union_name)),
+            "nested union should not fall back to opaque placeholder struct, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_union_decl_named_type_falls_back_to_sanitized_identifier() {
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![make_node(
+                ClangNodeKind::UnionDecl {
+                    name: "type".to_string(),
+                    fields: vec![],
+                },
+                vec![make_node(
+                    ClangNodeKind::FieldDecl {
+                        name: "value".to_string(),
+                        ty: CppType::Int { signed: true },
+                        access: crate::ast::AccessSpecifier::Public,
+                        is_static: false,
+                        bit_field_width: None,
+                    },
+                    vec![],
+                )],
+            )],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("pub union r#type {"),
+            "expected union decl named `type` to use sanitized identifier, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("pub union () {"),
+            "union decl should never lower to unit-type item name, got:\n{}",
             code
         );
     }
