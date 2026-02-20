@@ -13,8 +13,20 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 const TINYXML2_REPO_URL: &str = "https://github.com/leethomason/tinyxml2.git";
 const TINYXML2_PINNED_COMMIT: &str = "9148bdf719e997d1f474be6bcc7943881046dba1"; // 11.0.0
 const TINYXML2_CACHE_DIR: &str = "/tmp/fragile_real_world_tinyxml2";
-const TINYXML2_REQUIRED_PATHS: &[&str] =
-    &["tinyxml2.h", "tinyxml2.cpp", "xmltest.cpp", "CMakeLists.txt"];
+const TINYXML2_NATIVE_BASELINE_DIR: &str = "/tmp/fragile_real_world_tinyxml2_native_baseline";
+const TINYXML2_REQUIRED_PATHS: &[&str] = &[
+    "tinyxml2.h",
+    "tinyxml2.cpp",
+    "xmltest.cpp",
+    "CMakeLists.txt",
+    "Makefile",
+];
+const TINYXML2_BASELINE_LOG_FILES: &[&str] = &[
+    "make_test.status",
+    "make_test.stdout",
+    "make_test.stderr",
+    "baseline_manifest.txt",
+];
 
 fn run_git(args: &[&str], cwd: Option<&Path>) -> Result<Output, String> {
     let mut cmd = Command::new("git");
@@ -187,6 +199,139 @@ fn ensure_tinyxml2_checkout() -> Result<PathBuf, String> {
     )
 }
 
+fn status_code(output: &Output) -> i32 {
+    output.status.code().unwrap_or(-1)
+}
+
+fn write_command_capture(log_dir: &Path, step: &str, output: &Output) -> Result<(), String> {
+    fs::write(
+        log_dir.join(format!("{}.status", step)),
+        format!("{}\n", status_code(output)),
+    )
+    .map_err(|e| format!("failed to write {}.status: {}", step, e))?;
+    fs::write(log_dir.join(format!("{}.stdout", step)), &output.stdout)
+        .map_err(|e| format!("failed to write {}.stdout: {}", step, e))?;
+    fs::write(log_dir.join(format!("{}.stderr", step)), &output.stderr)
+        .map_err(|e| format!("failed to write {}.stderr: {}", step, e))?;
+    Ok(())
+}
+
+fn reset_dir(path: &Path) -> Result<(), String> {
+    if path.exists() {
+        fs::remove_dir_all(path)
+            .map_err(|e| format!("failed to remove {}: {}", path.display(), e))?;
+    }
+    fs::create_dir_all(path).map_err(|e| format!("failed to create {}: {}", path.display(), e))
+}
+
+fn write_baseline_manifest(log_dir: &Path, source_dir: &Path) -> Result<(), String> {
+    let head = read_head(source_dir).unwrap_or_else(|| "unknown".to_string());
+    let manifest = format!(
+        "source_dir={}\ncommit={}\n",
+        source_dir.display(),
+        head.trim()
+    );
+    fs::write(log_dir.join("baseline_manifest.txt"), manifest).map_err(|e| {
+        format!(
+            "failed to write baseline manifest at {}: {}",
+            log_dir.display(),
+            e
+        )
+    })
+}
+
+fn run_native_baseline_in_tree(source_dir: &Path, log_dir: &Path) -> Result<(), String> {
+    if !source_dir.join("Makefile").exists() {
+        return Err(format!(
+            "native baseline source {} is missing Makefile",
+            source_dir.display()
+        ));
+    }
+
+    fs::create_dir_all(log_dir).map_err(|e| {
+        format!(
+            "failed to create baseline log dir {}: {}",
+            log_dir.display(),
+            e
+        )
+    })?;
+
+    let mut make_test = Command::new("make");
+    make_test.arg("test").current_dir(source_dir);
+    make_test
+        .env("LC_ALL", "C")
+        .env("LANG", "C")
+        .env("MAKEFLAGS", "-j1");
+    let make_test_output = make_test.output().map_err(|e| {
+        format!(
+            "failed to run native baseline make test at {}: {}",
+            source_dir.display(),
+            e
+        )
+    })?;
+    write_command_capture(log_dir, "make_test", &make_test_output)?;
+    if !make_test_output.status.success() {
+        return Err(format!(
+            "native baseline make test failed with status {} (logs: {})",
+            status_code(&make_test_output),
+            log_dir.display()
+        ));
+    }
+
+    Ok(())
+}
+
+fn run_tinyxml2_native_baseline() -> Result<PathBuf, String> {
+    let checkout_dir = ensure_tinyxml2_checkout()?;
+    let baseline_root = PathBuf::from(TINYXML2_NATIVE_BASELINE_DIR);
+    reset_dir(&baseline_root)?;
+
+    let worktree_dir = baseline_root.join("worktree");
+    let checkout_dir_str = checkout_dir.to_string_lossy().to_string();
+    let worktree_dir_str = worktree_dir.to_string_lossy().to_string();
+    run_git(
+        &[
+            "clone",
+            "--no-tags",
+            "--local",
+            checkout_dir_str.as_str(),
+            worktree_dir_str.as_str(),
+        ],
+        None,
+    )?;
+    run_git(
+        &["checkout", "--detach", TINYXML2_PINNED_COMMIT],
+        Some(&worktree_dir),
+    )?;
+
+    let actual_head = read_head(&worktree_dir)
+        .ok_or_else(|| format!("failed to read HEAD in {}", worktree_dir.display()))?;
+    if actual_head != TINYXML2_PINNED_COMMIT {
+        return Err(format!(
+            "native baseline worktree expected commit {} but got {}",
+            TINYXML2_PINNED_COMMIT, actual_head
+        ));
+    }
+
+    let log_dir = baseline_root.join("native_logs");
+    run_native_baseline_in_tree(&worktree_dir, &log_dir)?;
+    write_baseline_manifest(&log_dir, &worktree_dir)?;
+    Ok(log_dir)
+}
+
+fn read_status_file(path: &Path) -> Result<i32, String> {
+    let raw = fs::read_to_string(path)
+        .map_err(|e| format!("failed to read status file {}: {}", path.display(), e))?;
+    raw.trim().parse::<i32>().map_err(|e| {
+        format!(
+            "failed to parse status code in {} (value: {:?}): {}",
+            path.display(),
+            raw.trim(),
+            e
+        )
+    })
+}
+
 fn unique_temp_dir(prefix: &str) -> PathBuf {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -212,8 +357,11 @@ fn create_local_tinyxml2_like_repo(base_dir: &Path) -> Result<(String, String, S
     )?;
     run_git(&["config", "user.name", "Fragile Tests"], Some(&remote_dir))?;
 
-    fs::write(remote_dir.join("tinyxml2.h"), "/* tinyxml2 fixture header */\n")
-        .map_err(|e| format!("failed to write tinyxml2.h: {}", e))?;
+    fs::write(
+        remote_dir.join("tinyxml2.h"),
+        "/* tinyxml2 fixture header */\n",
+    )
+    .map_err(|e| format!("failed to write tinyxml2.h: {}", e))?;
     fs::write(
         remote_dir.join("tinyxml2.cpp"),
         "int tinyxml2_fixture_version(void) { return 1; }\n",
@@ -224,10 +372,25 @@ fn create_local_tinyxml2_like_repo(base_dir: &Path) -> Result<(String, String, S
         "int main(void) { return tinyxml2_fixture_version() == 1 ? 0 : 1; }\n",
     )
     .map_err(|e| format!("failed to write xmltest.cpp: {}", e))?;
-    fs::write(remote_dir.join("CMakeLists.txt"), "cmake_minimum_required(VERSION 3.10)\n")
-        .map_err(|e| format!("failed to write CMakeLists.txt: {}", e))?;
+    fs::write(
+        remote_dir.join("CMakeLists.txt"),
+        "cmake_minimum_required(VERSION 3.10)\n",
+    )
+    .map_err(|e| format!("failed to write CMakeLists.txt: {}", e))?;
+    fs::write(
+        remote_dir.join("Makefile"),
+        "test:\n\t@echo \"xmltest fixture: Pass 1, Fail 0\"\n",
+    )
+    .map_err(|e| format!("failed to write Makefile: {}", e))?;
     run_git(
-        &["add", "tinyxml2.h", "tinyxml2.cpp", "xmltest.cpp", "CMakeLists.txt"],
+        &[
+            "add",
+            "tinyxml2.h",
+            "tinyxml2.cpp",
+            "xmltest.cpp",
+            "CMakeLists.txt",
+            "Makefile",
+        ],
         Some(&remote_dir),
     )?;
     run_git(&["commit", "-m", "first"], Some(&remote_dir))?;
@@ -254,8 +417,8 @@ fn test_ensure_pinned_checkout_clones_and_pins_local_tinyxml2_fixture() {
     let root = unique_temp_dir("tinyxml2_checkout_pin");
     fs::create_dir_all(&root).expect("failed to create test root");
 
-    let (repo_url, pinned_commit, _newer_commit) = create_local_tinyxml2_like_repo(&root)
-        .expect("failed to create local tinyxml2-like repo");
+    let (repo_url, pinned_commit, _newer_commit) =
+        create_local_tinyxml2_like_repo(&root).expect("failed to create local tinyxml2-like repo");
     let checkout_dir = root.join("checkout");
     let prepared = ensure_pinned_checkout(
         repo_url.as_str(),
@@ -284,8 +447,8 @@ fn test_ensure_pinned_checkout_rewinds_checkout_to_pinned_commit() {
     let root = unique_temp_dir("tinyxml2_checkout_rewind");
     fs::create_dir_all(&root).expect("failed to create test root");
 
-    let (repo_url, pinned_commit, newer_commit) = create_local_tinyxml2_like_repo(&root)
-        .expect("failed to create local tinyxml2-like repo");
+    let (repo_url, pinned_commit, newer_commit) =
+        create_local_tinyxml2_like_repo(&root).expect("failed to create local tinyxml2-like repo");
     let checkout_dir = root.join("checkout");
 
     ensure_pinned_checkout(
@@ -327,8 +490,8 @@ fn test_ensure_pinned_checkout_restores_missing_required_file() {
     let root = unique_temp_dir("tinyxml2_checkout_restore_required_file");
     fs::create_dir_all(&root).expect("failed to create test root");
 
-    let (repo_url, pinned_commit, _newer_commit) = create_local_tinyxml2_like_repo(&root)
-        .expect("failed to create local tinyxml2-like repo");
+    let (repo_url, pinned_commit, _newer_commit) =
+        create_local_tinyxml2_like_repo(&root).expect("failed to create local tinyxml2-like repo");
     let checkout_dir = root.join("checkout");
 
     ensure_pinned_checkout(
@@ -364,6 +527,115 @@ fn test_ensure_pinned_checkout_restores_missing_required_file() {
 }
 
 #[test]
+fn test_run_native_baseline_in_tree_local_fixture_success() {
+    let root = unique_temp_dir("tinyxml2_native_baseline_success");
+    fs::create_dir_all(&root).expect("failed to create test root");
+
+    let (repo_url, pinned_commit, _newer_commit) =
+        create_local_tinyxml2_like_repo(&root).expect("failed to create local tinyxml2-like repo");
+    let checkout_dir = root.join("checkout");
+    ensure_pinned_checkout(
+        repo_url.as_str(),
+        &checkout_dir,
+        pinned_commit.as_str(),
+        TINYXML2_REQUIRED_PATHS,
+    )
+    .expect("checkout should be prepared");
+
+    let log_dir = root.join("native_logs");
+    run_native_baseline_in_tree(&checkout_dir, &log_dir)
+        .expect("native baseline should pass for local fixture");
+    write_baseline_manifest(&log_dir, &checkout_dir)
+        .expect("baseline manifest should be written for local fixture");
+
+    for rel in TINYXML2_BASELINE_LOG_FILES {
+        assert!(
+            log_dir.join(rel).exists(),
+            "expected baseline log file {}",
+            log_dir.join(rel).display()
+        );
+    }
+    assert_eq!(
+        read_status_file(&log_dir.join("make_test.status")).expect("failed to read make status"),
+        0,
+        "local fixture baseline should report success status"
+    );
+    let make_stdout = fs::read_to_string(log_dir.join("make_test.stdout"))
+        .expect("failed to read make_test stdout");
+    assert!(
+        make_stdout.contains("Pass 1, Fail 0"),
+        "fixture make_test stdout should include success marker, got:\n{}",
+        make_stdout
+    );
+    let baseline_manifest = fs::read_to_string(log_dir.join("baseline_manifest.txt"))
+        .expect("failed to read baseline manifest");
+    assert!(
+        baseline_manifest.contains(&format!("commit={}", pinned_commit)),
+        "baseline manifest should record pinned commit {}:\n{}",
+        pinned_commit,
+        baseline_manifest
+    );
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn test_run_native_baseline_in_tree_reports_make_test_failure() {
+    let root = unique_temp_dir("tinyxml2_native_baseline_failure");
+    fs::create_dir_all(&root).expect("failed to create test root");
+
+    let (repo_url, pinned_commit, _newer_commit) =
+        create_local_tinyxml2_like_repo(&root).expect("failed to create local tinyxml2-like repo");
+    let checkout_dir = root.join("checkout");
+    ensure_pinned_checkout(
+        repo_url.as_str(),
+        &checkout_dir,
+        pinned_commit.as_str(),
+        TINYXML2_REQUIRED_PATHS,
+    )
+    .expect("checkout should be prepared");
+
+    fs::write(
+        checkout_dir.join("Makefile"),
+        "test:\n\t@echo \"fixture make test failure\" >&2\n\t@exit 7\n",
+    )
+    .expect("failed to override Makefile with failing test target");
+
+    let log_dir = root.join("native_logs");
+    let err = run_native_baseline_in_tree(&checkout_dir, &log_dir)
+        .expect_err("native baseline should fail when make test exits non-zero");
+    assert!(
+        err.contains("native baseline make test failed with status"),
+        "failure should report make-test failure status, got: {}",
+        err
+    );
+    let make_status =
+        read_status_file(&log_dir.join("make_test.status")).expect("failed to read make status");
+    assert_ne!(
+        make_status, 0,
+        "failure status should be non-zero in make_test.status"
+    );
+    assert_eq!(
+        err,
+        format!(
+            "native baseline make test failed with status {} (logs: {})",
+            make_status,
+            log_dir.display()
+        ),
+        "reported failure status should match captured make_test.status"
+    );
+    let make_stderr = fs::read_to_string(log_dir.join("make_test.stderr"))
+        .expect("failed to read make_test stderr");
+    assert!(
+        make_stderr.contains("fixture make test failure"),
+        "stderr capture should contain fixture failure text, got:\n{}",
+        make_stderr
+    );
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
 #[ignore = "real-world external project test (downloads tinyxml2 fixture)"]
 fn test_real_world_tinyxml2_fixture_checkout_is_pinned() {
     let repo_dir = ensure_tinyxml2_checkout().expect("failed to prepare tinyxml2 checkout");
@@ -379,5 +651,41 @@ fn test_real_world_tinyxml2_fixture_checkout_is_pinned() {
     assert_eq!(
         head, TINYXML2_PINNED_COMMIT,
         "tinyxml2 checkout must stay pinned for deterministic parity runs"
+    );
+}
+
+#[test]
+#[ignore = "real-world external project test (builds tinyxml2 baseline with make test)"]
+fn test_real_world_tinyxml2_native_baseline_make_test() {
+    let log_dir = run_tinyxml2_native_baseline().expect("failed to run tinyxml2 native baseline");
+    for rel in TINYXML2_BASELINE_LOG_FILES {
+        assert!(
+            log_dir.join(rel).exists(),
+            "expected baseline log file {}",
+            log_dir.join(rel).display()
+        );
+    }
+
+    let make_status =
+        read_status_file(&log_dir.join("make_test.status")).expect("failed to read make status");
+    assert_eq!(
+        make_status, 0,
+        "tinyxml2 native baseline make test should succeed"
+    );
+    let make_stdout = fs::read_to_string(log_dir.join("make_test.stdout"))
+        .expect("failed to read make_test stdout");
+    assert!(
+        make_stdout.contains("Fail 0"),
+        "tinyxml2 make_test stdout should report zero failing checks, got:\n{}",
+        make_stdout
+    );
+
+    let manifest = fs::read_to_string(log_dir.join("baseline_manifest.txt"))
+        .expect("failed to read baseline manifest");
+    assert!(
+        manifest.contains(&format!("commit={}", TINYXML2_PINNED_COMMIT)),
+        "baseline manifest should pin tinyxml2 commit {}:\n{}",
+        TINYXML2_PINNED_COMMIT,
+        manifest
     );
 }
