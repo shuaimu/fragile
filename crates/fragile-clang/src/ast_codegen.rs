@@ -16964,10 +16964,17 @@ impl AstCodeGen {
 
     /// Check whether a node is an assignment expression.
     fn is_assignment_expr_node(node: &ClangNode) -> bool {
-        matches!(
-            &node.kind,
-            ClangNodeKind::BinaryOperator { op, .. } if Self::is_assignment_binary_op(op)
-        )
+        match &node.kind {
+            ClangNodeKind::BinaryOperator { op, .. } => Self::is_assignment_binary_op(op),
+            ClangNodeKind::ImplicitCastExpr { .. }
+            | ClangNodeKind::CastExpr { .. }
+            | ClangNodeKind::ParenExpr { .. }
+            | ClangNodeKind::Unknown(_) => node
+                .children
+                .first()
+                .is_some_and(Self::is_assignment_expr_node),
+            _ => false,
+        }
     }
 
     /// Extract the LHS of an assignment expression
@@ -17521,10 +17528,10 @@ impl AstCodeGen {
 
         let child_is_sized_array = Self::get_expr_type(child)
             .as_ref()
-            .is_some_and(|t| matches!(t, CppType::Array { size: Some(_), .. }))
+            .is_some_and(Self::is_sized_array_or_array_ref_type)
             || Self::get_original_expr_type(child)
                 .as_ref()
-                .is_some_and(|t| matches!(t, CppType::Array { size: Some(_), .. }));
+                .is_some_and(Self::is_sized_array_or_array_ref_type);
         let base_name = self.get_raw_var_name(child);
         let declared_global_array = base_name.as_ref().is_some_and(|name| {
             self.global_var_types
@@ -17769,6 +17776,28 @@ impl AstCodeGen {
     /// Resolve member field type from declared aggregate metadata when expression-level
     /// type info is degraded (e.g., C enums reported as plain ints on MemberExpr).
     fn resolve_member_declared_field_type(&self, node: &ClangNode) -> Option<CppType> {
+        match &node.kind {
+            ClangNodeKind::ImplicitCastExpr { .. }
+            | ClangNodeKind::CastExpr { .. }
+            | ClangNodeKind::ParenExpr { .. }
+            | ClangNodeKind::Unknown(_) => {
+                return node
+                    .children
+                    .first()
+                    .and_then(|child| self.resolve_member_declared_field_type(child));
+            }
+            ClangNodeKind::UnaryOperator {
+                op: UnaryOp::AddrOf | UnaryOp::Deref,
+                ..
+            } => {
+                return node
+                    .children
+                    .first()
+                    .and_then(|child| self.resolve_member_declared_field_type(child));
+            }
+            _ => {}
+        }
+
         let ClangNodeKind::MemberExpr { member_name, .. } = &node.kind else {
             return None;
         };
@@ -18011,6 +18040,43 @@ impl AstCodeGen {
             ty,
             CppType::Pointer { .. } | CppType::Array { size: None, .. }
         ) || matches!(ty, CppType::Named(name) if name.contains('*'))
+    }
+
+    /// Whether a type is an array or a reference to an array.
+    fn is_array_or_array_ref_type(ty: &CppType) -> bool {
+        matches!(ty, CppType::Array { .. })
+            || matches!(
+                ty,
+                CppType::Reference { referent, .. }
+                    if matches!(referent.as_ref(), CppType::Array { .. })
+            )
+    }
+
+    /// Whether a type is a sized array or a reference to a sized array.
+    fn is_sized_array_or_array_ref_type(ty: &CppType) -> bool {
+        matches!(ty, CppType::Array { size: Some(_), .. })
+            || matches!(
+                ty,
+                CppType::Reference { referent, .. }
+                    if matches!(referent.as_ref(), CppType::Array { size: Some(_), .. })
+            )
+    }
+
+    /// Whether a type can act as an array-decay source (`arr`, `&arr`, `&mut arr`,
+    /// or pointer-to-array forms that need element-pointer normalization).
+    fn is_array_decay_source_type(ty: &CppType) -> bool {
+        if Self::is_array_or_array_ref_type(ty) {
+            return true;
+        }
+        match ty {
+            CppType::Pointer { pointee, .. } => Self::is_array_or_array_ref_type(pointee),
+            CppType::Reference { referent, .. } => matches!(
+                referent.as_ref(),
+                CppType::Pointer { pointee, .. }
+                    if Self::is_array_or_array_ref_type(pointee.as_ref())
+            ),
+            _ => false,
+        }
     }
 
     /// Check whether an expression node is boolean-like in C/C++ semantics.
@@ -23316,7 +23382,9 @@ impl AstCodeGen {
                     let left_type = Self::get_expr_type(&node.children[0]);
                     let left_is_pointer = matches!(left_type, Some(CppType::Pointer { .. }));
                     let left_is_ptr_var = self.is_ptr_var_expr(&node.children[0]);
-                    let left_is_array = matches!(left_type, Some(CppType::Array { .. }))
+                    let left_is_array = left_type
+                        .as_ref()
+                        .is_some_and(Self::is_array_or_array_ref_type)
                         && !self.is_ptr_var_expr(&node.children[0]);
                     let left_is_pointer_like = left_is_pointer || left_is_array || left_is_ptr_var;
 
@@ -23342,7 +23410,9 @@ impl AstCodeGen {
                     let right_type = Self::get_expr_type(&node.children[1]);
                     let right_is_pointer = matches!(right_type, Some(CppType::Pointer { .. }));
                     let right_is_ptr_var = self.is_ptr_var_expr(&node.children[1]);
-                    let right_is_array = matches!(right_type, Some(CppType::Array { .. }))
+                    let right_is_array = right_type
+                        .as_ref()
+                        .is_some_and(Self::is_array_or_array_ref_type)
                         && !self.is_ptr_var_expr(&node.children[1]);
                     let right_is_pointer_like =
                         right_is_pointer || right_is_array || right_is_ptr_var;
@@ -23452,10 +23522,16 @@ impl AstCodeGen {
 
                         // Check if left side is float type and right side is integer literal
                         let left_type = Self::get_expr_type(&node.children[0]);
-                        let left_is_float =
-                            matches!(left_type, Some(CppType::Float | CppType::Double));
+                        let left_declared_type =
+                            self.resolve_member_declared_field_type(&node.children[0]);
+                        let left_effective_type = left_type.clone().or(left_declared_type.clone());
+                        let left_is_float = left_effective_type
+                            .as_ref()
+                            .is_some_and(|ty| matches!(ty, CppType::Float | CppType::Double));
                         let right_type = Self::get_expr_type(&node.children[1]);
                         let right_orig_type = Self::get_original_expr_type(&node.children[1]);
+                        let right_declared_type =
+                            self.resolve_member_declared_field_type(&node.children[1]);
                         let mut right_raw = if left_is_float && is_integer_literal_str(&right_str) {
                             int_literal_to_float(&right_str)
                         } else {
@@ -23463,16 +23539,17 @@ impl AstCodeGen {
                         };
 
                         // Pointer assignment from 0/nullptr literal.
-                        let left_is_ptr =
-                            left_type.as_ref().is_some_and(Self::is_pointer_like_type);
-                        let left_is_fn_ptr = left_type
+                        let left_is_ptr = left_effective_type
+                            .as_ref()
+                            .is_some_and(Self::is_pointer_like_type);
+                        let left_is_fn_ptr = left_effective_type
                             .as_ref()
                             .is_some_and(Self::is_function_pointer_type_or_typedef);
                         if left_is_ptr && is_zero_integer_literal_str(&right_raw) {
                             right_raw = if left_is_fn_ptr {
                                 "None".to_string()
                             } else {
-                                let left_rust_type = left_type
+                                let left_rust_type = left_effective_type
                                     .as_ref()
                                     .map(|t| t.to_rust_type_str())
                                     .unwrap_or_default();
@@ -23485,7 +23562,7 @@ impl AstCodeGen {
                         }
 
                         if left_is_ptr {
-                            let left_rust_type = left_type
+                            let left_rust_type = left_effective_type
                                 .as_ref()
                                 .map(|t| t.to_rust_type_str())
                                 .unwrap_or_default();
@@ -23506,8 +23583,15 @@ impl AstCodeGen {
                                 }
                             } else {
                                 let rhs_is_array =
-                                    matches!(right_type, Some(CppType::Array { .. }))
-                                        || matches!(right_orig_type, Some(CppType::Array { .. }));
+                                    right_type
+                                        .as_ref()
+                                        .is_some_and(Self::is_array_decay_source_type)
+                                        || right_orig_type
+                                            .as_ref()
+                                            .is_some_and(Self::is_array_decay_source_type)
+                                        || right_declared_type
+                                            .as_ref()
+                                            .is_some_and(Self::is_array_decay_source_type);
                                 if rhs_is_array {
                                     let base = self
                                         .get_raw_var_name(&node.children[1])
@@ -23554,7 +23638,8 @@ impl AstCodeGen {
                         }
 
                         // C++ allows assigning bool expressions to integer fields.
-                        let left_rust_type = left_type.as_ref().map(|t| t.to_rust_type_str());
+                        let left_rust_type =
+                            left_effective_type.as_ref().map(|t| t.to_rust_type_str());
                         if let Some(ref lhs_ty) = left_rust_type {
                             if let Some(casted) =
                                 cast_negative_literal_to_unsigned(&right_raw, lhs_ty)
@@ -23600,8 +23685,9 @@ impl AstCodeGen {
                             op,
                             BinaryOp::AndAssign | BinaryOp::OrAssign | BinaryOp::XorAssign
                         );
-                        let right_raw = if is_bitwise_assign && left_type.is_some() {
-                            let lhs_rust_type = left_type.as_ref().unwrap().to_rust_type_str();
+                        let right_raw = if is_bitwise_assign && left_effective_type.is_some() {
+                            let lhs_rust_type =
+                                left_effective_type.as_ref().unwrap().to_rust_type_str();
                             format!("(({}) as {})", right_raw, lhs_rust_type)
                         } else {
                             right_raw
@@ -23632,7 +23718,7 @@ impl AstCodeGen {
                         } else {
                             left_raw
                         };
-                        let left_is_unsigned_int = left_type
+                        let left_is_unsigned_int = left_effective_type
                             .as_ref()
                             .map(|t| t.to_rust_type_str())
                             .as_deref()
@@ -23738,10 +23824,16 @@ impl AstCodeGen {
                         // Check if left side is float type and right side is integer literal
                         // Rust requires float literals (e.g., 1.0) when assigning to float
                         let left_type = Self::get_expr_type(&node.children[0]);
+                        let left_declared_type =
+                            self.resolve_member_declared_field_type(&node.children[0]);
+                        let left_effective_type = left_type.clone().or(left_declared_type.clone());
                         let right_type = Self::get_expr_type(&node.children[1]);
                         let right_orig_type = Self::get_original_expr_type(&node.children[1]);
-                        let left_is_float =
-                            matches!(left_type, Some(CppType::Float | CppType::Double));
+                        let right_declared_type =
+                            self.resolve_member_declared_field_type(&node.children[1]);
+                        let left_is_float = left_effective_type
+                            .as_ref()
+                            .is_some_and(|ty| matches!(ty, CppType::Float | CppType::Double));
                         let mut right = if left_is_float && is_integer_literal_str(&right_str) {
                             int_literal_to_float(&right_str)
                         } else {
@@ -23749,16 +23841,17 @@ impl AstCodeGen {
                         };
 
                         // Pointer assignment from 0/nullptr literal.
-                        let left_is_ptr =
-                            left_type.as_ref().is_some_and(Self::is_pointer_like_type);
-                        let left_is_fn_ptr = left_type
+                        let left_is_ptr = left_effective_type
+                            .as_ref()
+                            .is_some_and(Self::is_pointer_like_type);
+                        let left_is_fn_ptr = left_effective_type
                             .as_ref()
                             .is_some_and(Self::is_function_pointer_type_or_typedef);
                         if left_is_ptr && is_zero_integer_literal_str(&right) {
                             right = if left_is_fn_ptr {
                                 "None".to_string()
                             } else {
-                                let left_rust_type = left_type
+                                let left_rust_type = left_effective_type
                                     .as_ref()
                                     .map(|t| t.to_rust_type_str())
                                     .unwrap_or_default();
@@ -23771,7 +23864,7 @@ impl AstCodeGen {
                         }
 
                         if left_is_ptr {
-                            let left_rust_type = left_type
+                            let left_rust_type = left_effective_type
                                 .as_ref()
                                 .map(|t| t.to_rust_type_str())
                                 .unwrap_or_default();
@@ -23792,8 +23885,15 @@ impl AstCodeGen {
                                 }
                             } else {
                                 let rhs_is_array =
-                                    matches!(right_type, Some(CppType::Array { .. }))
-                                        || matches!(right_orig_type, Some(CppType::Array { .. }));
+                                    right_type
+                                        .as_ref()
+                                        .is_some_and(Self::is_array_decay_source_type)
+                                        || right_orig_type
+                                            .as_ref()
+                                            .is_some_and(Self::is_array_decay_source_type)
+                                        || right_declared_type
+                                            .as_ref()
+                                            .is_some_and(Self::is_array_decay_source_type);
                                 if rhs_is_array {
                                     let base = self
                                         .get_raw_var_name(&node.children[1])
@@ -23840,7 +23940,8 @@ impl AstCodeGen {
                         }
 
                         // C++ allows assigning bool expressions to integer fields.
-                        let left_rust_type = left_type.as_ref().map(|t| t.to_rust_type_str());
+                        let left_rust_type =
+                            left_effective_type.as_ref().map(|t| t.to_rust_type_str());
                         if let Some(ref lhs_ty) = left_rust_type {
                             if let Some(casted) = cast_negative_literal_to_unsigned(&right, lhs_ty)
                             {
@@ -23886,8 +23987,9 @@ impl AstCodeGen {
                             op,
                             BinaryOp::AndAssign | BinaryOp::OrAssign | BinaryOp::XorAssign
                         );
-                        let right = if is_bitwise_assign && left_type.is_some() {
-                            let lhs_rust_type = left_type.as_ref().unwrap().to_rust_type_str();
+                        let right = if is_bitwise_assign && left_effective_type.is_some() {
+                            let lhs_rust_type =
+                                left_effective_type.as_ref().unwrap().to_rust_type_str();
                             format!("(({}) as {})", right, lhs_rust_type)
                         } else {
                             right
@@ -23906,7 +24008,7 @@ impl AstCodeGen {
                             r
                         };
 
-                        let left_is_unsigned_int = left_type
+                        let left_is_unsigned_int = left_effective_type
                             .as_ref()
                             .map(|t| t.to_rust_type_str())
                             .as_deref()
@@ -24013,6 +24115,110 @@ impl AstCodeGen {
                         // This avoids generating `ptr == 0` (invalid in Rust).
                         let left_orig_type = Self::get_original_expr_type(&node.children[0]);
                         let right_orig_type = Self::get_original_expr_type(&node.children[1]);
+
+                        // Array-to-pointer decay for pointer comparisons across all comparison
+                        // operators (`==`, `!=`, `<`, `<=`, `>`, `>=`).
+                        let left_is_ptr = left_type
+                            .as_ref()
+                            .is_some_and(Self::is_pointer_like_type)
+                            || left_orig_type
+                                .as_ref()
+                                .is_some_and(Self::is_pointer_like_type)
+                            || self.is_ptr_var_expr(&node.children[0]);
+                        let right_is_ptr = right_type
+                            .as_ref()
+                            .is_some_and(Self::is_pointer_like_type)
+                            || right_orig_type
+                                .as_ref()
+                                .is_some_and(Self::is_pointer_like_type)
+                            || self.is_ptr_var_expr(&node.children[1]);
+                        let left_is_array = (left_type
+                            .as_ref()
+                            .is_some_and(Self::is_array_decay_source_type)
+                            || left_orig_type
+                                .as_ref()
+                                .is_some_and(Self::is_array_decay_source_type))
+                            && !self.is_ptr_var_expr(&node.children[0]);
+                        let right_is_array = (right_type
+                            .as_ref()
+                            .is_some_and(Self::is_array_decay_source_type)
+                            || right_orig_type
+                                .as_ref()
+                                .is_some_and(Self::is_array_decay_source_type))
+                            && !self.is_ptr_var_expr(&node.children[1]);
+                        if left_is_ptr && right_is_array {
+                            let left = self.expr_to_string(&node.children[0]);
+                            let right_base = self
+                                .get_raw_var_name(&node.children[1])
+                                .unwrap_or_else(|| self.expr_to_string(&node.children[1]));
+                            let right_base = if right_base.starts_with("unsafe { ")
+                                || right_base.contains(" as ")
+                                || right_base.contains(' ')
+                            {
+                                format!("({})", right_base)
+                            } else {
+                                right_base
+                            };
+                            let left_rust = left_type
+                                .as_ref()
+                                .or(left_orig_type.as_ref())
+                                .map(|t| t.to_rust_type_str())
+                                .unwrap_or_default();
+                            let right_ptr_inner = if left_rust.starts_with("*mut ") {
+                                format!("{}.as_mut_ptr()", right_base)
+                            } else {
+                                format!("{}.as_ptr()", right_base)
+                            };
+                            let right_ptr =
+                                if right_base.contains("__gv_") || right_base.contains("__fsv_") {
+                                    format!("unsafe {{ {} }}", right_ptr_inner)
+                                } else {
+                                    right_ptr_inner
+                                };
+                            return format!(
+                                "{} {} {}",
+                                wrap_unsafe_for_binop(&left),
+                                op_str,
+                                wrap_unsafe_for_binop(&right_ptr)
+                            );
+                        }
+                        if right_is_ptr && left_is_array {
+                            let right = self.expr_to_string(&node.children[1]);
+                            let left_base = self
+                                .get_raw_var_name(&node.children[0])
+                                .unwrap_or_else(|| self.expr_to_string(&node.children[0]));
+                            let left_base = if left_base.starts_with("unsafe { ")
+                                || left_base.contains(" as ")
+                                || left_base.contains(' ')
+                            {
+                                format!("({})", left_base)
+                            } else {
+                                left_base
+                            };
+                            let right_rust = right_type
+                                .as_ref()
+                                .or(right_orig_type.as_ref())
+                                .map(|t| t.to_rust_type_str())
+                                .unwrap_or_default();
+                            let left_ptr_inner = if right_rust.starts_with("*mut ") {
+                                format!("{}.as_mut_ptr()", left_base)
+                            } else {
+                                format!("{}.as_ptr()", left_base)
+                            };
+                            let left_ptr =
+                                if left_base.contains("__gv_") || left_base.contains("__fsv_") {
+                                    format!("unsafe {{ {} }}", left_ptr_inner)
+                                } else {
+                                    left_ptr_inner
+                                };
+                            return format!(
+                                "{} {} {}",
+                                wrap_unsafe_for_binop(&left_ptr),
+                                op_str,
+                                wrap_unsafe_for_binop(&right)
+                            );
+                        }
+
                         if matches!(op, BinaryOp::Eq | BinaryOp::Ne) {
                             let left_is_ptr =
                                 left_type.as_ref().is_some_and(Self::is_pointer_like_type)
@@ -24026,10 +24232,18 @@ impl AstCodeGen {
                                         .as_ref()
                                         .is_some_and(Self::is_pointer_like_type)
                                     || self.is_ptr_var_expr(&node.children[1]);
-                            let left_is_array = matches!(left_type, Some(CppType::Array { .. }))
-                                || matches!(left_orig_type, Some(CppType::Array { .. }));
-                            let right_is_array = matches!(right_type, Some(CppType::Array { .. }))
-                                || matches!(right_orig_type, Some(CppType::Array { .. }));
+                            let left_is_array = left_type
+                                .as_ref()
+                                .is_some_and(Self::is_array_decay_source_type)
+                                || left_orig_type
+                                    .as_ref()
+                                    .is_some_and(Self::is_array_decay_source_type);
+                            let right_is_array = right_type
+                                .as_ref()
+                                .is_some_and(Self::is_array_decay_source_type)
+                                || right_orig_type
+                                    .as_ref()
+                                    .is_some_and(Self::is_array_decay_source_type);
                             let left_is_array =
                                 left_is_array && !self.is_ptr_var_expr(&node.children[0]);
                             let right_is_array =
@@ -29959,6 +30173,320 @@ mod tests {
         assert!(
             !code.contains("= (*s).prev_length = 2"),
             "outer assignment must not receive raw `lhs = rhs = value` form in Rust, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_pointer_field_assignment_from_addr_of_array_member_decays_to_element_pointer() {
+        let code_ty = CppType::Named("code".to_string());
+        let codes_array_ty = CppType::Array {
+            element: Box::new(code_ty.clone()),
+            size: Some(1444),
+        };
+        let code_mut_ptr_ty = CppType::Pointer {
+            pointee: Box::new(code_ty.clone()),
+            is_const: false,
+        };
+        let code_const_ptr_ty = CppType::Pointer {
+            pointee: Box::new(code_ty.clone()),
+            is_const: true,
+        };
+
+        let state_record = make_node(
+            ClangNodeKind::RecordDecl {
+                name: "inflate_state".to_string(),
+                is_class: false,
+                is_definition: true,
+                fields: vec![],
+            },
+            vec![
+                make_node(
+                    ClangNodeKind::FieldDecl {
+                        name: "codes".to_string(),
+                        ty: codes_array_ty.clone(),
+                        access: crate::ast::AccessSpecifier::Public,
+                        is_static: false,
+                        bit_field_width: None,
+                    },
+                    vec![],
+                ),
+                make_node(
+                    ClangNodeKind::FieldDecl {
+                        name: "next".to_string(),
+                        ty: code_mut_ptr_ty.clone(),
+                        access: crate::ast::AccessSpecifier::Public,
+                        is_static: false,
+                        bit_field_width: None,
+                    },
+                    vec![],
+                ),
+                make_node(
+                    ClangNodeKind::FieldDecl {
+                        name: "distcode".to_string(),
+                        ty: code_const_ptr_ty.clone(),
+                        access: crate::ast::AccessSpecifier::Public,
+                        is_static: false,
+                        bit_field_width: None,
+                    },
+                    vec![],
+                ),
+            ],
+        );
+
+        let state_ptr_ty = CppType::Pointer {
+            pointee: Box::new(CppType::Named("inflate_state".to_string())),
+            is_const: false,
+        };
+
+        let member_on = |field: &str, ty: CppType| {
+            make_node(
+                ClangNodeKind::MemberExpr {
+                    member_name: field.to_string(),
+                    is_arrow: true,
+                    declaring_class: None,
+                    is_static: false,
+                    ty,
+                },
+                vec![make_node(
+                    ClangNodeKind::DeclRefExpr {
+                        name: "state".to_string(),
+                        ty: state_ptr_ty.clone(),
+                        namespace_path: vec![],
+                    },
+                    vec![],
+                )],
+            )
+        };
+
+        let addr_of_codes = make_node(
+            ClangNodeKind::UnaryOperator {
+                op: UnaryOp::AddrOf,
+                ty: CppType::Pointer {
+                    pointee: Box::new(codes_array_ty.clone()),
+                    is_const: false,
+                },
+            },
+            vec![member_on("codes", codes_array_ty.clone())],
+        );
+
+        let next_assign = make_node(
+            ClangNodeKind::BinaryOperator {
+                op: BinaryOp::Assign,
+                ty: code_mut_ptr_ty.clone(),
+            },
+            vec![member_on("next", code_mut_ptr_ty.clone()), addr_of_codes],
+        );
+
+        // Mirror real-world wrapped assignment form: distcode = (next = &codes) as *const code
+        let wrapped_next_assign = make_node(
+            ClangNodeKind::ImplicitCastExpr {
+                ty: code_const_ptr_ty.clone(),
+                cast_kind: CastKind::BitCast,
+            },
+            vec![next_assign],
+        );
+
+        let distcode_assign = make_node(
+            ClangNodeKind::BinaryOperator {
+                op: BinaryOp::Assign,
+                ty: code_const_ptr_ty.clone(),
+            },
+            vec![member_on("distcode", code_const_ptr_ty), wrapped_next_assign],
+        );
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![
+                state_record,
+                make_node(
+                    ClangNodeKind::FunctionDecl {
+                        name: "assign_codes_ptr".to_string(),
+                        mangled_name: "assign_codes_ptr".to_string(),
+                        return_type: CppType::Int { signed: true },
+                        params: vec![("state".to_string(), state_ptr_ty)],
+                        is_definition: true,
+                        is_variadic: false,
+                        is_noexcept: false,
+                        is_coroutine: false,
+                        coroutine_info: None,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![
+                            make_node(ClangNodeKind::ExprStmt, vec![distcode_assign]),
+                            make_node(
+                                ClangNodeKind::ReturnStmt,
+                                vec![make_node(
+                                    ClangNodeKind::IntegerLiteral {
+                                        value: 0,
+                                        cpp_type: Some(CppType::Int { signed: true }),
+                                    },
+                                    vec![],
+                                )],
+                            ),
+                        ],
+                    )],
+                ),
+            ],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("(*state).next =") && code.contains(".as_mut_ptr() as *mut code"),
+            "pointer field assignment from &array member should decay to element pointer, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("(*state).next = (&mut (*state).codes)"),
+            "raw &mut [T; N] assignment to *mut T should not be emitted, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_pointer_relational_comparison_with_addr_of_array_member_decays_rhs() {
+        let code_ty = CppType::Named("code".to_string());
+        let codes_array_ty = CppType::Array {
+            element: Box::new(code_ty.clone()),
+            size: Some(1444),
+        };
+        let code_const_ptr_ty = CppType::Pointer {
+            pointee: Box::new(code_ty.clone()),
+            is_const: true,
+        };
+
+        let state_record = make_node(
+            ClangNodeKind::RecordDecl {
+                name: "inflate_state".to_string(),
+                is_class: false,
+                is_definition: true,
+                fields: vec![],
+            },
+            vec![
+                make_node(
+                    ClangNodeKind::FieldDecl {
+                        name: "codes".to_string(),
+                        ty: codes_array_ty.clone(),
+                        access: crate::ast::AccessSpecifier::Public,
+                        is_static: false,
+                        bit_field_width: None,
+                    },
+                    vec![],
+                ),
+                make_node(
+                    ClangNodeKind::FieldDecl {
+                        name: "lencode".to_string(),
+                        ty: code_const_ptr_ty.clone(),
+                        access: crate::ast::AccessSpecifier::Public,
+                        is_static: false,
+                        bit_field_width: None,
+                    },
+                    vec![],
+                ),
+            ],
+        );
+
+        let state_ptr_ty = CppType::Pointer {
+            pointee: Box::new(CppType::Named("inflate_state".to_string())),
+            is_const: false,
+        };
+
+        let member_on = |field: &str, ty: CppType| {
+            make_node(
+                ClangNodeKind::MemberExpr {
+                    member_name: field.to_string(),
+                    is_arrow: true,
+                    declaring_class: None,
+                    is_static: false,
+                    ty,
+                },
+                vec![make_node(
+                    ClangNodeKind::DeclRefExpr {
+                        name: "state".to_string(),
+                        ty: state_ptr_ty.clone(),
+                        namespace_path: vec![],
+                    },
+                    vec![],
+                )],
+            )
+        };
+
+        let cond = make_node(
+            ClangNodeKind::BinaryOperator {
+                op: BinaryOp::Ge,
+                ty: CppType::Bool,
+            },
+            vec![
+                member_on("lencode", code_const_ptr_ty),
+                make_node(
+                    ClangNodeKind::UnaryOperator {
+                        op: UnaryOp::AddrOf,
+                        ty: CppType::Pointer {
+                            pointee: Box::new(codes_array_ty.clone()),
+                            is_const: false,
+                        },
+                    },
+                    vec![member_on("codes", codes_array_ty)],
+                ),
+            ],
+        );
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![
+                state_record,
+                make_node(
+                    ClangNodeKind::FunctionDecl {
+                        name: "compare_codes_ptr".to_string(),
+                        mangled_name: "compare_codes_ptr".to_string(),
+                        return_type: CppType::Int { signed: true },
+                        params: vec![("state".to_string(), state_ptr_ty)],
+                        is_definition: true,
+                        is_variadic: false,
+                        is_noexcept: false,
+                        is_coroutine: false,
+                        coroutine_info: None,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![make_node(
+                            ClangNodeKind::IfStmt,
+                            vec![
+                                cond,
+                                make_node(
+                                    ClangNodeKind::ReturnStmt,
+                                    vec![make_node(
+                                        ClangNodeKind::IntegerLiteral {
+                                            value: 1,
+                                            cpp_type: Some(CppType::Int { signed: true }),
+                                        },
+                                        vec![],
+                                    )],
+                                ),
+                                make_node(
+                                    ClangNodeKind::ReturnStmt,
+                                    vec![make_node(
+                                        ClangNodeKind::IntegerLiteral {
+                                            value: 0,
+                                            cpp_type: Some(CppType::Int { signed: true }),
+                                        },
+                                        vec![],
+                                    )],
+                                ),
+                            ],
+                        )],
+                    )],
+                ),
+            ],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("(*state).codes")
+                && code.contains(">=")
+                && code.contains(".as_ptr()"),
+            "relational pointer comparison against &array member should decay rhs to .as_ptr(), got:\n{}",
             code
         );
     }
