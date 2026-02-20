@@ -3,6 +3,14 @@
 ## Scope
 This note tracks the deterministic blocker sequence for `make test` replay under Fragile-linked zlib outputs.
 
+Canonical one-command reproducer:
+
+```bash
+./scripts/repro_zlib_failure.sh
+```
+
+Reference: `docs/zlib_failure_repro.md`.
+
 ## Previous permissive-link baseline
 Before strict-link replay, the first failing `make test` command was:
 

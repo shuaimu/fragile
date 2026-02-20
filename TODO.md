@@ -169,7 +169,10 @@ Run upstream-style tests through the Fragile transpiler with runtime parity:
 ### Phase 1 Exit Criteria (Must all be true)
 - [x] `zlib` transpiled pipeline passes target `make test` scope with no manual stubs.
 - [x] Parity checks are automated and committed.
-- [ ] Failures are reproducible via one documented command.
+- [x] Failures are reproducible via one documented command.
+  - Command: `./scripts/repro_zlib_failure.sh`
+  - Equivalent direct command: `cargo test -p fragile-clang --test real_world_zlib_tests test_real_world_zlib_make_test_command_subset_replay -- --ignored --nocapture --test-threads=1`
+  - Evidence (`cargo test -p fragile-clang --test zlib_failure_repro_command_tests -- --nocapture && ./scripts/repro_zlib_failure.sh --print`, 2026-02-20): passes; wrapper command contract is tested and documented in `docs/zlib_failure_repro.md`.
 
 ## Phase 2: tinyxml2 (Starts only after Phase 1 exit)
 - [ ] Add pinned `tinyxml2` fixture checkout.
