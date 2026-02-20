@@ -23298,7 +23298,9 @@ impl AstCodeGen {
                             )
                         });
                         let right_is_bool = matches!(right_type, Some(CppType::Bool));
-                        if left_is_integral_non_bool && right_is_bool {
+                        let right_is_boolish =
+                            right_is_bool || Self::is_booleanish_expr_node(&node.children[1]);
+                        if left_is_integral_non_bool && right_is_boolish {
                             if let Some(ref lhs_ty) = left_rust_type {
                                 right_raw = format!("({}) as {}", right_raw, lhs_ty);
                             }
@@ -23314,7 +23316,7 @@ impl AstCodeGen {
                                     .as_ref()
                                     .is_some_and(|t| t.is_integral() == Some(true) && !matches!(t, CppType::Bool))
                                 || is_integer_literal_str(&right_raw))
-                                && !right_is_bool;
+                                && !right_is_boolish;
                         if left_needs_width_norm && right_is_integral_non_bool {
                             if let Some(ref lhs_ty) = left_rust_type {
                                 right_raw = format!("(({}) as {})", right_raw, lhs_ty);
@@ -23576,7 +23578,9 @@ impl AstCodeGen {
                             )
                         });
                         let right_is_bool = matches!(right_type, Some(CppType::Bool));
-                        if left_is_integral_non_bool && right_is_bool {
+                        let right_is_boolish =
+                            right_is_bool || Self::is_booleanish_expr_node(&node.children[1]);
+                        if left_is_integral_non_bool && right_is_boolish {
                             if let Some(ref lhs_ty) = left_rust_type {
                                 right = format!("({}) as {}", right, lhs_ty);
                             }
@@ -23592,7 +23596,7 @@ impl AstCodeGen {
                                     .as_ref()
                                     .is_some_and(|t| t.is_integral() == Some(true) && !matches!(t, CppType::Bool))
                                 || is_integer_literal_str(&right))
-                                && !right_is_bool;
+                                && !right_is_boolish;
                         if left_needs_width_norm && right_is_integral_non_bool {
                             if let Some(ref lhs_ty) = left_rust_type {
                                 right = format!("(({}) as {})", right, lhs_ty);
@@ -28745,6 +28749,109 @@ mod tests {
         assert!(
             code.contains("wrap != 1"),
             "normalized condition should preserve comparison semantics, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_int_assignment_from_comparison_bool_is_casted() {
+        let assign_expr = make_node(
+            ClangNodeKind::BinaryOperator {
+                op: BinaryOp::Assign,
+                ty: CppType::Int { signed: true },
+            },
+            vec![
+                make_node(
+                    ClangNodeKind::DeclRefExpr {
+                        name: "out".to_string(),
+                        ty: CppType::Int { signed: true },
+                        namespace_path: vec![],
+                    },
+                    vec![],
+                ),
+                make_node(
+                    ClangNodeKind::BinaryOperator {
+                        op: BinaryOp::Eq,
+                        ty: CppType::Bool,
+                    },
+                    vec![
+                        make_node(
+                            ClangNodeKind::DeclRefExpr {
+                                name: "a".to_string(),
+                                ty: CppType::Int { signed: true },
+                                namespace_path: vec![],
+                            },
+                            vec![],
+                        ),
+                        make_node(
+                            ClangNodeKind::DeclRefExpr {
+                                name: "b".to_string(),
+                                ty: CppType::Int { signed: true },
+                                namespace_path: vec![],
+                            },
+                            vec![],
+                        ),
+                    ],
+                ),
+            ],
+        );
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![make_node(
+                ClangNodeKind::FunctionDecl {
+                    name: "assign_cmp_to_int".to_string(),
+                    mangled_name: "assign_cmp_to_int".to_string(),
+                    return_type: CppType::Int { signed: true },
+                    params: vec![
+                        ("a".to_string(), CppType::Int { signed: true }),
+                        ("b".to_string(), CppType::Int { signed: true }),
+                    ],
+                    is_definition: true,
+                    is_variadic: false,
+                    is_noexcept: false,
+                    is_coroutine: false,
+                    coroutine_info: None,
+                },
+                vec![make_node(
+                    ClangNodeKind::CompoundStmt,
+                    vec![
+                        make_node(
+                            ClangNodeKind::VarDecl {
+                                name: "out".to_string(),
+                                ty: CppType::Int { signed: true },
+                                has_init: true,
+                                is_static: false,
+                            },
+                            vec![make_node(
+                                ClangNodeKind::IntegerLiteral {
+                                    value: 0,
+                                    cpp_type: Some(CppType::Int { signed: true }),
+                                },
+                                vec![],
+                            )],
+                        ),
+                        make_node(ClangNodeKind::ExprStmt, vec![assign_expr]),
+                        make_node(
+                            ClangNodeKind::ReturnStmt,
+                            vec![make_node(
+                                ClangNodeKind::DeclRefExpr {
+                                    name: "out".to_string(),
+                                    ty: CppType::Int { signed: true },
+                                    namespace_path: vec![],
+                                },
+                                vec![],
+                            )],
+                        ),
+                    ],
+                )],
+            )],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("out = (a == b) as i32") || code.contains("out = ((a == b)) as i32"),
+            "integer lvalue assignment from comparison should cast bool to i32, got:\n{}",
             code
         );
     }
