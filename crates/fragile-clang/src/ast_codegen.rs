@@ -20951,6 +20951,8 @@ impl AstCodeGen {
                             let ret_is_bool = ret_rust_type.as_ref().map_or(false, |t| t == "bool");
                             let expr_is_bool =
                                 expr_rust_type.as_ref().map_or(false, |t| t == "bool");
+                            let expr_is_boolish_node =
+                                Self::is_booleanish_expr_node(&node.children[0]);
 
                             // Don't add != 0 for expressions that already return bool
                             // These are builtins that return int in C but we map to bool in Rust
@@ -20966,7 +20968,8 @@ impl AstCodeGen {
 
                             let needs_int_to_bool =
                                 ret_is_bool && expr_is_int && !already_returns_bool;
-                            let needs_bool_to_int = ret_is_int && expr_is_bool;
+                            let needs_bool_to_int =
+                                ret_is_int && (expr_is_bool || expr_is_boolish_node);
 
                             if needs_int_to_bool {
                                 // Convert integer to bool: non-zero = true
@@ -22518,6 +22521,10 @@ impl AstCodeGen {
                             || matches!(left_orig, Some(CppType::Bool));
                         let right_is_bool = matches!(right_type, Some(CppType::Bool))
                             || matches!(right_orig, Some(CppType::Bool));
+                        let left_is_boolish_node =
+                            left_is_bool || Self::is_booleanish_expr_node(&node.children[0]);
+                        let right_is_boolish_node =
+                            right_is_bool || Self::is_booleanish_expr_node(&node.children[1]);
                         let left_is_ptr =
                             left_type.as_ref().is_some_and(Self::is_pointer_like_type)
                                 || left_orig.as_ref().is_some_and(Self::is_pointer_like_type);
@@ -22527,12 +22534,12 @@ impl AstCodeGen {
                         let left_is_int = left_type
                             .as_ref()
                             .map_or(false, |t| t.is_integral() == Some(true))
-                            && !left_is_bool
+                            && !left_is_boolish_node
                             && !left_is_ptr;
                         let right_is_int = right_type
                             .as_ref()
                             .map_or(false, |t| t.is_integral() == Some(true))
-                            && !right_is_bool
+                            && !right_is_boolish_node
                             && !right_is_ptr;
 
                         let left = if left_is_ptr {
@@ -22540,6 +22547,8 @@ impl AstCodeGen {
                         } else if left_is_int {
                             let s = strip_literal_suffix(&left_str);
                             format!("({} != 0)", s)
+                        } else if left_is_boolish_node {
+                            Self::normalize_bool_int_condition_str(&left_str)
                         } else {
                             wrap_unsafe_for_binop(&left_str)
                         };
@@ -22548,6 +22557,8 @@ impl AstCodeGen {
                         } else if right_is_int {
                             let s = strip_literal_suffix(&right_str);
                             format!("({} != 0)", s)
+                        } else if right_is_boolish_node {
+                            Self::normalize_bool_int_condition_str(&right_str)
                         } else {
                             wrap_unsafe_for_binop(&right_str)
                         };
@@ -24622,6 +24633,10 @@ impl AstCodeGen {
                             || matches!(left_orig, Some(CppType::Bool));
                         let right_is_bool = matches!(right_type, Some(CppType::Bool))
                             || matches!(right_orig, Some(CppType::Bool));
+                        let left_is_boolish_node =
+                            left_is_bool || Self::is_booleanish_expr_node(&node.children[0]);
+                        let right_is_boolish_node =
+                            right_is_bool || Self::is_booleanish_expr_node(&node.children[1]);
                         let left_is_ptr =
                             left_type.as_ref().is_some_and(Self::is_pointer_like_type)
                                 || left_orig.as_ref().is_some_and(Self::is_pointer_like_type);
@@ -24632,13 +24647,13 @@ impl AstCodeGen {
                             .as_ref()
                             .map_or(false, |t| t.is_integral() == Some(true))
                             || is_integer_literal_str(&left_str))
-                            && !left_is_bool
+                            && !left_is_boolish_node
                             && !left_is_ptr;
                         let right_is_int = (right_type
                             .as_ref()
                             .map_or(false, |t| t.is_integral() == Some(true))
                             || is_integer_literal_str(&right_str))
-                            && !right_is_bool
+                            && !right_is_boolish_node
                             && !right_is_ptr;
 
                         let left = if left_is_ptr {
@@ -24646,6 +24661,8 @@ impl AstCodeGen {
                         } else if left_is_int {
                             let s = strip_literal_suffix(&left_str);
                             format!("({} != 0)", s)
+                        } else if left_is_boolish_node {
+                            Self::normalize_bool_int_condition_str(&left_str)
                         } else {
                             wrap_unsafe_for_binop(&left_str)
                         };
@@ -24654,6 +24671,8 @@ impl AstCodeGen {
                         } else if right_is_int {
                             let s = strip_literal_suffix(&right_str);
                             format!("({} != 0)", s)
+                        } else if right_is_boolish_node {
+                            Self::normalize_bool_int_condition_str(&right_str)
                         } else {
                             wrap_unsafe_for_binop(&right_str)
                         };
@@ -29430,6 +29449,111 @@ mod tests {
             !add_line.contains("value as u32 <<"),
             "ungrouped `as` cast before shift can be parsed as generic args, got line:\n{}\nfull code:\n{}",
             add_line,
+            code
+        );
+    }
+
+    #[test]
+    fn test_int_return_from_logical_and_comparisons_avoids_chained_comparison_form() {
+        let cond_left = make_node(
+            ClangNodeKind::BinaryOperator {
+                op: BinaryOp::Eq,
+                ty: CppType::Int { signed: true },
+            },
+            vec![
+                make_node(
+                    ClangNodeKind::DeclRefExpr {
+                        name: "mode".to_string(),
+                        ty: CppType::Int { signed: true },
+                        namespace_path: vec![],
+                    },
+                    vec![],
+                ),
+                make_node(
+                    ClangNodeKind::IntegerLiteral {
+                        value: 16193,
+                        cpp_type: Some(CppType::Int { signed: true }),
+                    },
+                    vec![],
+                ),
+            ],
+        );
+        let cond_right = make_node(
+            ClangNodeKind::BinaryOperator {
+                op: BinaryOp::Eq,
+                ty: CppType::Int { signed: true },
+            },
+            vec![
+                make_node(
+                    ClangNodeKind::DeclRefExpr {
+                        name: "bits".to_string(),
+                        ty: CppType::Int { signed: true },
+                        namespace_path: vec![],
+                    },
+                    vec![],
+                ),
+                make_node(
+                    ClangNodeKind::IntegerLiteral {
+                        value: 0,
+                        cpp_type: Some(CppType::Int { signed: true }),
+                    },
+                    vec![],
+                ),
+            ],
+        );
+        let logical_and = make_node(
+            ClangNodeKind::BinaryOperator {
+                op: BinaryOp::LAnd,
+                ty: CppType::Int { signed: true },
+            },
+            vec![cond_left, cond_right],
+        );
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![make_node(
+                ClangNodeKind::FunctionDecl {
+                    name: "sync_point_like".to_string(),
+                    mangled_name: "sync_point_like".to_string(),
+                    return_type: CppType::Int { signed: true },
+                    params: vec![
+                        ("mode".to_string(), CppType::Int { signed: true }),
+                        ("bits".to_string(), CppType::Int { signed: true }),
+                    ],
+                    is_definition: true,
+                    is_variadic: false,
+                    is_noexcept: false,
+                    is_coroutine: false,
+                    coroutine_info: None,
+                },
+                vec![make_node(
+                    ClangNodeKind::CompoundStmt,
+                    vec![make_node(ClangNodeKind::ReturnStmt, vec![logical_and])],
+                )],
+            )],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        let return_line = code
+            .lines()
+            .find(|line| line.contains("return") && line.contains("&&"))
+            .unwrap_or("");
+        assert!(
+            !return_line.contains("== 16193 != 0"),
+            "logical-and comparisons should not emit chained comparison syntax, got line:\n{}\nfull code:\n{}",
+            return_line,
+            code
+        );
+        assert!(
+            !return_line.contains("== 0 != 0"),
+            "logical-and comparisons should not emit chained comparison syntax, got line:\n{}\nfull code:\n{}",
+            return_line,
+            code
+        );
+        assert!(
+            return_line.contains("as i32"),
+            "int-return logical condition should be cast back to i32, got line:\n{}\nfull code:\n{}",
+            return_line,
             code
         );
     }

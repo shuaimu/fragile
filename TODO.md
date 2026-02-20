@@ -60,8 +60,10 @@ Run upstream-style tests through the Fragile transpiler with runtime parity:
             - Replay evidence (`/tmp/fragile_real_world_zlib_fragile_objz_objects/driver_logs/rustc_objz_infback_o.status` + `rustc_objz_infback_o.stderr`): `infback` now compiles (`status` = `0`) and the `(*state).last` signedness diagnostic is cleared.
           - [x] Fix `inflate` replay cast/shift parse regression where casts are emitted without shift-safe parentheses (`value as u32 << (*state).bits` parsed as generic args).
             - Replay evidence (`/tmp/fragile_real_world_zlib_fragile_objz_objects/driver_logs/objz_inflate_o_transpiled.rs` + `rustc_objz_inflate_o.stderr`): casted shift lhs now emits grouped form (`((value as u32) << (*state).bits)` at line 6914), and previous `<< interpreted as generic arguments` parse diagnostics are cleared.
-          - [ ] Fix `inflate` bool/int chained-comparison normalization in return expressions (invalid Rust `== ... != 0` forms from C int-bool lowering).
-            - Current first blocker class (`/tmp/fragile_real_world_zlib_fragile_objz_objects/driver_logs/rustc_objz_inflate_o.stderr`): `comparison operators cannot be chained` / `expected bool, found integer` at `objz_inflate_o_transpiled.rs:8619` in `inflateSyncPoint`.
+          - [x] Fix `inflate` bool/int chained-comparison normalization in return expressions (invalid Rust `== ... != 0` forms from C int-bool lowering).
+            - Replay evidence (`/tmp/fragile_real_world_zlib_fragile_objz_objects/driver_logs/objz_inflate_o_transpiled.rs` + `rustc_objz_inflate_o.stderr`): `inflateSyncPoint` now emits `return ((... == 16193 && ... == 0) as i32);` (no chained `== ... != 0` parse form), and the previous chained-comparison diagnostics at line 8619 are cleared.
+          - [ ] Fix `inflate` pointer/array decay + chained-assignment typing mismatch for `codes` table pointers (`(*state).next`/`(*state).distcode`/`(*state).lencode`).
+            - Current first blocker class (`/tmp/fragile_real_world_zlib_fragile_objz_objects/driver_logs/rustc_objz_inflate_o.stderr`): `expected *mut code, found &mut [code; 1444]` and follow-on `non-primitive cast: () as *const code` at `objz_inflate_o_transpiled.rs:6786`.
     - [ ] Replay `OBJG` units through Fragile to `.o` outputs and validate object completeness.
   - [ ] Link transpiled static/shared test binaries used by upstream tests (`example`, `minigzip`, `examplesh`, `minigzipsh`, `example64`, `minigzip64`).
 - [ ] Make transpiled build pass zlib test commands used by upstream `make test`.
