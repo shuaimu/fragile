@@ -1,0 +1,42 @@
+name: Zlib Nightly Matrix
+
+on:
+  schedule:
+    - cron: "0 7 * * *"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  LIBCLANG_PATH: /usr/lib/x86_64-linux-gnu
+
+jobs:
+  zlib-nightly-matrix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        test_name:
+          - test_real_world_zlib_required_artifacts_for_make_all_scope
+          - test_real_world_zlib_fragile_required_link_binaries_replay
+          - test_real_world_zlib_make_test_command_plan_generation
+          - test_real_world_zlib_make_test_command_subset_replay
+          - test_real_world_zlib_make_test_exit_status_parity
+          - test_real_world_zlib_make_test_stdout_stderr_parity
+          - test_real_world_zlib_make_test_artifact_behavior_parity
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libclang-dev llvm-dev
+
+      - name: Setup Rust stable
+        uses: dtolnay/rust-action@stable
+
+      - name: Run ignored zlib real-world matrix test
+        run: |
+          cargo test -p fragile-clang --test real_world_zlib_tests ${{ matrix.test_name }} -- --ignored --nocapture
