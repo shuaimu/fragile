@@ -492,6 +492,7 @@ fn convert_node_with_depth(
                 ty,
                 has_init,
                 is_static: false,
+                is_extern: false,
             }
         }
 
@@ -675,6 +676,7 @@ fn convert_node_with_depth(
                 ty,
                 has_init: false,
                 is_static: false,
+                is_extern: false,
             }
         }
 

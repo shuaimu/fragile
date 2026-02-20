@@ -197,6 +197,9 @@ pub enum ClangNodeKind {
         /// C/C++ `static` storage class on this variable declaration.
         /// For local variables, this means static storage duration.
         is_static: bool,
+        /// C/C++ `extern` storage class on this variable declaration.
+        /// For globals, this indicates a declaration that should not emit storage.
+        is_extern: bool,
     },
     /// Struct/class declaration
     RecordDecl {

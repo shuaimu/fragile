@@ -718,6 +718,9 @@ pub struct AstCodeGen {
     /// Function names that have a definition in this translation unit.
     /// Used to suppress emitting duplicate extern declarations.
     defined_function_names: HashSet<String>,
+    /// Global variable names that have a non-extern definition in this translation unit.
+    /// Used to suppress emitting duplicate extern-style declarations from headers.
+    defined_global_var_names: HashSet<String>,
     /// Function names seen as non-definition declarations in this translation unit.
     /// Used to identify externally declared C symbols that should be exported with C ABI.
     declared_function_names: HashSet<String>,
@@ -859,6 +862,7 @@ impl AstCodeGen {
             bit_field_groups: HashMap::new(),
             generated_functions: HashMap::new(),
             defined_function_names: HashSet::new(),
+            defined_global_var_names: HashSet::new(),
             declared_function_names: HashSet::new(),
             declared_function_param_types: HashMap::new(),
             emitted_extern_c_functions: HashSet::new(),
@@ -2497,6 +2501,7 @@ impl AstCodeGen {
             self.collect_polymorphic_info(&ast.children);
             self.collect_unsafe_function_names(ast);
             self.collect_defined_function_names(ast);
+            self.collect_defined_global_var_names(ast, false);
             self.collect_anon_union_defs(ast);
             self.collect_missing_union_member_types(ast);
         }
@@ -13348,7 +13353,11 @@ impl AstCodeGen {
                 self.generate_type_alias(name, underlying_type);
             }
             ClangNodeKind::VarDecl {
-                name, ty, has_init, ..
+                name,
+                ty,
+                has_init,
+                is_static,
+                is_extern,
             } => {
                 // Header-only declaration (typically `extern`) without initializer.
                 // Prefer emitting the definition from the `.c/.cc` translation unit.
@@ -13396,7 +13405,14 @@ impl AstCodeGen {
                     }
                 });
                 if !is_static_member_def {
-                    self.generate_global_var(name, ty, *has_init, &node.children);
+                    self.generate_global_var(
+                        name,
+                        ty,
+                        *has_init,
+                        *is_static,
+                        *is_extern,
+                        &node.children,
+                    );
                 }
             }
             ClangNodeKind::ModuleImportDecl {
@@ -16301,6 +16317,8 @@ impl AstCodeGen {
         name: &str,
         ty: &CppType,
         _has_init: bool,
+        is_static: bool,
+        is_extern: bool,
         children: &[ClangNode],
     ) {
         // Sanitize the name to handle special characters and keywords
@@ -16311,6 +16329,18 @@ impl AstCodeGen {
         // Prefix global variables with __gv_ to prevent parameter shadowing
         // Rust doesn't allow function parameters to shadow statics, so we need unique names
         let safe_name = format!("__gv_{}", base_name);
+
+        if is_extern && self.defined_global_var_names.contains(name) {
+            // Keep name/type mapping for reference lowering, but skip emitting
+            // storage for declarations that are satisfied by another definition
+            // in this translation unit.
+            self.global_var_mapping
+                .insert(base_name.clone(), safe_name.clone());
+            self.global_var_types
+                .entry(safe_name.clone())
+                .or_insert_with(|| ty.clone());
+            return;
+        }
 
         // Skip if already generated (handles duplicates from template instantiation)
         if self.global_vars.contains(&safe_name) {
@@ -16343,6 +16373,13 @@ impl AstCodeGen {
             .insert(base_name.clone(), safe_name.clone());
         self.global_var_types.insert(safe_name.clone(), ty.clone());
         self.writeln(&format!("/// C++ global variable `{}`", name));
+
+        let should_export_c_global = Self::should_export_c_global_symbol(
+            name,
+            is_static,
+            is_extern,
+            &self.current_namespace,
+        );
 
         // Unsized C arrays declared in headers (e.g., `extern uch _length_code[];`)
         // decay to pointers in generated Rust types. Model them as extern symbols and
@@ -16501,11 +16538,35 @@ impl AstCodeGen {
             Self::default_value_for_static(ty)
         };
 
+        if should_export_c_global {
+            self.writeln(&format!("#[export_name = \"{}\"]", name));
+        }
         self.writeln(&format!(
             "static mut {}: {} = {};",
             safe_name, rust_type, init_value
         ));
         self.writeln("");
+    }
+
+    fn should_export_c_global_symbol(
+        name: &str,
+        is_static: bool,
+        is_extern: bool,
+        current_namespace: &[(String, bool)],
+    ) -> bool {
+        if is_static || is_extern {
+            return false;
+        }
+        // Preserve C++ namespace scoping behavior by only exporting true global symbols.
+        if current_namespace.iter().any(|(_, is_inline)| !is_inline) {
+            return false;
+        }
+        let mut chars = name.chars();
+        match chars.next() {
+            Some(first) if first == '_' || first.is_ascii_alphabetic() => {}
+            _ => return false,
+        }
+        chars.all(|c| c == '_' || c.is_ascii_alphanumeric())
     }
 
     /// Generate a const-safe default value for static variables.
@@ -18020,6 +18081,37 @@ impl AstCodeGen {
         }
         for child in &node.children {
             self.collect_defined_function_names(child);
+        }
+    }
+
+    /// Collect global variable names that have a non-extern definition in this
+    /// translation unit. This lets us skip header-only `extern` declarations
+    /// when a real definition is also present (e.g. zlib trees symbols).
+    fn collect_defined_global_var_names(&mut self, node: &ClangNode, in_function_scope: bool) {
+        let next_in_function_scope = in_function_scope
+            || matches!(
+                node.kind,
+                ClangNodeKind::FunctionDecl { .. }
+                    | ClangNodeKind::CXXMethodDecl { .. }
+                    | ClangNodeKind::ConstructorDecl { .. }
+            );
+
+        if !in_function_scope {
+            if let ClangNodeKind::VarDecl {
+                name,
+                is_static,
+                is_extern,
+                ..
+            } = &node.kind
+            {
+                if !*is_static && !*is_extern {
+                    self.defined_global_var_names.insert(name.clone());
+                }
+            }
+        }
+
+        for child in &node.children {
+            self.collect_defined_global_var_names(child, next_in_function_scope);
         }
     }
 
@@ -29378,6 +29470,7 @@ mod tests {
                 ty: table_ty.clone(),
                 has_init: true,
                 is_static: true,
+                is_extern: false,
             },
             vec![make_node(
                 ClangNodeKind::InitListExpr { ty: table_ty },
@@ -29695,6 +29788,7 @@ mod tests {
                                 ty: CppType::Int { signed: true },
                                 has_init: true,
                                 is_static: false,
+                                is_extern: false,
                             },
                             vec![make_node(
                                 ClangNodeKind::IntegerLiteral {
@@ -30719,6 +30813,7 @@ mod tests {
                     ty: unsized_uch_array.clone(),
                     has_init: false,
                     is_static: false,
+                    is_extern: true,
                 },
                 vec![],
             )],
@@ -30738,6 +30833,96 @@ mod tests {
         assert!(
             !code.contains("static mut __gv__length_code: *mut u8 = [];"),
             "unsized array declaration must not emit invalid [] pointer initializer, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_non_static_non_extern_global_exports_c_symbol_name() {
+        let dist_code_ty = CppType::Array {
+            element: Box::new(CppType::Char { signed: false }),
+            size: Some(4),
+        };
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![make_node(
+                ClangNodeKind::VarDecl {
+                    name: "_dist_code".to_string(),
+                    ty: dist_code_ty.clone(),
+                    has_init: true,
+                    is_static: false,
+                    is_extern: false,
+                },
+                vec![make_node(
+                    ClangNodeKind::InitListExpr { ty: dist_code_ty },
+                    vec![
+                        make_node(
+                            ClangNodeKind::IntegerLiteral {
+                                value: 1,
+                                cpp_type: Some(CppType::Int { signed: true }),
+                            },
+                            vec![],
+                        ),
+                        make_node(
+                            ClangNodeKind::IntegerLiteral {
+                                value: 2,
+                                cpp_type: Some(CppType::Int { signed: true }),
+                            },
+                            vec![],
+                        ),
+                        make_node(
+                            ClangNodeKind::IntegerLiteral {
+                                value: 3,
+                                cpp_type: Some(CppType::Int { signed: true }),
+                            },
+                            vec![],
+                        ),
+                        make_node(
+                            ClangNodeKind::IntegerLiteral {
+                                value: 4,
+                                cpp_type: Some(CppType::Int { signed: true }),
+                            },
+                            vec![],
+                        ),
+                    ],
+                )],
+            )],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("#[export_name = \"_dist_code\"]"),
+            "global definition should export C symbol name, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("static mut __gv__dist_code: [u8; 4] ="),
+            "global definition should keep internal __gv_ storage name, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_extern_global_decl_does_not_export_c_symbol_name() {
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![make_node(
+                ClangNodeKind::VarDecl {
+                    name: "_dist_code".to_string(),
+                    ty: CppType::Int { signed: true },
+                    has_init: false,
+                    is_static: false,
+                    is_extern: true,
+                },
+                vec![],
+            )],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            !code.contains("#[export_name = \"_dist_code\"]"),
+            "extern declaration should not export C symbol storage, got:\n{}",
             code
         );
     }
@@ -31848,6 +32033,7 @@ mod tests {
                                 ty: CppType::Int { signed: false },
                                 has_init: true,
                                 is_static: false,
+                                is_extern: false,
                             },
                             vec![make_node(
                                 ClangNodeKind::IntegerLiteral {
@@ -32243,6 +32429,7 @@ mod tests {
                         ty: union_ty.clone(),
                         has_init: true,
                         is_static: true,
+                        is_extern: false,
                     },
                     vec![make_node(
                         ClangNodeKind::InitListExpr { ty: union_ty.clone() },

@@ -5910,13 +5910,7 @@ fn test_real_world_zlib_fragile_required_link_binaries_replay() {
     let replay_result = run_zlib_fragile_link_required_binaries_baseline();
 
     let log_dir = Path::new(ZLIB_FRAGILE_LINK_REQUIRED_BINARIES_BASELINE_DIR).join("driver_logs");
-    let replay_err =
-        replay_result.expect_err("strict required-link replay should fail with diagnostics");
-    assert!(
-        replay_err.contains("link replay failed for"),
-        "unexpected strict required-link replay failure: {}",
-        replay_err
-    );
+    replay_result.expect("strict required-link replay should succeed");
 
     for rel in ZLIB_FRAGILE_LINK_REQUIRED_LOG_FILES {
         assert!(
@@ -5964,54 +5958,55 @@ fn test_real_world_zlib_fragile_required_link_binaries_replay() {
         "runtime support archive should be non-empty"
     );
 
+    let link_manifest_path = log_dir.join("fragile_link_manifest.txt");
     assert!(
-        !log_dir.join("fragile_link_manifest.txt").exists(),
-        "strict required-link replay should not write fragile link manifest on failure"
+        link_manifest_path.exists(),
+        "strict required-link replay should write fragile link manifest on success"
+    );
+    let link_manifest =
+        fs::read_to_string(&link_manifest_path).expect("failed to read fragile link manifest");
+    assert!(
+        link_manifest.contains("relinked_output_count=6"),
+        "expected all required outputs to be relinked: {}",
+        link_manifest
     );
 
     let mut observed_link_steps: Vec<String> = Vec::new();
-    let mut first_failing_link_step: Option<String> = None;
     for output in ZLIB_REQUIRED_LINK_OUTPUTS {
         let link_step = format!("link_required_{}", normalize_identifier_fragment(output));
         let status_path = log_dir.join(format!("{}.status", link_step));
-        if !status_path.exists() {
-            break;
-        }
-        observed_link_steps.push(link_step.clone());
-        let status =
-            fs::read_to_string(&status_path).expect("failed to read strict link replay status");
         assert!(
-            !status.trim().is_empty(),
-            "strict link replay status should not be empty for {}",
+            status_path.exists(),
+            "expected strict link replay status for {}",
             output
         );
-        if status.trim() != "0" && first_failing_link_step.is_none() {
-            first_failing_link_step = Some(link_step);
-        }
+        observed_link_steps.push(link_step.clone());
+        let status = fs::read_to_string(&status_path).expect("failed to read strict link status");
+        assert!(
+            status.trim() == "0",
+            "strict link replay should succeed for {} (status={} logs={})",
+            output,
+            status.trim(),
+            log_dir.display()
+        );
+        assert!(
+            link_manifest.contains(&format!("output={}", output)),
+            "fragile link manifest should include output {}: {}",
+            output,
+            link_manifest
+        );
+        let stderr = fs::read_to_string(log_dir.join(format!("{}.stderr", link_step)))
+            .expect("failed to read strict link stderr");
+        assert!(
+            stderr.trim().is_empty(),
+            "successful strict link step should not emit stderr diagnostics for {}: {}",
+            output,
+            stderr
+        );
     }
     assert!(
-        !observed_link_steps.is_empty(),
-        "strict required-link replay should emit at least one link-step status"
-    );
-    let first_failing_link_step =
-        first_failing_link_step.expect("strict required-link replay should expose a failing link step");
-    let first_failing_stderr =
-        fs::read_to_string(log_dir.join(format!("{}.stderr", first_failing_link_step)))
-            .expect("failed to read strict-link failing stderr");
-    assert!(
-        !first_failing_stderr.trim().is_empty(),
-        "strict required-link replay failing step should include stderr diagnostics"
-    );
-    assert!(
-        first_failing_stderr.contains("_dist_code")
-            || first_failing_stderr.contains("_length_code"),
-        "expected post-runtime-link first blocker to be unresolved C globals (_dist_code/_length_code): {}",
-        first_failing_stderr
-    );
-    assert!(
-        !first_failing_stderr.contains("core::panicking::panic"),
-        "runtime-link leaf should clear Rust runtime unresolved-symbol diagnostics: {}",
-        first_failing_stderr
+        observed_link_steps.len() == ZLIB_REQUIRED_LINK_OUTPUTS.len(),
+        "strict required-link replay should emit status for all required outputs"
     );
 }
 

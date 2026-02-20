@@ -906,6 +906,7 @@ impl ClangParser {
                     let ty = self.convert_type(clang_sys::clang_getCursorType(cursor));
                     let storage_class = clang_sys::clang_Cursor_getStorageClass(cursor);
                     let is_static = storage_class == clang_sys::CX_SC_Static;
+                    let is_extern = storage_class == clang_sys::CX_SC_Extern;
 
                     // Check if this is a static member inside a class
                     let parent = clang_sys::clang_getCursorSemanticParent(cursor);
@@ -931,6 +932,7 @@ impl ClangParser {
                             ty,
                             has_init,
                             is_static,
+                            is_extern,
                         }
                     }
                 }
@@ -4388,6 +4390,68 @@ mod tests {
         assert!(
             matches!(&function.kind, ClangNodeKind::FunctionDecl { .. }),
             "expected FunctionDecl for c_register_fn"
+        );
+    }
+
+    #[test]
+    fn test_parse_vardecl_storage_class_flags_in_c_mode() {
+        let parser =
+            ClangParser::with_paths_defines_and_language(Vec::new(), Vec::new(), ParserLanguage::C)
+                .unwrap();
+        let ast = parser
+            .parse_string(
+                r#"
+                extern unsigned char _dist_code[];
+                unsigned char _dist_code[2] = {1, 2};
+                static int file_local_counter = 0;
+                "#,
+                "test.c",
+            )
+            .unwrap();
+
+        let mut saw_extern_decl = false;
+        let mut saw_definition = false;
+        let mut saw_static_file_local = false;
+
+        for child in &ast.translation_unit.children {
+            match &child.kind {
+                ClangNodeKind::VarDecl {
+                    name,
+                    is_static,
+                    is_extern,
+                    ..
+                } if name == "_dist_code" => {
+                    if *is_extern {
+                        saw_extern_decl = true;
+                    } else if !*is_static {
+                        saw_definition = true;
+                    }
+                }
+                ClangNodeKind::VarDecl {
+                    name,
+                    is_static,
+                    is_extern,
+                    ..
+                } if name == "file_local_counter" => {
+                    if *is_static && !*is_extern {
+                        saw_static_file_local = true;
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        assert!(
+            saw_extern_decl,
+            "expected extern declaration for _dist_code to set is_extern=true"
+        );
+        assert!(
+            saw_definition,
+            "expected non-extern definition for _dist_code to set is_extern=false"
+        );
+        assert!(
+            saw_static_file_local,
+            "expected static file-scope variable to set is_static=true and is_extern=false"
         );
     }
 
