@@ -34,6 +34,7 @@ const ZLIB_FRAGILE_LINK_REQUIRED_BINARIES_BASELINE_DIR: &str =
     "/tmp/fragile_real_world_zlib_fragile_link_required_binaries";
 const ZLIB_MAKE_TEST_COMMAND_PLAN_BASELINE_DIR: &str =
     "/tmp/fragile_real_world_zlib_make_test_command_plan";
+const ZLIB_MAKE_TEST_REPLAY_BASELINE_DIR: &str = "/tmp/fragile_real_world_zlib_make_test_replay";
 const ZLIB_REQUIRED_PATHS: &[&str] = &["zlib.h", "configure", "Makefile.in"];
 const ZLIB_REQUIRED_TEST_ARTIFACTS: &[&str] = &[
     "libz.a",
@@ -197,6 +198,24 @@ const ZLIB_MAKE_TEST_COMMAND_PLAN_LOG_FILES: &[&str] = &[
     "artifact_manifest.txt",
     "compile_units_manifest.txt",
     "link_units_manifest.txt",
+    "make_test_dryrun.status",
+    "make_test_dryrun.stdout",
+    "make_test_dryrun.stderr",
+    "make_test_commands_manifest.txt",
+];
+const ZLIB_MAKE_TEST_REPLAY_LOG_FILES: &[&str] = &[
+    "configure_driver.status",
+    "configure_driver.stdout",
+    "configure_driver.stderr",
+    "make_driver.status",
+    "make_driver.stdout",
+    "make_driver.stderr",
+    "cc_driver.log",
+    "cc_driver_manifest.txt",
+    "artifact_manifest.txt",
+    "compile_units_manifest.txt",
+    "link_units_manifest.txt",
+    "fragile_link_manifest.txt",
     "make_test_dryrun.status",
     "make_test_dryrun.stdout",
     "make_test_dryrun.stderr",
@@ -2827,6 +2846,43 @@ fn run_zlib_make_test_command_plan_baseline() -> Result<PathBuf, String> {
     Ok(log_dir)
 }
 
+fn run_zlib_make_test_command_subset_replay_baseline() -> Result<PathBuf, String> {
+    let checkout_dir = ensure_zlib_checkout()?;
+    let baseline_root = PathBuf::from(ZLIB_MAKE_TEST_REPLAY_BASELINE_DIR);
+    reset_dir(&baseline_root)?;
+
+    let worktree_dir = baseline_root.join("worktree");
+    let checkout_dir_str = checkout_dir.to_string_lossy().to_string();
+    let worktree_dir_str = worktree_dir.to_string_lossy().to_string();
+    run_git(
+        &[
+            "clone",
+            "--no-tags",
+            "--local",
+            checkout_dir_str.as_str(),
+            worktree_dir_str.as_str(),
+        ],
+        None,
+    )?;
+    run_git(
+        &["checkout", "--detach", ZLIB_PINNED_COMMIT],
+        Some(&worktree_dir),
+    )?;
+
+    let actual_head = read_head(&worktree_dir)
+        .ok_or_else(|| format!("failed to read HEAD in {}", worktree_dir.display()))?;
+    if actual_head != ZLIB_PINNED_COMMIT {
+        return Err(format!(
+            "make-test-replay worktree expected commit {} but got {}",
+            ZLIB_PINNED_COMMIT, actual_head
+        ));
+    }
+
+    let log_dir = baseline_root.join("driver_logs");
+    run_make_test_command_subset_replay_in_tree(&worktree_dir, &log_dir)?;
+    Ok(log_dir)
+}
+
 fn unique_temp_dir(prefix: &str) -> PathBuf {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -4639,6 +4695,94 @@ fn test_real_world_zlib_make_test_command_plan_generation() {
             "manifest should include required binary invocation for {}: {}",
             binary,
             manifest
+        );
+    }
+}
+
+#[test]
+#[ignore = "real-world external project test (downloads and replays zlib make-test command subset)"]
+fn test_real_world_zlib_make_test_command_subset_replay() {
+    let replay_result = run_zlib_make_test_command_subset_replay_baseline();
+
+    let log_dir = Path::new(ZLIB_MAKE_TEST_REPLAY_BASELINE_DIR).join("driver_logs");
+    let worktree_dir = Path::new(ZLIB_MAKE_TEST_REPLAY_BASELINE_DIR).join("worktree");
+    let err = replay_result.expect_err("make-test replay should currently fail with diagnostics");
+    assert!(
+        err.contains("make-test command replay failed at command"),
+        "unexpected make-test replay failure: {}",
+        err
+    );
+
+    for rel in ZLIB_MAKE_TEST_REPLAY_LOG_FILES {
+        assert!(
+            log_dir.join(rel).exists(),
+            "expected make-test replay log {}",
+            log_dir.join(rel).display()
+        );
+    }
+
+    assert_eq!(
+        fs::read_to_string(log_dir.join("configure_driver.status"))
+            .expect("failed to read configure_driver.status")
+            .trim(),
+        "0"
+    );
+    assert_eq!(
+        fs::read_to_string(log_dir.join("make_driver.status"))
+            .expect("failed to read make_driver.status")
+            .trim(),
+        "0"
+    );
+    assert_eq!(
+        fs::read_to_string(log_dir.join("make_test_dryrun.status"))
+            .expect("failed to read make_test_dryrun.status")
+            .trim(),
+        "0"
+    );
+
+    let commands_manifest = fs::read_to_string(log_dir.join("make_test_commands_manifest.txt"))
+        .expect("failed to read make_test_commands_manifest.txt");
+    let planned_commands = parse_make_test_commands_manifest_entries(&commands_manifest)
+        .expect("failed to parse make_test_commands_manifest.txt");
+    assert!(
+        !planned_commands.is_empty(),
+        "expected at least one replayable make-test command"
+    );
+    let first_step = make_test_replay_step_name(0);
+    assert_ne!(
+        fs::read_to_string(log_dir.join(format!("{}.status", first_step)))
+            .expect("failed to read first make-test replay status")
+            .trim(),
+        "0",
+        "first make-test replay command is expected to fail in current baseline"
+    );
+    assert!(
+        !log_dir.join("make_test_replay_manifest.txt").exists(),
+        "replay manifest should not be written when replay fails before completion"
+    );
+
+    let link_manifest = fs::read_to_string(log_dir.join("fragile_link_manifest.txt"))
+        .expect("failed to read fragile_link_manifest.txt");
+    for output in ZLIB_REQUIRED_LINK_OUTPUTS {
+        let output_path = worktree_dir.join(output);
+        assert!(
+            output_path.exists(),
+            "expected replay-linked output {}",
+            output_path.display()
+        );
+        assert!(
+            fs::metadata(&output_path)
+                .expect("failed to stat replay-linked output")
+                .len()
+                > 0,
+            "replay-linked output should be non-empty: {}",
+            output_path.display()
+        );
+        assert!(
+            link_manifest.contains(&format!("output={}", output)),
+            "fragile link manifest should include output {} entry: {}",
+            output,
+            link_manifest
         );
     }
 }

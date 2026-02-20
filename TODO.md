@@ -97,7 +97,8 @@ Run upstream-style tests through the Fragile transpiler with runtime parity:
     - Evidence (`cargo test -p fragile-clang --test real_world_zlib_tests -- --nocapture`, 2026-02-20): passes; local replay succeeds when command subset statuses are zero and fails with explicit diagnostics on first non-zero command.
   - [x] Add real-world ignored coverage for `make test` command-plan generation in pinned zlib fixture outputs.
     - Evidence (`cargo test -p fragile-clang --test real_world_zlib_tests test_real_world_zlib_make_test_command_plan_generation -- --ignored --nocapture`, 2026-02-20): passes; real-world run writes and validates `make_test_commands_manifest.txt`.
-  - [ ] Add real-world ignored coverage for `make test` replay against pinned zlib fixture outputs.
+  - [x] Add real-world ignored coverage for `make test` replay against pinned zlib fixture outputs.
+    - Evidence (`cargo test -p fragile-clang --test real_world_zlib_tests test_real_world_zlib_make_test_command_subset_replay -- --ignored --nocapture`, 2026-02-20): passes; pinned real-world replay coverage captures current first failing replay command with deterministic logs/status while preserving fragile-linked output/link manifests for diagnosis.
 - [ ] Add parity assertions vs native:
   - [ ] exit status parity
   - [ ] stdout/stderr parity (allowing nondeterministic path filtering if needed)
