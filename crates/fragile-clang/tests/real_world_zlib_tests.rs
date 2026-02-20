@@ -40,6 +40,14 @@ const ZLIB_REQUIRED_TEST_ARTIFACTS: &[&str] = &[
     "example64",
     "minigzip64",
 ];
+const ZLIB_REQUIRED_LINK_OUTPUTS: &[&str] = &[
+    "example",
+    "minigzip",
+    "examplesh",
+    "minigzipsh",
+    "example64",
+    "minigzip64",
+];
 const ZLIB_OBJZ_OBJECTS: &[&str] = &[
     "adler32.o",
     "crc32.o",
@@ -106,6 +114,7 @@ const ZLIB_REQUIRED_ARTIFACT_LOG_FILES: &[&str] = &[
     "cc_driver_manifest.txt",
     "artifact_manifest.txt",
     "compile_units_manifest.txt",
+    "link_units_manifest.txt",
 ];
 const ZLIB_FRAGILE_ADLER32_LOG_FILES: &[&str] = &[
     "configure_driver.status",
@@ -703,6 +712,86 @@ fn parse_compile_units_from_cc_driver_log(
     Ok(units.into_iter().collect())
 }
 
+fn parse_link_units_from_cc_driver_log(
+    log_text: &str,
+    source_root: &Path,
+) -> Result<Vec<(String, Vec<String>)>, String> {
+    fn is_compiler_driver_token(token: &str) -> bool {
+        let base = Path::new(token)
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or(token);
+        matches!(base, "cc" | "gcc" | "g++" | "clang" | "clang++" | "c++")
+            || base.starts_with("clang-")
+            || base.starts_with("gcc-")
+    }
+
+    let mut cwd = source_root.to_path_buf();
+    let mut units: std::collections::BTreeMap<String, Vec<String>> = std::collections::BTreeMap::new();
+
+    for line in log_text.lines() {
+        if let Some(rest) = line.strip_prefix("cwd=") {
+            let parsed = PathBuf::from(rest.trim());
+            if parsed.as_os_str().is_empty() {
+                continue;
+            }
+            cwd = parsed;
+            continue;
+        }
+        let Some(rest) = line.strip_prefix("args=") else {
+            continue;
+        };
+        let tokens: Vec<&str> = rest.split_whitespace().collect();
+        if tokens.is_empty() {
+            continue;
+        }
+        if tokens.iter().any(|t| *t == "-c" || t.starts_with("-c")) {
+            continue;
+        }
+
+        let Some((output_token, output_consumed_idx)) = extract_arg_value(&tokens, "-o") else {
+            continue;
+        };
+        let output = normalize_path_for_manifest(&output_token, &cwd, source_root);
+
+        let mut inputs: Vec<String> = Vec::new();
+        let mut skip_next = false;
+        for (idx, tok) in tokens.iter().enumerate() {
+            if idx == 0 && is_compiler_driver_token(tok) {
+                continue;
+            }
+            if skip_next {
+                skip_next = false;
+                continue;
+            }
+            if *tok == "-o" {
+                skip_next = true;
+                continue;
+            }
+            if output_consumed_idx.is_some_and(|i| i == idx) {
+                continue;
+            }
+            if tok.starts_with("-o") || tok.starts_with('-') {
+                continue;
+            }
+            let normalized = normalize_path_for_manifest(tok, &cwd, source_root);
+            if normalized == output {
+                continue;
+            }
+            if !inputs.contains(&normalized) {
+                inputs.push(normalized);
+            }
+        }
+
+        units.entry(output).or_insert(inputs);
+    }
+
+    if units.is_empty() {
+        return Err("no link units found in cc_driver.log".to_string());
+    }
+    Ok(units.into_iter().collect())
+}
+
 fn write_compile_units_manifest(log_dir: &Path, source_dir: &Path) -> Result<usize, String> {
     let driver_log_path = log_dir.join("cc_driver.log");
     let driver_log = fs::read_to_string(&driver_log_path).map_err(|e| {
@@ -730,6 +819,58 @@ fn write_compile_units_manifest(log_dir: &Path, source_dir: &Path) -> Result<usi
         )
     })?;
     Ok(units.len())
+}
+
+fn write_link_units_manifest(
+    log_dir: &Path,
+    source_dir: &Path,
+    required_outputs: &[&str],
+) -> Result<usize, String> {
+    let driver_log_path = log_dir.join("cc_driver.log");
+    let driver_log = fs::read_to_string(&driver_log_path).map_err(|e| {
+        format!(
+            "failed to read cc-driver invocation log {}: {}",
+            driver_log_path.display(),
+            e
+        )
+    })?;
+    let link_units = parse_link_units_from_cc_driver_log(&driver_log, source_dir)?;
+    let link_map: std::collections::BTreeMap<String, Vec<String>> =
+        link_units.into_iter().collect();
+
+    let mut missing_outputs: Vec<String> = Vec::new();
+    for output in required_outputs {
+        if !link_map.contains_key(*output) {
+            missing_outputs.push((*output).to_string());
+        }
+    }
+    if !missing_outputs.is_empty() {
+        return Err(format!(
+            "missing link units for required outputs: {}",
+            missing_outputs.join(", ")
+        ));
+    }
+
+    let mut manifest = format!(
+        "source_dir={}\nlink_units_count={}\nrequired_link_outputs={}\n",
+        source_dir.display(),
+        required_outputs.len(),
+        required_outputs.join(","),
+    );
+    for output in required_outputs {
+        let inputs = link_map
+            .get(*output)
+            .ok_or_else(|| format!("internal error: missing inputs for {}", output))?;
+        manifest.push_str(&format!("output={} inputs={}\n", output, inputs.join(",")));
+    }
+    fs::write(log_dir.join("link_units_manifest.txt"), manifest).map_err(|e| {
+        format!(
+            "failed to write link units manifest at {}: {}",
+            log_dir.display(),
+            e
+        )
+    })?;
+    Ok(required_outputs.len())
 }
 
 fn parse_makefile_variable_list(
@@ -1504,6 +1645,7 @@ fn run_cc_driver_required_artifacts_in_tree(
     run_cc_driver_baseline_in_tree(source_dir, log_dir, make_target)?;
     ensure_required_artifacts_exist(source_dir, required_artifacts)?;
     let compile_unit_count = write_compile_units_manifest(log_dir, source_dir)?;
+    write_link_units_manifest(log_dir, source_dir, ZLIB_REQUIRED_LINK_OUTPUTS)?;
     write_artifact_manifest(
         log_dir,
         source_dir,
@@ -2374,6 +2516,101 @@ fn test_parse_compile_units_from_driver_log_rejects_missing_compile_commands() {
 }
 
 #[test]
+fn test_parse_link_units_from_driver_log_normalizes_and_deduplicates() {
+    let root = unique_temp_dir("zlib_link_units_parse");
+    let worktree = root.join("worktree");
+    let subdir = worktree.join("sub");
+    fs::create_dir_all(&subdir).expect("failed to create test dirs");
+
+    let log = format!(
+        "cwd={}\n\
+args=cc -c adler32.c -o adler32.o\n\
+args=cc adler32.o libz.a -o example\n\
+args=cc adler32.o -o example\n\
+cwd={}\n\
+args=cc ../tiny.o ../libz.a -o ../minigzip\n",
+        worktree.display(),
+        subdir.display()
+    );
+
+    let units =
+        parse_link_units_from_cc_driver_log(&log, &worktree).expect("link unit parse should succeed");
+    assert_eq!(
+        units,
+        vec![
+            (
+                "example".to_string(),
+                vec!["adler32.o".to_string(), "libz.a".to_string()],
+            ),
+            (
+                "minigzip".to_string(),
+                vec!["tiny.o".to_string(), "libz.a".to_string()],
+            ),
+        ]
+    );
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn test_parse_link_units_from_driver_log_rejects_missing_link_commands() {
+    let root = unique_temp_dir("zlib_link_units_empty");
+    let worktree = root.join("worktree");
+    fs::create_dir_all(&worktree).expect("failed to create test dir");
+
+    let log = format!(
+        "cwd={}\nargs=cc -c adler32.c -o adler32.o\n",
+        worktree.display()
+    );
+    let err = parse_link_units_from_cc_driver_log(&log, &worktree)
+        .expect_err("expected parse to fail when no link commands exist");
+    assert!(
+        err.contains("no link units found"),
+        "unexpected parse error: {}",
+        err
+    );
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn test_write_link_units_manifest_detects_missing_required_outputs() {
+    let root = unique_temp_dir("zlib_link_units_missing_output");
+    let worktree = root.join("worktree");
+    let log_dir = root.join("logs");
+    fs::create_dir_all(&worktree).expect("failed to create test dir");
+    fs::create_dir_all(&log_dir).expect("failed to create log dir");
+
+    fs::write(
+        log_dir.join("cc_driver.log"),
+        format!(
+            "cwd={}\nargs=cc tiny.o -o example\n",
+            worktree.display()
+        ),
+    )
+    .expect("failed to write cc_driver.log");
+
+    let err = write_link_units_manifest(&log_dir, &worktree, &["example", "minigzip"])
+        .expect_err("expected missing required link output to fail");
+    assert!(
+        err.contains("missing link units for required outputs"),
+        "unexpected error: {}",
+        err
+    );
+    assert!(
+        err.contains("minigzip"),
+        "missing output should mention minigzip: {}",
+        err
+    );
+    assert!(
+        !log_dir.join("link_units_manifest.txt").exists(),
+        "link manifest should not be written on missing-output failure"
+    );
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
 fn test_required_artifacts_build_local_fixture_success() {
     let root = unique_temp_dir("zlib_required_artifacts_success");
     fs::create_dir_all(&root).expect("failed to create test root");
@@ -2413,6 +2650,16 @@ fn test_required_artifacts_build_local_fixture_success() {
         "compile unit manifest should include tiny compile unit: {}",
         compile_units
     );
+    let link_units = fs::read_to_string(log_dir.join("link_units_manifest.txt"))
+        .expect("failed to read link_units_manifest.txt");
+    for output in ZLIB_REQUIRED_LINK_OUTPUTS {
+        assert!(
+            link_units.contains(&format!("output={}", output)),
+            "link unit manifest should include output {}: {}",
+            output,
+            link_units
+        );
+    }
 
     let _ = fs::remove_dir_all(&root);
 }
@@ -3047,6 +3294,16 @@ fn test_real_world_zlib_required_artifacts_for_make_all_scope() {
         "compile unit manifest should include adler32.c compile unit: {}",
         compile_units
     );
+    let link_units = fs::read_to_string(log_dir.join("link_units_manifest.txt"))
+        .expect("failed to read link units manifest");
+    for output in ZLIB_REQUIRED_LINK_OUTPUTS {
+        assert!(
+            link_units.contains(&format!("output={}", output)),
+            "link unit manifest should include output {}: {}",
+            output,
+            link_units
+        );
+    }
 }
 
 #[test]
