@@ -113,7 +113,9 @@ Run upstream-style tests through the Fragile transpiler with runtime parity:
     - Evidence (`cargo test -p fragile-clang --test real_world_zlib_tests test_make_test_artifact_behavior_parity_local_fixture -- --nocapture`, 2026-02-20): passes; local fixture coverage verifies artifact round-trip parity success and deterministic mismatch reporting.
     - Evidence (`cargo test -p fragile-clang --test real_world_zlib_tests test_real_world_zlib_make_test_artifact_behavior_parity -- --ignored --nocapture`, 2026-02-20): passes; pinned real-world coverage asserts current native-vs-fragile artifact behavior mismatch with deterministic diagnostics.
 - [ ] Add CI tiering:
-  - [ ] smoke: minimal deterministic zlib parity run
+  - [x] smoke: minimal deterministic zlib parity run
+    - Plan: add a dedicated CI lane that runs only deterministic local-fixture zlib parity coverage (`exit status`, `stdout/stderr`, `artifact behavior`) so parity regressions are gated without relying on external project downloads.
+    - Evidence (`cargo test -p fragile-clang --test real_world_zlib_tests test_make_test_exit_status_parity_local_fixture -- --nocapture && cargo test -p fragile-clang --test real_world_zlib_tests test_make_test_stdout_stderr_parity_local_fixture -- --nocapture && cargo test -p fragile-clang --test real_world_zlib_tests test_make_test_artifact_behavior_parity_local_fixture -- --nocapture`, 2026-02-20): passes locally; same commands are wired into `.github/workflows/ci.yml` `zlib-smoke-parity` job.
   - [ ] nightly: fuller zlib matrix
 
 ### Phase 1 Exit Criteria (Must all be true)
