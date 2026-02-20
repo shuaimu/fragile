@@ -22002,6 +22002,10 @@ impl AstCodeGen {
                         }
                     } else if (expr == "self" || expr == "__self")
                         && Self::expr_is_this(&node.children[0])
+                        && !self
+                            .current_return_type
+                            .as_ref()
+                            .is_some_and(Self::is_pointer_like_type)
                     {
                         // Returning *this by value - need to clone since self is a reference
                         format!("{}.clone()", expr)
@@ -22047,6 +22051,8 @@ impl AstCodeGen {
                                     } else {
                                         "std::ptr::null_mut()".to_string()
                                     })
+                                } else if Self::expr_is_this(&node.children[0]) {
+                                    Some(format!("({}) as {}", expr, ret_ty))
                                 } else if expr_is_array {
                                     let base = self
                                         .get_raw_var_name(&node.children[0])
@@ -30890,6 +30896,66 @@ mod tests {
         assert!(
             code.contains("return self.Reset()"),
             "expected in-class caller to resolve Reset call, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_return_this_pointer_uses_pointer_cast_not_clone() {
+        let text_record = make_node(
+            ClangNodeKind::RecordDecl {
+                name: "XMLText".to_string(),
+                is_class: true,
+                is_definition: true,
+                fields: vec![],
+            },
+            vec![make_node(
+                ClangNodeKind::CXXMethodDecl {
+                    class_name: "XMLText".to_string(),
+                    name: "ToText".to_string(),
+                    return_type: CppType::Pointer {
+                        pointee: Box::new(CppType::Named("XMLText".to_string())),
+                        is_const: true,
+                    },
+                    params: vec![],
+                    is_definition: true,
+                    is_static: false,
+                    is_virtual: false,
+                    is_pure_virtual: false,
+                    is_override: false,
+                    is_final: false,
+                    is_const: true,
+                    access: AccessSpecifier::Public,
+                },
+                vec![make_node(
+                    ClangNodeKind::CompoundStmt,
+                    vec![make_node(
+                        ClangNodeKind::ReturnStmt,
+                        vec![make_node(
+                            ClangNodeKind::CXXThisExpr {
+                                ty: CppType::Pointer {
+                                    pointee: Box::new(CppType::Named("XMLText".to_string())),
+                                    is_const: true,
+                                },
+                            },
+                            vec![],
+                        )],
+                    )],
+                )],
+            )],
+        );
+
+        let ast = make_node(ClangNodeKind::TranslationUnit, vec![text_record]);
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("return (self) as *const XMLText;")
+                || code.contains("return self as *const XMLText;"),
+            "expected pointer-return cast from this, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("return self.clone();"),
+            "pointer-return this must not clone value, got:\n{}",
             code
         );
     }
