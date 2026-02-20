@@ -1285,6 +1285,14 @@ impl ClangParser {
                 clang_sys::CXCursor_DeclStmt => ClangNodeKind::DeclStmt,
                 clang_sys::CXCursor_BreakStmt => ClangNodeKind::BreakStmt,
                 clang_sys::CXCursor_ContinueStmt => ClangNodeKind::ContinueStmt,
+                clang_sys::CXCursor_GotoStmt => {
+                    let label = self.get_goto_target_label(cursor);
+                    ClangNodeKind::GotoStmt { label }
+                }
+                clang_sys::CXCursor_LabelStmt => {
+                    let label = cursor_spelling(cursor);
+                    ClangNodeKind::LabelStmt { label }
+                }
                 clang_sys::CXCursor_SwitchStmt => ClangNodeKind::SwitchStmt,
                 clang_sys::CXCursor_CaseStmt => {
                     // Evaluate the case constant
@@ -2320,6 +2328,43 @@ impl ClangParser {
 
             result
         }
+    }
+
+    /// Resolve the target label name for a goto statement cursor.
+    /// libclang may leave the goto cursor spelling empty, so fall back to
+    /// searching child label-reference cursors.
+    fn get_goto_target_label(&self, cursor: clang_sys::CXCursor) -> String {
+        let direct = cursor_spelling(cursor);
+        if !direct.is_empty() {
+            return direct;
+        }
+
+        extern "C" fn find_label_ref(
+            child: clang_sys::CXCursor,
+            _parent: clang_sys::CXCursor,
+            data: clang_sys::CXClientData,
+        ) -> clang_sys::CXChildVisitResult {
+            unsafe {
+                let child_kind = clang_sys::clang_getCursorKind(child);
+                if child_kind == clang_sys::CXCursor_LabelRef
+                    || child_kind == clang_sys::CXCursor_LabelStmt
+                {
+                    let label = cursor_spelling(child);
+                    if !label.is_empty() {
+                        let out = &mut *(data as *mut String);
+                        *out = label;
+                        return clang_sys::CXChildVisit_Break;
+                    }
+                }
+                clang_sys::CXChildVisit_Recurse
+            }
+        }
+
+        let mut label = String::new();
+        unsafe {
+            clang_sys::clang_visitChildren(cursor, find_label_ref, &mut label as *mut _ as _);
+        }
+        label
     }
 
     /// Parse lambda expression information.
@@ -4453,6 +4498,52 @@ mod tests {
             saw_static_file_local,
             "expected static file-scope variable to set is_static=true and is_extern=false"
         );
+    }
+
+    #[test]
+    fn test_parse_goto_and_label_statements_in_c_mode() {
+        fn walk(node: &ClangNode, saw_goto: &mut bool, saw_label: &mut bool) {
+            match &node.kind {
+                ClangNodeKind::GotoStmt { label } => {
+                    if label == "done" {
+                        *saw_goto = true;
+                    }
+                }
+                ClangNodeKind::LabelStmt { label } => {
+                    if label == "done" {
+                        *saw_label = true;
+                    }
+                }
+                _ => {}
+            }
+            for child in &node.children {
+                walk(child, saw_goto, saw_label);
+            }
+        }
+
+        let parser =
+            ClangParser::with_paths_defines_and_language(Vec::new(), Vec::new(), ParserLanguage::C)
+                .unwrap();
+        let ast = parser
+            .parse_string(
+                r#"
+                int jumpy(int x) {
+                    if (x) goto done;
+                    x = 1;
+                done:
+                    return x;
+                }
+                "#,
+                "test.c",
+            )
+            .unwrap();
+
+        let mut saw_goto = false;
+        let mut saw_label = false;
+        walk(&ast.translation_unit, &mut saw_goto, &mut saw_label);
+
+        assert!(saw_goto, "expected GotoStmt target `done` in parsed AST");
+        assert!(saw_label, "expected LabelStmt `done` in parsed AST");
     }
 
     #[test]

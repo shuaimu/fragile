@@ -796,6 +796,13 @@ pub struct AstCodeGen {
     /// Stack of loop depths at each enclosing switch statement entry.
     /// Used to distinguish `break` for switch from `break` for nested loops.
     switch_loop_depth_stack: Vec<usize>,
+    /// Stack of synthetic per-match-arm loop depths.
+    /// A switch-level `break` lowers to `break;` from this synthetic loop so
+    /// it can skip the rest of the current arm without exiting enclosing loops.
+    switch_arm_loop_depth_stack: Vec<usize>,
+    /// Active goto target rewrites inside the current function body.
+    /// Maps C label names to Rust labeled-loop break targets.
+    active_goto_break_labels: HashMap<String, String>,
 }
 
 /// Information about a function template definition
@@ -812,6 +819,13 @@ struct FnTemplateInfo {
     /// Whether the function is noexcept (reserved for future use)
     #[allow(dead_code)]
     is_noexcept: bool,
+}
+
+#[derive(Clone)]
+struct SwitchArm<'a> {
+    values: Vec<i128>,
+    body: Vec<&'a ClangNode>,
+    is_default: bool,
 }
 
 impl AstCodeGen {
@@ -892,6 +906,8 @@ impl AstCodeGen {
             missing_union_member_types: HashMap::new(),
             loop_depth: 0,
             switch_loop_depth_stack: Vec::new(),
+            switch_arm_loop_depth_stack: Vec::new(),
+            active_goto_break_labels: HashMap::new(),
         }
     }
 
@@ -14107,7 +14123,49 @@ impl AstCodeGen {
             // Find the compound statement (function body)
             for child in children {
                 if let ClangNodeKind::CompoundStmt = &child.kind {
-                    self.generate_block_contents(&child.children, return_type);
+                    if let Some((label_idx, label_name)) =
+                        Self::detect_single_top_level_exit_label(&child.children)
+                    {
+                        let leading_decl_count = child.children[..label_idx]
+                            .iter()
+                            .take_while(|stmt| matches!(&stmt.kind, ClangNodeKind::DeclStmt))
+                            .count();
+                        if leading_decl_count > 0 {
+                            self.generate_block_contents(
+                                &child.children[..leading_decl_count],
+                                &CppType::Void,
+                            );
+                        }
+
+                        let break_label =
+                            format!("__fragile_goto_{}", sanitize_identifier(&label_name));
+                        self.writeln(&format!("'{}: loop {{", break_label));
+                        self.indent += 1;
+                        self.active_goto_break_labels
+                            .insert(label_name.clone(), break_label.clone());
+
+                        self.generate_block_contents(
+                            &child.children[leading_decl_count..label_idx],
+                            &CppType::Void,
+                        );
+                        self.writeln(&format!("break '{};", break_label));
+
+                        self.active_goto_break_labels.remove(&label_name);
+                        self.indent -= 1;
+                        self.writeln("}");
+
+                        if let Some(label_stmt) = child.children.get(label_idx) {
+                            if let Some(labeled_stmt) = label_stmt.children.first() {
+                                self.generate_stmt(labeled_stmt, false);
+                            }
+                        }
+
+                        if label_idx + 1 < child.children.len() {
+                            self.generate_block_contents(&child.children[(label_idx + 1)..], return_type);
+                        }
+                    } else {
+                        self.generate_block_contents(&child.children, return_type);
+                    }
                 }
             }
 
@@ -20610,6 +20668,49 @@ impl AstCodeGen {
         }
     }
 
+    /// Collect all goto target labels reachable from this subtree.
+    fn collect_goto_labels_recursive(node: &ClangNode, labels: &mut HashSet<String>) {
+        if let ClangNodeKind::GotoStmt { label } = &node.kind {
+            labels.insert(label.clone());
+        }
+        for child in &node.children {
+            Self::collect_goto_labels_recursive(child, labels);
+        }
+    }
+
+    /// Detect the common C pattern where a function uses gotos to a single
+    /// top-level epilogue label (e.g., `goto inf_leave;`).
+    /// Returns `(label_stmt_index, label_name)` when the pattern is present.
+    fn detect_single_top_level_exit_label(stmts: &[ClangNode]) -> Option<(usize, String)> {
+        let top_level_labels: Vec<(usize, String)> = stmts
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, stmt)| {
+                if let ClangNodeKind::LabelStmt { label } = &stmt.kind {
+                    Some((idx, label.clone()))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        if top_level_labels.len() != 1 {
+            return None;
+        }
+
+        let (label_idx, label_name) = top_level_labels[0].clone();
+        let mut goto_labels = HashSet::new();
+        for stmt in stmts {
+            Self::collect_goto_labels_recursive(stmt, &mut goto_labels);
+        }
+
+        if goto_labels.is_empty() || goto_labels.iter().any(|target| target != &label_name) {
+            return None;
+        }
+
+        Some((label_idx, label_name))
+    }
+
     /// Generate a statement.
     fn generate_stmt(&mut self, node: &ClangNode, is_tail_expr: bool) {
         // Pre-process: collect variadic template instantiations from this node and children
@@ -21348,6 +21449,12 @@ impl AstCodeGen {
                 }
             }
             ClangNodeKind::BreakStmt => {
+                if let Some(&arm_loop_depth) = self.switch_arm_loop_depth_stack.last() {
+                    if self.loop_depth == arm_loop_depth {
+                        self.writeln("break;");
+                        return;
+                    }
+                }
                 // In C, `break` inside `switch` exits only the switch, not enclosing loops.
                 // Rust `match` has no direct `break`, so swallow switch-level break statements.
                 if let Some(&switch_loop_depth) = self.switch_loop_depth_stack.last() {
@@ -21362,6 +21469,20 @@ impl AstCodeGen {
             }
             ClangNodeKind::ContinueStmt => {
                 self.writeln("continue;");
+            }
+            ClangNodeKind::GotoStmt { label } => {
+                if let Some(break_label) = self.active_goto_break_labels.get(label) {
+                    self.writeln(&format!("break '{};", break_label));
+                } else {
+                    self.writeln(&format!("// unsupported goto {}", label));
+                }
+            }
+            ClangNodeKind::LabelStmt { .. } => {
+                // Labels are generated by the containing block transform when we can
+                // preserve goto semantics. Fallback: emit the labeled statement body.
+                if let Some(stmt) = node.children.first() {
+                    self.generate_stmt(stmt, is_tail_expr);
+                }
             }
             ClangNodeKind::TryStmt => {
                 // try { ... } catch { ... } => match std::panic::catch_unwind(|| { ... })
@@ -21630,16 +21751,66 @@ impl AstCodeGen {
         // Children: body, condition
         // do { body } while (cond); => loop { body; if !cond { break; } }
         if node.children.len() >= 2 {
+            let cond = self.condition_to_bool_expr(&node.children[1]);
             self.writeln("loop {");
             self.indent += 1;
             self.loop_depth += 1;
             // Body first (executes at least once)
-            self.generate_stmt(&node.children[0], false);
+            self.generate_do_body_stmt(&node.children[0], &cond);
             // Then condition check
-            let cond = self.condition_to_bool_expr(&node.children[1]);
             self.writeln(&format!("if !({}) {{ break; }}", cond));
             self.loop_depth -= 1;
             self.indent -= 1;
+            self.writeln("}");
+        }
+    }
+
+    /// Generate a statement inside a do-while loop body, handling continue specially.
+    /// In C do-while loops, continue jumps to the condition check.
+    fn generate_do_body_stmt(&mut self, node: &ClangNode, cond: &str) {
+        match &node.kind {
+            ClangNodeKind::ContinueStmt => {
+                self.writeln(&format!("if !({}) {{ break; }}", cond));
+                self.writeln("continue;");
+            }
+            ClangNodeKind::CompoundStmt => {
+                self.writeln("{");
+                self.indent += 1;
+                for stmt in &node.children {
+                    self.generate_do_body_stmt(stmt, cond);
+                }
+                self.indent -= 1;
+                self.writeln("}");
+            }
+            ClangNodeKind::IfStmt => {
+                self.generate_do_if_stmt(node, cond);
+            }
+            _ => {
+                self.generate_stmt(node, false);
+            }
+        }
+    }
+
+    /// Generate if statement inside do-while body, handling continue in branches.
+    fn generate_do_if_stmt(&mut self, node: &ClangNode, cond: &str) {
+        if node.children.len() >= 2 {
+            let if_cond = self.condition_to_bool_expr(&node.children[0]);
+            self.writeln(&format!("if {} {{", if_cond));
+            self.indent += 1;
+            self.generate_do_body_stmt(&node.children[1], cond);
+            self.indent -= 1;
+
+            if node.children.len() > 2 {
+                if let ClangNodeKind::IfStmt = &node.children[2].kind {
+                    self.write("} else ");
+                    self.generate_do_if_stmt(&node.children[2], cond);
+                    return;
+                }
+                self.writeln("} else {");
+                self.indent += 1;
+                self.generate_do_body_stmt(&node.children[2], cond);
+                self.indent -= 1;
+            }
             self.writeln("}");
         }
     }
@@ -21661,29 +21832,65 @@ impl AstCodeGen {
         self.writeln(&format!("match {} {{", cond));
         self.indent += 1;
 
-        // Find the body (CompoundStmt with cases)
-        let body = &node.children[1];
+        let arms = Self::collect_switch_arms(&node.children[1]);
+        let mut has_default = false;
+        if !arms.is_empty() {
+            // Preserve C fallthrough semantics by appending subsequent arm bodies
+            // when the current arm can naturally flow into the next arm.
+            let mut expanded_bodies: Vec<Vec<&ClangNode>> =
+                arms.iter().map(|arm| arm.body.clone()).collect();
+            for idx in (0..arms.len()).rev() {
+                if idx + 1 < arms.len() && Self::switch_body_can_fall_through(&arms[idx].body) {
+                    let next_body = expanded_bodies[idx + 1].clone();
+                    expanded_bodies[idx].extend(next_body);
+                }
+            }
+
+            let mut default_idx: Option<usize> = None;
+            for (idx, arm) in arms.iter().enumerate() {
+                if arm.is_default {
+                    has_default = true;
+                    default_idx = Some(idx);
+                } else {
+                    self.emit_match_arm(&arm.values, &expanded_bodies[idx], &enum_name);
+                }
+            }
+
+            if let Some(idx) = default_idx {
+                self.emit_default_arm(&expanded_bodies[idx]);
+            }
+        }
+
+        if !has_default {
+            self.writeln("_ => {}");
+        }
+
+        self.indent -= 1;
+        self.writeln("}");
+        let _ = self.switch_loop_depth_stack.pop();
+    }
+
+    fn collect_switch_arms<'a>(body: &'a ClangNode) -> Vec<SwitchArm<'a>> {
+        let mut arms = Vec::new();
+        let mut current_values: Vec<i128> = Vec::new();
+        let mut current_body: Vec<&ClangNode> = Vec::new();
+        let mut current_is_default = false;
+        let mut has_current_arm = false;
+
         if let ClangNodeKind::CompoundStmt = &body.kind {
-            // Process each case/default while preserving non-case siblings
-            // as part of the current active arm.
-            let mut current_values: Vec<i128> = Vec::new();
-            let mut current_body: Vec<&ClangNode> = Vec::new();
-            let mut in_default = false;
-            let mut default_body_to_emit: Option<Vec<&ClangNode>> = None;
             for child in &body.children {
                 match &child.kind {
                     ClangNodeKind::CaseStmt { value, .. } => {
-                        // Emit any previous arm before starting a new case arm.
-                        if !current_values.is_empty() {
-                            self.emit_match_arm(&current_values, &current_body, &enum_name);
-                            current_values.clear();
-                            current_body.clear();
-                        } else if in_default {
-                            default_body_to_emit = Some(current_body.clone());
-                            current_body.clear();
-                            in_default = false;
+                        if has_current_arm {
+                            arms.push(SwitchArm {
+                                values: std::mem::take(&mut current_values),
+                                body: std::mem::take(&mut current_body),
+                                is_default: current_is_default,
+                            });
                         }
 
+                        current_is_default = false;
+                        has_current_arm = true;
                         current_values.push(*value);
 
                         // Case children include the label expression first, then
@@ -21706,58 +21913,65 @@ impl AstCodeGen {
                         }
                     }
                     ClangNodeKind::DefaultStmt => {
-                        // Emit any previous case arm before starting default.
-                        if !current_values.is_empty() {
-                            self.emit_match_arm(&current_values, &current_body, &enum_name);
-                            current_values.clear();
-                            current_body.clear();
-                        } else if in_default {
-                            default_body_to_emit = Some(current_body.clone());
-                            current_body.clear();
+                        if has_current_arm {
+                            arms.push(SwitchArm {
+                                values: std::mem::take(&mut current_values),
+                                body: std::mem::take(&mut current_body),
+                                is_default: current_is_default,
+                            });
                         }
 
-                        in_default = true;
+                        current_is_default = true;
+                        has_current_arm = true;
                         current_body.extend(child.children.iter());
                     }
                     _ => {
-                        if !current_values.is_empty() || in_default {
+                        if has_current_arm {
                             current_body.push(child);
                         }
                     }
                 }
             }
-
-            // Emit final arm if any.
-            if !current_values.is_empty() {
-                self.emit_match_arm(&current_values, &current_body, &enum_name);
-            } else if in_default {
-                default_body_to_emit = Some(current_body.clone());
-            }
-
-            // C `default` can appear anywhere in source, but Rust `_` must be last.
-            if let Some(default_body) = default_body_to_emit {
-                self.emit_default_arm(&default_body);
-            }
         }
 
-        // Add default arm if not present (Rust requires exhaustive match)
-        // Note: We add _ => {} only if no DefaultStmt was found
-        let has_default = node.children.get(1).is_some_and(|c| {
-            if let ClangNodeKind::CompoundStmt = &c.kind {
-                c.children
-                    .iter()
-                    .any(|ch| matches!(&ch.kind, ClangNodeKind::DefaultStmt))
-            } else {
-                false
-            }
-        });
-        if !has_default {
-            self.writeln("_ => {}");
+        if has_current_arm {
+            arms.push(SwitchArm {
+                values: current_values,
+                body: current_body,
+                is_default: current_is_default,
+            });
         }
 
-        self.indent -= 1;
-        self.writeln("}");
-        let _ = self.switch_loop_depth_stack.pop();
+        arms
+    }
+
+    fn switch_body_can_fall_through(body: &[&ClangNode]) -> bool {
+        match body.last() {
+            Some(last) => !Self::stmt_definitely_exits_switch(last),
+            None => true,
+        }
+    }
+
+    fn stmt_definitely_exits_switch(node: &ClangNode) -> bool {
+        match &node.kind {
+            ClangNodeKind::BreakStmt
+            | ClangNodeKind::ContinueStmt
+            | ClangNodeKind::ReturnStmt
+            | ClangNodeKind::GotoStmt { .. } => true,
+            ClangNodeKind::CompoundStmt => node
+                .children
+                .last()
+                .is_some_and(Self::stmt_definitely_exits_switch),
+            ClangNodeKind::IfStmt => {
+                if node.children.len() < 3 {
+                    false
+                } else {
+                    Self::stmt_definitely_exits_switch(&node.children[1])
+                        && Self::stmt_definitely_exits_switch(&node.children[2])
+                }
+            }
+            _ => false,
+        }
     }
 
     /// Collect values/body from a (possibly nested) CaseStmt subtree.
@@ -21810,23 +22024,47 @@ impl AstCodeGen {
             })
             .collect::<Vec<_>>()
             .join(" | ");
+        let needs_arm_break = Self::switch_body_can_fall_through(body);
 
         self.writeln(&format!("{} => {{", pattern));
         self.indent += 1;
+        self.writeln("loop {");
+        self.indent += 1;
+        self.loop_depth += 1;
+        self.switch_arm_loop_depth_stack.push(self.loop_depth);
         for stmt in body {
             self.generate_stmt(stmt, false);
         }
+        if needs_arm_break {
+            self.writeln("break;");
+        }
+        let _ = self.switch_arm_loop_depth_stack.pop();
+        self.loop_depth -= 1;
+        self.indent -= 1;
+        self.writeln("}");
         self.indent -= 1;
         self.writeln("}");
     }
 
     /// Emit the default arm of a match.
     fn emit_default_arm(&mut self, body: &[&ClangNode]) {
+        let needs_arm_break = Self::switch_body_can_fall_through(body);
         self.writeln("_ => {");
         self.indent += 1;
+        self.writeln("loop {");
+        self.indent += 1;
+        self.loop_depth += 1;
+        self.switch_arm_loop_depth_stack.push(self.loop_depth);
         for stmt in body {
             self.generate_stmt(stmt, false);
         }
+        if needs_arm_break {
+            self.writeln("break;");
+        }
+        let _ = self.switch_arm_loop_depth_stack.pop();
+        self.loop_depth -= 1;
+        self.indent -= 1;
+        self.writeln("}");
         self.indent -= 1;
         self.writeln("}");
     }
@@ -31105,6 +31343,551 @@ mod tests {
             !code.contains("= (*s).prev_length = 2"),
             "outer assignment must not receive raw `lhs = rhs = value` form in Rust, got:\n{}",
             code
+        );
+    }
+
+    #[test]
+    fn test_do_while_continue_checks_condition_before_next_iteration() {
+        let cond_ref = || {
+            make_node(
+                ClangNodeKind::DeclRefExpr {
+                    name: "cond".to_string(),
+                    ty: CppType::Bool,
+                    namespace_path: vec![],
+                },
+                vec![],
+            )
+        };
+
+        let body = make_node(
+            ClangNodeKind::CompoundStmt,
+            vec![
+                make_node(
+                    ClangNodeKind::IfStmt,
+                    vec![
+                        cond_ref(),
+                        make_node(ClangNodeKind::ContinueStmt, vec![]),
+                    ],
+                ),
+                make_node(
+                    ClangNodeKind::ExprStmt,
+                    vec![make_node(
+                        ClangNodeKind::BinaryOperator {
+                            op: BinaryOp::Assign,
+                            ty: CppType::Bool,
+                        },
+                        vec![
+                            cond_ref(),
+                            make_node(
+                                ClangNodeKind::BoolLiteral(false),
+                                vec![],
+                            ),
+                        ],
+                    )],
+                ),
+            ],
+        );
+
+        let do_stmt = make_node(
+            ClangNodeKind::DoStmt,
+            vec![
+                body,
+                cond_ref(),
+            ],
+        );
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![make_node(
+                ClangNodeKind::FunctionDecl {
+                    name: "do_continue_semantics".to_string(),
+                    mangled_name: "do_continue_semantics".to_string(),
+                    is_static: false,
+                    return_type: CppType::Int { signed: true },
+                    params: vec![("cond".to_string(), CppType::Bool)],
+                    is_definition: true,
+                    is_variadic: false,
+                    is_noexcept: false,
+                    is_coroutine: false,
+                    coroutine_info: None,
+                },
+                vec![make_node(
+                    ClangNodeKind::CompoundStmt,
+                    vec![
+                        do_stmt,
+                        make_node(
+                            ClangNodeKind::ReturnStmt,
+                            vec![make_node(
+                                ClangNodeKind::IntegerLiteral {
+                                    value: 0,
+                                    cpp_type: Some(CppType::Int { signed: true }),
+                                },
+                                vec![],
+                            )],
+                        ),
+                    ],
+                )],
+            )],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        let check = "if !(cond) { break; }";
+        assert_eq!(
+            code.matches(check).count(),
+            2,
+            "do-while with continue should check condition both on continue path and loop tail, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_single_top_level_label_goto_rewrites_to_labeled_break() {
+        let jump_ref = || {
+            make_node(
+                ClangNodeKind::DeclRefExpr {
+                    name: "jump".to_string(),
+                    ty: CppType::Bool,
+                    namespace_path: vec![],
+                },
+                vec![],
+            )
+        };
+        let ret_ref = || {
+            make_node(
+                ClangNodeKind::DeclRefExpr {
+                    name: "ret".to_string(),
+                    ty: CppType::Int { signed: true },
+                    namespace_path: vec![],
+                },
+                vec![],
+            )
+        };
+        let assign_ret = |value: i128| {
+            make_node(
+                ClangNodeKind::ExprStmt,
+                vec![make_node(
+                    ClangNodeKind::BinaryOperator {
+                        op: BinaryOp::Assign,
+                        ty: CppType::Int { signed: true },
+                    },
+                    vec![
+                        ret_ref(),
+                        make_node(
+                            ClangNodeKind::IntegerLiteral {
+                                value,
+                                cpp_type: Some(CppType::Int { signed: true }),
+                            },
+                            vec![],
+                        ),
+                    ],
+                )],
+            )
+        };
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![make_node(
+                ClangNodeKind::FunctionDecl {
+                    name: "goto_epilogue".to_string(),
+                    mangled_name: "goto_epilogue".to_string(),
+                    is_static: false,
+                    return_type: CppType::Int { signed: true },
+                    params: vec![("jump".to_string(), CppType::Bool)],
+                    is_definition: true,
+                    is_variadic: false,
+                    is_noexcept: false,
+                    is_coroutine: false,
+                    coroutine_info: None,
+                },
+                vec![make_node(
+                    ClangNodeKind::CompoundStmt,
+                    vec![
+                        make_node(
+                            ClangNodeKind::DeclStmt,
+                            vec![make_node(
+                                ClangNodeKind::VarDecl {
+                                    name: "ret".to_string(),
+                                    ty: CppType::Int { signed: true },
+                                    has_init: true,
+                                    is_static: false,
+                                    is_extern: false,
+                                },
+                                vec![make_node(
+                                    ClangNodeKind::IntegerLiteral {
+                                        value: 0,
+                                        cpp_type: Some(CppType::Int { signed: true }),
+                                    },
+                                    vec![],
+                                )],
+                            )],
+                        ),
+                        make_node(
+                            ClangNodeKind::IfStmt,
+                            vec![
+                                jump_ref(),
+                                make_node(
+                                    ClangNodeKind::GotoStmt {
+                                        label: "done".to_string(),
+                                    },
+                                    vec![],
+                                ),
+                            ],
+                        ),
+                        assign_ret(1),
+                        make_node(
+                            ClangNodeKind::LabelStmt {
+                                label: "done".to_string(),
+                            },
+                            vec![assign_ret(2)],
+                        ),
+                        make_node(ClangNodeKind::ReturnStmt, vec![ret_ref()]),
+                    ],
+                )],
+            )],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("'__fragile_goto_done: loop {"),
+            "expected labeled loop for single-epilogue goto pattern, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("break '__fragile_goto_done;"),
+            "expected goto to lower as labeled break, got:\n{}",
+            code
+        );
+        let decl_pos = code
+            .find("let mut ret: i32")
+            .expect("expected `ret` declaration in generated function");
+        let loop_pos = code
+            .find("'__fragile_goto_done: loop")
+            .expect("expected generated goto loop label");
+        assert!(
+            decl_pos < loop_pos,
+            "leading declarations must stay in scope for epilogue statements, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_unsupported_goto_is_emitted_as_comment() {
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![make_node(
+                ClangNodeKind::FunctionDecl {
+                    name: "unsupported_goto".to_string(),
+                    mangled_name: "unsupported_goto".to_string(),
+                    is_static: false,
+                    return_type: CppType::Int { signed: true },
+                    params: vec![],
+                    is_definition: true,
+                    is_variadic: false,
+                    is_noexcept: false,
+                    is_coroutine: false,
+                    coroutine_info: None,
+                },
+                vec![make_node(
+                    ClangNodeKind::CompoundStmt,
+                    vec![
+                        make_node(
+                            ClangNodeKind::GotoStmt {
+                                label: "missing".to_string(),
+                            },
+                            vec![],
+                        ),
+                        make_node(
+                            ClangNodeKind::ReturnStmt,
+                            vec![make_node(
+                                ClangNodeKind::IntegerLiteral {
+                                    value: 0,
+                                    cpp_type: Some(CppType::Int { signed: true }),
+                                },
+                                vec![],
+                            )],
+                        ),
+                    ],
+                )],
+            )],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("// unsupported goto missing"),
+            "unsupported goto should stay visible in generated output for diagnostics, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_switch_break_inside_case_exits_arm_without_comment_stub() {
+        let ret_ref = || {
+            make_node(
+                ClangNodeKind::DeclRefExpr {
+                    name: "ret".to_string(),
+                    ty: CppType::Int { signed: true },
+                    namespace_path: vec![],
+                },
+                vec![],
+            )
+        };
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![make_node(
+                ClangNodeKind::FunctionDecl {
+                    name: "switch_break_case".to_string(),
+                    mangled_name: "switch_break_case".to_string(),
+                    is_static: false,
+                    return_type: CppType::Int { signed: true },
+                    params: vec![("v".to_string(), CppType::Int { signed: true })],
+                    is_definition: true,
+                    is_variadic: false,
+                    is_noexcept: false,
+                    is_coroutine: false,
+                    coroutine_info: None,
+                },
+                vec![make_node(
+                    ClangNodeKind::CompoundStmt,
+                    vec![
+                        make_node(
+                            ClangNodeKind::DeclStmt,
+                            vec![make_node(
+                                ClangNodeKind::VarDecl {
+                                    name: "ret".to_string(),
+                                    ty: CppType::Int { signed: true },
+                                    has_init: true,
+                                    is_static: false,
+                                    is_extern: false,
+                                },
+                                vec![make_node(
+                                    ClangNodeKind::IntegerLiteral {
+                                        value: 0,
+                                        cpp_type: Some(CppType::Int { signed: true }),
+                                    },
+                                    vec![],
+                                )],
+                            )],
+                        ),
+                        make_node(
+                            ClangNodeKind::SwitchStmt,
+                            vec![
+                                make_node(
+                                    ClangNodeKind::DeclRefExpr {
+                                        name: "v".to_string(),
+                                        ty: CppType::Int { signed: true },
+                                        namespace_path: vec![],
+                                    },
+                                    vec![],
+                                ),
+                                make_node(
+                                    ClangNodeKind::CompoundStmt,
+                                    vec![
+                                        make_node(
+                                            ClangNodeKind::CaseStmt {
+                                                value: 1,
+                                                enum_name: None,
+                                            },
+                                            vec![
+                                                make_node(
+                                                    ClangNodeKind::IntegerLiteral {
+                                                        value: 1,
+                                                        cpp_type: Some(CppType::Int { signed: true }),
+                                                    },
+                                                    vec![],
+                                                ),
+                                                make_node(ClangNodeKind::BreakStmt, vec![]),
+                                                make_node(
+                                                    ClangNodeKind::ExprStmt,
+                                                    vec![make_node(
+                                                        ClangNodeKind::BinaryOperator {
+                                                            op: BinaryOp::Assign,
+                                                            ty: CppType::Int { signed: true },
+                                                        },
+                                                        vec![
+                                                            ret_ref(),
+                                                            make_node(
+                                                                ClangNodeKind::IntegerLiteral {
+                                                                    value: 1,
+                                                                    cpp_type: Some(CppType::Int {
+                                                                        signed: true,
+                                                                    }),
+                                                                },
+                                                                vec![],
+                                                            ),
+                                                        ],
+                                                    )],
+                                                ),
+                                            ],
+                                        ),
+                                        make_node(ClangNodeKind::DefaultStmt, vec![]),
+                                    ],
+                                ),
+                            ],
+                        ),
+                        make_node(ClangNodeKind::ReturnStmt, vec![ret_ref()]),
+                    ],
+                )],
+            )],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            !code.contains("// break; (switch)"),
+            "switch-case break should lower to executable break in arm wrapper, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_switch_case_fallthrough_appends_next_case_body() {
+        let ret_ref = || {
+            make_node(
+                ClangNodeKind::DeclRefExpr {
+                    name: "ret".to_string(),
+                    ty: CppType::Int { signed: true },
+                    namespace_path: vec![],
+                },
+                vec![],
+            )
+        };
+        let assign_ret = |value: i128| {
+            make_node(
+                ClangNodeKind::ExprStmt,
+                vec![make_node(
+                    ClangNodeKind::BinaryOperator {
+                        op: BinaryOp::Assign,
+                        ty: CppType::Int { signed: true },
+                    },
+                    vec![
+                        ret_ref(),
+                        make_node(
+                            ClangNodeKind::IntegerLiteral {
+                                value,
+                                cpp_type: Some(CppType::Int { signed: true }),
+                            },
+                            vec![],
+                        ),
+                    ],
+                )],
+            )
+        };
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![make_node(
+                ClangNodeKind::FunctionDecl {
+                    name: "switch_fallthrough".to_string(),
+                    mangled_name: "switch_fallthrough".to_string(),
+                    is_static: false,
+                    return_type: CppType::Int { signed: true },
+                    params: vec![("v".to_string(), CppType::Int { signed: true })],
+                    is_definition: true,
+                    is_variadic: false,
+                    is_noexcept: false,
+                    is_coroutine: false,
+                    coroutine_info: None,
+                },
+                vec![make_node(
+                    ClangNodeKind::CompoundStmt,
+                    vec![
+                        make_node(
+                            ClangNodeKind::DeclStmt,
+                            vec![make_node(
+                                ClangNodeKind::VarDecl {
+                                    name: "ret".to_string(),
+                                    ty: CppType::Int { signed: true },
+                                    has_init: true,
+                                    is_static: false,
+                                    is_extern: false,
+                                },
+                                vec![make_node(
+                                    ClangNodeKind::IntegerLiteral {
+                                        value: 0,
+                                        cpp_type: Some(CppType::Int { signed: true }),
+                                    },
+                                    vec![],
+                                )],
+                            )],
+                        ),
+                        make_node(
+                            ClangNodeKind::SwitchStmt,
+                            vec![
+                                make_node(
+                                    ClangNodeKind::DeclRefExpr {
+                                        name: "v".to_string(),
+                                        ty: CppType::Int { signed: true },
+                                        namespace_path: vec![],
+                                    },
+                                    vec![],
+                                ),
+                                make_node(
+                                    ClangNodeKind::CompoundStmt,
+                                    vec![
+                                        make_node(
+                                            ClangNodeKind::CaseStmt {
+                                                value: 1,
+                                                enum_name: None,
+                                            },
+                                            vec![
+                                                make_node(
+                                                    ClangNodeKind::IntegerLiteral {
+                                                        value: 1,
+                                                        cpp_type: Some(CppType::Int {
+                                                            signed: true,
+                                                        }),
+                                                    },
+                                                    vec![],
+                                                ),
+                                                assign_ret(1),
+                                            ],
+                                        ),
+                                        make_node(
+                                            ClangNodeKind::CaseStmt {
+                                                value: 2,
+                                                enum_name: None,
+                                            },
+                                            vec![
+                                                make_node(
+                                                    ClangNodeKind::IntegerLiteral {
+                                                        value: 2,
+                                                        cpp_type: Some(CppType::Int {
+                                                            signed: true,
+                                                        }),
+                                                    },
+                                                    vec![],
+                                                ),
+                                                assign_ret(2),
+                                                make_node(ClangNodeKind::BreakStmt, vec![]),
+                                            ],
+                                        ),
+                                        make_node(
+                                            ClangNodeKind::DefaultStmt,
+                                            vec![assign_ret(3), make_node(ClangNodeKind::BreakStmt, vec![])],
+                                        ),
+                                    ],
+                                ),
+                            ],
+                        ),
+                        make_node(ClangNodeKind::ReturnStmt, vec![ret_ref()]),
+                    ],
+                )],
+            )],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        let arm1_start = code
+            .find("1 => {")
+            .expect("expected case-1 arm in generated switch");
+        let arm2_start = code
+            .find("2 => {")
+            .expect("expected case-2 arm in generated switch");
+        let arm1 = &code[arm1_start..arm2_start];
+        let arm1_assign_count = arm1.matches("ret =").count();
+        assert!(
+            arm1_assign_count >= 2,
+            "fallthrough case should include next case body assignments, got:\n{}",
+            arm1
         );
     }
 
