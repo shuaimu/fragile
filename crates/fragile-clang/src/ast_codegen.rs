@@ -12833,26 +12833,67 @@ impl AstCodeGen {
             }
         };
 
-        let mut param_strs: Vec<String> = params
+        let param_strs: Vec<String> = params
             .iter()
             .enumerate()
             .map(|(i, (_, t))| format!("_arg{}: {}", i, t.to_rust_type_str()))
             .collect();
+        let call_args: Vec<String> = (0..params.len()).map(|i| format!("_arg{}", i)).collect();
         if is_variadic {
-            param_strs.push("...".to_string());
+            // Rust cannot define non-extern variadic wrappers, so keep a direct declaration.
+            let mut variadic_params = param_strs.clone();
+            variadic_params.push("...".to_string());
+            self.writeln("unsafe extern \"C\" {");
+            self.indent += 1;
+            if rust_name != name {
+                self.writeln(&format!("#[link_name = \"{}\"]", name));
+            }
+            self.writeln(&format!(
+                "pub fn {}({}){};",
+                rust_name,
+                variadic_params.join(", "),
+                ret_str
+            ));
+            self.indent -= 1;
+            self.writeln("}");
+            self.writeln("");
+            self.emitted_extern_c_functions.insert(rust_name);
+            return;
         }
 
+        let raw_rust_name = format!("__fragile_extern_{}", rust_name);
         self.writeln("unsafe extern \"C\" {");
         self.indent += 1;
-        if rust_name != name {
-            self.writeln(&format!("#[link_name = \"{}\"]", name));
-        }
+        self.writeln(&format!("#[link_name = \"{}\"]", name));
         self.writeln(&format!(
-            "pub fn {}({}){};",
+            "fn {}({}){};",
+            raw_rust_name,
+            param_strs.join(", "),
+            ret_str
+        ));
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("#[inline]");
+        self.writeln(&format!(
+            "pub fn {}({}){} {{",
             rust_name,
             param_strs.join(", "),
             ret_str
         ));
+        self.indent += 1;
+        if ret_str.is_empty() {
+            self.writeln(&format!(
+                "unsafe {{ {}({}); }}",
+                raw_rust_name,
+                call_args.join(", ")
+            ));
+        } else {
+            self.writeln(&format!(
+                "unsafe {{ {}({}) }}",
+                raw_rust_name,
+                call_args.join(", ")
+            ));
+        }
         self.indent -= 1;
         self.writeln("}");
         self.writeln("");
@@ -18297,6 +18338,14 @@ impl AstCodeGen {
     fn is_function_pointer_variable(node: &ClangNode) -> bool {
         match &node.kind {
             ClangNodeKind::DeclRefExpr { ty, .. } => Self::is_function_pointer_type_or_typedef(ty),
+            ClangNodeKind::MemberExpr { ty, .. } => Self::is_function_pointer_type_or_typedef(ty),
+            ClangNodeKind::UnaryOperator {
+                op: UnaryOp::Deref, ..
+            }
+            | ClangNodeKind::CastExpr { .. }
+            | ClangNodeKind::ParenExpr { .. } => {
+                node.children.iter().any(Self::is_function_pointer_variable)
+            }
             ClangNodeKind::Unknown(_) | ClangNodeKind::ImplicitCastExpr { .. } => {
                 // Look through wrapper nodes (but not FunctionToPointerDecay)
                 node.children.iter().any(Self::is_function_pointer_variable)
@@ -18313,17 +18362,42 @@ impl AstCodeGen {
             }
             CppType::Named(name) => {
                 // Keep this conservative: false positives here produce invalid `.unwrap()()`
-                // on non-function values.
+                // on non-function values, while still catching common typedef names.
+                let lower = name.to_ascii_lowercase();
                 name.contains("(*")
                     || name.contains("fn(")
-                    || name.ends_with("_f")
-                    || name.ends_with("Fn")
-                    || name.ends_with("Func")
-                    || name.ends_with("Handler")
-                    || name.ends_with("Callback")
+                    || lower.ends_with("_f")
+                    || lower.ends_with("fn")
+                    || lower.ends_with("func")
+                    || lower.ends_with("handler")
+                    || lower.ends_with("callback")
             }
             _ => false,
         }
+    }
+
+    /// Check if a type expression is function-pointer-like, including typedef aliases.
+    fn is_function_pointer_expr_type(&self, ty: &CppType) -> bool {
+        if Self::is_function_pointer_type_or_typedef(ty) {
+            return true;
+        }
+        if let CppType::Named(name) = ty {
+            let alias = sanitize_identifier(name);
+            if let Some(target) = self.type_alias_targets.get(&alias) {
+                return is_option_fn_rust_type(target);
+            }
+        }
+        false
+    }
+
+    /// Check if an expression node has a function-pointer-like type.
+    fn node_is_function_pointer_expr(&self, node: &ClangNode) -> bool {
+        Self::get_expr_type(node)
+            .as_ref()
+            .is_some_and(|ty| self.is_function_pointer_expr_type(ty))
+            || Self::get_original_expr_type(node)
+                .as_ref()
+                .is_some_and(|ty| self.is_function_pointer_expr_type(ty))
     }
 
     /// Check if a node is a nullptr literal (possibly wrapped in Unknown nodes).
@@ -21126,6 +21200,11 @@ impl AstCodeGen {
                     let operand = self.expr_to_string_raw(&node.children[0]);
                     match op {
                         UnaryOp::Deref => {
+                            // C function pointers are represented as Option<fn(...)>; a source-level
+                            // `*fp` used as a call callee should not become raw-pointer dereference.
+                            if self.node_is_function_pointer_expr(&node.children[0]) {
+                                return operand;
+                            }
                             // Check if operand is a reference variable (tracked in ref_vars)
                             // In Rust, dereferencing a reference for method calls is automatic
                             // So *ref_var.method() should just be ref_var.method()
@@ -21451,8 +21530,16 @@ impl AstCodeGen {
                             format!("{} as {}", cast_inner, rust_type)
                         }
                         CastKind::FunctionToPointerDecay => {
-                            // Function to pointer decay - wrap in Some() for Option<fn(...)> type
-                            format!("Some({})", inner)
+                            // Function-to-pointer decay should be idempotent when the child already
+                            // produces an Option<fn(...)> value (e.g., typedef'd function-pointer fields).
+                            if inner == "None"
+                                || inner.starts_with("Some(")
+                                || self.node_is_function_pointer_expr(child)
+                            {
+                                inner
+                            } else {
+                                format!("Some({})", inner)
+                            }
                         }
                         CastKind::ArrayToPointerDecay => {
                             if let Some(decayed) =
@@ -22748,10 +22835,19 @@ impl AstCodeGen {
                                 .as_ref()
                                 .map(|t| t.to_rust_type_str())
                                 .unwrap_or_default();
+                            let rhs_is_fn_ptr_expr = right_type
+                                .as_ref()
+                                .is_some_and(|ty| self.is_function_pointer_expr_type(ty))
+                                || right_orig_type
+                                    .as_ref()
+                                    .is_some_and(|ty| self.is_function_pointer_expr_type(ty));
                             if left_is_fn_ptr || is_option_fn_rust_type(&left_rust_type) {
                                 if is_zero_integer_literal_str(&right_raw) {
                                     right_raw = "None".to_string();
-                                } else if right_raw != "None" && !right_raw.starts_with("Some(") {
+                                } else if right_raw != "None"
+                                    && !right_raw.starts_with("Some(")
+                                    && !rhs_is_fn_ptr_expr
+                                {
                                     right_raw = format!("Some({})", right_raw);
                                 }
                             } else {
@@ -23001,10 +23097,19 @@ impl AstCodeGen {
                                 .as_ref()
                                 .map(|t| t.to_rust_type_str())
                                 .unwrap_or_default();
+                            let rhs_is_fn_ptr_expr = right_type
+                                .as_ref()
+                                .is_some_and(|ty| self.is_function_pointer_expr_type(ty))
+                                || right_orig_type
+                                    .as_ref()
+                                    .is_some_and(|ty| self.is_function_pointer_expr_type(ty));
                             if left_is_fn_ptr || is_option_fn_rust_type(&left_rust_type) {
                                 if is_zero_integer_literal_str(&right) {
                                     right = "None".to_string();
-                                } else if right != "None" && !right.starts_with("Some(") {
+                                } else if right != "None"
+                                    && !right.starts_with("Some(")
+                                    && !rhs_is_fn_ptr_expr
+                                {
                                     right = format!("Some({})", right);
                                 }
                             } else {
@@ -24085,6 +24190,11 @@ impl AstCodeGen {
                             }
                         }
                         UnaryOp::Deref => {
+                            // C function pointers are represented as Option<fn(...)>; a source-level
+                            // `*fp` used as a call callee should not become raw-pointer dereference.
+                            if self.node_is_function_pointer_expr(&node.children[0]) {
+                                operand
+                            } else
                             // Check if we're dereferencing 'this' - in C++ *this gives the object,
                             // in Rust 'self' is already the object (not a pointer)
                             if matches!(&node.children[0].kind, ClangNodeKind::CXXThisExpr { .. }) {
@@ -25081,7 +25191,20 @@ impl AstCodeGen {
                             };
                         }
                         if is_fn_ptr_call {
-                            format!("{}.unwrap()({})", func, args.join(", "))
+                            if func.starts_with("unsafe { ") && func.ends_with(" }") {
+                                let inner = &func[9..func.len() - 2];
+                                format!(
+                                    "unsafe {{ ({}).expect(\"function pointer not set\")({}) }}",
+                                    inner,
+                                    args.join(", ")
+                                )
+                            } else {
+                                format!(
+                                    "({}).expect(\"function pointer not set\")({})",
+                                    func,
+                                    args.join(", ")
+                                )
+                            }
                         } else {
                             format!("{}({})", func, args.join(", "))
                         }
@@ -25637,12 +25760,24 @@ impl AstCodeGen {
 
                     // Check if the function expression is wrapped in unsafe (from arrow member access)
                     // If so, put the function call inside the unsafe block
-                    if func.starts_with("unsafe { ") && func.ends_with(" }") {
+                    if is_fn_ptr_call {
+                        if func.starts_with("unsafe { ") && func.ends_with(" }") {
+                            let inner = &func[9..func.len() - 2]; // Extract "(*...).field" from "unsafe { (*...).field }"
+                            format!(
+                                "unsafe {{ ({}).expect(\"function pointer not set\")({}) }}",
+                                inner,
+                                args.join(", ")
+                            )
+                        } else {
+                            format!(
+                                "({}).expect(\"function pointer not set\")({})",
+                                func,
+                                args.join(", ")
+                            )
+                        }
+                    } else if func.starts_with("unsafe { ") && func.ends_with(" }") {
                         let inner = &func[9..func.len() - 2]; // Extract "(*...).method" from "unsafe { (*...).method }"
                         format!("unsafe {{ {}({}) }}", inner, args.join(", "))
-                    } else if is_fn_ptr_call {
-                        // Function pointer call: need to unwrap the Option<fn(...)>
-                        format!("{}.unwrap()({})", func, args.join(", "))
                     } else if Self::is_unsafe_runtime_function(&func) {
                         // Unsafe runtime function (pthread, malloc, etc.)
                         format!("unsafe {{ {}({}) }}", func, args.join(", "))
@@ -26537,8 +26672,16 @@ impl AstCodeGen {
                             format!("{} as {}", cast_inner, rust_type)
                         }
                         CastKind::FunctionToPointerDecay => {
-                            // Function to pointer decay - wrap in Some() for Option<fn(...)> type
-                            format!("Some({})", inner)
+                            // Function-to-pointer decay should be idempotent when the child already
+                            // produces an Option<fn(...)> value (e.g., typedef'd function-pointer fields).
+                            if inner == "None"
+                                || inner.starts_with("Some(")
+                                || self.node_is_function_pointer_expr(child)
+                            {
+                                inner
+                            } else {
+                                format!("Some({})", inner)
+                            }
                         }
                         CastKind::ArrayToPointerDecay => {
                             if let Some(decayed) =
@@ -26643,7 +26786,10 @@ impl AstCodeGen {
                         if is_zero_integer_literal_str(&inner) {
                             return "None".to_string();
                         }
-                        if inner == "None" || inner.starts_with("Some(") {
+                        if inner == "None"
+                            || inner.starts_with("Some(")
+                            || inner_node.is_some_and(|n| self.node_is_function_pointer_expr(n))
+                        {
                             return inner;
                         }
                         return format!("Some({})", inner);
@@ -28297,8 +28443,13 @@ mod tests {
 
         let code = AstCodeGen::new().generate(&ast);
         assert!(
-            code.contains("unsafe extern \"C\" {\n    pub fn adler32("),
-            "expected extern declaration for unresolved C function, got:\n{}",
+            code.contains("fn __fragile_extern_adler32("),
+            "expected raw extern declaration for unresolved C function, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("pub fn adler32(") && code.contains("unsafe { __fragile_extern_adler32("),
+            "expected safe wrapper around unresolved extern C function, got:\n{}",
             code
         );
     }
@@ -28354,7 +28505,7 @@ mod tests {
 
         let code = AstCodeGen::new().generate(&ast);
         assert!(
-            !code.contains("unsafe extern \"C\" {\n    pub fn adler32("),
+            !code.contains("fn __fragile_extern_adler32("),
             "extern declaration should not be emitted when TU defines symbol, got:\n{}",
             code
         );
@@ -28387,6 +28538,258 @@ mod tests {
         assert!(
             code.contains("pub struct static_tree_desc_s {"),
             "missing alias target should get placeholder struct, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_function_pointer_deref_call_uses_option_expect_not_raw_deref() {
+        let fn_ptr_ty = CppType::Pointer {
+            pointee: Box::new(CppType::Function {
+                return_type: Box::new(CppType::Int { signed: true }),
+                params: vec![CppType::Int { signed: true }],
+                is_variadic: false,
+            }),
+            is_const: false,
+        };
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![make_node(
+                ClangNodeKind::FunctionDecl {
+                    name: "call_fp".to_string(),
+                    mangled_name: "call_fp".to_string(),
+                    return_type: CppType::Int { signed: true },
+                    params: vec![
+                        ("fp".to_string(), fn_ptr_ty.clone()),
+                        ("x".to_string(), CppType::Int { signed: true }),
+                    ],
+                    is_definition: true,
+                    is_variadic: false,
+                    is_noexcept: false,
+                    is_coroutine: false,
+                    coroutine_info: None,
+                },
+                vec![make_node(
+                    ClangNodeKind::CompoundStmt,
+                    vec![make_node(
+                        ClangNodeKind::ReturnStmt,
+                        vec![make_node(
+                            ClangNodeKind::CallExpr {
+                                ty: CppType::Int { signed: true },
+                                template_instantiation: None,
+                            },
+                            vec![
+                                make_node(
+                                    ClangNodeKind::UnaryOperator {
+                                        op: UnaryOp::Deref,
+                                        ty: CppType::Function {
+                                            return_type: Box::new(CppType::Int { signed: true }),
+                                            params: vec![CppType::Int { signed: true }],
+                                            is_variadic: false,
+                                        },
+                                    },
+                                    vec![make_node(
+                                        ClangNodeKind::DeclRefExpr {
+                                            name: "fp".to_string(),
+                                            ty: fn_ptr_ty.clone(),
+                                            namespace_path: vec![],
+                                        },
+                                        vec![],
+                                    )],
+                                ),
+                                make_node(
+                                    ClangNodeKind::DeclRefExpr {
+                                        name: "x".to_string(),
+                                        ty: CppType::Int { signed: true },
+                                        namespace_path: vec![],
+                                    },
+                                    vec![],
+                                ),
+                            ],
+                        )],
+                    )],
+                )],
+            )],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("expect(\"function pointer not set\")"),
+            "function-pointer call should unwrap Option before invoking, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("*fp"),
+            "function-pointer call should not emit raw dereference for Option<fn>, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_function_to_pointer_decay_does_not_wrap_existing_option_fn_typedef() {
+        let fn_ptr_ty = CppType::Pointer {
+            pointee: Box::new(CppType::Function {
+                return_type: Box::new(CppType::Int { signed: true }),
+                params: vec![CppType::Int { signed: true }],
+                is_variadic: false,
+            }),
+            is_const: false,
+        };
+        let alias_ty = CppType::Named("alloc_func".to_string());
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![
+                make_node(
+                    ClangNodeKind::TypedefDecl {
+                        name: "alloc_func".to_string(),
+                        underlying_type: fn_ptr_ty,
+                    },
+                    vec![],
+                ),
+                make_node(
+                    ClangNodeKind::FunctionDecl {
+                        name: "id_fp".to_string(),
+                        mangled_name: "id_fp".to_string(),
+                        return_type: alias_ty.clone(),
+                        params: vec![("fp".to_string(), alias_ty.clone())],
+                        is_definition: true,
+                        is_variadic: false,
+                        is_noexcept: false,
+                        is_coroutine: false,
+                        coroutine_info: None,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![make_node(
+                            ClangNodeKind::ReturnStmt,
+                            vec![make_node(
+                                ClangNodeKind::ImplicitCastExpr {
+                                    cast_kind: CastKind::FunctionToPointerDecay,
+                                    ty: alias_ty.clone(),
+                                },
+                                vec![make_node(
+                                    ClangNodeKind::DeclRefExpr {
+                                        name: "fp".to_string(),
+                                        ty: alias_ty,
+                                        namespace_path: vec![],
+                                    },
+                                    vec![],
+                                )],
+                            )],
+                        )],
+                    )],
+                ),
+            ],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("return fp"),
+            "function-to-pointer decay on Option typedef should pass through existing value, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("Some(fp)"),
+            "function-to-pointer decay should not wrap Option typedef again, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_function_pointer_assignment_between_option_typedefs_does_not_double_wrap() {
+        let fn_ptr_ty = CppType::Pointer {
+            pointee: Box::new(CppType::Function {
+                return_type: Box::new(CppType::Int { signed: true }),
+                params: vec![CppType::Int { signed: true }],
+                is_variadic: false,
+            }),
+            is_const: false,
+        };
+        let alias_ty = CppType::Named("alloc_func".to_string());
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![
+                make_node(
+                    ClangNodeKind::TypedefDecl {
+                        name: "alloc_func".to_string(),
+                        underlying_type: fn_ptr_ty,
+                    },
+                    vec![],
+                ),
+                make_node(
+                    ClangNodeKind::FunctionDecl {
+                        name: "assign_fp".to_string(),
+                        mangled_name: "assign_fp".to_string(),
+                        return_type: alias_ty.clone(),
+                        params: vec![
+                            ("f".to_string(), alias_ty.clone()),
+                            ("g".to_string(), alias_ty.clone()),
+                        ],
+                        is_definition: true,
+                        is_variadic: false,
+                        is_noexcept: false,
+                        is_coroutine: false,
+                        coroutine_info: None,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![
+                            make_node(
+                                ClangNodeKind::ExprStmt,
+                                vec![make_node(
+                                    ClangNodeKind::BinaryOperator {
+                                        op: BinaryOp::Assign,
+                                        ty: alias_ty.clone(),
+                                    },
+                                    vec![
+                                        make_node(
+                                            ClangNodeKind::DeclRefExpr {
+                                                name: "f".to_string(),
+                                                ty: alias_ty.clone(),
+                                                namespace_path: vec![],
+                                            },
+                                            vec![],
+                                        ),
+                                        make_node(
+                                            ClangNodeKind::DeclRefExpr {
+                                                name: "g".to_string(),
+                                                ty: alias_ty.clone(),
+                                                namespace_path: vec![],
+                                            },
+                                            vec![],
+                                        ),
+                                    ],
+                                )],
+                            ),
+                            make_node(
+                                ClangNodeKind::ReturnStmt,
+                                vec![make_node(
+                                    ClangNodeKind::DeclRefExpr {
+                                        name: "f".to_string(),
+                                        ty: alias_ty,
+                                        namespace_path: vec![],
+                                    },
+                                    vec![],
+                                )],
+                            ),
+                        ],
+                    )],
+                ),
+            ],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("f = g"),
+            "assignment between Option<fn> aliases should pass value through, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("Some(g)"),
+            "assignment between Option<fn> aliases should not wrap RHS in Some(...), got:\n{}",
             code
         );
     }
