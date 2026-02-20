@@ -22661,6 +22661,39 @@ impl AstCodeGen {
                         } else {
                             format!("{} {} {}", left, op_str, right)
                         }
+                    } else if matches!(
+                        op,
+                        BinaryOp::And
+                            | BinaryOp::Or
+                            | BinaryOp::Xor
+                            | BinaryOp::Shl
+                            | BinaryOp::Shr
+                            | BinaryOp::Lt
+                            | BinaryOp::Le
+                            | BinaryOp::Gt
+                            | BinaryOp::Ge
+                            | BinaryOp::Eq
+                            | BinaryOp::Ne
+                    ) {
+                        // Cast operands must be grouped before these operators so `as T << ...`
+                        // and `as T < ...` are not parsed as generic arguments.
+                        let left_raw = wrap_unsafe_for_binop(&self.expr_to_string_raw(&node.children[0]));
+                        let right_raw = wrap_unsafe_for_binop(&self.expr_to_string_raw(&node.children[1]));
+                        let left = if left_raw.contains(" as ")
+                            && !is_fully_parenthesized_expr(&left_raw)
+                        {
+                            format!("({})", left_raw)
+                        } else {
+                            left_raw
+                        };
+                        let right = if right_raw.contains(" as ")
+                            && !is_fully_parenthesized_expr(&right_raw)
+                        {
+                            format!("({})", right_raw)
+                        } else {
+                            right_raw
+                        };
+                        format!("{} {} {}", left, op_str, right)
                     } else {
                         let left =
                             wrap_unsafe_for_binop(&self.expr_to_string_raw(&node.children[0]));
@@ -29235,6 +29268,168 @@ mod tests {
             assign_line.contains("as i32"),
             "expected unsigned bitmask RHS assigned to i32 member to be cast back to i32, got line:\n{}\nfull code:\n{}",
             assign_line,
+            code
+        );
+    }
+
+    #[test]
+    fn test_shift_cast_operand_is_parenthesized_in_assignment_rhs() {
+        let state_ty = CppType::Named("inflate_state".to_string());
+        let state_ptr_ty = CppType::Pointer {
+            pointee: Box::new(state_ty.clone()),
+            is_const: false,
+        };
+        let hold_ty = CppType::LongLong { signed: false };
+        let bits_ty = CppType::Int { signed: false };
+
+        let add_assign_expr = make_node(
+            ClangNodeKind::BinaryOperator {
+                op: BinaryOp::AddAssign,
+                ty: hold_ty.clone(),
+            },
+            vec![
+                make_node(
+                    ClangNodeKind::MemberExpr {
+                        member_name: "hold".to_string(),
+                        is_arrow: true,
+                        ty: hold_ty.clone(),
+                        declaring_class: None,
+                        is_static: false,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::DeclRefExpr {
+                            name: "state".to_string(),
+                            ty: state_ptr_ty.clone(),
+                            namespace_path: vec![],
+                        },
+                        vec![],
+                    )],
+                ),
+                make_node(
+                    ClangNodeKind::BinaryOperator {
+                        op: BinaryOp::Shl,
+                        ty: bits_ty.clone(),
+                    },
+                    vec![
+                        make_node(
+                            ClangNodeKind::CastExpr {
+                                ty: bits_ty.clone(),
+                                cast_kind: CastKind::IntegralCast,
+                            },
+                            vec![make_node(
+                                ClangNodeKind::DeclRefExpr {
+                                    name: "value".to_string(),
+                                    ty: CppType::Int { signed: true },
+                                    namespace_path: vec![],
+                                },
+                                vec![],
+                            )],
+                        ),
+                        make_node(
+                            ClangNodeKind::MemberExpr {
+                                member_name: "bits".to_string(),
+                                is_arrow: true,
+                                ty: bits_ty.clone(),
+                                declaring_class: None,
+                                is_static: false,
+                            },
+                            vec![make_node(
+                                ClangNodeKind::DeclRefExpr {
+                                    name: "state".to_string(),
+                                    ty: state_ptr_ty.clone(),
+                                    namespace_path: vec![],
+                                },
+                                vec![],
+                            )],
+                        ),
+                    ],
+                ),
+            ],
+        );
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![
+                make_node(
+                    ClangNodeKind::RecordDecl {
+                        name: "inflate_state".to_string(),
+                        is_class: false,
+                        is_definition: true,
+                        fields: vec![],
+                    },
+                    vec![
+                        make_node(
+                            ClangNodeKind::FieldDecl {
+                                name: "hold".to_string(),
+                                ty: hold_ty.clone(),
+                                access: crate::ast::AccessSpecifier::Public,
+                                is_static: false,
+                                bit_field_width: None,
+                            },
+                            vec![],
+                        ),
+                        make_node(
+                            ClangNodeKind::FieldDecl {
+                                name: "bits".to_string(),
+                                ty: bits_ty.clone(),
+                                access: crate::ast::AccessSpecifier::Public,
+                                is_static: false,
+                                bit_field_width: None,
+                            },
+                            vec![],
+                        ),
+                    ],
+                ),
+                make_node(
+                    ClangNodeKind::FunctionDecl {
+                        name: "accumulate_hold".to_string(),
+                        mangled_name: "accumulate_hold".to_string(),
+                        return_type: CppType::Int { signed: true },
+                        params: vec![
+                            ("state".to_string(), state_ptr_ty),
+                            ("value".to_string(), CppType::Int { signed: true }),
+                        ],
+                        is_definition: true,
+                        is_variadic: false,
+                        is_noexcept: false,
+                        is_coroutine: false,
+                        coroutine_info: None,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![
+                            make_node(ClangNodeKind::ExprStmt, vec![add_assign_expr]),
+                            make_node(
+                                ClangNodeKind::ReturnStmt,
+                                vec![make_node(
+                                    ClangNodeKind::IntegerLiteral {
+                                        value: 0,
+                                        cpp_type: Some(CppType::Int { signed: true }),
+                                    },
+                                    vec![],
+                                )],
+                            ),
+                        ],
+                    )],
+                ),
+            ],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        let add_line = code
+            .lines()
+            .find(|line| line.contains("wrapping_add") && line.contains("value as u32"))
+            .unwrap_or("");
+        assert!(
+            add_line.contains("(value as u32) <<") || add_line.contains("((value as u32)) <<"),
+            "casted shift lhs must be parenthesized in assignment rhs, got line:\n{}\nfull code:\n{}",
+            add_line,
+            code
+        );
+        assert!(
+            !add_line.contains("value as u32 <<"),
+            "ungrouped `as` cast before shift can be parsed as generic args, got line:\n{}\nfull code:\n{}",
+            add_line,
             code
         );
     }
