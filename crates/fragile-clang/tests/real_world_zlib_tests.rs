@@ -26,6 +26,8 @@ const ZLIB_REQUIRED_ARTIFACTS_BASELINE_DIR: &str =
 const ZLIB_FRAGILE_ADLER32_OBJECT_BASELINE_DIR: &str =
     "/tmp/fragile_real_world_zlib_fragile_adler32_object";
 const ZLIB_LIBZA_REPLAY_PLAN_BASELINE_DIR: &str = "/tmp/fragile_real_world_zlib_libza_replay_plan";
+const ZLIB_FRAGILE_OBJZ_OBJECTS_BASELINE_DIR: &str =
+    "/tmp/fragile_real_world_zlib_fragile_objz_objects";
 const ZLIB_REQUIRED_PATHS: &[&str] = &["zlib.h", "configure", "Makefile.in"];
 const ZLIB_REQUIRED_TEST_ARTIFACTS: &[&str] = &[
     "libz.a",
@@ -120,6 +122,18 @@ const ZLIB_FRAGILE_ADLER32_LOG_FILES: &[&str] = &[
     "fragile_object_manifest.txt",
 ];
 const ZLIB_LIBZA_REPLAY_PLAN_LOG_FILES: &[&str] = &[
+    "configure_driver.status",
+    "configure_driver.stdout",
+    "configure_driver.stderr",
+    "make_driver.status",
+    "make_driver.stdout",
+    "make_driver.stderr",
+    "cc_driver.log",
+    "cc_driver_manifest.txt",
+    "compile_units_manifest.txt",
+    "libza_replay_plan.txt",
+];
+const ZLIB_FRAGILE_OBJZ_LOG_FILES: &[&str] = &[
     "configure_driver.status",
     "configure_driver.stdout",
     "configure_driver.stderr",
@@ -831,6 +845,281 @@ fn run_cc_driver_libza_replay_plan_in_tree(
     Ok(())
 }
 
+fn parse_replay_plan_entries(replay_plan_text: &str) -> Result<Vec<(String, String)>, String> {
+    let mut entries: Vec<(String, String)> = Vec::new();
+    for (line_no, line) in replay_plan_text.lines().enumerate() {
+        let Some(rest) = line.strip_prefix("source=") else {
+            continue;
+        };
+        let Some((source, object)) = rest.split_once(" object=") else {
+            return Err(format!(
+                "invalid replay plan entry at line {}: {}",
+                line_no + 1,
+                line
+            ));
+        };
+        let source = source.trim();
+        let object = object.trim();
+        if source.is_empty() || object.is_empty() {
+            return Err(format!(
+                "incomplete replay plan entry at line {}: {}",
+                line_no + 1,
+                line
+            ));
+        }
+        entries.push((source.to_string(), object.to_string()));
+    }
+
+    if entries.is_empty() {
+        return Err("replay plan has no source/object entries".to_string());
+    }
+    Ok(entries)
+}
+
+fn normalize_identifier_fragment(input: &str) -> String {
+    let mut out = String::new();
+    let mut prev_sep = false;
+    for ch in input.chars() {
+        if ch.is_ascii_alphanumeric() {
+            out.push(ch.to_ascii_lowercase());
+            prev_sep = false;
+        } else if !prev_sep {
+            out.push('_');
+            prev_sep = true;
+        }
+    }
+    while out.ends_with('_') {
+        out.pop();
+    }
+    if out.is_empty() {
+        "unit".to_string()
+    } else {
+        out
+    }
+}
+
+fn replay_manifest_file_name(scope_name: &str) -> String {
+    format!(
+        "fragile_{}_manifest.txt",
+        normalize_identifier_fragment(scope_name)
+    )
+}
+
+fn rustc_replay_step_name(scope_name: &str, object_rel: &str) -> String {
+    format!(
+        "rustc_{}_{}",
+        normalize_identifier_fragment(scope_name),
+        normalize_identifier_fragment(object_rel)
+    )
+}
+
+fn select_compile_command_for_unit(
+    log_text: &str,
+    source_root: &Path,
+    target_source_rel: &str,
+    target_object_rel: &str,
+) -> Result<(PathBuf, Vec<String>), String> {
+    let mut cwd = source_root.to_path_buf();
+    for line in log_text.lines() {
+        if let Some(rest) = line.strip_prefix("cwd=") {
+            let parsed = PathBuf::from(rest.trim());
+            if !parsed.as_os_str().is_empty() {
+                cwd = parsed;
+            }
+            continue;
+        }
+        let Some(rest) = line.strip_prefix("args=") else {
+            continue;
+        };
+        let tokens: Vec<&str> = rest.split_whitespace().collect();
+        if tokens.is_empty() {
+            continue;
+        }
+        if !tokens.iter().any(|t| *t == "-c" || t.starts_with("-c")) {
+            continue;
+        }
+        let Some((obj, obj_consumed_idx)) = extract_arg_value(&tokens, "-o") else {
+            continue;
+        };
+        let Some(src) = extract_compile_source_token(&tokens, &obj, obj_consumed_idx) else {
+            continue;
+        };
+        let source_rel = normalize_path_for_manifest(&src, &cwd, source_root);
+        let object_rel = normalize_path_for_manifest(&obj, &cwd, source_root);
+        if source_rel != target_source_rel || object_rel != target_object_rel {
+            continue;
+        }
+        let command_tokens = tokens.iter().map(|t| (*t).to_string()).collect();
+        return Ok((cwd.clone(), command_tokens));
+    }
+    Err(format!(
+        "compile command for source={} object={} not found in cc_driver.log",
+        target_source_rel, target_object_rel
+    ))
+}
+
+fn write_fragile_replay_manifest(
+    log_dir: &Path,
+    source_dir: &Path,
+    scope_name: &str,
+    target_objects: &[&str],
+    compile_units_count: usize,
+    replayed_entries: &[(String, String, PathBuf, u64)],
+) -> Result<(), String> {
+    let head = read_head(source_dir).unwrap_or_else(|| "unknown".to_string());
+    let mut manifest = format!(
+        "source_dir={}\ncommit={}\nreplay_scope={}\nreplay_target_count={}\nreplayed_count={}\ncompile_units_count={}\nreplay_targets={}\n",
+        source_dir.display(),
+        head.trim(),
+        scope_name,
+        target_objects.len(),
+        replayed_entries.len(),
+        compile_units_count,
+        target_objects.join(","),
+    );
+
+    for (source_rel, object_rel, transpiled_rs_path, object_size) in replayed_entries {
+        manifest.push_str(&format!(
+            "source={} object={} transpiled_rust={} object_size={}\n",
+            source_rel,
+            object_rel,
+            transpiled_rs_path.display(),
+            object_size
+        ));
+    }
+
+    fs::write(
+        log_dir.join(replay_manifest_file_name(scope_name)),
+        manifest,
+    )
+    .map_err(|e| {
+        format!(
+            "failed to write fragile replay manifest at {}: {}",
+            log_dir.display(),
+            e
+        )
+    })
+}
+
+fn run_fragile_replay_for_targets_in_tree(
+    source_dir: &Path,
+    log_dir: &Path,
+    scope_name: &str,
+    target_objects: &[&str],
+) -> Result<(), String> {
+    run_cc_driver_libza_replay_plan_in_tree(source_dir, log_dir)?;
+
+    let driver_log_path = log_dir.join("cc_driver.log");
+    let driver_log = fs::read_to_string(&driver_log_path).map_err(|e| {
+        format!(
+            "failed to read cc-driver invocation log {}: {}",
+            driver_log_path.display(),
+            e
+        )
+    })?;
+    let replay_plan_path = log_dir.join("libza_replay_plan.txt");
+    let replay_plan = fs::read_to_string(&replay_plan_path)
+        .map_err(|e| format!("failed to read {}: {}", replay_plan_path.display(), e))?;
+
+    let compile_units_count =
+        parse_compile_units_from_cc_driver_log(&driver_log, source_dir)?.len();
+    let replay_entries = parse_replay_plan_entries(&replay_plan)?;
+    let target_set: BTreeSet<&str> = target_objects.iter().copied().collect();
+    let selected_entries: Vec<(String, String)> = replay_entries
+        .into_iter()
+        .filter(|(_, object_rel)| target_set.contains(object_rel.as_str()))
+        .collect();
+
+    let selected_objects: BTreeSet<String> = selected_entries
+        .iter()
+        .map(|(_, object)| object.clone())
+        .collect();
+    let mut missing_targets: Vec<String> = Vec::new();
+    for object in target_objects {
+        if !selected_objects.contains(*object) {
+            missing_targets.push((*object).to_string());
+        }
+    }
+    if !missing_targets.is_empty() {
+        return Err(format!(
+            "replay plan is missing targets for {}: {}",
+            scope_name,
+            missing_targets.join(", ")
+        ));
+    }
+
+    let mut replayed_manifest_entries: Vec<(String, String, PathBuf, u64)> = Vec::new();
+    for (source_rel, object_rel) in selected_entries {
+        let (command_cwd, command_tokens) =
+            select_compile_command_for_unit(&driver_log, source_dir, &source_rel, &object_rel)?;
+        let source_path = source_dir.join(&source_rel);
+        if !source_path.exists() {
+            return Err(format!(
+                "selected source {} does not exist under {}",
+                source_rel,
+                source_dir.display()
+            ));
+        }
+
+        let transpiled =
+            transpile_source_with_driver_command(&source_path, &command_cwd, &command_tokens)?;
+        let transpiled_rs_path = log_dir.join(format!(
+            "{}_{}_transpiled.rs",
+            normalize_identifier_fragment(scope_name),
+            normalize_identifier_fragment(&object_rel)
+        ));
+        fs::write(&transpiled_rs_path, transpiled).map_err(|e| {
+            format!(
+                "failed to write transpiled source {}: {}",
+                transpiled_rs_path.display(),
+                e
+            )
+        })?;
+
+        let object_path = source_dir.join(&object_rel);
+        let compile_output = compile_rust_source_to_object(
+            &transpiled_rs_path,
+            &object_path,
+            &crate_name_from_source(&source_rel),
+        )?;
+        let rustc_step = rustc_replay_step_name(scope_name, &object_rel);
+        write_command_capture(log_dir, &rustc_step, &compile_output)?;
+        if !compile_output.status.success() {
+            return Err(format!(
+                "fragile rustc object build failed for {} with status {} (logs: {})",
+                object_rel,
+                status_code(&compile_output),
+                log_dir.display()
+            ));
+        }
+
+        let object_size = fs::metadata(&object_path)
+            .map_err(|e| format!("failed to stat object {}: {}", object_path.display(), e))?
+            .len();
+        if object_size == 0 {
+            return Err(format!(
+                "generated object {} is empty",
+                object_path.display()
+            ));
+        }
+        replayed_manifest_entries.push((source_rel, object_rel, transpiled_rs_path, object_size));
+    }
+
+    write_fragile_replay_manifest(
+        log_dir,
+        source_dir,
+        scope_name,
+        target_objects,
+        compile_units_count,
+        &replayed_manifest_entries,
+    )?;
+    Ok(())
+}
+
+fn run_fragile_objz_replay_in_tree(source_dir: &Path, log_dir: &Path) -> Result<(), String> {
+    run_fragile_replay_for_targets_in_tree(source_dir, log_dir, "OBJZ", ZLIB_OBJZ_OBJECTS)
+}
+
 fn select_compile_command_for_source(
     log_text: &str,
     source_root: &Path,
@@ -1415,6 +1704,43 @@ fn run_zlib_fragile_adler32_object_baseline() -> Result<PathBuf, String> {
 
     let log_dir = baseline_root.join("driver_logs");
     run_fragile_single_object_in_tree(&worktree_dir, &log_dir, "adler32.c", "adler32.o")?;
+    Ok(log_dir)
+}
+
+fn run_zlib_fragile_objz_objects_baseline() -> Result<PathBuf, String> {
+    let checkout_dir = ensure_zlib_checkout()?;
+    let baseline_root = PathBuf::from(ZLIB_FRAGILE_OBJZ_OBJECTS_BASELINE_DIR);
+    reset_dir(&baseline_root)?;
+
+    let worktree_dir = baseline_root.join("worktree");
+    let checkout_dir_str = checkout_dir.to_string_lossy().to_string();
+    let worktree_dir_str = worktree_dir.to_string_lossy().to_string();
+    run_git(
+        &[
+            "clone",
+            "--no-tags",
+            "--local",
+            checkout_dir_str.as_str(),
+            worktree_dir_str.as_str(),
+        ],
+        None,
+    )?;
+    run_git(
+        &["checkout", "--detach", ZLIB_PINNED_COMMIT],
+        Some(&worktree_dir),
+    )?;
+
+    let actual_head = read_head(&worktree_dir)
+        .ok_or_else(|| format!("failed to read HEAD in {}", worktree_dir.display()))?;
+    if actual_head != ZLIB_PINNED_COMMIT {
+        return Err(format!(
+            "fragile-objz worktree expected commit {} but got {}",
+            ZLIB_PINNED_COMMIT, actual_head
+        ));
+    }
+
+    let log_dir = baseline_root.join("driver_logs");
+    run_fragile_objz_replay_in_tree(&worktree_dir, &log_dir)?;
     Ok(log_dir)
 }
 
@@ -2160,6 +2486,113 @@ fn test_libza_replay_plan_build_detects_missing_compile_unit() {
 }
 
 #[test]
+fn test_fragile_objz_replay_build_local_fixture_success() {
+    let root = unique_temp_dir("zlib_fragile_objz_replay_success");
+    fs::create_dir_all(&root).expect("failed to create test root");
+
+    let project_dir = create_local_libza_replay_plan_project(&root, None)
+        .expect("failed to create libza replay-plan project");
+    let log_dir = root.join("logs");
+    run_fragile_objz_replay_in_tree(&project_dir, &log_dir)
+        .expect("fragile OBJZ replay should succeed");
+
+    let manifest = fs::read_to_string(log_dir.join("fragile_objz_manifest.txt"))
+        .expect("failed to read fragile_objz_manifest.txt");
+    assert!(
+        manifest.contains("replay_scope=OBJZ"),
+        "manifest should include replay scope: {}",
+        manifest
+    );
+    assert!(
+        manifest.contains(&format!("replay_target_count={}", ZLIB_OBJZ_OBJECTS.len())),
+        "manifest should include OBJZ target count: {}",
+        manifest
+    );
+    assert!(
+        manifest.contains(&format!("replayed_count={}", ZLIB_OBJZ_OBJECTS.len())),
+        "manifest should include OBJZ replayed count: {}",
+        manifest
+    );
+
+    for object in ZLIB_OBJZ_OBJECTS {
+        let object_path = project_dir.join(object);
+        assert!(
+            object_path.exists(),
+            "expected replayed object {}",
+            object_path.display()
+        );
+        assert!(
+            fs::metadata(&object_path)
+                .expect("failed to stat replayed object")
+                .len()
+                > 0,
+            "replayed object should be non-empty: {}",
+            object_path.display()
+        );
+        assert!(
+            manifest.contains(&format!("object={}", object)),
+            "manifest should include OBJZ object {}: {}",
+            object,
+            manifest
+        );
+
+        let rustc_step = rustc_replay_step_name("OBJZ", object);
+        assert_eq!(
+            fs::read_to_string(log_dir.join(format!("{}.status", rustc_step)))
+                .expect("failed to read rustc replay status")
+                .trim(),
+            "0",
+            "rustc replay should succeed for {}",
+            object
+        );
+    }
+
+    for object in ZLIB_OBJG_OBJECTS {
+        assert!(
+            !manifest.contains(&format!("object={}", object)),
+            "OBJG object {} should not appear in OBJZ replay manifest: {}",
+            object,
+            manifest
+        );
+    }
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn test_fragile_objz_replay_build_detects_missing_compile_unit() {
+    let root = unique_temp_dir("zlib_fragile_objz_replay_missing_unit");
+    fs::create_dir_all(&root).expect("failed to create test root");
+
+    let project_dir = create_local_libza_replay_plan_project(&root, Some("trees.o"))
+        .expect("failed to create libza replay-plan project");
+    let log_dir = root.join("logs");
+    let err = run_fragile_objz_replay_in_tree(&project_dir, &log_dir)
+        .expect_err("expected OBJZ replay to fail when one compile unit is missing");
+
+    assert!(
+        err.contains("missing compile units for libz object targets"),
+        "unexpected error message: {}",
+        err
+    );
+    assert!(
+        err.contains("trees.o"),
+        "missing target should mention trees.o: {}",
+        err
+    );
+    assert!(
+        log_dir.join("compile_units_manifest.txt").exists(),
+        "compile units manifest should still be written on failure"
+    );
+    assert!(
+        !log_dir.join("fragile_objz_manifest.txt").exists(),
+        "OBJZ replay manifest should not be written on failure"
+    );
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
 fn test_fragile_single_object_build_local_fixture_success() {
     let root = unique_temp_dir("zlib_fragile_object_success");
     fs::create_dir_all(&root).expect("failed to create test root");
@@ -2420,6 +2853,58 @@ fn test_real_world_zlib_libza_replay_plan_for_objz_objg_scope() {
             replay_plan
         );
     }
+}
+
+#[test]
+#[ignore = "real-world external project test (downloads and transpiles zlib OBJZ objects)"]
+fn test_real_world_zlib_fragile_objz_objects_replay() {
+    let err = run_zlib_fragile_objz_objects_baseline()
+        .expect_err("OBJZ replay is expected to fail until crc32 codegen typing is fixed");
+    assert!(
+        err.contains("crc32.o"),
+        "failure should surface crc32.o replay blocker: {}",
+        err
+    );
+
+    let log_dir = Path::new(ZLIB_FRAGILE_OBJZ_OBJECTS_BASELINE_DIR).join("driver_logs");
+    for rel in ZLIB_FRAGILE_OBJZ_LOG_FILES {
+        assert!(
+            log_dir.join(rel).exists(),
+            "expected fragile-OBJZ log {}",
+            log_dir.join(rel).display()
+        );
+    }
+
+    let manifest = fs::read_to_string(log_dir.join("libza_replay_plan.txt"))
+        .expect("failed to read libza_replay_plan.txt");
+    assert!(
+        manifest.contains("libza_target_count=15"),
+        "replay plan should still be generated before OBJZ replay failure: {}",
+        manifest
+    );
+
+    assert_eq!(
+        fs::read_to_string(log_dir.join("rustc_objz_adler32_o.status"))
+            .expect("failed to read adler32 replay status")
+            .trim(),
+        "0"
+    );
+    assert_ne!(
+        fs::read_to_string(log_dir.join("rustc_objz_crc32_o.status"))
+            .expect("failed to read crc32 replay status")
+            .trim(),
+        "0"
+    );
+    assert!(
+        fs::read_to_string(log_dir.join("rustc_objz_crc32_o.stderr"))
+            .expect("failed to read crc32 replay stderr")
+            .contains("wrapping_shl"),
+        "crc32 failure should capture wrapping_shl typing issue"
+    );
+    assert!(
+        !log_dir.join("fragile_objz_manifest.txt").exists(),
+        "OBJZ replay manifest should not be written when replay aborts on crc32 failure"
+    );
 }
 
 #[test]

@@ -24,6 +24,9 @@ Run upstream-style tests through the Fragile transpiler with runtime parity:
   - [ ] Expand transpile+compile coverage to all `OBJZ` and `OBJG` units needed for `libz.a`.
     - [x] Derive deterministic `OBJZ`/`OBJG` replay plan from upstream `Makefile` + `cc_driver.log` compile units (`libza_replay_plan.txt` under `/tmp/fragile_real_world_zlib_libza_replay_plan/driver_logs`).
     - [ ] Replay `OBJZ` units through Fragile to `.o` outputs and validate object completeness.
+      - [x] Add deterministic `OBJZ` replay harness/logging (`fragile_objz_manifest.txt` + per-object `rustc_objz_*.status` logs under `/tmp/fragile_real_world_zlib_fragile_objz_objects/driver_logs`).
+      - [ ] Fix `crc32.c` transpiled replay compile failure (`wrapping_shl` ambiguous integer literal typing) in source-faithful codegen.
+      - [ ] Re-run full `OBJZ` replay and confirm all expected OBJZ objects compile and are non-empty.
     - [ ] Replay `OBJG` units through Fragile to `.o` outputs and validate object completeness.
   - [ ] Link transpiled static/shared test binaries used by upstream tests (`example`, `minigzip`, `examplesh`, `minigzipsh`, `example64`, `minigzip64`).
 - [ ] Make transpiled build pass zlib test commands used by upstream `make test`.

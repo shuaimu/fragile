@@ -29,3 +29,9 @@ The third leaf replays a single real compile unit (`adler32.c`) through Fragile 
 ## Fourth leaf scope (4a)
 
 The fourth leaf is split so each step stays under a few hundred LOC. Subleaf 4a derives a deterministic replay target plan for static `libz.a` coverage: it parses `OBJZ` and `OBJG` from zlib's generated `Makefile`, maps those targets to normalized compile units from `cc_driver.log`, and writes `libza_replay_plan.txt`. This creates a stable contract before bulk object replay (`OBJZ` then `OBJG`).
+
+## Fourth leaf scope (4b)
+
+Subleaf 4b executes the `OBJZ` half of that plan. The harness reuses `libza_replay_plan.txt`, filters entries to `OBJZ`, replays each compile unit through Fragile (`ClangParser` + `AstCodeGen` + `rustc --emit=obj`), and validates that every expected `OBJZ` object is recompiled and non-empty. It records deterministic evidence in `fragile_objz_manifest.txt` and per-object `rustc_objz_*.status` logs.
+
+Current status: harness/logging is implemented, but full real-world completion is blocked by a codegen issue on `crc32.c` (`wrapping_shl` emitted on an untyped integer literal). The next subleaf addresses that typing/codegen fix, then reruns full `OBJZ` object replay.
