@@ -1058,6 +1058,7 @@ impl ClangParser {
                 }
 
                 clang_sys::CXCursor_CXXMethod => {
+                    let class_name = self.get_parent_class_name(cursor);
                     let name = cursor_spelling(cursor);
                     let cursor_type = clang_sys::clang_getCursorType(cursor);
                     let return_type =
@@ -1071,6 +1072,7 @@ impl ClangParser {
                     let (is_override, is_final) = self.get_override_final_attrs(cursor);
                     let access = self.get_access_specifier(cursor);
                     ClangNodeKind::CXXMethodDecl {
+                        class_name,
                         name,
                         return_type,
                         params,
@@ -1087,6 +1089,7 @@ impl ClangParser {
 
                 // Conversion functions (operator bool(), operator int(), etc.)
                 clang_sys::CXCursor_ConversionFunction => {
+                    let class_name = self.get_parent_class_name(cursor);
                     let name = cursor_spelling(cursor);
                     let cursor_type = clang_sys::clang_getCursorType(cursor);
                     let return_type =
@@ -1100,6 +1103,7 @@ impl ClangParser {
                     let (is_override, is_final) = self.get_override_final_attrs(cursor);
                     let access = self.get_access_specifier(cursor);
                     ClangNodeKind::CXXMethodDecl {
+                        class_name,
                         name,
                         return_type,
                         params,

@@ -238,6 +238,8 @@ pub enum ClangNodeKind {
     },
     /// C++ method declaration
     CXXMethodDecl {
+        /// Owning class name from semantic parent (e.g., `XMLNode`)
+        class_name: String,
         name: String,
         return_type: CppType,
         params: Vec<(String, CppType)>,

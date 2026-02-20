@@ -753,6 +753,9 @@ pub struct AstCodeGen {
     /// Per-class method overload metadata used to resolve member call suffixes.
     /// Key: class name (C++/Rust variants), Value: base method name -> overloads.
     class_method_overloads: HashMap<String, HashMap<String, Vec<MethodOverloadInfo>>>,
+    /// Out-of-line class method definitions collected from top-level/namespace scope.
+    /// Key: owning class name, Value: method-definition nodes.
+    out_of_line_method_defs: HashMap<String, Vec<ClangNode>>,
     /// Whether the currently-generated method is `const` in C++ terms.
     current_method_is_const: bool,
     /// Merged namespace contents: path -> list of child node indices from all occurrences
@@ -908,6 +911,7 @@ impl AstCodeGen {
             module_depth: 0,
             current_struct_methods: HashMap::new(),
             class_method_overloads: HashMap::new(),
+            out_of_line_method_defs: HashMap::new(),
             current_method_is_const: false,
             merged_namespace_children: HashMap::new(),
             collected_nodes: Vec::new(),
@@ -2720,6 +2724,7 @@ impl AstCodeGen {
             self.collect_unsafe_function_names(ast);
             self.collect_defined_function_names(ast);
             self.collect_defined_global_var_names(ast, false);
+            self.collect_out_of_line_method_defs(ast, false);
             self.collect_anon_union_defs(ast);
             self.collect_missing_union_member_types(ast);
         }
@@ -8494,6 +8499,59 @@ impl AstCodeGen {
             }
             _ => None,
         }
+    }
+
+    fn method_definition_key(node: &ClangNode) -> Option<String> {
+        if let ClangNodeKind::CXXMethodDecl {
+            class_name,
+            name,
+            params,
+            is_static,
+            is_const,
+            ..
+        } = &node.kind
+        {
+            Some(format!(
+                "{}::{}#{}#{}#{}",
+                class_name,
+                name,
+                params.len(),
+                is_static,
+                is_const
+            ))
+        } else {
+            None
+        }
+    }
+
+    fn get_out_of_line_method_defs_for_class(
+        &self,
+        class_name: &str,
+        rust_name: &str,
+    ) -> Vec<ClangNode> {
+        let mut keys = vec![class_name.to_string(), rust_name.to_string()];
+        if let Some(last) = class_name.rsplit("::").next() {
+            keys.push(last.to_string());
+        }
+        if let Some(last) = rust_name.rsplit("::").next() {
+            keys.push(last.to_string());
+        }
+
+        let mut seen = HashSet::new();
+        let mut collected = Vec::new();
+        for key in keys {
+            if let Some(methods) = self.out_of_line_method_defs.get(&key) {
+                for method in methods {
+                    let Some(signature_key) = Self::method_definition_key(method) else {
+                        continue;
+                    };
+                    if seen.insert(signature_key) {
+                        collected.push(method.clone());
+                    }
+                }
+            }
+        }
+        collected
     }
 
     /// Pre-register emitted method overload names for a class so member calls can
@@ -15584,8 +15642,9 @@ impl AstCodeGen {
             matches!(&c.kind, ClangNodeKind::ConstructorDecl { params, is_definition: true, .. } if params.is_empty())
         });
 
-        // Generate impl block for methods
-        let methods: Vec<_> = children
+        // Generate impl block for methods.
+        // Include both in-class definitions and out-of-line class method definitions.
+        let mut methods: Vec<ClangNode> = children
             .iter()
             .filter(|c| {
                 matches!(
@@ -15599,9 +15658,24 @@ impl AstCodeGen {
                     }
                 )
             })
+            .cloned()
             .collect();
 
-        self.register_class_method_overloads(name, &rust_name, children);
+        let out_of_line_methods = self.get_out_of_line_method_defs_for_class(name, &rust_name);
+        let mut seen_method_keys: HashSet<String> = methods
+            .iter()
+            .filter_map(Self::method_definition_key)
+            .collect();
+        for method in out_of_line_methods {
+            if let Some(signature_key) = Self::method_definition_key(&method) {
+                if !seen_method_keys.insert(signature_key) {
+                    continue;
+                }
+            }
+            methods.push(method);
+        }
+
+        self.register_class_method_overloads(name, &rust_name, &methods);
 
         // Check if we have bit fields that need accessor methods
         let has_bit_fields = self.bit_field_groups.contains_key(name);
@@ -15668,7 +15742,7 @@ impl AstCodeGen {
                 self.writeln("");
             }
 
-            for method in methods {
+            for method in &methods {
                 self.generate_method(method, name);
             }
 
@@ -18845,6 +18919,38 @@ impl AstCodeGen {
 
         for child in &node.children {
             self.collect_defined_global_var_names(child, next_in_function_scope);
+        }
+    }
+
+    /// Collect out-of-line class method definitions so they can be emitted into
+    /// the owning class impl even when Clang places them at namespace/top level.
+    fn collect_out_of_line_method_defs(&mut self, node: &ClangNode, in_record_scope: bool) {
+        let next_in_record_scope = in_record_scope
+            || matches!(
+                node.kind,
+                ClangNodeKind::RecordDecl { .. }
+                    | ClangNodeKind::ClassTemplateDecl { .. }
+                    | ClangNodeKind::ClassTemplatePartialSpecDecl { .. }
+            );
+
+        if !in_record_scope {
+            if let ClangNodeKind::CXXMethodDecl {
+                class_name,
+                is_definition,
+                ..
+            } = &node.kind
+            {
+                if *is_definition && !class_name.is_empty() {
+                    self.out_of_line_method_defs
+                        .entry(class_name.clone())
+                        .or_default()
+                        .push(node.clone());
+                }
+            }
+        }
+
+        for child in &node.children {
+            self.collect_out_of_line_method_defs(child, next_in_record_scope);
         }
     }
 
@@ -30389,6 +30495,7 @@ mod tests {
             vec![
                 make_node(
                     ClangNodeKind::CXXMethodDecl {
+                        class_name: "Foo".to_string(),
                         name: "bar".to_string(),
                         return_type: int_ty.clone(),
                         params: vec![],
@@ -30417,6 +30524,7 @@ mod tests {
                 ),
                 make_node(
                     ClangNodeKind::CXXMethodDecl {
+                        class_name: "Foo".to_string(),
                         name: "bar".to_string(),
                         return_type: int_ty.clone(),
                         params: vec![],
@@ -30445,6 +30553,7 @@ mod tests {
                 ),
                 make_node(
                     ClangNodeKind::CXXMethodDecl {
+                        class_name: "Foo".to_string(),
                         name: "call".to_string(),
                         return_type: int_ty.clone(),
                         params: vec![],
@@ -30529,6 +30638,7 @@ mod tests {
             vec![
                 make_node(
                     ClangNodeKind::CXXMethodDecl {
+                        class_name: "Attr".to_string(),
                         name: "Query".to_string(),
                         return_type: int_ty.clone(),
                         params: vec![],
@@ -30557,6 +30667,7 @@ mod tests {
                 ),
                 make_node(
                     ClangNodeKind::CXXMethodDecl {
+                        class_name: "Attr".to_string(),
                         name: "Query".to_string(),
                         return_type: int_ty.clone(),
                         params: vec![],
@@ -30595,6 +30706,7 @@ mod tests {
             },
             vec![make_node(
                 ClangNodeKind::CXXMethodDecl {
+                    class_name: "Elem".to_string(),
                     name: "call_attr".to_string(),
                     return_type: int_ty.clone(),
                     params: vec![("a".to_string(), attr_ptr_const.clone())],
@@ -30648,6 +30760,136 @@ mod tests {
         assert!(
             code.contains("(*a).Query_1()"),
             "const pointer receiver should target const overload suffix, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_out_of_line_method_definition_is_emitted_into_class_impl() {
+        let int_ty = CppType::Int { signed: true };
+        let foo_this = CppType::Pointer {
+            pointee: Box::new(CppType::Named("Foo".to_string())),
+            is_const: false,
+        };
+
+        let foo_record = make_node(
+            ClangNodeKind::RecordDecl {
+                name: "Foo".to_string(),
+                is_class: true,
+                is_definition: true,
+                fields: vec![],
+            },
+            vec![
+                make_node(
+                    ClangNodeKind::CXXMethodDecl {
+                        class_name: "Foo".to_string(),
+                        name: "Reset".to_string(),
+                        return_type: int_ty.clone(),
+                        params: vec![],
+                        is_definition: false,
+                        is_static: false,
+                        is_virtual: false,
+                        is_pure_virtual: false,
+                        is_override: false,
+                        is_final: false,
+                        is_const: false,
+                        access: AccessSpecifier::Public,
+                    },
+                    vec![],
+                ),
+                make_node(
+                    ClangNodeKind::CXXMethodDecl {
+                        class_name: "Foo".to_string(),
+                        name: "Call".to_string(),
+                        return_type: int_ty.clone(),
+                        params: vec![],
+                        is_definition: true,
+                        is_static: false,
+                        is_virtual: false,
+                        is_pure_virtual: false,
+                        is_override: false,
+                        is_final: false,
+                        is_const: false,
+                        access: AccessSpecifier::Public,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![make_node(
+                            ClangNodeKind::ReturnStmt,
+                            vec![make_node(
+                                ClangNodeKind::CallExpr {
+                                    ty: int_ty.clone(),
+                                    template_instantiation: None,
+                                },
+                                vec![make_node(
+                                    ClangNodeKind::MemberExpr {
+                                        member_name: "Reset".to_string(),
+                                        is_arrow: false,
+                                        ty: CppType::Function {
+                                            return_type: Box::new(int_ty.clone()),
+                                            params: vec![],
+                                            is_variadic: false,
+                                        },
+                                        declaring_class: Some("Foo".to_string()),
+                                        is_static: false,
+                                    },
+                                    vec![make_node(
+                                        ClangNodeKind::CXXThisExpr {
+                                            ty: foo_this.clone(),
+                                        },
+                                        vec![],
+                                    )],
+                                )],
+                            )],
+                        )],
+                    )],
+                ),
+            ],
+        );
+
+        let out_of_line_reset = make_node(
+            ClangNodeKind::CXXMethodDecl {
+                class_name: "Foo".to_string(),
+                name: "Reset".to_string(),
+                return_type: int_ty.clone(),
+                params: vec![],
+                is_definition: true,
+                is_static: false,
+                is_virtual: false,
+                is_pure_virtual: false,
+                is_override: false,
+                is_final: false,
+                is_const: false,
+                access: AccessSpecifier::Public,
+            },
+            vec![make_node(
+                ClangNodeKind::CompoundStmt,
+                vec![make_node(
+                    ClangNodeKind::ReturnStmt,
+                    vec![make_node(
+                        ClangNodeKind::IntegerLiteral {
+                            value: 7,
+                            cpp_type: Some(int_ty.clone()),
+                        },
+                        vec![],
+                    )],
+                )],
+            )],
+        );
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![foo_record, out_of_line_reset],
+        );
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("pub fn Reset(&mut self, ) -> i32"),
+            "expected out-of-line method definition to be emitted in impl, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("return self.Reset()"),
+            "expected in-class caller to resolve Reset call, got:\n{}",
             code
         );
     }
