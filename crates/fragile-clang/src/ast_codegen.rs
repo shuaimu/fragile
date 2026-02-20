@@ -16580,6 +16580,32 @@ impl AstCodeGen {
         false
     }
 
+    /// Check if a binary operator is an assignment-family operator.
+    fn is_assignment_binary_op(op: &BinaryOp) -> bool {
+        matches!(
+            op,
+            BinaryOp::Assign
+                | BinaryOp::AddAssign
+                | BinaryOp::SubAssign
+                | BinaryOp::MulAssign
+                | BinaryOp::DivAssign
+                | BinaryOp::RemAssign
+                | BinaryOp::AndAssign
+                | BinaryOp::OrAssign
+                | BinaryOp::XorAssign
+                | BinaryOp::ShlAssign
+                | BinaryOp::ShrAssign
+        )
+    }
+
+    /// Check whether a node is an assignment expression.
+    fn is_assignment_expr_node(node: &ClangNode) -> bool {
+        matches!(
+            &node.kind,
+            ClangNodeKind::BinaryOperator { op, .. } if Self::is_assignment_binary_op(op)
+        )
+    }
+
     /// Extract the LHS of an assignment expression
     /// For "*__a = expr", returns "__a" (the variable being assigned)
     fn extract_assignment_lhs(expr: &str) -> Option<String> {
@@ -22828,8 +22854,14 @@ impl AstCodeGen {
                         // For pointer dereference, subscript, or static member on left side, wrap entire assignment in unsafe
                         // Strip literal suffix on RHS - Rust infers type from LHS
                         let left_raw = self.expr_to_string_raw(&node.children[0]);
-                        let right_str =
-                            strip_literal_suffix(&self.expr_to_string_raw(&node.children[1]));
+                        // Preserve C assignment-expression value semantics on RHS (e.g. `a = b = 2`).
+                        // Raw lowering would emit `b = 2` (type `()` in Rust), which breaks outer typed assignment.
+                        let right_expr = if Self::is_assignment_expr_node(&node.children[1]) {
+                            self.expr_to_string(&node.children[1])
+                        } else {
+                            self.expr_to_string_raw(&node.children[1])
+                        };
+                        let right_str = strip_literal_suffix(&right_expr);
 
                         // Check if left side is float type and right side is integer literal
                         let left_type = Self::get_expr_type(&node.children[0]);
@@ -28611,6 +28643,157 @@ mod tests {
         assert_eq!(
             correct_initializer_for_type("[]", &unsized_uch_array),
             "std::ptr::null_mut()"
+        );
+    }
+
+    #[test]
+    fn test_chained_assignment_rhs_preserves_expression_value_in_unsafe_lhs_path() {
+        let state_struct = make_node(
+            ClangNodeKind::RecordDecl {
+                name: "state".to_string(),
+                is_class: false,
+                is_definition: true,
+                fields: vec![],
+            },
+            vec![
+                make_node(
+                    ClangNodeKind::FieldDecl {
+                        name: "match_length".to_string(),
+                        ty: CppType::Int { signed: false },
+                        access: crate::ast::AccessSpecifier::Public,
+                        is_static: false,
+                        bit_field_width: None,
+                    },
+                    vec![],
+                ),
+                make_node(
+                    ClangNodeKind::FieldDecl {
+                        name: "prev_length".to_string(),
+                        ty: CppType::Int { signed: false },
+                        access: crate::ast::AccessSpecifier::Public,
+                        is_static: false,
+                        bit_field_width: None,
+                    },
+                    vec![],
+                ),
+            ],
+        );
+
+        let state_ptr_ty = CppType::Pointer {
+            pointee: Box::new(CppType::Named("state".to_string())),
+            is_const: false,
+        };
+
+        let lhs_match = make_node(
+            ClangNodeKind::MemberExpr {
+                member_name: "match_length".to_string(),
+                is_arrow: true,
+                declaring_class: None,
+                is_static: false,
+                ty: CppType::Int { signed: false },
+            },
+            vec![make_node(
+                ClangNodeKind::DeclRefExpr {
+                    name: "s".to_string(),
+                    ty: state_ptr_ty.clone(),
+                    namespace_path: vec![],
+                },
+                vec![],
+            )],
+        );
+        let lhs_prev = make_node(
+            ClangNodeKind::MemberExpr {
+                member_name: "prev_length".to_string(),
+                is_arrow: true,
+                declaring_class: None,
+                is_static: false,
+                ty: CppType::Int { signed: false },
+            },
+            vec![make_node(
+                ClangNodeKind::DeclRefExpr {
+                    name: "s".to_string(),
+                    ty: state_ptr_ty.clone(),
+                    namespace_path: vec![],
+                },
+                vec![],
+            )],
+        );
+
+        let chained_assign = make_node(
+            ClangNodeKind::BinaryOperator {
+                op: BinaryOp::Assign,
+                ty: CppType::Int { signed: false },
+            },
+            vec![
+                lhs_match,
+                make_node(
+                    ClangNodeKind::BinaryOperator {
+                        op: BinaryOp::Assign,
+                        ty: CppType::Int { signed: false },
+                    },
+                    vec![
+                        lhs_prev,
+                        make_node(
+                            ClangNodeKind::IntegerLiteral {
+                                value: 2,
+                                cpp_type: Some(CppType::Int { signed: true }),
+                            },
+                            vec![],
+                        ),
+                    ],
+                ),
+            ],
+        );
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![
+                state_struct,
+                make_node(
+                    ClangNodeKind::FunctionDecl {
+                        name: "chain_assign".to_string(),
+                        mangled_name: "chain_assign".to_string(),
+                        return_type: CppType::Int { signed: true },
+                        params: vec![("s".to_string(), state_ptr_ty)],
+                        is_definition: true,
+                        is_variadic: false,
+                        is_noexcept: false,
+                        is_coroutine: false,
+                        coroutine_info: None,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![
+                            make_node(
+                                ClangNodeKind::ExprStmt,
+                                vec![chained_assign],
+                            ),
+                            make_node(
+                                ClangNodeKind::ReturnStmt,
+                                vec![make_node(
+                                    ClangNodeKind::IntegerLiteral {
+                                        value: 0,
+                                        cpp_type: Some(CppType::Int { signed: true }),
+                                    },
+                                    vec![],
+                                )],
+                            ),
+                        ],
+                    )],
+                ),
+            ],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("(*s).prev_length = 2; (*s).prev_length"),
+            "inner assignment should be lowered as value-producing expression, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("= (*s).prev_length = 2"),
+            "outer assignment must not receive raw `lhs = rhs = value` form in Rust, got:\n{}",
+            code
         );
     }
 

@@ -42,7 +42,8 @@ Run upstream-style tests through the Fragile transpiler with runtime parity:
           - Plan: resolve by first compiler error class from replay logs; keep each leaf scoped to a single lowering rule family (<500 LOC per leaf).
           - [x] Fix unsized extern array declaration lowering so pointer-typed globals don't emit invalid `= []` initializers (`_length_code`/`_dist_code`).
             - Replay evidence (`/tmp/fragile_real_world_zlib_fragile_objz_objects/driver_logs/rustc_objz_deflate_o.stderr`): `__gv__length_code`/`__gv__dist_code` `*mut u8 = []` diagnostics are cleared; next first blocker class is integer-width/chained-assignment typing in `deflate`.
-          - [ ] Fix chained-assignment expression lowering that currently returns `()` in typed assignments (`a = b = 2` forms).
+          - [x] Fix chained-assignment expression lowering that currently returns `()` in typed assignments (`a = b = 2` forms).
+            - Replay evidence (`/tmp/fragile_real_world_zlib_fragile_objz_objects/driver_logs/objz_deflate_o_transpiled.rs`): chained forms now lower as value expressions (e.g., `(*s).match_length = unsafe { (*s).prev_length = 2; (*s).prev_length }`), and corresponding `found ()` assignment diagnostics are cleared from `rustc_objz_deflate_o.stderr`.
           - [ ] Fix pointer arithmetic lowering for `ptr + offset_from(...)` patterns to use Rust pointer APIs.
           - [ ] Fix integer width normalization for `u32`/`u64` fields and temporaries in shift/math expressions.
           - [ ] Fix enum return lowering so `block_state` returns emit enum variants instead of integer literals.
