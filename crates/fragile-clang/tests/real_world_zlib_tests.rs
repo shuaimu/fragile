@@ -204,25 +204,6 @@ const ZLIB_MAKE_TEST_COMMAND_PLAN_LOG_FILES: &[&str] = &[
     "make_test_dryrun.stderr",
     "make_test_commands_manifest.txt",
 ];
-const ZLIB_MAKE_TEST_REPLAY_LOG_FILES: &[&str] = &[
-    "configure_driver.status",
-    "configure_driver.stdout",
-    "configure_driver.stderr",
-    "make_driver.status",
-    "make_driver.stdout",
-    "make_driver.stderr",
-    "cc_driver.log",
-    "cc_driver_manifest.txt",
-    "artifact_manifest.txt",
-    "compile_units_manifest.txt",
-    "link_units_manifest.txt",
-    "fragile_link_manifest.txt",
-    "make_test_dryrun.status",
-    "make_test_dryrun.stdout",
-    "make_test_dryrun.stderr",
-    "make_test_commands_manifest.txt",
-];
-
 fn run_git(args: &[&str], cwd: Option<&Path>) -> Result<Output, String> {
     let mut cmd = Command::new("git");
     cmd.args(args);
@@ -2074,11 +2055,7 @@ fn replay_required_link_outputs(
                 )
             })?;
         }
-        link_cmd
-            .arg("-Wl,--unresolved-symbols=ignore-all")
-            .arg("-o")
-            .arg(&output_path)
-            .current_dir(source_dir);
+        link_cmd.arg("-o").arg(&output_path).current_dir(source_dir);
         link_cmd.env("LC_ALL", "C").env("LANG", "C");
         let link_output = link_cmd.output().map_err(|e| {
             format!(
@@ -4348,27 +4325,32 @@ fn test_make_test_command_subset_replay_local_fixture_success() {
     )
     .expect("failed to rewrite local fixture test target for replay success");
     let log_dir = root.join("logs");
-    run_make_test_command_subset_replay_in_tree(&project_dir, &log_dir)
-        .expect("make-test command replay should succeed");
-
-    let replay_manifest = fs::read_to_string(log_dir.join("make_test_replay_manifest.txt"))
-        .expect("failed to read make_test_replay_manifest.txt");
+    let err = run_make_test_command_subset_replay_in_tree(&project_dir, &log_dir)
+        .expect_err("strict make-test replay should fail at link step");
     assert!(
-        replay_manifest.contains("command_replay_count=3"),
-        "replay manifest should include replayed command count: {}",
-        replay_manifest
+        err.contains("link replay failed for"),
+        "unexpected strict make-test replay failure: {}",
+        err
     );
-    for idx in 0..3 {
-        let step = make_test_replay_step_name(idx);
-        assert_eq!(
-            fs::read_to_string(log_dir.join(format!("{}.status", step)))
-                .expect("failed to read replay step status")
-                .trim(),
-            "0",
-            "replayed command should succeed for step {}",
-            step
-        );
-    }
+    assert!(
+        !log_dir.join("make_test_commands_manifest.txt").exists(),
+        "make-test command plan should not be written when strict link replay fails first"
+    );
+    assert!(
+        !log_dir.join("make_test_replay_manifest.txt").exists(),
+        "make-test replay manifest should not be written when strict link replay fails first"
+    );
+    let first_link_step = format!(
+        "link_required_{}",
+        normalize_identifier_fragment(ZLIB_REQUIRED_LINK_OUTPUTS[0])
+    );
+    assert_ne!(
+        fs::read_to_string(log_dir.join(format!("{}.status", first_link_step)))
+            .expect("failed to read strict link replay status")
+            .trim(),
+        "0",
+        "first strict link replay step should fail in current baseline"
+    );
 
     let _ = fs::remove_dir_all(&root);
 }
@@ -4392,24 +4374,28 @@ fn test_make_test_command_subset_replay_reports_failing_command() {
 
     let log_dir = root.join("logs");
     let err = run_make_test_command_subset_replay_in_tree(&project_dir, &log_dir)
-        .expect_err("make-test command replay should fail on non-zero command");
+        .expect_err("strict make-test replay should fail at link step");
     assert!(
-        err.contains("make-test command replay failed at command"),
+        err.contains("link replay failed for"),
         "unexpected replay error: {}",
         err
     );
 
-    let failing_step = make_test_replay_step_name(2);
-    let failing_status = fs::read_to_string(log_dir.join(format!("{}.status", failing_step)))
-        .expect("failed to read failing replay status");
+    let failing_step = format!(
+        "link_required_{}",
+        normalize_identifier_fragment(ZLIB_REQUIRED_LINK_OUTPUTS[0])
+    );
+    let failing_status =
+        fs::read_to_string(log_dir.join(format!("{}.status", failing_step)))
+            .expect("failed to read strict link replay status");
     assert_ne!(
         failing_status.trim(),
         "0",
-        "failing replay command should have non-zero status"
+        "strict link replay step should have non-zero status"
     );
     assert!(
         !log_dir.join("make_test_replay_manifest.txt").exists(),
-        "replay manifest should not be written on replay failure"
+        "make-test replay manifest should not be written when strict link replay fails first"
     );
 
     let _ = fs::remove_dir_all(&root);
@@ -4420,10 +4406,10 @@ fn test_make_test_exit_status_parity_local_fixture_success() {
     let root = unique_temp_dir("zlib_make_test_exit_status_parity_success");
     fs::create_dir_all(&root).expect("failed to create test root");
 
-    let project_dir = create_local_required_artifacts_project(&root, false)
-        .expect("failed to create required-artifacts project");
+    let replay_project = create_local_required_artifacts_project(&root.join("replay"), false)
+        .expect("failed to create replay required-artifacts project");
     rewrite_local_makefile_test_target(
-        &project_dir,
+        &replay_project,
         r#"test:
 	@$(MAKE) all
 	@test -x ./minigzip && test -x ./example
@@ -4431,24 +4417,42 @@ fn test_make_test_exit_status_parity_local_fixture_success() {
 	@test -x ./minigzip64 && test -x ./example64
 "#,
     )
-    .expect("failed to rewrite local fixture test target for parity success");
+    .expect("failed to rewrite replay fixture test target for parity success");
 
     let replay_log_dir = root.join("replay_logs");
-    run_make_test_command_subset_replay_in_tree(&project_dir, &replay_log_dir)
-        .expect("make-test replay should succeed for parity success case");
+    let replay_err = run_make_test_command_subset_replay_in_tree(&replay_project, &replay_log_dir)
+        .expect_err("strict make-test replay should fail at link step for parity success case");
+    assert!(
+        replay_err.contains("link replay failed for"),
+        "unexpected strict replay error: {}",
+        replay_err
+    );
 
+    let native_project = create_local_required_artifacts_project(&root.join("native"), false)
+        .expect("failed to create native required-artifacts project");
+    rewrite_local_makefile_test_target(
+        &native_project,
+        r#"test:
+	@$(MAKE) all
+	@test -x ./minigzip && test -x ./example
+	@test -x ./minigzipsh && test -x ./examplesh
+	@test -x ./minigzip64 && test -x ./example64
+"#,
+    )
+    .expect("failed to rewrite native fixture test target for parity success");
     let native_log_dir = root.join("native_logs");
-    run_native_baseline_in_tree(&project_dir, &native_log_dir)
+    run_native_baseline_in_tree(&native_project, &native_log_dir)
         .expect("native baseline should succeed for parity success case");
 
-    assert_make_test_exit_status_parity(&native_log_dir, &replay_log_dir)
-        .expect("exit status parity should match for local success case");
-    assert_eq!(
-        read_native_make_test_exit_status(&native_log_dir).expect("failed to read native status"),
-        0
+    let parity_err = assert_make_test_exit_status_parity(&native_log_dir, &replay_log_dir)
+        .expect_err("parity evaluation should report missing replay make-test manifest");
+    assert!(
+        parity_err.contains("make_test_commands_manifest.txt"),
+        "unexpected parity error after strict link failure: {}",
+        parity_err
     );
     assert_eq!(
-        read_make_test_replay_exit_status(&replay_log_dir).expect("failed to read replay status"),
+        read_native_make_test_exit_status(&native_log_dir).expect("failed to read native status"),
         0
     );
 
@@ -4460,10 +4464,10 @@ fn test_make_test_exit_status_parity_local_fixture_reports_mismatch() {
     let root = unique_temp_dir("zlib_make_test_exit_status_parity_mismatch");
     fs::create_dir_all(&root).expect("failed to create test root");
 
-    let project_dir = create_local_required_artifacts_project(&root, false)
-        .expect("failed to create required-artifacts project");
+    let replay_project = create_local_required_artifacts_project(&root.join("replay"), false)
+        .expect("failed to create replay required-artifacts project");
     rewrite_local_makefile_test_target(
-        &project_dir,
+        &replay_project,
         r#"test:
 	@$(MAKE) all
 	@test -x ./minigzip && test -x ./example && false
@@ -4471,17 +4475,36 @@ fn test_make_test_exit_status_parity_local_fixture_reports_mismatch() {
 	@test -x ./minigzip64 && test -x ./example64
 "#,
     )
-    .expect("failed to rewrite local fixture test target for parity mismatch");
+    .expect("failed to rewrite replay fixture test target for parity mismatch");
 
     let replay_log_dir = root.join("replay_logs");
-    let replay_result = run_make_test_command_subset_replay_in_tree(&project_dir, &replay_log_dir);
+    let replay_result =
+        run_make_test_command_subset_replay_in_tree(&replay_project, &replay_log_dir);
     assert!(
         replay_result.is_err(),
-        "make-test replay should fail for parity mismatch case"
+        "strict make-test replay should fail at link step for parity mismatch case"
+    );
+    let replay_err = replay_result.expect_err("strict replay failure should be present");
+    assert!(
+        replay_err.contains("link replay failed for"),
+        "unexpected strict replay error: {}",
+        replay_err
     );
 
+    let native_project = create_local_required_artifacts_project(&root.join("native"), false)
+        .expect("failed to create native required-artifacts project");
+    rewrite_local_makefile_test_target(
+        &native_project,
+        r#"test:
+	@$(MAKE) all
+	@test -x ./minigzip && test -x ./example && false
+	@test -x ./minigzipsh && test -x ./examplesh
+	@test -x ./minigzip64 && test -x ./example64
+"#,
+    )
+    .expect("failed to rewrite native fixture test target for parity mismatch");
     let native_log_dir = root.join("native_logs");
-    let native_result = run_native_baseline_in_tree(&project_dir, &native_log_dir);
+    let native_result = run_native_baseline_in_tree(&native_project, &native_log_dir);
     assert!(
         native_result.is_err(),
         "native baseline should fail for parity mismatch case"
@@ -4489,17 +4512,12 @@ fn test_make_test_exit_status_parity_local_fixture_reports_mismatch() {
 
     let native_status =
         read_native_make_test_exit_status(&native_log_dir).expect("failed to read native status");
-    let replay_status =
-        read_make_test_replay_exit_status(&replay_log_dir).expect("failed to read replay status");
-    assert_ne!(
-        native_status, replay_status,
-        "mismatch fixture should produce different native/replay statuses"
-    );
+    assert_ne!(native_status, 0, "mismatch fixture should fail natively");
 
     let err = assert_make_test_exit_status_parity(&native_log_dir, &replay_log_dir)
-        .expect_err("expected exit status parity mismatch");
+        .expect_err("parity evaluation should report missing replay make-test manifest");
     assert!(
-        err.contains("exit status parity mismatch"),
+        err.contains("make_test_commands_manifest.txt"),
         "unexpected mismatch error: {}",
         err
     );
@@ -4512,10 +4530,10 @@ fn test_make_test_stdout_stderr_parity_local_fixture_success() {
     let root = unique_temp_dir("zlib_make_test_output_parity_success");
     fs::create_dir_all(&root).expect("failed to create test root");
 
-    let project_dir = create_local_required_artifacts_project(&root, false)
-        .expect("failed to create required-artifacts project");
+    let replay_project = create_local_required_artifacts_project(&root.join("replay"), false)
+        .expect("failed to create replay required-artifacts project");
     rewrite_local_makefile_test_target(
-        &project_dir,
+        &replay_project,
         r#"test:
 	@$(MAKE) all
 	@test -x ./minigzip && test -x ./example && echo "stdout static $$PWD" && echo "stderr static $$PWD" 1>&2
@@ -4523,20 +4541,43 @@ fn test_make_test_stdout_stderr_parity_local_fixture_success() {
 	@test -x ./minigzip64 && test -x ./example64 && echo "stdout 64 $$PWD" && echo "stderr 64 $$PWD" 1>&2
 "#,
     )
-    .expect("failed to rewrite local fixture test target for output parity success");
+    .expect("failed to rewrite replay fixture test target for output parity success");
 
     let replay_log_dir = root.join("replay_logs");
-    run_make_test_command_subset_replay_in_tree(&project_dir, &replay_log_dir)
-        .expect("make-test replay should succeed for output parity success case");
+    let replay_err =
+        run_make_test_command_subset_replay_in_tree(&replay_project, &replay_log_dir)
+        .expect_err("strict make-test replay should fail at link step for output parity success case");
+    assert!(
+        replay_err.contains("link replay failed for"),
+        "unexpected strict replay error: {}",
+        replay_err
+    );
 
+    let native_project = create_local_required_artifacts_project(&root.join("native"), false)
+        .expect("failed to create native required-artifacts project");
+    rewrite_local_makefile_test_target(
+        &native_project,
+        r#"test:
+	@$(MAKE) all
+	@test -x ./minigzip && test -x ./example && echo "stdout static $$PWD" && echo "stderr static $$PWD" 1>&2
+	@test -x ./minigzipsh && test -x ./examplesh && echo "stdout shared $$PWD" && echo "stderr shared $$PWD" 1>&2
+	@test -x ./minigzip64 && test -x ./example64 && echo "stdout 64 $$PWD" && echo "stderr 64 $$PWD" 1>&2
+"#,
+    )
+    .expect("failed to rewrite native fixture test target for output parity success");
     let native_log_dir = root.join("native_logs");
-    run_native_baseline_in_tree(&project_dir, &native_log_dir)
+    run_native_baseline_in_tree(&native_project, &native_log_dir)
         .expect("native baseline should succeed for output parity success case");
-    write_baseline_manifest(&native_log_dir, &project_dir)
+    write_baseline_manifest(&native_log_dir, &native_project)
         .expect("failed to write baseline manifest for output parity success case");
 
-    assert_make_test_stdout_stderr_parity(&native_log_dir, &replay_log_dir)
-        .expect("stdout/stderr parity should match for local success case");
+    let parity_err = assert_make_test_stdout_stderr_parity(&native_log_dir, &replay_log_dir)
+        .expect_err("parity evaluation should report missing replay make-test manifest");
+    assert!(
+        parity_err.contains("make_test_commands_manifest.txt"),
+        "unexpected parity error after strict link failure: {}",
+        parity_err
+    );
 
     let _ = fs::remove_dir_all(&root);
 }
@@ -4546,20 +4587,20 @@ fn test_make_test_stdout_stderr_parity_local_fixture_reports_mismatch() {
     let root = unique_temp_dir("zlib_make_test_output_parity_mismatch");
     fs::create_dir_all(&root).expect("failed to create test root");
 
-    let project_dir = create_local_required_artifacts_project(&root, false)
-        .expect("failed to create required-artifacts project");
+    let replay_project = create_local_required_artifacts_project(&root.join("replay"), false)
+        .expect("failed to create replay required-artifacts project");
     fs::write(
-        project_dir.join("parity_stdout.txt"),
+        replay_project.join("parity_stdout.txt"),
         "fragile-parity-stdout\n",
     )
     .expect("failed to write fragile parity stdout marker");
     fs::write(
-        project_dir.join("parity_stderr.txt"),
+        replay_project.join("parity_stderr.txt"),
         "fragile-parity-stderr\n",
     )
     .expect("failed to write fragile parity stderr marker");
     rewrite_local_makefile_test_target(
-        &project_dir,
+        &replay_project,
         r#"test:
 	@$(MAKE) all
 	@test -x ./minigzip && test -x ./example && cat ./parity_stdout.txt && cat ./parity_stderr.txt 1>&2
@@ -4567,33 +4608,51 @@ fn test_make_test_stdout_stderr_parity_local_fixture_reports_mismatch() {
 	@test -x ./minigzip64 && test -x ./example64 && cat ./parity_stdout.txt && cat ./parity_stderr.txt 1>&2
 "#,
     )
-    .expect("failed to rewrite local fixture test target for output parity mismatch");
+    .expect("failed to rewrite replay fixture test target for output parity mismatch");
 
     let replay_log_dir = root.join("replay_logs");
-    run_make_test_command_subset_replay_in_tree(&project_dir, &replay_log_dir)
-        .expect("make-test replay should succeed for output parity mismatch case");
+    let replay_err =
+        run_make_test_command_subset_replay_in_tree(&replay_project, &replay_log_dir)
+        .expect_err("strict make-test replay should fail at link step for output parity mismatch case");
+    assert!(
+        replay_err.contains("link replay failed for"),
+        "unexpected strict replay error: {}",
+        replay_err
+    );
 
+    let native_project = create_local_required_artifacts_project(&root.join("native"), false)
+        .expect("failed to create native required-artifacts project");
     fs::write(
-        project_dir.join("parity_stdout.txt"),
+        native_project.join("parity_stdout.txt"),
         "native-parity-stdout\n",
     )
     .expect("failed to write native parity stdout marker");
     fs::write(
-        project_dir.join("parity_stderr.txt"),
+        native_project.join("parity_stderr.txt"),
         "native-parity-stderr\n",
     )
     .expect("failed to write native parity stderr marker");
+    rewrite_local_makefile_test_target(
+        &native_project,
+        r#"test:
+	@$(MAKE) all
+	@test -x ./minigzip && test -x ./example && cat ./parity_stdout.txt && cat ./parity_stderr.txt 1>&2
+	@test -x ./minigzipsh && test -x ./examplesh && cat ./parity_stdout.txt && cat ./parity_stderr.txt 1>&2
+	@test -x ./minigzip64 && test -x ./example64 && cat ./parity_stdout.txt && cat ./parity_stderr.txt 1>&2
+"#,
+    )
+    .expect("failed to rewrite native fixture test target for output parity mismatch");
 
     let native_log_dir = root.join("native_logs");
-    run_native_baseline_in_tree(&project_dir, &native_log_dir)
+    run_native_baseline_in_tree(&native_project, &native_log_dir)
         .expect("native baseline should succeed for output parity mismatch case");
-    write_baseline_manifest(&native_log_dir, &project_dir)
+    write_baseline_manifest(&native_log_dir, &native_project)
         .expect("failed to write baseline manifest for output parity mismatch case");
 
     let err = assert_make_test_stdout_stderr_parity(&native_log_dir, &replay_log_dir)
-        .expect_err("expected stdout/stderr parity mismatch");
+        .expect_err("parity evaluation should report missing replay make-test manifest");
     assert!(
-        err.contains("stdout/stderr parity mismatch"),
+        err.contains("make_test_commands_manifest.txt"),
         "unexpected parity mismatch error: {}",
         err
     );
@@ -4807,35 +4866,13 @@ fn test_fragile_link_required_binaries_local_fixture_success() {
     let project_dir = create_local_required_artifacts_project(&root, false)
         .expect("failed to create required-artifacts project");
     let log_dir = root.join("logs");
-    run_fragile_link_required_binaries_in_tree(&project_dir, &log_dir)
-        .expect("fragile required-link replay should succeed");
-
-    for output in ZLIB_REQUIRED_LINK_OUTPUTS {
-        let output_path = project_dir.join(output);
-        assert!(
-            output_path.exists(),
-            "expected replay-linked output {}",
-            output_path.display()
-        );
-        assert!(
-            fs::metadata(&output_path)
-                .expect("failed to stat replay-linked output")
-                .len()
-                > 0,
-            "replay-linked output should be non-empty: {}",
-            output_path.display()
-        );
-
-        let link_step = format!("link_required_{}", normalize_identifier_fragment(output));
-        assert_eq!(
-            fs::read_to_string(log_dir.join(format!("{}.status", link_step)))
-                .expect("failed to read link replay status")
-                .trim(),
-            "0",
-            "link replay should succeed for {}",
-            output
-        );
-    }
+    let err = run_fragile_link_required_binaries_in_tree(&project_dir, &log_dir)
+        .expect_err("strict fragile required-link replay should fail");
+    assert!(
+        err.contains("link replay failed for"),
+        "unexpected strict required-link replay error: {}",
+        err
+    );
 
     assert_eq!(
         fs::read_to_string(log_dir.join("rustc_link_tiny_o.status"))
@@ -4844,29 +4881,40 @@ fn test_fragile_link_required_binaries_local_fixture_success() {
         "0",
         "expected tiny.o transpile+compile replay to succeed"
     );
-    let manifest = fs::read_to_string(log_dir.join("fragile_link_manifest.txt"))
-        .expect("failed to read fragile_link_manifest.txt");
     assert!(
-        manifest.contains("transpiled_object_count=1"),
-        "manifest should include transpiled object count: {}",
-        manifest
+        !log_dir.join("fragile_link_manifest.txt").exists(),
+        "strict required-link replay should not write fragile link manifest on failure"
     );
-    assert!(
-        manifest.contains(&format!(
-            "relinked_output_count={}",
-            ZLIB_REQUIRED_LINK_OUTPUTS.len()
-        )),
-        "manifest should include relinked output count: {}",
-        manifest
-    );
+    let mut observed_link_steps: Vec<String> = Vec::new();
+    let mut first_failing_link_step: Option<String> = None;
     for output in ZLIB_REQUIRED_LINK_OUTPUTS {
-        assert!(
-            manifest.contains(&format!("output={}", output)),
-            "manifest should include linked output {}: {}",
-            output,
-            manifest
-        );
+        let link_step = format!("link_required_{}", normalize_identifier_fragment(output));
+        let status_path = log_dir.join(format!("{}.status", link_step));
+        if !status_path.exists() {
+            break;
+        }
+        observed_link_steps.push(link_step.clone());
+        let status = fs::read_to_string(&status_path).expect("failed to read strict link status");
+        if status.trim() != "0" && first_failing_link_step.is_none() {
+            first_failing_link_step = Some(link_step);
+        }
     }
+    assert!(
+        !observed_link_steps.is_empty(),
+        "strict required-link replay should emit at least one link-step status"
+    );
+    assert!(
+        first_failing_link_step.is_some(),
+        "strict required-link replay should expose at least one failing link step"
+    );
+    let first_failing_step = first_failing_link_step.expect("missing first failing link step");
+    let first_failing_stderr =
+        fs::read_to_string(log_dir.join(format!("{}.stderr", first_failing_step)))
+            .expect("failed to read first failing strict-link stderr");
+    assert!(
+        !first_failing_stderr.trim().is_empty(),
+        "strict required-link replay failing step should include linker diagnostics"
+    );
 
     let _ = fs::remove_dir_all(&root);
 }
@@ -5575,15 +5623,14 @@ fn test_real_world_zlib_make_test_command_subset_replay() {
     let replay_result = run_zlib_make_test_command_subset_replay_baseline();
 
     let log_dir = Path::new(ZLIB_MAKE_TEST_REPLAY_BASELINE_DIR).join("driver_logs");
-    let worktree_dir = Path::new(ZLIB_MAKE_TEST_REPLAY_BASELINE_DIR).join("worktree");
-    let err = replay_result.expect_err("make-test replay should currently fail with diagnostics");
+    let err = replay_result.expect_err("make-test replay should currently fail at strict link step");
     assert!(
-        err.contains("make-test command replay failed at command"),
+        err.contains("link replay failed for"),
         "unexpected make-test replay failure: {}",
         err
     );
 
-    for rel in ZLIB_MAKE_TEST_REPLAY_LOG_FILES {
+    for rel in ZLIB_FRAGILE_LINK_REQUIRED_LOG_FILES {
         assert!(
             log_dir.join(rel).exists(),
             "expected make-test replay log {}",
@@ -5603,134 +5650,109 @@ fn test_real_world_zlib_make_test_command_subset_replay() {
             .trim(),
         "0"
     );
-    assert_eq!(
-        fs::read_to_string(log_dir.join("make_test_dryrun.status"))
-            .expect("failed to read make_test_dryrun.status")
-            .trim(),
-        "0"
-    );
-
-    let commands_manifest = fs::read_to_string(log_dir.join("make_test_commands_manifest.txt"))
-        .expect("failed to read make_test_commands_manifest.txt");
-    let planned_commands = parse_make_test_commands_manifest_entries(&commands_manifest)
-        .expect("failed to parse make_test_commands_manifest.txt");
     assert!(
-        !planned_commands.is_empty(),
-        "expected at least one replayable make-test command"
+        !log_dir.join("make_test_dryrun.status").exists(),
+        "make-test dry-run should not execute when strict link replay fails first"
     );
-    let first_step = make_test_replay_step_name(0);
-    assert_ne!(
-        fs::read_to_string(log_dir.join(format!("{}.status", first_step)))
-            .expect("failed to read first make-test replay status")
-            .trim(),
-        "0",
-        "first make-test replay command is expected to fail in current baseline"
+    assert!(
+        !log_dir.join("make_test_commands_manifest.txt").exists(),
+        "make-test command plan should not be written when strict link replay fails first"
     );
     assert!(
         !log_dir.join("make_test_replay_manifest.txt").exists(),
-        "replay manifest should not be written when replay fails before completion"
+        "make-test replay manifest should not be written when strict link replay fails first"
+    );
+    assert!(
+        !log_dir.join("fragile_link_manifest.txt").exists(),
+        "fragile link manifest should not be written on strict link replay failure"
     );
 
-    let link_manifest = fs::read_to_string(log_dir.join("fragile_link_manifest.txt"))
-        .expect("failed to read fragile_link_manifest.txt");
+    let mut observed_link_steps: Vec<String> = Vec::new();
+    let mut failing_link_steps: Vec<String> = Vec::new();
     for output in ZLIB_REQUIRED_LINK_OUTPUTS {
-        let output_path = worktree_dir.join(output);
-        assert!(
-            output_path.exists(),
-            "expected replay-linked output {}",
-            output_path.display()
-        );
-        assert!(
-            fs::metadata(&output_path)
-                .expect("failed to stat replay-linked output")
-                .len()
-                > 0,
-            "replay-linked output should be non-empty: {}",
-            output_path.display()
-        );
-        assert!(
-            link_manifest.contains(&format!("output={}", output)),
-            "fragile link manifest should include output {} entry: {}",
-            output,
-            link_manifest
-        );
+        let link_step = format!("link_required_{}", normalize_identifier_fragment(output));
+        let status_path = log_dir.join(format!("{}.status", link_step));
+        if !status_path.exists() {
+            break;
+        }
+        observed_link_steps.push(link_step.clone());
+        let status = fs::read_to_string(&status_path).expect("failed to read strict link status");
+        if status.trim() != "0" {
+            failing_link_steps.push(link_step);
+        }
     }
+    assert!(
+        !observed_link_steps.is_empty(),
+        "strict link replay should emit at least one link-step status"
+    );
+    assert!(
+        !failing_link_steps.is_empty(),
+        "strict link replay should surface at least one failing link step"
+    );
+    let first_failing_step = &failing_link_steps[0];
+    let stderr = fs::read_to_string(log_dir.join(format!("{}.stderr", first_failing_step)))
+        .expect("failed to read first failing strict link stderr");
+    assert!(
+        !stderr.trim().is_empty(),
+        "strict link replay failure should emit linker diagnostics for {}",
+        first_failing_step
+    );
 }
 
 #[test]
 #[ignore = "real-world external project test (downloads zlib and compares native-vs-fragile make-test exit status)"]
 fn test_real_world_zlib_make_test_exit_status_parity() {
-    let native_log_dir = run_zlib_native_baseline().expect("failed to run zlib native baseline");
     let replay_result = run_zlib_make_test_command_subset_replay_baseline();
     let replay_log_dir = Path::new(ZLIB_MAKE_TEST_REPLAY_BASELINE_DIR).join("driver_logs");
 
     let replay_err =
         replay_result.expect_err("fragile replay is expected to fail in current baseline");
     assert!(
-        replay_err.contains("make-test command replay failed at command"),
+        replay_err.contains("link replay failed for"),
         "unexpected make-test replay failure: {}",
         replay_err
     );
-
-    let parity_err = assert_make_test_exit_status_parity(&native_log_dir, &replay_log_dir)
-        .expect_err("expected native-vs-fragile exit status parity mismatch");
     assert!(
-        parity_err.contains("exit status parity mismatch"),
-        "unexpected parity error: {}",
-        parity_err
-    );
-    assert!(
-        parity_err.contains("native make test status=0"),
-        "parity error should include native success status: {}",
-        parity_err
+        !replay_log_dir.join("make_test_commands_manifest.txt").exists(),
+        "make-test exit status parity cannot run until strict link replay reaches make-test planning"
     );
 }
 
 #[test]
 #[ignore = "real-world external project test (downloads zlib and compares native-vs-fragile make-test stdout/stderr)"]
 fn test_real_world_zlib_make_test_stdout_stderr_parity() {
-    let native_log_dir = run_zlib_native_baseline().expect("failed to run zlib native baseline");
     let replay_result = run_zlib_make_test_command_subset_replay_baseline();
     let replay_log_dir = Path::new(ZLIB_MAKE_TEST_REPLAY_BASELINE_DIR).join("driver_logs");
 
     let replay_err =
         replay_result.expect_err("fragile replay is expected to fail in current baseline");
     assert!(
-        replay_err.contains("make-test command replay failed at command"),
+        replay_err.contains("link replay failed for"),
         "unexpected make-test replay failure: {}",
         replay_err
     );
-
-    let parity_err = assert_make_test_stdout_stderr_parity(&native_log_dir, &replay_log_dir)
-        .expect_err("expected native-vs-fragile stdout/stderr parity mismatch");
     assert!(
-        parity_err.contains("stdout/stderr parity mismatch"),
-        "unexpected parity error: {}",
-        parity_err
+        !replay_log_dir.join("make_test_commands_manifest.txt").exists(),
+        "make-test stdout/stderr parity cannot run until strict link replay reaches make-test planning"
     );
 }
 
 #[test]
 #[ignore = "real-world external project test (downloads zlib and compares native-vs-fragile make-test artifact behavior)"]
 fn test_real_world_zlib_make_test_artifact_behavior_parity() {
-    let native_log_dir = run_zlib_native_baseline().expect("failed to run zlib native baseline");
     let replay_result = run_zlib_make_test_command_subset_replay_baseline();
     let replay_log_dir = Path::new(ZLIB_MAKE_TEST_REPLAY_BASELINE_DIR).join("driver_logs");
 
     let replay_err =
         replay_result.expect_err("fragile replay is expected to fail in current baseline");
     assert!(
-        replay_err.contains("make-test command replay failed at command"),
+        replay_err.contains("link replay failed for"),
         "unexpected make-test replay failure: {}",
         replay_err
     );
-
-    let parity_err = assert_make_test_artifact_behavior_parity(&native_log_dir, &replay_log_dir)
-        .expect_err("expected native-vs-fragile artifact behavior parity mismatch");
     assert!(
-        parity_err.contains("artifact behavior parity mismatch"),
-        "unexpected parity error: {}",
-        parity_err
+        !replay_log_dir.join("make_test_commands_manifest.txt").exists(),
+        "make-test artifact parity cannot run until strict link replay reaches make-test planning"
     );
 }
 
@@ -5740,13 +5762,12 @@ fn test_real_world_zlib_fragile_required_link_binaries_replay() {
     let replay_result = run_zlib_fragile_link_required_binaries_baseline();
 
     let log_dir = Path::new(ZLIB_FRAGILE_LINK_REQUIRED_BINARIES_BASELINE_DIR).join("driver_logs");
-    let worktree_dir = Path::new(ZLIB_FRAGILE_LINK_REQUIRED_BINARIES_BASELINE_DIR).join("worktree");
-    let replay_log_dir = replay_result
-        .map_err(|e| format!("required-link replay failed unexpectedly: {}", e))
-        .expect("required-link replay should succeed end-to-end");
-    assert_eq!(
-        replay_log_dir, log_dir,
-        "replay helper should return baseline required-link driver log directory"
+    let replay_err =
+        replay_result.expect_err("strict required-link replay should fail with diagnostics");
+    assert!(
+        replay_err.contains("link replay failed for"),
+        "unexpected strict required-link replay failure: {}",
+        replay_err
     );
 
     for rel in ZLIB_FRAGILE_LINK_REQUIRED_LOG_FILES {
@@ -5776,48 +5797,44 @@ fn test_real_world_zlib_fragile_required_link_binaries_replay() {
         "0"
     );
 
-    let manifest = fs::read_to_string(log_dir.join("fragile_link_manifest.txt"))
-        .expect("failed to read fragile_link_manifest.txt");
     assert!(
-        manifest.contains(&format!(
-            "relinked_output_count={}",
-            ZLIB_REQUIRED_LINK_OUTPUTS.len()
-        )),
-        "manifest should include required output count: {}",
-        manifest
+        !log_dir.join("fragile_link_manifest.txt").exists(),
+        "strict required-link replay should not write fragile link manifest on failure"
     );
+
+    let mut observed_link_steps: Vec<String> = Vec::new();
+    let mut first_failing_link_step: Option<String> = None;
     for output in ZLIB_REQUIRED_LINK_OUTPUTS {
         let link_step = format!("link_required_{}", normalize_identifier_fragment(output));
-        assert_eq!(
-            fs::read_to_string(log_dir.join(format!("{}.status", link_step)))
-                .expect("failed to read link replay status")
-                .trim(),
-            "0",
-            "link replay should succeed for {}",
+        let status_path = log_dir.join(format!("{}.status", link_step));
+        if !status_path.exists() {
+            break;
+        }
+        observed_link_steps.push(link_step.clone());
+        let status =
+            fs::read_to_string(&status_path).expect("failed to read strict link replay status");
+        assert!(
+            !status.trim().is_empty(),
+            "strict link replay status should not be empty for {}",
             output
         );
-
-        let output_path = worktree_dir.join(output);
-        assert!(
-            output_path.exists(),
-            "expected replay-linked output {}",
-            output_path.display()
-        );
-        assert!(
-            fs::metadata(&output_path)
-                .expect("failed to stat replay-linked output")
-                .len()
-                > 0,
-            "replay-linked output should be non-empty: {}",
-            output_path.display()
-        );
-        assert!(
-            manifest.contains(&format!("output={}", output)),
-            "manifest should include output {} entry: {}",
-            output,
-            manifest
-        );
+        if status.trim() != "0" && first_failing_link_step.is_none() {
+            first_failing_link_step = Some(link_step);
+        }
     }
+    assert!(
+        !observed_link_steps.is_empty(),
+        "strict required-link replay should emit at least one link-step status"
+    );
+    let first_failing_link_step =
+        first_failing_link_step.expect("strict required-link replay should expose a failing link step");
+    let first_failing_stderr =
+        fs::read_to_string(log_dir.join(format!("{}.stderr", first_failing_link_step)))
+            .expect("failed to read strict-link failing stderr");
+    assert!(
+        !first_failing_stderr.trim().is_empty(),
+        "strict required-link replay failing step should include stderr diagnostics"
+    );
 }
 
 #[test]
