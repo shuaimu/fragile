@@ -18,7 +18,18 @@ const ZLIB_PINNED_COMMIT: &str = "51b7f2abdade71cd9bb0e7a373ef2610ec6f9daf"; // 
 const ZLIB_CACHE_DIR: &str = "/tmp/fragile_real_world_zlib";
 const ZLIB_NATIVE_BASELINE_DIR: &str = "/tmp/fragile_real_world_zlib_native_baseline";
 const ZLIB_CC_DRIVER_BASELINE_DIR: &str = "/tmp/fragile_real_world_zlib_cc_driver";
+const ZLIB_REQUIRED_ARTIFACTS_BASELINE_DIR: &str =
+    "/tmp/fragile_real_world_zlib_required_artifacts";
 const ZLIB_REQUIRED_PATHS: &[&str] = &["zlib.h", "configure", "Makefile.in"];
+const ZLIB_REQUIRED_TEST_ARTIFACTS: &[&str] = &[
+    "libz.a",
+    "example",
+    "minigzip",
+    "examplesh",
+    "minigzipsh",
+    "example64",
+    "minigzip64",
+];
 const ZLIB_BASELINE_LOG_FILES: &[&str] = &[
     "configure.status",
     "configure.stdout",
@@ -37,6 +48,17 @@ const ZLIB_CC_DRIVER_LOG_FILES: &[&str] = &[
     "make_driver.stderr",
     "cc_driver.log",
     "cc_driver_manifest.txt",
+];
+const ZLIB_REQUIRED_ARTIFACT_LOG_FILES: &[&str] = &[
+    "configure_driver.status",
+    "configure_driver.stdout",
+    "configure_driver.stderr",
+    "make_driver.status",
+    "make_driver.stdout",
+    "make_driver.stderr",
+    "cc_driver.log",
+    "cc_driver_manifest.txt",
+    "artifact_manifest.txt",
 ];
 
 fn run_git(args: &[&str], cwd: Option<&Path>) -> Result<Output, String> {
@@ -448,6 +470,62 @@ fn run_cc_driver_baseline_in_tree(
     Ok(())
 }
 
+fn ensure_required_artifacts_exist(
+    source_dir: &Path,
+    required_artifacts: &[&str],
+) -> Result<(), String> {
+    let mut missing: Vec<String> = Vec::new();
+    for rel in required_artifacts {
+        if !source_dir.join(rel).exists() {
+            missing.push((*rel).to_string());
+        }
+    }
+    if missing.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "missing required artifacts after make in {}: {}",
+            source_dir.display(),
+            missing.join(", ")
+        ))
+    }
+}
+
+fn write_artifact_manifest(
+    log_dir: &Path,
+    source_dir: &Path,
+    make_target: &str,
+    required_artifacts: &[&str],
+) -> Result<(), String> {
+    let head = read_head(source_dir).unwrap_or_else(|| "unknown".to_string());
+    let manifest = format!(
+        "source_dir={}\ncommit={}\nmake_target={}\nrequired_artifacts={}\n",
+        source_dir.display(),
+        head.trim(),
+        make_target,
+        required_artifacts.join(",")
+    );
+    fs::write(log_dir.join("artifact_manifest.txt"), manifest).map_err(|e| {
+        format!(
+            "failed to write artifact manifest at {}: {}",
+            log_dir.display(),
+            e
+        )
+    })
+}
+
+fn run_cc_driver_required_artifacts_in_tree(
+    source_dir: &Path,
+    log_dir: &Path,
+    make_target: &str,
+    required_artifacts: &[&str],
+) -> Result<(), String> {
+    run_cc_driver_baseline_in_tree(source_dir, log_dir, make_target)?;
+    ensure_required_artifacts_exist(source_dir, required_artifacts)?;
+    write_artifact_manifest(log_dir, source_dir, make_target, required_artifacts)?;
+    Ok(())
+}
+
 fn write_baseline_manifest(log_dir: &Path, source_dir: &Path) -> Result<(), String> {
     let head = read_head(source_dir).unwrap_or_else(|| "unknown".to_string());
     let manifest = format!(
@@ -545,6 +623,48 @@ fn run_zlib_cc_driver_baseline() -> Result<PathBuf, String> {
 
     let log_dir = baseline_root.join("driver_logs");
     run_cc_driver_baseline_in_tree(&worktree_dir, &log_dir, "adler32.o")?;
+    Ok(log_dir)
+}
+
+fn run_zlib_required_artifacts_baseline() -> Result<PathBuf, String> {
+    let checkout_dir = ensure_zlib_checkout()?;
+    let baseline_root = PathBuf::from(ZLIB_REQUIRED_ARTIFACTS_BASELINE_DIR);
+    reset_dir(&baseline_root)?;
+
+    let worktree_dir = baseline_root.join("worktree");
+    let checkout_dir_str = checkout_dir.to_string_lossy().to_string();
+    let worktree_dir_str = worktree_dir.to_string_lossy().to_string();
+    run_git(
+        &[
+            "clone",
+            "--no-tags",
+            "--local",
+            checkout_dir_str.as_str(),
+            worktree_dir_str.as_str(),
+        ],
+        None,
+    )?;
+    run_git(
+        &["checkout", "--detach", ZLIB_PINNED_COMMIT],
+        Some(&worktree_dir),
+    )?;
+
+    let actual_head = read_head(&worktree_dir)
+        .ok_or_else(|| format!("failed to read HEAD in {}", worktree_dir.display()))?;
+    if actual_head != ZLIB_PINNED_COMMIT {
+        return Err(format!(
+            "required-artifacts worktree expected commit {} but got {}",
+            ZLIB_PINNED_COMMIT, actual_head
+        ));
+    }
+
+    let log_dir = baseline_root.join("driver_logs");
+    run_cc_driver_required_artifacts_in_tree(
+        &worktree_dir,
+        &log_dir,
+        "all",
+        ZLIB_REQUIRED_TEST_ARTIFACTS,
+    )?;
     Ok(log_dir)
 }
 
@@ -666,6 +786,86 @@ EOF
     };
     fs::write(project_dir.join("hello.c"), source)
         .map_err(|e| format!("failed to write hello.c: {}", e))?;
+    Ok(project_dir)
+}
+
+fn create_local_required_artifacts_project(
+    base_dir: &Path,
+    omit_minigzip64: bool,
+) -> Result<PathBuf, String> {
+    let project_dir = base_dir.join("required_artifacts_project");
+    fs::create_dir_all(&project_dir)
+        .map_err(|e| format!("failed to create {}: {}", project_dir.display(), e))?;
+
+    let configure = r#"#!/bin/sh
+set -eu
+cat > conftest.c <<'EOF'
+int main(void) { return 0; }
+EOF
+"${CC:-cc}" -c conftest.c -o conftest.o
+rm -f conftest.c conftest.o
+"#;
+    fs::write(project_dir.join("configure"), configure)
+        .map_err(|e| format!("failed to write configure script: {}", e))?;
+    make_executable(&project_dir.join("configure"))?;
+
+    fs::write(project_dir.join("tiny.c"), "int main(void) { return 0; }\n")
+        .map_err(|e| format!("failed to write tiny.c: {}", e))?;
+
+    let makefile = if omit_minigzip64 {
+        r#"CC ?= cc
+all: static shared all64
+static: libz.a example minigzip
+shared: examplesh minigzipsh
+all64: example64
+
+tiny.o: tiny.c
+	$(CC) -c tiny.c -o tiny.o
+
+libz.a: tiny.o
+	ar rcs libz.a tiny.o
+
+example: tiny.o
+	$(CC) tiny.o -o example
+minigzip: tiny.o
+	$(CC) tiny.o -o minigzip
+examplesh: tiny.o
+	$(CC) tiny.o -o examplesh
+minigzipsh: tiny.o
+	$(CC) tiny.o -o minigzipsh
+example64: tiny.o
+	$(CC) tiny.o -o example64
+"#
+    } else {
+        r#"CC ?= cc
+all: static shared all64
+static: libz.a example minigzip
+shared: examplesh minigzipsh
+all64: example64 minigzip64
+
+tiny.o: tiny.c
+	$(CC) -c tiny.c -o tiny.o
+
+libz.a: tiny.o
+	ar rcs libz.a tiny.o
+
+example: tiny.o
+	$(CC) tiny.o -o example
+minigzip: tiny.o
+	$(CC) tiny.o -o minigzip
+examplesh: tiny.o
+	$(CC) tiny.o -o examplesh
+minigzipsh: tiny.o
+	$(CC) tiny.o -o minigzipsh
+example64: tiny.o
+	$(CC) tiny.o -o example64
+minigzip64: tiny.o
+	$(CC) tiny.o -o minigzip64
+"#
+    };
+    fs::write(project_dir.join("Makefile"), makefile)
+        .map_err(|e| format!("failed to write Makefile: {}", e))?;
+
     Ok(project_dir)
 }
 
@@ -903,6 +1103,77 @@ fn test_cc_driver_path_surfaces_make_failure_with_logs() {
 }
 
 #[test]
+fn test_required_artifacts_build_local_fixture_success() {
+    let root = unique_temp_dir("zlib_required_artifacts_success");
+    fs::create_dir_all(&root).expect("failed to create test root");
+
+    let project_dir = create_local_required_artifacts_project(&root, false)
+        .expect("failed to create required-artifacts project");
+    let log_dir = root.join("logs");
+    run_cc_driver_required_artifacts_in_tree(
+        &project_dir,
+        &log_dir,
+        "all",
+        ZLIB_REQUIRED_TEST_ARTIFACTS,
+    )
+    .expect("required-artifacts build should succeed");
+
+    for rel in ZLIB_REQUIRED_TEST_ARTIFACTS {
+        assert!(
+            project_dir.join(rel).exists(),
+            "expected local artifact {}",
+            project_dir.join(rel).display()
+        );
+    }
+
+    assert!(fs::read_to_string(log_dir.join("artifact_manifest.txt"))
+        .expect("failed to read artifact_manifest.txt")
+        .contains("required_artifacts="));
+    assert!(fs::read_to_string(log_dir.join("cc_driver.log"))
+        .expect("failed to read cc_driver.log")
+        .contains("tiny.c"));
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn test_required_artifacts_build_detects_missing_output() {
+    let root = unique_temp_dir("zlib_required_artifacts_missing");
+    fs::create_dir_all(&root).expect("failed to create test root");
+
+    let project_dir = create_local_required_artifacts_project(&root, true)
+        .expect("failed to create required-artifacts project");
+    let log_dir = root.join("logs");
+    let result = run_cc_driver_required_artifacts_in_tree(
+        &project_dir,
+        &log_dir,
+        "all",
+        ZLIB_REQUIRED_TEST_ARTIFACTS,
+    );
+    let error = result.expect_err("missing artifact should fail validation");
+    assert!(
+        error.contains("missing required artifacts"),
+        "unexpected error message: {}",
+        error
+    );
+    assert!(
+        error.contains("minigzip64"),
+        "missing artifact should mention minigzip64: {}",
+        error
+    );
+    assert!(
+        log_dir.join("cc_driver.log").exists(),
+        "cc-driver invocation log should still be emitted on missing artifact failure"
+    );
+    assert!(
+        !log_dir.join("artifact_manifest.txt").exists(),
+        "artifact manifest should not be written when validation fails"
+    );
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
 #[ignore = "real-world external project test (downloads zlib fixture)"]
 fn test_real_world_zlib_fixture_checkout_is_pinned() {
     let repo_dir = ensure_zlib_checkout().expect("failed to prepare zlib checkout");
@@ -982,4 +1253,40 @@ fn test_real_world_zlib_cc_driver_path_configure_make_object() {
     assert!(fs::read_to_string(log_dir.join("cc_driver.log"))
         .expect("failed to read cc_driver.log")
         .contains("adler32.c"));
+}
+
+#[test]
+#[ignore = "real-world external project test (downloads and builds zlib make all artifact scope)"]
+fn test_real_world_zlib_required_artifacts_for_make_all_scope() {
+    let log_dir = run_zlib_required_artifacts_baseline()
+        .expect("failed to run zlib required-artifacts build");
+    for rel in ZLIB_REQUIRED_ARTIFACT_LOG_FILES {
+        assert!(
+            log_dir.join(rel).exists(),
+            "expected required-artifacts log {}",
+            log_dir.join(rel).display()
+        );
+    }
+    assert_eq!(
+        fs::read_to_string(log_dir.join("configure_driver.status"))
+            .expect("failed to read configure_driver.status")
+            .trim(),
+        "0"
+    );
+    assert_eq!(
+        fs::read_to_string(log_dir.join("make_driver.status"))
+            .expect("failed to read make_driver.status")
+            .trim(),
+        "0"
+    );
+    let manifest =
+        fs::read_to_string(log_dir.join("artifact_manifest.txt")).expect("failed to read manifest");
+    for artifact in ZLIB_REQUIRED_TEST_ARTIFACTS {
+        assert!(
+            manifest.contains(artifact),
+            "artifact manifest should include {}: {}",
+            artifact,
+            manifest
+        );
+    }
 }
