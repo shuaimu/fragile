@@ -25,6 +25,7 @@ const ZLIB_REQUIRED_ARTIFACTS_BASELINE_DIR: &str =
     "/tmp/fragile_real_world_zlib_required_artifacts";
 const ZLIB_FRAGILE_ADLER32_OBJECT_BASELINE_DIR: &str =
     "/tmp/fragile_real_world_zlib_fragile_adler32_object";
+const ZLIB_LIBZA_REPLAY_PLAN_BASELINE_DIR: &str = "/tmp/fragile_real_world_zlib_libza_replay_plan";
 const ZLIB_REQUIRED_PATHS: &[&str] = &["zlib.h", "configure", "Makefile.in"];
 const ZLIB_REQUIRED_TEST_ARTIFACTS: &[&str] = &[
     "libz.a",
@@ -34,6 +35,42 @@ const ZLIB_REQUIRED_TEST_ARTIFACTS: &[&str] = &[
     "minigzipsh",
     "example64",
     "minigzip64",
+];
+const ZLIB_OBJZ_OBJECTS: &[&str] = &[
+    "adler32.o",
+    "crc32.o",
+    "deflate.o",
+    "infback.o",
+    "inffast.o",
+    "inflate.o",
+    "inftrees.o",
+    "trees.o",
+    "zutil.o",
+];
+const ZLIB_OBJG_OBJECTS: &[&str] = &[
+    "compress.o",
+    "uncompr.o",
+    "gzclose.o",
+    "gzlib.o",
+    "gzread.o",
+    "gzwrite.o",
+];
+const ZLIB_LIBZA_OBJECTS: &[&str] = &[
+    "adler32.o",
+    "crc32.o",
+    "deflate.o",
+    "infback.o",
+    "inffast.o",
+    "inflate.o",
+    "inftrees.o",
+    "trees.o",
+    "zutil.o",
+    "compress.o",
+    "uncompr.o",
+    "gzclose.o",
+    "gzlib.o",
+    "gzread.o",
+    "gzwrite.o",
 ];
 const ZLIB_BASELINE_LOG_FILES: &[&str] = &[
     "configure.status",
@@ -81,6 +118,18 @@ const ZLIB_FRAGILE_ADLER32_LOG_FILES: &[&str] = &[
     "rustc_object.stdout",
     "rustc_object.stderr",
     "fragile_object_manifest.txt",
+];
+const ZLIB_LIBZA_REPLAY_PLAN_LOG_FILES: &[&str] = &[
+    "configure_driver.status",
+    "configure_driver.stdout",
+    "configure_driver.stderr",
+    "make_driver.status",
+    "make_driver.stdout",
+    "make_driver.stderr",
+    "cc_driver.log",
+    "cc_driver_manifest.txt",
+    "compile_units_manifest.txt",
+    "libza_replay_plan.txt",
 ];
 
 fn run_git(args: &[&str], cwd: Option<&Path>) -> Result<Output, String> {
@@ -655,6 +704,133 @@ fn write_compile_units_manifest(log_dir: &Path, source_dir: &Path) -> Result<usi
     Ok(units.len())
 }
 
+fn parse_makefile_variable_list(
+    makefile_text: &str,
+    var_name: &str,
+) -> Result<Vec<String>, String> {
+    let needle = format!("{} =", var_name);
+    let lines: Vec<&str> = makefile_text.lines().collect();
+    let mut idx = 0usize;
+
+    while idx < lines.len() {
+        let trimmed = lines[idx].trim_start();
+        if !trimmed.starts_with(&needle) {
+            idx += 1;
+            continue;
+        }
+
+        let mut values = String::new();
+        let mut remainder = trimmed[needle.len()..].trim().to_string();
+        loop {
+            if remainder.ends_with('\\') {
+                remainder.pop();
+                values.push_str(remainder.trim());
+                values.push(' ');
+                idx += 1;
+                if idx >= lines.len() {
+                    break;
+                }
+                remainder = lines[idx].trim().to_string();
+            } else {
+                values.push_str(remainder.trim());
+                break;
+            }
+        }
+
+        let objects: Vec<String> = values.split_whitespace().map(ToString::to_string).collect();
+        if objects.is_empty() {
+            return Err(format!("{} is empty in Makefile", var_name));
+        }
+        return Ok(objects);
+    }
+
+    Err(format!("{} not found in Makefile", var_name))
+}
+
+fn parse_libza_object_targets(source_dir: &Path) -> Result<Vec<String>, String> {
+    let makefile_path = source_dir.join("Makefile");
+    let makefile_text = fs::read_to_string(&makefile_path)
+        .map_err(|e| format!("failed to read {}: {}", makefile_path.display(), e))?;
+    let objz = parse_makefile_variable_list(&makefile_text, "OBJZ")?;
+    let objg = parse_makefile_variable_list(&makefile_text, "OBJG")?;
+    let mut targets = Vec::new();
+    targets.extend(objz);
+    targets.extend(objg);
+    Ok(targets)
+}
+
+fn write_libza_replay_plan(log_dir: &Path, source_dir: &Path) -> Result<usize, String> {
+    let driver_log_path = log_dir.join("cc_driver.log");
+    let driver_log = fs::read_to_string(&driver_log_path).map_err(|e| {
+        format!(
+            "failed to read cc-driver invocation log {}: {}",
+            driver_log_path.display(),
+            e
+        )
+    })?;
+    let compile_units = parse_compile_units_from_cc_driver_log(&driver_log, source_dir)?;
+    let target_objects = parse_libza_object_targets(source_dir)?;
+
+    let mut object_to_source: std::collections::BTreeMap<String, String> =
+        std::collections::BTreeMap::new();
+    for (source, object) in &compile_units {
+        object_to_source.insert(object.clone(), source.clone());
+    }
+
+    let mut plan_entries: Vec<(String, String)> = Vec::new();
+    let mut missing_targets: Vec<String> = Vec::new();
+    for object in &target_objects {
+        if let Some(source) = object_to_source.get(object) {
+            plan_entries.push((source.clone(), object.clone()));
+        } else {
+            missing_targets.push(object.clone());
+        }
+    }
+    if !missing_targets.is_empty() {
+        return Err(format!(
+            "missing compile units for libz object targets: {}",
+            missing_targets.join(", ")
+        ));
+    }
+
+    let mut manifest = format!(
+        "source_dir={}\ncompile_units_count={}\nlibza_target_count={}\nlibza_targets={}\n",
+        source_dir.display(),
+        compile_units.len(),
+        plan_entries.len(),
+        target_objects.join(","),
+    );
+    for (source, object) in &plan_entries {
+        manifest.push_str(&format!("source={} object={}\n", source, object));
+    }
+    fs::write(log_dir.join("libza_replay_plan.txt"), manifest).map_err(|e| {
+        format!(
+            "failed to write libza replay plan at {}: {}",
+            log_dir.display(),
+            e
+        )
+    })?;
+    Ok(plan_entries.len())
+}
+
+fn run_cc_driver_libza_replay_plan_in_tree(
+    source_dir: &Path,
+    log_dir: &Path,
+) -> Result<(), String> {
+    run_cc_driver_baseline_in_tree(source_dir, log_dir, "all")?;
+    let compile_units_count = write_compile_units_manifest(log_dir, source_dir)?;
+    let planned_count = write_libza_replay_plan(log_dir, source_dir)?;
+    if planned_count != ZLIB_LIBZA_OBJECTS.len() {
+        return Err(format!(
+            "unexpected libza replay plan size: expected {} got {} (compile units total {})",
+            ZLIB_LIBZA_OBJECTS.len(),
+            planned_count,
+            compile_units_count
+        ));
+    }
+    Ok(())
+}
+
 fn select_compile_command_for_source(
     log_text: &str,
     source_root: &Path,
@@ -1168,6 +1344,43 @@ fn run_zlib_required_artifacts_baseline() -> Result<PathBuf, String> {
     Ok(log_dir)
 }
 
+fn run_zlib_libza_replay_plan_baseline() -> Result<PathBuf, String> {
+    let checkout_dir = ensure_zlib_checkout()?;
+    let baseline_root = PathBuf::from(ZLIB_LIBZA_REPLAY_PLAN_BASELINE_DIR);
+    reset_dir(&baseline_root)?;
+
+    let worktree_dir = baseline_root.join("worktree");
+    let checkout_dir_str = checkout_dir.to_string_lossy().to_string();
+    let worktree_dir_str = worktree_dir.to_string_lossy().to_string();
+    run_git(
+        &[
+            "clone",
+            "--no-tags",
+            "--local",
+            checkout_dir_str.as_str(),
+            worktree_dir_str.as_str(),
+        ],
+        None,
+    )?;
+    run_git(
+        &["checkout", "--detach", ZLIB_PINNED_COMMIT],
+        Some(&worktree_dir),
+    )?;
+
+    let actual_head = read_head(&worktree_dir)
+        .ok_or_else(|| format!("failed to read HEAD in {}", worktree_dir.display()))?;
+    if actual_head != ZLIB_PINNED_COMMIT {
+        return Err(format!(
+            "libza-replay-plan worktree expected commit {} but got {}",
+            ZLIB_PINNED_COMMIT, actual_head
+        ));
+    }
+
+    let log_dir = baseline_root.join("driver_logs");
+    run_cc_driver_libza_replay_plan_in_tree(&worktree_dir, &log_dir)?;
+    Ok(log_dir)
+}
+
 fn run_zlib_fragile_adler32_object_baseline() -> Result<PathBuf, String> {
     let checkout_dir = ensure_zlib_checkout()?;
     let baseline_root = PathBuf::from(ZLIB_FRAGILE_ADLER32_OBJECT_BASELINE_DIR);
@@ -1441,6 +1654,52 @@ adler32.o: adler32.c
 tiny.o: tiny.c
 	$(CC) -c tiny.c -o tiny.o
 "#;
+    fs::write(project_dir.join("Makefile"), makefile)
+        .map_err(|e| format!("failed to write Makefile: {}", e))?;
+    Ok(project_dir)
+}
+
+fn create_local_libza_replay_plan_project(
+    base_dir: &Path,
+    skip_cc_compile_for_object: Option<&str>,
+) -> Result<PathBuf, String> {
+    let project_dir = base_dir.join("libza_replay_plan_project");
+    fs::create_dir_all(&project_dir)
+        .map_err(|e| format!("failed to create {}: {}", project_dir.display(), e))?;
+
+    let configure = r#"#!/bin/sh
+set -eu
+cat > conftest.c <<'EOF'
+int main(void) { return 0; }
+EOF
+"${CC:-cc}" -c conftest.c -o conftest.o
+rm -f conftest.c conftest.o
+"#;
+    fs::write(project_dir.join("configure"), configure)
+        .map_err(|e| format!("failed to write configure script: {}", e))?;
+    make_executable(&project_dir.join("configure"))?;
+
+    for (idx, object) in ZLIB_LIBZA_OBJECTS.iter().enumerate() {
+        let source = object.trim_end_matches(".o").to_string() + ".c";
+        let func_name = source.replace('.', "_");
+        let source_text = format!("int {}(void) {{ return {}; }}\n", func_name, idx + 1);
+        fs::write(project_dir.join(source), source_text)
+            .map_err(|e| format!("failed to write source for {}: {}", object, e))?;
+    }
+
+    let mut makefile = format!(
+        "CC ?= cc\nOBJZ = {}\nOBJG = {}\nOBJS = $(OBJZ) $(OBJG)\nall: $(OBJS) libz.a\n\nlibz.a: $(OBJS)\n\tar rcs libz.a $(OBJS)\n\n%.o: %.c\n\t$(CC) -c $< -o $@\n",
+        ZLIB_OBJZ_OBJECTS.join(" "),
+        ZLIB_OBJG_OBJECTS.join(" ")
+    );
+
+    if let Some(skip_object) = skip_cc_compile_for_object {
+        makefile.push_str(&format!(
+            "\n{}:\n\t@printf 'skipped cc compile for {}\\n' > {}\n",
+            skip_object, skip_object, skip_object
+        ));
+    }
+
     fs::write(project_dir.join("Makefile"), makefile)
         .map_err(|e| format!("failed to write Makefile: {}", e))?;
     Ok(project_dir)
@@ -1810,6 +2069,97 @@ fn test_required_artifacts_build_detects_missing_output() {
 }
 
 #[test]
+fn test_parse_makefile_variable_list_supports_line_continuation() {
+    let makefile = r#"OBJZ = adler32.o crc32.o \
+deflate.o
+OBJG = compress.o \
+uncompr.o
+"#;
+
+    let objz = parse_makefile_variable_list(makefile, "OBJZ").expect("failed to parse OBJZ");
+    assert_eq!(
+        objz,
+        vec![
+            "adler32.o".to_string(),
+            "crc32.o".to_string(),
+            "deflate.o".to_string()
+        ]
+    );
+
+    let objg = parse_makefile_variable_list(makefile, "OBJG").expect("failed to parse OBJG");
+    assert_eq!(
+        objg,
+        vec!["compress.o".to_string(), "uncompr.o".to_string()]
+    );
+}
+
+#[test]
+fn test_libza_replay_plan_build_local_fixture_success() {
+    let root = unique_temp_dir("zlib_libza_replay_plan_success");
+    fs::create_dir_all(&root).expect("failed to create test root");
+
+    let project_dir = create_local_libza_replay_plan_project(&root, None)
+        .expect("failed to create libza replay-plan project");
+    let log_dir = root.join("logs");
+    run_cc_driver_libza_replay_plan_in_tree(&project_dir, &log_dir)
+        .expect("libza replay plan generation should succeed");
+
+    assert!(
+        project_dir.join("libz.a").exists(),
+        "expected static library output"
+    );
+    let replay_plan = fs::read_to_string(log_dir.join("libza_replay_plan.txt"))
+        .expect("failed to read replay plan");
+    assert!(
+        replay_plan.contains("libza_target_count=15"),
+        "unexpected replay plan target count: {}",
+        replay_plan
+    );
+    for target in ZLIB_LIBZA_OBJECTS {
+        assert!(
+            replay_plan.contains(&format!("object={}", target)),
+            "replay plan should include {}: {}",
+            target,
+            replay_plan
+        );
+    }
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn test_libza_replay_plan_build_detects_missing_compile_unit() {
+    let root = unique_temp_dir("zlib_libza_replay_plan_missing_unit");
+    fs::create_dir_all(&root).expect("failed to create test root");
+
+    let project_dir = create_local_libza_replay_plan_project(&root, Some("gzwrite.o"))
+        .expect("failed to create libza replay-plan project");
+    let log_dir = root.join("logs");
+    let err = run_cc_driver_libza_replay_plan_in_tree(&project_dir, &log_dir)
+        .expect_err("expected replay plan to fail when one target misses CC compile unit");
+    assert!(
+        err.contains("missing compile units for libz object targets"),
+        "unexpected error message: {}",
+        err
+    );
+    assert!(
+        err.contains("gzwrite.o"),
+        "missing target should mention gzwrite.o: {}",
+        err
+    );
+    assert!(
+        log_dir.join("compile_units_manifest.txt").exists(),
+        "compile units manifest should still be written for diagnosis"
+    );
+    assert!(
+        !log_dir.join("libza_replay_plan.txt").exists(),
+        "replay plan should not be written when target coverage is incomplete"
+    );
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
 fn test_fragile_single_object_build_local_fixture_success() {
     let root = unique_temp_dir("zlib_fragile_object_success");
     fs::create_dir_all(&root).expect("failed to create test root");
@@ -2029,6 +2379,47 @@ fn test_real_world_zlib_required_artifacts_for_make_all_scope() {
         "compile unit manifest should include adler32.c compile unit: {}",
         compile_units
     );
+}
+
+#[test]
+#[ignore = "real-world external project test (downloads and plans zlib OBJZ/OBJG replay scope)"]
+fn test_real_world_zlib_libza_replay_plan_for_objz_objg_scope() {
+    let log_dir =
+        run_zlib_libza_replay_plan_baseline().expect("failed to run zlib libza replay-plan build");
+    for rel in ZLIB_LIBZA_REPLAY_PLAN_LOG_FILES {
+        assert!(
+            log_dir.join(rel).exists(),
+            "expected libza replay-plan log {}",
+            log_dir.join(rel).display()
+        );
+    }
+    assert_eq!(
+        fs::read_to_string(log_dir.join("configure_driver.status"))
+            .expect("failed to read configure_driver.status")
+            .trim(),
+        "0"
+    );
+    assert_eq!(
+        fs::read_to_string(log_dir.join("make_driver.status"))
+            .expect("failed to read make_driver.status")
+            .trim(),
+        "0"
+    );
+    let replay_plan = fs::read_to_string(log_dir.join("libza_replay_plan.txt"))
+        .expect("failed to read replay plan");
+    assert!(
+        replay_plan.contains("libza_target_count=15"),
+        "unexpected replay plan size: {}",
+        replay_plan
+    );
+    for object in ZLIB_LIBZA_OBJECTS {
+        assert!(
+            replay_plan.contains(&format!("object={}", object)),
+            "replay plan should include {}: {}",
+            object,
+            replay_plan
+        );
+    }
 }
 
 #[test]

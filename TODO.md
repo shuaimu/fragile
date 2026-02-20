@@ -22,6 +22,9 @@ Run upstream-style tests through the Fragile transpiler with runtime parity:
   - [x] Parse and normalize compile units from `CC` driver logs into a reproducible source/object list (`compile_units_manifest.txt` in `/tmp/fragile_real_world_zlib_required_artifacts/driver_logs`).
   - [x] Transpile and compile one core object end-to-end (`adler32.c` -> Rust -> `adler32.o`) through the Fragile flow (`fragile_object_manifest.txt` and `rustc_object.*` logs under `/tmp/fragile_real_world_zlib_fragile_adler32_object/driver_logs`).
   - [ ] Expand transpile+compile coverage to all `OBJZ` and `OBJG` units needed for `libz.a`.
+    - [x] Derive deterministic `OBJZ`/`OBJG` replay plan from upstream `Makefile` + `cc_driver.log` compile units (`libza_replay_plan.txt` under `/tmp/fragile_real_world_zlib_libza_replay_plan/driver_logs`).
+    - [ ] Replay `OBJZ` units through Fragile to `.o` outputs and validate object completeness.
+    - [ ] Replay `OBJG` units through Fragile to `.o` outputs and validate object completeness.
   - [ ] Link transpiled static/shared test binaries used by upstream tests (`example`, `minigzip`, `examplesh`, `minigzipsh`, `example64`, `minigzip64`).
 - [ ] Make transpiled build pass zlib test commands used by upstream `make test`.
 - [ ] Add parity assertions vs native:

@@ -25,3 +25,7 @@ The second leaf adds deterministic compile-unit extraction from the `CC` driver 
 ## Third leaf scope
 
 The third leaf replays a single real compile unit (`adler32.c`) through Fragile end-to-end. The harness now selects that unit from driver logs, carries forward compile command include/define flags into `ClangParser`, emits transpiled Rust, compiles it to `adler32.o` via `rustc --emit=obj`, and records replay artifacts in `fragile_object_manifest.txt`.
+
+## Fourth leaf scope (4a)
+
+The fourth leaf is split so each step stays under a few hundred LOC. Subleaf 4a derives a deterministic replay target plan for static `libz.a` coverage: it parses `OBJZ` and `OBJG` from zlib's generated `Makefile`, maps those targets to normalized compile units from `cc_driver.log`, and writes `libza_replay_plan.txt`. This creates a stable contract before bulk object replay (`OBJZ` then `OBJG`).
