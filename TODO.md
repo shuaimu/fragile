@@ -39,6 +39,14 @@ Run upstream-style tests through the Fragile transpiler with runtime parity:
         - [x] Fix pointer/function-pointer invocation lowering regressions in `deflate` replay output (Option function pointers deref/call shape).
           - Replay evidence (`/tmp/fragile_real_world_zlib_fragile_objz_objects/driver_logs/rustc_objz_deflate_o.stderr`): no remaining `Option<fn>` deref/call/assignment diagnostics; next blockers are type-width, pointer arithmetic, enum return-type, and union-field layout issues.
         - [ ] Fix remaining `deflate` type/union field/codegen mismatches in replay output (`freq` union field access, integer width mismatches, pointer arithmetic typing).
+          - Plan: resolve by first compiler error class from replay logs; keep each leaf scoped to a single lowering rule family (<500 LOC per leaf).
+          - [x] Fix unsized extern array declaration lowering so pointer-typed globals don't emit invalid `= []` initializers (`_length_code`/`_dist_code`).
+            - Replay evidence (`/tmp/fragile_real_world_zlib_fragile_objz_objects/driver_logs/rustc_objz_deflate_o.stderr`): `__gv__length_code`/`__gv__dist_code` `*mut u8 = []` diagnostics are cleared; next first blocker class is integer-width/chained-assignment typing in `deflate`.
+          - [ ] Fix chained-assignment expression lowering that currently returns `()` in typed assignments (`a = b = 2` forms).
+          - [ ] Fix pointer arithmetic lowering for `ptr + offset_from(...)` patterns to use Rust pointer APIs.
+          - [ ] Fix integer width normalization for `u32`/`u64` fields and temporaries in shift/math expressions.
+          - [ ] Fix enum return lowering so `block_state` returns emit enum variants instead of integer literals.
+          - [ ] Fix union field preservation/access for Huffman tree frequency members (`.fc.freq`).
     - [ ] Replay `OBJG` units through Fragile to `.o` outputs and validate object completeness.
   - [ ] Link transpiled static/shared test binaries used by upstream tests (`example`, `minigzip`, `examplesh`, `minigzipsh`, `example64`, `minigzip64`).
 - [ ] Make transpiled build pass zlib test commands used by upstream `make test`.

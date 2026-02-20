@@ -15875,6 +15875,41 @@ impl AstCodeGen {
         self.global_var_types.insert(safe_name.clone(), ty.clone());
         self.writeln(&format!("/// C++ global variable `{}`", name));
 
+        // Unsized C arrays declared in headers (e.g., `extern uch _length_code[];`)
+        // decay to pointers in generated Rust types. Model them as extern symbols and
+        // initialize the pointer from the symbol address to preserve link semantics.
+        if let CppType::Array {
+            element,
+            size: None,
+        } = ty
+        {
+            let has_explicit_initializer = children.iter().any(|child| {
+                matches!(
+                    &child.kind,
+                    ClangNodeKind::InitListExpr { .. } | ClangNodeKind::StringLiteral(_)
+                )
+            });
+            if !has_explicit_initializer {
+                let extern_name = format!("__fragile_extern_{}", safe_name);
+                self.writeln("unsafe extern \"C\" {");
+                self.indent += 1;
+                self.writeln(&format!("#[link_name = \"{}\"]", name));
+                self.writeln(&format!(
+                    "static mut {}: {};",
+                    extern_name,
+                    element.to_rust_type_str()
+                ));
+                self.indent -= 1;
+                self.writeln("}");
+                self.writeln(&format!(
+                    "static mut {}: {} = std::ptr::addr_of_mut!({});",
+                    safe_name, rust_type, extern_name
+                ));
+                self.writeln("");
+                return;
+            }
+        }
+
         // Get initial value if present
         // Handle different cases:
         // - Arrays without initializers have IntegerLiteral (size) as first child
@@ -16044,7 +16079,7 @@ impl AstCodeGen {
                     }
                 } else {
                     // Unsized arrays shouldn't appear as globals, but fallback
-                    "[]".to_string()
+                    "std::ptr::null_mut()".to_string()
                 }
             }
             _ => {
@@ -27885,6 +27920,14 @@ fn correct_initializer_for_type(value: &str, ty: &CppType) -> String {
         } else {
             "std::ptr::null_mut()".to_string()
         }
+    } else if matches!(ty, CppType::Array { size: None, .. })
+        && (is_zero_integer_literal_str(value)
+            || value.trim() == "[]"
+            || value.trim() == "std::ptr::null()"
+            || value.trim() == "std::ptr::null_mut()")
+    {
+        // Unsized arrays lower to pointer types in Rust.
+        "std::ptr::null_mut()".to_string()
     } else if matches!(ty, CppType::Pointer { pointee, .. } if matches!(pointee.as_ref(), CppType::Function { .. }))
     {
         let raw = value.trim();
@@ -28513,6 +28556,61 @@ mod tests {
             code.contains("pub fn adler32(x: i32) -> i32 {"),
             "definition should still be generated, got:\n{}",
             code
+        );
+    }
+
+    #[test]
+    fn test_unsized_array_global_decl_uses_extern_symbol_address() {
+        let unsized_uch_array = CppType::Array {
+            element: Box::new(CppType::Char { signed: false }),
+            size: None,
+        };
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![make_node(
+                ClangNodeKind::VarDecl {
+                    name: "_length_code".to_string(),
+                    ty: unsized_uch_array.clone(),
+                    has_init: false,
+                    is_static: false,
+                },
+                vec![],
+            )],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("#[link_name = \"_length_code\"]"),
+            "expected link_name extern static for unsized array declaration, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("std::ptr::addr_of_mut!(__fragile_extern___gv__length_code)"),
+            "unsized array declaration should lower to pointer from extern symbol address, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("static mut __gv__length_code: *mut u8 = [];"),
+            "unsized array declaration must not emit invalid [] pointer initializer, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_unsized_array_defaults_normalize_to_null_pointer() {
+        let unsized_uch_array = CppType::Array {
+            element: Box::new(CppType::Char { signed: false }),
+            size: None,
+        };
+
+        assert_eq!(
+            AstCodeGen::default_value_for_static(&unsized_uch_array),
+            "std::ptr::null_mut()"
+        );
+        assert_eq!(
+            correct_initializer_for_type("[]", &unsized_uch_array),
+            "std::ptr::null_mut()"
         );
     }
 
