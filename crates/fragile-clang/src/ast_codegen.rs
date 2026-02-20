@@ -711,6 +711,15 @@ pub struct AstCodeGen {
     type_alias_targets: HashMap<String, String>,
     /// Track already generated module names to avoid duplicates (e.g., inline namespaces)
     generated_modules: HashSet<String>,
+    /// Type names defined at the translation-unit (top) scope.
+    /// Used to prevent auto-alias collisions with true global definitions.
+    global_type_names: HashSet<String>,
+    /// Top-level aliases for types defined in non-flattened namespaces.
+    /// Key: unqualified Rust type name, Value: fully-qualified Rust path.
+    namespace_type_alias_targets: HashMap<String, String>,
+    /// Names that are defined in multiple namespaces and therefore can't be
+    /// auto-aliased safely.
+    namespace_type_alias_conflicts: HashSet<String>,
     /// Map from class/struct name to its bit field groups
     bit_field_groups: HashMap<String, Vec<BitFieldGroup>>,
     /// Track generated function signatures to handle overloads: name -> count
@@ -873,6 +882,9 @@ impl AstCodeGen {
             primitive_aliases: HashSet::new(),
             type_alias_targets: HashMap::new(),
             generated_modules: HashSet::new(),
+            global_type_names: HashSet::new(),
+            namespace_type_alias_targets: HashMap::new(),
+            namespace_type_alias_conflicts: HashSet::new(),
             bit_field_groups: HashMap::new(),
             generated_functions: HashMap::new(),
             defined_function_names: HashSet::new(),
@@ -2921,6 +2933,10 @@ impl AstCodeGen {
 
         // Generate variadic template instantiations collected during code generation
         self.generate_variadic_template_instantiations();
+
+        // Export uniquely-resolved namespaced types at top level so helper items
+        // emitted outside namespace modules can refer to unqualified names.
+        self.emit_namespace_type_aliases();
 
         // Generate placeholder structs for types that were used but not defined
         self.generate_missing_type_stubs();
@@ -5164,6 +5180,10 @@ impl AstCodeGen {
             return;
         }
         self.generated_structs.insert(rust_name.clone());
+        if self.current_rust_module_path().is_empty() {
+            self.global_type_names.insert(rust_name.clone());
+        }
+        self.register_namespace_type_alias(&rust_name);
 
         // Build substitution map: T -> int, etc.
         // Also map Clang's internal type-parameter-N-M names to the same substitutions.
@@ -12696,6 +12716,118 @@ impl AstCodeGen {
         parts.join("::")
     }
 
+    /// Returns namespace segments that map to actual Rust modules.
+    /// Flattened/internal namespaces (e.g., `std`, `__*`, `pmr`) and inline
+    /// namespaces are excluded.
+    fn current_rust_module_path(&self) -> Vec<String> {
+        self.current_namespace
+            .iter()
+            .filter_map(|(ns, is_inline)| {
+                if *is_inline || ns == "std" || ns == "pmr" || ns.starts_with("__") {
+                    None
+                } else {
+                    Some(sanitize_identifier(ns))
+                }
+            })
+            .collect()
+    }
+
+    /// True when a lowered Rust array type uses an unresolved non-type template
+    /// placeholder as its size expression (e.g., `[i8; (ITEM_SIZE) as usize]`).
+    fn has_unresolved_array_size_placeholder(type_str: &str) -> bool {
+        if !type_str.starts_with('[') || !type_str.contains(" as usize") {
+            return false;
+        }
+        let Some((_, size_part)) = type_str.rsplit_once(';') else {
+            return false;
+        };
+        let mut size_expr = size_part.trim().trim_end_matches(']').trim();
+        if let Some(inner) = size_expr
+            .strip_prefix('(')
+            .and_then(|s| s.strip_suffix(") as usize"))
+        {
+            size_expr = inner.trim();
+        } else if let Some(inner) = size_expr.strip_suffix(" as usize") {
+            size_expr = inner.trim();
+        }
+        !size_expr.is_empty()
+            && size_expr
+                .chars()
+                .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+    }
+
+    /// Register an auto-generated top-level alias for a namespaced type so
+    /// earlier-emitted helper items (e.g., vtables/templates) can refer to the
+    /// unqualified type name safely.
+    fn register_namespace_type_alias(&mut self, rust_type_name: &str) {
+        if rust_type_name.is_empty()
+            || Self::is_primitive_type_name(rust_type_name)
+            || rust_type_name == "_"
+            || rust_type_name == "()"
+        {
+            return;
+        }
+
+        let module_path = self.current_rust_module_path();
+        if module_path.is_empty() {
+            return;
+        }
+
+        let target = format!("{}::{}", module_path.join("::"), rust_type_name);
+        if self.namespace_type_alias_conflicts.contains(rust_type_name) {
+            return;
+        }
+
+        match self.namespace_type_alias_targets.get(rust_type_name) {
+            Some(existing) if existing == &target => {}
+            Some(_) => {
+                self.namespace_type_alias_targets.remove(rust_type_name);
+                self.namespace_type_alias_conflicts
+                    .insert(rust_type_name.to_string());
+            }
+            None => {
+                self.namespace_type_alias_targets
+                    .insert(rust_type_name.to_string(), target);
+            }
+        }
+    }
+
+    /// Emit deterministic top-level aliases for uniquely-resolved namespaced
+    /// types. This keeps generated helper items valid when they refer to
+    /// unqualified type names outside namespace modules.
+    fn emit_namespace_type_aliases(&mut self) {
+        let mut aliases: Vec<(String, String)> = self
+            .namespace_type_alias_targets
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        aliases.sort_by(|a, b| a.0.cmp(&b.0));
+
+        let mut wrote_header = false;
+        for (alias, target) in aliases {
+            if self.namespace_type_alias_conflicts.contains(&alias) {
+                continue;
+            }
+            if self.global_type_names.contains(&alias) {
+                continue;
+            }
+
+            if !wrote_header {
+                self.writeln("");
+                self.writeln(
+                    "// Auto-exported aliases for uniquely-resolved namespaced types",
+                );
+                wrote_header = true;
+            }
+            self.writeln(&format!("pub type {} = {};", alias, target));
+            self.generated_aliases.insert(alias.clone());
+            self.type_alias_targets.insert(alias, target);
+        }
+        if wrote_header {
+            self.writeln("");
+        }
+    }
+
     /// Generate Rust stubs (signatures only, no bodies) from a Clang AST.
     /// This is useful for FFI declarations and header generation.
     pub fn generate_stubs(mut self, ast: &ClangNode) -> String {
@@ -12954,6 +13086,10 @@ impl AstCodeGen {
             return;
         }
         self.generated_structs.insert(rust_name.clone());
+        if self.current_rust_module_path().is_empty() {
+            self.global_type_names.insert(rust_name.clone());
+        }
+        self.register_namespace_type_alias(&rust_name);
 
         // Emit nested union declarations when a named field in this record uses that
         // union type (e.g., `union { ... } fc;` in zlib's `ct_data_s`).
@@ -13203,6 +13339,22 @@ impl AstCodeGen {
         if self.generated_structs.contains(&rust_name) {
             return;
         }
+
+        // Skip unions whose array payload bound is an unresolved non-type template
+        // placeholder (e.g., `ITEM_SIZE`) to avoid hard compile blockers from
+        // template-definition-only artifacts.
+        for child in children {
+            if let ClangNodeKind::FieldDecl { ty, .. } = &child.kind {
+                let type_str = ty.to_rust_type_str();
+                if type_str.contains("_S_local_capacity")
+                    || type_str.contains("_S_")
+                    || Self::has_unresolved_array_size_placeholder(&type_str)
+                {
+                    return;
+                }
+            }
+        }
+
         self.generated_structs.insert(rust_name.clone());
         self.union_types.insert(rust_name.clone());
 
@@ -14676,6 +14828,10 @@ impl AstCodeGen {
             return;
         }
 
+        // Track alias candidate before duplicate struct-name suppression so we can
+        // detect cross-namespace collisions (e.g., a::Node vs b::Node).
+        self.register_namespace_type_alias(&rust_name);
+
         // Skip if already generated (handles duplicate template instantiations)
         if self.generated_structs.contains(&rust_name) {
             return;
@@ -14686,6 +14842,9 @@ impl AstCodeGen {
         }
 
         self.generated_structs.insert(rust_name.clone());
+        if self.current_rust_module_path().is_empty() {
+            self.global_type_names.insert(rust_name.clone());
+        }
 
         // Emit nested union declarations when a named field in this record uses that
         // union type (e.g., `union { ... } fc;` in zlib's `ct_data_s`).
@@ -16146,6 +16305,10 @@ impl AstCodeGen {
         }
         self.generated_structs.insert(name.to_string());
         self.generated_enums.insert(name.to_string());
+        if self.current_rust_module_path().is_empty() {
+            self.global_type_names.insert(safe_name.clone());
+        }
+        self.register_namespace_type_alias(&safe_name);
 
         let kind = if is_scoped { "enum class" } else { "enum" };
         self.writeln(&format!("/// C++ {} `{}`", kind, name));
@@ -16267,7 +16430,10 @@ impl AstCodeGen {
             if let ClangNodeKind::FieldDecl { ty, .. } = &child.kind {
                 let type_str = ty.to_rust_type_str();
                 // Skip if array size contains template parameters like _S_local_capacity
-                if type_str.contains("_S_local_capacity") || type_str.contains("_S_") {
+                if type_str.contains("_S_local_capacity")
+                    || type_str.contains("_S_")
+                    || Self::has_unresolved_array_size_placeholder(&type_str)
+                {
                     return;
                 }
             }
@@ -16275,6 +16441,10 @@ impl AstCodeGen {
 
         self.generated_structs.insert(rust_name.clone());
         self.union_types.insert(rust_name.clone());
+        if self.current_rust_module_path().is_empty() {
+            self.global_type_names.insert(rust_name.clone());
+        }
+        self.register_namespace_type_alias(&rust_name);
 
         // Check if any field needs ManuallyDrop.
         // Keep regular C union payload types plain; only wrap c_void placeholders.
@@ -16436,8 +16606,12 @@ impl AstCodeGen {
         }
 
         self.generated_aliases.insert(safe_name.clone());
+        if self.current_rust_module_path().is_empty() {
+            self.global_type_names.insert(safe_name.clone());
+        }
         self.type_alias_targets
             .insert(safe_name.clone(), rust_type.clone());
+        self.register_namespace_type_alias(&safe_name);
         if safe_name != name {
             self.type_alias_targets
                 .insert(name.to_string(), rust_type.clone());
@@ -27470,8 +27644,19 @@ impl AstCodeGen {
                         };
                     }
 
-                    // Check if this is a C library function that should be mapped to fragile-runtime
-                    let func = if let Some(runtime_func) = Self::map_runtime_function_name(&func) {
+                    // Check if this is a C library function that should be mapped to fragile-runtime.
+                    // Also handle qualified references produced inside namespace modules
+                    // (e.g., `super::fopen`).
+                    let runtime_func = Self::map_runtime_function_name(&func).or_else(|| {
+                        if func.starts_with("super::") || func.starts_with("self::") {
+                            func.rsplit("::")
+                                .next()
+                                .and_then(Self::map_runtime_function_name)
+                        } else {
+                            None
+                        }
+                    });
+                    let func = if let Some(runtime_func) = runtime_func {
                         // Apply argument fixups for C library functions
                         if runtime_func.ends_with("fragile_malloc") && !args.is_empty() {
                             // malloc(size) — cast size to usize (C's unsigned long → u64, but Rust expects usize)
@@ -29858,6 +30043,231 @@ mod tests {
         let code = AstCodeGen::new().generate(&ast);
         assert!(code.contains("pub fn add(a: i32, b: i32) -> i32"));
         assert!(code.contains("return a + b"));
+    }
+
+    #[test]
+    fn test_namespaced_type_alias_export_for_top_level_references() {
+        let namespaced_type = make_node(
+            ClangNodeKind::NamespaceDecl {
+                name: Some("tinyxml2".to_string()),
+                is_inline: false,
+            },
+            vec![make_node(
+                ClangNodeKind::RecordDecl {
+                    name: "XMLNode".to_string(),
+                    is_class: false,
+                    is_definition: true,
+                    fields: vec![],
+                },
+                vec![],
+            )],
+        );
+
+        let holder = make_node(
+            ClangNodeKind::RecordDecl {
+                name: "Holder".to_string(),
+                is_class: false,
+                is_definition: true,
+                fields: vec![],
+            },
+            vec![make_node(
+                ClangNodeKind::FieldDecl {
+                    name: "node".to_string(),
+                    ty: CppType::Pointer {
+                        pointee: Box::new(CppType::Named("XMLNode".to_string())),
+                        is_const: false,
+                    },
+                    access: crate::ast::AccessSpecifier::Public,
+                    is_static: false,
+                    bit_field_width: None,
+                },
+                vec![],
+            )],
+        );
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![namespaced_type, holder],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("pub mod tinyxml2 {"),
+            "expected tinyxml2 module in output, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("pub type XMLNode = tinyxml2::XMLNode;"),
+            "expected top-level alias for namespaced XMLNode, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("pub node: *mut XMLNode,"),
+            "expected top-level user type reference to compile through alias, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_namespaced_type_alias_skips_ambiguous_names() {
+        let ns_a = make_node(
+            ClangNodeKind::NamespaceDecl {
+                name: Some("a".to_string()),
+                is_inline: false,
+            },
+            vec![make_node(
+                ClangNodeKind::RecordDecl {
+                    name: "Node".to_string(),
+                    is_class: false,
+                    is_definition: true,
+                    fields: vec![],
+                },
+                vec![],
+            )],
+        );
+        let ns_b = make_node(
+            ClangNodeKind::NamespaceDecl {
+                name: Some("b".to_string()),
+                is_inline: false,
+            },
+            vec![make_node(
+                ClangNodeKind::RecordDecl {
+                    name: "Node".to_string(),
+                    is_class: false,
+                    is_definition: true,
+                    fields: vec![],
+                },
+                vec![],
+            )],
+        );
+        let ast = make_node(ClangNodeKind::TranslationUnit, vec![ns_a, ns_b]);
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            !code.contains("pub type Node = a::Node;") && !code.contains("pub type Node = b::Node;"),
+            "ambiguous namespaced type aliases should be skipped, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_qualified_stdio_call_maps_to_fragile_runtime_function() {
+        let c_void_ptr = CppType::Pointer {
+            pointee: Box::new(CppType::Void),
+            is_const: false,
+        };
+        let c_str_ptr = CppType::Pointer {
+            pointee: Box::new(CppType::Char { signed: true }),
+            is_const: true,
+        };
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![make_node(
+                ClangNodeKind::NamespaceDecl {
+                    name: Some("tinyxml2".to_string()),
+                    is_inline: false,
+                },
+                vec![make_node(
+                    ClangNodeKind::FunctionDecl {
+                        name: "open_file".to_string(),
+                        mangled_name: "open_file".to_string(),
+                        is_static: false,
+                        return_type: c_void_ptr.clone(),
+                        params: vec![
+                            ("filepath".to_string(), c_str_ptr.clone()),
+                            ("mode".to_string(), c_str_ptr.clone()),
+                        ],
+                        is_definition: true,
+                        is_variadic: false,
+                        is_noexcept: false,
+                        is_coroutine: false,
+                        coroutine_info: None,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![make_node(
+                            ClangNodeKind::ReturnStmt,
+                            vec![make_node(
+                                ClangNodeKind::CallExpr {
+                                    ty: c_void_ptr.clone(),
+                                    template_instantiation: None,
+                                },
+                                vec![
+                                    make_node(
+                                        ClangNodeKind::DeclRefExpr {
+                                            name: "fopen".to_string(),
+                                            ty: CppType::Function {
+                                                return_type: Box::new(c_void_ptr),
+                                                params: vec![c_str_ptr.clone(), c_str_ptr.clone()],
+                                                is_variadic: false,
+                                            },
+                                            namespace_path: vec![],
+                                        },
+                                        vec![],
+                                    ),
+                                    make_node(
+                                        ClangNodeKind::DeclRefExpr {
+                                            name: "filepath".to_string(),
+                                            ty: c_str_ptr.clone(),
+                                            namespace_path: vec![],
+                                        },
+                                        vec![],
+                                    ),
+                                    make_node(
+                                        ClangNodeKind::DeclRefExpr {
+                                            name: "mode".to_string(),
+                                            ty: c_str_ptr,
+                                            namespace_path: vec![],
+                                        },
+                                        vec![],
+                                    ),
+                                ],
+                            )],
+                        )],
+                    )],
+                )],
+            )],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("crate::fragile_runtime::fopen("),
+            "qualified stdio calls should remap to fragile_runtime, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("super::fopen("),
+            "qualified stdio calls should not leave unresolved super::fopen path, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_union_with_unresolved_template_array_bound_is_skipped() {
+        let unresolved_union = make_node(
+            ClangNodeKind::UnionDecl {
+                name: "Item".to_string(),
+                fields: vec![],
+            },
+            vec![make_node(
+                ClangNodeKind::FieldDecl {
+                    name: "itemData".to_string(),
+                    ty: CppType::Named("char[static_cast<size_t>(ITEM_SIZE)]".to_string()),
+                    access: crate::ast::AccessSpecifier::Public,
+                    is_static: false,
+                    bit_field_width: None,
+                },
+                vec![],
+            )],
+        );
+
+        let ast = make_node(ClangNodeKind::TranslationUnit, vec![unresolved_union]);
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            !code.contains("pub union Item"),
+            "unions with unresolved template array bounds should be skipped, got:\n{}",
+            code
+        );
     }
 
     #[test]

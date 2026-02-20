@@ -62,6 +62,111 @@ pub fn parse_template_args(args: &str) -> Vec<String> {
     result
 }
 
+fn parse_cpp_named_cast(expr: &str) -> Option<(&str, &str)> {
+    let trimmed = expr.trim();
+    for cast_name in ["static_cast", "reinterpret_cast", "const_cast"] {
+        if !trimmed.starts_with(cast_name) {
+            continue;
+        }
+        let after_name = trimmed[cast_name.len()..].trim_start();
+        if !after_name.starts_with('<') {
+            continue;
+        }
+
+        let mut angle_depth = 0i32;
+        let mut cast_type_end: Option<usize> = None;
+        for (idx, ch) in after_name.char_indices() {
+            match ch {
+                '<' => angle_depth += 1,
+                '>' => {
+                    angle_depth -= 1;
+                    if angle_depth == 0 {
+                        cast_type_end = Some(idx);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let cast_type_end = cast_type_end?;
+        let cast_target = after_name[1..cast_type_end].trim();
+        let rest = after_name[cast_type_end + 1..].trim_start();
+        if !rest.starts_with('(') {
+            continue;
+        }
+
+        let mut paren_depth = 0i32;
+        let mut value_end: Option<usize> = None;
+        for (idx, ch) in rest.char_indices() {
+            match ch {
+                '(' => paren_depth += 1,
+                ')' => {
+                    paren_depth -= 1;
+                    if paren_depth == 0 {
+                        value_end = Some(idx);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let value_end = value_end?;
+        if value_end + 1 != rest.len() {
+            continue;
+        }
+
+        let value_expr = rest[1..value_end].trim();
+        return Some((cast_target, value_expr));
+    }
+    None
+}
+
+fn is_integer_size_literal(expr: &str) -> bool {
+    let raw = expr.trim();
+    if raw.is_empty() {
+        return false;
+    }
+    let mut s = raw;
+    while let Some(stripped) = s.strip_suffix(['u', 'U', 'l', 'L']) {
+        s = stripped;
+    }
+    if s.starts_with("0x") || s.starts_with("0X") {
+        return s[2..]
+            .chars()
+            .all(|c| c.is_ascii_hexdigit() || c == '_');
+    }
+    if s.starts_with("0b") || s.starts_with("0B") {
+        return s[2..].chars().all(|c| c == '0' || c == '1' || c == '_');
+    }
+    s.chars().all(|c| c.is_ascii_digit() || c == '_')
+}
+
+fn normalize_array_size_expr(size: &str) -> String {
+    let mut current = size.trim().to_string();
+    while let Some((_cast_ty, inner)) = parse_cpp_named_cast(&current) {
+        current = inner.to_string();
+    }
+
+    let current = current.trim();
+    if current.is_empty() {
+        return "0usize".to_string();
+    }
+    // Template parameter pack size expressions like `sizeof...(_Args)` are
+    // unresolved in concrete Rust output. Emit a conservative zero-length
+    // bound so downstream transpiled code remains syntactically valid.
+    let compact = current.replace(' ', "");
+    if compact.contains("sizeof...") || compact.contains("...") {
+        return "0usize".to_string();
+    }
+    if is_integer_size_literal(current) {
+        return current.to_string();
+    }
+    if current.ends_with("usize") || current.contains(" as usize") {
+        return current.to_string();
+    }
+    format!("({}) as usize", current)
+}
+
 /// A C++ type that can be converted to Rust types.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CppType {
@@ -548,7 +653,7 @@ impl CppType {
                                     // Recursively convert the element type and size
                                     let elem_rust =
                                         CppType::Named(element_type.to_string()).to_rust_type_str();
-                                    let size_rust = size.replace("-", "_").replace(".", "_");
+                                    let size_rust = normalize_array_size_expr(size);
                                     return format!("[{}; {}]", elem_rust, size_rust);
                                 }
                                 // Empty size like T[] - just convert to Arr suffix
@@ -1289,6 +1394,26 @@ mod tests {
         assert_eq!(
             CppType::Named("std::array<std::vector<int>, 2>".to_string()).to_rust_type_str(),
             "std_array_std_vector_int__2"
+        );
+    }
+
+    #[test]
+    fn test_named_array_size_static_cast_normalizes_to_rust_usize_expr() {
+        assert_eq!(
+            CppType::Named("char[static_cast<size_t>(ITEM_SIZE)]".to_string()).to_rust_type_str(),
+            "[i8; (ITEM_SIZE) as usize]"
+        );
+        assert_eq!(
+            CppType::Named("char[static_cast<std::size_t>(4)]".to_string()).to_rust_type_str(),
+            "[i8; 4]"
+        );
+    }
+
+    #[test]
+    fn test_named_array_size_pack_expansion_falls_back_to_zero() {
+        assert_eq!(
+            CppType::Named("bool[sizeof...(_Args)]".to_string()).to_rust_type_str(),
+            "[bool; 0usize]"
         );
     }
 
