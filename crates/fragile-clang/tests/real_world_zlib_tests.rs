@@ -204,6 +204,7 @@ const ZLIB_MAKE_TEST_COMMAND_PLAN_LOG_FILES: &[&str] = &[
     "make_test_dryrun.stderr",
     "make_test_commands_manifest.txt",
 ];
+const ZLIB_MAKE_TEST_REPLAY_COMMAND_TIMEOUT_SECONDS: u64 = 15;
 fn run_git(args: &[&str], cwd: Option<&Path>) -> Result<Output, String> {
     let mut cmd = Command::new("git");
     cmd.args(args);
@@ -1102,6 +1103,34 @@ fn make_test_replay_step_name(idx: usize) -> String {
     format!("make_test_replay_{:02}", idx + 1)
 }
 
+fn run_make_test_replay_command_with_timeout_in_tree(
+    source_dir: &Path,
+    command_line: &str,
+    timeout_seconds: u64,
+) -> Result<Output, String> {
+    let mut cmd = Command::new("timeout");
+    cmd.arg(format!("{}s", timeout_seconds))
+        .arg("sh")
+        .arg("-c")
+        .arg(command_line)
+        .current_dir(source_dir);
+    cmd.env("LC_ALL", "C").env("LANG", "C");
+    cmd.output().map_err(|e| {
+        if e.kind() == ErrorKind::NotFound {
+            format!(
+                "failed to run make-test replay command with timeout: `timeout` command is unavailable at {}",
+                source_dir.display()
+            )
+        } else {
+            format!(
+                "failed to run make-test replay command with timeout at {}: {}",
+                source_dir.display(),
+                e
+            )
+        }
+    })
+}
+
 fn replay_make_test_commands_from_manifest_in_tree(
     source_dir: &Path,
     log_dir: &Path,
@@ -1112,24 +1141,28 @@ fn replay_make_test_commands_from_manifest_in_tree(
     let commands = parse_make_test_commands_manifest_entries(&manifest)?;
 
     for (idx, command_line) in commands.iter().enumerate() {
-        let mut cmd = Command::new("sh");
-        cmd.arg("-c").arg(command_line).current_dir(source_dir);
-        cmd.env("LC_ALL", "C").env("LANG", "C");
-        let output = cmd.output().map_err(|e| {
-            format!(
-                "failed to run make-test replay command {} at {}: {}",
-                idx + 1,
-                source_dir.display(),
-                e
-            )
-        })?;
+        let output = run_make_test_replay_command_with_timeout_in_tree(
+            source_dir,
+            command_line,
+            ZLIB_MAKE_TEST_REPLAY_COMMAND_TIMEOUT_SECONDS,
+        )?;
         let step = make_test_replay_step_name(idx);
         write_command_capture(log_dir, &step, &output)?;
         if !output.status.success() {
+            let status = status_code(&output);
+            if status == 124 {
+                return Err(format!(
+                    "make-test command replay timed out at command {} after {}s: {} (logs: {})",
+                    idx + 1,
+                    ZLIB_MAKE_TEST_REPLAY_COMMAND_TIMEOUT_SECONDS,
+                    command_line,
+                    log_dir.display()
+                ));
+            }
             return Err(format!(
                 "make-test command replay failed at command {} with status {}: {} (logs: {})",
                 idx + 1,
-                status_code(&output),
+                status,
                 command_line,
                 log_dir.display()
             ));
@@ -5755,9 +5788,10 @@ fn test_real_world_zlib_make_test_command_subset_replay() {
     let replay_result = run_zlib_make_test_command_subset_replay_baseline();
 
     let log_dir = Path::new(ZLIB_MAKE_TEST_REPLAY_BASELINE_DIR).join("driver_logs");
-    let err = replay_result.expect_err("make-test replay should currently fail at strict link step");
+    let err = replay_result.expect_err("make-test replay should currently fail at command #1");
     assert!(
-        err.contains("link replay failed for"),
+        err.contains("make-test command replay failed at command 1")
+            || err.contains("make-test command replay timed out at command 1"),
         "unexpected make-test replay failure: {}",
         err
     );
@@ -5789,61 +5823,54 @@ fn test_real_world_zlib_make_test_command_subset_replay() {
         "0"
     );
     assert!(
-        !log_dir.join("make_test_dryrun.status").exists(),
-        "make-test dry-run should not execute when strict link replay fails first"
+        log_dir.join("fragile_link_manifest.txt").exists(),
+        "strict link replay should now complete before make-test replay"
+    );
+    for output in ZLIB_REQUIRED_LINK_OUTPUTS {
+        let step = format!("link_required_{}", normalize_identifier_fragment(output));
+        assert_eq!(
+            fs::read_to_string(log_dir.join(format!("{}.status", step)))
+                .expect("failed to read strict link status")
+                .trim(),
+            "0",
+            "expected strict required-link success for {}",
+            output
+        );
+    }
+    assert!(
+        log_dir.join("make_test_dryrun.status").exists(),
+        "make-test dry-run should execute after strict link replay succeeds"
+    );
+    assert_eq!(
+        fs::read_to_string(log_dir.join("make_test_dryrun.status"))
+            .expect("failed to read make_test_dryrun.status")
+            .trim(),
+        "0",
     );
     assert!(
-        !log_dir.join("make_test_commands_manifest.txt").exists(),
-        "make-test command plan should not be written when strict link replay fails first"
+        log_dir.join("make_test_commands_manifest.txt").exists(),
+        "make-test command manifest should be written before replay execution"
     );
     assert!(
         !log_dir.join("make_test_replay_manifest.txt").exists(),
-        "make-test replay manifest should not be written when strict link replay fails first"
+        "make-test replay manifest should not be written when command replay fails at command #1"
+    );
+    let replay_step = make_test_replay_step_name(0);
+    let replay_step_status_path = log_dir.join(format!("{}.status", replay_step));
+    assert!(
+        replay_step_status_path.exists(),
+        "expected replay step status for command #1"
+    );
+    let replay_step_status = fs::read_to_string(&replay_step_status_path)
+        .expect("failed to read replay step #1 status");
+    assert!(
+        replay_step_status.trim() != "0",
+        "expected command #1 to fail in current baseline"
     );
     assert!(
-        !log_dir.join("fragile_link_manifest.txt").exists(),
-        "fragile link manifest should not be written on strict link replay failure"
-    );
-
-    let mut observed_link_steps: Vec<String> = Vec::new();
-    let mut failing_link_steps: Vec<String> = Vec::new();
-    for output in ZLIB_REQUIRED_LINK_OUTPUTS {
-        let link_step = format!("link_required_{}", normalize_identifier_fragment(output));
-        let status_path = log_dir.join(format!("{}.status", link_step));
-        if !status_path.exists() {
-            break;
-        }
-        observed_link_steps.push(link_step.clone());
-        let status = fs::read_to_string(&status_path).expect("failed to read strict link status");
-        if status.trim() != "0" {
-            failing_link_steps.push(link_step);
-        }
-    }
-    assert!(
-        !observed_link_steps.is_empty(),
-        "strict link replay should emit at least one link-step status"
-    );
-    assert!(
-        !failing_link_steps.is_empty(),
-        "strict link replay should surface at least one failing link step"
-    );
-    let first_failing_step = &failing_link_steps[0];
-    let stderr = fs::read_to_string(log_dir.join(format!("{}.stderr", first_failing_step)))
-        .expect("failed to read first failing strict link stderr");
-    assert!(
-        !stderr.trim().is_empty(),
-        "strict link replay failure should emit linker diagnostics for {}",
-        first_failing_step
-    );
-    assert!(
-        stderr.contains("_dist_code") || stderr.contains("_length_code"),
-        "expected post-runtime-link first blocker to be unresolved C globals (_dist_code/_length_code): {}",
-        stderr
-    );
-    assert!(
-        !stderr.contains("core::panicking::panic"),
-        "runtime-link leaf should clear Rust runtime unresolved-symbol diagnostics: {}",
-        stderr
+        log_dir.join(format!("{}.stdout", replay_step)).exists()
+            && log_dir.join(format!("{}.stderr", replay_step)).exists(),
+        "expected replay stdout/stderr captures for command #1"
     );
 }
 
@@ -5853,16 +5880,21 @@ fn test_real_world_zlib_make_test_exit_status_parity() {
     let replay_result = run_zlib_make_test_command_subset_replay_baseline();
     let replay_log_dir = Path::new(ZLIB_MAKE_TEST_REPLAY_BASELINE_DIR).join("driver_logs");
 
-    let replay_err =
-        replay_result.expect_err("fragile replay is expected to fail in current baseline");
+    let replay_err = replay_result.expect_err("fragile replay should currently fail at command #1");
     assert!(
-        replay_err.contains("link replay failed for"),
+        replay_err.contains("make-test command replay failed at command 1")
+            || replay_err.contains("make-test command replay timed out at command 1"),
         "unexpected make-test replay failure: {}",
         replay_err
     );
     assert!(
-        !replay_log_dir.join("make_test_commands_manifest.txt").exists(),
-        "make-test exit status parity cannot run until strict link replay reaches make-test planning"
+        replay_log_dir.join("make_test_commands_manifest.txt").exists(),
+        "make-test command plan should exist once strict link replay succeeds"
+    );
+    let replay_step = make_test_replay_step_name(0);
+    assert!(
+        replay_log_dir.join(format!("{}.status", replay_step)).exists(),
+        "make-test exit status parity baseline should include command #1 replay status"
     );
 }
 
@@ -5872,16 +5904,22 @@ fn test_real_world_zlib_make_test_stdout_stderr_parity() {
     let replay_result = run_zlib_make_test_command_subset_replay_baseline();
     let replay_log_dir = Path::new(ZLIB_MAKE_TEST_REPLAY_BASELINE_DIR).join("driver_logs");
 
-    let replay_err =
-        replay_result.expect_err("fragile replay is expected to fail in current baseline");
+    let replay_err = replay_result.expect_err("fragile replay should currently fail at command #1");
     assert!(
-        replay_err.contains("link replay failed for"),
+        replay_err.contains("make-test command replay failed at command 1")
+            || replay_err.contains("make-test command replay timed out at command 1"),
         "unexpected make-test replay failure: {}",
         replay_err
     );
     assert!(
-        !replay_log_dir.join("make_test_commands_manifest.txt").exists(),
-        "make-test stdout/stderr parity cannot run until strict link replay reaches make-test planning"
+        replay_log_dir.join("make_test_commands_manifest.txt").exists(),
+        "make-test command plan should exist once strict link replay succeeds"
+    );
+    let replay_step = make_test_replay_step_name(0);
+    assert!(
+        replay_log_dir.join(format!("{}.stdout", replay_step)).exists()
+            && replay_log_dir.join(format!("{}.stderr", replay_step)).exists(),
+        "make-test stdout/stderr baseline should include command #1 replay captures"
     );
 }
 
@@ -5891,16 +5929,21 @@ fn test_real_world_zlib_make_test_artifact_behavior_parity() {
     let replay_result = run_zlib_make_test_command_subset_replay_baseline();
     let replay_log_dir = Path::new(ZLIB_MAKE_TEST_REPLAY_BASELINE_DIR).join("driver_logs");
 
-    let replay_err =
-        replay_result.expect_err("fragile replay is expected to fail in current baseline");
+    let replay_err = replay_result.expect_err("fragile replay should currently fail at command #1");
     assert!(
-        replay_err.contains("link replay failed for"),
+        replay_err.contains("make-test command replay failed at command 1")
+            || replay_err.contains("make-test command replay timed out at command 1"),
         "unexpected make-test replay failure: {}",
         replay_err
     );
     assert!(
-        !replay_log_dir.join("make_test_commands_manifest.txt").exists(),
-        "make-test artifact parity cannot run until strict link replay reaches make-test planning"
+        replay_log_dir.join("make_test_commands_manifest.txt").exists(),
+        "make-test command plan should exist once strict link replay succeeds"
+    );
+    let replay_step = make_test_replay_step_name(0);
+    assert!(
+        replay_log_dir.join(format!("{}.status", replay_step)).exists(),
+        "make-test artifact behavior baseline should include command #1 replay status"
     );
 }
 
