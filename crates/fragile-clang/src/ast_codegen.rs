@@ -648,6 +648,9 @@ pub struct AstCodeGen {
     /// Track type aliases that resolve to primitive types (e.g., pthread_mutex_t = usize)
     /// These need special handling since they can't have ::new_N() constructors
     primitive_aliases: HashSet<String>,
+    /// Type alias resolution map: alias name -> resolved Rust target type.
+    /// Used to resolve aggregate field layouts through typedef aliases.
+    type_alias_targets: HashMap<String, String>,
     /// Track already generated module names to avoid duplicates (e.g., inline namespaces)
     generated_modules: HashSet<String>,
     /// Map from class/struct name to its bit field groups
@@ -778,6 +781,7 @@ impl AstCodeGen {
             generated_aliases: HashSet::new(),
             constructor_param_types: HashMap::new(),
             primitive_aliases: HashSet::new(),
+            type_alias_targets: HashMap::new(),
             generated_modules: HashSet::new(),
             bit_field_groups: HashMap::new(),
             generated_functions: HashMap::new(),
@@ -15526,6 +15530,21 @@ impl AstCodeGen {
         }
 
         self.generated_aliases.insert(safe_name.clone());
+        self.type_alias_targets
+            .insert(safe_name.clone(), rust_type.clone());
+        if safe_name != name {
+            self.type_alias_targets
+                .insert(name.to_string(), rust_type.clone());
+        }
+
+        // Mirror aggregate field metadata through typedef aliases so InitListExpr
+        // can emit named Rust field initializers for alias-typed aggregates.
+        if let Some(fields) = self.class_fields.get(&rust_type).cloned() {
+            self.class_fields.insert(safe_name.clone(), fields.clone());
+            if safe_name != name {
+                self.class_fields.insert(name.to_string(), fields);
+            }
+        }
 
         // Track if this type alias resolves to a primitive (can't use ::new_N constructors)
         let is_primitive = matches!(
@@ -15568,6 +15587,28 @@ impl AstCodeGen {
             self.writeln(&format!("pub type {} = {};", safe_name, rust_type));
         }
         self.writeln("");
+    }
+
+    /// Resolve aggregate field metadata for InitListExpr emission.
+    /// Supports direct struct names and typedef aliases to struct-like records.
+    fn resolve_aggregate_fields<'a>(
+        &'a self,
+        raw_name: &str,
+        normalized_name: &str,
+    ) -> Option<&'a Vec<(String, CppType)>> {
+        self.class_fields
+            .get(raw_name)
+            .or_else(|| self.class_fields.get(normalized_name))
+            .or_else(|| {
+                self.type_alias_targets
+                    .get(raw_name)
+                    .and_then(|target| self.class_fields.get(target))
+            })
+            .or_else(|| {
+                self.type_alias_targets
+                    .get(normalized_name)
+                    .and_then(|target| self.class_fields.get(target))
+            })
     }
 
     /// Generate a global variable declaration.
@@ -26519,10 +26560,8 @@ impl AstCodeGen {
                     if has_designators {
                         // All values have field names from designators
                         // Check if we're missing some fields - if so, use ..Default::default()
-                        let struct_fields_opt = self
-                            .class_fields
-                            .get(name)
-                            .or_else(|| self.class_fields.get(struct_name.as_str()));
+                        let struct_fields_opt =
+                            self.resolve_aggregate_fields(name, struct_name.as_str());
                         if is_union_aggregate {
                             if let Some((field_name, value)) = field_values.first() {
                                 let converted = struct_fields_opt
@@ -26561,23 +26600,21 @@ impl AstCodeGen {
                                 format!("{}: {}", f, converted)
                             })
                             .collect();
-                        if needs_default {
-                            format!(
-                                "{} {{ {}, ..Default::default() }}",
-                                struct_name,
-                                inits.join(", ")
-                            )
-                        } else {
-                            format!("{} {{ {} }}", struct_name, inits.join(", "))
-                        }
+                            if needs_default {
+                                format!(
+                                    "{} {{ {}, ..Default::default() }}",
+                                    struct_name,
+                                    inits.join(", ")
+                                )
+                            } else {
+                                format!("{} {{ {} }}", struct_name, inits.join(", "))
+                            }
                         }
                     } else {
                         // Try to get field names for this struct (positional)
                         // Try both original name and stripped name for lookup
-                        let struct_fields_opt = self
-                            .class_fields
-                            .get(name)
-                            .or_else(|| self.class_fields.get(struct_name.as_str()));
+                        let struct_fields_opt =
+                            self.resolve_aggregate_fields(name, struct_name.as_str());
                         if let Some(struct_fields) = struct_fields_opt {
                             if is_union_aggregate {
                                 if field_values.is_empty() || struct_fields.is_empty() {
@@ -27552,6 +27589,131 @@ mod tests {
         let code = AstCodeGen::new().generate(&ast);
         assert!(code.contains("pub fn add(a: i32, b: i32) -> i32"));
         assert!(code.contains("return a + b"));
+    }
+
+    #[test]
+    fn test_typedef_alias_array_aggregate_init_uses_named_fields() {
+        let config_record = make_node(
+            ClangNodeKind::RecordDecl {
+                name: "config_s".to_string(),
+                is_class: false,
+                is_definition: true,
+                fields: vec![],
+            },
+            vec![
+                make_node(
+                    ClangNodeKind::FieldDecl {
+                        name: "good_length".to_string(),
+                        ty: CppType::Int { signed: true },
+                        access: crate::ast::AccessSpecifier::Public,
+                        is_static: false,
+                        bit_field_width: None,
+                    },
+                    vec![],
+                ),
+                make_node(
+                    ClangNodeKind::FieldDecl {
+                        name: "max_lazy".to_string(),
+                        ty: CppType::Int { signed: true },
+                        access: crate::ast::AccessSpecifier::Public,
+                        is_static: false,
+                        bit_field_width: None,
+                    },
+                    vec![],
+                ),
+            ],
+        );
+
+        let config_alias = make_node(
+            ClangNodeKind::TypedefDecl {
+                name: "config".to_string(),
+                underlying_type: CppType::Named("config_s".to_string()),
+            },
+            vec![],
+        );
+
+        let config_ty = CppType::Named("config".to_string());
+        let table_ty = CppType::Array {
+            element: Box::new(config_ty.clone()),
+            size: Some(2),
+        };
+        let configuration_table = make_node(
+            ClangNodeKind::VarDecl {
+                name: "configuration_table".to_string(),
+                ty: table_ty.clone(),
+                has_init: true,
+                is_static: true,
+            },
+            vec![make_node(
+                ClangNodeKind::InitListExpr { ty: table_ty },
+                vec![
+                    make_node(
+                        ClangNodeKind::InitListExpr {
+                            ty: config_ty.clone(),
+                        },
+                        vec![
+                            make_node(
+                                ClangNodeKind::IntegerLiteral {
+                                    value: 1,
+                                    cpp_type: Some(CppType::Int { signed: true }),
+                                },
+                                vec![],
+                            ),
+                            make_node(
+                                ClangNodeKind::IntegerLiteral {
+                                    value: 2,
+                                    cpp_type: Some(CppType::Int { signed: true }),
+                                },
+                                vec![],
+                            ),
+                        ],
+                    ),
+                    make_node(
+                        ClangNodeKind::InitListExpr { ty: config_ty },
+                        vec![
+                            make_node(
+                                ClangNodeKind::IntegerLiteral {
+                                    value: 3,
+                                    cpp_type: Some(CppType::Int { signed: true }),
+                                },
+                                vec![],
+                            ),
+                            make_node(
+                                ClangNodeKind::IntegerLiteral {
+                                    value: 4,
+                                    cpp_type: Some(CppType::Int { signed: true }),
+                                },
+                                vec![],
+                            ),
+                        ],
+                    ),
+                ],
+            )],
+        );
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![config_record, config_alias, configuration_table],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("pub type config = config_s;"),
+            "expected typedef alias in output, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("config { good_length:")
+                && code.contains("max_lazy:")
+                && code.contains("__gv_configuration_table"),
+            "expected alias-typed aggregate to use named fields, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("config { 1i32, 2i32 }"),
+            "positional struct-literal syntax is invalid Rust and should not be emitted:\n{}",
+            code
+        );
     }
 
     #[test]

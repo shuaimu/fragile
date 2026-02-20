@@ -2600,6 +2600,72 @@ fn test_fragile_objz_replay_parses_c_register_storage_class() {
 }
 
 #[test]
+fn test_fragile_objz_replay_handles_typedef_struct_aggregate_initializer() {
+    let root = unique_temp_dir("zlib_fragile_objz_replay_config_table_c");
+    fs::create_dir_all(&root).expect("failed to create test root");
+
+    let project_dir = create_local_libza_replay_plan_project(&root, None)
+        .expect("failed to create libza replay-plan project");
+    fs::write(
+        project_dir.join("deflate.c"),
+        r#"
+typedef int (*compress_func)(void);
+
+typedef struct config_s {
+    int good_length;
+    int max_lazy;
+    int nice_length;
+    int max_chain;
+    compress_func func;
+} config;
+
+int deflate_stored(void) { return 0; }
+int deflate_fast(void) { return 0; }
+int deflate_slow(void) { return 0; }
+
+config configuration_table[3] = {
+    {0, 0, 0, 0, deflate_stored},
+    {4, 4, 8, 4, deflate_fast},
+    {4, 5, 16, 8, deflate_slow},
+};
+
+int deflate_with_configuration_table(void) {
+    return configuration_table[1].max_lazy + configuration_table[2].nice_length;
+}
+"#,
+    )
+    .expect("failed to write deflate.c fixture with configuration_table aggregate init");
+
+    let log_dir = root.join("logs");
+    run_fragile_objz_replay_in_tree(&project_dir, &log_dir)
+        .expect("OBJZ replay should compile typedef-aggregate config table");
+
+    let rustc_step = rustc_replay_step_name("OBJZ", "deflate.o");
+    assert_eq!(
+        fs::read_to_string(log_dir.join(format!("{}.status", rustc_step)))
+            .expect("failed to read deflate rustc replay status")
+            .trim(),
+        "0",
+        "deflate OBJZ replay should compile typedef struct aggregate initializer"
+    );
+
+    let transpiled = fs::read_to_string(log_dir.join("objz_deflate_o_transpiled.rs"))
+        .expect("failed to read transpiled deflate artifact");
+    assert!(
+        transpiled.contains("config { good_length:"),
+        "transpiled aggregate initializer should use named fields for config typedef: {}",
+        transpiled
+    );
+    assert!(
+        !transpiled.contains("config { 0"),
+        "transpiled aggregate initializer should not use positional struct literal syntax: {}",
+        transpiled
+    );
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
 fn test_fragile_objz_replay_build_detects_missing_compile_unit() {
     let root = unique_temp_dir("zlib_fragile_objz_replay_missing_unit");
     fs::create_dir_all(&root).expect("failed to create test root");
