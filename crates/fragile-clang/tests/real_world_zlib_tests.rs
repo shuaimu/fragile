@@ -2859,10 +2859,15 @@ fn test_real_world_zlib_libza_replay_plan_for_objz_objg_scope() {
 #[ignore = "real-world external project test (downloads and transpiles zlib OBJZ objects)"]
 fn test_real_world_zlib_fragile_objz_objects_replay() {
     let err = run_zlib_fragile_objz_objects_baseline()
-        .expect_err("OBJZ replay is expected to fail until crc32 codegen typing is fixed");
+        .expect_err("OBJZ replay is expected to fail until C-source parsing mode is fixed");
     assert!(
-        err.contains("crc32.o"),
-        "failure should surface crc32.o replay blocker: {}",
+        err.contains("deflate.c"),
+        "failure should surface deflate.c parser blocker: {}",
+        err
+    );
+    assert!(
+        err.contains("register"),
+        "failure should surface register-specifier parser mismatch: {}",
         err
     );
 
@@ -2889,21 +2894,15 @@ fn test_real_world_zlib_fragile_objz_objects_replay() {
             .trim(),
         "0"
     );
-    assert_ne!(
+    assert_eq!(
         fs::read_to_string(log_dir.join("rustc_objz_crc32_o.status"))
             .expect("failed to read crc32 replay status")
             .trim(),
         "0"
     );
     assert!(
-        fs::read_to_string(log_dir.join("rustc_objz_crc32_o.stderr"))
-            .expect("failed to read crc32 replay stderr")
-            .contains("wrapping_shl"),
-        "crc32 failure should capture wrapping_shl typing issue"
-    );
-    assert!(
         !log_dir.join("fragile_objz_manifest.txt").exists(),
-        "OBJZ replay manifest should not be written when replay aborts on crc32 failure"
+        "OBJZ replay manifest should not be written when replay aborts before full OBJZ completion"
     );
 }
 

@@ -23449,30 +23449,28 @@ impl AstCodeGen {
                         // Shifts with large constant counts can trigger compile-time overflow in Rust.
                         // Use wrapping shifts to preserve runtime behavior and avoid invalid literal shifts.
                         if matches!(op, BinaryOp::Shl | BinaryOp::Shr) {
-                            // Integer literals like `1` don't carry enough type information for
-                            // method-based shifts. Cast to the inferred lhs integer type when known.
-                            let left_type = Self::get_expr_type(&node.children[0]);
-                            let left = if is_integer_literal_str(&left) {
-                                if let Some(ty) = left_type {
-                                    let rust_ty = ty.to_rust_type_str();
-                                    if matches!(
-                                        rust_ty.as_str(),
-                                        "i8" | "i16"
-                                            | "i32"
-                                            | "i64"
-                                            | "i128"
-                                            | "isize"
-                                            | "u8"
-                                            | "u16"
-                                            | "u32"
-                                            | "u64"
-                                            | "u128"
-                                            | "usize"
-                                    ) {
-                                        format!("({} as {})", left, rust_ty)
-                                    } else {
-                                        left
-                                    }
+                            // Method-based shifts require a concrete integer receiver type.
+                            // Cast the lhs to the inferred integer type when available.
+                            // This avoids E0689 for expressions like `(8 - 1).wrapping_shl(3)`.
+                            let left_type = Self::get_expr_type(&node.children[0])
+                                .or_else(|| Self::get_expr_type(node));
+                            let left = if let Some(ty) = left_type {
+                                let rust_ty = ty.to_rust_type_str();
+                                if matches!(
+                                    rust_ty.as_str(),
+                                    "i8" | "i16"
+                                        | "i32"
+                                        | "i64"
+                                        | "i128"
+                                        | "isize"
+                                        | "u8"
+                                        | "u16"
+                                        | "u32"
+                                        | "u64"
+                                        | "u128"
+                                        | "usize"
+                                ) {
+                                    format!("({} as {})", left, rust_ty)
                                 } else {
                                     left
                                 }
@@ -27640,6 +27638,81 @@ mod tests {
         assert!(code.contains("return a"));
         assert!(code.contains("} else {"));
         assert!(code.contains("return b"));
+    }
+
+    #[test]
+    fn test_shift_lhs_expr_gets_integer_cast_for_wrapping_shift() {
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![make_node(
+                ClangNodeKind::FunctionDecl {
+                    name: "shift_expr".to_string(),
+                    mangled_name: "_Z10shift_exprv".to_string(),
+                    return_type: CppType::Int { signed: true },
+                    params: vec![],
+                    is_definition: true,
+                    is_variadic: false,
+                    is_noexcept: false,
+                    is_coroutine: false,
+                    coroutine_info: None,
+                },
+                vec![make_node(
+                    ClangNodeKind::CompoundStmt,
+                    vec![make_node(
+                        ClangNodeKind::ReturnStmt,
+                        vec![make_node(
+                            ClangNodeKind::BinaryOperator {
+                                op: BinaryOp::Shl,
+                                ty: CppType::Int { signed: true },
+                            },
+                            vec![
+                                make_node(
+                                    ClangNodeKind::BinaryOperator {
+                                        op: BinaryOp::Sub,
+                                        ty: CppType::Int { signed: true },
+                                    },
+                                    vec![
+                                        make_node(
+                                            ClangNodeKind::IntegerLiteral {
+                                                value: 8,
+                                                cpp_type: Some(CppType::Int { signed: true }),
+                                            },
+                                            vec![],
+                                        ),
+                                        make_node(
+                                            ClangNodeKind::IntegerLiteral {
+                                                value: 1,
+                                                cpp_type: Some(CppType::Int { signed: true }),
+                                            },
+                                            vec![],
+                                        ),
+                                    ],
+                                ),
+                                make_node(
+                                    ClangNodeKind::IntegerLiteral {
+                                        value: 3,
+                                        cpp_type: Some(CppType::Int { signed: true }),
+                                    },
+                                    vec![],
+                                ),
+                            ],
+                        )],
+                    )],
+                )],
+            )],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("wrapping_shl"),
+            "expected wrapping_shl for shift expression, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("as i32"),
+            "shift lhs should be typed to avoid ambiguous integer method resolution, got:\n{}",
+            code
+        );
     }
 
     #[test]

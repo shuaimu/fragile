@@ -34,4 +34,4 @@ The fourth leaf is split so each step stays under a few hundred LOC. Subleaf 4a 
 
 Subleaf 4b executes the `OBJZ` half of that plan. The harness reuses `libza_replay_plan.txt`, filters entries to `OBJZ`, replays each compile unit through Fragile (`ClangParser` + `AstCodeGen` + `rustc --emit=obj`), and validates that every expected `OBJZ` object is recompiled and non-empty. It records deterministic evidence in `fragile_objz_manifest.txt` and per-object `rustc_objz_*.status` logs.
 
-Current status: harness/logging is implemented, but full real-world completion is blocked by a codegen issue on `crc32.c` (`wrapping_shl` emitted on an untyped integer literal). The next subleaf addresses that typing/codegen fix, then reruns full `OBJZ` object replay.
+Current status: `crc32.c` replay compile typing is fixed (`wrapping_shl` lhs typing), and `rustc_objz_crc32_o.status=0` is now observed in the real-world replay logs. Full real-world completion is now blocked later at `deflate.c` parse, where C source is being parsed under C++ mode (`register` storage class rejection). The next subleaf addresses parser mode for `.c` replay units, then reruns full `OBJZ` object replay.
