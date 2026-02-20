@@ -21,3 +21,7 @@ The first leaf validates that the harness can consistently build all `make test`
 ## Second leaf scope
 
 The second leaf adds deterministic compile-unit extraction from the `CC` driver log. It normalizes paths relative to the zlib worktree, de-duplicates units, and writes `compile_units_manifest.txt` so later transpile replay can consume a stable source/object plan.
+
+## Third leaf scope
+
+The third leaf replays a single real compile unit (`adler32.c`) through Fragile end-to-end. The harness now selects that unit from driver logs, carries forward compile command include/define flags into `ClangParser`, emits transpiled Rust, compiles it to `adler32.o` via `rustc --emit=obj`, and records replay artifacts in `fragile_object_manifest.txt`.

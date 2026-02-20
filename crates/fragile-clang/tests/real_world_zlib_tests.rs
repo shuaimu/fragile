@@ -14,6 +14,8 @@ use std::process::{Command, Output};
 use std::thread::sleep;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use fragile_clang::{AstCodeGen, ClangParser};
+
 const ZLIB_REPO_URL: &str = "https://github.com/madler/zlib.git";
 const ZLIB_PINNED_COMMIT: &str = "51b7f2abdade71cd9bb0e7a373ef2610ec6f9daf"; // v1.3.1
 const ZLIB_CACHE_DIR: &str = "/tmp/fragile_real_world_zlib";
@@ -21,6 +23,8 @@ const ZLIB_NATIVE_BASELINE_DIR: &str = "/tmp/fragile_real_world_zlib_native_base
 const ZLIB_CC_DRIVER_BASELINE_DIR: &str = "/tmp/fragile_real_world_zlib_cc_driver";
 const ZLIB_REQUIRED_ARTIFACTS_BASELINE_DIR: &str =
     "/tmp/fragile_real_world_zlib_required_artifacts";
+const ZLIB_FRAGILE_ADLER32_OBJECT_BASELINE_DIR: &str =
+    "/tmp/fragile_real_world_zlib_fragile_adler32_object";
 const ZLIB_REQUIRED_PATHS: &[&str] = &["zlib.h", "configure", "Makefile.in"];
 const ZLIB_REQUIRED_TEST_ARTIFACTS: &[&str] = &[
     "libz.a",
@@ -61,6 +65,22 @@ const ZLIB_REQUIRED_ARTIFACT_LOG_FILES: &[&str] = &[
     "cc_driver_manifest.txt",
     "artifact_manifest.txt",
     "compile_units_manifest.txt",
+];
+const ZLIB_FRAGILE_ADLER32_LOG_FILES: &[&str] = &[
+    "configure_driver.status",
+    "configure_driver.stdout",
+    "configure_driver.stderr",
+    "make_driver.status",
+    "make_driver.stdout",
+    "make_driver.stderr",
+    "cc_driver.log",
+    "cc_driver_manifest.txt",
+    "compile_units_manifest.txt",
+    "adler32_transpiled.rs",
+    "rustc_object.status",
+    "rustc_object.stdout",
+    "rustc_object.stderr",
+    "fragile_object_manifest.txt",
 ];
 
 fn run_git(args: &[&str], cwd: Option<&Path>) -> Result<Output, String> {
@@ -519,6 +539,48 @@ fn extract_arg_value(tokens: &[&str], flag: &str) -> Option<(String, Option<usiz
     None
 }
 
+fn extract_compile_source_token(
+    tokens: &[&str],
+    object_token: &str,
+    object_consumed_idx: Option<usize>,
+) -> Option<String> {
+    let mut source_candidate: Option<&str> = None;
+    if let Some(c_idx) = tokens.iter().position(|t| *t == "-c") {
+        if let Some(next) = tokens.get(c_idx + 1) {
+            if !next.starts_with('-') {
+                source_candidate = Some(next);
+            }
+        }
+    }
+    if source_candidate.is_none() {
+        if let Some(attached) = tokens
+            .iter()
+            .find(|t| t.starts_with("-c") && t.len() > 2)
+            .map(|t| &t[2..])
+        {
+            source_candidate = Some(attached);
+        }
+    }
+    if source_candidate.is_none() {
+        let mut positional: Vec<(usize, &str)> = Vec::new();
+        for (idx, tok) in tokens.iter().enumerate() {
+            if tok.starts_with('-') {
+                continue;
+            }
+            if object_consumed_idx.is_some_and(|i| i == idx) {
+                continue;
+            }
+            positional.push((idx, tok));
+        }
+        source_candidate = positional
+            .iter()
+            .rev()
+            .map(|(_, tok)| *tok)
+            .find(|tok| *tok != object_token);
+    }
+    source_candidate.map(ToString::to_string)
+}
+
 fn parse_compile_units_from_cc_driver_log(
     log_text: &str,
     source_root: &Path,
@@ -549,42 +611,7 @@ fn parse_compile_units_from_cc_driver_log(
         let Some((obj, obj_consumed_idx)) = extract_arg_value(&tokens, "-o") else {
             continue;
         };
-
-        let mut source_candidate: Option<&str> = None;
-        if let Some(c_idx) = tokens.iter().position(|t| *t == "-c") {
-            if let Some(next) = tokens.get(c_idx + 1) {
-                if !next.starts_with('-') {
-                    source_candidate = Some(next);
-                }
-            }
-        }
-        if source_candidate.is_none() {
-            if let Some(attached) = tokens
-                .iter()
-                .find(|t| t.starts_with("-c") && t.len() > 2)
-                .map(|t| &t[2..])
-            {
-                source_candidate = Some(attached);
-            }
-        }
-        if source_candidate.is_none() {
-            let mut positional: Vec<(usize, &str)> = Vec::new();
-            for (idx, tok) in tokens.iter().enumerate() {
-                if tok.starts_with('-') {
-                    continue;
-                }
-                if obj_consumed_idx.is_some_and(|i| i == idx) {
-                    continue;
-                }
-                positional.push((idx, tok));
-            }
-            source_candidate = positional
-                .iter()
-                .rev()
-                .map(|(_, tok)| *tok)
-                .find(|tok| *tok != obj);
-        }
-        let Some(src) = source_candidate.map(ToString::to_string) else {
+        let Some(src) = extract_compile_source_token(&tokens, &obj, obj_consumed_idx) else {
             continue;
         };
 
@@ -626,6 +653,312 @@ fn write_compile_units_manifest(log_dir: &Path, source_dir: &Path) -> Result<usi
         )
     })?;
     Ok(units.len())
+}
+
+fn select_compile_command_for_source(
+    log_text: &str,
+    source_root: &Path,
+    source_file_name: &str,
+) -> Result<(String, String, PathBuf, Vec<String>), String> {
+    let mut cwd = source_root.to_path_buf();
+    for line in log_text.lines() {
+        if let Some(rest) = line.strip_prefix("cwd=") {
+            let parsed = PathBuf::from(rest.trim());
+            if !parsed.as_os_str().is_empty() {
+                cwd = parsed;
+            }
+            continue;
+        }
+        let Some(rest) = line.strip_prefix("args=") else {
+            continue;
+        };
+        let tokens: Vec<&str> = rest.split_whitespace().collect();
+        if tokens.is_empty() {
+            continue;
+        }
+        if !tokens.iter().any(|t| *t == "-c" || t.starts_with("-c")) {
+            continue;
+        }
+        let Some((obj, obj_consumed_idx)) = extract_arg_value(&tokens, "-o") else {
+            continue;
+        };
+        let Some(src) = extract_compile_source_token(&tokens, &obj, obj_consumed_idx) else {
+            continue;
+        };
+        let source = normalize_path_for_manifest(&src, &cwd, source_root);
+        let source_basename = Path::new(&source).file_name().and_then(|s| s.to_str());
+        if source_basename != Some(source_file_name) {
+            continue;
+        }
+        let object = normalize_path_for_manifest(&obj, &cwd, source_root);
+        let command_tokens = tokens.iter().map(|t| (*t).to_string()).collect();
+        return Ok((source, object, cwd.clone(), command_tokens));
+    }
+
+    Err(format!(
+        "compile unit for source {} not found in cc_driver.log",
+        source_file_name
+    ))
+}
+
+fn resolve_flag_path(path_arg: &str, cwd: &Path) -> String {
+    let raw = Path::new(path_arg);
+    let joined = if raw.is_absolute() {
+        raw.to_path_buf()
+    } else {
+        cwd.join(raw)
+    };
+    lexical_normalize(&joined).to_string_lossy().to_string()
+}
+
+fn extract_parser_args_from_driver_tokens(
+    command_tokens: &[String],
+    cwd: &Path,
+) -> (Vec<String>, Vec<String>) {
+    let mut include_paths: BTreeSet<String> = BTreeSet::new();
+    let mut defines: BTreeSet<String> = BTreeSet::new();
+    let mut idx = 0usize;
+
+    while idx < command_tokens.len() {
+        let tok = &command_tokens[idx];
+        if tok == "-I" {
+            if let Some(next) = command_tokens.get(idx + 1) {
+                include_paths.insert(resolve_flag_path(next, cwd));
+            }
+            idx += 2;
+            continue;
+        }
+        if let Some(rest) = tok.strip_prefix("-I") {
+            if !rest.is_empty() {
+                include_paths.insert(resolve_flag_path(rest, cwd));
+            }
+            idx += 1;
+            continue;
+        }
+        if tok == "-isystem" {
+            if let Some(next) = command_tokens.get(idx + 1) {
+                include_paths.insert(resolve_flag_path(next, cwd));
+            }
+            idx += 2;
+            continue;
+        }
+        if let Some(rest) = tok.strip_prefix("-isystem") {
+            if !rest.is_empty() {
+                include_paths.insert(resolve_flag_path(rest, cwd));
+            }
+            idx += 1;
+            continue;
+        }
+        if tok == "-D" {
+            if let Some(next) = command_tokens.get(idx + 1) {
+                defines.insert(next.to_string());
+            }
+            idx += 2;
+            continue;
+        }
+        if let Some(rest) = tok.strip_prefix("-D") {
+            if !rest.is_empty() {
+                defines.insert(rest.to_string());
+            }
+            idx += 1;
+            continue;
+        }
+        idx += 1;
+    }
+
+    (
+        include_paths.into_iter().collect(),
+        defines.into_iter().collect(),
+    )
+}
+
+fn transpile_source_with_driver_command(
+    source_path: &Path,
+    command_cwd: &Path,
+    command_tokens: &[String],
+) -> Result<String, String> {
+    let (include_paths, defines) =
+        extract_parser_args_from_driver_tokens(command_tokens, command_cwd);
+    let parser = ClangParser::with_paths_and_defines(include_paths, defines).map_err(|e| {
+        format!(
+            "failed to create parser for {}: {}",
+            source_path.display(),
+            e
+        )
+    })?;
+    let ast = parser
+        .parse_file(source_path)
+        .map_err(|e| format!("failed to parse {}: {}", source_path.display(), e))?;
+    Ok(AstCodeGen::new().generate(&ast.translation_unit))
+}
+
+fn crate_name_from_source(source_rel: &str) -> String {
+    let mut crate_name = String::from("zlib_");
+    let mut prev_was_sep = false;
+    for ch in source_rel.chars() {
+        if ch.is_ascii_alphanumeric() {
+            crate_name.push(ch.to_ascii_lowercase());
+            prev_was_sep = false;
+        } else if !prev_was_sep {
+            crate_name.push('_');
+            prev_was_sep = true;
+        }
+    }
+    while crate_name.ends_with('_') {
+        crate_name.pop();
+    }
+    if crate_name == "zlib" || crate_name == "zlib_" {
+        "zlib_unit".to_string()
+    } else {
+        crate_name
+    }
+}
+
+fn compile_rust_source_to_object(
+    rust_source_path: &Path,
+    object_path: &Path,
+    crate_name: &str,
+) -> Result<Output, String> {
+    if let Some(parent) = object_path.parent() {
+        fs::create_dir_all(parent).map_err(|e| {
+            format!(
+                "failed to create object output dir {}: {}",
+                parent.display(),
+                e
+            )
+        })?;
+    }
+    Command::new("rustc")
+        .arg("--edition")
+        .arg("2021")
+        .arg("--crate-type")
+        .arg("lib")
+        .arg("--crate-name")
+        .arg(crate_name)
+        .arg("--emit=obj")
+        .arg("-C")
+        .arg("overflow-checks=off")
+        .arg("-A")
+        .arg("warnings")
+        .arg(rust_source_path)
+        .arg("-o")
+        .arg(object_path)
+        .output()
+        .map_err(|e| format!("failed to run rustc for {}: {}", object_path.display(), e))
+}
+
+fn write_fragile_object_manifest(
+    log_dir: &Path,
+    source_dir: &Path,
+    make_target: &str,
+    source_rel: &str,
+    object_rel: &str,
+    transpiled_rs_path: &Path,
+    compile_unit_count: usize,
+) -> Result<(), String> {
+    let object_path = source_dir.join(object_rel);
+    let object_size = fs::metadata(&object_path)
+        .map_err(|e| format!("failed to stat object {}: {}", object_path.display(), e))?
+        .len();
+    let head = read_head(source_dir).unwrap_or_else(|| "unknown".to_string());
+    let manifest = format!(
+        "source_dir={}\ncommit={}\nmake_target={}\nsource={}\nobject={}\ntranspiled_rust={}\ncompile_units_count={}\nobject_size={}\n",
+        source_dir.display(),
+        head.trim(),
+        make_target,
+        source_rel,
+        object_rel,
+        transpiled_rs_path.display(),
+        compile_unit_count,
+        object_size,
+    );
+    fs::write(log_dir.join("fragile_object_manifest.txt"), manifest).map_err(|e| {
+        format!(
+            "failed to write fragile object manifest at {}: {}",
+            log_dir.display(),
+            e
+        )
+    })
+}
+
+fn run_fragile_single_object_in_tree(
+    source_dir: &Path,
+    log_dir: &Path,
+    source_file_name: &str,
+    make_target: &str,
+) -> Result<(), String> {
+    run_cc_driver_baseline_in_tree(source_dir, log_dir, make_target)?;
+    let compile_unit_count = write_compile_units_manifest(log_dir, source_dir)?;
+
+    let driver_log_path = log_dir.join("cc_driver.log");
+    let driver_log = fs::read_to_string(&driver_log_path).map_err(|e| {
+        format!(
+            "failed to read cc-driver invocation log {}: {}",
+            driver_log_path.display(),
+            e
+        )
+    })?;
+    let (source_rel, object_rel, command_cwd, command_tokens) =
+        select_compile_command_for_source(&driver_log, source_dir, source_file_name)?;
+    let source_path = source_dir.join(&source_rel);
+    if !source_path.exists() {
+        return Err(format!(
+            "selected source {} does not exist under {}",
+            source_rel,
+            source_dir.display()
+        ));
+    }
+
+    let transpiled =
+        transpile_source_with_driver_command(&source_path, &command_cwd, &command_tokens)?;
+    let stem = Path::new(source_file_name)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("unit");
+    let transpiled_rs_path = log_dir.join(format!("{}_transpiled.rs", stem));
+    fs::write(&transpiled_rs_path, transpiled).map_err(|e| {
+        format!(
+            "failed to write transpiled source {}: {}",
+            transpiled_rs_path.display(),
+            e
+        )
+    })?;
+
+    let object_path = source_dir.join(&object_rel);
+    let compile_output = compile_rust_source_to_object(
+        &transpiled_rs_path,
+        &object_path,
+        &crate_name_from_source(&source_rel),
+    )?;
+    write_command_capture(log_dir, "rustc_object", &compile_output)?;
+    if !compile_output.status.success() {
+        return Err(format!(
+            "fragile rustc object build failed with status {} (logs: {})",
+            status_code(&compile_output),
+            log_dir.display()
+        ));
+    }
+
+    let object_size = fs::metadata(&object_path)
+        .map_err(|e| format!("failed to stat object {}: {}", object_path.display(), e))?
+        .len();
+    if object_size == 0 {
+        return Err(format!(
+            "generated object {} is empty",
+            object_path.display()
+        ));
+    }
+
+    write_fragile_object_manifest(
+        log_dir,
+        source_dir,
+        make_target,
+        &source_rel,
+        &object_rel,
+        &transpiled_rs_path,
+        compile_unit_count,
+    )?;
+    Ok(())
 }
 
 fn ensure_required_artifacts_exist(
@@ -835,6 +1168,43 @@ fn run_zlib_required_artifacts_baseline() -> Result<PathBuf, String> {
     Ok(log_dir)
 }
 
+fn run_zlib_fragile_adler32_object_baseline() -> Result<PathBuf, String> {
+    let checkout_dir = ensure_zlib_checkout()?;
+    let baseline_root = PathBuf::from(ZLIB_FRAGILE_ADLER32_OBJECT_BASELINE_DIR);
+    reset_dir(&baseline_root)?;
+
+    let worktree_dir = baseline_root.join("worktree");
+    let checkout_dir_str = checkout_dir.to_string_lossy().to_string();
+    let worktree_dir_str = worktree_dir.to_string_lossy().to_string();
+    run_git(
+        &[
+            "clone",
+            "--no-tags",
+            "--local",
+            checkout_dir_str.as_str(),
+            worktree_dir_str.as_str(),
+        ],
+        None,
+    )?;
+    run_git(
+        &["checkout", "--detach", ZLIB_PINNED_COMMIT],
+        Some(&worktree_dir),
+    )?;
+
+    let actual_head = read_head(&worktree_dir)
+        .ok_or_else(|| format!("failed to read HEAD in {}", worktree_dir.display()))?;
+    if actual_head != ZLIB_PINNED_COMMIT {
+        return Err(format!(
+            "fragile-adler32 worktree expected commit {} but got {}",
+            ZLIB_PINNED_COMMIT, actual_head
+        ));
+    }
+
+    let log_dir = baseline_root.join("driver_logs");
+    run_fragile_single_object_in_tree(&worktree_dir, &log_dir, "adler32.c", "adler32.o")?;
+    Ok(log_dir)
+}
+
 fn unique_temp_dir(prefix: &str) -> PathBuf {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1033,6 +1403,46 @@ minigzip64: tiny.o
     fs::write(project_dir.join("Makefile"), makefile)
         .map_err(|e| format!("failed to write Makefile: {}", e))?;
 
+    Ok(project_dir)
+}
+
+fn create_local_fragile_object_project(base_dir: &Path) -> Result<PathBuf, String> {
+    let project_dir = base_dir.join("fragile_object_project");
+    fs::create_dir_all(&project_dir)
+        .map_err(|e| format!("failed to create {}: {}", project_dir.display(), e))?;
+
+    let configure = r#"#!/bin/sh
+set -eu
+cat > conftest.c <<'EOF'
+int main(void) { return 0; }
+EOF
+"${CC:-cc}" -c conftest.c -o conftest.o
+rm -f conftest.c conftest.o
+"#;
+    fs::write(project_dir.join("configure"), configure)
+        .map_err(|e| format!("failed to write configure script: {}", e))?;
+    make_executable(&project_dir.join("configure"))?;
+
+    fs::write(
+        project_dir.join("adler32.c"),
+        "unsigned long adler32(unsigned long adler, const unsigned char* buf, int len) {\n    unsigned long sum = adler;\n    for (int i = 0; i < len; ++i) sum += buf[i];\n    return sum;\n}\n",
+    )
+    .map_err(|e| format!("failed to write adler32.c: {}", e))?;
+    fs::write(
+        project_dir.join("tiny.c"),
+        "int tiny_answer(void) { return 7; }\n",
+    )
+    .map_err(|e| format!("failed to write tiny.c: {}", e))?;
+
+    let makefile = r#"CC ?= cc
+adler32.o: adler32.c
+	$(CC) -c adler32.c -o adler32.o
+
+tiny.o: tiny.c
+	$(CC) -c tiny.c -o tiny.o
+"#;
+    fs::write(project_dir.join("Makefile"), makefile)
+        .map_err(|e| format!("failed to write Makefile: {}", e))?;
     Ok(project_dir)
 }
 
@@ -1400,6 +1810,98 @@ fn test_required_artifacts_build_detects_missing_output() {
 }
 
 #[test]
+fn test_fragile_single_object_build_local_fixture_success() {
+    let root = unique_temp_dir("zlib_fragile_object_success");
+    fs::create_dir_all(&root).expect("failed to create test root");
+
+    let project_dir = create_local_fragile_object_project(&root)
+        .expect("failed to create fragile-object project");
+    let log_dir = root.join("logs");
+    run_fragile_single_object_in_tree(&project_dir, &log_dir, "adler32.c", "adler32.o")
+        .expect("fragile single object replay should succeed");
+
+    let object_path = project_dir.join("adler32.o");
+    assert!(
+        object_path.exists(),
+        "expected transpiled object output at {}",
+        object_path.display()
+    );
+    assert!(
+        fs::metadata(&object_path)
+            .expect("failed to stat adler32.o")
+            .len()
+            > 0,
+        "adler32.o should be non-empty"
+    );
+
+    for rel in ZLIB_FRAGILE_ADLER32_LOG_FILES {
+        assert!(
+            log_dir.join(rel).exists(),
+            "expected fragile-object log {}",
+            log_dir.join(rel).display()
+        );
+    }
+    assert_eq!(
+        fs::read_to_string(log_dir.join("rustc_object.status"))
+            .expect("failed to read rustc_object.status")
+            .trim(),
+        "0"
+    );
+    assert!(
+        fs::read_to_string(log_dir.join("compile_units_manifest.txt"))
+            .expect("failed to read compile_units_manifest.txt")
+            .contains("source=adler32.c object=adler32.o")
+    );
+    let manifest = fs::read_to_string(log_dir.join("fragile_object_manifest.txt"))
+        .expect("failed to read fragile object manifest");
+    assert!(
+        manifest.contains("source=adler32.c"),
+        "manifest should include source entry: {}",
+        manifest
+    );
+    assert!(
+        manifest.contains("object=adler32.o"),
+        "manifest should include object entry: {}",
+        manifest
+    );
+    assert!(
+        manifest.contains("compile_units_count="),
+        "manifest should include compile unit count: {}",
+        manifest
+    );
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn test_fragile_single_object_build_fails_when_source_unit_missing() {
+    let root = unique_temp_dir("zlib_fragile_object_missing_source_unit");
+    fs::create_dir_all(&root).expect("failed to create test root");
+
+    let project_dir = create_local_fragile_object_project(&root)
+        .expect("failed to create fragile-object project");
+    let log_dir = root.join("logs");
+    let err = run_fragile_single_object_in_tree(&project_dir, &log_dir, "adler32.c", "tiny.o")
+        .expect_err("expected source-unit selection to fail");
+
+    assert!(
+        err.contains("compile unit for source adler32.c not found"),
+        "unexpected failure reason: {}",
+        err
+    );
+    assert!(
+        log_dir.join("compile_units_manifest.txt").exists(),
+        "compile units manifest should exist to aid failure diagnosis"
+    );
+    assert!(
+        !log_dir.join("rustc_object.status").exists(),
+        "rustc should not run if selected source compile unit is missing"
+    );
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
 #[ignore = "real-world external project test (downloads zlib fixture)"]
 fn test_real_world_zlib_fixture_checkout_is_pinned() {
     let repo_dir = ensure_zlib_checkout().expect("failed to prepare zlib checkout");
@@ -1526,5 +2028,37 @@ fn test_real_world_zlib_required_artifacts_for_make_all_scope() {
         compile_units.contains("source=adler32.c"),
         "compile unit manifest should include adler32.c compile unit: {}",
         compile_units
+    );
+}
+
+#[test]
+#[ignore = "real-world external project test (downloads and transpiles zlib adler32 object)"]
+fn test_real_world_zlib_fragile_adler32_object_replay() {
+    let log_dir =
+        run_zlib_fragile_adler32_object_baseline().expect("failed to run adler32 object replay");
+    for rel in ZLIB_FRAGILE_ADLER32_LOG_FILES {
+        assert!(
+            log_dir.join(rel).exists(),
+            "expected fragile-object replay log {}",
+            log_dir.join(rel).display()
+        );
+    }
+    assert_eq!(
+        fs::read_to_string(log_dir.join("rustc_object.status"))
+            .expect("failed to read rustc_object.status")
+            .trim(),
+        "0"
+    );
+    let manifest = fs::read_to_string(log_dir.join("fragile_object_manifest.txt"))
+        .expect("failed to read fragile object manifest");
+    assert!(
+        manifest.contains("source=adler32.c"),
+        "manifest should include adler32 source entry: {}",
+        manifest
+    );
+    assert!(
+        manifest.contains("object=adler32.o"),
+        "manifest should include adler32 object entry: {}",
+        manifest
     );
 }
