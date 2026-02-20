@@ -22076,6 +22076,73 @@ impl AstCodeGen {
                             wrap_unsafe_for_binop(&right_str)
                         };
                         format!("{} {} {}", left, op_str, right)
+                    } else if matches!(op, BinaryOp::Add | BinaryOp::Sub) {
+                        let left_type = Self::get_expr_type(&node.children[0]);
+                        let right_type = Self::get_expr_type(&node.children[1]);
+                        let left_is_pointer = matches!(left_type, Some(CppType::Pointer { .. }));
+                        let right_is_pointer = matches!(right_type, Some(CppType::Pointer { .. }));
+                        let left_is_ptr_var = self.is_ptr_var_expr(&node.children[0]);
+                        let right_is_ptr_var = self.is_ptr_var_expr(&node.children[1]);
+                        let left_is_array = matches!(left_type, Some(CppType::Array { .. }))
+                            && !self.is_ptr_var_expr(&node.children[0]);
+                        let right_is_array = matches!(right_type, Some(CppType::Array { .. }))
+                            && !self.is_ptr_var_expr(&node.children[1]);
+                        let left_is_pointer_like =
+                            left_is_pointer || left_is_ptr_var || left_is_array;
+                        let right_is_pointer_like =
+                            right_is_pointer || right_is_ptr_var || right_is_array;
+
+                        // Pointer subtraction: ptr1 - ptr2 -> ptr1.offset_from(ptr2)
+                        if left_is_pointer_like && right_is_pointer_like && matches!(op, BinaryOp::Sub)
+                        {
+                            let left_raw = self.expr_to_string_raw(&node.children[0]);
+                            let right_raw = self.expr_to_string_raw(&node.children[1]);
+                            let left_ptr = if left_is_array {
+                                format!("{}.as_ptr()", left_raw)
+                            } else {
+                                left_raw
+                            };
+                            let right_ptr = if right_is_array {
+                                format!("{}.as_ptr()", right_raw)
+                            } else {
+                                right_raw
+                            };
+                            return format!("{}.offset_from({})", left_ptr, right_ptr);
+                        }
+
+                        // Pointer +/- integer: ptr.wrapping_offset(delta)
+                        if left_is_pointer_like {
+                            let left_raw = self.expr_to_string_raw(&node.children[0]);
+                            let mut right_raw =
+                                strip_literal_suffix(&self.expr_to_string_raw(&node.children[1]));
+                            let mut is_add = matches!(op, BinaryOp::Add);
+                            if let Some(abs) = right_raw.strip_prefix('-') {
+                                if is_integer_literal_str(abs) {
+                                    is_add = !is_add;
+                                    right_raw = abs.to_string();
+                                }
+                            }
+                            let left_ptr = if left_is_array {
+                                format!("{}.as_ptr()", left_raw)
+                            } else {
+                                left_raw
+                            };
+                            let left_wrapped = if left_ptr.contains(" as ")
+                                || left_ptr.starts_with("unsafe { ")
+                                || left_ptr.contains(' ')
+                            {
+                                format!("({})", left_ptr)
+                            } else {
+                                left_ptr
+                            };
+                            if is_add {
+                                return format!("{}.wrapping_offset(({}) as isize)", left_wrapped, right_raw);
+                            }
+                            return format!("{}.wrapping_offset(-(({}) as isize))", left_wrapped, right_raw);
+                        }
+                        let left = wrap_unsafe_for_binop(&self.expr_to_string_raw(&node.children[0]));
+                        let right = wrap_unsafe_for_binop(&self.expr_to_string_raw(&node.children[1]));
+                        format!("{} {} {}", left, op_str, right)
                     } else if matches!(
                         op,
                         BinaryOp::Add
@@ -28793,6 +28860,155 @@ mod tests {
         assert!(
             !code.contains("= (*s).prev_length = 2"),
             "outer assignment must not receive raw `lhs = rhs = value` form in Rust, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_pointer_add_with_offset_from_uses_wrapping_offset_in_unsafe_rhs() {
+        let byte_ptr_ty = CppType::Pointer {
+            pointee: Box::new(CppType::Char { signed: false }),
+            is_const: false,
+        };
+
+        let state_struct = make_node(
+            ClangNodeKind::RecordDecl {
+                name: "state".to_string(),
+                is_class: false,
+                is_definition: true,
+                fields: vec![],
+            },
+            vec![
+                make_node(
+                    ClangNodeKind::FieldDecl {
+                        name: "pending_out".to_string(),
+                        ty: byte_ptr_ty.clone(),
+                        access: crate::ast::AccessSpecifier::Public,
+                        is_static: false,
+                        bit_field_width: None,
+                    },
+                    vec![],
+                ),
+                make_node(
+                    ClangNodeKind::FieldDecl {
+                        name: "pending_buf".to_string(),
+                        ty: byte_ptr_ty.clone(),
+                        access: crate::ast::AccessSpecifier::Public,
+                        is_static: false,
+                        bit_field_width: None,
+                    },
+                    vec![],
+                ),
+            ],
+        );
+
+        let state_ptr_ty = CppType::Pointer {
+            pointee: Box::new(CppType::Named("state".to_string())),
+            is_const: false,
+        };
+
+        let member_on = |var: &str, field: &str, ty: CppType| {
+            make_node(
+                ClangNodeKind::MemberExpr {
+                    member_name: field.to_string(),
+                    is_arrow: true,
+                    declaring_class: None,
+                    is_static: false,
+                    ty,
+                },
+                vec![make_node(
+                    ClangNodeKind::DeclRefExpr {
+                        name: var.to_string(),
+                        ty: state_ptr_ty.clone(),
+                        namespace_path: vec![],
+                    },
+                    vec![],
+                )],
+            )
+        };
+
+        let rhs = make_node(
+            ClangNodeKind::BinaryOperator {
+                op: BinaryOp::Add,
+                ty: byte_ptr_ty.clone(),
+            },
+            vec![
+                member_on("ds", "pending_buf", byte_ptr_ty.clone()),
+                make_node(
+                    ClangNodeKind::BinaryOperator {
+                        op: BinaryOp::Sub,
+                        ty: CppType::Long { signed: true },
+                    },
+                    vec![
+                        member_on("ss", "pending_out", byte_ptr_ty.clone()),
+                        member_on("ss", "pending_buf", byte_ptr_ty.clone()),
+                    ],
+                ),
+            ],
+        );
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![
+                state_struct,
+                make_node(
+                    ClangNodeKind::FunctionDecl {
+                        name: "fix_pending".to_string(),
+                        mangled_name: "fix_pending".to_string(),
+                        return_type: CppType::Int { signed: true },
+                        params: vec![
+                            ("ds".to_string(), state_ptr_ty.clone()),
+                            ("ss".to_string(), state_ptr_ty.clone()),
+                        ],
+                        is_definition: true,
+                        is_variadic: false,
+                        is_noexcept: false,
+                        is_coroutine: false,
+                        coroutine_info: None,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![
+                            make_node(
+                                ClangNodeKind::ExprStmt,
+                                vec![make_node(
+                                    ClangNodeKind::BinaryOperator {
+                                        op: BinaryOp::Assign,
+                                        ty: byte_ptr_ty.clone(),
+                                    },
+                                    vec![member_on("ds", "pending_out", byte_ptr_ty.clone()), rhs],
+                                )],
+                            ),
+                            make_node(
+                                ClangNodeKind::ReturnStmt,
+                                vec![make_node(
+                                    ClangNodeKind::IntegerLiteral {
+                                        value: 0,
+                                        cpp_type: Some(CppType::Int { signed: true }),
+                                    },
+                                    vec![],
+                                )],
+                            ),
+                        ],
+                    )],
+                ),
+            ],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains(".wrapping_offset("),
+            "pointer + integer should lower to wrapping_offset in unsafe RHS path, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains(".offset_from("),
+            "pointer difference should lower to offset_from, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("(*ds).pending_buf +"),
+            "pointer addition should not use raw `+` in Rust, got:\n{}",
             code
         );
     }
