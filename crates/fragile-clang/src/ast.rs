@@ -106,6 +106,8 @@ pub enum ClangNodeKind {
         name: String,
         /// Mangled name for linking (e.g., "_Z3addii" for "int add(int, int)")
         mangled_name: String,
+        /// Whether the function has `static` storage class (internal linkage in C/C++).
+        is_static: bool,
         return_type: CppType,
         params: Vec<(String, CppType)>,
         is_definition: bool,

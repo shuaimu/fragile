@@ -718,6 +718,9 @@ pub struct AstCodeGen {
     /// Function names that have a definition in this translation unit.
     /// Used to suppress emitting duplicate extern declarations.
     defined_function_names: HashSet<String>,
+    /// Function names seen as non-definition declarations in this translation unit.
+    /// Used to identify externally declared C symbols that should be exported with C ABI.
+    declared_function_names: HashSet<String>,
     /// Declared function parameter types keyed by `(function_name, arity)`.
     /// Used as a fallback when call-site function type metadata is degraded.
     declared_function_param_types: HashMap<(String, usize), Vec<CppType>>,
@@ -856,6 +859,7 @@ impl AstCodeGen {
             bit_field_groups: HashMap::new(),
             generated_functions: HashMap::new(),
             defined_function_names: HashSet::new(),
+            declared_function_names: HashSet::new(),
             declared_function_param_types: HashMap::new(),
             emitted_extern_c_functions: HashSet::new(),
             module_depth: 0,
@@ -13279,6 +13283,7 @@ impl AstCodeGen {
             ClangNodeKind::FunctionDecl {
                 name,
                 mangled_name,
+                is_static,
                 return_type,
                 params,
                 is_definition,
@@ -13291,6 +13296,7 @@ impl AstCodeGen {
                     self.generate_function(
                         name,
                         mangled_name,
+                        *is_static,
                         return_type,
                         params,
                         *is_variadic,
@@ -13733,6 +13739,7 @@ impl AstCodeGen {
         &mut self,
         name: &str,
         mangled_name: &str,
+        is_static: bool,
         return_type: &CppType,
         params: &[(String, CppType)],
         is_variadic: bool,
@@ -13983,6 +13990,14 @@ impl AstCodeGen {
                 coroutine_info.as_ref().map(|i| i.kind),
                 Some(CoroutineKind::Async) | Some(CoroutineKind::Task) | None
             );
+        // Export C-linkage definitions with unmangled symbols so cross-TU links
+        // can resolve them from transpiled objects/archives.
+        let is_c_linkage_name = !name.is_empty() && mangled_name == name;
+        let should_export_c_abi = !is_static
+            && is_c_linkage_name
+            && !is_main
+            && !is_generator
+            && self.declared_function_names.contains(name);
 
         // Handle generators with state machine
         if is_generator {
@@ -14030,11 +14045,18 @@ impl AstCodeGen {
                 params_str
             };
 
-            // Variadic functions require extern "C" linkage and unsafe keyword
+            if should_export_c_abi {
+                self.writeln("#[no_mangle]");
+            }
+            // Variadic functions require extern "C" linkage and unsafe keyword.
+            // For non-variadic non-async functions, only emit C ABI when the
+            // original symbol uses C linkage and external visibility.
             let (async_keyword, extern_c) = if is_variadic {
                 ("", "unsafe extern \"C\" ")
             } else if is_async {
                 ("async ", "")
+            } else if should_export_c_abi {
+                ("", "extern \"C\" ")
             } else {
                 ("", "")
             };
@@ -17978,6 +18000,8 @@ impl AstCodeGen {
         {
             if *is_definition {
                 self.defined_function_names.insert(name.clone());
+            } else {
+                self.declared_function_names.insert(name.clone());
             }
 
             let key = (name.clone(), params.len());
@@ -29252,6 +29276,7 @@ mod tests {
                 ClangNodeKind::FunctionDecl {
                     name: "add".to_string(),
                     mangled_name: "_Z3addii".to_string(),
+                    is_static: false,
                     return_type: CppType::Int { signed: true },
                     params: vec![
                         ("a".to_string(), CppType::Int { signed: true }),
@@ -29533,6 +29558,7 @@ mod tests {
                 ClangNodeKind::FunctionDecl {
                     name: "bool_int_chain_guard".to_string(),
                     mangled_name: "bool_int_chain_guard".to_string(),
+                    is_static: false,
                     return_type: CppType::Int { signed: true },
                     params: vec![
                         ("windowBits".to_string(), CppType::Int { signed: true }),
@@ -29648,6 +29674,7 @@ mod tests {
                 ClangNodeKind::FunctionDecl {
                     name: "assign_cmp_to_int".to_string(),
                     mangled_name: "assign_cmp_to_int".to_string(),
+                    is_static: false,
                     return_type: CppType::Int { signed: true },
                     params: vec![
                         ("a".to_string(), CppType::Int { signed: true }),
@@ -29791,6 +29818,7 @@ mod tests {
                     ClangNodeKind::FunctionDecl {
                         name: "set_last".to_string(),
                         mangled_name: "set_last".to_string(),
+                        is_static: false,
                         return_type: CppType::Int { signed: true },
                         params: vec![
                             ("state".to_string(), state_ptr_ty),
@@ -29923,6 +29951,7 @@ mod tests {
                     ClangNodeKind::FunctionDecl {
                         name: "accumulate_back".to_string(),
                         mangled_name: "accumulate_back".to_string(),
+                        is_static: false,
                         return_type: CppType::Int { signed: true },
                         params: vec![("state".to_string(), state_ptr_ty)],
                         is_definition: true,
@@ -29997,6 +30026,7 @@ mod tests {
                 ClangNodeKind::FunctionDecl {
                     name: "accumulate_plain".to_string(),
                     mangled_name: "accumulate_plain".to_string(),
+                    is_static: false,
                     return_type: CppType::Int { signed: true },
                     params: vec![
                         ("sum".to_string(), CppType::Int { signed: true }),
@@ -30063,6 +30093,7 @@ mod tests {
                 ClangNodeKind::FunctionDecl {
                     name: "codes_used_like".to_string(),
                     mangled_name: "codes_used_like".to_string(),
+                    is_static: false,
                     return_type: CppType::Long { signed: false },
                     params: vec![],
                     is_definition: true,
@@ -30120,6 +30151,7 @@ mod tests {
                 ClangNodeKind::FunctionDecl {
                     name: "explicit_cast_neg_one".to_string(),
                     mangled_name: "explicit_cast_neg_one".to_string(),
+                    is_static: false,
                     return_type: CppType::Long { signed: false },
                     params: vec![],
                     is_definition: true,
@@ -30261,6 +30293,7 @@ mod tests {
                     ClangNodeKind::FunctionDecl {
                         name: "accumulate_hold".to_string(),
                         mangled_name: "accumulate_hold".to_string(),
+                        is_static: false,
                         return_type: CppType::Int { signed: true },
                         params: vec![
                             ("state".to_string(), state_ptr_ty),
@@ -30373,6 +30406,7 @@ mod tests {
                 ClangNodeKind::FunctionDecl {
                     name: "sync_point_like".to_string(),
                     mangled_name: "sync_point_like".to_string(),
+                    is_static: false,
                     return_type: CppType::Int { signed: true },
                     params: vec![
                         ("mode".to_string(), CppType::Int { signed: true }),
@@ -30454,6 +30488,7 @@ mod tests {
                 ClangNodeKind::FunctionDecl {
                     name: "cast_lt_guard".to_string(),
                     mangled_name: "cast_lt_guard".to_string(),
+                    is_static: false,
                     return_type: CppType::Int { signed: true },
                     params: vec![("dist".to_string(), CppType::Int { signed: true })],
                     is_definition: true,
@@ -30517,6 +30552,7 @@ mod tests {
                 ClangNodeKind::FunctionDecl {
                     name: "adler32".to_string(),
                     mangled_name: "adler32".to_string(),
+                    is_static: false,
                     return_type: CppType::Long { signed: false },
                     params: vec![
                         ("adler".to_string(), CppType::Long { signed: false }),
@@ -30561,6 +30597,7 @@ mod tests {
                     ClangNodeKind::FunctionDecl {
                         name: "adler32".to_string(),
                         mangled_name: "adler32".to_string(),
+                        is_static: false,
                         return_type: CppType::Int { signed: true },
                         params: vec![("x".to_string(), CppType::Int { signed: true })],
                         is_definition: false,
@@ -30575,6 +30612,7 @@ mod tests {
                     ClangNodeKind::FunctionDecl {
                         name: "adler32".to_string(),
                         mangled_name: "adler32".to_string(),
+                        is_static: false,
                         return_type: CppType::Int { signed: true },
                         params: vec![("x".to_string(), CppType::Int { signed: true })],
                         is_definition: true,
@@ -30608,8 +30646,60 @@ mod tests {
             code
         );
         assert!(
-            code.contains("pub fn adler32(x: i32) -> i32 {"),
-            "definition should still be generated, got:\n{}",
+            code.contains("#[no_mangle]"),
+            "non-static C-linkage definition should export unmangled symbol, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("pub extern \"C\" fn adler32(x: i32) -> i32 {"),
+            "definition should use C ABI when exported, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_static_c_definition_keeps_rust_mangling() {
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![make_node(
+                ClangNodeKind::FunctionDecl {
+                    name: "adler32_local".to_string(),
+                    mangled_name: "adler32_local".to_string(),
+                    is_static: true,
+                    return_type: CppType::Int { signed: true },
+                    params: vec![("x".to_string(), CppType::Int { signed: true })],
+                    is_definition: true,
+                    is_variadic: false,
+                    is_noexcept: false,
+                    is_coroutine: false,
+                    coroutine_info: None,
+                },
+                vec![make_node(
+                    ClangNodeKind::CompoundStmt,
+                    vec![make_node(
+                        ClangNodeKind::ReturnStmt,
+                        vec![make_node(
+                            ClangNodeKind::DeclRefExpr {
+                                name: "x".to_string(),
+                                ty: CppType::Int { signed: true },
+                                namespace_path: vec![],
+                            },
+                            vec![],
+                        )],
+                    )],
+                )],
+            )],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("pub fn adler32_local(x: i32) -> i32 {"),
+            "static definition should remain a regular Rust function, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("pub extern \"C\" fn adler32_local("),
+            "static definition should not export a C ABI symbol, got:\n{}",
             code
         );
     }
@@ -30776,6 +30866,7 @@ mod tests {
                     ClangNodeKind::FunctionDecl {
                         name: "chain_assign".to_string(),
                         mangled_name: "chain_assign".to_string(),
+                        is_static: false,
                         return_type: CppType::Int { signed: true },
                         params: vec![("s".to_string(), state_ptr_ty)],
                         is_definition: true,
@@ -30947,6 +31038,7 @@ mod tests {
                     ClangNodeKind::FunctionDecl {
                         name: "assign_codes_ptr".to_string(),
                         mangled_name: "assign_codes_ptr".to_string(),
+                        is_static: false,
                         return_type: CppType::Int { signed: true },
                         params: vec![("state".to_string(), state_ptr_ty)],
                         is_definition: true,
@@ -31084,6 +31176,7 @@ mod tests {
                     ClangNodeKind::FunctionDecl {
                         name: "compare_codes_ptr".to_string(),
                         mangled_name: "compare_codes_ptr".to_string(),
+                        is_static: false,
                         return_type: CppType::Int { signed: true },
                         params: vec![("state".to_string(), state_ptr_ty)],
                         is_definition: true,
@@ -31226,6 +31319,7 @@ mod tests {
                     ClangNodeKind::FunctionDecl {
                         name: "fix_pending".to_string(),
                         mangled_name: "fix_pending".to_string(),
+                        is_static: false,
                         return_type: CppType::Int { signed: true },
                         params: vec![
                             ("ds".to_string(), state_ptr_ty.clone()),
@@ -31327,6 +31421,7 @@ mod tests {
                 ClangNodeKind::FunctionDecl {
                     name: "call_fp".to_string(),
                     mangled_name: "call_fp".to_string(),
+                    is_static: false,
                     return_type: CppType::Int { signed: true },
                     params: vec![
                         ("fp".to_string(), fn_ptr_ty.clone()),
@@ -31420,6 +31515,7 @@ mod tests {
                     ClangNodeKind::FunctionDecl {
                         name: "id_fp".to_string(),
                         mangled_name: "id_fp".to_string(),
+                        is_static: false,
                         return_type: alias_ty.clone(),
                         params: vec![("fp".to_string(), alias_ty.clone())],
                         is_definition: true,
@@ -31491,6 +31587,7 @@ mod tests {
                     ClangNodeKind::FunctionDecl {
                         name: "assign_fp".to_string(),
                         mangled_name: "assign_fp".to_string(),
+                        is_static: false,
                         return_type: alias_ty.clone(),
                         params: vec![
                             ("f".to_string(), alias_ty.clone()),
@@ -31570,6 +31667,7 @@ mod tests {
                 ClangNodeKind::FunctionDecl {
                     name: "max".to_string(),
                     mangled_name: "_Z3maxii".to_string(),
+                    is_static: false,
                     return_type: CppType::Int { signed: true },
                     params: vec![
                         ("a".to_string(), CppType::Int { signed: true }),
@@ -31656,6 +31754,7 @@ mod tests {
                 ClangNodeKind::FunctionDecl {
                     name: "shift_expr".to_string(),
                     mangled_name: "_Z10shift_exprv".to_string(),
+                    is_static: false,
                     return_type: CppType::Int { signed: true },
                     params: vec![],
                     is_definition: true,
@@ -31731,6 +31830,7 @@ mod tests {
                 ClangNodeKind::FunctionDecl {
                     name: "normalize_have".to_string(),
                     mangled_name: "_Z14normalize_havej".to_string(),
+                    is_static: false,
                     return_type: CppType::Int { signed: true },
                     params: vec![("bi_valid".to_string(), CppType::Int { signed: false })],
                     is_definition: true,
@@ -31913,6 +32013,7 @@ mod tests {
                     ClangNodeKind::FunctionDecl {
                         name: "assign_shift".to_string(),
                         mangled_name: "assign_shift".to_string(),
+                        is_static: false,
                         return_type: CppType::Int { signed: true },
                         params: vec![("s".to_string(), state_ptr_ty.clone())],
                         is_definition: true,
@@ -32226,6 +32327,7 @@ mod tests {
                     ClangNodeKind::FunctionDecl {
                         name: "set_mode".to_string(),
                         mangled_name: "set_mode".to_string(),
+                        is_static: false,
                         return_type: CppType::Int { signed: true },
                         params: vec![("state".to_string(), state_ptr_ty.clone())],
                         is_definition: true,
@@ -32343,6 +32445,7 @@ mod tests {
                     ClangNodeKind::FunctionDecl {
                         name: "set_mode".to_string(),
                         mangled_name: "set_mode".to_string(),
+                        is_static: false,
                         return_type: CppType::Int { signed: true },
                         params: vec![("state".to_string(), state_ptr_ty.clone())],
                         is_definition: true,
@@ -32447,6 +32550,7 @@ mod tests {
                     ClangNodeKind::FunctionDecl {
                         name: "take_kind".to_string(),
                         mangled_name: "take_kind".to_string(),
+                        is_static: false,
                         return_type: CppType::Int { signed: true },
                         params: vec![("kind".to_string(), enum_ty.clone())],
                         is_definition: true,
@@ -32473,6 +32577,7 @@ mod tests {
                     ClangNodeKind::FunctionDecl {
                         name: "call_take".to_string(),
                         mangled_name: "call_take".to_string(),
+                        is_static: false,
                         return_type: CppType::Int { signed: true },
                         params: vec![],
                         is_definition: true,
@@ -32560,6 +32665,7 @@ mod tests {
                     ClangNodeKind::FunctionDecl {
                         name: "take_kind".to_string(),
                         mangled_name: "take_kind".to_string(),
+                        is_static: false,
                         return_type: CppType::Int { signed: true },
                         params: vec![("kind".to_string(), enum_ty.clone())],
                         is_definition: true,
@@ -32586,6 +32692,7 @@ mod tests {
                     ClangNodeKind::FunctionDecl {
                         name: "call_take".to_string(),
                         mangled_name: "call_take".to_string(),
+                        is_static: false,
                         return_type: CppType::Int { signed: true },
                         params: vec![],
                         is_definition: true,
@@ -32687,6 +32794,7 @@ mod tests {
                     ClangNodeKind::FunctionDecl {
                         name: "return_block_state".to_string(),
                         mangled_name: "return_block_state".to_string(),
+                        is_static: false,
                         return_type: CppType::Named("block_state".to_string()),
                         params: vec![("last".to_string(), CppType::Int { signed: true })],
                         is_definition: true,
@@ -32779,6 +32887,7 @@ mod tests {
                 ClangNodeKind::FunctionDecl {
                     name: "compute".to_string(),
                     mangled_name: "_Z7computev".to_string(),
+                    is_static: false,
                     return_type: CppType::Named("Task<int>".to_string()),
                     params: vec![],
                     is_definition: true,
@@ -32836,6 +32945,7 @@ mod tests {
                 ClangNodeKind::FunctionDecl {
                     name: "range".to_string(),
                     mangled_name: "_Z5rangev".to_string(),
+                    is_static: false,
                     return_type: CppType::Named("Generator<int>".to_string()),
                     params: vec![],
                     is_definition: true,
@@ -32964,6 +33074,7 @@ mod tests {
                 ClangNodeKind::FunctionDecl {
                     name: "custom".to_string(),
                     mangled_name: "_Z6customv".to_string(),
+                    is_static: false,
                     return_type: CppType::Named("CustomCoroutine".to_string()),
                     params: vec![],
                     is_definition: true,
@@ -33000,6 +33111,7 @@ mod tests {
                 ClangNodeKind::FunctionDecl {
                     name: "regular".to_string(),
                     mangled_name: "_Z7regularv".to_string(),
+                    is_static: false,
                     return_type: CppType::Int { signed: true },
                     params: vec![],
                     is_definition: true,
@@ -33048,6 +33160,7 @@ mod tests {
                 ClangNodeKind::FunctionDecl {
                     name: "my_printf".to_string(),
                     mangled_name: "my_printf".to_string(),
+                    is_static: false,
                     return_type: CppType::Int { signed: true },
                     params: vec![(
                         "fmt".to_string(),

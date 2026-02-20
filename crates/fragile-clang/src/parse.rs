@@ -723,6 +723,8 @@ impl ClangParser {
                 clang_sys::CXCursor_FunctionDecl => {
                     let name = cursor_spelling(cursor);
                     let mangled_name = cursor_mangled_name(cursor);
+                    let storage_class = clang_sys::clang_Cursor_getStorageClass(cursor);
+                    let is_static = storage_class == clang_sys::CX_SC_Static;
                     let cursor_type = clang_sys::clang_getCursorType(cursor);
                     let return_type =
                         self.convert_type(clang_sys::clang_getResultType(cursor_type));
@@ -780,6 +782,7 @@ impl ClangParser {
                     ClangNodeKind::FunctionDecl {
                         name,
                         mangled_name,
+                        is_static,
                         return_type,
                         params,
                         is_definition,

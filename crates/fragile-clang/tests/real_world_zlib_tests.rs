@@ -1849,6 +1849,101 @@ fn collect_object_targets_for_link_replay(
     Ok((object_targets, archive_members))
 }
 
+struct RustRuntimeSupportInputs {
+    archive_path: PathBuf,
+    archive_size: u64,
+    native_static_libs: Vec<String>,
+}
+
+fn parse_native_static_libs_from_rustc_stderr(stderr: &str) -> Result<Vec<String>, String> {
+    for line in stderr.lines() {
+        let Some((_, libs_text)) = line.split_once("native-static-libs:") else {
+            continue;
+        };
+        let libs: Vec<String> = libs_text
+            .split_whitespace()
+            .filter(|token| token.starts_with("-l") || token.starts_with("-Wl,"))
+            .map(ToString::to_string)
+            .collect();
+        if libs.is_empty() {
+            return Err(
+                "rustc reported native-static-libs but no link flags were parsed".to_string()
+            );
+        }
+        return Ok(libs);
+    }
+    Err("rustc did not report native-static-libs in stderr".to_string())
+}
+
+fn build_rust_runtime_support_inputs(log_dir: &Path) -> Result<RustRuntimeSupportInputs, String> {
+    let runtime_source_path = log_dir.join("link_runtime_support.rs");
+    fs::write(
+        &runtime_source_path,
+        "#[no_mangle]\npub extern \"C\" fn fragile_runtime_support_anchor() {}\n",
+    )
+    .map_err(|e| {
+        format!(
+            "failed to write runtime support source {}: {}",
+            runtime_source_path.display(),
+            e
+        )
+    })?;
+
+    let archive_path = log_dir.join("libfragile_runtime_support.a");
+    let rustc_output = Command::new("rustc")
+        .arg("--edition")
+        .arg("2021")
+        .arg("--crate-type")
+        .arg("staticlib")
+        .arg("--crate-name")
+        .arg("fragile_link_runtime_support")
+        .arg(&runtime_source_path)
+        .arg("-o")
+        .arg(&archive_path)
+        .arg("--print")
+        .arg("native-static-libs")
+        .output()
+        .map_err(|e| {
+            format!(
+                "failed to run rustc for runtime support archive {}: {}",
+                archive_path.display(),
+                e
+            )
+        })?;
+    write_command_capture(log_dir, "rustc_link_runtime_support", &rustc_output)?;
+    if !rustc_output.status.success() {
+        return Err(format!(
+            "runtime support archive rustc build failed with status {} (logs: {})",
+            status_code(&rustc_output),
+            log_dir.display()
+        ));
+    }
+
+    let archive_size = fs::metadata(&archive_path)
+        .map_err(|e| {
+            format!(
+                "failed to stat runtime support archive {}: {}",
+                archive_path.display(),
+                e
+            )
+        })?
+        .len();
+    if archive_size == 0 {
+        return Err(format!(
+            "runtime support archive {} is empty",
+            archive_path.display()
+        ));
+    }
+
+    let native_static_libs =
+        parse_native_static_libs_from_rustc_stderr(&String::from_utf8_lossy(&rustc_output.stderr))?;
+    Ok(RustRuntimeSupportInputs {
+        archive_path,
+        archive_size,
+        native_static_libs,
+    })
+}
+
 fn transpile_objects_for_link_replay(
     source_dir: &Path,
     log_dir: &Path,
@@ -2012,6 +2107,7 @@ fn replay_required_link_outputs(
     source_dir: &Path,
     log_dir: &Path,
     link_units: &[(String, Vec<String>)],
+    runtime_support: &RustRuntimeSupportInputs,
 ) -> Result<Vec<(String, u64)>, String> {
     let mut relinked_outputs: Vec<(String, u64)> = Vec::new();
     for (output_rel, inputs_rel) in link_units {
@@ -2043,6 +2139,10 @@ fn replay_required_link_outputs(
                 ));
             }
             link_cmd.arg(input_path);
+        }
+        link_cmd.arg(&runtime_support.archive_path);
+        for native_lib in &runtime_support.native_static_libs {
+            link_cmd.arg(native_lib);
         }
 
         let output_path = resolve_manifest_path(source_dir, output_rel);
@@ -2098,15 +2198,19 @@ fn replay_required_link_outputs(
 fn write_fragile_link_manifest(
     log_dir: &Path,
     source_dir: &Path,
+    runtime_support: &RustRuntimeSupportInputs,
     transpiled_objects: &[(String, String, PathBuf, u64)],
     archive_members: &std::collections::BTreeMap<String, Vec<String>>,
     relinked_outputs: &[(String, u64)],
 ) -> Result<(), String> {
     let head = read_head(source_dir).unwrap_or_else(|| "unknown".to_string());
     let mut manifest = format!(
-        "source_dir={}\ncommit={}\ntranspiled_object_count={}\narchive_rebuild_count={}\nrelinked_output_count={}\n",
+        "source_dir={}\ncommit={}\nruntime_support_archive={}\nruntime_support_archive_size={}\nruntime_support_native_static_libs={}\ntranspiled_object_count={}\narchive_rebuild_count={}\nrelinked_output_count={}\n",
         source_dir.display(),
         head.trim(),
+        runtime_support.archive_path.display(),
+        runtime_support.archive_size,
+        runtime_support.native_static_libs.join(" "),
         transpiled_objects.len(),
         archive_members.len(),
         relinked_outputs.len(),
@@ -2182,12 +2286,15 @@ fn replay_required_link_binaries_from_manifests_in_tree(
         collect_object_targets_for_link_replay(source_dir, &link_units)?;
     let transpiled_objects =
         transpile_objects_for_link_replay(source_dir, log_dir, &driver_log, &object_targets)?;
+    let runtime_support = build_rust_runtime_support_inputs(log_dir)?;
     rebuild_static_archives_for_link_replay(source_dir, log_dir, &archive_members)?;
-    let relinked_outputs = replay_required_link_outputs(source_dir, log_dir, &link_units)?;
+    let relinked_outputs =
+        replay_required_link_outputs(source_dir, log_dir, &link_units, &runtime_support)?;
 
     write_fragile_link_manifest(
         log_dir,
         source_dir,
+        &runtime_support,
         &transpiled_objects,
         &archive_members,
         &relinked_outputs,
@@ -4881,6 +4988,26 @@ fn test_fragile_link_required_binaries_local_fixture_success() {
         "0",
         "expected tiny.o transpile+compile replay to succeed"
     );
+    assert_eq!(
+        fs::read_to_string(log_dir.join("rustc_link_runtime_support.status"))
+            .expect("failed to read rustc_link_runtime_support.status")
+            .trim(),
+        "0",
+        "expected runtime support staticlib build to succeed"
+    );
+    let runtime_support_archive = log_dir.join("libfragile_runtime_support.a");
+    assert!(
+        runtime_support_archive.exists(),
+        "runtime support archive should exist at {}",
+        runtime_support_archive.display()
+    );
+    let runtime_support_size = fs::metadata(&runtime_support_archive)
+        .expect("failed to stat runtime support archive")
+        .len();
+    assert!(
+        runtime_support_size > 0,
+        "runtime support archive should be non-empty"
+    );
     assert!(
         !log_dir.join("fragile_link_manifest.txt").exists(),
         "strict required-link replay should not write fragile link manifest on failure"
@@ -4914,6 +5041,11 @@ fn test_fragile_link_required_binaries_local_fixture_success() {
     assert!(
         !first_failing_stderr.trim().is_empty(),
         "strict required-link replay failing step should include linker diagnostics"
+    );
+    assert!(
+        !first_failing_stderr.contains("core::panicking::panic"),
+        "runtime-link leaf should clear Rust runtime unresolved-symbol diagnostics: {}",
+        first_failing_stderr
     );
 
     let _ = fs::remove_dir_all(&root);
@@ -5650,6 +5782,12 @@ fn test_real_world_zlib_make_test_command_subset_replay() {
             .trim(),
         "0"
     );
+    assert_eq!(
+        fs::read_to_string(log_dir.join("rustc_link_runtime_support.status"))
+            .expect("failed to read rustc_link_runtime_support.status")
+            .trim(),
+        "0"
+    );
     assert!(
         !log_dir.join("make_test_dryrun.status").exists(),
         "make-test dry-run should not execute when strict link replay fails first"
@@ -5696,6 +5834,16 @@ fn test_real_world_zlib_make_test_command_subset_replay() {
         !stderr.trim().is_empty(),
         "strict link replay failure should emit linker diagnostics for {}",
         first_failing_step
+    );
+    assert!(
+        stderr.contains("_dist_code") || stderr.contains("_length_code"),
+        "expected post-runtime-link first blocker to be unresolved C globals (_dist_code/_length_code): {}",
+        stderr
+    );
+    assert!(
+        !stderr.contains("core::panicking::panic"),
+        "runtime-link leaf should clear Rust runtime unresolved-symbol diagnostics: {}",
+        stderr
     );
 }
 
@@ -5796,6 +5944,25 @@ fn test_real_world_zlib_fragile_required_link_binaries_replay() {
             .trim(),
         "0"
     );
+    assert_eq!(
+        fs::read_to_string(log_dir.join("rustc_link_runtime_support.status"))
+            .expect("failed to read rustc_link_runtime_support.status")
+            .trim(),
+        "0"
+    );
+    let runtime_support_archive = log_dir.join("libfragile_runtime_support.a");
+    assert!(
+        runtime_support_archive.exists(),
+        "expected runtime support archive {}",
+        runtime_support_archive.display()
+    );
+    let runtime_support_size = fs::metadata(&runtime_support_archive)
+        .expect("failed to stat runtime support archive")
+        .len();
+    assert!(
+        runtime_support_size > 0,
+        "runtime support archive should be non-empty"
+    );
 
     assert!(
         !log_dir.join("fragile_link_manifest.txt").exists(),
@@ -5834,6 +6001,17 @@ fn test_real_world_zlib_fragile_required_link_binaries_replay() {
     assert!(
         !first_failing_stderr.trim().is_empty(),
         "strict required-link replay failing step should include stderr diagnostics"
+    );
+    assert!(
+        first_failing_stderr.contains("_dist_code")
+            || first_failing_stderr.contains("_length_code"),
+        "expected post-runtime-link first blocker to be unresolved C globals (_dist_code/_length_code): {}",
+        first_failing_stderr
+    );
+    assert!(
+        !first_failing_stderr.contains("core::panicking::panic"),
+        "runtime-link leaf should clear Rust runtime unresolved-symbol diagnostics: {}",
+        first_failing_stderr
     );
 }
 
