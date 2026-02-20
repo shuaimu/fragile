@@ -28,8 +28,9 @@ Run upstream-style tests through the Fragile transpiler with runtime parity:
       - [x] Fix `crc32.c` transpiled replay compile failure (`wrapping_shl` ambiguous integer literal typing) in source-faithful codegen.
       - [x] Fix `.c` unit parsing mode mismatch in OBJZ replay (`deflate.c` `register` rejected under C++17 parser mode).
       - [x] Fix `deflate.c` transpiled replay compile failure for `configuration_table` initializer (`config { ... }` positional initializer emitted as invalid Rust struct literal).
-      - [ ] Fix `deflate.c` transpiled replay compile failure for chained comparisons emitted from C integer-bool normalization (invalid Rust `a != b != 0` forms).
+      - [x] Fix `deflate.c` transpiled replay compile failure for chained comparisons emitted from C integer-bool normalization (invalid Rust `a != b != 0` forms).
       - [ ] Re-run full `OBJZ` replay and confirm all expected OBJZ objects compile and are non-empty.
+        - Latest replay no longer emits chained `a != b != 0` forms in `deflate` output; next first `deflate` compiler blocker is cast-vs-`<` precedence (`(dist) as i32 < 256` needs explicit cast grouping in emitted Rust).
     - [ ] Replay `OBJG` units through Fragile to `.o` outputs and validate object completeness.
   - [ ] Link transpiled static/shared test binaries used by upstream tests (`example`, `minigzip`, `examplesh`, `minigzipsh`, `example64`, `minigzip64`).
 - [ ] Make transpiled build pass zlib test commands used by upstream `make test`.
