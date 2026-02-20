@@ -6,7 +6,9 @@
 use std::collections::BTreeSet;
 use std::fs;
 use std::io::ErrorKind;
-use std::path::{Path, PathBuf};
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Output};
 use std::thread::sleep;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -17,6 +19,9 @@ const TINYXML2_CACHE_DIR: &str = "/tmp/fragile_real_world_tinyxml2";
 const TINYXML2_NATIVE_BASELINE_DIR: &str = "/tmp/fragile_real_world_tinyxml2_native_baseline";
 const TINYXML2_MAKE_TEST_COMMAND_PLAN_DIR: &str =
     "/tmp/fragile_real_world_tinyxml2_make_test_command_plan";
+const TINYXML2_MAKE_TEST_REPLAY_NATIVE_DIR: &str =
+    "/tmp/fragile_real_world_tinyxml2_make_test_replay_native";
+const TINYXML2_CXX_DRIVER_XMLTEST_DIR: &str = "/tmp/fragile_real_world_tinyxml2_cxx_driver_xmltest";
 const TINYXML2_REQUIRED_PATHS: &[&str] = &[
     "tinyxml2.h",
     "tinyxml2.cpp",
@@ -37,6 +42,18 @@ const TINYXML2_MAKE_TEST_COMMAND_PLAN_LOG_FILES: &[&str] = &[
     "make_test_dryrun.stderr",
     "make_test_commands_manifest.txt",
 ];
+const TINYXML2_CXX_DRIVER_LOG_FILES: &[&str] = &[
+    "make_clean_driver.status",
+    "make_clean_driver.stdout",
+    "make_clean_driver.stderr",
+    "make_xmltest_driver.status",
+    "make_xmltest_driver.stdout",
+    "make_xmltest_driver.stderr",
+    "cxx_driver.log",
+    "cxx_driver_manifest.txt",
+    "compile_units_manifest.txt",
+];
+const TINYXML2_MAKE_TEST_REPLAY_COMMAND_TIMEOUT_SECONDS: u64 = 15;
 
 fn run_git(args: &[&str], cwd: Option<&Path>) -> Result<Output, String> {
     let mut cmd = Command::new("git");
@@ -232,6 +249,306 @@ fn reset_dir(path: &Path) -> Result<(), String> {
             .map_err(|e| format!("failed to remove {}: {}", path.display(), e))?;
     }
     fs::create_dir_all(path).map_err(|e| format!("failed to create {}: {}", path.display(), e))
+}
+
+fn make_executable(path: &Path) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        let mut perms = fs::metadata(path)
+            .map_err(|e| format!("failed to stat {}: {}", path.display(), e))?
+            .permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(path, perms)
+            .map_err(|e| format!("failed to chmod {}: {}", path.display(), e))?;
+    }
+    Ok(())
+}
+
+fn normalize_slashes(path: &str) -> String {
+    path.replace('\\', "/")
+}
+
+fn lexical_normalize(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for comp in path.components() {
+        match comp {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                let _ = out.pop();
+            }
+            _ => out.push(comp.as_os_str()),
+        }
+    }
+    out
+}
+
+fn normalize_path_for_manifest(raw: &str, cwd: &Path, source_root: &Path) -> String {
+    let raw_path = Path::new(raw);
+    let absolute = if raw_path.is_absolute() {
+        raw_path.to_path_buf()
+    } else {
+        cwd.join(raw_path)
+    };
+    let absolute = lexical_normalize(&absolute);
+    let source_root = lexical_normalize(source_root);
+    if let Ok(rel) = absolute.strip_prefix(&source_root) {
+        normalize_slashes(rel.to_string_lossy().as_ref())
+    } else {
+        normalize_slashes(absolute.to_string_lossy().as_ref())
+    }
+}
+
+fn is_c_family_source_token(token: &str) -> bool {
+    let lower = token.to_ascii_lowercase();
+    lower.ends_with(".c")
+        || lower.ends_with(".cc")
+        || lower.ends_with(".cpp")
+        || lower.ends_with(".cxx")
+        || lower.ends_with(".c++")
+}
+
+fn parse_compile_units_from_cxx_driver_log(
+    driver_log: &str,
+    source_dir: &Path,
+) -> Result<Vec<(String, String)>, String> {
+    let mut units: BTreeSet<(String, String)> = BTreeSet::new();
+    let mut pending_cwd: Option<PathBuf> = None;
+
+    for line in driver_log.lines() {
+        if let Some(cwd_raw) = line.strip_prefix("cwd=") {
+            pending_cwd = Some(PathBuf::from(cwd_raw.trim()));
+            continue;
+        }
+
+        let Some(args_raw) = line.strip_prefix("args=") else {
+            continue;
+        };
+        let command_cwd = pending_cwd
+            .as_ref()
+            .cloned()
+            .unwrap_or_else(|| source_dir.to_path_buf());
+        let tokens: Vec<&str> = args_raw.split_whitespace().collect();
+        if tokens.is_empty() || !tokens.iter().any(|tok| *tok == "-c") {
+            continue;
+        }
+
+        let mut source_token: Option<&str> = None;
+        let mut object_token: Option<&str> = None;
+        let mut idx = 0usize;
+        while idx < tokens.len() {
+            let tok = tokens[idx];
+            if tok == "-o" {
+                if let Some(next) = tokens.get(idx + 1) {
+                    object_token = Some(*next);
+                }
+                idx += 2;
+                continue;
+            }
+            if let Some(rest) = tok.strip_prefix("-o") {
+                if !rest.is_empty() {
+                    object_token = Some(rest);
+                }
+                idx += 1;
+                continue;
+            }
+            if source_token.is_none() && !tok.starts_with('-') && is_c_family_source_token(tok) {
+                source_token = Some(tok);
+            }
+            idx += 1;
+        }
+
+        let (source_raw, object_raw) = match (source_token, object_token) {
+            (Some(source_raw), Some(object_raw)) => (source_raw, object_raw),
+            _ => continue,
+        };
+        let source_rel = normalize_path_for_manifest(source_raw, &command_cwd, source_dir);
+        let object_rel = normalize_path_for_manifest(object_raw, &command_cwd, source_dir);
+        units.insert((source_rel, object_rel));
+    }
+
+    if units.is_empty() {
+        return Err("no compile units found in cxx_driver.log".to_string());
+    }
+    Ok(units.into_iter().collect())
+}
+
+fn write_compile_units_manifest_from_cxx_driver_log(
+    log_dir: &Path,
+    source_dir: &Path,
+) -> Result<usize, String> {
+    let driver_log_path = log_dir.join("cxx_driver.log");
+    let driver_log = fs::read_to_string(&driver_log_path)
+        .map_err(|e| format!("failed to read {}: {}", driver_log_path.display(), e))?;
+    let units = parse_compile_units_from_cxx_driver_log(&driver_log, source_dir)?;
+
+    let mut manifest = format!(
+        "source_dir={}\ncompile_units_count={}\n",
+        source_dir.display(),
+        units.len()
+    );
+    for (source_rel, object_rel) in &units {
+        manifest.push_str(&format!("source={} object={}\n", source_rel, object_rel));
+    }
+    fs::write(log_dir.join("compile_units_manifest.txt"), manifest).map_err(|e| {
+        format!(
+            "failed to write compile units manifest at {}: {}",
+            log_dir.display(),
+            e
+        )
+    })?;
+    Ok(units.len())
+}
+
+fn create_logging_cxx_driver(driver_dir: &Path, log_path: &Path) -> Result<PathBuf, String> {
+    fs::create_dir_all(driver_dir).map_err(|e| {
+        format!(
+            "failed to create CXX driver dir {}: {}",
+            driver_dir.display(),
+            e
+        )
+    })?;
+
+    if let Some(parent) = log_path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|e| format!("failed to create CXX log dir {}: {}", parent.display(), e))?;
+    }
+    fs::write(log_path, "").map_err(|e| {
+        format!(
+            "failed to initialize CXX driver log {}: {}",
+            log_path.display(),
+            e
+        )
+    })?;
+
+    let driver_path = driver_dir.join("fragile_tinyxml2_cxx_driver.sh");
+    let script = r#"#!/bin/sh
+set -eu
+log_file="${FRAGILE_TINYXML2_CXX_DRIVER_LOG:-}"
+if [ -z "$log_file" ]; then
+  echo "FRAGILE_TINYXML2_CXX_DRIVER_LOG is required" 1>&2
+  exit 97
+fi
+{
+  printf 'cwd=%s\n' "$(pwd)"
+  printf 'args='
+  printf '%s ' "$@"
+  printf '\n'
+} >> "$log_file"
+exec c++ "$@"
+"#;
+
+    fs::write(&driver_path, script).map_err(|e| {
+        format!(
+            "failed to write CXX driver script {}: {}",
+            driver_path.display(),
+            e
+        )
+    })?;
+    make_executable(&driver_path)?;
+    Ok(driver_path)
+}
+
+fn write_cxx_driver_manifest(
+    log_dir: &Path,
+    source_dir: &Path,
+    make_target: &str,
+) -> Result<(), String> {
+    let head = read_head(source_dir).unwrap_or_else(|| "unknown".to_string());
+    let manifest = format!(
+        "source_dir={}\ncommit={}\nmake_target={}\n",
+        source_dir.display(),
+        head.trim(),
+        make_target
+    );
+    fs::write(log_dir.join("cxx_driver_manifest.txt"), manifest).map_err(|e| {
+        format!(
+            "failed to write CXX driver manifest at {}: {}",
+            log_dir.display(),
+            e
+        )
+    })
+}
+
+fn run_cxx_driver_xmltest_baseline_in_tree(
+    source_dir: &Path,
+    log_dir: &Path,
+) -> Result<(), String> {
+    if !source_dir.join("Makefile").exists() {
+        return Err(format!(
+            "CXX-driver baseline source {} is missing Makefile",
+            source_dir.display()
+        ));
+    }
+
+    fs::create_dir_all(log_dir).map_err(|e| {
+        format!(
+            "failed to create CXX-driver baseline log dir {}: {}",
+            log_dir.display(),
+            e
+        )
+    })?;
+    let cxx_driver_log = log_dir.join("cxx_driver.log");
+    let cxx_driver = create_logging_cxx_driver(log_dir, &cxx_driver_log)?;
+    let cxx_driver_str = cxx_driver.to_string_lossy().to_string();
+    let cxx_driver_log_str = cxx_driver_log.to_string_lossy().to_string();
+
+    let mut make_clean = Command::new("make");
+    make_clean.arg("clean").current_dir(source_dir);
+    make_clean
+        .env("CXX", cxx_driver_str.as_str())
+        .env(
+            "FRAGILE_TINYXML2_CXX_DRIVER_LOG",
+            cxx_driver_log_str.as_str(),
+        )
+        .env("LC_ALL", "C")
+        .env("LANG", "C")
+        .env("MAKEFLAGS", "-j1");
+    let make_clean_output = make_clean.output().map_err(|e| {
+        format!(
+            "failed to run CXX-driver make clean at {}: {}",
+            source_dir.display(),
+            e
+        )
+    })?;
+    write_command_capture(log_dir, "make_clean_driver", &make_clean_output)?;
+    if !make_clean_output.status.success() {
+        return Err(format!(
+            "CXX-driver make clean failed with status {} (logs: {})",
+            status_code(&make_clean_output),
+            log_dir.display()
+        ));
+    }
+
+    let mut make_xmltest = Command::new("make");
+    make_xmltest.arg("xmltest").current_dir(source_dir);
+    make_xmltest
+        .env("CXX", cxx_driver_str.as_str())
+        .env(
+            "FRAGILE_TINYXML2_CXX_DRIVER_LOG",
+            cxx_driver_log_str.as_str(),
+        )
+        .env("LC_ALL", "C")
+        .env("LANG", "C")
+        .env("MAKEFLAGS", "-j1");
+    let make_xmltest_output = make_xmltest.output().map_err(|e| {
+        format!(
+            "failed to run CXX-driver make xmltest at {}: {}",
+            source_dir.display(),
+            e
+        )
+    })?;
+    write_command_capture(log_dir, "make_xmltest_driver", &make_xmltest_output)?;
+    if !make_xmltest_output.status.success() {
+        return Err(format!(
+            "CXX-driver make xmltest failed with status {} (logs: {})",
+            status_code(&make_xmltest_output),
+            log_dir.display()
+        ));
+    }
+
+    write_cxx_driver_manifest(log_dir, source_dir, "xmltest")?;
+    write_compile_units_manifest_from_cxx_driver_log(log_dir, source_dir)?;
+    Ok(())
 }
 
 fn write_baseline_manifest(log_dir: &Path, source_dir: &Path) -> Result<(), String> {
@@ -520,6 +837,162 @@ fn parse_make_test_commands_manifest_entries(manifest_text: &str) -> Result<Vec<
     Ok(commands)
 }
 
+fn make_test_replay_step_name(idx: usize) -> String {
+    format!("make_test_replay_{:02}", idx + 1)
+}
+
+fn run_make_test_replay_command_with_timeout_in_tree(
+    source_dir: &Path,
+    command_line: &str,
+    timeout_seconds: u64,
+) -> Result<Output, String> {
+    let mut cmd = Command::new("timeout");
+    cmd.arg(format!("{}s", timeout_seconds))
+        .arg("sh")
+        .arg("-c")
+        .arg(command_line)
+        .current_dir(source_dir);
+    cmd.env("LC_ALL", "C").env("LANG", "C");
+    cmd.output().map_err(|e| {
+        if e.kind() == ErrorKind::NotFound {
+            format!(
+                "failed to run make-test replay command with timeout: `timeout` command is unavailable at {}",
+                source_dir.display()
+            )
+        } else {
+            format!(
+                "failed to run make-test replay command with timeout at {}: {}",
+                source_dir.display(),
+                e
+            )
+        }
+    })
+}
+
+fn replay_make_test_commands_from_manifest_in_tree(
+    source_dir: &Path,
+    log_dir: &Path,
+) -> Result<usize, String> {
+    let manifest_path = log_dir.join("make_test_commands_manifest.txt");
+    let manifest = fs::read_to_string(&manifest_path)
+        .map_err(|e| format!("failed to read {}: {}", manifest_path.display(), e))?;
+    let commands = parse_make_test_commands_manifest_entries(&manifest)?;
+
+    for (idx, command_line) in commands.iter().enumerate() {
+        let output = run_make_test_replay_command_with_timeout_in_tree(
+            source_dir,
+            command_line,
+            TINYXML2_MAKE_TEST_REPLAY_COMMAND_TIMEOUT_SECONDS,
+        )?;
+        let step = make_test_replay_step_name(idx);
+        write_command_capture(log_dir, &step, &output)?;
+        if !output.status.success() {
+            let status = status_code(&output);
+            if status == 124 {
+                return Err(format!(
+                    "make-test command replay timed out at command {} after {}s: {} (logs: {})",
+                    idx + 1,
+                    TINYXML2_MAKE_TEST_REPLAY_COMMAND_TIMEOUT_SECONDS,
+                    command_line,
+                    log_dir.display()
+                ));
+            }
+            return Err(format!(
+                "make-test command replay failed at command {} with status {}: {} (logs: {})",
+                idx + 1,
+                status,
+                command_line,
+                log_dir.display()
+            ));
+        }
+    }
+
+    let mut replay_manifest = format!(
+        "source_dir={}\ncommand_replay_count={}\n",
+        source_dir.display(),
+        commands.len()
+    );
+    for (idx, command_line) in commands.iter().enumerate() {
+        replay_manifest.push_str(&format!(
+            "replay_step={} command={}\n",
+            make_test_replay_step_name(idx),
+            command_line
+        ));
+    }
+    fs::write(
+        log_dir.join("make_test_replay_manifest.txt"),
+        replay_manifest,
+    )
+    .map_err(|e| {
+        format!(
+            "failed to write make-test replay manifest at {}: {}",
+            log_dir.display(),
+            e
+        )
+    })?;
+
+    Ok(commands.len())
+}
+
+fn run_make_test_command_replay_in_tree(source_dir: &Path, log_dir: &Path) -> Result<(), String> {
+    run_make_test_command_plan_in_tree(source_dir, log_dir)?;
+    replay_make_test_commands_from_manifest_in_tree(source_dir, log_dir)?;
+    Ok(())
+}
+
+fn run_make_xmltest_build_in_tree(
+    source_dir: &Path,
+    log_dir: &Path,
+    step_name: &str,
+) -> Result<(), String> {
+    fs::create_dir_all(log_dir).map_err(|e| {
+        format!(
+            "failed to create replay log dir {}: {}",
+            log_dir.display(),
+            e
+        )
+    })?;
+
+    let mut make_xmltest = Command::new("make");
+    make_xmltest.arg("xmltest").current_dir(source_dir);
+    make_xmltest
+        .env("LC_ALL", "C")
+        .env("LANG", "C")
+        .env("MAKEFLAGS", "-j1");
+    let make_xmltest_output = make_xmltest.output().map_err(|e| {
+        format!(
+            "failed to run make xmltest at {}: {}",
+            source_dir.display(),
+            e
+        )
+    })?;
+    write_command_capture(log_dir, step_name, &make_xmltest_output)?;
+    if !make_xmltest_output.status.success() {
+        return Err(format!(
+            "make xmltest failed with status {} (logs: {})",
+            status_code(&make_xmltest_output),
+            log_dir.display()
+        ));
+    }
+    Ok(())
+}
+
+fn run_tinyxml2_native_make_test_command_replay_in_tree(
+    source_dir: &Path,
+    log_dir: &Path,
+) -> Result<(), String> {
+    run_make_xmltest_build_in_tree(source_dir, log_dir, "make_xmltest_native")?;
+    run_make_test_command_replay_in_tree(source_dir, log_dir)?;
+    Ok(())
+}
+
+fn run_tinyxml2_fragile_make_test_command_replay_in_tree(
+    source_dir: &Path,
+    log_dir: &Path,
+) -> Result<(), String> {
+    run_make_test_command_replay_in_tree(source_dir, log_dir)
+}
+
 fn run_tinyxml2_make_test_command_plan() -> Result<PathBuf, String> {
     let checkout_dir = ensure_tinyxml2_checkout()?;
     let baseline_root = PathBuf::from(TINYXML2_MAKE_TEST_COMMAND_PLAN_DIR);
@@ -554,6 +1027,80 @@ fn run_tinyxml2_make_test_command_plan() -> Result<PathBuf, String> {
 
     let log_dir = baseline_root.join("command_plan_logs");
     run_make_test_command_plan_in_tree(&worktree_dir, &log_dir)?;
+    Ok(log_dir)
+}
+
+fn run_tinyxml2_make_test_command_replay_native() -> Result<PathBuf, String> {
+    let checkout_dir = ensure_tinyxml2_checkout()?;
+    let baseline_root = PathBuf::from(TINYXML2_MAKE_TEST_REPLAY_NATIVE_DIR);
+    reset_dir(&baseline_root)?;
+
+    let worktree_dir = baseline_root.join("worktree");
+    let checkout_dir_str = checkout_dir.to_string_lossy().to_string();
+    let worktree_dir_str = worktree_dir.to_string_lossy().to_string();
+    run_git(
+        &[
+            "clone",
+            "--no-tags",
+            "--local",
+            checkout_dir_str.as_str(),
+            worktree_dir_str.as_str(),
+        ],
+        None,
+    )?;
+    run_git(
+        &["checkout", "--detach", TINYXML2_PINNED_COMMIT],
+        Some(&worktree_dir),
+    )?;
+
+    let actual_head = read_head(&worktree_dir)
+        .ok_or_else(|| format!("failed to read HEAD in {}", worktree_dir.display()))?;
+    if actual_head != TINYXML2_PINNED_COMMIT {
+        return Err(format!(
+            "make-test replay native worktree expected commit {} but got {}",
+            TINYXML2_PINNED_COMMIT, actual_head
+        ));
+    }
+
+    let log_dir = baseline_root.join("replay_logs");
+    run_tinyxml2_native_make_test_command_replay_in_tree(&worktree_dir, &log_dir)?;
+    Ok(log_dir)
+}
+
+fn run_tinyxml2_cxx_driver_xmltest_baseline() -> Result<PathBuf, String> {
+    let checkout_dir = ensure_tinyxml2_checkout()?;
+    let baseline_root = PathBuf::from(TINYXML2_CXX_DRIVER_XMLTEST_DIR);
+    reset_dir(&baseline_root)?;
+
+    let worktree_dir = baseline_root.join("worktree");
+    let checkout_dir_str = checkout_dir.to_string_lossy().to_string();
+    let worktree_dir_str = worktree_dir.to_string_lossy().to_string();
+    run_git(
+        &[
+            "clone",
+            "--no-tags",
+            "--local",
+            checkout_dir_str.as_str(),
+            worktree_dir_str.as_str(),
+        ],
+        None,
+    )?;
+    run_git(
+        &["checkout", "--detach", TINYXML2_PINNED_COMMIT],
+        Some(&worktree_dir),
+    )?;
+
+    let actual_head = read_head(&worktree_dir)
+        .ok_or_else(|| format!("failed to read HEAD in {}", worktree_dir.display()))?;
+    if actual_head != TINYXML2_PINNED_COMMIT {
+        return Err(format!(
+            "CXX-driver xmltest worktree expected commit {} but got {}",
+            TINYXML2_PINNED_COMMIT, actual_head
+        ));
+    }
+
+    let log_dir = baseline_root.join("driver_logs");
+    run_cxx_driver_xmltest_baseline_in_tree(&worktree_dir, &log_dir)?;
     Ok(log_dir)
 }
 
@@ -648,6 +1195,83 @@ fn create_local_tinyxml2_like_repo(base_dir: &Path) -> Result<(String, String, S
         pinned_commit,
         newer_commit,
     ))
+}
+
+fn create_local_tinyxml2_cxx_driver_project(base_dir: &Path) -> Result<PathBuf, String> {
+    let project_dir = base_dir.join("tinyxml2_cxx_driver_project");
+    fs::create_dir_all(&project_dir)
+        .map_err(|e| format!("failed to create {}: {}", project_dir.display(), e))?;
+
+    fs::write(
+        project_dir.join("tinyxml2.h"),
+        "#pragma once\nint tinyxml2_fixture_value(void);\n",
+    )
+    .map_err(|e| format!("failed to write tinyxml2.h: {}", e))?;
+    fs::write(
+        project_dir.join("tinyxml2.cpp"),
+        "#include \"tinyxml2.h\"\nint tinyxml2_fixture_value(void) { return 7; }\n",
+    )
+    .map_err(|e| format!("failed to write tinyxml2.cpp: {}", e))?;
+    fs::write(
+        project_dir.join("xmltest.cpp"),
+        "#include \"tinyxml2.h\"\nint main(void) { return tinyxml2_fixture_value() == 7 ? 0 : 1; }\n",
+    )
+    .map_err(|e| format!("failed to write xmltest.cpp: {}", e))?;
+    fs::write(
+        project_dir.join("Makefile"),
+        "\
+CXX ?= c++\n\
+CXXFLAGS ?= -std=c++11 -O2\n\
+\n\
+xmltest: xmltest.o tinyxml2.o\n\
+\t$(CXX) $(CXXFLAGS) xmltest.o tinyxml2.o -o $@\n\
+\n\
+xmltest.o: xmltest.cpp tinyxml2.h\n\
+\t$(CXX) $(CXXFLAGS) -c xmltest.cpp -o $@\n\
+\n\
+tinyxml2.o: tinyxml2.cpp tinyxml2.h\n\
+\t$(CXX) $(CXXFLAGS) -c tinyxml2.cpp -o $@\n\
+\n\
+test: xmltest\n\
+\t./xmltest\n\
+\n\
+clean:\n\
+\t$(RM) xmltest xmltest.o tinyxml2.o\n",
+    )
+    .map_err(|e| format!("failed to write Makefile: {}", e))?;
+
+    Ok(project_dir)
+}
+
+fn assert_make_test_replay_artifacts_exist(log_dir: &Path) -> Result<usize, String> {
+    let manifest =
+        fs::read_to_string(log_dir.join("make_test_commands_manifest.txt")).map_err(|e| {
+            format!(
+                "failed to read make-test command manifest in {}: {}",
+                log_dir.display(),
+                e
+            )
+        })?;
+    let commands = parse_make_test_commands_manifest_entries(&manifest)?;
+    for (idx, _) in commands.iter().enumerate() {
+        let step = make_test_replay_step_name(idx);
+        for suffix in ["status", "stdout", "stderr"] {
+            let path = log_dir.join(format!("{}.{}", step, suffix));
+            if !path.exists() {
+                return Err(format!("missing replay artifact {}", path.display()));
+            }
+        }
+    }
+
+    let replay_manifest = log_dir.join("make_test_replay_manifest.txt");
+    if !replay_manifest.exists() {
+        return Err(format!(
+            "missing replay manifest {}",
+            replay_manifest.display()
+        ));
+    }
+
+    Ok(commands.len())
 }
 
 #[test]
@@ -911,6 +1535,138 @@ fn test_parse_make_test_commands_from_dry_run_reports_missing_required_binary_in
 }
 
 #[test]
+fn test_parse_compile_units_from_cxx_driver_log_normalizes_and_deduplicates() {
+    let source_dir = Path::new("/tmp/tinyxml2_driver_parse");
+    let driver_log = "\
+cwd=/tmp/tinyxml2_driver_parse\n\
+args=-std=c++11 -O2 -c tinyxml2.cpp -o tinyxml2.o \n\
+cwd=/tmp/tinyxml2_driver_parse\n\
+args=-std=c++11 -O2 -c ./xmltest.cpp -o ./xmltest.o \n\
+cwd=/tmp/tinyxml2_driver_parse\n\
+args=-std=c++11 -O2 -c tinyxml2.cpp -o tinyxml2.o \n";
+
+    let units = parse_compile_units_from_cxx_driver_log(driver_log, source_dir)
+        .expect("CXX-driver parse should capture compile units");
+    assert_eq!(
+        units,
+        vec![
+            ("tinyxml2.cpp".to_string(), "tinyxml2.o".to_string()),
+            ("xmltest.cpp".to_string(), "xmltest.o".to_string())
+        ],
+        "compile-unit parser should normalize paths and deduplicate repeated entries"
+    );
+}
+
+#[test]
+fn test_parse_compile_units_from_cxx_driver_log_reports_missing_units() {
+    let source_dir = Path::new("/tmp/tinyxml2_driver_parse_empty");
+    let driver_log = "\
+cwd=/tmp/tinyxml2_driver_parse_empty\n\
+args=-std=c++11 xmltest.cpp tinyxml2.o -o xmltest \n";
+
+    let err = parse_compile_units_from_cxx_driver_log(driver_log, source_dir)
+        .expect_err("parser should fail when CXX driver log has no compile units");
+    assert!(
+        err.contains("no compile units found in cxx_driver.log"),
+        "missing-unit error should be explicit, got: {}",
+        err
+    );
+}
+
+#[test]
+fn test_cxx_driver_xmltest_baseline_local_fixture_success() {
+    let root = unique_temp_dir("tinyxml2_cxx_driver_xmltest_success");
+    fs::create_dir_all(&root).expect("failed to create test root");
+
+    let project_dir = create_local_tinyxml2_cxx_driver_project(&root)
+        .expect("failed to create local tinyxml2 CXX-driver project");
+    let log_dir = root.join("cxx_driver_logs");
+    run_cxx_driver_xmltest_baseline_in_tree(&project_dir, &log_dir)
+        .expect("CXX-driver baseline should succeed for local fixture");
+
+    for rel in TINYXML2_CXX_DRIVER_LOG_FILES {
+        assert!(
+            log_dir.join(rel).exists(),
+            "expected CXX-driver log artifact {}",
+            log_dir.join(rel).display()
+        );
+    }
+    assert_eq!(
+        read_status_file(&log_dir.join("make_xmltest_driver.status"))
+            .expect("failed to read make_xmltest_driver.status"),
+        0,
+        "make xmltest should succeed for local CXX-driver fixture"
+    );
+    assert_eq!(
+        read_status_file(&log_dir.join("make_clean_driver.status"))
+            .expect("failed to read make_clean_driver.status"),
+        0,
+        "make clean should succeed for local CXX-driver fixture"
+    );
+
+    let compile_manifest = fs::read_to_string(log_dir.join("compile_units_manifest.txt"))
+        .expect("failed to read compile_units_manifest.txt");
+    assert!(
+        compile_manifest.contains("source=tinyxml2.cpp object=tinyxml2.o"),
+        "compile manifest should include tinyxml2 compile unit, got:\n{}",
+        compile_manifest
+    );
+    assert!(
+        compile_manifest.contains("source=xmltest.cpp object=xmltest.o"),
+        "compile manifest should include xmltest compile unit, got:\n{}",
+        compile_manifest
+    );
+
+    let xmltest_status = Command::new("./xmltest")
+        .current_dir(&project_dir)
+        .output()
+        .expect("failed to execute local xmltest binary")
+        .status;
+    assert!(
+        xmltest_status.success(),
+        "local xmltest binary built via CXX-driver baseline should succeed"
+    );
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn test_cxx_driver_xmltest_baseline_reports_missing_compile_coverage() {
+    let root = unique_temp_dir("tinyxml2_cxx_driver_xmltest_missing_coverage");
+    fs::create_dir_all(&root).expect("failed to create test root");
+    let project_dir = root.join("tinyxml2_no_compile_project");
+    fs::create_dir_all(&project_dir).expect("failed to create local project dir");
+    fs::write(
+        project_dir.join("Makefile"),
+        "\
+xmltest:\n\
+\t@printf '%s\\n' '#!/bin/sh' 'exit 0' > xmltest\n\
+\t@chmod +x xmltest\n\
+\n\
+clean:\n\
+\t@rm -f xmltest\n",
+    )
+    .expect("failed to write no-compile Makefile");
+
+    let log_dir = root.join("cxx_driver_logs");
+    let err = run_cxx_driver_xmltest_baseline_in_tree(&project_dir, &log_dir)
+        .expect_err("CXX-driver baseline should fail without compile coverage");
+    assert!(
+        err.contains("no compile units found in cxx_driver.log"),
+        "missing compile-coverage error should be explicit, got: {}",
+        err
+    );
+    assert_eq!(
+        read_status_file(&log_dir.join("make_xmltest_driver.status"))
+            .expect("failed to read make_xmltest_driver.status"),
+        0,
+        "fixture xmltest target should still execute before compile coverage validation fails"
+    );
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
 fn test_make_test_command_plan_local_fixture_success() {
     let root = unique_temp_dir("tinyxml2_make_test_command_plan_success");
     fs::create_dir_all(&root).expect("failed to create test root");
@@ -994,6 +1750,186 @@ fn test_make_test_command_plan_local_fixture_detects_missing_coverage() {
     assert!(
         log_dir.join("make_test_dryrun.status").exists(),
         "dry-run status should still be captured before coverage validation failure"
+    );
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn test_make_test_command_replay_local_fixture_native_runner_success() {
+    let root = unique_temp_dir("tinyxml2_make_test_replay_native_success");
+    fs::create_dir_all(&root).expect("failed to create test root");
+
+    let (repo_url, pinned_commit, _newer_commit) =
+        create_local_tinyxml2_like_repo(&root).expect("failed to create local tinyxml2-like repo");
+    let checkout_dir = root.join("checkout");
+    ensure_pinned_checkout(
+        repo_url.as_str(),
+        &checkout_dir,
+        pinned_commit.as_str(),
+        TINYXML2_REQUIRED_PATHS,
+    )
+    .expect("checkout should be prepared");
+
+    let log_dir = root.join("replay_logs_native");
+    run_tinyxml2_native_make_test_command_replay_in_tree(&checkout_dir, &log_dir)
+        .expect("native replay runner should succeed for local fixture");
+
+    for rel in TINYXML2_MAKE_TEST_COMMAND_PLAN_LOG_FILES {
+        assert!(
+            log_dir.join(rel).exists(),
+            "expected replay prerequisite file {}",
+            log_dir.join(rel).display()
+        );
+    }
+    assert!(
+        log_dir.join("make_xmltest_native.status").exists(),
+        "native runner should capture build status"
+    );
+    assert_eq!(
+        read_status_file(&log_dir.join("make_xmltest_native.status"))
+            .expect("failed to read make_xmltest_native.status"),
+        0,
+        "native runner should build xmltest successfully before replay"
+    );
+
+    let replay_count = assert_make_test_replay_artifacts_exist(&log_dir)
+        .expect("expected replay artifacts to be captured");
+    assert_eq!(
+        replay_count, 1,
+        "local tinyxml2 fixture should replay exactly one runtime command"
+    );
+    assert_eq!(
+        read_status_file(&log_dir.join("make_test_replay_01.status"))
+            .expect("failed to read replay status"),
+        0,
+        "native replay command should succeed"
+    );
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn test_make_test_command_replay_local_fixture_reports_failing_command() {
+    let root = unique_temp_dir("tinyxml2_make_test_replay_native_failure");
+    fs::create_dir_all(&root).expect("failed to create test root");
+
+    let (repo_url, pinned_commit, _newer_commit) =
+        create_local_tinyxml2_like_repo(&root).expect("failed to create local tinyxml2-like repo");
+    let checkout_dir = root.join("checkout");
+    ensure_pinned_checkout(
+        repo_url.as_str(),
+        &checkout_dir,
+        pinned_commit.as_str(),
+        TINYXML2_REQUIRED_PATHS,
+    )
+    .expect("checkout should be prepared");
+
+    fs::write(
+        checkout_dir.join("Makefile"),
+        "test: xmltest\n\t@./xmltest\n\nxmltest:\n\t@printf '%s\\n' '#!/bin/sh' 'echo \"fixture replay failure\" >&2' 'exit 9' > xmltest\n\t@chmod +x xmltest\n",
+    )
+    .expect("failed to write failing replay fixture Makefile");
+
+    let log_dir = root.join("replay_logs_native");
+    let err = run_tinyxml2_native_make_test_command_replay_in_tree(&checkout_dir, &log_dir)
+        .expect_err("native replay runner should fail when runtime command exits non-zero");
+    assert!(
+        err.contains("make-test command replay failed at command 1 with status 9"),
+        "failure should report replay command index and status, got: {}",
+        err
+    );
+    assert_eq!(
+        read_status_file(&log_dir.join("make_xmltest_native.status"))
+            .expect("failed to read native build status"),
+        0,
+        "fixture should still build xmltest script successfully"
+    );
+    assert_eq!(
+        read_status_file(&log_dir.join("make_test_replay_01.status"))
+            .expect("failed to read replay failure status"),
+        9,
+        "replay status should capture failing command exit code"
+    );
+    let replay_stderr = fs::read_to_string(log_dir.join("make_test_replay_01.stderr"))
+        .expect("failed to read replay stderr");
+    assert!(
+        replay_stderr.contains("fixture replay failure"),
+        "captured stderr should contain fixture failure message, got:\n{}",
+        replay_stderr
+    );
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn test_make_test_command_replay_local_fixture_fragile_runner_success_with_prebuilt_binary() {
+    let root = unique_temp_dir("tinyxml2_make_test_replay_fragile_success");
+    fs::create_dir_all(&root).expect("failed to create test root");
+
+    let (repo_url, pinned_commit, _newer_commit) =
+        create_local_tinyxml2_like_repo(&root).expect("failed to create local tinyxml2-like repo");
+    let checkout_dir = root.join("checkout");
+    ensure_pinned_checkout(
+        repo_url.as_str(),
+        &checkout_dir,
+        pinned_commit.as_str(),
+        TINYXML2_REQUIRED_PATHS,
+    )
+    .expect("checkout should be prepared");
+
+    run_make_xmltest_build_in_tree(&checkout_dir, &root.join("prep_logs"), "make_xmltest_prep")
+        .expect("fixture setup should prebuild xmltest for fragile-runner replay");
+
+    let log_dir = root.join("replay_logs_fragile");
+    run_tinyxml2_fragile_make_test_command_replay_in_tree(&checkout_dir, &log_dir)
+        .expect("fragile replay runner should succeed when binary is prebuilt");
+
+    let replay_count = assert_make_test_replay_artifacts_exist(&log_dir)
+        .expect("expected replay artifacts to be captured");
+    assert_eq!(
+        replay_count, 1,
+        "local tinyxml2 fixture should replay one runtime command"
+    );
+    assert_eq!(
+        read_status_file(&log_dir.join("make_test_replay_01.status"))
+            .expect("failed to read replay status"),
+        0,
+        "fragile replay command should succeed for prebuilt fixture"
+    );
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn test_make_test_command_replay_local_fixture_fragile_runner_reports_missing_binary() {
+    let root = unique_temp_dir("tinyxml2_make_test_replay_fragile_missing_binary");
+    fs::create_dir_all(&root).expect("failed to create test root");
+
+    let (repo_url, pinned_commit, _newer_commit) =
+        create_local_tinyxml2_like_repo(&root).expect("failed to create local tinyxml2-like repo");
+    let checkout_dir = root.join("checkout");
+    ensure_pinned_checkout(
+        repo_url.as_str(),
+        &checkout_dir,
+        pinned_commit.as_str(),
+        TINYXML2_REQUIRED_PATHS,
+    )
+    .expect("checkout should be prepared");
+
+    let log_dir = root.join("replay_logs_fragile");
+    let err = run_tinyxml2_fragile_make_test_command_replay_in_tree(&checkout_dir, &log_dir)
+        .expect_err("fragile replay runner should fail when xmltest is not prebuilt");
+    assert!(
+        err.contains("make-test command replay failed at command 1 with status 127"),
+        "missing binary should fail at command replay with status 127, got: {}",
+        err
+    );
+    assert_eq!(
+        read_status_file(&log_dir.join("make_test_replay_01.status"))
+            .expect("failed to read replay status"),
+        127,
+        "replay status should record missing-binary failure"
     );
 
     let _ = fs::remove_dir_all(&root);
@@ -1085,4 +2021,73 @@ fn test_real_world_tinyxml2_make_test_command_plan_generation() {
         "manifest should contain xmltest runtime command, got: {:?}",
         commands
     );
+}
+
+#[test]
+#[ignore = "real-world external project test (captures tinyxml2 CXX-driver compile units for make xmltest)"]
+fn test_real_world_tinyxml2_cxx_driver_xmltest_compile_manifest() {
+    let log_dir = run_tinyxml2_cxx_driver_xmltest_baseline()
+        .expect("failed to run tinyxml2 CXX-driver xmltest baseline");
+    for rel in TINYXML2_CXX_DRIVER_LOG_FILES {
+        assert!(
+            log_dir.join(rel).exists(),
+            "expected CXX-driver artifact {}",
+            log_dir.join(rel).display()
+        );
+    }
+
+    assert_eq!(
+        read_status_file(&log_dir.join("make_xmltest_driver.status"))
+            .expect("failed to read make_xmltest_driver.status"),
+        0,
+        "tinyxml2 CXX-driver make xmltest should succeed"
+    );
+
+    let compile_manifest = fs::read_to_string(log_dir.join("compile_units_manifest.txt"))
+        .expect("failed to read compile_units_manifest.txt");
+    assert!(
+        compile_manifest.contains("source=tinyxml2.cpp object=tinyxml2.o"),
+        "real-world compile manifest should include tinyxml2 compile unit, got:\n{}",
+        compile_manifest
+    );
+}
+
+#[test]
+#[ignore = "real-world external project test (replays tinyxml2 make-test command subset in native flow)"]
+fn test_real_world_tinyxml2_make_test_command_subset_replay_native() {
+    let log_dir = run_tinyxml2_make_test_command_replay_native()
+        .expect("failed to run tinyxml2 native make-test replay run");
+    for rel in TINYXML2_MAKE_TEST_COMMAND_PLAN_LOG_FILES {
+        assert!(
+            log_dir.join(rel).exists(),
+            "expected replay prerequisite file {}",
+            log_dir.join(rel).display()
+        );
+    }
+    assert!(
+        log_dir.join("make_xmltest_native.status").exists(),
+        "native replay should capture make_xmltest_native status"
+    );
+    assert_eq!(
+        read_status_file(&log_dir.join("make_xmltest_native.status"))
+            .expect("failed to read make_xmltest_native.status"),
+        0,
+        "native replay should build xmltest before command replay"
+    );
+    let replay_count =
+        assert_make_test_replay_artifacts_exist(&log_dir).expect("missing replay artifacts");
+    assert!(
+        replay_count >= 1,
+        "native replay should capture at least one runtime command replay"
+    );
+    for idx in 0..replay_count {
+        let step = make_test_replay_step_name(idx);
+        assert_eq!(
+            read_status_file(&log_dir.join(format!("{}.status", step)))
+                .expect("failed to read replay status"),
+            0,
+            "replay step {} should succeed",
+            step
+        );
+    }
 }
