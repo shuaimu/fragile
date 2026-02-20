@@ -924,6 +924,47 @@ fn command_invokes_binary(command_line: &str, binary: &str) -> bool {
     })
 }
 
+fn parse_make_test_logical_commands(dry_run_stdout: &str) -> Vec<String> {
+    let mut logical_commands: Vec<String> = Vec::new();
+    let mut current = String::new();
+
+    for raw_line in dry_run_stdout.lines() {
+        let trimmed = raw_line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        let has_trailing_continuation = trimmed.ends_with('\\');
+        let line_body = if has_trailing_continuation {
+            trimmed[..trimmed.len() - 1].trim_end()
+        } else {
+            trimmed
+        };
+
+        if !line_body.is_empty() {
+            if !current.is_empty() {
+                current.push(' ');
+            }
+            current.push_str(line_body);
+        }
+
+        if !has_trailing_continuation {
+            if let Some(normalized) = normalize_make_command_line(&current) {
+                logical_commands.push(normalized);
+            }
+            current.clear();
+        }
+    }
+
+    if !current.is_empty() {
+        if let Some(normalized) = normalize_make_command_line(&current) {
+            logical_commands.push(normalized);
+        }
+    }
+
+    logical_commands
+}
+
 fn parse_make_test_commands_from_dry_run(
     dry_run_stdout: &str,
     required_binaries: &[&str],
@@ -932,10 +973,7 @@ fn parse_make_test_commands_from_dry_run(
     let mut seen_commands: BTreeSet<String> = BTreeSet::new();
     let mut covered_binaries: BTreeSet<String> = BTreeSet::new();
 
-    for line in dry_run_stdout.lines() {
-        let Some(normalized) = normalize_make_command_line(line) else {
-            continue;
-        };
+    for normalized in parse_make_test_logical_commands(dry_run_stdout) {
         let mut command_is_relevant = false;
         for binary in required_binaries {
             if command_invokes_binary(&normalized, binary) {
@@ -1034,6 +1072,104 @@ fn run_make_test_command_plan_in_tree(source_dir: &Path, log_dir: &Path) -> Resu
     )?;
     run_make_test_dry_run_in_tree(source_dir, log_dir)?;
     write_make_test_commands_manifest(log_dir, source_dir, ZLIB_REQUIRED_LINK_OUTPUTS)?;
+    Ok(())
+}
+
+fn parse_make_test_commands_manifest_entries(manifest_text: &str) -> Result<Vec<String>, String> {
+    let mut commands: Vec<String> = Vec::new();
+    for (line_no, line) in manifest_text.lines().enumerate() {
+        let Some(rest) = line.strip_prefix("command=") else {
+            continue;
+        };
+        let command = rest.trim();
+        if command.is_empty() {
+            return Err(format!(
+                "invalid empty make-test command in manifest at line {}",
+                line_no + 1
+            ));
+        }
+        commands.push(command.to_string());
+    }
+
+    if commands.is_empty() {
+        return Err("make-test command manifest has no command entries".to_string());
+    }
+    Ok(commands)
+}
+
+fn make_test_replay_step_name(idx: usize) -> String {
+    format!("make_test_replay_{:02}", idx + 1)
+}
+
+fn replay_make_test_commands_from_manifest_in_tree(
+    source_dir: &Path,
+    log_dir: &Path,
+) -> Result<usize, String> {
+    let manifest_path = log_dir.join("make_test_commands_manifest.txt");
+    let manifest = fs::read_to_string(&manifest_path)
+        .map_err(|e| format!("failed to read {}: {}", manifest_path.display(), e))?;
+    let commands = parse_make_test_commands_manifest_entries(&manifest)?;
+
+    for (idx, command_line) in commands.iter().enumerate() {
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c").arg(command_line).current_dir(source_dir);
+        cmd.env("LC_ALL", "C").env("LANG", "C");
+        let output = cmd.output().map_err(|e| {
+            format!(
+                "failed to run make-test replay command {} at {}: {}",
+                idx + 1,
+                source_dir.display(),
+                e
+            )
+        })?;
+        let step = make_test_replay_step_name(idx);
+        write_command_capture(log_dir, &step, &output)?;
+        if !output.status.success() {
+            return Err(format!(
+                "make-test command replay failed at command {} with status {}: {} (logs: {})",
+                idx + 1,
+                status_code(&output),
+                command_line,
+                log_dir.display()
+            ));
+        }
+    }
+
+    let mut replay_manifest = format!(
+        "source_dir={}\ncommand_replay_count={}\n",
+        source_dir.display(),
+        commands.len()
+    );
+    for (idx, command_line) in commands.iter().enumerate() {
+        replay_manifest.push_str(&format!(
+            "replay_step={} command={}\n",
+            make_test_replay_step_name(idx),
+            command_line
+        ));
+    }
+    fs::write(
+        log_dir.join("make_test_replay_manifest.txt"),
+        replay_manifest,
+    )
+    .map_err(|e| {
+        format!(
+            "failed to write make-test replay manifest at {}: {}",
+            log_dir.display(),
+            e
+        )
+    })?;
+
+    Ok(commands.len())
+}
+
+fn run_make_test_command_subset_replay_in_tree(
+    source_dir: &Path,
+    log_dir: &Path,
+) -> Result<(), String> {
+    run_fragile_link_required_binaries_in_tree(source_dir, log_dir)?;
+    run_make_test_dry_run_in_tree(source_dir, log_dir)?;
+    write_make_test_commands_manifest(log_dir, source_dir, ZLIB_REQUIRED_LINK_OUTPUTS)?;
+    replay_make_test_commands_from_manifest_in_tree(source_dir, log_dir)?;
     Ok(())
 }
 
@@ -2926,6 +3062,24 @@ test:
     Ok(project_dir)
 }
 
+fn rewrite_local_makefile_test_target(project_dir: &Path, test_target: &str) -> Result<(), String> {
+    let makefile_path = project_dir.join("Makefile");
+    let makefile_text = fs::read_to_string(&makefile_path)
+        .map_err(|e| format!("failed to read Makefile: {}", e))?;
+    let (prefix, _) = makefile_text
+        .split_once("\ntest:\n")
+        .ok_or_else(|| format!("Makefile at {} has no test target", makefile_path.display()))?;
+    let rewritten = format!("{}\n{}\n", prefix.trim_end(), test_target.trim_end());
+    fs::write(&makefile_path, rewritten).map_err(|e| {
+        format!(
+            "failed to rewrite Makefile {}: {}",
+            makefile_path.display(),
+            e
+        )
+    })?;
+    Ok(())
+}
+
 fn create_local_fragile_object_project(base_dir: &Path) -> Result<PathBuf, String> {
     let project_dir = base_dir.join("fragile_object_project");
     fs::create_dir_all(&project_dir)
@@ -3539,6 +3693,90 @@ fn test_make_test_command_plan_local_fixture_detects_missing_coverage() {
     assert!(
         !log_dir.join("make_test_commands_manifest.txt").exists(),
         "make-test command manifest should not be written on coverage failure"
+    );
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn test_make_test_command_subset_replay_local_fixture_success() {
+    let root = unique_temp_dir("zlib_make_test_replay_success");
+    fs::create_dir_all(&root).expect("failed to create test root");
+
+    let project_dir = create_local_required_artifacts_project(&root, false)
+        .expect("failed to create required-artifacts project");
+    rewrite_local_makefile_test_target(
+        &project_dir,
+        r#"test:
+	@test -x ./minigzip && test -x ./example
+	@test -x ./minigzipsh && test -x ./examplesh
+	@test -x ./minigzip64 && test -x ./example64
+"#,
+    )
+    .expect("failed to rewrite local fixture test target for replay success");
+    let log_dir = root.join("logs");
+    run_make_test_command_subset_replay_in_tree(&project_dir, &log_dir)
+        .expect("make-test command replay should succeed");
+
+    let replay_manifest = fs::read_to_string(log_dir.join("make_test_replay_manifest.txt"))
+        .expect("failed to read make_test_replay_manifest.txt");
+    assert!(
+        replay_manifest.contains("command_replay_count=3"),
+        "replay manifest should include replayed command count: {}",
+        replay_manifest
+    );
+    for idx in 0..3 {
+        let step = make_test_replay_step_name(idx);
+        assert_eq!(
+            fs::read_to_string(log_dir.join(format!("{}.status", step)))
+                .expect("failed to read replay step status")
+                .trim(),
+            "0",
+            "replayed command should succeed for step {}",
+            step
+        );
+    }
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn test_make_test_command_subset_replay_reports_failing_command() {
+    let root = unique_temp_dir("zlib_make_test_replay_failure");
+    fs::create_dir_all(&root).expect("failed to create test root");
+
+    let project_dir = create_local_required_artifacts_project(&root, false)
+        .expect("failed to create required-artifacts project");
+    rewrite_local_makefile_test_target(
+        &project_dir,
+        r#"test:
+	@test -x ./minigzip && test -x ./example
+	@test -x ./minigzipsh && test -x ./examplesh
+	@test -x ./minigzip64 && test -x ./example64 && false
+"#,
+    )
+    .expect("failed to rewrite local fixture test target for replay failure");
+
+    let log_dir = root.join("logs");
+    let err = run_make_test_command_subset_replay_in_tree(&project_dir, &log_dir)
+        .expect_err("make-test command replay should fail on non-zero command");
+    assert!(
+        err.contains("make-test command replay failed at command"),
+        "unexpected replay error: {}",
+        err
+    );
+
+    let failing_step = make_test_replay_step_name(2);
+    let failing_status = fs::read_to_string(log_dir.join(format!("{}.status", failing_step)))
+        .expect("failed to read failing replay status");
+    assert_ne!(
+        failing_status.trim(),
+        "0",
+        "failing replay command should have non-zero status"
+    );
+    assert!(
+        !log_dir.join("make_test_replay_manifest.txt").exists(),
+        "replay manifest should not be written on replay failure"
     );
 
     let _ = fs::remove_dir_all(&root);

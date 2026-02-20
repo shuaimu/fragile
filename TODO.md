@@ -92,7 +92,9 @@ Run upstream-style tests through the Fragile transpiler with runtime parity:
     - Evidence (`cargo test -p fragile-clang --test real_world_zlib_tests test_parse_make_test_commands_from_dry_run_normalizes_and_validates_coverage test_parse_make_test_commands_from_dry_run_reports_missing_required_binary_invocations -- --nocapture`, 2026-02-20): passes; parser normalizes dry-run command lines, deduplicates invocations, and reports missing required binaries.
   - [x] Add local fixture coverage for `make test` command-plan generation and missing-command diagnostics.
     - Evidence (`cargo test -p fragile-clang --test real_world_zlib_tests test_make_test_command_plan_local_fixture_success test_make_test_command_plan_local_fixture_detects_missing_coverage -- --nocapture`, 2026-02-20): passes; fixture generation writes `make_test_commands_manifest.txt` and missing command coverage fails with explicit diagnostics.
-  - [ ] Replay planned `make test` binary command subset against fragile-linked zlib outputs and validate per-command status is zero.
+  - [x] Replay planned `make test` binary command subset against fragile-linked zlib outputs and validate per-command status is zero.
+    - Plan: execute normalized `make_test_commands_manifest.txt` entries via `sh -c` against fragile-linked outputs and record per-command replay status logs.
+    - Evidence (`cargo test -p fragile-clang --test real_world_zlib_tests -- --nocapture`, 2026-02-20): passes; local replay succeeds when command subset statuses are zero and fails with explicit diagnostics on first non-zero command.
   - [x] Add real-world ignored coverage for `make test` command-plan generation in pinned zlib fixture outputs.
     - Evidence (`cargo test -p fragile-clang --test real_world_zlib_tests test_real_world_zlib_make_test_command_plan_generation -- --ignored --nocapture`, 2026-02-20): passes; real-world run writes and validates `make_test_commands_manifest.txt`.
   - [ ] Add real-world ignored coverage for `make test` replay against pinned zlib fixture outputs.
