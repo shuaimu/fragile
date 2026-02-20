@@ -62,6 +62,18 @@ fn is_one_integer_literal_str(s: &str) -> bool {
     is_integer_literal_str(s) && strip_literal_suffix(s) == "1"
 }
 
+/// Parse an integer literal string (optionally parenthesized and/or suffixed) to i128.
+fn parse_integer_literal_value_str(s: &str) -> Option<i128> {
+    let mut raw = s.trim();
+    while is_fully_parenthesized_expr(raw) && raw.len() >= 2 {
+        raw = raw[1..raw.len() - 1].trim();
+    }
+    if !is_integer_literal_str(raw) {
+        return None;
+    }
+    strip_literal_suffix(raw).parse::<i128>().ok()
+}
+
 /// Check whether a Rust primitive type string is an unsigned integer.
 fn is_unsigned_rust_int_type(ty: &str) -> bool {
     matches!(ty, "u8" | "u16" | "u32" | "u64" | "u128" | "usize")
@@ -890,6 +902,48 @@ impl AstCodeGen {
                 sanitize_identifier(enum_name.rsplit("::").next().unwrap_or(enum_name));
             format!("{}::{}", enum_ident, sanitize_identifier(name))
         })
+    }
+
+    /// Resolve `return <int-literal>;` into `EnumType::Variant` when return type is an enum.
+    fn resolve_enum_variant_from_return_literal(
+        &self,
+        return_ty: &CppType,
+        literal_value: i128,
+    ) -> Option<String> {
+        let CppType::Named(raw_return_enum_name) = return_ty else {
+            return None;
+        };
+
+        let return_enum_name = raw_return_enum_name
+            .trim_start_matches("const ")
+            .trim_start_matches("volatile ")
+            .trim();
+        if return_enum_name.is_empty() {
+            return None;
+        }
+
+        let return_enum_base = Self::strip_namespace_and_template(return_enum_name);
+        let return_enum_rust_name = CppType::Named(return_enum_name.to_string()).to_rust_type_str();
+
+        let mut matched_variant: Option<&str> = None;
+        for ((enum_name, value), variant) in &self.enum_variant_map {
+            if *value != literal_value {
+                continue;
+            }
+
+            let enum_base = Self::strip_namespace_and_template(enum_name);
+            let same_enum = enum_name == return_enum_name || enum_base == return_enum_base;
+            if !same_enum {
+                continue;
+            }
+
+            match matched_variant {
+                Some(existing) if existing != variant => return None,
+                _ => matched_variant = Some(variant.as_str()),
+            }
+        }
+
+        matched_variant.map(|variant| format!("{}::{}", return_enum_rust_name, variant))
     }
 
     /// Set resolved field types from LibTooling template specializations.
@@ -20445,8 +20499,22 @@ impl AstCodeGen {
                             None
                         };
 
+                        let enum_return_expr = self
+                            .current_return_type
+                            .as_ref()
+                            .and_then(|ret_ty| {
+                                parse_integer_literal_value_str(&expr).and_then(|literal_value| {
+                                    self.resolve_enum_variant_from_return_literal(
+                                        ret_ty,
+                                        literal_value,
+                                    )
+                                })
+                            });
+
                         if let Some(ptr_expr) = pointer_return_expr {
                             ptr_expr
+                        } else if let Some(enum_expr) = enum_return_expr {
+                            enum_expr
                         } else {
                             let ret_is_int = ret_rust_type
                                 .as_ref()
@@ -29754,6 +29822,128 @@ mod tests {
             w_size_assign_line.contains(" as u32)"),
             "u32 field assignment should normalize shift/math rhs width, got line:\n{}\nfull code:\n{}",
             w_size_assign_line,
+            code
+        );
+    }
+
+    #[test]
+    fn test_enum_return_integer_literal_is_lowered_to_enum_variant() {
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![
+                make_node(
+                    ClangNodeKind::EnumDecl {
+                        name: "block_state".to_string(),
+                        is_scoped: false,
+                        underlying_type: CppType::Int { signed: true },
+                    },
+                    vec![
+                        make_node(
+                            ClangNodeKind::EnumConstantDecl {
+                                name: "need_more".to_string(),
+                                value: Some(0),
+                            },
+                            vec![],
+                        ),
+                        make_node(
+                            ClangNodeKind::EnumConstantDecl {
+                                name: "block_done".to_string(),
+                                value: Some(1),
+                            },
+                            vec![],
+                        ),
+                        make_node(
+                            ClangNodeKind::EnumConstantDecl {
+                                name: "finish_started".to_string(),
+                                value: Some(2),
+                            },
+                            vec![],
+                        ),
+                        make_node(
+                            ClangNodeKind::EnumConstantDecl {
+                                name: "finish_done".to_string(),
+                                value: Some(3),
+                            },
+                            vec![],
+                        ),
+                    ],
+                ),
+                make_node(
+                    ClangNodeKind::FunctionDecl {
+                        name: "return_block_state".to_string(),
+                        mangled_name: "return_block_state".to_string(),
+                        return_type: CppType::Named("block_state".to_string()),
+                        params: vec![("last".to_string(), CppType::Int { signed: true })],
+                        is_definition: true,
+                        is_variadic: false,
+                        is_noexcept: false,
+                        is_coroutine: false,
+                        coroutine_info: None,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![make_node(
+                            ClangNodeKind::IfStmt,
+                            vec![
+                                make_node(
+                                    ClangNodeKind::BinaryOperator {
+                                        op: BinaryOp::Ne,
+                                        ty: CppType::Bool,
+                                    },
+                                    vec![
+                                        make_node(
+                                            ClangNodeKind::DeclRefExpr {
+                                                name: "last".to_string(),
+                                                ty: CppType::Int { signed: true },
+                                                namespace_path: vec![],
+                                            },
+                                            vec![],
+                                        ),
+                                        make_node(
+                                            ClangNodeKind::IntegerLiteral {
+                                                value: 0,
+                                                cpp_type: Some(CppType::Int { signed: true }),
+                                            },
+                                            vec![],
+                                        ),
+                                    ],
+                                ),
+                                make_node(
+                                    ClangNodeKind::ReturnStmt,
+                                    vec![make_node(
+                                        ClangNodeKind::IntegerLiteral {
+                                            value: 3,
+                                            cpp_type: Some(CppType::Int { signed: true }),
+                                        },
+                                        vec![],
+                                    )],
+                                ),
+                                make_node(
+                                    ClangNodeKind::ReturnStmt,
+                                    vec![make_node(
+                                        ClangNodeKind::IntegerLiteral {
+                                            value: 0,
+                                            cpp_type: Some(CppType::Int { signed: true }),
+                                        },
+                                        vec![],
+                                    )],
+                                ),
+                            ],
+                        )],
+                    )],
+                ),
+            ],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("return block_state::finish_done;"),
+            "expected integer literal return to lower to enum variant, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("return block_state::need_more;"),
+            "expected integer literal return to lower to enum variant, got:\n{}",
             code
         );
     }

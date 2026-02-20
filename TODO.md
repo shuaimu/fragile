@@ -48,7 +48,8 @@ Run upstream-style tests through the Fragile transpiler with runtime parity:
             - Replay evidence (`/tmp/fragile_real_world_zlib_fragile_objz_objects/driver_logs/objz_deflate_o_transpiled.rs`): pointer-add forms now emit `.wrapping_offset(...)` (e.g., `pending_out = pending_buf.wrapping_offset(offset_from(...) as isize)`), and previous raw `*mut u8 + isize` diagnostics are cleared from `rustc_objz_deflate_o.stderr`.
           - [x] Fix integer width normalization for `u32`/`u64` fields and temporaries in shift/math expressions.
             - Replay evidence (`/tmp/fragile_real_world_zlib_fragile_objz_objects/driver_logs/objz_deflate_o_transpiled.rs` + `rustc_objz_deflate_o.stderr`): `deflate` now emits explicit `as u32` normalization on `w_size`/`hash_size`/`lit_bufsize` and `have` shift assignments, and previous `expected u32/u64, found i32/i64` diagnostics are cleared.
-          - [ ] Fix enum return lowering so `block_state` returns emit enum variants instead of integer literals.
+          - [x] Fix enum return lowering so `block_state` returns emit enum variants instead of integer literals.
+            - Replay evidence (`/tmp/fragile_real_world_zlib_fragile_objz_objects/driver_logs/objz_deflate_o_transpiled.rs` + `rustc_objz_deflate_o.stderr`): `block_state` functions no longer emit `return 0/1/3;` literals; next first blocker class is union field preservation/access (`.fc.freq`) plus bool-to-int assignment typing.
           - [ ] Fix union field preservation/access for Huffman tree frequency members (`.fc.freq`).
     - [ ] Replay `OBJG` units through Fragile to `.o` outputs and validate object completeness.
   - [ ] Link transpiled static/shared test binaries used by upstream tests (`example`, `minigzip`, `examplesh`, `minigzipsh`, `example64`, `minigzip64`).
