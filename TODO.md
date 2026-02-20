@@ -39,8 +39,9 @@ Run upstream-style tests through the Fragile transpiler with runtime parity:
           - Replay evidence (`/tmp/fragile_real_world_zlib_fragile_objz_objects/driver_logs/rustc_objz_deflate_o.stderr`): unresolved symbol/type diagnostics are cleared; current first blocker class is function-pointer/Option invocation and type-width mismatches.
         - [x] Fix pointer/function-pointer invocation lowering regressions in `deflate` replay output (Option function pointers deref/call shape).
           - Replay evidence (`/tmp/fragile_real_world_zlib_fragile_objz_objects/driver_logs/rustc_objz_deflate_o.stderr`): no remaining `Option<fn>` deref/call/assignment diagnostics; next blockers are type-width, pointer arithmetic, enum return-type, and union-field layout issues.
-        - [ ] Fix remaining `deflate` type/union field/codegen mismatches in replay output (`freq` union field access, integer width mismatches, pointer arithmetic typing).
+        - [x] Fix remaining `deflate` type/union field/codegen mismatches in replay output (`freq` union field access, integer width mismatches, pointer arithmetic typing).
           - Plan: resolve by first compiler error class from replay logs; keep each leaf scoped to a single lowering rule family (<500 LOC per leaf).
+          - Replay evidence (`cargo test -p fragile-clang --test real_world_zlib_tests test_real_world_zlib_fragile_objz_objects_replay -- --ignored --nocapture`, 2026-02-20): passes; full OBJZ replay remains green with non-empty outputs after the deflate/inflate/infback fixes below.
           - [x] Fix unsized extern array declaration lowering so pointer-typed globals don't emit invalid `= []` initializers (`_length_code`/`_dist_code`).
             - Replay evidence (`/tmp/fragile_real_world_zlib_fragile_objz_objects/driver_logs/rustc_objz_deflate_o.stderr`): `__gv__length_code`/`__gv__dist_code` `*mut u8 = []` diagnostics are cleared; next first blocker class is integer-width/chained-assignment typing in `deflate`.
           - [x] Fix chained-assignment expression lowering that currently returns `()` in typed assignments (`a = b = 2` forms).

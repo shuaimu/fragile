@@ -195,9 +195,18 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 
+#[derive(Debug, Clone)]
+struct FragileRuntimeLinkInfo {
+    profile_dir: PathBuf,
+    deps_dir: PathBuf,
+    rlib_path: PathBuf,
+}
+
 /// Helper to find the fragile-runtime library path.
-/// Looks in the target directory for the compiled rlib.
-fn find_fragile_runtime_path() -> Option<PathBuf> {
+/// Looks in the target directory for either:
+/// - `target/{debug,release}/libfragile_runtime.rlib`
+/// - `target/{debug,release}/deps/libfragile_runtime-*.rlib`
+fn find_fragile_runtime_link_info() -> Option<FragileRuntimeLinkInfo> {
     // Try to find the workspace root by looking for Cargo.toml
     let mut current = std::env::current_dir().ok()?;
 
@@ -209,13 +218,40 @@ fn find_fragile_runtime_path() -> Option<PathBuf> {
             if content.contains("[workspace]") {
                 // Found workspace root, look for runtime library
                 // Check release first (more common in CI), then debug
-                let release_path = current.join("target/release");
-                if release_path.join("libfragile_runtime.rlib").exists() {
-                    return Some(release_path);
-                }
-                let debug_path = current.join("target/debug");
-                if debug_path.join("libfragile_runtime.rlib").exists() {
-                    return Some(debug_path);
+                for profile in ["release", "debug"] {
+                    let profile_dir = current.join("target").join(profile);
+                    let direct_rlib = profile_dir.join("libfragile_runtime.rlib");
+                    let deps_dir = profile_dir.join("deps");
+
+                    if direct_rlib.exists() {
+                        return Some(FragileRuntimeLinkInfo {
+                            profile_dir,
+                            deps_dir,
+                            rlib_path: direct_rlib,
+                        });
+                    }
+
+                    let deps_entries = fs::read_dir(&deps_dir).ok()?;
+                    let mut hashed_rlibs: Vec<PathBuf> = deps_entries
+                        .filter_map(|entry| entry.ok())
+                        .map(|entry| entry.path())
+                        .filter(|path| {
+                            path.file_name()
+                                .and_then(|name| name.to_str())
+                                .is_some_and(|name| {
+                                    name.starts_with("libfragile_runtime-")
+                                        && name.ends_with(".rlib")
+                                })
+                        })
+                        .collect();
+                    hashed_rlibs.sort();
+                    if let Some(rlib_path) = hashed_rlibs.pop() {
+                        return Some(FragileRuntimeLinkInfo {
+                            profile_dir,
+                            deps_dir,
+                            rlib_path,
+                        });
+                    }
                 }
             }
         }
@@ -301,8 +337,9 @@ fn transpile_compile_run_with_runtime(
     fs::write(&rs_path, &rust_code).map_err(|e| format!("Failed to write Rust source: {}", e))?;
 
     // Find fragile-runtime library path
-    let runtime_path = find_fragile_runtime_path()
-        .ok_or_else(|| "Could not find fragile-runtime library path".to_string())?;
+    let runtime_link = find_fragile_runtime_link_info().ok_or_else(|| {
+        "Could not find fragile-runtime library path (direct or hashed rlib)".to_string()
+    })?;
 
     // Compile with rustc, linking against fragile-runtime
     let binary_path = temp_dir.join(filename.replace(".cpp", ""));
@@ -312,14 +349,11 @@ fn transpile_compile_run_with_runtime(
         .arg(&binary_path)
         .arg("--edition=2021")
         .arg("-L")
-        .arg(&runtime_path)
+        .arg(&runtime_link.profile_dir)
         .arg("-L")
-        .arg(runtime_path.join("deps"))
+        .arg(&runtime_link.deps_dir)
         .arg("--extern")
-        .arg(format!(
-            "fragile_runtime={}/libfragile_runtime.rlib",
-            runtime_path.display()
-        ))
+        .arg(format!("fragile_runtime={}", runtime_link.rlib_path.display()))
         .output()
         .map_err(|e| format!("Failed to run rustc: {}", e))?;
 
@@ -4181,8 +4215,8 @@ fn main() {
     fs::write(&rs_path, rust_code).expect("Failed to write Rust source");
 
     // Find fragile-runtime library path
-    let runtime_path =
-        find_fragile_runtime_path().expect("Could not find fragile-runtime library path");
+    let runtime_link = find_fragile_runtime_link_info()
+        .expect("Could not find fragile-runtime library path (direct or hashed rlib)");
 
     // Compile with rustc, linking against fragile-runtime
     let binary_path = temp_dir.join("runtime_file_io");
@@ -4192,13 +4226,13 @@ fn main() {
         .arg(&binary_path)
         .arg("--edition=2021")
         .arg("-L")
-        .arg(&runtime_path)
+        .arg(&runtime_link.profile_dir)
         .arg("-L")
-        .arg(runtime_path.join("deps"))
+        .arg(&runtime_link.deps_dir)
         .arg("--extern")
         .arg(format!(
-            "fragile_runtime={}/libfragile_runtime.rlib",
-            runtime_path.display()
+            "fragile_runtime={}",
+            runtime_link.rlib_path.display()
         ))
         .output()
         .expect("Failed to run rustc");
@@ -4307,8 +4341,8 @@ fn main() {
     fs::write(&rs_path, rust_code).expect("Failed to write Rust source");
 
     // Find fragile-runtime library path
-    let runtime_path =
-        find_fragile_runtime_path().expect("Could not find fragile-runtime library path");
+    let runtime_link = find_fragile_runtime_link_info()
+        .expect("Could not find fragile-runtime library path (direct or hashed rlib)");
 
     // Compile with rustc, linking against fragile-runtime
     let binary_path = temp_dir.join("runtime_pthread");
@@ -4318,13 +4352,13 @@ fn main() {
         .arg(&binary_path)
         .arg("--edition=2021")
         .arg("-L")
-        .arg(&runtime_path)
+        .arg(&runtime_link.profile_dir)
         .arg("-L")
-        .arg(runtime_path.join("deps"))
+        .arg(&runtime_link.deps_dir)
         .arg("--extern")
         .arg(format!(
-            "fragile_runtime={}/libfragile_runtime.rlib",
-            runtime_path.display()
+            "fragile_runtime={}",
+            runtime_link.rlib_path.display()
         ))
         .output()
         .expect("Failed to run rustc");
