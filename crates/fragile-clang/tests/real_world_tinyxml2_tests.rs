@@ -13,6 +13,8 @@ use std::process::{Command, Output};
 use std::thread::sleep;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use fragile_clang::{AstCodeGen, ClangParser, ParserLanguage};
+
 const TINYXML2_REPO_URL: &str = "https://github.com/leethomason/tinyxml2.git";
 const TINYXML2_PINNED_COMMIT: &str = "9148bdf719e997d1f474be6bcc7943881046dba1"; // 11.0.0
 const TINYXML2_CACHE_DIR: &str = "/tmp/fragile_real_world_tinyxml2";
@@ -22,6 +24,8 @@ const TINYXML2_MAKE_TEST_COMMAND_PLAN_DIR: &str =
 const TINYXML2_MAKE_TEST_REPLAY_NATIVE_DIR: &str =
     "/tmp/fragile_real_world_tinyxml2_make_test_replay_native";
 const TINYXML2_CXX_DRIVER_XMLTEST_DIR: &str = "/tmp/fragile_real_world_tinyxml2_cxx_driver_xmltest";
+const TINYXML2_FRAGILE_XMLTEST_BUILD_DIR: &str =
+    "/tmp/fragile_real_world_tinyxml2_fragile_xmltest_build";
 const TINYXML2_REQUIRED_PATHS: &[&str] = &[
     "tinyxml2.h",
     "tinyxml2.cpp",
@@ -52,6 +56,24 @@ const TINYXML2_CXX_DRIVER_LOG_FILES: &[&str] = &[
     "cxx_driver.log",
     "cxx_driver_manifest.txt",
     "compile_units_manifest.txt",
+];
+const TINYXML2_FRAGILE_XMLTEST_LOG_FILES: &[&str] = &[
+    "make_clean_driver.status",
+    "make_clean_driver.stdout",
+    "make_clean_driver.stderr",
+    "make_xmltest_driver.status",
+    "make_xmltest_driver.stdout",
+    "make_xmltest_driver.stderr",
+    "cxx_driver.log",
+    "cxx_driver_manifest.txt",
+    "compile_units_manifest.txt",
+    "link_fragile_xmltest.status",
+    "link_fragile_xmltest.stdout",
+    "link_fragile_xmltest.stderr",
+    "fragile_xmltest_manifest.txt",
+    "rustc_fragile_runtime_support.status",
+    "rustc_fragile_runtime_support.stdout",
+    "rustc_fragile_runtime_support.stderr",
 ];
 const TINYXML2_MAKE_TEST_REPLAY_COMMAND_TIMEOUT_SECONDS: u64 = 15;
 
@@ -307,11 +329,83 @@ fn is_c_family_source_token(token: &str) -> bool {
         || lower.ends_with(".c++")
 }
 
-fn parse_compile_units_from_cxx_driver_log(
+#[derive(Clone, Debug)]
+struct CompileCommand {
+    source_rel: String,
+    object_rel: String,
+    command_cwd: PathBuf,
+    command_tokens: Vec<String>,
+}
+
+#[derive(Clone, Debug)]
+struct LinkCommand {
+    output_rel: String,
+    input_paths: Vec<String>,
+    command_cwd: PathBuf,
+    command_tokens: Vec<String>,
+}
+
+fn extract_arg_value(tokens: &[&str], flag: &str) -> Option<(String, Option<usize>)> {
+    for (idx, tok) in tokens.iter().enumerate() {
+        if *tok == flag {
+            if let Some(next) = tokens.get(idx + 1) {
+                return Some(((*next).to_string(), Some(idx + 1)));
+            }
+        } else if tok.starts_with(flag) && tok.len() > flag.len() {
+            return Some((tok[flag.len()..].to_string(), None));
+        }
+    }
+    None
+}
+
+fn extract_compile_source_token(
+    tokens: &[&str],
+    object_token: &str,
+    object_consumed_idx: Option<usize>,
+) -> Option<String> {
+    let mut source_candidate: Option<&str> = None;
+    if let Some(c_idx) = tokens.iter().position(|t| *t == "-c") {
+        if let Some(next) = tokens.get(c_idx + 1) {
+            if !next.starts_with('-') {
+                source_candidate = Some(next);
+            }
+        }
+    }
+    if source_candidate.is_none() {
+        if let Some(attached) = tokens
+            .iter()
+            .find(|t| t.starts_with("-c") && t.len() > 2)
+            .map(|t| &t[2..])
+        {
+            source_candidate = Some(attached);
+        }
+    }
+    if source_candidate.is_none() {
+        let mut positional: Vec<(usize, &str)> = Vec::new();
+        for (idx, tok) in tokens.iter().enumerate() {
+            if tok.starts_with('-') {
+                continue;
+            }
+            if object_consumed_idx.is_some_and(|i| i == idx) {
+                continue;
+            }
+            positional.push((idx, tok));
+        }
+        source_candidate = positional
+            .iter()
+            .rev()
+            .map(|(_, tok)| *tok)
+            .find(|tok| *tok != object_token);
+    }
+    source_candidate.map(ToString::to_string)
+}
+
+fn parse_compile_commands_from_cxx_driver_log(
     driver_log: &str,
     source_dir: &Path,
-) -> Result<Vec<(String, String)>, String> {
-    let mut units: BTreeSet<(String, String)> = BTreeSet::new();
+) -> Result<Vec<CompileCommand>, String> {
+    let mut commands: std::collections::BTreeMap<(String, String), CompileCommand> =
+        std::collections::BTreeMap::new();
     let mut pending_cwd: Option<PathBuf> = None;
 
     for line in driver_log.lines() {
@@ -328,48 +422,128 @@ fn parse_compile_units_from_cxx_driver_log(
             .cloned()
             .unwrap_or_else(|| source_dir.to_path_buf());
         let tokens: Vec<&str> = args_raw.split_whitespace().collect();
-        if tokens.is_empty() || !tokens.iter().any(|tok| *tok == "-c") {
+        if tokens.is_empty() {
+            continue;
+        }
+        if !tokens.iter().any(|tok| *tok == "-c" || tok.starts_with("-c")) {
             continue;
         }
 
-        let mut source_token: Option<&str> = None;
-        let mut object_token: Option<&str> = None;
-        let mut idx = 0usize;
-        while idx < tokens.len() {
-            let tok = tokens[idx];
-            if tok == "-o" {
-                if let Some(next) = tokens.get(idx + 1) {
-                    object_token = Some(*next);
-                }
-                idx += 2;
-                continue;
-            }
-            if let Some(rest) = tok.strip_prefix("-o") {
-                if !rest.is_empty() {
-                    object_token = Some(rest);
-                }
-                idx += 1;
-                continue;
-            }
-            if source_token.is_none() && !tok.starts_with('-') && is_c_family_source_token(tok) {
-                source_token = Some(tok);
-            }
-            idx += 1;
+        let Some((object_raw, object_consumed_idx)) = extract_arg_value(&tokens, "-o") else {
+            continue;
+        };
+        let Some(source_raw) = extract_compile_source_token(&tokens, &object_raw, object_consumed_idx)
+        else {
+            continue;
+        };
+
+        if !is_c_family_source_token(&source_raw) {
+            continue;
         }
 
-        let (source_raw, object_raw) = match (source_token, object_token) {
-            (Some(source_raw), Some(object_raw)) => (source_raw, object_raw),
-            _ => continue,
-        };
-        let source_rel = normalize_path_for_manifest(source_raw, &command_cwd, source_dir);
-        let object_rel = normalize_path_for_manifest(object_raw, &command_cwd, source_dir);
-        units.insert((source_rel, object_rel));
+        let source_rel = normalize_path_for_manifest(&source_raw, &command_cwd, source_dir);
+        let object_rel = normalize_path_for_manifest(&object_raw, &command_cwd, source_dir);
+        let key = (source_rel.clone(), object_rel.clone());
+        commands.entry(key).or_insert_with(|| CompileCommand {
+            source_rel,
+            object_rel,
+            command_cwd: command_cwd.clone(),
+            command_tokens: tokens.iter().map(|token| (*token).to_string()).collect(),
+        });
     }
 
-    if units.is_empty() {
+    if commands.is_empty() {
         return Err("no compile units found in cxx_driver.log".to_string());
     }
-    Ok(units.into_iter().collect())
+    Ok(commands.into_values().collect())
+}
+
+fn parse_compile_units_from_cxx_driver_log(
+    driver_log: &str,
+    source_dir: &Path,
+) -> Result<Vec<(String, String)>, String> {
+    let commands = parse_compile_commands_from_cxx_driver_log(driver_log, source_dir)?;
+    Ok(commands
+        .into_iter()
+        .map(|cmd| (cmd.source_rel, cmd.object_rel))
+        .collect())
+}
+
+fn parse_link_commands_from_cxx_driver_log(
+    driver_log: &str,
+    source_dir: &Path,
+) -> Result<Vec<LinkCommand>, String> {
+    let mut commands: std::collections::BTreeMap<String, LinkCommand> =
+        std::collections::BTreeMap::new();
+    let mut pending_cwd: Option<PathBuf> = None;
+
+    for line in driver_log.lines() {
+        if let Some(cwd_raw) = line.strip_prefix("cwd=") {
+            pending_cwd = Some(PathBuf::from(cwd_raw.trim()));
+            continue;
+        }
+
+        let Some(args_raw) = line.strip_prefix("args=") else {
+            continue;
+        };
+        let command_cwd = pending_cwd
+            .as_ref()
+            .cloned()
+            .unwrap_or_else(|| source_dir.to_path_buf());
+        let tokens: Vec<&str> = args_raw.split_whitespace().collect();
+        if tokens.is_empty() {
+            continue;
+        }
+        if tokens.iter().any(|tok| *tok == "-c" || tok.starts_with("-c")) {
+            continue;
+        }
+
+        let Some((output_raw, output_consumed_idx)) = extract_arg_value(&tokens, "-o") else {
+            continue;
+        };
+        let output_rel = normalize_path_for_manifest(&output_raw, &command_cwd, source_dir);
+        let mut input_paths: Vec<String> = Vec::new();
+        let mut skip_next = false;
+        for (idx, token) in tokens.iter().enumerate() {
+            if skip_next {
+                skip_next = false;
+                continue;
+            }
+            if *token == "-o" {
+                skip_next = true;
+                continue;
+            }
+            if output_consumed_idx.is_some_and(|i| i == idx) {
+                continue;
+            }
+            if token.starts_with('-') {
+                continue;
+            }
+            let normalized = normalize_path_for_manifest(token, &command_cwd, source_dir);
+            if normalized == output_rel {
+                continue;
+            }
+            if !input_paths.contains(&normalized) {
+                input_paths.push(normalized);
+            }
+        }
+
+        if input_paths.is_empty() {
+            continue;
+        }
+
+        commands.entry(output_rel.clone()).or_insert_with(|| LinkCommand {
+            output_rel,
+            input_paths,
+            command_cwd: command_cwd.clone(),
+            command_tokens: tokens.iter().map(|token| (*token).to_string()).collect(),
+        });
+    }
+
+    if commands.is_empty() {
+        return Err("no link commands found in cxx_driver.log".to_string());
+    }
+    Ok(commands.into_values().collect())
 }
 
 fn write_compile_units_manifest_from_cxx_driver_log(
@@ -397,6 +571,693 @@ fn write_compile_units_manifest_from_cxx_driver_log(
         )
     })?;
     Ok(units.len())
+}
+
+fn resolve_flag_path(path_arg: &str, cwd: &Path) -> String {
+    let raw = Path::new(path_arg);
+    let joined = if raw.is_absolute() {
+        raw.to_path_buf()
+    } else {
+        cwd.join(raw)
+    };
+    lexical_normalize(&joined).to_string_lossy().to_string()
+}
+
+fn extract_parser_args_from_driver_tokens(
+    command_tokens: &[String],
+    cwd: &Path,
+) -> (Vec<String>, Vec<String>) {
+    let mut include_paths: BTreeSet<String> = BTreeSet::new();
+    let mut defines: BTreeSet<String> = BTreeSet::new();
+    let mut idx = 0usize;
+
+    while idx < command_tokens.len() {
+        let tok = &command_tokens[idx];
+        if tok == "-I" {
+            if let Some(next) = command_tokens.get(idx + 1) {
+                include_paths.insert(resolve_flag_path(next, cwd));
+            }
+            idx += 2;
+            continue;
+        }
+        if let Some(rest) = tok.strip_prefix("-I") {
+            if !rest.is_empty() {
+                include_paths.insert(resolve_flag_path(rest, cwd));
+            }
+            idx += 1;
+            continue;
+        }
+        if tok == "-isystem" {
+            if let Some(next) = command_tokens.get(idx + 1) {
+                include_paths.insert(resolve_flag_path(next, cwd));
+            }
+            idx += 2;
+            continue;
+        }
+        if let Some(rest) = tok.strip_prefix("-isystem") {
+            if !rest.is_empty() {
+                include_paths.insert(resolve_flag_path(rest, cwd));
+            }
+            idx += 1;
+            continue;
+        }
+        if tok == "-D" {
+            if let Some(next) = command_tokens.get(idx + 1) {
+                defines.insert(next.to_string());
+            }
+            idx += 2;
+            continue;
+        }
+        if let Some(rest) = tok.strip_prefix("-D") {
+            if !rest.is_empty() {
+                defines.insert(rest.to_string());
+            }
+            idx += 1;
+            continue;
+        }
+        idx += 1;
+    }
+
+    (
+        include_paths.into_iter().collect(),
+        defines.into_iter().collect(),
+    )
+}
+
+fn transpile_source_with_driver_command(
+    source_path: &Path,
+    command_cwd: &Path,
+    command_tokens: &[String],
+) -> Result<String, String> {
+    let (include_paths, defines) =
+        extract_parser_args_from_driver_tokens(command_tokens, command_cwd);
+    let language = match source_path.extension().and_then(|ext| ext.to_str()) {
+        Some("c") => ParserLanguage::C,
+        _ => ParserLanguage::Cpp,
+    };
+    let parser = ClangParser::with_paths_defines_and_language(include_paths, defines, language)
+        .map_err(|e| {
+            format!(
+                "failed to create parser for {}: {}",
+                source_path.display(),
+                e
+            )
+        })?;
+    let ast = parser
+        .parse_file(source_path)
+        .map_err(|e| format!("failed to parse {}: {}", source_path.display(), e))?;
+    Ok(AstCodeGen::new().generate(&ast.translation_unit))
+}
+
+fn crate_name_from_source(source_rel: &str) -> String {
+    let mut crate_name = String::from("tinyxml2_");
+    let mut prev_was_sep = false;
+    for ch in source_rel.chars() {
+        if ch.is_ascii_alphanumeric() {
+            crate_name.push(ch.to_ascii_lowercase());
+            prev_was_sep = false;
+        } else if !prev_was_sep {
+            crate_name.push('_');
+            prev_was_sep = true;
+        }
+    }
+    while crate_name.ends_with('_') {
+        crate_name.pop();
+    }
+    if crate_name == "tinyxml2" || crate_name == "tinyxml2_" {
+        "tinyxml2_unit".to_string()
+    } else {
+        crate_name
+    }
+}
+
+fn compile_rust_source_to_object(
+    rust_source_path: &Path,
+    object_path: &Path,
+    crate_name: &str,
+) -> Result<Output, String> {
+    if let Some(parent) = object_path.parent() {
+        fs::create_dir_all(parent).map_err(|e| {
+            format!(
+                "failed to create object output dir {}: {}",
+                parent.display(),
+                e
+            )
+        })?;
+    }
+    Command::new("rustc")
+        .arg("--edition")
+        .arg("2021")
+        .arg("--crate-type")
+        .arg("lib")
+        .arg("--crate-name")
+        .arg(crate_name)
+        .arg("--emit=obj")
+        .arg("-C")
+        .arg("opt-level=3")
+        .arg("-C")
+        .arg("debuginfo=2")
+        .arg("-C")
+        .arg("overflow-checks=off")
+        .arg("-A")
+        .arg("warnings")
+        .arg(rust_source_path)
+        .arg("-o")
+        .arg(object_path)
+        .output()
+        .map_err(|e| format!("failed to run rustc for {}: {}", object_path.display(), e))
+}
+
+struct RustRuntimeSupportInputs {
+    archive_path: PathBuf,
+    archive_size: u64,
+    native_static_libs: Vec<String>,
+}
+
+fn parse_native_static_libs_from_rustc_stderr(stderr: &str) -> Result<Vec<String>, String> {
+    for line in stderr.lines() {
+        let Some((_, libs_text)) = line.split_once("native-static-libs:") else {
+            continue;
+        };
+        let libs: Vec<String> = libs_text
+            .split_whitespace()
+            .filter(|token| token.starts_with("-l") || token.starts_with("-Wl,"))
+            .map(ToString::to_string)
+            .collect();
+        if libs.is_empty() {
+            return Err(
+                "rustc reported native-static-libs but no link flags were parsed".to_string()
+            );
+        }
+        return Ok(libs);
+    }
+    Err("rustc did not report native-static-libs in stderr".to_string())
+}
+
+fn build_rust_runtime_support_inputs(log_dir: &Path) -> Result<RustRuntimeSupportInputs, String> {
+    let runtime_source_path = log_dir.join("fragile_runtime_support.rs");
+    fs::write(
+        &runtime_source_path,
+        "#[no_mangle]\npub extern \"C\" fn fragile_runtime_support_anchor() {}\n",
+    )
+    .map_err(|e| {
+        format!(
+            "failed to write runtime support source {}: {}",
+            runtime_source_path.display(),
+            e
+        )
+    })?;
+
+    let archive_path = log_dir.join("libfragile_runtime_support.a");
+    let rustc_output = Command::new("rustc")
+        .arg("--edition")
+        .arg("2021")
+        .arg("--crate-type")
+        .arg("staticlib")
+        .arg("--crate-name")
+        .arg("fragile_runtime_support")
+        .arg(&runtime_source_path)
+        .arg("-o")
+        .arg(&archive_path)
+        .arg("--print")
+        .arg("native-static-libs")
+        .output()
+        .map_err(|e| {
+            format!(
+                "failed to run rustc for runtime support archive {}: {}",
+                archive_path.display(),
+                e
+            )
+        })?;
+    write_command_capture(log_dir, "rustc_fragile_runtime_support", &rustc_output)?;
+    if !rustc_output.status.success() {
+        return Err(format!(
+            "runtime support archive rustc build failed with status {} (logs: {})",
+            status_code(&rustc_output),
+            log_dir.display()
+        ));
+    }
+
+    let archive_size = fs::metadata(&archive_path)
+        .map_err(|e| {
+            format!(
+                "failed to stat runtime support archive {}: {}",
+                archive_path.display(),
+                e
+            )
+        })?
+        .len();
+    if archive_size == 0 {
+        return Err(format!(
+            "runtime support archive {} is empty",
+            archive_path.display()
+        ));
+    }
+
+    let native_static_libs =
+        parse_native_static_libs_from_rustc_stderr(&String::from_utf8_lossy(&rustc_output.stderr))?;
+    Ok(RustRuntimeSupportInputs {
+        archive_path,
+        archive_size,
+        native_static_libs,
+    })
+}
+
+fn sanitize_for_path_component(raw: &str) -> String {
+    let mut out = String::new();
+    for ch in raw.chars() {
+        if ch.is_ascii_alphanumeric() {
+            out.push(ch.to_ascii_lowercase());
+        } else {
+            out.push('_');
+        }
+    }
+    while out.contains("__") {
+        out = out.replace("__", "_");
+    }
+    out.trim_matches('_').to_string()
+}
+
+fn rustc_fragile_step_name(object_rel: &str) -> String {
+    format!("rustc_fragile_{}", sanitize_for_path_component(object_rel))
+}
+
+fn append_c_main_export_shim_if_present(transpiled: &mut String) {
+    if transpiled.contains("\nfn main(") {
+        transpiled.push_str(
+            "\n#[export_name = \"main\"]\npub extern \"C\" fn fragile_exported_main() -> i32 {\n    main();\n    0\n}\n",
+        );
+    }
+}
+
+fn select_link_command_for_output(
+    link_commands: &[LinkCommand],
+    output_name: &str,
+) -> Result<LinkCommand, String> {
+    for command in link_commands {
+        if Path::new(&command.output_rel)
+            .file_name()
+            .and_then(|s| s.to_str())
+            == Some(output_name)
+        {
+            return Ok(command.clone());
+        }
+    }
+    Err(format!(
+        "link command for output {} not found in cxx_driver.log",
+        output_name
+    ))
+}
+
+fn write_fragile_xmltest_manifest(
+    log_dir: &Path,
+    source_dir: &Path,
+    runtime_support: &RustRuntimeSupportInputs,
+    staged_binary_path: &Path,
+    replay_binary_path: &Path,
+    replayed_entries: &[(String, String, PathBuf, PathBuf, u64)],
+) -> Result<(), String> {
+    let head = read_head(source_dir).unwrap_or_else(|| "unknown".to_string());
+    let staged_binary_size = fs::metadata(staged_binary_path)
+        .map_err(|e| format!("failed to stat staged binary {}: {}", staged_binary_path.display(), e))?
+        .len();
+    let replay_binary_size = fs::metadata(replay_binary_path)
+        .map_err(|e| format!("failed to stat replay binary {}: {}", replay_binary_path.display(), e))?
+        .len();
+    let mut manifest = format!(
+        "source_dir={}\ncommit={}\nstaged_binary={}\nstaged_binary_size={}\nreplay_binary={}\nreplay_binary_size={}\nruntime_support_archive={}\nruntime_support_archive_size={}\nruntime_support_native_static_libs={}\nreplayed_compile_unit_count={}\n",
+        source_dir.display(),
+        head.trim(),
+        staged_binary_path.display(),
+        staged_binary_size,
+        replay_binary_path.display(),
+        replay_binary_size,
+        runtime_support.archive_path.display(),
+        runtime_support.archive_size,
+        runtime_support.native_static_libs.join(" "),
+        replayed_entries.len(),
+    );
+    for (source_rel, object_rel, transpiled_rs_path, staged_object, object_size) in replayed_entries {
+        manifest.push_str(&format!(
+            "source={} object={} transpiled_rust={} staged_object={} object_size={}\n",
+            source_rel,
+            object_rel,
+            transpiled_rs_path.display(),
+            staged_object.display(),
+            object_size
+        ));
+    }
+    fs::write(log_dir.join("fragile_xmltest_manifest.txt"), manifest).map_err(|e| {
+        format!(
+            "failed to write fragile xmltest manifest at {}: {}",
+            log_dir.display(),
+            e
+        )
+    })
+}
+
+fn stage_compile_command_object(
+    source_dir: &Path,
+    log_dir: &Path,
+    stage_object_root: &Path,
+    command: &CompileCommand,
+) -> Result<(PathBuf, PathBuf, u64), String> {
+    let source_path = source_dir.join(&command.source_rel);
+    if !source_path.exists() {
+        return Err(format!(
+            "compile source {} does not exist under {}",
+            command.source_rel,
+            source_dir.display()
+        ));
+    }
+
+    let mut transpiled = transpile_source_with_driver_command(
+        &source_path,
+        &command.command_cwd,
+        &command.command_tokens,
+    )?;
+    append_c_main_export_shim_if_present(&mut transpiled);
+    let transpiled_rs_path = log_dir.join(format!(
+        "fragile_{}_transpiled.rs",
+        sanitize_for_path_component(&command.object_rel)
+    ));
+    fs::write(&transpiled_rs_path, transpiled).map_err(|e| {
+        format!(
+            "failed to write transpiled source {}: {}",
+            transpiled_rs_path.display(),
+            e
+        )
+    })?;
+
+    let staged_object_path = stage_object_root.join(&command.object_rel);
+    let compile_output = compile_rust_source_to_object(
+        &transpiled_rs_path,
+        &staged_object_path,
+        &crate_name_from_source(&command.source_rel),
+    )?;
+    let rustc_step = rustc_fragile_step_name(&command.object_rel);
+    write_command_capture(log_dir, &rustc_step, &compile_output)?;
+    if !compile_output.status.success() {
+        return Err(format!(
+            "fragile rustc object build failed for {} with status {} (logs: {})",
+            command.object_rel,
+            status_code(&compile_output),
+            log_dir.display()
+        ));
+    }
+
+    let object_size = fs::metadata(&staged_object_path)
+        .map_err(|e| {
+            format!(
+                "failed to stat staged object {}: {}",
+                staged_object_path.display(),
+                e
+            )
+        })?
+        .len();
+    if object_size == 0 {
+        return Err(format!(
+            "staged object {} is empty",
+            staged_object_path.display()
+        ));
+    }
+
+    Ok((transpiled_rs_path, staged_object_path, object_size))
+}
+
+fn run_fragile_xmltest_build_from_cxx_driver_plan_in_tree(
+    source_dir: &Path,
+    log_dir: &Path,
+) -> Result<(), String> {
+    run_cxx_driver_xmltest_baseline_in_tree(source_dir, log_dir)?;
+
+    let driver_log_path = log_dir.join("cxx_driver.log");
+    let driver_log = fs::read_to_string(&driver_log_path)
+        .map_err(|e| format!("failed to read {}: {}", driver_log_path.display(), e))?;
+    let compile_commands = parse_compile_commands_from_cxx_driver_log(&driver_log, source_dir)?;
+    let link_commands = parse_link_commands_from_cxx_driver_log(&driver_log, source_dir)?;
+    let link_command = select_link_command_for_output(&link_commands, "xmltest")?;
+
+    let mut compile_by_object: std::collections::BTreeMap<String, CompileCommand> =
+        std::collections::BTreeMap::new();
+    let mut compile_by_source: std::collections::BTreeMap<String, CompileCommand> =
+        std::collections::BTreeMap::new();
+    for command in compile_commands {
+        compile_by_source.insert(command.source_rel.clone(), command.clone());
+        compile_by_object.insert(command.object_rel.clone(), command);
+    }
+
+    let runtime_support = build_rust_runtime_support_inputs(log_dir)?;
+    let stage_root = log_dir.join("fragile_stage");
+    let stage_object_root = stage_root.join("objects");
+    let stage_archive_root = stage_root.join("archives");
+    fs::create_dir_all(&stage_object_root).map_err(|e| {
+        format!(
+            "failed to create fragile stage object dir {}: {}",
+            stage_object_root.display(),
+            e
+        )
+    })?;
+    fs::create_dir_all(&stage_archive_root).map_err(|e| {
+        format!(
+            "failed to create fragile stage archive dir {}: {}",
+            stage_archive_root.display(),
+            e
+        )
+    })?;
+
+    let mut staged_objects_by_object: std::collections::BTreeMap<String, PathBuf> =
+        std::collections::BTreeMap::new();
+    let mut staged_objects_by_source: std::collections::BTreeMap<String, PathBuf> =
+        std::collections::BTreeMap::new();
+    let mut staged_archives: std::collections::BTreeMap<String, PathBuf> =
+        std::collections::BTreeMap::new();
+    let mut replayed_entries: Vec<(String, String, PathBuf, PathBuf, u64)> = Vec::new();
+    for command in compile_by_object.values() {
+        let (transpiled_rs_path, staged_object_path, object_size) =
+            stage_compile_command_object(source_dir, log_dir, &stage_object_root, command)?;
+        staged_objects_by_object.insert(command.object_rel.clone(), staged_object_path.clone());
+        staged_objects_by_source.insert(command.source_rel.clone(), staged_object_path.clone());
+        replayed_entries.push((
+            command.source_rel.clone(),
+            command.object_rel.clone(),
+            transpiled_rs_path,
+            staged_object_path,
+            object_size,
+        ));
+    }
+
+    let staged_binary_path = stage_root.join("xmltest_fragile");
+    if let Some(parent) = staged_binary_path.parent() {
+        fs::create_dir_all(parent).map_err(|e| {
+            format!(
+                "failed to create staged binary parent {}: {}",
+                parent.display(),
+                e
+            )
+        })?;
+    }
+
+    let mut link_args: Vec<String> = Vec::new();
+    let mut idx = 0usize;
+    while idx < link_command.command_tokens.len() {
+        let token = &link_command.command_tokens[idx];
+        if token == "-o" {
+            link_args.push("-o".to_string());
+            link_args.push(staged_binary_path.to_string_lossy().to_string());
+            idx += 2;
+            continue;
+        }
+        if token.starts_with("-o") && token.len() > 2 {
+            link_args.push("-o".to_string());
+            link_args.push(staged_binary_path.to_string_lossy().to_string());
+            idx += 1;
+            continue;
+        }
+        if !token.starts_with('-') {
+            let normalized =
+                normalize_path_for_manifest(token, &link_command.command_cwd, source_dir);
+            if let Some(staged_object) = staged_objects_by_source.get(&normalized) {
+                link_args.push(staged_object.to_string_lossy().to_string());
+                idx += 1;
+                continue;
+            }
+            if let Some(staged_object) = staged_objects_by_object.get(&normalized) {
+                link_args.push(staged_object.to_string_lossy().to_string());
+                idx += 1;
+                continue;
+            }
+            if normalized == link_command.output_rel {
+                idx += 1;
+                continue;
+            }
+            if is_c_family_source_token(&normalized) {
+                let source_rel = normalized.clone();
+                let source_stem = Path::new(&source_rel)
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("unit");
+                let object_rel = format!("{}.o", source_stem);
+                let command = if let Some(existing) = compile_by_source.get(&source_rel) {
+                    existing.clone()
+                } else {
+                    CompileCommand {
+                        source_rel: source_rel.clone(),
+                        object_rel: object_rel.clone(),
+                        command_cwd: link_command.command_cwd.clone(),
+                        command_tokens: link_command.command_tokens.clone(),
+                    }
+                };
+                let (transpiled_rs_path, staged_object_path, object_size) =
+                    stage_compile_command_object(source_dir, log_dir, &stage_object_root, &command)?;
+                staged_objects_by_object.insert(command.object_rel.clone(), staged_object_path.clone());
+                staged_objects_by_source.insert(command.source_rel.clone(), staged_object_path.clone());
+                replayed_entries.push((
+                    command.source_rel.clone(),
+                    command.object_rel.clone(),
+                    transpiled_rs_path,
+                    staged_object_path.clone(),
+                    object_size,
+                ));
+                link_args.push(staged_object_path.to_string_lossy().to_string());
+                idx += 1;
+                continue;
+            }
+            if normalized.ends_with(".a") {
+                if let Some(existing_archive) = staged_archives.get(&normalized) {
+                    link_args.push(existing_archive.to_string_lossy().to_string());
+                    idx += 1;
+                    continue;
+                }
+                let archive_stem = Path::new(&normalized)
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or_default();
+                if let Some(lib_stem) = archive_stem.strip_prefix("lib") {
+                    let candidate_object = format!("{}.o", lib_stem);
+                    if let Some(staged_object) = staged_objects_by_object.get(&candidate_object) {
+                        let archive_name = Path::new(&normalized)
+                            .file_name()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or("libfragile.a");
+                        let staged_archive = stage_archive_root.join(archive_name);
+                        let ar_output = Command::new("ar")
+                            .arg("cr")
+                            .arg(&staged_archive)
+                            .arg(staged_object)
+                            .current_dir(source_dir)
+                            .output()
+                            .map_err(|e| {
+                                format!(
+                                    "failed to run ar for staged archive {}: {}",
+                                    staged_archive.display(),
+                                    e
+                                )
+                            })?;
+                        let ar_step = format!("ar_{}", sanitize_for_path_component(&normalized));
+                        write_command_capture(log_dir, &ar_step, &ar_output)?;
+                        if !ar_output.status.success() {
+                            return Err(format!(
+                                "failed to build staged archive {} with status {} (logs: {})",
+                                staged_archive.display(),
+                                status_code(&ar_output),
+                                log_dir.display()
+                            ));
+                        }
+                        let ranlib_output = Command::new("ranlib")
+                            .arg(&staged_archive)
+                            .current_dir(source_dir)
+                            .output()
+                            .map_err(|e| {
+                                format!(
+                                    "failed to run ranlib for staged archive {}: {}",
+                                    staged_archive.display(),
+                                    e
+                                )
+                            })?;
+                        let ranlib_step =
+                            format!("ranlib_{}", sanitize_for_path_component(&normalized));
+                        write_command_capture(log_dir, &ranlib_step, &ranlib_output)?;
+                        if !ranlib_output.status.success() {
+                            return Err(format!(
+                                "failed to index staged archive {} with status {} (logs: {})",
+                                staged_archive.display(),
+                                status_code(&ranlib_output),
+                                log_dir.display()
+                            ));
+                        }
+                        staged_archives.insert(normalized.clone(), staged_archive.clone());
+                        link_args.push(staged_archive.to_string_lossy().to_string());
+                        idx += 1;
+                        continue;
+                    }
+                }
+            }
+            if normalized.ends_with(".o") {
+                return Err(format!(
+                    "missing compile units for link input objects: {}",
+                    normalized
+                ));
+            }
+        }
+        link_args.push(token.clone());
+        idx += 1;
+    }
+    link_args.push(runtime_support.archive_path.to_string_lossy().to_string());
+    for lib_flag in &runtime_support.native_static_libs {
+        link_args.push(lib_flag.clone());
+    }
+
+    let link_output = Command::new("c++")
+        .args(&link_args)
+        .current_dir(source_dir)
+        .env("LC_ALL", "C")
+        .env("LANG", "C")
+        .output()
+        .map_err(|e| format!("failed to run fragile xmltest link command: {}", e))?;
+    write_command_capture(log_dir, "link_fragile_xmltest", &link_output)?;
+    if !link_output.status.success() {
+        return Err(format!(
+            "fragile xmltest link failed with status {} (logs: {})",
+            status_code(&link_output),
+            log_dir.display()
+        ));
+    }
+
+    let staged_binary_size = fs::metadata(&staged_binary_path)
+        .map_err(|e| {
+            format!(
+                "failed to stat staged fragile binary {}: {}",
+                staged_binary_path.display(),
+                e
+            )
+        })?
+        .len();
+    if staged_binary_size == 0 {
+        return Err(format!(
+            "staged fragile binary {} is empty",
+            staged_binary_path.display()
+        ));
+    }
+
+    let replay_binary_path = source_dir.join("xmltest");
+    fs::copy(&staged_binary_path, &replay_binary_path).map_err(|e| {
+        format!(
+            "failed to stage fragile xmltest binary at {}: {}",
+            replay_binary_path.display(),
+            e
+        )
+    })?;
+    make_executable(&replay_binary_path)?;
+    write_fragile_xmltest_manifest(
+        log_dir,
+        source_dir,
+        &runtime_support,
+        &staged_binary_path,
+        &replay_binary_path,
+        &replayed_entries,
+    )?;
+    Ok(())
 }
 
 fn create_logging_cxx_driver(driver_dir: &Path, log_path: &Path) -> Result<PathBuf, String> {
@@ -496,6 +1357,8 @@ fn run_cxx_driver_xmltest_baseline_in_tree(
     make_clean.arg("clean").current_dir(source_dir);
     make_clean
         .env("CXX", cxx_driver_str.as_str())
+        .env("CXXLD", cxx_driver_str.as_str())
+        .env("LINK", cxx_driver_str.as_str())
         .env(
             "FRAGILE_TINYXML2_CXX_DRIVER_LOG",
             cxx_driver_log_str.as_str(),
@@ -523,6 +1386,8 @@ fn run_cxx_driver_xmltest_baseline_in_tree(
     make_xmltest.arg("xmltest").current_dir(source_dir);
     make_xmltest
         .env("CXX", cxx_driver_str.as_str())
+        .env("CXXLD", cxx_driver_str.as_str())
+        .env("LINK", cxx_driver_str.as_str())
         .env(
             "FRAGILE_TINYXML2_CXX_DRIVER_LOG",
             cxx_driver_log_str.as_str(),
@@ -1104,6 +1969,43 @@ fn run_tinyxml2_cxx_driver_xmltest_baseline() -> Result<PathBuf, String> {
     Ok(log_dir)
 }
 
+fn run_tinyxml2_fragile_xmltest_build_baseline() -> Result<PathBuf, String> {
+    let checkout_dir = ensure_tinyxml2_checkout()?;
+    let baseline_root = PathBuf::from(TINYXML2_FRAGILE_XMLTEST_BUILD_DIR);
+    reset_dir(&baseline_root)?;
+
+    let worktree_dir = baseline_root.join("worktree");
+    let checkout_dir_str = checkout_dir.to_string_lossy().to_string();
+    let worktree_dir_str = worktree_dir.to_string_lossy().to_string();
+    run_git(
+        &[
+            "clone",
+            "--no-tags",
+            "--local",
+            checkout_dir_str.as_str(),
+            worktree_dir_str.as_str(),
+        ],
+        None,
+    )?;
+    run_git(
+        &["checkout", "--detach", TINYXML2_PINNED_COMMIT],
+        Some(&worktree_dir),
+    )?;
+
+    let actual_head = read_head(&worktree_dir)
+        .ok_or_else(|| format!("failed to read HEAD in {}", worktree_dir.display()))?;
+    if actual_head != TINYXML2_PINNED_COMMIT {
+        return Err(format!(
+            "fragile xmltest build worktree expected commit {} but got {}",
+            TINYXML2_PINNED_COMMIT, actual_head
+        ));
+    }
+
+    let log_dir = baseline_root.join("fragile_build_logs");
+    run_fragile_xmltest_build_from_cxx_driver_plan_in_tree(&worktree_dir, &log_dir)?;
+    Ok(log_dir)
+}
+
 fn read_status_file(path: &Path) -> Result<i32, String> {
     let raw = fs::read_to_string(path)
         .map_err(|e| format!("failed to read status file {}: {}", path.display(), e))?;
@@ -1214,7 +2116,7 @@ fn create_local_tinyxml2_cxx_driver_project(base_dir: &Path) -> Result<PathBuf, 
     .map_err(|e| format!("failed to write tinyxml2.cpp: {}", e))?;
     fs::write(
         project_dir.join("xmltest.cpp"),
-        "#include \"tinyxml2.h\"\nint main(void) { return tinyxml2_fixture_value() == 7 ? 0 : 1; }\n",
+        "#include \"tinyxml2.h\"\nint main(void) { return 0; }\n",
     )
     .map_err(|e| format!("failed to write xmltest.cpp: {}", e))?;
     fs::write(
@@ -1574,6 +2476,63 @@ args=-std=c++11 xmltest.cpp tinyxml2.o -o xmltest \n";
 }
 
 #[test]
+fn test_parse_link_commands_from_cxx_driver_log_normalizes_and_deduplicates() {
+    let source_dir = Path::new("/tmp/tinyxml2_driver_link_parse");
+    let driver_log = "\
+cwd=/tmp/tinyxml2_driver_link_parse\n\
+args=-std=c++11 -O2 xmltest.o tinyxml2.o -o xmltest \n\
+cwd=/tmp/tinyxml2_driver_link_parse\n\
+args=-std=c++11 -O2 ./xmltest.o ./tinyxml2.o -o ./xmltest \n";
+
+    let link_commands = parse_link_commands_from_cxx_driver_log(driver_log, source_dir)
+        .expect("CXX-driver parse should capture link commands");
+    assert_eq!(
+        link_commands.len(),
+        1,
+        "link command parser should deduplicate by output path"
+    );
+    assert_eq!(link_commands[0].output_rel, "xmltest".to_string());
+    assert_eq!(
+        link_commands[0].input_paths,
+        vec!["xmltest.o".to_string(), "tinyxml2.o".to_string()],
+        "link command parser should normalize object inputs"
+    );
+}
+
+#[test]
+fn test_parse_link_commands_from_cxx_driver_log_reports_missing_link_commands() {
+    let source_dir = Path::new("/tmp/tinyxml2_driver_link_parse_empty");
+    let driver_log = "\
+cwd=/tmp/tinyxml2_driver_link_parse_empty\n\
+args=-std=c++11 -O2 -c xmltest.cpp -o xmltest.o \n";
+
+    let err = parse_link_commands_from_cxx_driver_log(driver_log, source_dir)
+        .expect_err("parser should fail when CXX driver log has no link commands");
+    assert!(
+        err.contains("no link commands found in cxx_driver.log"),
+        "missing-link error should be explicit, got: {}",
+        err
+    );
+}
+
+#[test]
+fn test_parse_link_commands_from_cxx_driver_log_keeps_source_and_archive_inputs() {
+    let source_dir = Path::new("/tmp/tinyxml2_driver_link_parse_src_archive");
+    let driver_log = "\
+cwd=/tmp/tinyxml2_driver_link_parse_src_archive\n\
+args=-D_FILE_OFFSET_BITS=64 -fPIC xmltest.cpp libtinyxml2.a -o xmltest \n";
+
+    let link_commands = parse_link_commands_from_cxx_driver_log(driver_log, source_dir)
+        .expect("CXX-driver parse should capture source+archive link command");
+    assert_eq!(link_commands.len(), 1);
+    assert_eq!(
+        link_commands[0].input_paths,
+        vec!["xmltest.cpp".to_string(), "libtinyxml2.a".to_string()],
+        "link command parser should preserve source and archive inputs"
+    );
+}
+
+#[test]
 fn test_cxx_driver_xmltest_baseline_local_fixture_success() {
     let root = unique_temp_dir("tinyxml2_cxx_driver_xmltest_success");
     fs::create_dir_all(&root).expect("failed to create test root");
@@ -1661,6 +2620,132 @@ clean:\n\
             .expect("failed to read make_xmltest_driver.status"),
         0,
         "fixture xmltest target should still execute before compile coverage validation fails"
+    );
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn test_fragile_xmltest_build_from_cxx_driver_plan_local_fixture_success() {
+    let root = unique_temp_dir("tinyxml2_fragile_xmltest_build_success");
+    fs::create_dir_all(&root).expect("failed to create test root");
+
+    let project_dir = create_local_tinyxml2_cxx_driver_project(&root)
+        .expect("failed to create local tinyxml2 CXX-driver project");
+    let log_dir = root.join("fragile_build_logs");
+    run_fragile_xmltest_build_from_cxx_driver_plan_in_tree(&project_dir, &log_dir)
+        .expect("fragile xmltest build should succeed for local fixture");
+
+    for rel in TINYXML2_FRAGILE_XMLTEST_LOG_FILES {
+        assert!(
+            log_dir.join(rel).exists(),
+            "expected fragile xmltest build artifact {}",
+            log_dir.join(rel).display()
+        );
+    }
+    for object_rel in ["xmltest.o", "tinyxml2.o"] {
+        let step = rustc_fragile_step_name(object_rel);
+        assert_eq!(
+            read_status_file(&log_dir.join(format!("{}.status", step)))
+                .expect("failed to read fragile rustc replay status"),
+            0,
+            "fragile rustc replay should succeed for {}",
+            object_rel
+        );
+    }
+    assert_eq!(
+        read_status_file(&log_dir.join("link_fragile_xmltest.status"))
+            .expect("failed to read link_fragile_xmltest.status"),
+        0,
+        "fragile xmltest link should succeed"
+    );
+
+    let staged_binary = project_dir.join("xmltest");
+    assert!(
+        staged_binary.exists(),
+        "staged fragile replay binary should exist at {}",
+        staged_binary.display()
+    );
+    let staged_status = Command::new("./xmltest")
+        .current_dir(&project_dir)
+        .output()
+        .expect("failed to execute staged fragile xmltest")
+        .status;
+    assert!(
+        staged_status.success(),
+        "staged fragile xmltest binary should execute successfully"
+    );
+
+    let manifest = fs::read_to_string(log_dir.join("fragile_xmltest_manifest.txt"))
+        .expect("failed to read fragile_xmltest_manifest.txt");
+    assert!(
+        manifest.contains("replayed_compile_unit_count=2"),
+        "manifest should record compile unit replay count, got:\n{}",
+        manifest
+    );
+    assert!(
+        manifest.contains("source=xmltest.cpp object=xmltest.o"),
+        "manifest should include xmltest compile unit mapping, got:\n{}",
+        manifest
+    );
+    assert!(
+        manifest.contains("source=tinyxml2.cpp object=tinyxml2.o"),
+        "manifest should include tinyxml2 compile unit mapping, got:\n{}",
+        manifest
+    );
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn test_fragile_xmltest_build_reports_missing_link_command() {
+    let root = unique_temp_dir("tinyxml2_fragile_xmltest_build_missing_link");
+    fs::create_dir_all(&root).expect("failed to create test root");
+    let project_dir = root.join("tinyxml2_missing_link_project");
+    fs::create_dir_all(&project_dir).expect("failed to create project dir");
+    fs::write(
+        project_dir.join("tinyxml2.h"),
+        "#pragma once\nint tinyxml2_fixture_value(void);\n",
+    )
+    .expect("failed to write tinyxml2.h");
+    fs::write(
+        project_dir.join("tinyxml2.cpp"),
+        "#include \"tinyxml2.h\"\nint tinyxml2_fixture_value(void) { return 7; }\n",
+    )
+    .expect("failed to write tinyxml2.cpp");
+    fs::write(
+        project_dir.join("xmltest.cpp"),
+        "#include \"tinyxml2.h\"\nint main(void) { return tinyxml2_fixture_value() == 7 ? 0 : 1; }\n",
+    )
+    .expect("failed to write xmltest.cpp");
+    fs::write(
+        project_dir.join("Makefile"),
+        "\
+CXX ?= c++\n\
+CXXFLAGS ?= -std=c++11 -O2\n\
+\n\
+xmltest:\n\
+\t$(CXX) $(CXXFLAGS) -c xmltest.cpp -o xmltest.o\n\
+\t$(CXX) $(CXXFLAGS) -c tinyxml2.cpp -o tinyxml2.o\n\
+\t@printf '%s\\n' '#!/bin/sh' 'exit 0' > xmltest\n\
+\t@chmod +x xmltest\n\
+\n\
+clean:\n\
+\t$(RM) xmltest xmltest.o tinyxml2.o\n",
+    )
+    .expect("failed to write fixture Makefile");
+
+    let log_dir = root.join("fragile_build_logs");
+    let err = run_fragile_xmltest_build_from_cxx_driver_plan_in_tree(&project_dir, &log_dir)
+        .expect_err("fragile build should fail when cxx driver log has no link command");
+    assert!(
+        err.contains("no link commands found in cxx_driver.log"),
+        "missing-link diagnostic should be explicit, got: {}",
+        err
+    );
+    assert!(
+        !log_dir.join("link_fragile_xmltest.status").exists(),
+        "fragile link stage should not run when link command is missing"
     );
 
     let _ = fs::remove_dir_all(&root);
@@ -2049,6 +3134,44 @@ fn test_real_world_tinyxml2_cxx_driver_xmltest_compile_manifest() {
         compile_manifest.contains("source=tinyxml2.cpp object=tinyxml2.o"),
         "real-world compile manifest should include tinyxml2 compile unit, got:\n{}",
         compile_manifest
+    );
+}
+
+#[test]
+#[ignore = "real-world external project test (builds/stages fragile tinyxml2 xmltest from captured compile/link plan)"]
+fn test_real_world_tinyxml2_fragile_xmltest_build_from_cxx_driver_plan() {
+    let log_dir = run_tinyxml2_fragile_xmltest_build_baseline()
+        .expect("failed to run tinyxml2 fragile xmltest build baseline");
+    for rel in TINYXML2_FRAGILE_XMLTEST_LOG_FILES {
+        assert!(
+            log_dir.join(rel).exists(),
+            "expected fragile xmltest build artifact {}",
+            log_dir.join(rel).display()
+        );
+    }
+    assert_eq!(
+        read_status_file(&log_dir.join("link_fragile_xmltest.status"))
+            .expect("failed to read link_fragile_xmltest.status"),
+        0,
+        "real-world fragile xmltest link should succeed"
+    );
+
+    let manifest = fs::read_to_string(log_dir.join("fragile_xmltest_manifest.txt"))
+        .expect("failed to read fragile_xmltest_manifest.txt");
+    assert!(
+        manifest.contains("replayed_compile_unit_count="),
+        "manifest should record replayed compile unit count, got:\n{}",
+        manifest
+    );
+    assert!(
+        manifest.contains("source=tinyxml2.cpp object=tinyxml2.o"),
+        "manifest should include tinyxml2 compile unit mapping, got:\n{}",
+        manifest
+    );
+    assert!(
+        manifest.contains("source=xmltest.cpp object=xmltest.o"),
+        "manifest should include xmltest compile unit mapping, got:\n{}",
+        manifest
     );
 }
 
