@@ -5792,12 +5792,10 @@ fn test_real_world_zlib_make_test_command_subset_replay() {
     let replay_result = run_zlib_make_test_command_subset_replay_baseline();
 
     let log_dir = Path::new(ZLIB_MAKE_TEST_REPLAY_BASELINE_DIR).join("driver_logs");
-    let err = replay_result.expect_err("make-test replay should currently fail at command #1");
-    assert!(
-        err.contains("make-test command replay failed at command 1")
-            || err.contains("make-test command replay timed out at command 1"),
-        "unexpected make-test replay failure: {}",
-        err
+    let replay_log_dir = replay_result.expect("make-test replay should succeed end-to-end");
+    assert_eq!(
+        replay_log_dir, log_dir,
+        "replay helper should return baseline make-test replay log directory"
     );
 
     for rel in ZLIB_FRAGILE_LINK_REQUIRED_LOG_FILES {
@@ -5856,99 +5854,85 @@ fn test_real_world_zlib_make_test_command_subset_replay() {
         "make-test command manifest should be written before replay execution"
     );
     assert!(
-        !log_dir.join("make_test_replay_manifest.txt").exists(),
-        "make-test replay manifest should not be written when command replay fails at command #1"
+        log_dir.join("make_test_replay_manifest.txt").exists(),
+        "make-test replay manifest should be written when replay succeeds"
     );
-    let replay_step = make_test_replay_step_name(0);
-    let replay_step_status_path = log_dir.join(format!("{}.status", replay_step));
+    let commands_manifest = fs::read_to_string(log_dir.join("make_test_commands_manifest.txt"))
+        .expect("failed to read make_test_commands_manifest.txt");
+    let commands = parse_make_test_commands_manifest_entries(&commands_manifest)
+        .expect("failed to parse make_test_commands_manifest.txt");
     assert!(
-        replay_step_status_path.exists(),
-        "expected replay step status for command #1"
+        !commands.is_empty(),
+        "make-test replay should include at least one command"
     );
-    let replay_step_status = fs::read_to_string(&replay_step_status_path)
-        .expect("failed to read replay step #1 status");
-    assert!(
-        replay_step_status.trim() != "0",
-        "expected command #1 to fail in current baseline"
-    );
-    assert!(
-        log_dir.join(format!("{}.stdout", replay_step)).exists()
-            && log_dir.join(format!("{}.stderr", replay_step)).exists(),
-        "expected replay stdout/stderr captures for command #1"
-    );
+    for idx in 0..commands.len() {
+        let replay_step = make_test_replay_step_name(idx);
+        let replay_step_status_path = log_dir.join(format!("{}.status", replay_step));
+        assert!(
+            replay_step_status_path.exists(),
+            "expected replay step status for command #{}",
+            idx + 1
+        );
+        let replay_step_status = fs::read_to_string(&replay_step_status_path)
+            .expect("failed to read replay step status");
+        assert_eq!(
+            replay_step_status.trim(),
+            "0",
+            "expected command #{} to succeed in current baseline",
+            idx + 1
+        );
+        assert!(
+            log_dir.join(format!("{}.stdout", replay_step)).exists()
+                && log_dir.join(format!("{}.stderr", replay_step)).exists(),
+            "expected replay stdout/stderr captures for command #{}",
+            idx + 1
+        );
+    }
 }
 
 #[test]
 #[ignore = "real-world external project test (downloads zlib and compares native-vs-fragile make-test exit status)"]
 fn test_real_world_zlib_make_test_exit_status_parity() {
-    let replay_result = run_zlib_make_test_command_subset_replay_baseline();
-    let replay_log_dir = Path::new(ZLIB_MAKE_TEST_REPLAY_BASELINE_DIR).join("driver_logs");
+    let native_log_dir = run_zlib_native_baseline().expect("failed to run native zlib baseline");
+    let replay_log_dir = run_zlib_make_test_command_subset_replay_baseline()
+        .expect("fragile replay should succeed end-to-end");
 
-    let replay_err = replay_result.expect_err("fragile replay should currently fail at command #1");
-    assert!(
-        replay_err.contains("make-test command replay failed at command 1")
-            || replay_err.contains("make-test command replay timed out at command 1"),
-        "unexpected make-test replay failure: {}",
-        replay_err
-    );
     assert!(
         replay_log_dir.join("make_test_commands_manifest.txt").exists(),
         "make-test command plan should exist once strict link replay succeeds"
     );
-    let replay_step = make_test_replay_step_name(0);
-    assert!(
-        replay_log_dir.join(format!("{}.status", replay_step)).exists(),
-        "make-test exit status parity baseline should include command #1 replay status"
-    );
+    assert_make_test_exit_status_parity(&native_log_dir, &replay_log_dir)
+        .expect("expected native and fragile make-test exit statuses to match");
 }
 
 #[test]
 #[ignore = "real-world external project test (downloads zlib and compares native-vs-fragile make-test stdout/stderr)"]
 fn test_real_world_zlib_make_test_stdout_stderr_parity() {
-    let replay_result = run_zlib_make_test_command_subset_replay_baseline();
-    let replay_log_dir = Path::new(ZLIB_MAKE_TEST_REPLAY_BASELINE_DIR).join("driver_logs");
+    let native_log_dir = run_zlib_native_baseline().expect("failed to run native zlib baseline");
+    let replay_log_dir = run_zlib_make_test_command_subset_replay_baseline()
+        .expect("fragile replay should succeed end-to-end");
 
-    let replay_err = replay_result.expect_err("fragile replay should currently fail at command #1");
-    assert!(
-        replay_err.contains("make-test command replay failed at command 1")
-            || replay_err.contains("make-test command replay timed out at command 1"),
-        "unexpected make-test replay failure: {}",
-        replay_err
-    );
     assert!(
         replay_log_dir.join("make_test_commands_manifest.txt").exists(),
         "make-test command plan should exist once strict link replay succeeds"
     );
-    let replay_step = make_test_replay_step_name(0);
-    assert!(
-        replay_log_dir.join(format!("{}.stdout", replay_step)).exists()
-            && replay_log_dir.join(format!("{}.stderr", replay_step)).exists(),
-        "make-test stdout/stderr baseline should include command #1 replay captures"
-    );
+    assert_make_test_stdout_stderr_parity(&native_log_dir, &replay_log_dir)
+        .expect("expected native and fragile make-test stdout/stderr to match");
 }
 
 #[test]
 #[ignore = "real-world external project test (downloads zlib and compares native-vs-fragile make-test artifact behavior)"]
 fn test_real_world_zlib_make_test_artifact_behavior_parity() {
-    let replay_result = run_zlib_make_test_command_subset_replay_baseline();
-    let replay_log_dir = Path::new(ZLIB_MAKE_TEST_REPLAY_BASELINE_DIR).join("driver_logs");
+    let native_log_dir = run_zlib_native_baseline().expect("failed to run native zlib baseline");
+    let replay_log_dir = run_zlib_make_test_command_subset_replay_baseline()
+        .expect("fragile replay should succeed end-to-end");
 
-    let replay_err = replay_result.expect_err("fragile replay should currently fail at command #1");
-    assert!(
-        replay_err.contains("make-test command replay failed at command 1")
-            || replay_err.contains("make-test command replay timed out at command 1"),
-        "unexpected make-test replay failure: {}",
-        replay_err
-    );
     assert!(
         replay_log_dir.join("make_test_commands_manifest.txt").exists(),
         "make-test command plan should exist once strict link replay succeeds"
     );
-    let replay_step = make_test_replay_step_name(0);
-    assert!(
-        replay_log_dir.join(format!("{}.status", replay_step)).exists(),
-        "make-test artifact behavior baseline should include command #1 replay status"
-    );
+    assert_make_test_artifact_behavior_parity(&native_log_dir, &replay_log_dir)
+        .expect("expected native and fragile make-test artifact behavior to match");
 }
 
 #[test]

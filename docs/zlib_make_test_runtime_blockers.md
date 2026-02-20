@@ -121,7 +121,7 @@ Observed artifact state:
 - `make_test_replay_01.stderr` is empty (previous `Segmentation fault` signature is cleared);
 - `link_gzwrite_o_transpiled.rs` now lowers nested stream-field writes as `((*state).strm).next_in` / `((*state).strm).avail_in`.
 
-## Make-test replay baseline after switch-fallthrough fix (current)
+## Make-test replay baseline after command-#1 runtime fixes (current)
 Reproducer:
 
 ```bash
@@ -129,25 +129,36 @@ cargo test -p fragile-clang --test real_world_zlib_tests \
   test_real_world_zlib_make_test_command_subset_replay -- --ignored --nocapture --test-threads=1
 ```
 
-Current runtime status for command #1:
-- Status file: `/tmp/fragile_real_world_zlib_make_test_replay/driver_logs/make_test_replay_01.status`
-- Status value: `1`
-- Stderr file: `/tmp/fragile_real_world_zlib_make_test_replay/driver_logs/make_test_replay_01.stderr`
+Current runtime status:
+- `/tmp/fragile_real_world_zlib_make_test_replay/driver_logs/make_test_replay_01.status` = `0`
+- `/tmp/fragile_real_world_zlib_make_test_replay/driver_logs/make_test_replay_02.status` = `0`
+- `/tmp/fragile_real_world_zlib_make_test_replay/driver_logs/make_test_replay_03.status` = `0`
+- `/tmp/fragile_real_world_zlib_make_test_replay/driver_logs/make_test_replay_manifest.txt` exists with `command_replay_count=3`
 
-Observed stderr:
+Observed command #1 stdout (fragile replay):
 
 ```text
-./minigzip: <fd:0>: incorrect data check
+hello world
+zlib version 1.3.1 = 0x1310, compile flags = 0xa9
+uncompress(): hello, hello!
+gzread(): hello, hello!
+gzgets() after gzseek:  hello!
+inflate(): hello, hello!
+large_inflate(): OK
+after inflateSync(): hello, hello!
+inflate with dictionary: hello, hello!
+ *** zlib test OK ***
 ```
 
-Observed behavior shift:
-- `./example tmpst_$` no longer hangs/times out; it now exits quickly with `uncompress error: -3`.
-- replay command #1 failure is now data-integrity/checksum validation, not non-termination.
+Resolved blocker classes in this step:
+1. `gzprintf err` due hardcoded variadic stdio zero-return shims (`vsnprintf`/`vasprintf`) in generated Rust prelude.
+2. Follow-on `deflate_fast` segfault from corrupted `deflate_state` layout caused by unnamed-union source recovery line-offset drift (block comments collapsed line numbers), which polluted recovered union fields and inflated `ct_data` size.
 
-## Current hypothesis
-Strict-link input/symbol gaps and the command-#1 non-termination are resolved; the current first blocker is checksum/data-integrity mismatch in the gzip round-trip path (`minigzip`/`inflate`).
+Applied fixes:
+1. Variadic stdio shims now forward `va_list` correctly to libc via pointer (`_args.as_mut_ptr()`), matching C parameter decay semantics.
+2. Unnamed-union source recovery now preserves newline offsets while stripping block comments and prefers source-recovered union members over polluted member-usage merges.
 
-## Immediate next fix direction
-1. Capture native-vs-fragile gzip stream/trailer deltas for command #1 round-trip.
-2. Root-cause and fix checksum/state accounting mismatch in transpiled gzip/inflate runtime path.
-3. Re-run command-subset replay and advance command #1 status from `1` to `0`.
+Parity validation after replay success:
+- `test_real_world_zlib_make_test_exit_status_parity` passes.
+- `test_real_world_zlib_make_test_stdout_stderr_parity` passes.
+- `test_real_world_zlib_make_test_artifact_behavior_parity` passes.

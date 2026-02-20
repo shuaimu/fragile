@@ -995,6 +995,181 @@ impl AstCodeGen {
         }
     }
 
+    /// Parse an unnamed-union source location from a C++ type spelling such as:
+    /// `union (unnamed union at /path/to/header.h:77:5)`.
+    fn parse_unnamed_union_location(cpp_name: &str) -> Option<(String, usize)> {
+        let marker = "unnamed union at ";
+        let idx = cpp_name.find(marker)?;
+        let mut tail = cpp_name[idx + marker.len()..].trim();
+        if let Some(end) = tail.find(')') {
+            tail = &tail[..end];
+        }
+        let mut parts = tail.rsplitn(3, ':');
+        let _col = parts.next()?;
+        let line = parts.next()?.trim().parse::<usize>().ok()?;
+        let path = parts.next()?.trim();
+        if path.is_empty() || line == 0 {
+            return None;
+        }
+        Some((path.to_string(), line))
+    }
+
+    /// Best-effort parser for simple C field declaration types from header text.
+    fn parse_c_decl_type(type_str: &str) -> CppType {
+        let cleaned = type_str
+            .replace("const ", "")
+            .replace("volatile ", "")
+            .trim()
+            .to_string();
+        let lowered = cleaned.to_ascii_lowercase();
+        match lowered.as_str() {
+            "void" => CppType::Void,
+            "bool" => CppType::Bool,
+            "char" | "signed char" => CppType::Char { signed: true },
+            "unsigned char" => CppType::Char { signed: false },
+            "short" | "signed short" | "short int" | "signed short int" => {
+                CppType::Short { signed: true }
+            }
+            "unsigned short" | "unsigned short int" => CppType::Short { signed: false },
+            "int" | "signed int" | "signed" => CppType::Int { signed: true },
+            "unsigned" | "unsigned int" => CppType::Int { signed: false },
+            "long" | "signed long" | "long int" | "signed long int" => {
+                CppType::Long { signed: true }
+            }
+            "unsigned long" | "unsigned long int" => CppType::Long { signed: false },
+            "long long" | "signed long long" | "long long int" | "signed long long int" => {
+                CppType::LongLong { signed: true }
+            }
+            "unsigned long long" | "unsigned long long int" => CppType::LongLong { signed: false },
+            "float" => CppType::Float,
+            "double" => CppType::Double,
+            _ => CppType::Named(cleaned),
+        }
+    }
+
+    /// Recover unnamed-union field members from header source text using the embedded
+    /// location in the union type spelling when the AST omits explicit UnionDecl nodes.
+    fn recover_unnamed_union_fields_from_source(cpp_name: &str) -> Option<Vec<(String, CppType)>> {
+        let (path, line) = Self::parse_unnamed_union_location(cpp_name)?;
+        let source = std::fs::read_to_string(path).ok()?;
+        let mut stripped = String::with_capacity(source.len());
+        let mut chars = source.chars().peekable();
+        let mut in_block_comment = false;
+        while let Some(ch) = chars.next() {
+            if in_block_comment {
+                if ch == '*' && matches!(chars.peek(), Some('/')) {
+                    let _ = chars.next();
+                    in_block_comment = false;
+                } else if ch == '\n' {
+                    // Preserve line offsets so recovered `path:line:col` locations
+                    // still map to the same logical source line.
+                    stripped.push('\n');
+                }
+                continue;
+            }
+            if ch == '/' && matches!(chars.peek(), Some('*')) {
+                let _ = chars.next();
+                in_block_comment = true;
+                continue;
+            }
+            stripped.push(ch);
+        }
+        let lines: Vec<&str> = stripped.lines().collect();
+        if line == 0 || line > lines.len() {
+            return None;
+        }
+
+        // Start from the union's location line and find the first opening brace.
+        let tail = lines[line - 1..].join("\n");
+        let open_idx = tail.find('{')?;
+
+        // Extract the immediate union body by tracking brace depth.
+        let mut depth = 1usize;
+        let mut body = String::new();
+        for ch in tail[open_idx + 1..].chars() {
+            match ch {
+                '{' => {
+                    depth += 1;
+                    body.push(ch);
+                }
+                '}' => {
+                    depth = depth.saturating_sub(1);
+                    if depth == 0 {
+                        break;
+                    }
+                    body.push(ch);
+                }
+                _ => body.push(ch),
+            }
+        }
+        if body.trim().is_empty() {
+            return None;
+        }
+
+        let mut fields = Vec::new();
+        for raw_stmt in body.split(';') {
+            let mut stmt = raw_stmt.trim();
+            if stmt.is_empty() {
+                continue;
+            }
+            if let Some(comment_idx) = stmt.find("//") {
+                stmt = stmt[..comment_idx].trim();
+            }
+            if stmt.is_empty() || stmt.contains('{') || stmt.contains('}') {
+                continue;
+            }
+            let stmt = stmt.split('=').next().unwrap_or(stmt).trim();
+            let stmt = stmt.split(':').next().unwrap_or(stmt).trim();
+            if stmt.is_empty() {
+                continue;
+            }
+
+            let mut tokens: Vec<&str> = stmt.split_whitespace().collect();
+            if tokens.len() < 2 {
+                continue;
+            }
+
+            let mut field_token = tokens.pop().unwrap_or_default().trim().to_string();
+            let mut ptr_count = 0usize;
+            while field_token.starts_with('*') {
+                ptr_count += 1;
+                field_token.remove(0);
+            }
+            if field_token.is_empty() {
+                continue;
+            }
+
+            let mut type_str = tokens.join(" ");
+            while type_str.ends_with('*') {
+                ptr_count += 1;
+                type_str.pop();
+                type_str = type_str.trim_end().to_string();
+            }
+            if type_str.is_empty() {
+                continue;
+            }
+
+            let mut field_ty = Self::parse_c_decl_type(&type_str);
+            for _ in 0..ptr_count {
+                field_ty = CppType::Pointer {
+                    pointee: Box::new(field_ty),
+                    is_const: false,
+                };
+            }
+            let field_name = sanitize_identifier(&field_token);
+            if field_name.is_empty() || field_name == "_" {
+                continue;
+            }
+            fields.push((field_name, field_ty));
+        }
+
+        if fields.is_empty() {
+            None
+        } else {
+            Some(fields)
+        }
+    }
+
     /// Normalize C/C++ named enum spellings for lookup:
     /// strips qualifiers/tags like `const`, `volatile`, `enum`, `struct`, `class`.
     fn canonical_enum_type_name(name: &str) -> String {
@@ -3218,12 +3393,22 @@ impl AstCodeGen {
                 info.field_types.keys().any(|k| !k.contains("padding"))
             });
 
-            let recovered_union_fields = self
-                .missing_union_member_types
-                .get(&rust_name)
-                .cloned()
-                .filter(|fields| !fields.is_empty());
-            if let Some(union_fields) = recovered_union_fields {
+            let source_union_fields =
+                Self::recover_unnamed_union_fields_from_source(&cpp_name).unwrap_or_default();
+            let recovered_union_fields = if !source_union_fields.is_empty() {
+                // Prefer source-location recovery when available. Member-usage
+                // recovery can be polluted by upstream type-lowering artifacts.
+                source_union_fields
+            } else {
+                self.missing_union_member_types
+                    .get(&rust_name)
+                    .cloned()
+                    .unwrap_or_default()
+            };
+            if !recovered_union_fields.is_empty() {
+                let union_fields = recovered_union_fields.clone();
+                self.missing_union_member_types
+                    .insert(rust_name.clone(), recovered_union_fields);
                 self.writeln(&format!("/// Recovered union for C++ `{}`", cpp_name));
                 self.writeln("#[repr(C)]");
                 self.writeln("#[derive(Copy, Clone)]");
@@ -11900,10 +12085,18 @@ impl AstCodeGen {
         self.writeln("#[inline] pub fn strtold_l(_s: *const i8, _endptr: *mut *mut i8, _loc: *mut std::ffi::c_void) -> f64 { 0.0 }");
         self.writeln("");
 
-        // Variadic C stdio stubs
-        self.writeln("// Variadic C stdio stubs");
-        self.writeln("#[inline] pub fn vsnprintf(_s: *mut i8, _n: u64, _fmt: *const i8, _args: [std::ffi::VaList; 1]) -> i32 { 0 }");
-        self.writeln("#[inline] pub fn vasprintf(_strp: *mut *mut i8, _fmt: *const i8, _args: [std::ffi::VaList; 1]) -> i32 { 0 }");
+        // Variadic C stdio shims
+        self.writeln("// Variadic C stdio shims");
+        self.writeln("unsafe extern \"C\" {");
+        self.writeln("    #[link_name = \"vsnprintf\"]");
+        self.writeln("    fn __fragile_extern_vsnprintf(_s: *mut i8, _n: u64, _fmt: *const i8, _args: *mut std::ffi::VaList) -> i32;");
+        self.writeln("}");
+        self.writeln("#[inline] pub fn vsnprintf(_s: *mut i8, _n: u64, _fmt: *const i8, mut _args: [std::ffi::VaList; 1]) -> i32 { unsafe { __fragile_extern_vsnprintf(_s, _n, _fmt, _args.as_mut_ptr()) } }");
+        self.writeln("unsafe extern \"C\" {");
+        self.writeln("    #[link_name = \"vasprintf\"]");
+        self.writeln("    fn __fragile_extern_vasprintf(_strp: *mut *mut i8, _fmt: *const i8, _args: *mut std::ffi::VaList) -> i32;");
+        self.writeln("}");
+        self.writeln("#[inline] pub fn vasprintf(_strp: *mut *mut i8, _fmt: *const i8, mut _args: [std::ffi::VaList; 1]) -> i32 { unsafe { __fragile_extern_vasprintf(_strp, _fmt, _args.as_mut_ptr()) } }");
         self.writeln("");
 
         // sizeof pseudo-function
@@ -33298,6 +33491,128 @@ mod tests {
     }
 
     #[test]
+    fn test_unnamed_union_placeholder_recovers_members_from_source_location() {
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let header_path = std::env::temp_dir().join(format!("fragile_union_recover_{unique}.h"));
+        std::fs::write(
+            &header_path,
+            "typedef unsigned short ush;\n\
+             typedef struct ct_data_s {\n\
+                 union {\n\
+                     ush dad;\n\
+                     ush len;\n\
+                 } dl;\n\
+             } ct_data;\n",
+        )
+        .expect("failed to write union recovery fixture header");
+
+        let union_name = format!(
+            "union (unnamed union at {}:3:5)",
+            header_path.display()
+        );
+        let union_ty = CppType::Named(union_name.clone());
+        let rust_union_name = union_ty.to_rust_type_str();
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![make_node(
+                ClangNodeKind::RecordDecl {
+                    name: "ct_data_s".to_string(),
+                    is_class: false,
+                    is_definition: true,
+                    fields: vec![],
+                },
+                vec![make_node(
+                    ClangNodeKind::FieldDecl {
+                        name: "dl".to_string(),
+                        ty: union_ty.clone(),
+                        access: crate::ast::AccessSpecifier::Public,
+                        is_static: false,
+                        bit_field_width: None,
+                    },
+                    vec![],
+                )],
+            )],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+
+        let _ = std::fs::remove_file(&header_path);
+
+        assert!(
+            code.contains(&format!("pub union {} {{", rust_union_name)),
+            "expected unnamed union to be recovered from source location, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("pub dad: ush,") && code.contains("pub len: ush,"),
+            "expected recovered union members from header source, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains(&format!("pub struct {} {{\n    _opaque: [u8; 64]", rust_union_name)),
+            "source-location union recovery should avoid opaque placeholder fallback, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_unnamed_union_source_recovery_preserves_line_offsets_through_block_comments() {
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let header_path =
+            std::env::temp_dir().join(format!("fragile_union_line_offsets_{unique}.h"));
+        std::fs::write(
+            &header_path,
+            "/*\n\
+             * multi-line header comment that must not shift source line mapping\n\
+             */\n\
+             typedef unsigned short ush;\n\
+             typedef struct ct_data_s {\n\
+                 union {\n\
+                     ush freq; /* frequency count */\n\
+                     ush code; /* bit string */\n\
+                 } fc;\n\
+                 union {\n\
+                     ush dad;  /* father node */\n\
+                     ush len;  /* code length */\n\
+                 } dl;\n\
+             } ct_data;\n\
+             typedef struct tree_desc_s {\n\
+                 ct_data *dyn_tree;\n\
+                 int max_code;\n\
+                 const void *stat_desc;\n\
+             } tree_desc;\n",
+        )
+        .expect("failed to write line-offset union recovery fixture header");
+
+        let union_fc = format!("union (unnamed union at {}:6:5)", header_path.display());
+        let union_dl = format!("union (unnamed union at {}:10:5)", header_path.display());
+
+        let fields_fc = AstCodeGen::recover_unnamed_union_fields_from_source(&union_fc)
+            .expect("expected source recovery for first unnamed union");
+        let fields_dl = AstCodeGen::recover_unnamed_union_fields_from_source(&union_dl)
+            .expect("expected source recovery for second unnamed union");
+
+        let _ = std::fs::remove_file(&header_path);
+
+        let names_fc: Vec<String> = fields_fc.iter().map(|(n, _)| n.clone()).collect();
+        let names_dl: Vec<String> = fields_dl.iter().map(|(n, _)| n.clone()).collect();
+
+        assert_eq!(names_fc, vec!["freq".to_string(), "code".to_string()]);
+        assert_eq!(names_dl, vec!["dad".to_string(), "len".to_string()]);
+    }
+
+    #[test]
     fn test_union_decl_named_type_falls_back_to_sanitized_identifier() {
         let ast = make_node(
             ClangNodeKind::TranslationUnit,
@@ -34684,5 +34999,34 @@ mod tests {
         assert!(!AstCodeGen::has_unresolved_template_placeholder(
             "basic_string_char"
         ));
+    }
+
+    #[test]
+    fn test_variadic_stdio_shims_link_to_c_runtime() {
+        let ast = make_node(ClangNodeKind::TranslationUnit, vec![]);
+        let code = AstCodeGen::new().generate(&ast);
+
+        assert!(
+            code.contains("#[link_name = \"vsnprintf\"]"),
+            "expected vsnprintf shim to link against libc symbol, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("fn __fragile_extern_vsnprintf"),
+            "expected generated vsnprintf extern declaration, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("__fragile_extern_vsnprintf(_s, _n, _fmt, _args.as_mut_ptr())"),
+            "expected generated vsnprintf shim call-through, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains(
+                "pub fn vsnprintf(_s: *mut i8, _n: u64, _fmt: *const i8, _args: [std::ffi::VaList; 1]) -> i32 { 0 }"
+            ),
+            "unexpected hardcoded vsnprintf zero-return stub remained in output:\n{}",
+            code
+        );
     }
 }
