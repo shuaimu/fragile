@@ -18849,6 +18849,23 @@ impl AstCodeGen {
                     .collect::<Vec<_>>()
                     .join(", ");
                 let params_names = deduped_params.join(", ");
+                let ctor_param_type_by_name: HashMap<String, CppType> = deduped_params
+                    .iter()
+                    .cloned()
+                    .zip(params.iter().map(|(_, t)| t.clone()))
+                    .collect();
+                let correct_ctor_initializer = |value: &str, ty: &CppType| -> String {
+                    let raw = value.trim();
+                    if Self::is_function_pointer_type_or_typedef(ty)
+                        && ctor_param_type_by_name
+                            .get(raw)
+                            .is_some_and(Self::is_function_pointer_type_or_typedef)
+                    {
+                        raw.to_string()
+                    } else {
+                        correct_initializer_for_type(value, ty)
+                    }
+                };
 
                 // Extract member initializers and base class initializers from constructor children
                 // Pattern 1: MemberRef { name } followed by initialization expression (member initializer list)
@@ -18992,7 +19009,7 @@ impl AstCodeGen {
                                                     .iter()
                                                     .zip(matched_param_types.iter())
                                                     .map(|(arg, ty)| {
-                                                        correct_initializer_for_type(arg, ty)
+                                                        correct_ctor_initializer(arg, ty)
                                                     })
                                                     .collect();
                                                 (corrected, matched_name.clone())
@@ -19005,7 +19022,7 @@ impl AstCodeGen {
                                                     .iter()
                                                     .zip(param_types.iter())
                                                     .map(|(arg, ty)| {
-                                                        correct_initializer_for_type(arg, ty)
+                                                        correct_ctor_initializer(arg, ty)
                                                     })
                                                     .collect();
                                                 (corrected, ctor_name_lookup.clone())
@@ -19166,7 +19183,7 @@ impl AstCodeGen {
                         let corrected = all_fields_vbase
                             .iter()
                             .find(|(name, _)| name == &sanitized)
-                            .map(|(_, ty)| correct_initializer_for_type(value, ty))
+                            .map(|(_, ty)| correct_ctor_initializer(value, ty))
                             .unwrap_or_else(|| value.clone());
                         self.writeln(&format!("{}: {},", sanitized, corrected));
                         initialized_vbase.insert(sanitized);
@@ -19331,7 +19348,7 @@ impl AstCodeGen {
                             let corrected = all_fields
                                 .iter()
                                 .find(|(name, _)| name == &sanitized)
-                                .map(|(_, ty)| correct_initializer_for_type(value, ty))
+                                .map(|(_, ty)| correct_ctor_initializer(value, ty))
                                 .unwrap_or_else(|| value.clone());
                             self.writeln(&format!("{}: {},", sanitized, corrected));
                             initialized.insert(sanitized);
@@ -19384,7 +19401,7 @@ impl AstCodeGen {
                                 let corrected = all_fields
                                     .iter()
                                     .find(|(name, _)| name == &sanitized)
-                                    .map(|(_, ty)| correct_initializer_for_type(&fixed_value, ty))
+                                    .map(|(_, ty)| correct_ctor_initializer(&fixed_value, ty))
                                     .unwrap_or_else(|| fixed_value.clone());
                                 self.writeln(&format!("__self.{} = {};", sanitized, corrected));
                             }
@@ -19587,7 +19604,9 @@ impl AstCodeGen {
                                     }
                                 } else if is_ptr && is_zero_integer_literal_str(&expr) {
                                     // Pointer initialized from 0/null constant.
-                                    if let CppType::Pointer { is_const, .. } = ty {
+                                    if Self::is_function_pointer_type_or_typedef(ty) {
+                                        " = None".to_string()
+                                    } else if let CppType::Pointer { is_const, .. } = ty {
                                         if *is_const {
                                             " = std::ptr::null()".to_string()
                                         } else {
@@ -19598,6 +19617,9 @@ impl AstCodeGen {
                                     }
                                 } else if is_ptr {
                                     // Array-to-pointer decay in variable initialization.
+                                    let rust_ty = ty.to_rust_type_str();
+                                    let is_fn_ptr = Self::is_function_pointer_type_or_typedef(ty)
+                                        || is_option_fn_rust_type(&rust_ty);
                                     let init_ty = Self::get_expr_type(init_node);
                                     let init_orig_ty = Self::get_original_expr_type(init_node);
                                     let init_is_array =
@@ -19615,7 +19637,6 @@ impl AstCodeGen {
                                         } else {
                                             base
                                         };
-                                        let rust_ty = ty.to_rust_type_str();
                                         let is_global_base =
                                             base.contains("__gv_") || base.contains("__fsv_");
                                         let ptr_inner = if rust_ty.starts_with("*const ") {
@@ -19629,8 +19650,10 @@ impl AstCodeGen {
                                             ptr_inner
                                         };
                                         format!(" = {} as {}", ptr, rust_ty)
+                                    } else if is_fn_ptr {
+                                        let normalized = correct_initializer_for_type(&expr, ty);
+                                        format!(" = {}", normalized)
                                     } else {
-                                        let rust_ty = ty.to_rust_type_str();
                                         let expr = if rust_ty.starts_with("*mut ") {
                                             expr.replace(".as_ptr()", ".as_mut_ptr()")
                                         } else {
@@ -22798,6 +22821,8 @@ impl AstCodeGen {
                             .is_some_and(is_unsigned_rust_int_type);
                         let assign_needs_unsafe = left_for_assign.starts_with('*')
                             || left_for_assign.contains("(*");
+                        let lhs_requires_temp_eval = left_for_assign.contains("let __v =")
+                            || (left_for_assign.contains('{') && left_for_assign.contains(';'));
                         if left_is_unsigned_int {
                             let left_for_read = if left_for_assign.contains(" as ")
                                 || left_for_assign.contains(' ')
@@ -22810,7 +22835,7 @@ impl AstCodeGen {
                             };
                             return match op {
                                 BinaryOp::Assign => {
-                                    if left_for_assign.contains("let __v =") {
+                                    if lhs_requires_temp_eval {
                                         format!(
                                             "unsafe {{ let __lhs: *mut _ = &mut ({}); *__lhs = {}; std::ptr::read(__lhs) }}",
                                             left_for_assign, right
@@ -22840,7 +22865,7 @@ impl AstCodeGen {
                             };
                         }
                         if matches!(op, BinaryOp::Assign) {
-                            if left_for_assign.contains("let __v =") {
+                            if lhs_requires_temp_eval {
                                 format!(
                                     "unsafe {{ let __lhs: *mut _ = &mut ({}); *__lhs = {}; std::ptr::read(__lhs) }}",
                                     left_for_assign, right
