@@ -67,6 +67,11 @@ fn is_unsigned_rust_int_type(ty: &str) -> bool {
     matches!(ty, "u8" | "u16" | "u32" | "u64" | "u128" | "usize")
 }
 
+/// Check whether a Rust primitive type string is exactly u32 or u64.
+fn is_u32_u64_rust_int_type(ty: &str) -> bool {
+    matches!(ty, "u32" | "u64")
+}
+
 /// Check whether a Rust type string is an Option-wrapped function pointer.
 fn is_option_fn_rust_type(ty: &str) -> bool {
     ty.starts_with("Option<fn(")
@@ -23049,6 +23054,23 @@ impl AstCodeGen {
                                 right_raw = format!("({}) as {}", right_raw, lhs_ty);
                             }
                         }
+                        let left_needs_width_norm = left_rust_type
+                            .as_ref()
+                            .is_some_and(|t| is_u32_u64_rust_int_type(t));
+                        let right_is_integral_non_bool =
+                            (right_type
+                                .as_ref()
+                                .is_some_and(|t| t.is_integral() == Some(true) && !matches!(t, CppType::Bool))
+                                || right_orig_type
+                                    .as_ref()
+                                    .is_some_and(|t| t.is_integral() == Some(true) && !matches!(t, CppType::Bool))
+                                || is_integer_literal_str(&right_raw))
+                                && !right_is_bool;
+                        if left_needs_width_norm && right_is_integral_non_bool {
+                            if let Some(ref lhs_ty) = left_rust_type {
+                                right_raw = format!("(({}) as {})", right_raw, lhs_ty);
+                            }
+                        }
 
                         // For bitwise compound assignments (|=, &=, ^=), ensure RHS type matches LHS
                         // C++ allows mixing signed/unsigned in bitwise ops, Rust doesn't
@@ -23308,6 +23330,23 @@ impl AstCodeGen {
                         if left_is_integral_non_bool && right_is_bool {
                             if let Some(ref lhs_ty) = left_rust_type {
                                 right = format!("({}) as {}", right, lhs_ty);
+                            }
+                        }
+                        let left_needs_width_norm = left_rust_type
+                            .as_ref()
+                            .is_some_and(|t| is_u32_u64_rust_int_type(t));
+                        let right_is_integral_non_bool =
+                            (right_type
+                                .as_ref()
+                                .is_some_and(|t| t.is_integral() == Some(true) && !matches!(t, CppType::Bool))
+                                || right_orig_type
+                                    .as_ref()
+                                    .is_some_and(|t| t.is_integral() == Some(true) && !matches!(t, CppType::Bool))
+                                || is_integer_literal_str(&right))
+                                && !right_is_bool;
+                        if left_needs_width_norm && right_is_integral_non_bool {
+                            if let Some(ref lhs_ty) = left_rust_type {
+                                right = format!("(({}) as {})", right, lhs_ty);
                             }
                         }
 
@@ -23992,10 +24031,11 @@ impl AstCodeGen {
                         // Use wrapping shifts to preserve runtime behavior and avoid invalid literal shifts.
                         if matches!(op, BinaryOp::Shl | BinaryOp::Shr) {
                             // Method-based shifts require a concrete integer receiver type.
-                            // Cast the lhs to the inferred integer type when available.
+                            // Cast the lhs to the expression/result integer type when available.
+                            // Prefer node type over child literal type to preserve unsigned widths.
                             // This avoids E0689 for expressions like `(8 - 1).wrapping_shl(3)`.
-                            let left_type = Self::get_expr_type(&node.children[0])
-                                .or_else(|| Self::get_expr_type(node));
+                            let left_type =
+                                Self::get_expr_type(node).or_else(|| Self::get_expr_type(&node.children[0]));
                             let left = if let Some(ty) = left_type {
                                 let rust_ty = ty.to_rust_type_str();
                                 if matches!(
@@ -28853,7 +28893,8 @@ mod tests {
 
         let code = AstCodeGen::new().generate(&ast);
         assert!(
-            code.contains("(*s).prev_length = 2; (*s).prev_length"),
+            code.contains("(*s).prev_length = 2; (*s).prev_length")
+                || code.contains("(*s).prev_length = ((2) as u32); (*s).prev_length"),
             "inner assignment should be lowered as value-producing expression, got:\n{}",
             code
         );
@@ -29448,6 +29489,271 @@ mod tests {
         assert!(
             code.contains("as i32"),
             "shift lhs should be typed to avoid ambiguous integer method resolution, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_u32_temp_assignment_from_shift_expr_is_width_normalized() {
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![make_node(
+                ClangNodeKind::FunctionDecl {
+                    name: "normalize_have".to_string(),
+                    mangled_name: "_Z14normalize_havej".to_string(),
+                    return_type: CppType::Int { signed: true },
+                    params: vec![("bi_valid".to_string(), CppType::Int { signed: false })],
+                    is_definition: true,
+                    is_variadic: false,
+                    is_noexcept: false,
+                    is_coroutine: false,
+                    coroutine_info: None,
+                },
+                vec![make_node(
+                    ClangNodeKind::CompoundStmt,
+                    vec![
+                        make_node(
+                            ClangNodeKind::VarDecl {
+                                name: "have".to_string(),
+                                ty: CppType::Int { signed: false },
+                                has_init: true,
+                                is_static: false,
+                            },
+                            vec![make_node(
+                                ClangNodeKind::IntegerLiteral {
+                                    value: 0,
+                                    cpp_type: Some(CppType::Int { signed: false }),
+                                },
+                                vec![],
+                            )],
+                        ),
+                        make_node(
+                            ClangNodeKind::ExprStmt,
+                            vec![make_node(
+                                ClangNodeKind::BinaryOperator {
+                                    op: BinaryOp::Assign,
+                                    ty: CppType::Int { signed: false },
+                                },
+                                vec![
+                                    make_node(
+                                        ClangNodeKind::DeclRefExpr {
+                                            name: "have".to_string(),
+                                            ty: CppType::Int { signed: false },
+                                            namespace_path: vec![],
+                                        },
+                                        vec![],
+                                    ),
+                                    make_node(
+                                        ClangNodeKind::BinaryOperator {
+                                            op: BinaryOp::Shr,
+                                            ty: CppType::Int { signed: true },
+                                        },
+                                        vec![
+                                            make_node(
+                                                ClangNodeKind::BinaryOperator {
+                                                    op: BinaryOp::Add,
+                                                    ty: CppType::Int { signed: true },
+                                                },
+                                                vec![
+                                                    make_node(
+                                                        ClangNodeKind::DeclRefExpr {
+                                                            name: "bi_valid".to_string(),
+                                                            ty: CppType::Int { signed: false },
+                                                            namespace_path: vec![],
+                                                        },
+                                                        vec![],
+                                                    ),
+                                                    make_node(
+                                                        ClangNodeKind::IntegerLiteral {
+                                                            value: 42,
+                                                            cpp_type: Some(CppType::Int {
+                                                                signed: true,
+                                                            }),
+                                                        },
+                                                        vec![],
+                                                    ),
+                                                ],
+                                            ),
+                                            make_node(
+                                                ClangNodeKind::IntegerLiteral {
+                                                    value: 3,
+                                                    cpp_type: Some(CppType::Int { signed: true }),
+                                                },
+                                                vec![],
+                                            ),
+                                        ],
+                                    ),
+                                ],
+                            )],
+                        ),
+                        make_node(
+                            ClangNodeKind::ReturnStmt,
+                            vec![make_node(
+                                ClangNodeKind::IntegerLiteral {
+                                    value: 0,
+                                    cpp_type: Some(CppType::Int { signed: true }),
+                                },
+                                vec![],
+                            )],
+                        ),
+                    ],
+                )],
+            )],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        let have_assign_line = code
+            .lines()
+            .find(|line| line.contains("have =") && line.contains("wrapping_shr"))
+            .unwrap_or("");
+        assert!(
+            !have_assign_line.is_empty(),
+            "expected wrapped shift assignment to have, got:\n{}",
+            code
+        );
+        assert!(
+            have_assign_line.contains(" as u32)"),
+            "u32 assignment should normalize shift/math rhs width, got line:\n{}\nfull code:\n{}",
+            have_assign_line,
+            code
+        );
+    }
+
+    #[test]
+    fn test_u32_field_assignment_from_shift_expr_is_width_normalized() {
+        let u32_ty = CppType::Int { signed: false };
+        let state_ptr_ty = CppType::Pointer {
+            pointee: Box::new(CppType::Named("state".to_string())),
+            is_const: false,
+        };
+        let member_on = |var: &str, field: &str| {
+            make_node(
+                ClangNodeKind::MemberExpr {
+                    member_name: field.to_string(),
+                    is_arrow: true,
+                    declaring_class: None,
+                    is_static: false,
+                    ty: u32_ty.clone(),
+                },
+                vec![make_node(
+                    ClangNodeKind::DeclRefExpr {
+                        name: var.to_string(),
+                        ty: state_ptr_ty.clone(),
+                        namespace_path: vec![],
+                    },
+                    vec![],
+                )],
+            )
+        };
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![
+                make_node(
+                    ClangNodeKind::RecordDecl {
+                        name: "state".to_string(),
+                        is_class: false,
+                        is_definition: true,
+                        fields: vec![],
+                    },
+                    vec![
+                        make_node(
+                            ClangNodeKind::FieldDecl {
+                                name: "w_bits".to_string(),
+                                ty: u32_ty.clone(),
+                                access: crate::ast::AccessSpecifier::Public,
+                                is_static: false,
+                                bit_field_width: None,
+                            },
+                            vec![],
+                        ),
+                        make_node(
+                            ClangNodeKind::FieldDecl {
+                                name: "w_size".to_string(),
+                                ty: u32_ty.clone(),
+                                access: crate::ast::AccessSpecifier::Public,
+                                is_static: false,
+                                bit_field_width: None,
+                            },
+                            vec![],
+                        ),
+                    ],
+                ),
+                make_node(
+                    ClangNodeKind::FunctionDecl {
+                        name: "assign_shift".to_string(),
+                        mangled_name: "assign_shift".to_string(),
+                        return_type: CppType::Int { signed: true },
+                        params: vec![("s".to_string(), state_ptr_ty.clone())],
+                        is_definition: true,
+                        is_variadic: false,
+                        is_noexcept: false,
+                        is_coroutine: false,
+                        coroutine_info: None,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![
+                            make_node(
+                                ClangNodeKind::ExprStmt,
+                                vec![make_node(
+                                    ClangNodeKind::BinaryOperator {
+                                        op: BinaryOp::Assign,
+                                        ty: u32_ty.clone(),
+                                    },
+                                    vec![
+                                        member_on("s", "w_size"),
+                                        make_node(
+                                            ClangNodeKind::BinaryOperator {
+                                                op: BinaryOp::Shl,
+                                                ty: CppType::Int { signed: true },
+                                            },
+                                            vec![
+                                                make_node(
+                                                    ClangNodeKind::IntegerLiteral {
+                                                        value: 1,
+                                                        cpp_type: Some(CppType::Int {
+                                                            signed: true,
+                                                        }),
+                                                    },
+                                                    vec![],
+                                                ),
+                                                member_on("s", "w_bits"),
+                                            ],
+                                        ),
+                                    ],
+                                )],
+                            ),
+                            make_node(
+                                ClangNodeKind::ReturnStmt,
+                                vec![make_node(
+                                    ClangNodeKind::IntegerLiteral {
+                                        value: 0,
+                                        cpp_type: Some(CppType::Int { signed: true }),
+                                    },
+                                    vec![],
+                                )],
+                            ),
+                        ],
+                    )],
+                ),
+            ],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        let w_size_assign_line = code
+            .lines()
+            .find(|line| line.contains("(*s).w_size ="))
+            .unwrap_or("");
+        assert!(
+            !w_size_assign_line.is_empty(),
+            "expected assignment to w_size, got:\n{}",
+            code
+        );
+        assert!(
+            w_size_assign_line.contains(" as u32)"),
+            "u32 field assignment should normalize shift/math rhs width, got line:\n{}\nfull code:\n{}",
+            w_size_assign_line,
             code
         );
     }

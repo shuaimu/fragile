@@ -46,7 +46,8 @@ Run upstream-style tests through the Fragile transpiler with runtime parity:
             - Replay evidence (`/tmp/fragile_real_world_zlib_fragile_objz_objects/driver_logs/objz_deflate_o_transpiled.rs`): chained forms now lower as value expressions (e.g., `(*s).match_length = unsafe { (*s).prev_length = 2; (*s).prev_length }`), and corresponding `found ()` assignment diagnostics are cleared from `rustc_objz_deflate_o.stderr`.
           - [x] Fix pointer arithmetic lowering for `ptr + offset_from(...)` patterns to use Rust pointer APIs.
             - Replay evidence (`/tmp/fragile_real_world_zlib_fragile_objz_objects/driver_logs/objz_deflate_o_transpiled.rs`): pointer-add forms now emit `.wrapping_offset(...)` (e.g., `pending_out = pending_buf.wrapping_offset(offset_from(...) as isize)`), and previous raw `*mut u8 + isize` diagnostics are cleared from `rustc_objz_deflate_o.stderr`.
-          - [ ] Fix integer width normalization for `u32`/`u64` fields and temporaries in shift/math expressions.
+          - [x] Fix integer width normalization for `u32`/`u64` fields and temporaries in shift/math expressions.
+            - Replay evidence (`/tmp/fragile_real_world_zlib_fragile_objz_objects/driver_logs/objz_deflate_o_transpiled.rs` + `rustc_objz_deflate_o.stderr`): `deflate` now emits explicit `as u32` normalization on `w_size`/`hash_size`/`lit_bufsize` and `have` shift assignments, and previous `expected u32/u64, found i32/i64` diagnostics are cleared.
           - [ ] Fix enum return lowering so `block_state` returns emit enum variants instead of integer literals.
           - [ ] Fix union field preservation/access for Huffman tree frequency members (`.fc.freq`).
     - [ ] Replay `OBJG` units through Fragile to `.o` outputs and validate object completeness.
