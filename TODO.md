@@ -100,6 +100,14 @@ Run upstream-style tests through the Fragile transpiler with runtime parity:
     - Evidence (`cargo test -p fragile-clang --test real_world_zlib_tests test_real_world_zlib_make_test_command_plan_generation -- --ignored --nocapture`, 2026-02-20): passes; real-world run writes and validates `make_test_commands_manifest.txt`.
   - [x] Add real-world ignored coverage for `make test` replay against pinned zlib fixture outputs.
     - Evidence (`cargo test -p fragile-clang --test real_world_zlib_tests test_real_world_zlib_make_test_command_subset_replay -- --ignored --nocapture`, 2026-02-20): passes; pinned real-world replay coverage captures current first failing replay command with deterministic logs/status while preserving fragile-linked output/link manifests for diagnosis.
+  - [x] Capture deterministic first failing runtime replay signature for command #1 (`minigzip` pipeline + `example`) and document root-cause hypothesis.
+    - Analysis: this parent task is larger than a single <500 LOC change because runtime validity depends on link strictness, replay command semantics, and parity-test expectation updates; break into scoped leaves and close one failure class at a time.
+    - Evidence (`cargo test -p fragile-clang --test real_world_zlib_tests test_real_world_zlib_make_test_command_subset_replay -- --ignored --nocapture`, 2026-02-20): passes with expected-failure assertions; baseline logs show `make_test_replay_01.status=1` and stderr `./minigzip: error while loading shared libraries: unexpected PLT reloc type 0x00`.
+    - Docs: `docs/zlib_make_test_runtime_blockers.md` records command text, status/stderr artifacts, and next fix direction.
+  - [ ] Replace permissive required-binary link replay mode (`-Wl,--unresolved-symbols=ignore-all`) with strict/faithful link behavior and capture first strict link diagnostic set.
+  - [ ] Fix strict link input/symbol/flag gaps until make-test replay command #1 runs successfully under Fragile-linked binaries.
+  - [ ] Advance replay command #2 (`examplesh`/`minigzipsh`) and command #3 (`example64`/`minigzip64`) to runtime success under Fragile-linked binaries.
+  - [ ] Update real-world replay/parity tests to assert success semantics (remove expected-failure assertions) once all make-test replay commands pass.
 - [x] Add parity assertions vs native:
   - [x] exit status parity
     - Plan: derive native status from `make_test.status`, derive fragile replay status from first non-zero `make_test_replay_*.status` (or zero when all replayed commands succeed), and assert equality with explicit mismatch diagnostics.
