@@ -53,6 +53,7 @@ const ZLIB_REQUIRED_LINK_OUTPUTS: &[&str] = &[
     "example64",
     "minigzip64",
 ];
+const ZLIB_ARTIFACT_PARITY_PROBE_BINARIES: &[&str] = &["minigzip", "minigzipsh", "minigzip64"];
 const ZLIB_OBJZ_OBJECTS: &[&str] = &[
     "adler32.o",
     "crc32.o",
@@ -1489,6 +1490,238 @@ fn assert_make_test_stdout_stderr_parity(
         native_log_dir.display(),
         replay_log_dir.display()
     ))
+}
+
+#[derive(Debug)]
+struct MakeTestArtifactProbeResult {
+    binary: String,
+    run_status: i32,
+    roundtrip_status: i32,
+    roundtrip_matches_output: bool,
+    probe_output: Vec<u8>,
+    roundtrip_output: Vec<u8>,
+}
+
+fn read_replay_source_dir_for_parity(replay_log_dir: &Path) -> Result<PathBuf, String> {
+    read_source_dir_from_manifest(
+        &replay_log_dir.join("make_test_commands_manifest.txt"),
+        "make-test command manifest",
+    )
+}
+
+fn run_shell_command_capture_in_tree(
+    source_dir: &Path,
+    log_dir: &Path,
+    step_name: &str,
+    command_line: &str,
+) -> Result<Output, String> {
+    let mut cmd = Command::new("sh");
+    cmd.arg("-c").arg(command_line).current_dir(source_dir);
+    cmd.env("LC_ALL", "C").env("LANG", "C");
+    let output = cmd.output().map_err(|e| {
+        format!(
+            "failed to run shell command '{}' at {}: {}",
+            command_line,
+            source_dir.display(),
+            e
+        )
+    })?;
+    write_command_capture(log_dir, step_name, &output)?;
+    Ok(output)
+}
+
+fn run_make_test_artifact_probe_in_tree(
+    source_dir: &Path,
+    log_dir: &Path,
+    scope: &str,
+) -> Result<Vec<MakeTestArtifactProbeResult>, String> {
+    fs::create_dir_all(log_dir).map_err(|e| {
+        format!(
+            "failed to create probe log dir {}: {}",
+            log_dir.display(),
+            e
+        )
+    })?;
+
+    let mut results: Vec<MakeTestArtifactProbeResult> = Vec::new();
+    for binary in ZLIB_ARTIFACT_PARITY_PROBE_BINARIES {
+        let binary_id = normalize_identifier_fragment(binary);
+        let probe_output_rel =
+            format!(".fragile_artifact_probe_{}_{}_output.txt", scope, binary_id);
+        let roundtrip_rel = format!(
+            ".fragile_artifact_probe_{}_{}_roundtrip.txt",
+            scope, binary_id
+        );
+        let run_step = format!("make_test_artifact_probe_{}_{}_run", scope, binary_id);
+        let run_command = format!("./{} > {}", binary, probe_output_rel);
+        let run_output =
+            run_shell_command_capture_in_tree(source_dir, log_dir, &run_step, &run_command)?;
+        let run_status = status_code(&run_output);
+
+        let probe_output_path = source_dir.join(&probe_output_rel);
+        let mut probe_output = if probe_output_path.exists() {
+            fs::read(&probe_output_path).map_err(|e| {
+                format!(
+                    "failed to read probe output {}: {}",
+                    probe_output_path.display(),
+                    e
+                )
+            })?
+        } else {
+            Vec::new()
+        };
+
+        let mut roundtrip_status = -1;
+        let mut roundtrip_matches_output = false;
+        let mut roundtrip_output: Vec<u8> = Vec::new();
+
+        if run_status == 0 {
+            if probe_output.is_empty() && probe_output_path.exists() {
+                probe_output = fs::read(&probe_output_path).map_err(|e| {
+                    format!(
+                        "failed to read probe output {}: {}",
+                        probe_output_path.display(),
+                        e
+                    )
+                })?;
+            }
+
+            let roundtrip_step =
+                format!("make_test_artifact_probe_{}_{}_roundtrip", scope, binary_id);
+            let roundtrip_command = format!("cat < {} > {}", probe_output_rel, roundtrip_rel);
+            let roundtrip_command_output = run_shell_command_capture_in_tree(
+                source_dir,
+                log_dir,
+                &roundtrip_step,
+                &roundtrip_command,
+            )?;
+            roundtrip_status = status_code(&roundtrip_command_output);
+            if roundtrip_status == 0 {
+                let roundtrip_path = source_dir.join(&roundtrip_rel);
+                if roundtrip_path.exists() {
+                    roundtrip_output = fs::read(&roundtrip_path).map_err(|e| {
+                        format!(
+                            "failed to read roundtrip output {}: {}",
+                            roundtrip_path.display(),
+                            e
+                        )
+                    })?;
+                    roundtrip_matches_output = roundtrip_output == probe_output;
+                }
+            }
+        }
+
+        results.push(MakeTestArtifactProbeResult {
+            binary: (*binary).to_string(),
+            run_status,
+            roundtrip_status,
+            roundtrip_matches_output,
+            probe_output,
+            roundtrip_output,
+        });
+    }
+
+    let mut manifest = format!(
+        "source_dir={}\nprobe_scope={}\nprobe_binary_count={}\n",
+        source_dir.display(),
+        scope,
+        results.len()
+    );
+    for result in &results {
+        manifest.push_str(&format!(
+            "binary={} run_status={} roundtrip_status={} roundtrip_matches_output={} output_size={} roundtrip_size={}\n",
+            result.binary,
+            result.run_status,
+            result.roundtrip_status,
+            result.roundtrip_matches_output,
+            result.probe_output.len(),
+            result.roundtrip_output.len()
+        ));
+    }
+    let manifest_path = log_dir.join(format!("make_test_artifact_probe_{}_manifest.txt", scope));
+    fs::write(&manifest_path, manifest)
+        .map_err(|e| format!("failed to write {}: {}", manifest_path.display(), e))?;
+
+    Ok(results)
+}
+
+fn assert_make_test_artifact_behavior_parity(
+    native_log_dir: &Path,
+    replay_log_dir: &Path,
+) -> Result<(), String> {
+    let native_source_dir = read_native_source_dir_for_parity(native_log_dir)?;
+    let replay_source_dir = read_replay_source_dir_for_parity(replay_log_dir)?;
+    let native_results =
+        run_make_test_artifact_probe_in_tree(&native_source_dir, native_log_dir, "native")?;
+    let replay_results =
+        run_make_test_artifact_probe_in_tree(&replay_source_dir, replay_log_dir, "fragile")?;
+
+    if native_results.len() != replay_results.len() {
+        return Err(format!(
+            "artifact behavior parity mismatch: native probe count={} fragile probe count={} (native logs: {}, replay logs: {})",
+            native_results.len(),
+            replay_results.len(),
+            native_log_dir.display(),
+            replay_log_dir.display()
+        ));
+    }
+
+    for (native, replay) in native_results.iter().zip(replay_results.iter()) {
+        if native.binary != replay.binary {
+            return Err(format!(
+                "artifact behavior parity mismatch: probe binary order differs (native={} fragile={})",
+                native.binary, replay.binary
+            ));
+        }
+        if native.run_status != replay.run_status
+            || native.roundtrip_status != replay.roundtrip_status
+        {
+            return Err(format!(
+                "artifact behavior parity mismatch for {}: native statuses run={} roundtrip={} fragile statuses run={} roundtrip={} (native logs: {}, replay logs: {})",
+                native.binary,
+                native.run_status,
+                native.roundtrip_status,
+                replay.run_status,
+                replay.roundtrip_status,
+                native_log_dir.display(),
+                replay_log_dir.display()
+            ));
+        }
+        if native.run_status != 0 || native.roundtrip_status != 0 {
+            return Err(format!(
+                "artifact behavior parity mismatch for {}: non-zero probe status native(run={},roundtrip={}) fragile(run={},roundtrip={})",
+                native.binary,
+                native.run_status,
+                native.roundtrip_status,
+                replay.run_status,
+                replay.roundtrip_status
+            ));
+        }
+        if !native.roundtrip_matches_output || !replay.roundtrip_matches_output {
+            return Err(format!(
+                "artifact behavior parity mismatch for {}: roundtrip output check failed (native_match={} fragile_match={})",
+                native.binary, native.roundtrip_matches_output, replay.roundtrip_matches_output
+            ));
+        }
+        if native.probe_output != replay.probe_output {
+            return Err(format!(
+                "artifact behavior parity mismatch for {}: output bytes differ (native_size={} fragile_size={})",
+                native.binary,
+                native.probe_output.len(),
+                replay.probe_output.len()
+            ));
+        }
+        if native.roundtrip_output != replay.roundtrip_output {
+            return Err(format!(
+                "artifact behavior parity mismatch for {}: roundtrip output bytes differ (native_size={} fragile_size={})",
+                native.binary,
+                native.roundtrip_output.len(),
+                replay.roundtrip_output.len()
+            ));
+        }
+    }
+
+    Ok(())
 }
 
 fn parse_link_units_manifest_entries(
@@ -3435,6 +3668,51 @@ fn rewrite_local_makefile_test_target(project_dir: &Path, test_target: &str) -> 
     Ok(())
 }
 
+fn write_local_tiny_marker_program(project_dir: &Path, native_marker: bool) -> Result<(), String> {
+    let source = if native_marker {
+        r#"#include <unistd.h>
+int main(void) {
+    static const char kMarker[] = "native-marker\n";
+    return write(1, kMarker, sizeof(kMarker) - 1) < 0 ? 1 : 0;
+}
+"#
+    } else {
+        r#"#include <unistd.h>
+int main(void) {
+    static const char kMarker[] = "fragile-marker\n";
+    return write(1, kMarker, sizeof(kMarker) - 1) < 0 ? 1 : 0;
+}
+"#
+    };
+    let tiny_c_path = project_dir.join("tiny.c");
+    fs::write(&tiny_c_path, source)
+        .map_err(|e| format!("failed to write {}: {}", tiny_c_path.display(), e))
+}
+
+fn write_local_replay_source_manifest_for_parity(
+    replay_log_dir: &Path,
+    source_dir: &Path,
+) -> Result<(), String> {
+    fs::create_dir_all(replay_log_dir)
+        .map_err(|e| format!("failed to create {}: {}", replay_log_dir.display(), e))?;
+    let manifest = format!(
+        "source_dir={}\nmake_test_command_count=1\nrequired_binaries={}\ncommand=true\n",
+        source_dir.display(),
+        ZLIB_REQUIRED_LINK_OUTPUTS.join(",")
+    );
+    fs::write(
+        replay_log_dir.join("make_test_commands_manifest.txt"),
+        manifest,
+    )
+    .map_err(|e| {
+        format!(
+            "failed to write replay source manifest at {}: {}",
+            replay_log_dir.display(),
+            e
+        )
+    })
+}
+
 fn create_local_fragile_object_project(base_dir: &Path) -> Result<PathBuf, String> {
     let project_dir = base_dir.join("fragile_object_project");
     fs::create_dir_all(&project_dir)
@@ -4316,6 +4594,113 @@ fn test_make_test_stdout_stderr_parity_local_fixture_reports_mismatch() {
         .expect_err("expected stdout/stderr parity mismatch");
     assert!(
         err.contains("stdout/stderr parity mismatch"),
+        "unexpected parity mismatch error: {}",
+        err
+    );
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn test_make_test_artifact_behavior_parity_local_fixture_success() {
+    let root = unique_temp_dir("zlib_make_test_artifact_parity_success");
+    fs::create_dir_all(&root).expect("failed to create test root");
+
+    let replay_project = create_local_required_artifacts_project(&root.join("replay"), false)
+        .expect("failed to create replay required-artifacts project");
+    write_local_tiny_marker_program(&replay_project, false)
+        .expect("failed to rewrite replay tiny.c marker program");
+    rewrite_local_makefile_test_target(
+        &replay_project,
+        r#"test:
+	@$(MAKE) all
+	@test -x ./minigzip && test -x ./example
+	@test -x ./minigzipsh && test -x ./examplesh
+	@test -x ./minigzip64 && test -x ./example64
+"#,
+    )
+    .expect("failed to rewrite replay fixture test target for artifact parity success");
+    let replay_log_dir = root.join("replay_logs");
+    run_native_baseline_in_tree(&replay_project, &root.join("replay_native_logs"))
+        .expect("replay fixture build should succeed for artifact behavior parity success case");
+    write_local_replay_source_manifest_for_parity(&replay_log_dir, &replay_project)
+        .expect("failed to write replay source manifest for artifact behavior parity success");
+
+    let native_project = create_local_required_artifacts_project(&root.join("native"), false)
+        .expect("failed to create native required-artifacts project");
+    write_local_tiny_marker_program(&native_project, false)
+        .expect("failed to rewrite native tiny.c marker program");
+    rewrite_local_makefile_test_target(
+        &native_project,
+        r#"test:
+	@$(MAKE) all
+	@test -x ./minigzip && test -x ./example
+	@test -x ./minigzipsh && test -x ./examplesh
+	@test -x ./minigzip64 && test -x ./example64
+"#,
+    )
+    .expect("failed to rewrite native fixture test target for artifact parity success");
+    let native_log_dir = root.join("native_logs");
+    run_native_baseline_in_tree(&native_project, &native_log_dir)
+        .expect("native baseline should succeed for artifact behavior parity success case");
+    write_baseline_manifest(&native_log_dir, &native_project)
+        .expect("failed to write baseline manifest for artifact behavior parity success case");
+
+    assert_make_test_artifact_behavior_parity(&native_log_dir, &replay_log_dir)
+        .expect("artifact behavior parity should match for local success case");
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn test_make_test_artifact_behavior_parity_local_fixture_reports_mismatch() {
+    let root = unique_temp_dir("zlib_make_test_artifact_parity_mismatch");
+    fs::create_dir_all(&root).expect("failed to create test root");
+
+    let replay_project = create_local_required_artifacts_project(&root.join("replay"), false)
+        .expect("failed to create replay required-artifacts project");
+    write_local_tiny_marker_program(&replay_project, false)
+        .expect("failed to rewrite replay tiny.c marker program");
+    rewrite_local_makefile_test_target(
+        &replay_project,
+        r#"test:
+	@$(MAKE) all
+	@test -x ./minigzip && test -x ./example
+	@test -x ./minigzipsh && test -x ./examplesh
+	@test -x ./minigzip64 && test -x ./example64
+"#,
+    )
+    .expect("failed to rewrite replay fixture test target for artifact parity mismatch");
+    let replay_log_dir = root.join("replay_logs");
+    run_native_baseline_in_tree(&replay_project, &root.join("replay_native_logs"))
+        .expect("replay fixture build should succeed for artifact behavior parity mismatch case");
+    write_local_replay_source_manifest_for_parity(&replay_log_dir, &replay_project)
+        .expect("failed to write replay source manifest for artifact behavior parity mismatch");
+
+    let native_project = create_local_required_artifacts_project(&root.join("native"), false)
+        .expect("failed to create native required-artifacts project");
+    write_local_tiny_marker_program(&native_project, true)
+        .expect("failed to rewrite native tiny.c marker program");
+    rewrite_local_makefile_test_target(
+        &native_project,
+        r#"test:
+	@$(MAKE) all
+	@test -x ./minigzip && test -x ./example
+	@test -x ./minigzipsh && test -x ./examplesh
+	@test -x ./minigzip64 && test -x ./example64
+"#,
+    )
+    .expect("failed to rewrite native fixture test target for artifact parity mismatch");
+    let native_log_dir = root.join("native_logs");
+    run_native_baseline_in_tree(&native_project, &native_log_dir)
+        .expect("native baseline should succeed for artifact behavior parity mismatch case");
+    write_baseline_manifest(&native_log_dir, &native_project)
+        .expect("failed to write baseline manifest for artifact behavior parity mismatch case");
+
+    let err = assert_make_test_artifact_behavior_parity(&native_log_dir, &replay_log_dir)
+        .expect_err("expected artifact behavior parity mismatch");
+    assert!(
+        err.contains("artifact behavior parity mismatch"),
         "unexpected parity mismatch error: {}",
         err
     );
@@ -5320,6 +5705,30 @@ fn test_real_world_zlib_make_test_stdout_stderr_parity() {
         .expect_err("expected native-vs-fragile stdout/stderr parity mismatch");
     assert!(
         parity_err.contains("stdout/stderr parity mismatch"),
+        "unexpected parity error: {}",
+        parity_err
+    );
+}
+
+#[test]
+#[ignore = "real-world external project test (downloads zlib and compares native-vs-fragile make-test artifact behavior)"]
+fn test_real_world_zlib_make_test_artifact_behavior_parity() {
+    let native_log_dir = run_zlib_native_baseline().expect("failed to run zlib native baseline");
+    let replay_result = run_zlib_make_test_command_subset_replay_baseline();
+    let replay_log_dir = Path::new(ZLIB_MAKE_TEST_REPLAY_BASELINE_DIR).join("driver_logs");
+
+    let replay_err =
+        replay_result.expect_err("fragile replay is expected to fail in current baseline");
+    assert!(
+        replay_err.contains("make-test command replay failed at command"),
+        "unexpected make-test replay failure: {}",
+        replay_err
+    );
+
+    let parity_err = assert_make_test_artifact_behavior_parity(&native_log_dir, &replay_log_dir)
+        .expect_err("expected native-vs-fragile artifact behavior parity mismatch");
+    assert!(
+        parity_err.contains("artifact behavior parity mismatch"),
         "unexpected parity error: {}",
         parity_err
     );

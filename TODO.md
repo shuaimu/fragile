@@ -99,7 +99,7 @@ Run upstream-style tests through the Fragile transpiler with runtime parity:
     - Evidence (`cargo test -p fragile-clang --test real_world_zlib_tests test_real_world_zlib_make_test_command_plan_generation -- --ignored --nocapture`, 2026-02-20): passes; real-world run writes and validates `make_test_commands_manifest.txt`.
   - [x] Add real-world ignored coverage for `make test` replay against pinned zlib fixture outputs.
     - Evidence (`cargo test -p fragile-clang --test real_world_zlib_tests test_real_world_zlib_make_test_command_subset_replay -- --ignored --nocapture`, 2026-02-20): passes; pinned real-world replay coverage captures current first failing replay command with deterministic logs/status while preserving fragile-linked output/link manifests for diagnosis.
-- [ ] Add parity assertions vs native:
+- [x] Add parity assertions vs native:
   - [x] exit status parity
     - Plan: derive native status from `make_test.status`, derive fragile replay status from first non-zero `make_test_replay_*.status` (or zero when all replayed commands succeed), and assert equality with explicit mismatch diagnostics.
     - Evidence (`cargo test -p fragile-clang --test real_world_zlib_tests -- --nocapture`, 2026-02-20): passes; local parity success/mismatch fixtures verify status derivation and parity assertion behavior.
@@ -108,7 +108,10 @@ Run upstream-style tests through the Fragile transpiler with runtime parity:
     - Plan: replay the same `make_test_commands_manifest.txt` command subset on native outputs, aggregate per-step stdout/stderr streams, normalize path/make-noise lines, and assert stream parity against fragile replay with explicit first-diff diagnostics.
     - Evidence (`cargo test -p fragile-clang --test real_world_zlib_tests test_make_test_stdout_stderr_parity_local_fixture_success test_make_test_stdout_stderr_parity_local_fixture_reports_mismatch -- --nocapture`, 2026-02-20): passes; local fixture coverage verifies both parity success and deterministic mismatch reporting.
     - Evidence (`cargo test -p fragile-clang --test real_world_zlib_tests test_real_world_zlib_make_test_stdout_stderr_parity -- --ignored --nocapture`, 2026-02-20): passes; pinned real-world coverage asserts current native-vs-fragile stdout/stderr mismatch with deterministic diagnostics.
-  - [ ] artifact behavior parity (round-trip and output file checks)
+  - [x] artifact behavior parity (round-trip and output file checks)
+    - Plan: run deterministic `minigzip`/`minigzipsh`/`minigzip64` round-trip artifact probes in native and fragile worktrees, record per-binary compress/decompress statuses and round-trip outputs, and assert parity with explicit mismatch diagnostics.
+    - Evidence (`cargo test -p fragile-clang --test real_world_zlib_tests test_make_test_artifact_behavior_parity_local_fixture -- --nocapture`, 2026-02-20): passes; local fixture coverage verifies artifact round-trip parity success and deterministic mismatch reporting.
+    - Evidence (`cargo test -p fragile-clang --test real_world_zlib_tests test_real_world_zlib_make_test_artifact_behavior_parity -- --ignored --nocapture`, 2026-02-20): passes; pinned real-world coverage asserts current native-vs-fragile artifact behavior mismatch with deterministic diagnostics.
 - [ ] Add CI tiering:
   - [ ] smoke: minimal deterministic zlib parity run
   - [ ] nightly: fuller zlib matrix
