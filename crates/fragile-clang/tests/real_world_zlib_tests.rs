@@ -4,11 +4,12 @@
 //! This test file adds a pinned fixture checkout helper and validates that
 //! the helper is deterministic and idempotent.
 
+use std::collections::BTreeSet;
 use std::fs;
 use std::io::ErrorKind;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Output};
 use std::thread::sleep;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -59,6 +60,7 @@ const ZLIB_REQUIRED_ARTIFACT_LOG_FILES: &[&str] = &[
     "cc_driver.log",
     "cc_driver_manifest.txt",
     "artifact_manifest.txt",
+    "compile_units_manifest.txt",
 ];
 
 fn run_git(args: &[&str], cwd: Option<&Path>) -> Result<Output, String> {
@@ -470,6 +472,162 @@ fn run_cc_driver_baseline_in_tree(
     Ok(())
 }
 
+fn normalize_slashes(path: &str) -> String {
+    path.replace('\\', "/")
+}
+
+fn lexical_normalize(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for comp in path.components() {
+        match comp {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                let _ = out.pop();
+            }
+            _ => out.push(comp.as_os_str()),
+        }
+    }
+    out
+}
+
+fn normalize_path_for_manifest(raw: &str, cwd: &Path, source_root: &Path) -> String {
+    let raw_path = Path::new(raw);
+    let absolute = if raw_path.is_absolute() {
+        raw_path.to_path_buf()
+    } else {
+        cwd.join(raw_path)
+    };
+    let absolute = lexical_normalize(&absolute);
+    let source_root = lexical_normalize(source_root);
+    if let Ok(rel) = absolute.strip_prefix(&source_root) {
+        normalize_slashes(rel.to_string_lossy().as_ref())
+    } else {
+        normalize_slashes(absolute.to_string_lossy().as_ref())
+    }
+}
+
+fn extract_arg_value(tokens: &[&str], flag: &str) -> Option<(String, Option<usize>)> {
+    for (idx, tok) in tokens.iter().enumerate() {
+        if *tok == flag {
+            if let Some(next) = tokens.get(idx + 1) {
+                return Some(((*next).to_string(), Some(idx + 1)));
+            }
+        } else if tok.starts_with(flag) && tok.len() > flag.len() {
+            return Some((tok[flag.len()..].to_string(), None));
+        }
+    }
+    None
+}
+
+fn parse_compile_units_from_cc_driver_log(
+    log_text: &str,
+    source_root: &Path,
+) -> Result<Vec<(String, String)>, String> {
+    let mut cwd = source_root.to_path_buf();
+    let mut units: BTreeSet<(String, String)> = BTreeSet::new();
+
+    for line in log_text.lines() {
+        if let Some(rest) = line.strip_prefix("cwd=") {
+            let parsed = PathBuf::from(rest.trim());
+            if parsed.as_os_str().is_empty() {
+                continue;
+            }
+            cwd = parsed;
+            continue;
+        }
+        let Some(rest) = line.strip_prefix("args=") else {
+            continue;
+        };
+        let tokens: Vec<&str> = rest.split_whitespace().collect();
+        if tokens.is_empty() {
+            continue;
+        }
+        let has_compile_flag = tokens.iter().any(|t| *t == "-c" || t.starts_with("-c"));
+        if !has_compile_flag {
+            continue;
+        }
+        let Some((obj, obj_consumed_idx)) = extract_arg_value(&tokens, "-o") else {
+            continue;
+        };
+
+        let mut source_candidate: Option<&str> = None;
+        if let Some(c_idx) = tokens.iter().position(|t| *t == "-c") {
+            if let Some(next) = tokens.get(c_idx + 1) {
+                if !next.starts_with('-') {
+                    source_candidate = Some(next);
+                }
+            }
+        }
+        if source_candidate.is_none() {
+            if let Some(attached) = tokens
+                .iter()
+                .find(|t| t.starts_with("-c") && t.len() > 2)
+                .map(|t| &t[2..])
+            {
+                source_candidate = Some(attached);
+            }
+        }
+        if source_candidate.is_none() {
+            let mut positional: Vec<(usize, &str)> = Vec::new();
+            for (idx, tok) in tokens.iter().enumerate() {
+                if tok.starts_with('-') {
+                    continue;
+                }
+                if obj_consumed_idx.is_some_and(|i| i == idx) {
+                    continue;
+                }
+                positional.push((idx, tok));
+            }
+            source_candidate = positional
+                .iter()
+                .rev()
+                .map(|(_, tok)| *tok)
+                .find(|tok| *tok != obj);
+        }
+        let Some(src) = source_candidate.map(ToString::to_string) else {
+            continue;
+        };
+
+        let source = normalize_path_for_manifest(&src, &cwd, source_root);
+        let object = normalize_path_for_manifest(&obj, &cwd, source_root);
+        units.insert((source, object));
+    }
+
+    if units.is_empty() {
+        return Err("no compile units found in cc_driver.log".to_string());
+    }
+    Ok(units.into_iter().collect())
+}
+
+fn write_compile_units_manifest(log_dir: &Path, source_dir: &Path) -> Result<usize, String> {
+    let driver_log_path = log_dir.join("cc_driver.log");
+    let driver_log = fs::read_to_string(&driver_log_path).map_err(|e| {
+        format!(
+            "failed to read cc-driver invocation log {}: {}",
+            driver_log_path.display(),
+            e
+        )
+    })?;
+    let units = parse_compile_units_from_cc_driver_log(&driver_log, source_dir)?;
+
+    let mut manifest = format!(
+        "source_dir={}\ncompile_units_count={}\n",
+        source_dir.display(),
+        units.len()
+    );
+    for (source, object) in &units {
+        manifest.push_str(&format!("source={} object={}\n", source, object));
+    }
+    fs::write(log_dir.join("compile_units_manifest.txt"), manifest).map_err(|e| {
+        format!(
+            "failed to write compile units manifest at {}: {}",
+            log_dir.display(),
+            e
+        )
+    })?;
+    Ok(units.len())
+}
+
 fn ensure_required_artifacts_exist(
     source_dir: &Path,
     required_artifacts: &[&str],
@@ -496,14 +654,16 @@ fn write_artifact_manifest(
     source_dir: &Path,
     make_target: &str,
     required_artifacts: &[&str],
+    compile_unit_count: usize,
 ) -> Result<(), String> {
     let head = read_head(source_dir).unwrap_or_else(|| "unknown".to_string());
     let manifest = format!(
-        "source_dir={}\ncommit={}\nmake_target={}\nrequired_artifacts={}\n",
+        "source_dir={}\ncommit={}\nmake_target={}\nrequired_artifacts={}\ncompile_units_count={}\n",
         source_dir.display(),
         head.trim(),
         make_target,
-        required_artifacts.join(",")
+        required_artifacts.join(","),
+        compile_unit_count
     );
     fs::write(log_dir.join("artifact_manifest.txt"), manifest).map_err(|e| {
         format!(
@@ -522,7 +682,14 @@ fn run_cc_driver_required_artifacts_in_tree(
 ) -> Result<(), String> {
     run_cc_driver_baseline_in_tree(source_dir, log_dir, make_target)?;
     ensure_required_artifacts_exist(source_dir, required_artifacts)?;
-    write_artifact_manifest(log_dir, source_dir, make_target, required_artifacts)?;
+    let compile_unit_count = write_compile_units_manifest(log_dir, source_dir)?;
+    write_artifact_manifest(
+        log_dir,
+        source_dir,
+        make_target,
+        required_artifacts,
+        compile_unit_count,
+    )?;
     Ok(())
 }
 
@@ -1103,6 +1270,55 @@ fn test_cc_driver_path_surfaces_make_failure_with_logs() {
 }
 
 #[test]
+fn test_parse_compile_units_from_driver_log_normalizes_and_deduplicates() {
+    let root = unique_temp_dir("zlib_compile_units_parse");
+    let worktree = root.join("worktree");
+    let subdir = worktree.join("sub");
+    fs::create_dir_all(&subdir).expect("failed to create test dirs");
+
+    let log = format!(
+        "cwd={}\n\
+args=cc -c adler32.c -o adler32.o\n\
+args=cc adler32.o -o example\n\
+cwd={}\n\
+args=cc -c ../trees.c -o trees.o\n\
+args=cc -c ../adler32.c -o ../adler32.o\n",
+        worktree.display(),
+        subdir.display()
+    );
+
+    let units = parse_compile_units_from_cc_driver_log(&log, &worktree)
+        .expect("compile unit parse should succeed");
+    assert_eq!(
+        units,
+        vec![
+            ("adler32.c".to_string(), "adler32.o".to_string()),
+            ("trees.c".to_string(), "sub/trees.o".to_string()),
+        ]
+    );
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn test_parse_compile_units_from_driver_log_rejects_missing_compile_commands() {
+    let root = unique_temp_dir("zlib_compile_units_empty");
+    let worktree = root.join("worktree");
+    fs::create_dir_all(&worktree).expect("failed to create test dir");
+
+    let log = format!("cwd={}\nargs=cc adler32.o -o example\n", worktree.display());
+    let err = parse_compile_units_from_cc_driver_log(&log, &worktree)
+        .expect_err("expected parse to fail when no compile commands exist");
+    assert!(
+        err.contains("no compile units found"),
+        "unexpected parse error: {}",
+        err
+    );
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
 fn test_required_artifacts_build_local_fixture_success() {
     let root = unique_temp_dir("zlib_required_artifacts_success");
     fs::create_dir_all(&root).expect("failed to create test root");
@@ -1129,9 +1345,19 @@ fn test_required_artifacts_build_local_fixture_success() {
     assert!(fs::read_to_string(log_dir.join("artifact_manifest.txt"))
         .expect("failed to read artifact_manifest.txt")
         .contains("required_artifacts="));
+    assert!(fs::read_to_string(log_dir.join("artifact_manifest.txt"))
+        .expect("failed to read artifact_manifest.txt")
+        .contains("compile_units_count="));
     assert!(fs::read_to_string(log_dir.join("cc_driver.log"))
         .expect("failed to read cc_driver.log")
         .contains("tiny.c"));
+    let compile_units = fs::read_to_string(log_dir.join("compile_units_manifest.txt"))
+        .expect("failed to read compile_units_manifest.txt");
+    assert!(
+        compile_units.contains("source=tiny.c object=tiny.o"),
+        "compile unit manifest should include tiny compile unit: {}",
+        compile_units
+    );
 
     let _ = fs::remove_dir_all(&root);
 }
@@ -1289,4 +1515,16 @@ fn test_real_world_zlib_required_artifacts_for_make_all_scope() {
             manifest
         );
     }
+    let compile_units = fs::read_to_string(log_dir.join("compile_units_manifest.txt"))
+        .expect("failed to read compile units manifest");
+    assert!(
+        compile_units.contains("compile_units_count="),
+        "compile unit manifest should include count header: {}",
+        compile_units
+    );
+    assert!(
+        compile_units.contains("source=adler32.c"),
+        "compile unit manifest should include adler32.c compile unit: {}",
+        compile_units
+    );
 }

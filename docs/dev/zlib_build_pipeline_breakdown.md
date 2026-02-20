@@ -17,3 +17,7 @@ This order makes failures diagnosable and keeps each leaf independently testable
 ## First leaf scope
 
 The first leaf validates that the harness can consistently build all `make test`-relevant binaries in native mode and capture an artifact manifest plus command logs. This confirms target coverage before introducing Fragile object replay.
+
+## Second leaf scope
+
+The second leaf adds deterministic compile-unit extraction from the `CC` driver log. It normalizes paths relative to the zlib worktree, de-duplicates units, and writes `compile_units_manifest.txt` so later transpile replay can consume a stable source/object plan.
