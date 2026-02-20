@@ -21,7 +21,7 @@ Run upstream-style tests through the Fragile transpiler with runtime parity:
   - [x] Establish deterministic artifact target coverage for upstream `make test` scope (`make all` outputs + manifest/log capture in `real_world_zlib_tests`, logs under `/tmp/fragile_real_world_zlib_required_artifacts/driver_logs`).
   - [x] Parse and normalize compile units from `CC` driver logs into a reproducible source/object list (`compile_units_manifest.txt` in `/tmp/fragile_real_world_zlib_required_artifacts/driver_logs`).
   - [x] Transpile and compile one core object end-to-end (`adler32.c` -> Rust -> `adler32.o`) through the Fragile flow (`fragile_object_manifest.txt` and `rustc_object.*` logs under `/tmp/fragile_real_world_zlib_fragile_adler32_object/driver_logs`).
-  - [ ] Expand transpile+compile coverage to all `OBJZ` and `OBJG` units needed for `libz.a`.
+  - [x] Expand transpile+compile coverage to all `OBJZ` and `OBJG` units needed for `libz.a`.
     - [x] Derive deterministic `OBJZ`/`OBJG` replay plan from upstream `Makefile` + `cc_driver.log` compile units (`libza_replay_plan.txt` under `/tmp/fragile_real_world_zlib_libza_replay_plan/driver_logs`).
     - [x] Replay `OBJZ` units through Fragile to `.o` outputs and validate object completeness.
       - [x] Add deterministic `OBJZ` replay harness/logging (`fragile_objz_manifest.txt` + per-object `rustc_objz_*.status` logs under `/tmp/fragile_real_world_zlib_fragile_objz_objects/driver_logs`).
@@ -68,7 +68,10 @@ Run upstream-style tests through the Fragile transpiler with runtime parity:
           - [x] Fix `inflate` signed/unsigned compound-assignment and negative-to-unsigned return cast normalization (`i32 += u32` and `-1 as u64`).
             - Plan: normalize compound-assignment RHS casts for integral LHS types in assignment lowering and normalize negative literal casts to unsigned in return/cast paths.
             - Replay evidence (`/tmp/fragile_real_world_zlib_fragile_objz_objects/driver_logs/objz_inflate_o_transpiled.rs` + `rustc_objz_inflate_o.status` + `rustc_objz_inflate_o.stderr`): `inflate` now emits `(*state).back += (((*state).extra) as i32)` and `return (-1i32 as u64);`, `rustc_objz_inflate_o.status` is `0`, and `rustc_objz_inflate_o.stderr` is empty.
-    - [ ] Replay `OBJG` units through Fragile to `.o` outputs and validate object completeness.
+    - [x] Replay `OBJG` units through Fragile to `.o` outputs and validate object completeness.
+      - [x] Add deterministic `OBJG` replay harness/logging (`fragile_objg_manifest.txt` + per-object `rustc_objg_*.status` logs under `/tmp/fragile_real_world_zlib_fragile_objg_objects/driver_logs`).
+      - [x] Re-run full `OBJG` replay and confirm all expected OBJG objects compile and are non-empty.
+        - Replay evidence (`cargo test -p fragile-clang --test real_world_zlib_tests test_real_world_zlib_fragile_objg_objects_replay -- --ignored --nocapture`, 2026-02-20): passes; strict status/object-size/manifest assertions all succeed.
   - [ ] Link transpiled static/shared test binaries used by upstream tests (`example`, `minigzip`, `examplesh`, `minigzipsh`, `example64`, `minigzip64`).
 - [ ] Make transpiled build pass zlib test commands used by upstream `make test`.
 - [ ] Add parity assertions vs native:

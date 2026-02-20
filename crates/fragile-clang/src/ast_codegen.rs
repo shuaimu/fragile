@@ -11877,8 +11877,8 @@ impl AstCodeGen {
 
         // Variadic C stdio stubs
         self.writeln("// Variadic C stdio stubs");
-        self.writeln("#[inline] pub fn vsnprintf(_s: *mut i8, _n: u64, _fmt: *const i8, _args: *mut std::ffi::c_void) -> i32 { 0 }");
-        self.writeln("#[inline] pub fn vasprintf(_strp: *mut *mut i8, _fmt: *const i8, _args: *mut std::ffi::c_void) -> i32 { 0 }");
+        self.writeln("#[inline] pub fn vsnprintf(_s: *mut i8, _n: u64, _fmt: *const i8, _args: [std::ffi::VaList; 1]) -> i32 { 0 }");
+        self.writeln("#[inline] pub fn vasprintf(_strp: *mut *mut i8, _fmt: *const i8, _args: [std::ffi::VaList; 1]) -> i32 { 0 }");
         self.writeln("");
 
         // sizeof pseudo-function
@@ -13179,10 +13179,19 @@ impl AstCodeGen {
         }
 
         let rust_name = sanitize_identifier(name);
-        let existing_decl_pattern = format!("fn {}(", rust_name);
+        let raw_rust_name = format!("__fragile_extern_{}", rust_name);
+        let has_existing_free_fn_decl = self.output.lines().any(|line| {
+            let trimmed = line.trim_start();
+            let matches_name = trimmed.contains(&format!("pub fn {}(", rust_name))
+                || trimmed.contains(&format!("pub unsafe fn {}(", rust_name))
+                || trimmed.starts_with(&format!("fn {}(", rust_name));
+            matches_name && !trimmed.contains("&self") && !trimmed.contains("&mut self")
+        });
+        let has_existing_top_level_wrapper =
+            has_existing_free_fn_decl || self.output.contains(&format!("fn {}(", raw_rust_name));
         if self.generated_functions.contains_key(&rust_name)
             || self.emitted_extern_c_functions.contains(&rust_name)
-            || self.output.contains(&existing_decl_pattern)
+            || has_existing_top_level_wrapper
         {
             return;
         }
@@ -13226,7 +13235,6 @@ impl AstCodeGen {
             return;
         }
 
-        let raw_rust_name = format!("__fragile_extern_{}", rust_name);
         self.writeln("unsafe extern \"C\" {");
         self.indent += 1;
         self.writeln(&format!("#[link_name = \"{}\"]", name));
@@ -23675,20 +23683,23 @@ impl AstCodeGen {
                         };
 
                         // Pointer assignment from 0/nullptr literal.
-                        let left_is_ptr = left_effective_type
+                        let left_rust_type_hint = left_effective_type
                             .as_ref()
-                            .is_some_and(Self::is_pointer_like_type);
+                            .map(|t| t.to_rust_type_str())
+                            .unwrap_or_default();
                         let left_is_fn_ptr = left_effective_type
                             .as_ref()
-                            .is_some_and(Self::is_function_pointer_type_or_typedef);
+                            .is_some_and(Self::is_function_pointer_type_or_typedef)
+                            || is_option_fn_rust_type(&left_rust_type_hint);
+                        let left_is_ptr = left_effective_type
+                            .as_ref()
+                            .is_some_and(Self::is_pointer_like_type)
+                            || left_is_fn_ptr;
                         if left_is_ptr && is_zero_integer_literal_str(&right_raw) {
                             right_raw = if left_is_fn_ptr {
                                 "None".to_string()
                             } else {
-                                let left_rust_type = left_effective_type
-                                    .as_ref()
-                                    .map(|t| t.to_rust_type_str())
-                                    .unwrap_or_default();
+                                let left_rust_type = left_rust_type_hint.clone();
                                 if left_rust_type.starts_with("*const ") {
                                     "std::ptr::null()".to_string()
                                 } else {
@@ -23709,7 +23720,12 @@ impl AstCodeGen {
                                     .as_ref()
                                     .is_some_and(|ty| self.is_function_pointer_expr_type(ty));
                             if left_is_fn_ptr || is_option_fn_rust_type(&left_rust_type) {
-                                if is_zero_integer_literal_str(&right_raw) {
+                                if is_zero_integer_literal_str(&right_raw)
+                                    || right_raw == "std::ptr::null_mut()"
+                                    || right_raw == "std::ptr::null()"
+                                    || right_raw == "(std::ptr::null_mut())"
+                                    || right_raw == "(std::ptr::null())"
+                                {
                                     right_raw = "None".to_string();
                                 } else if right_raw != "None"
                                     && !right_raw.starts_with("Some(")
@@ -24007,20 +24023,23 @@ impl AstCodeGen {
                         };
 
                         // Pointer assignment from 0/nullptr literal.
-                        let left_is_ptr = left_effective_type
+                        let left_rust_type_hint = left_effective_type
                             .as_ref()
-                            .is_some_and(Self::is_pointer_like_type);
+                            .map(|t| t.to_rust_type_str())
+                            .unwrap_or_default();
                         let left_is_fn_ptr = left_effective_type
                             .as_ref()
-                            .is_some_and(Self::is_function_pointer_type_or_typedef);
+                            .is_some_and(Self::is_function_pointer_type_or_typedef)
+                            || is_option_fn_rust_type(&left_rust_type_hint);
+                        let left_is_ptr = left_effective_type
+                            .as_ref()
+                            .is_some_and(Self::is_pointer_like_type)
+                            || left_is_fn_ptr;
                         if left_is_ptr && is_zero_integer_literal_str(&right) {
                             right = if left_is_fn_ptr {
                                 "None".to_string()
                             } else {
-                                let left_rust_type = left_effective_type
-                                    .as_ref()
-                                    .map(|t| t.to_rust_type_str())
-                                    .unwrap_or_default();
+                                let left_rust_type = left_rust_type_hint.clone();
                                 if left_rust_type.starts_with("*const ") {
                                     "std::ptr::null()".to_string()
                                 } else {
@@ -24041,7 +24060,12 @@ impl AstCodeGen {
                                     .as_ref()
                                     .is_some_and(|ty| self.is_function_pointer_expr_type(ty));
                             if left_is_fn_ptr || is_option_fn_rust_type(&left_rust_type) {
-                                if is_zero_integer_literal_str(&right) {
+                                if is_zero_integer_literal_str(&right)
+                                    || right == "std::ptr::null_mut()"
+                                    || right == "std::ptr::null()"
+                                    || right == "(std::ptr::null_mut())"
+                                    || right == "(std::ptr::null())"
+                                {
                                     right = "None".to_string();
                                 } else if right != "None"
                                     && !right.starts_with("Some(")
@@ -24321,10 +24345,8 @@ impl AstCodeGen {
                             | BinaryOp::Ge
                     ) {
                         // For comparison operators, strip literal suffixes - Rust infers compatible types
-                        let left_str =
-                            strip_literal_suffix(&self.expr_to_string(&node.children[0]));
-                        let right_str =
-                            strip_literal_suffix(&self.expr_to_string(&node.children[1]));
+                        let left_str = strip_literal_suffix(&self.expr_to_string(&node.children[0]));
+                        let right_str = strip_literal_suffix(&self.expr_to_string(&node.children[1]));
 
                         // Check if one side is float and the other is an integer literal
                         // Rust requires float literals (e.g., 0.0) when comparing with floats
@@ -24634,16 +24656,24 @@ impl AstCodeGen {
                         let right_is_float =
                             matches!(right_type, Some(CppType::Float | CppType::Double));
 
-                        let left = if right_is_float && is_integer_literal_str(&left_str) {
+                        let mut left = if right_is_float && is_integer_literal_str(&left_str) {
                             int_literal_to_float(&left_str)
                         } else {
                             left_str
                         };
-                        let right = if left_is_float && is_integer_literal_str(&right_str) {
+                        let mut right = if left_is_float && is_integer_literal_str(&right_str) {
                             int_literal_to_float(&right_str)
                         } else {
                             right_str
                         };
+                        // Pointer differences lower to `isize` via `.offset_from(...)`.
+                        // Keep relational comparisons type-aligned when the opposite side is integral.
+                        if left.contains(".offset_from(") && !right.contains(".offset_from(") {
+                            right = format!("({}) as isize", right);
+                        } else if right.contains(".offset_from(") && !left.contains(".offset_from(")
+                        {
+                            left = format!("({}) as isize", left);
+                        }
 
                         // Handle comparison of unsigned type with -1:
                         // In C++, comparing unsigned with -1 works because -1 wraps to MAX.
@@ -27902,8 +27932,14 @@ impl AstCodeGen {
                             }
                         }
                         CastKind::NullToPointer => {
-                            // Integer 0 to pointer - use std::ptr::null() or null_mut()
-                            if let CppType::Pointer { is_const, .. } = ty {
+                            // Integer 0 to pointer-like target.
+                            // Function pointers are represented as Option<fn(...)> in Rust.
+                            let rust_type = ty.to_rust_type_str();
+                            if self.is_function_pointer_expr_type(ty)
+                                || is_option_fn_rust_type(&rust_type)
+                            {
+                                "None".to_string()
+                            } else if let CppType::Pointer { is_const, .. } = ty {
                                 if *is_const {
                                     "std::ptr::null()".to_string()
                                 } else {
