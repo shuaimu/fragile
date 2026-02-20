@@ -1192,6 +1192,66 @@ fn run_make_test_command_subset_replay_in_tree(
     Ok(())
 }
 
+fn read_status_file(path: &Path) -> Result<i32, String> {
+    let raw = fs::read_to_string(path)
+        .map_err(|e| format!("failed to read {}: {}", path.display(), e))?;
+    raw.trim()
+        .parse::<i32>()
+        .map_err(|e| format!("failed to parse status in {}: {}", path.display(), e))
+}
+
+fn read_native_make_test_exit_status(native_log_dir: &Path) -> Result<i32, String> {
+    read_status_file(&native_log_dir.join("make_test.status"))
+}
+
+fn read_make_test_replay_exit_status(replay_log_dir: &Path) -> Result<i32, String> {
+    let commands_manifest_path = replay_log_dir.join("make_test_commands_manifest.txt");
+    let commands_manifest = fs::read_to_string(&commands_manifest_path)
+        .map_err(|e| format!("failed to read {}: {}", commands_manifest_path.display(), e))?;
+    let commands = parse_make_test_commands_manifest_entries(&commands_manifest)?;
+
+    if commands.is_empty() {
+        return Err("make-test replay has no commands to evaluate".to_string());
+    }
+
+    for idx in 0..commands.len() {
+        let step = make_test_replay_step_name(idx);
+        let status_path = replay_log_dir.join(format!("{}.status", step));
+        if !status_path.exists() {
+            return Err(format!(
+                "missing replay status for step {} at {}",
+                step,
+                status_path.display()
+            ));
+        }
+        let status = read_status_file(&status_path)?;
+        if status != 0 {
+            return Ok(status);
+        }
+    }
+
+    Ok(0)
+}
+
+fn assert_make_test_exit_status_parity(
+    native_log_dir: &Path,
+    replay_log_dir: &Path,
+) -> Result<(), String> {
+    let native_status = read_native_make_test_exit_status(native_log_dir)?;
+    let replay_status = read_make_test_replay_exit_status(replay_log_dir)?;
+    if native_status == replay_status {
+        Ok(())
+    } else {
+        Err(format!(
+            "exit status parity mismatch: native make test status={} fragile replay status={} (native logs: {}, replay logs: {})",
+            native_status,
+            replay_status,
+            native_log_dir.display(),
+            replay_log_dir.display()
+        ))
+    }
+}
+
 fn parse_link_units_manifest_entries(
     manifest_text: &str,
 ) -> Result<Vec<(String, Vec<String>)>, String> {
@@ -3839,6 +3899,98 @@ fn test_make_test_command_subset_replay_reports_failing_command() {
 }
 
 #[test]
+fn test_make_test_exit_status_parity_local_fixture_success() {
+    let root = unique_temp_dir("zlib_make_test_exit_status_parity_success");
+    fs::create_dir_all(&root).expect("failed to create test root");
+
+    let project_dir = create_local_required_artifacts_project(&root, false)
+        .expect("failed to create required-artifacts project");
+    rewrite_local_makefile_test_target(
+        &project_dir,
+        r#"test:
+	@$(MAKE) all
+	@test -x ./minigzip && test -x ./example
+	@test -x ./minigzipsh && test -x ./examplesh
+	@test -x ./minigzip64 && test -x ./example64
+"#,
+    )
+    .expect("failed to rewrite local fixture test target for parity success");
+
+    let replay_log_dir = root.join("replay_logs");
+    run_make_test_command_subset_replay_in_tree(&project_dir, &replay_log_dir)
+        .expect("make-test replay should succeed for parity success case");
+
+    let native_log_dir = root.join("native_logs");
+    run_native_baseline_in_tree(&project_dir, &native_log_dir)
+        .expect("native baseline should succeed for parity success case");
+
+    assert_make_test_exit_status_parity(&native_log_dir, &replay_log_dir)
+        .expect("exit status parity should match for local success case");
+    assert_eq!(
+        read_native_make_test_exit_status(&native_log_dir).expect("failed to read native status"),
+        0
+    );
+    assert_eq!(
+        read_make_test_replay_exit_status(&replay_log_dir).expect("failed to read replay status"),
+        0
+    );
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn test_make_test_exit_status_parity_local_fixture_reports_mismatch() {
+    let root = unique_temp_dir("zlib_make_test_exit_status_parity_mismatch");
+    fs::create_dir_all(&root).expect("failed to create test root");
+
+    let project_dir = create_local_required_artifacts_project(&root, false)
+        .expect("failed to create required-artifacts project");
+    rewrite_local_makefile_test_target(
+        &project_dir,
+        r#"test:
+	@$(MAKE) all
+	@test -x ./minigzip && test -x ./example && false
+	@test -x ./minigzipsh && test -x ./examplesh
+	@test -x ./minigzip64 && test -x ./example64
+"#,
+    )
+    .expect("failed to rewrite local fixture test target for parity mismatch");
+
+    let replay_log_dir = root.join("replay_logs");
+    let replay_result = run_make_test_command_subset_replay_in_tree(&project_dir, &replay_log_dir);
+    assert!(
+        replay_result.is_err(),
+        "make-test replay should fail for parity mismatch case"
+    );
+
+    let native_log_dir = root.join("native_logs");
+    let native_result = run_native_baseline_in_tree(&project_dir, &native_log_dir);
+    assert!(
+        native_result.is_err(),
+        "native baseline should fail for parity mismatch case"
+    );
+
+    let native_status =
+        read_native_make_test_exit_status(&native_log_dir).expect("failed to read native status");
+    let replay_status =
+        read_make_test_replay_exit_status(&replay_log_dir).expect("failed to read replay status");
+    assert_ne!(
+        native_status, replay_status,
+        "mismatch fixture should produce different native/replay statuses"
+    );
+
+    let err = assert_make_test_exit_status_parity(&native_log_dir, &replay_log_dir)
+        .expect_err("expected exit status parity mismatch");
+    assert!(
+        err.contains("exit status parity mismatch"),
+        "unexpected mismatch error: {}",
+        err
+    );
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
 fn test_required_artifacts_build_local_fixture_success() {
     let root = unique_temp_dir("zlib_required_artifacts_success");
     fs::create_dir_all(&root).expect("failed to create test root");
@@ -4785,6 +4937,35 @@ fn test_real_world_zlib_make_test_command_subset_replay() {
             link_manifest
         );
     }
+}
+
+#[test]
+#[ignore = "real-world external project test (downloads zlib and compares native-vs-fragile make-test exit status)"]
+fn test_real_world_zlib_make_test_exit_status_parity() {
+    let native_log_dir = run_zlib_native_baseline().expect("failed to run zlib native baseline");
+    let replay_result = run_zlib_make_test_command_subset_replay_baseline();
+    let replay_log_dir = Path::new(ZLIB_MAKE_TEST_REPLAY_BASELINE_DIR).join("driver_logs");
+
+    let replay_err =
+        replay_result.expect_err("fragile replay is expected to fail in current baseline");
+    assert!(
+        replay_err.contains("make-test command replay failed at command"),
+        "unexpected make-test replay failure: {}",
+        replay_err
+    );
+
+    let parity_err = assert_make_test_exit_status_parity(&native_log_dir, &replay_log_dir)
+        .expect_err("expected native-vs-fragile exit status parity mismatch");
+    assert!(
+        parity_err.contains("exit status parity mismatch"),
+        "unexpected parity error: {}",
+        parity_err
+    );
+    assert!(
+        parity_err.contains("native make test status=0"),
+        "parity error should include native success status: {}",
+        parity_err
+    );
 }
 
 #[test]
