@@ -23,14 +23,15 @@ Run upstream-style tests through the Fragile transpiler with runtime parity:
   - [x] Transpile and compile one core object end-to-end (`adler32.c` -> Rust -> `adler32.o`) through the Fragile flow (`fragile_object_manifest.txt` and `rustc_object.*` logs under `/tmp/fragile_real_world_zlib_fragile_adler32_object/driver_logs`).
   - [ ] Expand transpile+compile coverage to all `OBJZ` and `OBJG` units needed for `libz.a`.
     - [x] Derive deterministic `OBJZ`/`OBJG` replay plan from upstream `Makefile` + `cc_driver.log` compile units (`libza_replay_plan.txt` under `/tmp/fragile_real_world_zlib_libza_replay_plan/driver_logs`).
-    - [ ] Replay `OBJZ` units through Fragile to `.o` outputs and validate object completeness.
+    - [x] Replay `OBJZ` units through Fragile to `.o` outputs and validate object completeness.
       - [x] Add deterministic `OBJZ` replay harness/logging (`fragile_objz_manifest.txt` + per-object `rustc_objz_*.status` logs under `/tmp/fragile_real_world_zlib_fragile_objz_objects/driver_logs`).
       - [x] Fix `crc32.c` transpiled replay compile failure (`wrapping_shl` ambiguous integer literal typing) in source-faithful codegen.
       - [x] Fix `.c` unit parsing mode mismatch in OBJZ replay (`deflate.c` `register` rejected under C++17 parser mode).
       - [x] Fix `deflate.c` transpiled replay compile failure for `configuration_table` initializer (`config { ... }` positional initializer emitted as invalid Rust struct literal).
       - [x] Fix `deflate.c` transpiled replay compile failure for chained comparisons emitted from C integer-bool normalization (invalid Rust `a != b != 0` forms).
-      - [ ] Re-run full `OBJZ` replay and confirm all expected OBJZ objects compile and are non-empty.
+      - [x] Re-run full `OBJZ` replay and confirm all expected OBJZ objects compile and are non-empty.
         - Plan: resolve replay blockers one compiler class at a time in `deflate.c` transpiled output, re-run replay after each class, and keep each fix leaf under ~500 LOC.
+        - Replay evidence (`cargo test -p fragile-clang test_real_world_zlib_fragile_objz_objects_replay -- --ignored --nocapture`, 2026-02-20): passes; strict status/object-size/manifest assertions all succeed.
         - [x] Fix relational comparison cast-parenthesization in codegen so emitted Rust doesn't parse cast types as generic arguments (`(dist) as i32 < 256`).
         - [x] Re-run real-world `OBJZ` replay after cast-parenthesization fix and record the next first blocking error class in `deflate` compile logs.
           - Current first blocker class after replay: external symbol/type resolution in `deflate` output (missing `static_tree_desc_s`, `zcalloc`/`zcfree`, `adler32`/`crc32`, `_tr_*`), followed by pointer-function call and type-width/union-field mismatches.

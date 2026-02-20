@@ -2967,6 +2967,7 @@ fn test_real_world_zlib_fragile_objz_objects_replay() {
     let replay_result = run_zlib_fragile_objz_objects_baseline();
 
     let log_dir = Path::new(ZLIB_FRAGILE_OBJZ_OBJECTS_BASELINE_DIR).join("driver_logs");
+    let worktree_dir = Path::new(ZLIB_FRAGILE_OBJZ_OBJECTS_BASELINE_DIR).join("worktree");
     for rel in ZLIB_FRAGILE_OBJZ_LOG_FILES {
         assert!(
             log_dir.join(rel).exists(),
@@ -2974,7 +2975,14 @@ fn test_real_world_zlib_fragile_objz_objects_replay() {
             log_dir.join(rel).display()
         );
     }
-    let replay_err = replay_result.err();
+
+    let replay_log_dir = replay_result
+        .map_err(|e| format!("full OBJZ replay failed unexpectedly: {}", e))
+        .expect("OBJZ replay should succeed end-to-end");
+    assert_eq!(
+        replay_log_dir, log_dir,
+        "replay helper should return baseline OBJZ driver log directory"
+    );
 
     let replay_plan = fs::read_to_string(log_dir.join("libza_replay_plan.txt"))
         .expect("failed to read libza_replay_plan.txt");
@@ -2997,15 +3005,6 @@ fn test_real_world_zlib_fragile_objz_objects_replay() {
         "0"
     );
 
-    if let Some(err) = replay_err {
-        assert!(
-            !err.contains("ISO C++17 does not allow 'register' storage class specifier"),
-            "C-source parsing mode mismatch persists: {}",
-            err
-        );
-        return;
-    }
-
     let manifest = fs::read_to_string(log_dir.join("fragile_objz_manifest.txt"))
         .expect("failed to read fragile_objz_manifest.txt");
     assert!(
@@ -3019,11 +3018,54 @@ fn test_real_world_zlib_fragile_objz_objects_replay() {
         manifest
     );
     for object in ZLIB_OBJZ_OBJECTS {
+        let rustc_step = rustc_replay_step_name("OBJZ", object);
+        assert_eq!(
+            fs::read_to_string(log_dir.join(format!("{}.status", rustc_step)))
+                .expect("failed to read rustc replay status")
+                .trim(),
+            "0",
+            "rustc replay should succeed for {}",
+            object
+        );
+
+        let object_path = worktree_dir.join(object);
+        assert!(
+            object_path.exists(),
+            "expected replayed OBJZ object {}",
+            object_path.display()
+        );
+        assert!(
+            fs::metadata(&object_path)
+                .expect("failed to stat replayed OBJZ object")
+                .len()
+                > 0,
+            "replayed OBJZ object should be non-empty: {}",
+            object_path.display()
+        );
+
         assert!(
             manifest.contains(&format!("object={}", object)),
             "manifest should include OBJZ object {}: {}",
             object,
             manifest
+        );
+        let manifest_line = manifest
+            .lines()
+            .find(|line| line.contains(&format!("object={}", object)))
+            .expect("manifest should contain per-object replay line");
+        let object_size_token = manifest_line
+            .split_whitespace()
+            .find(|token| token.starts_with("object_size="))
+            .expect("manifest object line should include object_size");
+        let manifest_object_size: u64 = object_size_token
+            .trim_start_matches("object_size=")
+            .parse()
+            .expect("manifest object_size should parse as u64");
+        assert!(
+            manifest_object_size > 0,
+            "manifest object_size should be positive for {}: {}",
+            object,
+            manifest_line
         );
     }
 }

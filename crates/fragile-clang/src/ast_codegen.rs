@@ -3226,6 +3226,7 @@ impl AstCodeGen {
                 self.writeln("");
                 self.generated_structs.insert(rust_name.clone());
                 self.union_types.insert(rust_name.clone());
+                self.class_fields.insert(rust_name.clone(), union_fields.clone());
                 continue;
             }
 
@@ -10252,6 +10253,10 @@ impl AstCodeGen {
         // File position type stub - simple version that works without __mbstate_t
         self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct fpos_mbstate_t { pub __pos: i64, pub __state_count: i32, pub __state_value: u32 }");
         self.writeln("pub type fpos___mbstate_t = fpos_mbstate_t;");
+        self.writeln("pub type fpos_t = fpos_mbstate_t;");
+        self.writeln("pub type fpos64_t = fpos_mbstate_t;");
+        self.generated_aliases.insert("fpos_t".to_string());
+        self.generated_aliases.insert("fpos64_t".to_string());
         self.writeln("");
         // Placeholder types that need Clone/Default (can't use c_void as base for structs)
         // string_view with data/size/length methods
@@ -13006,6 +13011,7 @@ impl AstCodeGen {
         self.writeln(&format!("pub union {} {{", rust_name));
         self.indent += 1;
 
+        let mut fields = Vec::new();
         for child in children {
             if let ClangNodeKind::FieldDecl {
                 name: field_name,
@@ -13031,6 +13037,7 @@ impl AstCodeGen {
                     type_str
                 };
                 self.writeln(&format!("{}{}: {},", vis, sanitized_name, wrapped_type));
+                fields.push((sanitized_name, ty.clone()));
             }
         }
 
@@ -13072,6 +13079,12 @@ impl AstCodeGen {
             self.writeln("}");
             self.indent -= 1;
             self.writeln("}");
+        }
+        if !fields.is_empty() {
+            self.class_fields.insert(rust_name.clone(), fields.clone());
+            if rust_name != name {
+                self.class_fields.insert(name.to_string(), fields);
+            }
         }
         self.writeln("");
     }
@@ -14471,6 +14484,16 @@ impl AstCodeGen {
         });
 
         // Derive Copy only when all non-static fields are trivially copyable.
+        let is_named_copy_union = |ty: &CppType| {
+            let Some(class_name) = Self::extract_class_name_from_type(ty) else {
+                return false;
+            };
+            let rust_name = CppType::Named(class_name.clone()).to_rust_type_str();
+            let unqual = class_name.rsplit("::").next().unwrap_or(&class_name);
+            class_name.contains("unnamed union at")
+                || rust_name.starts_with("union__")
+                || sanitize_identifier(unqual).starts_with("union__")
+        };
         let has_non_copy_field = children.iter().any(|child| {
             match &child.kind {
                 ClangNodeKind::FieldDecl { ty, is_static, .. } => {
@@ -14485,14 +14508,16 @@ impl AstCodeGen {
                     {
                         return true;
                     }
-                    !is_copy_like_cpp_type(ty)
+                    !(is_copy_like_cpp_type(ty) || is_named_copy_union(ty))
                 }
                 // Base subobjects participate in Copy-eligibility just like normal fields.
                 ClangNodeKind::CXXBaseSpecifier {
                     base_type,
                     is_virtual,
                     ..
-                } => !is_virtual && !is_copy_like_cpp_type(base_type),
+                } => {
+                    !is_virtual && !(is_copy_like_cpp_type(base_type) || is_named_copy_union(base_type))
+                }
                 _ => false,
             }
         });
@@ -16012,6 +16037,12 @@ impl AstCodeGen {
                 fields.push((sanitized_name, ty.clone()));
             }
         }
+        if !fields.is_empty() {
+            self.class_fields.insert(rust_name.clone(), fields.clone());
+            if rust_name != name {
+                self.class_fields.insert(name.to_string(), fields.clone());
+            }
+        }
 
         self.indent -= 1;
         self.writeln("}");
@@ -16174,6 +16205,35 @@ impl AstCodeGen {
         raw_name: &str,
         normalized_name: &str,
     ) -> Option<&'a Vec<(String, CppType)>> {
+        let raw_union_key = if raw_name.contains("unnamed union at") {
+            Some(
+                CppType::Named(
+                    raw_name
+                        .trim_start_matches("const ")
+                        .trim_start_matches("volatile ")
+                        .trim()
+                        .to_string(),
+                )
+                .to_rust_type_str(),
+            )
+        } else {
+            None
+        };
+        let normalized_union_key = if normalized_name.contains("unnamed union at") {
+            Some(
+                CppType::Named(
+                    normalized_name
+                        .trim_start_matches("const ")
+                        .trim_start_matches("volatile ")
+                        .trim()
+                        .to_string(),
+                )
+                .to_rust_type_str(),
+            )
+        } else {
+            None
+        };
+
         self.class_fields
             .get(raw_name)
             .or_else(|| self.class_fields.get(normalized_name))
@@ -16186,6 +16246,22 @@ impl AstCodeGen {
                 self.type_alias_targets
                     .get(normalized_name)
                     .and_then(|target| self.class_fields.get(target))
+            })
+            // Recovered unnamed-union layouts are tracked in
+            // missing_union_member_types before placeholder type emission.
+            // Consult those entries so positional InitListExpr lowering can
+            // still emit named field initializers.
+            .or_else(|| self.missing_union_member_types.get(raw_name))
+            .or_else(|| self.missing_union_member_types.get(normalized_name))
+            .or_else(|| {
+                raw_union_key
+                    .as_ref()
+                    .and_then(|key| self.missing_union_member_types.get(key))
+            })
+            .or_else(|| {
+                normalized_union_key
+                    .as_ref()
+                    .and_then(|key| self.missing_union_member_types.get(key))
             })
     }
 
@@ -17525,13 +17601,22 @@ impl AstCodeGen {
             return None;
         }
 
+        let base_name = self.get_raw_var_name(child);
+        // Some globals are emitted as raw pointers even when this TU still reports
+        // an array-ish source type. Avoid re-decaying those with `.as_ptr()`.
+        if base_name
+            .as_ref()
+            .is_some_and(|name| self.is_pointer_like_global_name(name))
+        {
+            return None;
+        }
+
         let child_is_sized_array = Self::get_expr_type(child)
             .as_ref()
             .is_some_and(Self::is_sized_array_or_array_ref_type)
             || Self::get_original_expr_type(child)
                 .as_ref()
                 .is_some_and(Self::is_sized_array_or_array_ref_type);
-        let base_name = self.get_raw_var_name(child);
         let declared_global_array = base_name.as_ref().is_some_and(|name| {
             self.global_var_types
                 .get(name)
@@ -17589,7 +17674,17 @@ impl AstCodeGen {
     /// Check whether an expression is a member access on a union instance.
     fn is_union_member_access(&self, node: &ClangNode) -> bool {
         match &node.kind {
-            ClangNodeKind::MemberExpr { .. } => {
+            ClangNodeKind::MemberExpr { declaring_class, .. } => {
+                let declaring_union = declaring_class.as_ref().is_some_and(|class_name| {
+                    let rust_name = CppType::Named(class_name.clone()).to_rust_type_str();
+                    class_name.contains("unnamed union at")
+                        || rust_name.starts_with("union__")
+                        || self.union_types.contains(class_name)
+                        || self.union_types.contains(&rust_name)
+                });
+                if declaring_union {
+                    return true;
+                }
                 if let Some(base) = node.children.first() {
                     if Self::get_original_expr_type(base)
                         .as_ref()
@@ -17665,6 +17760,16 @@ impl AstCodeGen {
             }
             _ => None,
         }
+    }
+
+    /// Whether a lowered global symbol name resolves to a pointer-like emitted type.
+    fn is_pointer_like_global_name(&self, raw_name: &str) -> bool {
+        self.global_var_types.get(raw_name).is_some_and(|t| {
+            matches!(
+                t,
+                CppType::Pointer { .. } | CppType::Array { size: None, .. }
+            )
+        })
     }
 
     /// Generate a unique symbol name for a function-scope static local variable.
@@ -22402,6 +22507,8 @@ impl AstCodeGen {
                 if node.children.len() >= 2 {
                     let mut arr_raw = self.expr_to_string_raw(&node.children[0]);
                     let idx = self.expr_to_string_raw(&node.children[1]);
+                    let is_global_array = self.is_global_var_expr(&node.children[0]);
+                    let global_raw_name = self.get_raw_var_name(&node.children[0]);
                     // Check if the array expression is a pointer type
                     let arr_type = Self::get_expr_type(&node.children[0]);
                     let is_pointer = match arr_type {
@@ -22439,6 +22546,26 @@ impl AstCodeGen {
                             }
                         } else {
                             format!("*{}.add(({}) as usize)", arr, idx)
+                        }
+                    } else if is_global_array {
+                        let raw_name = global_raw_name.unwrap_or(arr_raw);
+                        let raw_name = if raw_name.starts_with("unsafe { ")
+                            || raw_name.contains(" as ")
+                            || raw_name.contains(' ')
+                        {
+                            format!("({})", raw_name)
+                        } else {
+                            raw_name
+                        };
+                        let idx_no_suffix = strip_literal_suffix(&idx);
+                        if let Some(abs) = idx_no_suffix.strip_prefix('-') {
+                            if is_integer_literal_str(abs) {
+                                format!("*{}.as_mut_ptr().sub({} as usize)", raw_name, abs)
+                            } else {
+                                format!("*{}.as_mut_ptr().add(({}) as usize)", raw_name, idx)
+                            }
+                        } else {
+                            format!("*{}.as_mut_ptr().add(({}) as usize)", raw_name, idx)
                         }
                     } else {
                         let arr = if arr_raw.contains(" as ")
@@ -24116,24 +24243,48 @@ impl AstCodeGen {
                                     }
                                 }
                                 BinaryOp::AddAssign => {
-                                    format!(
+                                    let expr = format!(
                                         "{} = {}.wrapping_add({})",
                                         left_for_assign, left_for_read, right
-                                    )
+                                    );
+                                    if assign_needs_unsafe {
+                                        format!("unsafe {{ {} }}", expr)
+                                    } else {
+                                        expr
+                                    }
                                 }
                                 BinaryOp::SubAssign => {
-                                    format!(
+                                    let expr = format!(
                                         "{} = {}.wrapping_sub({})",
                                         left_for_assign, left_for_read, right
-                                    )
+                                    );
+                                    if assign_needs_unsafe {
+                                        format!("unsafe {{ {} }}", expr)
+                                    } else {
+                                        expr
+                                    }
                                 }
                                 BinaryOp::MulAssign => {
-                                    format!(
+                                    let expr = format!(
                                         "{} = {}.wrapping_mul({})",
                                         left_for_assign, left_for_read, right
-                                    )
+                                    );
+                                    if assign_needs_unsafe {
+                                        format!("unsafe {{ {} }}", expr)
+                                    } else {
+                                        expr
+                                    }
                                 }
-                                _ => format!("{} {} {}", left_for_assign, op_str, right),
+                                _ => {
+                                    if assign_needs_unsafe {
+                                        format!(
+                                            "unsafe {{ {} {} {} }}",
+                                            left_for_assign, op_str, right
+                                        )
+                                    } else {
+                                        format!("{} {} {}", left_for_assign, op_str, right)
+                                    }
+                                }
                             };
                         }
                         if matches!(op, BinaryOp::Assign) {
@@ -27173,7 +27324,15 @@ impl AstCodeGen {
                     } else {
                         "&mut "
                     };
-                    let base_is_union = base_type
+                    let declaring_union = declaring_class.as_ref().is_some_and(|class_name| {
+                        let rust_name = CppType::Named(class_name.clone()).to_rust_type_str();
+                        class_name.contains("unnamed union at")
+                            || rust_name.starts_with("union__")
+                            || self.union_types.contains(class_name)
+                            || self.union_types.contains(&rust_name)
+                    });
+                    let base_is_union = declaring_union
+                        || base_type
                         .as_ref()
                         .is_some_and(|t| self.is_union_named_type(t))
                         || base_type.as_ref().is_some_and(|t| match t {
@@ -27418,13 +27577,24 @@ impl AstCodeGen {
                 if node.children.len() >= 2 {
                     // Check if the array expression is a global variable
                     let is_global_array = self.is_global_var_expr(&node.children[0]);
+                    let global_raw_name = self.get_raw_var_name(&node.children[0]);
+                    let global_pointer_like = global_raw_name
+                        .as_ref()
+                        .and_then(|name| self.global_var_types.get(name))
+                        .is_some_and(|t| {
+                            matches!(
+                                t,
+                                CppType::Pointer { .. } | CppType::Array { size: None, .. }
+                            )
+                        });
 
                     let idx = self.expr_to_string(&node.children[1]);
                     // Check if the array expression is a pointer type
                     // (also check for unsized arrays which decay to pointers)
                     let arr_type = Self::get_expr_type(&node.children[0]);
                     let mut arr_expr = self.expr_to_string(&node.children[0]);
-                    let is_pointer = match arr_type {
+                    let is_pointer = global_pointer_like
+                        || match arr_type {
                         Some(CppType::Pointer { .. }) => true,
                         Some(CppType::Array { size: None, .. }) => true,
                         Some(CppType::Array { size: Some(_), .. }) => false,
@@ -27465,10 +27635,37 @@ impl AstCodeGen {
                             format!("unsafe {{ *{}.add(({}) as usize) }}", arr, idx)
                         }
                     } else if is_global_array {
-                        // For true global arrays (not pointers), index directly in unsafe.
-                        let raw_name = self.get_raw_var_name(&node.children[0]).unwrap_or(arr_expr);
-                        // Parenthesize idx to handle operator precedence (e.g., size_ - 1 as usize)
-                        format!("unsafe {{ {}[({}) as usize] }}", raw_name, idx)
+                        // For true global arrays (not pointers), use pointer-place access.
+                        // `unsafe { ARR[idx] }` in value context can move non-Copy elements
+                        // out of statics; pointer deref preserves place semantics.
+                        let raw_name = global_raw_name.unwrap_or(arr_expr);
+                        let raw_name = if raw_name.starts_with("unsafe { ")
+                            || raw_name.contains(" as ")
+                            || raw_name.contains(' ')
+                        {
+                            format!("({})", raw_name)
+                        } else {
+                            raw_name
+                        };
+                        let idx_no_suffix = strip_literal_suffix(&idx);
+                        if let Some(abs) = idx_no_suffix.strip_prefix('-') {
+                            if is_integer_literal_str(abs) {
+                                format!(
+                                    "unsafe {{ *{}.as_mut_ptr().sub({} as usize) }}",
+                                    raw_name, abs
+                                )
+                            } else {
+                                format!(
+                                    "unsafe {{ *{}.as_mut_ptr().add(({}) as usize) }}",
+                                    raw_name, idx
+                                )
+                            }
+                        } else {
+                            format!(
+                                "unsafe {{ *{}.as_mut_ptr().add(({}) as usize) }}",
+                                raw_name, idx
+                            )
+                        }
                     } else {
                         let arr = arr_expr;
                         // Parenthesize if arr contains a cast (`as`) since Rust's `as` has lower
@@ -28900,6 +29097,31 @@ fn correct_initializer_for_type(value: &str, ty: &CppType) -> String {
         } else {
             "std::ptr::null_mut()".to_string()
         }
+    } else if matches!(ty, CppType::Pointer { pointee, .. } if !matches!(pointee.as_ref(), CppType::Function { .. }))
+    {
+        // Global arrays frequently appear as `unsafe { __gv_name }` in aggregate
+        // initializers for pointer fields. Apply array-to-pointer decay here.
+        let raw = value.trim();
+        let inner = raw
+            .strip_prefix("unsafe { ")
+            .and_then(|s| s.strip_suffix(" }"))
+            .unwrap_or(raw)
+            .trim();
+        let is_plain_ident = !inner.is_empty()
+            && inner
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || ch == '_');
+        let looks_global_array_ident = (inner.starts_with("__gv_") && !inner.starts_with("__gv__"))
+            || (inner.starts_with("__fsv_") && !inner.starts_with("__fsv__"));
+        if is_plain_ident && looks_global_array_ident {
+            let ptr_expr = if matches!(ty, CppType::Pointer { is_const: true, .. }) {
+                format!("({}).as_ptr()", inner)
+            } else {
+                format!("({}).as_mut_ptr()", inner)
+            };
+            return format!("unsafe {{ {} }}", ptr_expr);
+        }
+        value.to_string()
     } else if matches!(ty, CppType::Array { size: None, .. })
         && (is_zero_integer_literal_str(value)
             || value.trim() == "[]"
@@ -31837,6 +32059,77 @@ mod tests {
         assert!(
             !code.contains("pub union () {"),
             "union decl should never lower to unit-type item name, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_union_positional_init_list_uses_named_field_initializer() {
+        let union_name = "union__fixture".to_string();
+        let union_ty = CppType::Named(union_name.clone());
+        let rust_union_name = union_ty.to_rust_type_str();
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![
+                make_node(
+                    ClangNodeKind::UnionDecl {
+                        name: union_name,
+                        fields: vec![],
+                    },
+                    vec![
+                        make_node(
+                            ClangNodeKind::FieldDecl {
+                                name: "freq".to_string(),
+                                ty: CppType::Short { signed: false },
+                                access: crate::ast::AccessSpecifier::Public,
+                                is_static: false,
+                                bit_field_width: None,
+                            },
+                            vec![],
+                        ),
+                        make_node(
+                            ClangNodeKind::FieldDecl {
+                                name: "code".to_string(),
+                                ty: CppType::Short { signed: false },
+                                access: crate::ast::AccessSpecifier::Public,
+                                is_static: false,
+                                bit_field_width: None,
+                            },
+                            vec![],
+                        ),
+                    ],
+                ),
+                make_node(
+                    ClangNodeKind::VarDecl {
+                        name: "local_union".to_string(),
+                        ty: union_ty.clone(),
+                        has_init: true,
+                        is_static: true,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::InitListExpr { ty: union_ty.clone() },
+                        vec![make_node(
+                            ClangNodeKind::IntegerLiteral {
+                                value: 12,
+                                cpp_type: Some(CppType::Int { signed: true }),
+                            },
+                            vec![],
+                        )],
+                    )],
+                ),
+            ],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains(&format!("{} {{ freq:", rust_union_name)),
+            "positional union init-list should use named union field initializer, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains(&format!("{} {{ 12", rust_union_name)),
+            "invalid positional union literal should not be emitted, got:\n{}",
             code
         );
     }

@@ -3754,25 +3754,50 @@ fn transpile_and_compile_with_vendored_libcxx(
 fn transpile_with_vendored_libcxx(cpp_source: &str, filename: &str) -> (bool, String, String) {
     use fragile_clang::ClangParser;
 
-    // Create parser (uses vendored libc++ by default)
-    let parser = match ClangParser::new() {
-        Ok(p) => p,
-        Err(e) => {
-            return (
+    // libc++ headers can trigger very deep recursive expression lowering in AstCodeGen.
+    // Run transpilation on a larger-stack worker thread to avoid stack overflows in tests.
+    let cpp_source_owned = cpp_source.to_string();
+    let filename_owned = filename.to_string();
+    let worker = std::thread::Builder::new()
+        .name("libcxx-transpile".to_string())
+        .stack_size(32 * 1024 * 1024)
+        .spawn(move || {
+            // Create parser (uses vendored libc++ by default)
+            let parser = match ClangParser::new() {
+                Ok(p) => p,
+                Err(e) => {
+                    return (
+                        false,
+                        String::new(),
+                        format!("Failed to create parser: {}", e),
+                    );
+                }
+            };
+
+            // Parse and generate Rust code
+            match parser.parse_string(&cpp_source_owned, &filename_owned) {
+                Ok(ast) => {
+                    let rust_code = AstCodeGen::new().generate(&ast.translation_unit);
+                    (true, rust_code, String::new())
+                }
+                Err(e) => (false, String::new(), format!("Parse error: {}", e)),
+            }
+        });
+
+    match worker {
+        Ok(handle) => match handle.join() {
+            Ok(result) => result,
+            Err(_) => (
                 false,
                 String::new(),
-                format!("Failed to create parser: {}", e),
-            );
-        }
-    };
-
-    // Parse and generate Rust code
-    match parser.parse_string(cpp_source, filename) {
-        Ok(ast) => {
-            let rust_code = AstCodeGen::new().generate(&ast.translation_unit);
-            (true, rust_code, String::new())
-        }
-        Err(e) => (false, String::new(), format!("Parse error: {}", e)),
+                "Transpile worker thread panicked".to_string(),
+            ),
+        },
+        Err(e) => (
+            false,
+            String::new(),
+            format!("Failed to spawn transpile worker: {}", e),
+        ),
     }
 }
 
@@ -10788,7 +10813,10 @@ fn test_e2e_pthread() {
     let (exit_code, _stdout, _stderr) =
         transpile_compile_run(source, "e2e_pthread.cpp").expect("E2E test failed");
 
-    assert_eq!(exit_code, 0, "pthread_create/join should spawn and run a thread");
+    assert_eq!(
+        exit_code, 0,
+        "pthread_create/join should spawn and run a thread"
+    );
 }
 
 /// Test __builtin_*_overflow functions for checked arithmetic
@@ -10827,7 +10855,10 @@ fn test_e2e_builtin_overflow() {
     let (exit_code, _stdout, _stderr) =
         transpile_compile_run(source, "e2e_builtin_overflow.cpp").expect("E2E test failed");
 
-    assert_eq!(exit_code, 0, "__builtin_*_overflow functions should work correctly");
+    assert_eq!(
+        exit_code, 0,
+        "__builtin_*_overflow functions should work correctly"
+    );
 }
 
 /// Transpilation test: long double and missing primitive types
@@ -10842,21 +10873,43 @@ fn test_long_double_type_mapping() {
         long double cosl(long double __x) { return __builtin_cosl(__x); }
     "#;
 
-    let ast = parser.parse_string(source, "long_double_test.cpp").expect("Failed to parse");
+    let ast = parser
+        .parse_string(source, "long_double_test.cpp")
+        .expect("Failed to parse");
     let code = AstCodeGen::new().generate(&ast.translation_unit);
 
     // long double should map to f64, not to a Named type
-    assert!(code.contains("pub fn sinl(__x: f64) -> f64"), "sinl should have f64 params and return type, got:\n{}",
-        code.lines().find(|l| l.contains("pub fn sinl")).unwrap_or("NOT FOUND"));
-    assert!(code.contains("pub fn cosl(__x: f64) -> f64"), "cosl should have f64 params and return type");
+    assert!(
+        code.contains("pub fn sinl(__x: f64) -> f64"),
+        "sinl should have f64 params and return type, got:\n{}",
+        code.lines()
+            .find(|l| l.contains("pub fn sinl"))
+            .unwrap_or("NOT FOUND")
+    );
+    assert!(
+        code.contains("pub fn cosl(__x: f64) -> f64"),
+        "cosl should have f64 params and return type"
+    );
 
     // The function body should contain the builtin call WITH arguments
-    assert!(code.contains("__builtin_sinl(__x)"), "sinl should call __builtin_sinl with argument __x");
-    assert!(code.contains("__builtin_cosl(__x)"), "cosl should call __builtin_cosl with argument __x");
+    assert!(
+        code.contains("__builtin_sinl(__x)"),
+        "sinl should call __builtin_sinl with argument __x"
+    );
+    assert!(
+        code.contains("__builtin_cosl(__x)"),
+        "cosl should call __builtin_cosl with argument __x"
+    );
 
     // Should NOT contain bare builtin reference (without parens)
-    assert!(!code.contains("return __builtin_sinl;"), "sinl should not have bare builtin reference");
-    assert!(!code.contains("return __builtin_cosl;"), "cosl should not have bare builtin reference");
+    assert!(
+        !code.contains("return __builtin_sinl;"),
+        "sinl should not have bare builtin reference"
+    );
+    assert!(
+        !code.contains("return __builtin_cosl;"),
+        "cosl should not have bare builtin reference"
+    );
 }
 
 /// E2E test: long double type handling
@@ -10894,7 +10947,10 @@ fn test_e2e_long_double() {
     let (exit_code, _stdout, _stderr) =
         transpile_compile_run(source, "e2e_long_double.cpp").expect("E2E test failed");
 
-    assert_eq!(exit_code, 0, "long double builtin functions should work correctly");
+    assert_eq!(
+        exit_code, 0,
+        "long double builtin functions should work correctly"
+    );
 }
 
 /// E2E test: wchar_t type handling
@@ -10944,5 +11000,8 @@ fn test_e2e_char16_char32() {
     let (exit_code, _stdout, _stderr) =
         transpile_compile_run(source, "e2e_char16_char32.cpp").expect("E2E test failed");
 
-    assert_eq!(exit_code, 0, "char16_t and char32_t operations should work correctly");
+    assert_eq!(
+        exit_code, 0,
+        "char16_t and char32_t operations should work correctly"
+    );
 }
