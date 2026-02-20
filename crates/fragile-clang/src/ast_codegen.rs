@@ -168,6 +168,34 @@ fn wrap_for_as_cast(expr: &str) -> String {
     }
 }
 
+/// Returns true when an expression is wrapped by one outer-most pair of
+/// parentheses that encloses the full expression.
+fn is_fully_parenthesized_expr(expr: &str) -> bool {
+    let trimmed = expr.trim();
+    if !(trimmed.starts_with('(') && trimmed.ends_with(')')) {
+        return false;
+    }
+
+    let mut depth = 0usize;
+    for (idx, ch) in trimmed.char_indices() {
+        match ch {
+            '(' => depth += 1,
+            ')' => {
+                if depth == 0 {
+                    return false;
+                }
+                depth -= 1;
+                if depth == 0 && idx + ch.len_utf8() != trimmed.len() {
+                    return false;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    depth == 0
+}
+
 /// If an expression is wrapped as an outer `unsafe { ... }` block (optionally parenthesized),
 /// return the inner expression.
 fn unwrap_outer_unsafe_expr(expr: &str) -> Option<String> {
@@ -23281,13 +23309,19 @@ impl AstCodeGen {
                             right
                         };
 
-                        // Wrap left operand in parens if it ends with "as TYPE" to prevent
-                        // < being interpreted as generic arguments (e.g., `x as i32 < y`)
-                        let left = if left.contains(" as ") && !left.starts_with('(') {
+                        // Wrap cast operands in parens to avoid `<` being interpreted
+                        // as generic arguments (e.g., `(x as i32) < y`).
+                        let left = if left.contains(" as ") && !is_fully_parenthesized_expr(&left) {
                             format!("({})", left)
                         } else {
                             left
                         };
+                        let right =
+                            if right.contains(" as ") && !is_fully_parenthesized_expr(&right) {
+                                format!("({})", right)
+                            } else {
+                                right
+                            };
                         // Wrap unsafe blocks in parentheses for binary expressions
                         let left = wrap_unsafe_for_binop(&left);
                         let right = wrap_unsafe_for_binop(&right);
@@ -27997,6 +28031,99 @@ mod tests {
         assert!(
             code.contains("wrap != 1"),
             "normalized condition should preserve comparison semantics, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_relational_comparison_cast_operand_is_parenthesized() {
+        let cond = make_node(
+            ClangNodeKind::BinaryOperator {
+                op: BinaryOp::Lt,
+                ty: CppType::Bool,
+            },
+            vec![
+                make_node(
+                    ClangNodeKind::CastExpr {
+                        ty: CppType::Int { signed: true },
+                        cast_kind: CastKind::IntegralCast,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::DeclRefExpr {
+                            name: "dist".to_string(),
+                            ty: CppType::Int { signed: true },
+                            namespace_path: vec![],
+                        },
+                        vec![],
+                    )],
+                ),
+                make_node(
+                    ClangNodeKind::IntegerLiteral {
+                        value: 256,
+                        cpp_type: Some(CppType::Int { signed: true }),
+                    },
+                    vec![],
+                ),
+            ],
+        );
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![make_node(
+                ClangNodeKind::FunctionDecl {
+                    name: "cast_lt_guard".to_string(),
+                    mangled_name: "cast_lt_guard".to_string(),
+                    return_type: CppType::Int { signed: true },
+                    params: vec![("dist".to_string(), CppType::Int { signed: true })],
+                    is_definition: true,
+                    is_variadic: false,
+                    is_noexcept: false,
+                    is_coroutine: false,
+                    coroutine_info: None,
+                },
+                vec![make_node(
+                    ClangNodeKind::CompoundStmt,
+                    vec![make_node(
+                        ClangNodeKind::IfStmt,
+                        vec![
+                            cond,
+                            make_node(
+                                ClangNodeKind::ReturnStmt,
+                                vec![make_node(
+                                    ClangNodeKind::IntegerLiteral {
+                                        value: 1,
+                                        cpp_type: Some(CppType::Int { signed: true }),
+                                    },
+                                    vec![],
+                                )],
+                            ),
+                            make_node(
+                                ClangNodeKind::ReturnStmt,
+                                vec![make_node(
+                                    ClangNodeKind::IntegerLiteral {
+                                        value: 0,
+                                        cpp_type: Some(CppType::Int { signed: true }),
+                                    },
+                                    vec![],
+                                )],
+                            ),
+                        ],
+                    )],
+                )],
+            )],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("(dist as i32) < 256")
+                || code.contains("((dist) as i32) < 256")
+                || code.contains("((dist as i32)) < 256"),
+            "cast operand should be grouped before `<` to avoid generic-arg parsing, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("(dist) as i32 < 256"),
+            "ungrouped cast before `<` can be parsed as generic args, got:\n{}",
             code
         );
     }

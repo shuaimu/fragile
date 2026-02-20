@@ -30,7 +30,13 @@ Run upstream-style tests through the Fragile transpiler with runtime parity:
       - [x] Fix `deflate.c` transpiled replay compile failure for `configuration_table` initializer (`config { ... }` positional initializer emitted as invalid Rust struct literal).
       - [x] Fix `deflate.c` transpiled replay compile failure for chained comparisons emitted from C integer-bool normalization (invalid Rust `a != b != 0` forms).
       - [ ] Re-run full `OBJZ` replay and confirm all expected OBJZ objects compile and are non-empty.
-        - Latest replay no longer emits chained `a != b != 0` forms in `deflate` output; next first `deflate` compiler blocker is cast-vs-`<` precedence (`(dist) as i32 < 256` needs explicit cast grouping in emitted Rust).
+        - Plan: resolve replay blockers one compiler class at a time in `deflate.c` transpiled output, re-run replay after each class, and keep each fix leaf under ~500 LOC.
+        - [x] Fix relational comparison cast-parenthesization in codegen so emitted Rust doesn't parse cast types as generic arguments (`(dist) as i32 < 256`).
+        - [x] Re-run real-world `OBJZ` replay after cast-parenthesization fix and record the next first blocking error class in `deflate` compile logs.
+          - Current first blocker class after replay: external symbol/type resolution in `deflate` output (missing `static_tree_desc_s`, `zcalloc`/`zcfree`, `adler32`/`crc32`, `_tr_*`), followed by pointer-function call and type-width/union-field mismatches.
+        - [ ] Fix external symbol/type resolution issues in `deflate` replay output (e.g., missing `adler32`/`crc32`/`_tr_*`/`static_tree_desc_s`) with source-faithful cross-unit declarations.
+        - [ ] Fix pointer/function-pointer invocation lowering regressions in `deflate` replay output (Option function pointers deref/call shape).
+        - [ ] Fix remaining `deflate` type/union field/codegen mismatches in replay output (`freq` union field access, integer width mismatches, pointer arithmetic typing).
     - [ ] Replay `OBJG` units through Fragile to `.o` outputs and validate object completeness.
   - [ ] Link transpiled static/shared test binaries used by upstream tests (`example`, `minigzip`, `examplesh`, `minigzipsh`, `example64`, `minigzip64`).
 - [ ] Make transpiled build pass zlib test commands used by upstream `make test`.
