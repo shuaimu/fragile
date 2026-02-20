@@ -705,6 +705,9 @@ pub struct AstCodeGen {
     /// Function names that have a definition in this translation unit.
     /// Used to suppress emitting duplicate extern declarations.
     defined_function_names: HashSet<String>,
+    /// Declared function parameter types keyed by `(function_name, arity)`.
+    /// Used as a fallback when call-site function type metadata is degraded.
+    declared_function_param_types: HashMap<(String, usize), Vec<CppType>>,
     /// C extern declarations already emitted in this translation unit.
     emitted_extern_c_functions: HashSet<String>,
     /// Track actual Rust module nesting depth (excludes flattened namespaces like std, __)
@@ -840,6 +843,7 @@ impl AstCodeGen {
             bit_field_groups: HashMap::new(),
             generated_functions: HashMap::new(),
             defined_function_names: HashSet::new(),
+            declared_function_param_types: HashMap::new(),
             emitted_extern_c_functions: HashSet::new(),
             module_depth: 0,
             current_struct_methods: HashMap::new(),
@@ -954,65 +958,132 @@ impl AstCodeGen {
         }
     }
 
+    /// Normalize C/C++ named enum spellings for lookup:
+    /// strips qualifiers/tags like `const`, `volatile`, `enum`, `struct`, `class`.
+    fn canonical_enum_type_name(name: &str) -> String {
+        name.trim()
+            .trim_start_matches("const ")
+            .trim_start_matches("volatile ")
+            .trim_start_matches("enum ")
+            .trim_start_matches("struct ")
+            .trim_start_matches("class ")
+            .trim()
+            .to_string()
+    }
+
     /// Resolve bare enum constants (e.g., `algo_xxh64`) to qualified Rust paths
     /// (e.g., `AlgoSelected::algo_xxh64`) when the referenced type indicates the enum.
     fn resolve_enum_variant_expr(&self, name: &str, ty: &CppType) -> Option<String> {
         let CppType::Named(expr_ty_name) = ty else {
             return None;
         };
-        let expr_ty_base = Self::strip_namespace_and_template(expr_ty_name);
+        let expr_ty_name = Self::canonical_enum_type_name(expr_ty_name);
+        if expr_ty_name.is_empty() {
+            return None;
+        }
+        let expr_ty_base = Self::strip_namespace_and_template(&expr_ty_name);
+        let name_ident = sanitize_identifier(name);
 
-        let mut owner: Option<&str> = None;
+        let mut owner: Option<String> = None;
         for ((enum_name, _), variant_name) in &self.enum_variant_map {
-            if variant_name != name {
+            let variant_ident = sanitize_identifier(variant_name);
+            if variant_name != name && variant_ident != name_ident {
                 continue;
             }
-            let enum_base = Self::strip_namespace_and_template(enum_name);
+            let enum_name = Self::canonical_enum_type_name(enum_name);
+            let enum_base = Self::strip_namespace_and_template(&enum_name);
             if enum_base != expr_ty_base {
                 continue;
             }
-            match owner {
-                Some(existing) if existing != enum_name => return None,
+            match owner.as_ref() {
+                Some(existing) if existing != &enum_name => return None,
                 _ => owner = Some(enum_name),
             }
         }
 
         owner.map(|enum_name| {
-            let enum_ident =
-                sanitize_identifier(enum_name.rsplit("::").next().unwrap_or(enum_name));
-            format!("{}::{}", enum_ident, sanitize_identifier(name))
+            let enum_ident = CppType::Named(enum_name).to_rust_type_str();
+            format!("{}::{}", enum_ident, name_ident)
         })
     }
 
-    /// Resolve `return <int-literal>;` into `EnumType::Variant` when return type is an enum.
-    fn resolve_enum_variant_from_return_literal(
+    /// Extract an integer literal value from an expression node, unwrapping cast/paren wrappers.
+    fn integer_literal_value_from_expr(node: &ClangNode) -> Option<i128> {
+        match &node.kind {
+            ClangNodeKind::IntegerLiteral { value, .. } => Some(*value),
+            ClangNodeKind::EvaluatedExpr {
+                int_value: Some(value),
+                ..
+            } => Some(*value as i128),
+            ClangNodeKind::UnaryOperator {
+                op: UnaryOp::Minus,
+                ..
+            } => node
+                .children
+                .first()
+                .and_then(Self::integer_literal_value_from_expr)
+                .map(|v| -v),
+            ClangNodeKind::UnaryOperator {
+                op: UnaryOp::Plus,
+                ..
+            }
+            | ClangNodeKind::ImplicitCastExpr { .. }
+            | ClangNodeKind::CastExpr { .. }
+            | ClangNodeKind::ParenExpr { .. }
+            | ClangNodeKind::Unknown(_) => node
+                .children
+                .first()
+                .and_then(Self::integer_literal_value_from_expr),
+            _ => None,
+        }
+    }
+
+    /// Extract a `DeclRefExpr` name from an expression node, unwrapping cast/paren wrappers.
+    fn declref_name_from_expr(node: &ClangNode) -> Option<&str> {
+        match &node.kind {
+            ClangNodeKind::DeclRefExpr { name, .. } => Some(name.as_str()),
+            ClangNodeKind::UnaryOperator { .. }
+            | ClangNodeKind::ImplicitCastExpr { .. }
+            | ClangNodeKind::CastExpr { .. }
+            | ClangNodeKind::ParenExpr { .. }
+            | ClangNodeKind::Unknown(_) => node
+                .children
+                .first()
+                .and_then(Self::declref_name_from_expr),
+            _ => None,
+        }
+    }
+
+    /// Resolve `<enum-typed-expr> = <enum-constant-declref>` style values to `Enum::Variant`.
+    fn resolve_enum_variant_from_declref_name(
         &self,
-        return_ty: &CppType,
-        literal_value: i128,
+        target_ty: &CppType,
+        declref_name: &str,
     ) -> Option<String> {
-        let CppType::Named(raw_return_enum_name) = return_ty else {
+        let CppType::Named(raw_enum_name) = target_ty else {
             return None;
         };
 
-        let return_enum_name = raw_return_enum_name
-            .trim_start_matches("const ")
-            .trim_start_matches("volatile ")
-            .trim();
-        if return_enum_name.is_empty() {
+        let target_enum_name = Self::canonical_enum_type_name(raw_enum_name);
+        if target_enum_name.is_empty() {
             return None;
         }
-
-        let return_enum_base = Self::strip_namespace_and_template(return_enum_name);
-        let return_enum_rust_name = CppType::Named(return_enum_name.to_string()).to_rust_type_str();
+        let target_enum_base = Self::strip_namespace_and_template(&target_enum_name);
+        let target_enum_rust_name = CppType::Named(target_enum_name.clone()).to_rust_type_str();
+        let target_declref_ident = sanitize_identifier(declref_name);
 
         let mut matched_variant: Option<&str> = None;
-        for ((enum_name, value), variant) in &self.enum_variant_map {
-            if *value != literal_value {
+        for ((enum_name, _), variant) in &self.enum_variant_map {
+            let variant_ident = sanitize_identifier(variant);
+            if variant != declref_name && variant_ident != target_declref_ident {
                 continue;
             }
 
-            let enum_base = Self::strip_namespace_and_template(enum_name);
-            let same_enum = enum_name == return_enum_name || enum_base == return_enum_base;
+            let enum_name = Self::canonical_enum_type_name(enum_name);
+            let enum_base = Self::strip_namespace_and_template(&enum_name);
+            let same_enum = enum_name == target_enum_name
+                || enum_base == target_enum_base
+                || CppType::Named(enum_name.clone()).to_rust_type_str() == target_enum_rust_name;
             if !same_enum {
                 continue;
             }
@@ -1023,7 +1094,86 @@ impl AstCodeGen {
             }
         }
 
-        matched_variant.map(|variant| format!("{}::{}", return_enum_rust_name, variant))
+        matched_variant.map(|variant| {
+            format!(
+                "{}::{}",
+                target_enum_rust_name,
+                sanitize_identifier(variant)
+            )
+        })
+    }
+
+    /// Resolve `<enum-typed-expr> = <int-literal>` style values to `Enum::Variant`.
+    fn resolve_enum_variant_from_integer_literal(
+        &self,
+        target_ty: &CppType,
+        literal_value: i128,
+    ) -> Option<String> {
+        let CppType::Named(raw_enum_name) = target_ty else {
+            return None;
+        };
+
+        let target_enum_name = Self::canonical_enum_type_name(raw_enum_name);
+        if target_enum_name.is_empty() {
+            return None;
+        }
+
+        let target_enum_base = Self::strip_namespace_and_template(&target_enum_name);
+        let target_enum_rust_name = CppType::Named(target_enum_name.clone()).to_rust_type_str();
+
+        let mut matched_variant: Option<&str> = None;
+        for ((enum_name, value), variant) in &self.enum_variant_map {
+            if *value != literal_value {
+                continue;
+            }
+
+            let enum_name = Self::canonical_enum_type_name(enum_name);
+            let enum_base = Self::strip_namespace_and_template(&enum_name);
+            let same_enum = enum_name == target_enum_name
+                || enum_base == target_enum_base
+                || CppType::Named(enum_name.clone()).to_rust_type_str() == target_enum_rust_name;
+            if !same_enum {
+                continue;
+            }
+
+            match matched_variant {
+                Some(existing) if existing != variant => return None,
+                _ => matched_variant = Some(variant.as_str()),
+            }
+        }
+
+        matched_variant.map(|variant| {
+            format!(
+                "{}::{}",
+                target_enum_rust_name,
+                sanitize_identifier(variant)
+            )
+        })
+    }
+
+    fn resolve_enum_variant_from_literal_expr(
+        &self,
+        target_ty: &CppType,
+        expr: &ClangNode,
+    ) -> Option<String> {
+        if let Some(declref_name) = Self::declref_name_from_expr(expr) {
+            if let Some(enum_variant) =
+                self.resolve_enum_variant_from_declref_name(target_ty, declref_name)
+            {
+                return Some(enum_variant);
+            }
+        }
+        let value = Self::integer_literal_value_from_expr(expr)?;
+        self.resolve_enum_variant_from_integer_literal(target_ty, value)
+    }
+
+    /// Resolve `return <int-literal>;` into `EnumType::Variant` when return type is an enum.
+    fn resolve_enum_variant_from_return_literal(
+        &self,
+        return_ty: &CppType,
+        literal_value: i128,
+    ) -> Option<String> {
+        self.resolve_enum_variant_from_integer_literal(return_ty, literal_value)
     }
 
     /// Set resolved field types from LibTooling template specializations.
@@ -17602,6 +17752,47 @@ impl AstCodeGen {
         }
     }
 
+    /// Resolve member field type from declared aggregate metadata when expression-level
+    /// type info is degraded (e.g., C enums reported as plain ints on MemberExpr).
+    fn resolve_member_declared_field_type(&self, node: &ClangNode) -> Option<CppType> {
+        let ClangNodeKind::MemberExpr { member_name, .. } = &node.kind else {
+            return None;
+        };
+        let base = node.children.first()?;
+        let base_ty = Self::get_original_expr_type(base).or_else(|| Self::get_expr_type(base))?;
+        let base_name = match base_ty {
+            CppType::Named(name) => name,
+            CppType::Pointer { pointee, .. } => match *pointee {
+                CppType::Named(name) => name,
+                _ => return None,
+            },
+            CppType::Reference { referent, .. } => match *referent {
+                CppType::Named(name) => name,
+                _ => return None,
+            },
+            _ => return None,
+        };
+
+        let raw_name = base_name
+            .trim_start_matches("const ")
+            .trim_start_matches("volatile ")
+            .trim_start_matches("struct ")
+            .trim_start_matches("class ")
+            .trim();
+        if raw_name.is_empty() {
+            return None;
+        }
+        let normalized_name = CppType::Named(raw_name.to_string()).to_rust_type_str();
+        let target_field = sanitize_identifier(member_name);
+        let fields = self.resolve_aggregate_fields(raw_name, &normalized_name)?;
+        fields
+            .iter()
+            .find(|(name, _)| {
+                name == &target_field || sanitize_identifier(name) == target_field
+            })
+            .map(|(_, ty)| ty.clone())
+    }
+
     /// Collect names of functions that must be called from an unsafe block.
     /// Currently this includes C variadic functions.
     fn collect_unsafe_function_names(&mut self, node: &ClangNode) {
@@ -17624,11 +17815,28 @@ impl AstCodeGen {
     /// Used to suppress duplicate extern declaration emission.
     fn collect_defined_function_names(&mut self, node: &ClangNode) {
         if let ClangNodeKind::FunctionDecl {
-            name, is_definition, ..
+            name,
+            params,
+            is_definition,
+            ..
         } = &node.kind
         {
             if *is_definition {
                 self.defined_function_names.insert(name.clone());
+            }
+
+            let key = (name.clone(), params.len());
+            let candidate: Vec<CppType> = params.iter().map(|(_, ty)| ty.clone()).collect();
+            match self.declared_function_param_types.get(&key) {
+                Some(existing) if existing != &candidate => {
+                    // Ambiguous overload/signature under the same `(name, arity)` key.
+                    // Drop fallback typing for this key to avoid applying incorrect coercions.
+                    self.declared_function_param_types.remove(&key);
+                }
+                None => {
+                    self.declared_function_param_types.insert(key, candidate);
+                }
+                _ => {}
             }
         }
         for child in &node.children {
@@ -23272,6 +23480,21 @@ impl AstCodeGen {
                             }
                         }
 
+                        // Enum-typed lvalues can receive integer literals in C/C++.
+                        // Resolve to a concrete variant when the target enum is known.
+                        let enum_lhs_ty = left_type
+                            .as_ref()
+                            .filter(|ty| matches!(ty, CppType::Named(_)))
+                            .cloned()
+                            .or_else(|| self.resolve_member_declared_field_type(&node.children[0]));
+                        if let Some(lhs_ty) = enum_lhs_ty.as_ref() {
+                            if let Some(enum_variant) = self
+                                .resolve_enum_variant_from_literal_expr(lhs_ty, &node.children[1])
+                            {
+                                right_raw = enum_variant;
+                            }
+                        }
+
                         // C++ allows assigning bool expressions to integer fields.
                         let left_rust_type = left_type.as_ref().map(|t| t.to_rust_type_str());
                         if let Some(ref lhs_ty) = left_rust_type {
@@ -23550,6 +23773,21 @@ impl AstCodeGen {
                                 } else if !is_zero_integer_literal_str(&right) {
                                     right = format!("({}) as {}", right, left_rust_type);
                                 }
+                            }
+                        }
+
+                        // Enum-typed lvalues can receive integer literals in C/C++.
+                        // Resolve to a concrete variant when the target enum is known.
+                        let enum_lhs_ty = left_type
+                            .as_ref()
+                            .filter(|ty| matches!(ty, CppType::Named(_)))
+                            .cloned()
+                            .or_else(|| self.resolve_member_declared_field_type(&node.children[0]));
+                        if let Some(lhs_ty) = enum_lhs_ty.as_ref() {
+                            if let Some(enum_variant) = self
+                                .resolve_enum_variant_from_literal_expr(lhs_ty, &node.children[1])
+                            {
+                                right = enum_variant;
                             }
                         }
 
@@ -25773,8 +26011,20 @@ impl AstCodeGen {
                     // Function pointers are represented as Option<fn(...)>, so we need .unwrap()
                     let is_fn_ptr_call = Self::is_function_pointer_variable(&node.children[0]);
 
-                    // Try to get function parameter types to handle reference parameters
-                    let param_types = Self::get_function_param_types(&node.children[0]);
+                    // Try to get function parameter types to handle reference parameters.
+                    // Fall back to declarations collected from FunctionDecl nodes when the
+                    // call-site callee type is degraded (common in C enum-heavy headers).
+                    let mut param_types = Self::get_function_param_types(&node.children[0]);
+                    if let Some(callee_name) = Self::get_declref_name(&node.children[0]) {
+                        let arity = node.children.len().saturating_sub(1);
+                        if let Some(declared) = self
+                            .declared_function_param_types
+                            .get(&(callee_name, arity))
+                            .cloned()
+                        {
+                            param_types = Some(declared);
+                        }
+                    }
 
                     let mut args: Vec<String> = node.children[1..]
                         .iter()
@@ -25805,6 +26055,12 @@ impl AstCodeGen {
                                             return "None".to_string();
                                         }
                                         return arg_str;
+                                    }
+
+                                    if let Some(enum_variant) =
+                                        self.resolve_enum_variant_from_literal_expr(&types[i], c)
+                                    {
+                                        return enum_variant;
                                     }
 
                                     let target_rust = types[i].to_rust_type_str();
@@ -30221,6 +30477,477 @@ mod tests {
         assert!(
             !code.contains("pub union () {"),
             "union decl should never lower to unit-type item name, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_enum_assignment_integer_literal_is_lowered_to_variant() {
+        let enum_ty = CppType::Named("inflate_mode".to_string());
+        let state_ptr_ty = CppType::Pointer {
+            pointee: Box::new(CppType::Named("inflate_state".to_string())),
+            is_const: false,
+        };
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![
+                make_node(
+                    ClangNodeKind::EnumDecl {
+                        name: "inflate_mode".to_string(),
+                        is_scoped: false,
+                        underlying_type: CppType::Int { signed: true },
+                    },
+                    vec![
+                        make_node(
+                            ClangNodeKind::EnumConstantDecl {
+                                name: "TYPE".to_string(),
+                                value: Some(16191),
+                            },
+                            vec![],
+                        ),
+                        make_node(
+                            ClangNodeKind::EnumConstantDecl {
+                                name: "BAD".to_string(),
+                                value: Some(16209),
+                            },
+                            vec![],
+                        ),
+                    ],
+                ),
+                make_node(
+                    ClangNodeKind::RecordDecl {
+                        name: "inflate_state".to_string(),
+                        is_class: false,
+                        is_definition: true,
+                        fields: vec![],
+                    },
+                    vec![make_node(
+                        ClangNodeKind::FieldDecl {
+                            name: "mode".to_string(),
+                            ty: enum_ty.clone(),
+                            access: crate::ast::AccessSpecifier::Public,
+                            is_static: false,
+                            bit_field_width: None,
+                        },
+                        vec![],
+                    )],
+                ),
+                make_node(
+                    ClangNodeKind::FunctionDecl {
+                        name: "set_mode".to_string(),
+                        mangled_name: "set_mode".to_string(),
+                        return_type: CppType::Int { signed: true },
+                        params: vec![("state".to_string(), state_ptr_ty.clone())],
+                        is_definition: true,
+                        is_variadic: false,
+                        is_noexcept: false,
+                        is_coroutine: false,
+                        coroutine_info: None,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![
+                            make_node(
+                                ClangNodeKind::ExprStmt,
+                                vec![make_node(
+                                    ClangNodeKind::BinaryOperator {
+                                        op: BinaryOp::Assign,
+                                        ty: enum_ty.clone(),
+                                    },
+                                    vec![
+                                        make_node(
+                                            ClangNodeKind::MemberExpr {
+                                                member_name: "mode".to_string(),
+                                                is_arrow: true,
+                                                declaring_class: None,
+                                                is_static: false,
+                                                ty: enum_ty.clone(),
+                                            },
+                                            vec![make_node(
+                                                ClangNodeKind::DeclRefExpr {
+                                                    name: "state".to_string(),
+                                                    ty: state_ptr_ty,
+                                                    namespace_path: vec![],
+                                                },
+                                                vec![],
+                                            )],
+                                        ),
+                                        make_node(
+                                            ClangNodeKind::IntegerLiteral {
+                                                value: 16191,
+                                                cpp_type: Some(CppType::Int { signed: true }),
+                                            },
+                                            vec![],
+                                        ),
+                                    ],
+                                )],
+                            ),
+                            make_node(
+                                ClangNodeKind::ReturnStmt,
+                                vec![make_node(
+                                    ClangNodeKind::IntegerLiteral {
+                                        value: 0,
+                                        cpp_type: Some(CppType::Int { signed: true }),
+                                    },
+                                    vec![],
+                                )],
+                            ),
+                        ],
+                    )],
+                ),
+            ],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("(*state).mode = inflate_mode::TYPE"),
+            "enum assignment from integer literal should use enum variant, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_enum_assignment_integer_literal_with_tagged_type_is_lowered_to_variant() {
+        let enum_ty = CppType::Named("enum inflate_mode".to_string());
+        let state_ptr_ty = CppType::Pointer {
+            pointee: Box::new(CppType::Named("inflate_state".to_string())),
+            is_const: false,
+        };
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![
+                make_node(
+                    ClangNodeKind::EnumDecl {
+                        name: "inflate_mode".to_string(),
+                        is_scoped: false,
+                        underlying_type: CppType::Int { signed: true },
+                    },
+                    vec![make_node(
+                        ClangNodeKind::EnumConstantDecl {
+                            name: "TYPE".to_string(),
+                            value: Some(16191),
+                        },
+                        vec![],
+                    )],
+                ),
+                make_node(
+                    ClangNodeKind::RecordDecl {
+                        name: "inflate_state".to_string(),
+                        is_class: false,
+                        is_definition: true,
+                        fields: vec![],
+                    },
+                    vec![make_node(
+                        ClangNodeKind::FieldDecl {
+                            name: "mode".to_string(),
+                            ty: enum_ty.clone(),
+                            access: crate::ast::AccessSpecifier::Public,
+                            is_static: false,
+                            bit_field_width: None,
+                        },
+                        vec![],
+                    )],
+                ),
+                make_node(
+                    ClangNodeKind::FunctionDecl {
+                        name: "set_mode".to_string(),
+                        mangled_name: "set_mode".to_string(),
+                        return_type: CppType::Int { signed: true },
+                        params: vec![("state".to_string(), state_ptr_ty.clone())],
+                        is_definition: true,
+                        is_variadic: false,
+                        is_noexcept: false,
+                        is_coroutine: false,
+                        coroutine_info: None,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![
+                            make_node(
+                                ClangNodeKind::ExprStmt,
+                                vec![make_node(
+                                    ClangNodeKind::BinaryOperator {
+                                        op: BinaryOp::Assign,
+                                        ty: enum_ty.clone(),
+                                    },
+                                    vec![
+                                        make_node(
+                                            ClangNodeKind::MemberExpr {
+                                                member_name: "mode".to_string(),
+                                                is_arrow: true,
+                                                declaring_class: None,
+                                                is_static: false,
+                                                ty: enum_ty.clone(),
+                                            },
+                                            vec![make_node(
+                                                ClangNodeKind::DeclRefExpr {
+                                                    name: "state".to_string(),
+                                                    ty: state_ptr_ty,
+                                                    namespace_path: vec![],
+                                                },
+                                                vec![],
+                                            )],
+                                        ),
+                                        make_node(
+                                            ClangNodeKind::IntegerLiteral {
+                                                value: 16191,
+                                                cpp_type: Some(CppType::Int { signed: true }),
+                                            },
+                                            vec![],
+                                        ),
+                                    ],
+                                )],
+                            ),
+                            make_node(
+                                ClangNodeKind::ReturnStmt,
+                                vec![make_node(
+                                    ClangNodeKind::IntegerLiteral {
+                                        value: 0,
+                                        cpp_type: Some(CppType::Int { signed: true }),
+                                    },
+                                    vec![],
+                                )],
+                            ),
+                        ],
+                    )],
+                ),
+            ],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("(*state).mode = inflate_mode::TYPE"),
+            "tagged enum assignment from integer literal should use enum variant, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_enum_function_argument_integer_literal_is_lowered_to_variant() {
+        let enum_ty = CppType::Named("codetype".to_string());
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![
+                make_node(
+                    ClangNodeKind::EnumDecl {
+                        name: "codetype".to_string(),
+                        is_scoped: false,
+                        underlying_type: CppType::Int { signed: true },
+                    },
+                    vec![
+                        make_node(
+                            ClangNodeKind::EnumConstantDecl {
+                                name: "CODES".to_string(),
+                                value: Some(0),
+                            },
+                            vec![],
+                        ),
+                        make_node(
+                            ClangNodeKind::EnumConstantDecl {
+                                name: "LENS".to_string(),
+                                value: Some(1),
+                            },
+                            vec![],
+                        ),
+                    ],
+                ),
+                make_node(
+                    ClangNodeKind::FunctionDecl {
+                        name: "take_kind".to_string(),
+                        mangled_name: "take_kind".to_string(),
+                        return_type: CppType::Int { signed: true },
+                        params: vec![("kind".to_string(), enum_ty.clone())],
+                        is_definition: true,
+                        is_variadic: false,
+                        is_noexcept: false,
+                        is_coroutine: false,
+                        coroutine_info: None,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![make_node(
+                            ClangNodeKind::ReturnStmt,
+                            vec![make_node(
+                                ClangNodeKind::IntegerLiteral {
+                                    value: 0,
+                                    cpp_type: Some(CppType::Int { signed: true }),
+                                },
+                                vec![],
+                            )],
+                        )],
+                    )],
+                ),
+                make_node(
+                    ClangNodeKind::FunctionDecl {
+                        name: "call_take".to_string(),
+                        mangled_name: "call_take".to_string(),
+                        return_type: CppType::Int { signed: true },
+                        params: vec![],
+                        is_definition: true,
+                        is_variadic: false,
+                        is_noexcept: false,
+                        is_coroutine: false,
+                        coroutine_info: None,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![make_node(
+                            ClangNodeKind::ReturnStmt,
+                            vec![make_node(
+                                ClangNodeKind::CallExpr {
+                                    ty: CppType::Int { signed: true },
+                                    template_instantiation: None,
+                                },
+                                vec![
+                                    make_node(
+                                        ClangNodeKind::DeclRefExpr {
+                                            name: "take_kind".to_string(),
+                                            ty: CppType::Function {
+                                                return_type: Box::new(CppType::Int { signed: true }),
+                                                params: vec![enum_ty.clone()],
+                                                is_variadic: false,
+                                            },
+                                            namespace_path: vec![],
+                                        },
+                                        vec![],
+                                    ),
+                                    make_node(
+                                        ClangNodeKind::IntegerLiteral {
+                                            value: 0,
+                                            cpp_type: Some(CppType::Int { signed: true }),
+                                        },
+                                        vec![],
+                                    ),
+                                ],
+                            )],
+                        )],
+                    )],
+                ),
+            ],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("return take_kind(codetype::CODES)"),
+            "enum parameter call argument from integer literal should use variant, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_enum_function_argument_declref_uses_declared_param_type_fallback() {
+        let enum_ty = CppType::Named("enum codetype".to_string());
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![
+                make_node(
+                    ClangNodeKind::EnumDecl {
+                        name: "codetype".to_string(),
+                        is_scoped: false,
+                        underlying_type: CppType::Int { signed: true },
+                    },
+                    vec![
+                        make_node(
+                            ClangNodeKind::EnumConstantDecl {
+                                name: "CODES".to_string(),
+                                value: Some(0),
+                            },
+                            vec![],
+                        ),
+                        make_node(
+                            ClangNodeKind::EnumConstantDecl {
+                                name: "LENS".to_string(),
+                                value: Some(1),
+                            },
+                            vec![],
+                        ),
+                    ],
+                ),
+                make_node(
+                    ClangNodeKind::FunctionDecl {
+                        name: "take_kind".to_string(),
+                        mangled_name: "take_kind".to_string(),
+                        return_type: CppType::Int { signed: true },
+                        params: vec![("kind".to_string(), enum_ty.clone())],
+                        is_definition: true,
+                        is_variadic: false,
+                        is_noexcept: false,
+                        is_coroutine: false,
+                        coroutine_info: None,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![make_node(
+                            ClangNodeKind::ReturnStmt,
+                            vec![make_node(
+                                ClangNodeKind::IntegerLiteral {
+                                    value: 0,
+                                    cpp_type: Some(CppType::Int { signed: true }),
+                                },
+                                vec![],
+                            )],
+                        )],
+                    )],
+                ),
+                make_node(
+                    ClangNodeKind::FunctionDecl {
+                        name: "call_take".to_string(),
+                        mangled_name: "call_take".to_string(),
+                        return_type: CppType::Int { signed: true },
+                        params: vec![],
+                        is_definition: true,
+                        is_variadic: false,
+                        is_noexcept: false,
+                        is_coroutine: false,
+                        coroutine_info: None,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![make_node(
+                            ClangNodeKind::ReturnStmt,
+                            vec![make_node(
+                                ClangNodeKind::CallExpr {
+                                    ty: CppType::Int { signed: true },
+                                    template_instantiation: None,
+                                },
+                                vec![
+                                    make_node(
+                                        ClangNodeKind::DeclRefExpr {
+                                            name: "take_kind".to_string(),
+                                            // Simulate degraded call-site metadata that loses enum type.
+                                            ty: CppType::Function {
+                                                return_type: Box::new(CppType::Int { signed: true }),
+                                                params: vec![CppType::Int { signed: true }],
+                                                is_variadic: false,
+                                            },
+                                            namespace_path: vec![],
+                                        },
+                                        vec![],
+                                    ),
+                                    make_node(
+                                        ClangNodeKind::DeclRefExpr {
+                                            name: "CODES".to_string(),
+                                            ty: CppType::Int { signed: true },
+                                            namespace_path: vec![],
+                                        },
+                                        vec![],
+                                    ),
+                                ],
+                            )],
+                        )],
+                    )],
+                ),
+            ],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("return take_kind(codetype::CODES)"),
+            "declared-parameter fallback should normalize enum declref call arg, got:\n{}",
             code
         );
     }
