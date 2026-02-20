@@ -32,6 +32,8 @@ const ZLIB_FRAGILE_OBJG_OBJECTS_BASELINE_DIR: &str =
     "/tmp/fragile_real_world_zlib_fragile_objg_objects";
 const ZLIB_FRAGILE_LINK_REQUIRED_BINARIES_BASELINE_DIR: &str =
     "/tmp/fragile_real_world_zlib_fragile_link_required_binaries";
+const ZLIB_MAKE_TEST_COMMAND_PLAN_BASELINE_DIR: &str =
+    "/tmp/fragile_real_world_zlib_make_test_command_plan";
 const ZLIB_REQUIRED_PATHS: &[&str] = &["zlib.h", "configure", "Makefile.in"];
 const ZLIB_REQUIRED_TEST_ARTIFACTS: &[&str] = &[
     "libz.a",
@@ -182,6 +184,23 @@ const ZLIB_FRAGILE_LINK_REQUIRED_LOG_FILES: &[&str] = &[
     "artifact_manifest.txt",
     "compile_units_manifest.txt",
     "link_units_manifest.txt",
+];
+const ZLIB_MAKE_TEST_COMMAND_PLAN_LOG_FILES: &[&str] = &[
+    "configure_driver.status",
+    "configure_driver.stdout",
+    "configure_driver.stderr",
+    "make_driver.status",
+    "make_driver.stdout",
+    "make_driver.stderr",
+    "cc_driver.log",
+    "cc_driver_manifest.txt",
+    "artifact_manifest.txt",
+    "compile_units_manifest.txt",
+    "link_units_manifest.txt",
+    "make_test_dryrun.status",
+    "make_test_dryrun.stdout",
+    "make_test_dryrun.stderr",
+    "make_test_commands_manifest.txt",
 ];
 
 fn run_git(args: &[&str], cwd: Option<&Path>) -> Result<Output, String> {
@@ -887,6 +906,135 @@ fn write_link_units_manifest(
         )
     })?;
     Ok(required_outputs.len())
+}
+
+fn normalize_make_command_line(line: &str) -> Option<String> {
+    let normalized = line.split_whitespace().collect::<Vec<_>>().join(" ");
+    if normalized.is_empty() {
+        None
+    } else {
+        Some(normalized)
+    }
+}
+
+fn command_invokes_binary(command_line: &str, binary: &str) -> bool {
+    let expected = format!("./{}", binary);
+    command_line.split_whitespace().any(|token| {
+        token.trim_matches(|c: char| matches!(c, '|' | '&' | ';' | '\\' | '(' | ')')) == expected
+    })
+}
+
+fn parse_make_test_commands_from_dry_run(
+    dry_run_stdout: &str,
+    required_binaries: &[&str],
+) -> Result<Vec<String>, String> {
+    let mut commands: Vec<String> = Vec::new();
+    let mut seen_commands: BTreeSet<String> = BTreeSet::new();
+    let mut covered_binaries: BTreeSet<String> = BTreeSet::new();
+
+    for line in dry_run_stdout.lines() {
+        let Some(normalized) = normalize_make_command_line(line) else {
+            continue;
+        };
+        let mut command_is_relevant = false;
+        for binary in required_binaries {
+            if command_invokes_binary(&normalized, binary) {
+                covered_binaries.insert((*binary).to_string());
+                command_is_relevant = true;
+            }
+        }
+        if !command_is_relevant {
+            continue;
+        }
+        if seen_commands.insert(normalized.clone()) {
+            commands.push(normalized);
+        }
+    }
+
+    if commands.is_empty() {
+        return Err("no make test runtime commands found for required binaries".to_string());
+    }
+
+    let mut missing: Vec<String> = Vec::new();
+    for binary in required_binaries {
+        if !covered_binaries.contains(*binary) {
+            missing.push((*binary).to_string());
+        }
+    }
+    if !missing.is_empty() {
+        return Err(format!(
+            "make test command plan missing required binary invocations: {}",
+            missing.join(", ")
+        ));
+    }
+
+    Ok(commands)
+}
+
+fn run_make_test_dry_run_in_tree(source_dir: &Path, log_dir: &Path) -> Result<(), String> {
+    let mut make_dryrun = Command::new("make");
+    make_dryrun.arg("-n").arg("test").current_dir(source_dir);
+    make_dryrun
+        .env("LC_ALL", "C")
+        .env("LANG", "C")
+        .env("MAKEFLAGS", "-j1");
+    let dry_run_output = make_dryrun.output().map_err(|e| {
+        format!(
+            "failed to run make -n test at {}: {}",
+            source_dir.display(),
+            e
+        )
+    })?;
+    write_command_capture(log_dir, "make_test_dryrun", &dry_run_output)?;
+    if !dry_run_output.status.success() {
+        return Err(format!(
+            "make -n test failed with status {} (logs: {})",
+            status_code(&dry_run_output),
+            log_dir.display()
+        ));
+    }
+    Ok(())
+}
+
+fn write_make_test_commands_manifest(
+    log_dir: &Path,
+    source_dir: &Path,
+    required_binaries: &[&str],
+) -> Result<usize, String> {
+    let dry_run_path = log_dir.join("make_test_dryrun.stdout");
+    let dry_run_stdout = fs::read_to_string(&dry_run_path)
+        .map_err(|e| format!("failed to read {}: {}", dry_run_path.display(), e))?;
+    let commands = parse_make_test_commands_from_dry_run(&dry_run_stdout, required_binaries)?;
+
+    let mut manifest = format!(
+        "source_dir={}\nmake_test_command_count={}\nrequired_binaries={}\n",
+        source_dir.display(),
+        commands.len(),
+        required_binaries.join(","),
+    );
+    for command in &commands {
+        manifest.push_str(&format!("command={}\n", command));
+    }
+    fs::write(log_dir.join("make_test_commands_manifest.txt"), manifest).map_err(|e| {
+        format!(
+            "failed to write make-test command manifest at {}: {}",
+            log_dir.display(),
+            e
+        )
+    })?;
+    Ok(commands.len())
+}
+
+fn run_make_test_command_plan_in_tree(source_dir: &Path, log_dir: &Path) -> Result<(), String> {
+    run_cc_driver_required_artifacts_in_tree(
+        source_dir,
+        log_dir,
+        "all",
+        ZLIB_REQUIRED_TEST_ARTIFACTS,
+    )?;
+    run_make_test_dry_run_in_tree(source_dir, log_dir)?;
+    write_make_test_commands_manifest(log_dir, source_dir, ZLIB_REQUIRED_LINK_OUTPUTS)?;
+    Ok(())
 }
 
 fn parse_link_units_manifest_entries(
@@ -2506,6 +2654,43 @@ fn run_zlib_fragile_link_required_binaries_baseline() -> Result<PathBuf, String>
     Ok(log_dir)
 }
 
+fn run_zlib_make_test_command_plan_baseline() -> Result<PathBuf, String> {
+    let checkout_dir = ensure_zlib_checkout()?;
+    let baseline_root = PathBuf::from(ZLIB_MAKE_TEST_COMMAND_PLAN_BASELINE_DIR);
+    reset_dir(&baseline_root)?;
+
+    let worktree_dir = baseline_root.join("worktree");
+    let checkout_dir_str = checkout_dir.to_string_lossy().to_string();
+    let worktree_dir_str = worktree_dir.to_string_lossy().to_string();
+    run_git(
+        &[
+            "clone",
+            "--no-tags",
+            "--local",
+            checkout_dir_str.as_str(),
+            worktree_dir_str.as_str(),
+        ],
+        None,
+    )?;
+    run_git(
+        &["checkout", "--detach", ZLIB_PINNED_COMMIT],
+        Some(&worktree_dir),
+    )?;
+
+    let actual_head = read_head(&worktree_dir)
+        .ok_or_else(|| format!("failed to read HEAD in {}", worktree_dir.display()))?;
+    if actual_head != ZLIB_PINNED_COMMIT {
+        return Err(format!(
+            "make-test-command-plan worktree expected commit {} but got {}",
+            ZLIB_PINNED_COMMIT, actual_head
+        ));
+    }
+
+    let log_dir = baseline_root.join("driver_logs");
+    run_make_test_command_plan_in_tree(&worktree_dir, &log_dir)?;
+    Ok(log_dir)
+}
+
 fn unique_temp_dir(prefix: &str) -> PathBuf {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -2673,6 +2858,20 @@ minigzipsh: tiny.o libz.a
 	$(CC) tiny.o libz.a -o minigzipsh
 example64: tiny.o libz.a
 	$(CC) tiny.o libz.a -o example64
+
+test:
+	TMPST=tmpst_$$; \
+	if echo hello world | ./minigzip | ./minigzip -d && ./example $$TMPST ; then \
+	  echo "*** zlib test OK ***"; \
+	else \
+	  echo "*** zlib test FAILED ***"; false; \
+	fi
+	TMPSH=tmpsh_$$; \
+	if echo hello world | ./minigzipsh | ./minigzipsh -d && ./examplesh $$TMPSH; then \
+	  echo "*** zlib shared test OK ***"; \
+	else \
+	  echo "*** zlib shared test FAILED ***"; false; \
+	fi
 "#
     } else {
         r#"CC ?= cc
@@ -2699,6 +2898,26 @@ example64: tiny.o libz.a
 	$(CC) tiny.o libz.a -o example64
 minigzip64: tiny.o libz.a
 	$(CC) tiny.o libz.a -o minigzip64
+
+test:
+	TMPST=tmpst_$$; \
+	if echo hello world | ./minigzip | ./minigzip -d && ./example $$TMPST ; then \
+	  echo "*** zlib test OK ***"; \
+	else \
+	  echo "*** zlib test FAILED ***"; false; \
+	fi
+	TMPSH=tmpsh_$$; \
+	if echo hello world | ./minigzipsh | ./minigzipsh -d && ./examplesh $$TMPSH; then \
+	  echo "*** zlib shared test OK ***"; \
+	else \
+	  echo "*** zlib shared test FAILED ***"; false; \
+	fi
+	TMP64=tmp64_$$; \
+	if echo hello world | ./minigzip64 | ./minigzip64 -d && ./example64 $$TMP64 ; then \
+	  echo "*** zlib 64-bit test OK ***"; \
+	else \
+	  echo "*** zlib 64-bit test FAILED ***"; false; \
+	fi
 "#
     };
     fs::write(project_dir.join("Makefile"), makefile)
@@ -3162,6 +3381,164 @@ fn test_write_link_units_manifest_detects_missing_required_outputs() {
     assert!(
         !log_dir.join("link_units_manifest.txt").exists(),
         "link manifest should not be written on missing-output failure"
+    );
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn test_parse_make_test_commands_from_dry_run_normalizes_and_validates_coverage() {
+    let dry_run_stdout = r#"
+gcc -O3 -o example example.o -L. libz.a
+TMPST=tmpst_$; \
+if echo hello world |  ./minigzip | ./minigzip -d && ./example $TMPST ; then \
+  echo '*** zlib test OK ***'; \
+else \
+  echo '*** zlib test FAILED ***'; false; \
+fi
+LD_LIBRARY_PATH=`pwd`: ; export LD_LIBRARY_PATH; \
+TMPSH=tmpsh_$; \
+if echo hello world | ./minigzipsh | ./minigzipsh -d && ./examplesh $TMPSH; then \
+  echo '*** zlib shared test OK ***'; \
+else \
+  echo '*** zlib shared test FAILED ***'; false; \
+fi
+TMP64=tmp64_$; \
+if echo hello world | ./minigzip64 | ./minigzip64 -d && ./example64 $TMP64 ; then \
+  echo '*** zlib 64-bit test OK ***'; \
+else \
+  echo '*** zlib 64-bit test FAILED ***'; false; \
+fi
+"#;
+
+    let commands =
+        parse_make_test_commands_from_dry_run(dry_run_stdout, ZLIB_REQUIRED_LINK_OUTPUTS)
+            .expect("make test command parse should succeed");
+    assert_eq!(
+        commands.len(),
+        3,
+        "expected one normalized command per test variant: {:?}",
+        commands
+    );
+    assert!(commands.iter().any(|c| c.contains("./example")));
+    assert!(commands.iter().any(|c| c.contains("./examplesh")));
+    assert!(commands.iter().any(|c| c.contains("./example64")));
+}
+
+#[test]
+fn test_parse_make_test_commands_from_dry_run_reports_missing_required_binary_invocations() {
+    let dry_run_stdout = r#"
+TMPST=tmpst_$; \
+if echo hello world | ./minigzip | ./minigzip -d && ./example $TMPST ; then \
+  echo ok; \
+else \
+  false; \
+fi
+TMPSH=tmpsh_$; \
+if echo hello world | ./minigzipsh | ./minigzipsh -d && ./examplesh $TMPSH ; then \
+  echo ok; \
+else \
+  false; \
+fi
+"#;
+    let err = parse_make_test_commands_from_dry_run(dry_run_stdout, ZLIB_REQUIRED_LINK_OUTPUTS)
+        .expect_err("expected missing required binary invocation failure");
+    assert!(
+        err.contains("make test command plan missing required binary invocations"),
+        "unexpected error: {}",
+        err
+    );
+    assert!(
+        err.contains("example64"),
+        "missing 64-bit command coverage should be reported: {}",
+        err
+    );
+    assert!(
+        err.contains("minigzip64"),
+        "missing 64-bit command coverage should be reported: {}",
+        err
+    );
+}
+
+#[test]
+fn test_make_test_command_plan_local_fixture_success() {
+    let root = unique_temp_dir("zlib_make_test_command_plan_success");
+    fs::create_dir_all(&root).expect("failed to create test root");
+
+    let project_dir = create_local_required_artifacts_project(&root, false)
+        .expect("failed to create required-artifacts project");
+    let log_dir = root.join("logs");
+    run_make_test_command_plan_in_tree(&project_dir, &log_dir)
+        .expect("make-test command plan generation should succeed");
+
+    assert_eq!(
+        fs::read_to_string(log_dir.join("make_test_dryrun.status"))
+            .expect("failed to read make_test_dryrun.status")
+            .trim(),
+        "0"
+    );
+    let manifest = fs::read_to_string(log_dir.join("make_test_commands_manifest.txt"))
+        .expect("failed to read make_test_commands_manifest.txt");
+    assert!(
+        manifest.contains("make_test_command_count=3"),
+        "manifest should include normalized command count: {}",
+        manifest
+    );
+    for binary in ZLIB_REQUIRED_LINK_OUTPUTS {
+        assert!(
+            manifest.contains(&format!("./{}", binary)),
+            "manifest should include binary invocation for {}: {}",
+            binary,
+            manifest
+        );
+    }
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn test_make_test_command_plan_local_fixture_detects_missing_coverage() {
+    let root = unique_temp_dir("zlib_make_test_command_plan_missing_coverage");
+    fs::create_dir_all(&root).expect("failed to create test root");
+
+    let project_dir = create_local_required_artifacts_project(&root, false)
+        .expect("failed to create required-artifacts project");
+    let makefile_path = project_dir.join("Makefile");
+    let makefile_text = fs::read_to_string(&makefile_path).expect("failed to read Makefile");
+    let mut rewritten: Vec<String> = Vec::new();
+    let mut skipping_64_block = false;
+    for line in makefile_text.lines() {
+        if line.contains("TMP64=tmp64_$$; \\") {
+            skipping_64_block = true;
+            continue;
+        }
+        if skipping_64_block {
+            if line.trim() == "fi" {
+                skipping_64_block = false;
+            }
+            continue;
+        }
+        rewritten.push(line.to_string());
+    }
+    fs::write(&makefile_path, format!("{}\n", rewritten.join("\n")))
+        .expect("failed to rewrite Makefile without 64-bit test command block");
+
+    let log_dir = root.join("logs");
+    let err = run_make_test_command_plan_in_tree(&project_dir, &log_dir)
+        .expect_err("make-test command plan should fail with missing required coverage");
+    assert!(
+        err.contains("make test command plan missing required binary invocations"),
+        "unexpected error: {}",
+        err
+    );
+    assert!(
+        err.contains("minigzip64"),
+        "missing binary coverage should be reported: {}",
+        err
+    );
+    assert!(
+        !log_dir.join("make_test_commands_manifest.txt").exists(),
+        "make-test command manifest should not be written on coverage failure"
     );
 
     let _ = fs::remove_dir_all(&root);
@@ -3988,6 +4365,42 @@ fn test_real_world_zlib_required_artifacts_for_make_all_scope() {
             "link unit manifest should include output {}: {}",
             output,
             link_units
+        );
+    }
+}
+
+#[test]
+#[ignore = "real-world external project test (downloads and derives zlib make test command plan)"]
+fn test_real_world_zlib_make_test_command_plan_generation() {
+    let log_dir = run_zlib_make_test_command_plan_baseline()
+        .expect("failed to generate real-world make-test command plan");
+    for rel in ZLIB_MAKE_TEST_COMMAND_PLAN_LOG_FILES {
+        assert!(
+            log_dir.join(rel).exists(),
+            "expected make-test command-plan log {}",
+            log_dir.join(rel).display()
+        );
+    }
+
+    assert_eq!(
+        fs::read_to_string(log_dir.join("make_test_dryrun.status"))
+            .expect("failed to read make_test_dryrun.status")
+            .trim(),
+        "0"
+    );
+    let manifest = fs::read_to_string(log_dir.join("make_test_commands_manifest.txt"))
+        .expect("failed to read make_test_commands_manifest.txt");
+    assert!(
+        manifest.contains("make_test_command_count="),
+        "manifest should include command count header: {}",
+        manifest
+    );
+    for binary in ZLIB_REQUIRED_LINK_OUTPUTS {
+        assert!(
+            manifest.contains(&format!("./{}", binary)),
+            "manifest should include required binary invocation for {}: {}",
+            binary,
+            manifest
         );
     }
 }

@@ -87,6 +87,15 @@ Run upstream-style tests through the Fragile transpiler with runtime parity:
       - Evidence (`cargo test -p fragile-clang --test real_world_zlib_tests test_fragile_link_required_binaries_local_fixture_success test_fragile_link_replay_reports_missing_static_archive_from_manifest -- --nocapture`, 2026-02-20): passes; local replay validates successful binary emission and failure diagnostics.
       - Evidence (`cargo test -p fragile-clang --test real_world_zlib_tests test_real_world_zlib_fragile_required_link_binaries_replay -- --ignored --nocapture`, 2026-02-20): passes; pinned real-world zlib replay emits non-empty required binaries and `fragile_link_manifest.txt`.
 - [ ] Make transpiled build pass zlib test commands used by upstream `make test`.
+  - [x] Derive deterministic replayable `make test` command plan (from configured zlib worktree) and validate required command coverage for `example`/`minigzip` shared+64-bit variants.
+    - Plan: run `make -n test` in the configured worktree, parse normalized command lines into `make_test_commands_manifest.txt`, and assert all required binary invocations are represented.
+    - Evidence (`cargo test -p fragile-clang --test real_world_zlib_tests test_parse_make_test_commands_from_dry_run_normalizes_and_validates_coverage test_parse_make_test_commands_from_dry_run_reports_missing_required_binary_invocations -- --nocapture`, 2026-02-20): passes; parser normalizes dry-run command lines, deduplicates invocations, and reports missing required binaries.
+  - [x] Add local fixture coverage for `make test` command-plan generation and missing-command diagnostics.
+    - Evidence (`cargo test -p fragile-clang --test real_world_zlib_tests test_make_test_command_plan_local_fixture_success test_make_test_command_plan_local_fixture_detects_missing_coverage -- --nocapture`, 2026-02-20): passes; fixture generation writes `make_test_commands_manifest.txt` and missing command coverage fails with explicit diagnostics.
+  - [ ] Replay planned `make test` binary command subset against fragile-linked zlib outputs and validate per-command status is zero.
+  - [x] Add real-world ignored coverage for `make test` command-plan generation in pinned zlib fixture outputs.
+    - Evidence (`cargo test -p fragile-clang --test real_world_zlib_tests test_real_world_zlib_make_test_command_plan_generation -- --ignored --nocapture`, 2026-02-20): passes; real-world run writes and validates `make_test_commands_manifest.txt`.
+  - [ ] Add real-world ignored coverage for `make test` replay against pinned zlib fixture outputs.
 - [ ] Add parity assertions vs native:
   - [ ] exit status parity
   - [ ] stdout/stderr parity (allowing nondeterministic path filtering if needed)
