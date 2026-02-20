@@ -182,6 +182,10 @@ Run upstream-style tests through the Fragile transpiler with runtime parity:
   - Analysis: scoped under <500 LOC by extending the tinyxml2 real-world harness with deterministic native `make test` execution, status/stdout/stderr capture, and baseline manifest output under `/tmp/fragile_real_world_tinyxml2_native_baseline/native_logs`.
   - Evidence (`cargo test -p fragile-clang --test real_world_tinyxml2_tests -- --nocapture && cargo test -p fragile-clang --test real_world_tinyxml2_tests -- --ignored --nocapture`, 2026-02-20): passes; local fixture coverage validates success/failure capture semantics and ignored real-world run validates pinned tinyxml2 baseline logs with successful `make test`.
 - [ ] Reuse the zlib harness pattern for transpiler-vs-native parity.
+  - Analysis (2026-02-20): this task is larger than a single <500 LOC change; split into focused leaves and land parity-harness plumbing incrementally.
+  - [x] Derive deterministic tinyxml2 `make test` command-plan generation (`make -n test` dry-run parsing + `make_test_commands_manifest.txt`) and validate required `xmltest` runtime invocation coverage.
+    - Evidence (`cargo test -p fragile-clang --test real_world_tinyxml2_tests -- --nocapture && cargo test -p fragile-clang --test real_world_tinyxml2_tests -- --ignored --nocapture`, 2026-02-20): passes; parser/manifest coverage is deterministic locally and pinned real-world command-plan generation emits required logs/manifest entries.
+  - [ ] Add tinyxml2 replay-ready command-plan execution scaffolding (native/fragile worktree runners + per-command status/stdout/stderr capture) to feed upcoming parity assertions.
 - [ ] Ensure transpiled `tinyxml2` test binary passes upstream test scope.
 - [ ] Add parity assertions (exit code + output + generated files).
 - [ ] Add CI coverage (smoke or nightly based on runtime cost).
