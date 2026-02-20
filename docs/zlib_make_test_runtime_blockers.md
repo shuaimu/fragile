@@ -109,22 +109,22 @@ timeout 900 cargo test -p fragile-clang --test real_world_zlib_tests \
   test_real_world_zlib_make_test_command_subset_replay -- --ignored --nocapture --test-threads=1
 ```
 
-Current first runtime blockers in command #1 (`TMPST=tmpst_$; if echo hello world | ./minigzip | ./minigzip -d && ./example $TMPST ; then ... fi`):
+Current runtime status for command #1 (`TMPST=tmpst_$; if echo hello world | ./minigzip | ./minigzip -d && ./example $TMPST ; then ... fi`):
 
-- `cd /tmp/fragile_real_world_zlib_make_test_replay/worktree && echo hello world | ./minigzip > /tmp/fragile_minigzip.out`
-  - exits `139` (segfault)
-- `cd /tmp/fragile_real_world_zlib_make_test_replay/worktree && timeout 10 ./example tmpst_$`
-  - exits `124` (hang/timeout)
+- pipeline stage `echo hello world | ./minigzip | ./minigzip -d` no longer crashes;
+- replay status remains `124` because `./example tmpst_$` does not terminate.
 
 Observed artifact state:
 - strict-link logs/manifests are present and successful;
 - `make_test_dryrun.status` and `make_test_commands_manifest.txt` are produced;
-- `make_test_replay_*.status` / `make_test_replay_manifest.txt` are not finalized in the current hanging replay path.
+- `make_test_replay_01.status` is `124`;
+- `make_test_replay_01.stderr` is empty (previous `Segmentation fault` signature is cleared);
+- `link_gzwrite_o_transpiled.rs` now lowers nested stream-field writes as `((*state).strm).next_in` / `((*state).strm).avail_in`.
 
 ## Current hypothesis
-Strict-link input/symbol gaps are closed for required binaries; the next blockers are runtime correctness regressions in replay command #1 (`minigzip` segfault and `example` non-termination).
+Strict-link input/symbol gaps are closed and the `minigzip` crash path is resolved; the remaining blocker is `example` runtime non-termination in replay command #1.
 
 ## Immediate next fix direction
-1. Make command-subset replay failure deterministic with per-command timeout/status logging.
-2. Fix `minigzip` runtime crash (first command pipeline stage).
-3. Fix `example` runtime non-termination and re-run command #1 to status `0`.
+1. Reproduce and root-cause `./example tmpst_$` hang under replay worktree.
+2. Fix the runtime non-termination in transpiled/linked outputs.
+3. Re-run command-subset replay and advance command #1 status from `124` to `0`.

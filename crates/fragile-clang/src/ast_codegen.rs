@@ -27613,7 +27613,13 @@ impl AstCodeGen {
                                             format!("unsafe {{ (*{}).{} }}", base, member)
                                         }
                                     } else {
-                                        format!("{}.{}", base, member)
+                                        if let Some(base_inner) =
+                                            Self::strip_outer_unsafe_block(&base)
+                                        {
+                                            format!("unsafe {{ ({}).{} }}", base_inner, member)
+                                        } else {
+                                            format!("{}.{}", base, member)
+                                        }
                                     }
                                 } else {
                                     format!("{}.{}.{}", base, field, member)
@@ -27645,6 +27651,11 @@ impl AstCodeGen {
                                 format!("unsafe {{ {}.{} }}", base_raw, member)
                             }
                         } else {
+                            // Keep member projection inside the unsafe block for place semantics.
+                            // `unsafe { (*p).s }.f = v` writes through a temporary copy of `s`.
+                            if let Some(base_inner) = Self::strip_outer_unsafe_block(&base) {
+                                return format!("unsafe {{ ({}).{} }}", base_inner, member);
+                            }
                             // Parenthesize if base starts with '*' (deref) or contains 'as' (cast)
                             // since Rust's '*' and 'as' have lower precedence than '.'
                             // - `*x.y` means `*(x.y)` in Rust, we want `(*x).y`
@@ -31093,6 +31104,158 @@ mod tests {
         assert!(
             !code.contains("= (*s).prev_length = 2"),
             "outer assignment must not receive raw `lhs = rhs = value` form in Rust, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_nested_member_assignment_keeps_lhs_projection_inside_unsafe() {
+        let stream_struct = make_node(
+            ClangNodeKind::RecordDecl {
+                name: "z_stream_s".to_string(),
+                is_class: false,
+                is_definition: true,
+                fields: vec![],
+            },
+            vec![make_node(
+                ClangNodeKind::FieldDecl {
+                    name: "next_in".to_string(),
+                    ty: CppType::Pointer {
+                        pointee: Box::new(CppType::Char { signed: false }),
+                        is_const: false,
+                    },
+                    access: crate::ast::AccessSpecifier::Public,
+                    is_static: false,
+                    bit_field_width: None,
+                },
+                vec![],
+            )],
+        );
+
+        let state_struct = make_node(
+            ClangNodeKind::RecordDecl {
+                name: "gz_state".to_string(),
+                is_class: false,
+                is_definition: true,
+                fields: vec![],
+            },
+            vec![make_node(
+                ClangNodeKind::FieldDecl {
+                    name: "strm".to_string(),
+                    ty: CppType::Named("z_stream_s".to_string()),
+                    access: crate::ast::AccessSpecifier::Public,
+                    is_static: false,
+                    bit_field_width: None,
+                },
+                vec![],
+            )],
+        );
+
+        let state_ptr_ty = CppType::Pointer {
+            pointee: Box::new(CppType::Named("gz_state".to_string())),
+            is_const: false,
+        };
+        let u8_ptr_ty = CppType::Pointer {
+            pointee: Box::new(CppType::Char { signed: false }),
+            is_const: false,
+        };
+
+        let state_ref = make_node(
+            ClangNodeKind::DeclRefExpr {
+                name: "state".to_string(),
+                ty: state_ptr_ty.clone(),
+                namespace_path: vec![],
+            },
+            vec![],
+        );
+        let buf_ref = make_node(
+            ClangNodeKind::DeclRefExpr {
+                name: "buf".to_string(),
+                ty: u8_ptr_ty.clone(),
+                namespace_path: vec![],
+            },
+            vec![],
+        );
+
+        let strm_member = make_node(
+            ClangNodeKind::MemberExpr {
+                member_name: "strm".to_string(),
+                is_arrow: true,
+                declaring_class: None,
+                is_static: false,
+                ty: CppType::Named("z_stream_s".to_string()),
+            },
+            vec![state_ref],
+        );
+        let next_in_member = make_node(
+            ClangNodeKind::MemberExpr {
+                member_name: "next_in".to_string(),
+                is_arrow: false,
+                declaring_class: None,
+                is_static: false,
+                ty: u8_ptr_ty.clone(),
+            },
+            vec![strm_member],
+        );
+
+        let assign_next_in = make_node(
+            ClangNodeKind::BinaryOperator {
+                op: BinaryOp::Assign,
+                ty: u8_ptr_ty.clone(),
+            },
+            vec![next_in_member, buf_ref],
+        );
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![
+                stream_struct,
+                state_struct,
+                make_node(
+                    ClangNodeKind::FunctionDecl {
+                        name: "set_next_in".to_string(),
+                        mangled_name: "set_next_in".to_string(),
+                        is_static: false,
+                        return_type: CppType::Int { signed: true },
+                        params: vec![
+                            ("state".to_string(), state_ptr_ty),
+                            ("buf".to_string(), u8_ptr_ty),
+                        ],
+                        is_definition: true,
+                        is_variadic: false,
+                        is_noexcept: false,
+                        is_coroutine: false,
+                        coroutine_info: None,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![
+                            make_node(ClangNodeKind::ExprStmt, vec![assign_next_in]),
+                            make_node(
+                                ClangNodeKind::ReturnStmt,
+                                vec![make_node(
+                                    ClangNodeKind::IntegerLiteral {
+                                        value: 0,
+                                        cpp_type: Some(CppType::Int { signed: true }),
+                                    },
+                                    vec![],
+                                )],
+                            ),
+                        ],
+                    )],
+                ),
+            ],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            !code.contains("unsafe { (*state).strm }.next_in"),
+            "nested member assignment must not project from an unsafe temporary copy, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("((*state).strm).next_in"),
+            "nested member assignment should keep projection inside unsafe block, got:\n{}",
             code
         );
     }
