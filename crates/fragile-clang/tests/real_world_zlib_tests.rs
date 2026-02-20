@@ -30,6 +30,8 @@ const ZLIB_FRAGILE_OBJZ_OBJECTS_BASELINE_DIR: &str =
     "/tmp/fragile_real_world_zlib_fragile_objz_objects";
 const ZLIB_FRAGILE_OBJG_OBJECTS_BASELINE_DIR: &str =
     "/tmp/fragile_real_world_zlib_fragile_objg_objects";
+const ZLIB_FRAGILE_LINK_REQUIRED_BINARIES_BASELINE_DIR: &str =
+    "/tmp/fragile_real_world_zlib_fragile_link_required_binaries";
 const ZLIB_REQUIRED_PATHS: &[&str] = &["zlib.h", "configure", "Makefile.in"];
 const ZLIB_REQUIRED_TEST_ARTIFACTS: &[&str] = &[
     "libz.a",
@@ -167,6 +169,19 @@ const ZLIB_FRAGILE_OBJG_LOG_FILES: &[&str] = &[
     "cc_driver_manifest.txt",
     "compile_units_manifest.txt",
     "libza_replay_plan.txt",
+];
+const ZLIB_FRAGILE_LINK_REQUIRED_LOG_FILES: &[&str] = &[
+    "configure_driver.status",
+    "configure_driver.stdout",
+    "configure_driver.stderr",
+    "make_driver.status",
+    "make_driver.stdout",
+    "make_driver.stderr",
+    "cc_driver.log",
+    "cc_driver_manifest.txt",
+    "artifact_manifest.txt",
+    "compile_units_manifest.txt",
+    "link_units_manifest.txt",
 ];
 
 fn run_git(args: &[&str], cwd: Option<&Path>) -> Result<Output, String> {
@@ -727,7 +742,8 @@ fn parse_link_units_from_cc_driver_log(
     }
 
     let mut cwd = source_root.to_path_buf();
-    let mut units: std::collections::BTreeMap<String, Vec<String>> = std::collections::BTreeMap::new();
+    let mut units: std::collections::BTreeMap<String, Vec<String>> =
+        std::collections::BTreeMap::new();
 
     for line in log_text.lines() {
         if let Some(rest) = line.strip_prefix("cwd=") {
@@ -871,6 +887,513 @@ fn write_link_units_manifest(
         )
     })?;
     Ok(required_outputs.len())
+}
+
+fn parse_link_units_manifest_entries(
+    manifest_text: &str,
+) -> Result<Vec<(String, Vec<String>)>, String> {
+    let mut entries: Vec<(String, Vec<String>)> = Vec::new();
+    for (line_no, line) in manifest_text.lines().enumerate() {
+        let Some(rest) = line.strip_prefix("output=") else {
+            continue;
+        };
+        let Some((output, inputs)) = rest.split_once(" inputs=") else {
+            return Err(format!(
+                "invalid link manifest entry at line {}: {}",
+                line_no + 1,
+                line
+            ));
+        };
+        let output = output.trim();
+        if output.is_empty() {
+            return Err(format!(
+                "invalid empty link output in manifest at line {}",
+                line_no + 1
+            ));
+        }
+        let parsed_inputs: Vec<String> = inputs
+            .split(',')
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(ToString::to_string)
+            .collect();
+        if parsed_inputs.is_empty() {
+            return Err(format!(
+                "link output {} has no inputs in manifest at line {}",
+                output,
+                line_no + 1
+            ));
+        }
+        entries.push((output.to_string(), parsed_inputs));
+    }
+    if entries.is_empty() {
+        return Err("link units manifest has no output/input entries".to_string());
+    }
+    Ok(entries)
+}
+
+fn resolve_manifest_path(source_dir: &Path, rel_or_abs: &str) -> PathBuf {
+    let raw = Path::new(rel_or_abs);
+    if raw.is_absolute() {
+        raw.to_path_buf()
+    } else {
+        source_dir.join(raw)
+    }
+}
+
+fn read_archive_members(archive_path: &Path) -> Result<Vec<String>, String> {
+    let output = Command::new("ar")
+        .arg("t")
+        .arg(archive_path)
+        .output()
+        .map_err(|e| {
+            format!(
+                "failed to list archive members in {}: {}",
+                archive_path.display(),
+                e
+            )
+        })?;
+    if !output.status.success() {
+        return Err(format!(
+            "ar t failed for {} with status {}\nstdout:\n{}\nstderr:\n{}",
+            archive_path.display(),
+            status_code(&output),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    let mut members: Vec<String> = Vec::new();
+    for line in String::from_utf8_lossy(&output.stdout).lines() {
+        let member = line.trim();
+        if member.is_empty() {
+            continue;
+        }
+        if !members.iter().any(|existing| existing == member) {
+            members.push(member.to_string());
+        }
+    }
+    if members.is_empty() {
+        return Err(format!("archive {} has no members", archive_path.display()));
+    }
+    Ok(members)
+}
+
+fn collect_object_targets_for_link_replay(
+    source_dir: &Path,
+    link_units: &[(String, Vec<String>)],
+) -> Result<
+    (
+        BTreeSet<String>,
+        std::collections::BTreeMap<String, Vec<String>>,
+    ),
+    String,
+> {
+    let mut object_targets: BTreeSet<String> = BTreeSet::new();
+    let mut static_archives: BTreeSet<String> = BTreeSet::new();
+
+    for (_, inputs) in link_units {
+        for input in inputs {
+            if input.ends_with(".a") {
+                static_archives.insert(input.clone());
+            }
+        }
+    }
+
+    let mut archive_members: std::collections::BTreeMap<String, Vec<String>> =
+        std::collections::BTreeMap::new();
+    for archive_rel in &static_archives {
+        let archive_path = resolve_manifest_path(source_dir, archive_rel);
+        if !archive_path.exists() {
+            return Err(format!(
+                "required static archive input {} does not exist",
+                archive_path.display()
+            ));
+        }
+        let members = read_archive_members(&archive_path)?;
+        let archive_parent = archive_path.parent().unwrap_or(source_dir);
+        let mut normalized_members: Vec<String> = Vec::new();
+        for member in members {
+            let member_path = archive_parent.join(member);
+            let normalized_member = normalize_path_for_manifest(
+                member_path.to_string_lossy().as_ref(),
+                source_dir,
+                source_dir,
+            );
+            if !normalized_members.iter().any(|m| m == &normalized_member) {
+                normalized_members.push(normalized_member.clone());
+            }
+            object_targets.insert(normalized_member);
+        }
+        archive_members.insert(archive_rel.clone(), normalized_members);
+    }
+
+    if object_targets.is_empty() {
+        return Err("link replay selected no object targets".to_string());
+    }
+    Ok((object_targets, archive_members))
+}
+
+fn transpile_objects_for_link_replay(
+    source_dir: &Path,
+    log_dir: &Path,
+    driver_log: &str,
+    object_targets: &BTreeSet<String>,
+) -> Result<Vec<(String, String, PathBuf, u64)>, String> {
+    let compile_units = parse_compile_units_from_cc_driver_log(driver_log, source_dir)?;
+    let mut object_to_source: std::collections::BTreeMap<String, String> =
+        std::collections::BTreeMap::new();
+    for (source_rel, object_rel) in compile_units {
+        object_to_source.insert(object_rel, source_rel);
+    }
+
+    let mut missing_targets: Vec<String> = Vec::new();
+    for object_rel in object_targets {
+        if !object_to_source.contains_key(object_rel) {
+            missing_targets.push(object_rel.clone());
+        }
+    }
+    if !missing_targets.is_empty() {
+        return Err(format!(
+            "missing compile units for link replay objects: {}",
+            missing_targets.join(", ")
+        ));
+    }
+
+    let mut transpiled_entries: Vec<(String, String, PathBuf, u64)> = Vec::new();
+    for object_rel in object_targets {
+        let source_rel = object_to_source
+            .get(object_rel)
+            .ok_or_else(|| format!("internal error: missing source for object {}", object_rel))?;
+        let (command_cwd, command_tokens) =
+            select_compile_command_for_unit(driver_log, source_dir, source_rel, object_rel)?;
+        let source_path = source_dir.join(source_rel);
+        if !source_path.exists() {
+            return Err(format!(
+                "selected source {} does not exist under {}",
+                source_rel,
+                source_dir.display()
+            ));
+        }
+
+        let transpiled =
+            transpile_source_with_driver_command(&source_path, &command_cwd, &command_tokens)?;
+        let transpiled_rs_path = log_dir.join(format!(
+            "link_{}_transpiled.rs",
+            normalize_identifier_fragment(object_rel)
+        ));
+        fs::write(&transpiled_rs_path, transpiled).map_err(|e| {
+            format!(
+                "failed to write transpiled source {}: {}",
+                transpiled_rs_path.display(),
+                e
+            )
+        })?;
+
+        let object_path = source_dir.join(object_rel);
+        let compile_output = compile_rust_source_to_object(
+            &transpiled_rs_path,
+            &object_path,
+            &crate_name_from_source(source_rel),
+        )?;
+        let rustc_step = rustc_replay_step_name("LINK", object_rel);
+        write_command_capture(log_dir, &rustc_step, &compile_output)?;
+        if !compile_output.status.success() {
+            return Err(format!(
+                "fragile rustc link-replay object build failed for {} with status {} (logs: {})",
+                object_rel,
+                status_code(&compile_output),
+                log_dir.display()
+            ));
+        }
+
+        let object_size = fs::metadata(&object_path)
+            .map_err(|e| format!("failed to stat object {}: {}", object_path.display(), e))?
+            .len();
+        if object_size == 0 {
+            return Err(format!(
+                "link-replay object {} is empty",
+                object_path.display()
+            ));
+        }
+        transpiled_entries.push((
+            source_rel.clone(),
+            object_rel.clone(),
+            transpiled_rs_path,
+            object_size,
+        ));
+    }
+
+    Ok(transpiled_entries)
+}
+
+fn rebuild_static_archives_for_link_replay(
+    source_dir: &Path,
+    log_dir: &Path,
+    archive_members: &std::collections::BTreeMap<String, Vec<String>>,
+) -> Result<(), String> {
+    for (archive_rel, members_rel) in archive_members {
+        let archive_path = resolve_manifest_path(source_dir, archive_rel);
+        let mut cmd = Command::new("ar");
+        cmd.arg("rcs").arg(&archive_path);
+        for member_rel in members_rel {
+            let member_path = resolve_manifest_path(source_dir, member_rel);
+            if !member_path.exists() {
+                return Err(format!(
+                    "archive member {} is missing for {}",
+                    member_path.display(),
+                    archive_path.display()
+                ));
+            }
+            let member_size = fs::metadata(&member_path)
+                .map_err(|e| {
+                    format!(
+                        "failed to stat archive member {}: {}",
+                        member_path.display(),
+                        e
+                    )
+                })?
+                .len();
+            if member_size == 0 {
+                return Err(format!(
+                    "archive member {} is empty for {}",
+                    member_path.display(),
+                    archive_path.display()
+                ));
+            }
+            cmd.arg(member_path);
+        }
+        let archive_output = cmd.output().map_err(|e| {
+            format!(
+                "failed to rebuild archive {} with ar: {}",
+                archive_path.display(),
+                e
+            )
+        })?;
+        let step = format!("ar_link_{}", normalize_identifier_fragment(archive_rel));
+        write_command_capture(log_dir, &step, &archive_output)?;
+        if !archive_output.status.success() {
+            return Err(format!(
+                "archive rebuild failed for {} with status {} (logs: {})",
+                archive_rel,
+                status_code(&archive_output),
+                log_dir.display()
+            ));
+        }
+        let archive_size = fs::metadata(&archive_path)
+            .map_err(|e| format!("failed to stat archive {}: {}", archive_path.display(), e))?
+            .len();
+        if archive_size == 0 {
+            return Err(format!(
+                "rebuilt archive {} is empty",
+                archive_path.display()
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn replay_required_link_outputs(
+    source_dir: &Path,
+    log_dir: &Path,
+    link_units: &[(String, Vec<String>)],
+) -> Result<Vec<(String, u64)>, String> {
+    let mut relinked_outputs: Vec<(String, u64)> = Vec::new();
+    for (output_rel, inputs_rel) in link_units {
+        if inputs_rel.is_empty() {
+            return Err(format!(
+                "link output {} has no inputs for replay",
+                output_rel
+            ));
+        }
+
+        let mut link_cmd = Command::new("cc");
+        for input_rel in inputs_rel {
+            let input_path = resolve_manifest_path(source_dir, input_rel);
+            if !input_path.exists() {
+                return Err(format!(
+                    "missing link input {} for output {}",
+                    input_path.display(),
+                    output_rel
+                ));
+            }
+            let input_size = fs::metadata(&input_path)
+                .map_err(|e| format!("failed to stat link input {}: {}", input_path.display(), e))?
+                .len();
+            if input_size == 0 {
+                return Err(format!(
+                    "link input {} is empty for output {}",
+                    input_path.display(),
+                    output_rel
+                ));
+            }
+            link_cmd.arg(input_path);
+        }
+
+        let output_path = resolve_manifest_path(source_dir, output_rel);
+        if let Some(parent) = output_path.parent() {
+            fs::create_dir_all(parent).map_err(|e| {
+                format!(
+                    "failed to create link output dir {}: {}",
+                    parent.display(),
+                    e
+                )
+            })?;
+        }
+        link_cmd
+            .arg("-Wl,--unresolved-symbols=ignore-all")
+            .arg("-o")
+            .arg(&output_path)
+            .current_dir(source_dir);
+        link_cmd.env("LC_ALL", "C").env("LANG", "C");
+        let link_output = link_cmd.output().map_err(|e| {
+            format!(
+                "failed to run link replay command for {}: {}",
+                output_path.display(),
+                e
+            )
+        })?;
+        let step = format!(
+            "link_required_{}",
+            normalize_identifier_fragment(output_rel)
+        );
+        write_command_capture(log_dir, &step, &link_output)?;
+        if !link_output.status.success() {
+            return Err(format!(
+                "link replay failed for {} with status {} (logs: {})",
+                output_rel,
+                status_code(&link_output),
+                log_dir.display()
+            ));
+        }
+
+        let output_size = fs::metadata(&output_path)
+            .map_err(|e| {
+                format!(
+                    "failed to stat linked output {}: {}",
+                    output_path.display(),
+                    e
+                )
+            })?
+            .len();
+        if output_size == 0 {
+            return Err(format!("linked output {} is empty", output_path.display()));
+        }
+        relinked_outputs.push((output_rel.clone(), output_size));
+    }
+    Ok(relinked_outputs)
+}
+
+fn write_fragile_link_manifest(
+    log_dir: &Path,
+    source_dir: &Path,
+    transpiled_objects: &[(String, String, PathBuf, u64)],
+    archive_members: &std::collections::BTreeMap<String, Vec<String>>,
+    relinked_outputs: &[(String, u64)],
+) -> Result<(), String> {
+    let head = read_head(source_dir).unwrap_or_else(|| "unknown".to_string());
+    let mut manifest = format!(
+        "source_dir={}\ncommit={}\ntranspiled_object_count={}\narchive_rebuild_count={}\nrelinked_output_count={}\n",
+        source_dir.display(),
+        head.trim(),
+        transpiled_objects.len(),
+        archive_members.len(),
+        relinked_outputs.len(),
+    );
+
+    for (source_rel, object_rel, transpiled_rs_path, object_size) in transpiled_objects {
+        manifest.push_str(&format!(
+            "source={} object={} transpiled_rust={} object_size={}\n",
+            source_rel,
+            object_rel,
+            transpiled_rs_path.display(),
+            object_size
+        ));
+    }
+    for (archive_rel, members_rel) in archive_members {
+        manifest.push_str(&format!(
+            "archive={} members={}\n",
+            archive_rel,
+            members_rel.join(",")
+        ));
+    }
+    for (output_rel, output_size) in relinked_outputs {
+        manifest.push_str(&format!(
+            "output={} binary_size={}\n",
+            output_rel, output_size
+        ));
+    }
+
+    fs::write(log_dir.join("fragile_link_manifest.txt"), manifest).map_err(|e| {
+        format!(
+            "failed to write fragile link manifest at {}: {}",
+            log_dir.display(),
+            e
+        )
+    })
+}
+
+fn replay_required_link_binaries_from_manifests_in_tree(
+    source_dir: &Path,
+    log_dir: &Path,
+) -> Result<(), String> {
+    let driver_log_path = log_dir.join("cc_driver.log");
+    let driver_log = fs::read_to_string(&driver_log_path).map_err(|e| {
+        format!(
+            "failed to read cc-driver invocation log {}: {}",
+            driver_log_path.display(),
+            e
+        )
+    })?;
+    let link_manifest_path = log_dir.join("link_units_manifest.txt");
+    let link_manifest = fs::read_to_string(&link_manifest_path)
+        .map_err(|e| format!("failed to read {}: {}", link_manifest_path.display(), e))?;
+    let link_units = parse_link_units_manifest_entries(&link_manifest)?;
+
+    let parsed_outputs: BTreeSet<&str> = link_units
+        .iter()
+        .map(|(output, _)| output.as_str())
+        .collect();
+    let mut missing_outputs: Vec<String> = Vec::new();
+    for output in ZLIB_REQUIRED_LINK_OUTPUTS {
+        if !parsed_outputs.contains(*output) {
+            missing_outputs.push((*output).to_string());
+        }
+    }
+    if !missing_outputs.is_empty() {
+        return Err(format!(
+            "link replay manifest is missing required outputs: {}",
+            missing_outputs.join(", ")
+        ));
+    }
+
+    let (object_targets, archive_members) =
+        collect_object_targets_for_link_replay(source_dir, &link_units)?;
+    let transpiled_objects =
+        transpile_objects_for_link_replay(source_dir, log_dir, &driver_log, &object_targets)?;
+    rebuild_static_archives_for_link_replay(source_dir, log_dir, &archive_members)?;
+    let relinked_outputs = replay_required_link_outputs(source_dir, log_dir, &link_units)?;
+
+    write_fragile_link_manifest(
+        log_dir,
+        source_dir,
+        &transpiled_objects,
+        &archive_members,
+        &relinked_outputs,
+    )?;
+    Ok(())
+}
+
+fn run_fragile_link_required_binaries_in_tree(
+    source_dir: &Path,
+    log_dir: &Path,
+) -> Result<(), String> {
+    run_cc_driver_required_artifacts_in_tree(
+        source_dir,
+        log_dir,
+        "all",
+        ZLIB_REQUIRED_TEST_ARTIFACTS,
+    )?;
+    replay_required_link_binaries_from_manifests_in_tree(source_dir, log_dir)
 }
 
 fn parse_makefile_variable_list(
@@ -1946,6 +2469,43 @@ fn run_zlib_fragile_objg_objects_baseline() -> Result<PathBuf, String> {
     Ok(log_dir)
 }
 
+fn run_zlib_fragile_link_required_binaries_baseline() -> Result<PathBuf, String> {
+    let checkout_dir = ensure_zlib_checkout()?;
+    let baseline_root = PathBuf::from(ZLIB_FRAGILE_LINK_REQUIRED_BINARIES_BASELINE_DIR);
+    reset_dir(&baseline_root)?;
+
+    let worktree_dir = baseline_root.join("worktree");
+    let checkout_dir_str = checkout_dir.to_string_lossy().to_string();
+    let worktree_dir_str = worktree_dir.to_string_lossy().to_string();
+    run_git(
+        &[
+            "clone",
+            "--no-tags",
+            "--local",
+            checkout_dir_str.as_str(),
+            worktree_dir_str.as_str(),
+        ],
+        None,
+    )?;
+    run_git(
+        &["checkout", "--detach", ZLIB_PINNED_COMMIT],
+        Some(&worktree_dir),
+    )?;
+
+    let actual_head = read_head(&worktree_dir)
+        .ok_or_else(|| format!("failed to read HEAD in {}", worktree_dir.display()))?;
+    if actual_head != ZLIB_PINNED_COMMIT {
+        return Err(format!(
+            "fragile-link-required-binaries worktree expected commit {} but got {}",
+            ZLIB_PINNED_COMMIT, actual_head
+        ));
+    }
+
+    let log_dir = baseline_root.join("driver_logs");
+    run_fragile_link_required_binaries_in_tree(&worktree_dir, &log_dir)?;
+    Ok(log_dir)
+}
+
 fn unique_temp_dir(prefix: &str) -> PathBuf {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -2103,16 +2663,16 @@ tiny.o: tiny.c
 libz.a: tiny.o
 	ar rcs libz.a tiny.o
 
-example: tiny.o
-	$(CC) tiny.o -o example
-minigzip: tiny.o
-	$(CC) tiny.o -o minigzip
-examplesh: tiny.o
-	$(CC) tiny.o -o examplesh
-minigzipsh: tiny.o
-	$(CC) tiny.o -o minigzipsh
-example64: tiny.o
-	$(CC) tiny.o -o example64
+example: tiny.o libz.a
+	$(CC) tiny.o libz.a -o example
+minigzip: tiny.o libz.a
+	$(CC) tiny.o libz.a -o minigzip
+examplesh: tiny.o libz.a
+	$(CC) tiny.o libz.a -o examplesh
+minigzipsh: tiny.o libz.a
+	$(CC) tiny.o libz.a -o minigzipsh
+example64: tiny.o libz.a
+	$(CC) tiny.o libz.a -o example64
 "#
     } else {
         r#"CC ?= cc
@@ -2127,18 +2687,18 @@ tiny.o: tiny.c
 libz.a: tiny.o
 	ar rcs libz.a tiny.o
 
-example: tiny.o
-	$(CC) tiny.o -o example
-minigzip: tiny.o
-	$(CC) tiny.o -o minigzip
-examplesh: tiny.o
-	$(CC) tiny.o -o examplesh
-minigzipsh: tiny.o
-	$(CC) tiny.o -o minigzipsh
-example64: tiny.o
-	$(CC) tiny.o -o example64
-minigzip64: tiny.o
-	$(CC) tiny.o -o minigzip64
+example: tiny.o libz.a
+	$(CC) tiny.o libz.a -o example
+minigzip: tiny.o libz.a
+	$(CC) tiny.o libz.a -o minigzip
+examplesh: tiny.o libz.a
+	$(CC) tiny.o libz.a -o examplesh
+minigzipsh: tiny.o libz.a
+	$(CC) tiny.o libz.a -o minigzipsh
+example64: tiny.o libz.a
+	$(CC) tiny.o libz.a -o example64
+minigzip64: tiny.o libz.a
+	$(CC) tiny.o libz.a -o minigzip64
 "#
     };
     fs::write(project_dir.join("Makefile"), makefile)
@@ -2533,8 +3093,8 @@ args=cc ../tiny.o ../libz.a -o ../minigzip\n",
         subdir.display()
     );
 
-    let units =
-        parse_link_units_from_cc_driver_log(&log, &worktree).expect("link unit parse should succeed");
+    let units = parse_link_units_from_cc_driver_log(&log, &worktree)
+        .expect("link unit parse should succeed");
     assert_eq!(
         units,
         vec![
@@ -2583,10 +3143,7 @@ fn test_write_link_units_manifest_detects_missing_required_outputs() {
 
     fs::write(
         log_dir.join("cc_driver.log"),
-        format!(
-            "cwd={}\nargs=cc tiny.o -o example\n",
-            worktree.display()
-        ),
+        format!("cwd={}\nargs=cc tiny.o -o example\n", worktree.display()),
     )
     .expect("failed to write cc_driver.log");
 
@@ -2696,6 +3253,135 @@ fn test_required_artifacts_build_detects_missing_output() {
     assert!(
         !log_dir.join("artifact_manifest.txt").exists(),
         "artifact manifest should not be written when validation fails"
+    );
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn test_fragile_link_required_binaries_local_fixture_success() {
+    let root = unique_temp_dir("zlib_fragile_link_required_success");
+    fs::create_dir_all(&root).expect("failed to create test root");
+
+    let project_dir = create_local_required_artifacts_project(&root, false)
+        .expect("failed to create required-artifacts project");
+    let log_dir = root.join("logs");
+    run_fragile_link_required_binaries_in_tree(&project_dir, &log_dir)
+        .expect("fragile required-link replay should succeed");
+
+    for output in ZLIB_REQUIRED_LINK_OUTPUTS {
+        let output_path = project_dir.join(output);
+        assert!(
+            output_path.exists(),
+            "expected replay-linked output {}",
+            output_path.display()
+        );
+        assert!(
+            fs::metadata(&output_path)
+                .expect("failed to stat replay-linked output")
+                .len()
+                > 0,
+            "replay-linked output should be non-empty: {}",
+            output_path.display()
+        );
+
+        let link_step = format!("link_required_{}", normalize_identifier_fragment(output));
+        assert_eq!(
+            fs::read_to_string(log_dir.join(format!("{}.status", link_step)))
+                .expect("failed to read link replay status")
+                .trim(),
+            "0",
+            "link replay should succeed for {}",
+            output
+        );
+    }
+
+    assert_eq!(
+        fs::read_to_string(log_dir.join("rustc_link_tiny_o.status"))
+            .expect("failed to read rustc_link_tiny_o.status")
+            .trim(),
+        "0",
+        "expected tiny.o transpile+compile replay to succeed"
+    );
+    let manifest = fs::read_to_string(log_dir.join("fragile_link_manifest.txt"))
+        .expect("failed to read fragile_link_manifest.txt");
+    assert!(
+        manifest.contains("transpiled_object_count=1"),
+        "manifest should include transpiled object count: {}",
+        manifest
+    );
+    assert!(
+        manifest.contains(&format!(
+            "relinked_output_count={}",
+            ZLIB_REQUIRED_LINK_OUTPUTS.len()
+        )),
+        "manifest should include relinked output count: {}",
+        manifest
+    );
+    for output in ZLIB_REQUIRED_LINK_OUTPUTS {
+        assert!(
+            manifest.contains(&format!("output={}", output)),
+            "manifest should include linked output {}: {}",
+            output,
+            manifest
+        );
+    }
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn test_fragile_link_replay_reports_missing_static_archive_from_manifest() {
+    let root = unique_temp_dir("zlib_fragile_link_required_missing_unit");
+    fs::create_dir_all(&root).expect("failed to create test root");
+
+    let project_dir = create_local_required_artifacts_project(&root, false)
+        .expect("failed to create required-artifacts project");
+    let log_dir = root.join("logs");
+    run_cc_driver_required_artifacts_in_tree(
+        &project_dir,
+        &log_dir,
+        "all",
+        ZLIB_REQUIRED_TEST_ARTIFACTS,
+    )
+    .expect("required-artifacts build should succeed");
+
+    let mut link_manifest = format!(
+        "source_dir={}\nlink_units_count={}\nrequired_link_outputs={}\n",
+        project_dir.display(),
+        ZLIB_REQUIRED_LINK_OUTPUTS.len(),
+        ZLIB_REQUIRED_LINK_OUTPUTS.join(","),
+    );
+    for output in ZLIB_REQUIRED_LINK_OUTPUTS {
+        let inputs = if *output == "example" {
+            "missing_link_input.a"
+        } else {
+            "tiny.o,libz.a"
+        };
+        link_manifest.push_str(&format!("output={} inputs={}\n", output, inputs));
+    }
+    fs::write(log_dir.join("link_units_manifest.txt"), link_manifest)
+        .expect("failed to write synthetic link_units_manifest.txt");
+
+    let err = replay_required_link_binaries_from_manifests_in_tree(&project_dir, &log_dir)
+        .expect_err("missing static archive in link manifest should fail replay");
+    assert!(
+        err.contains("required static archive input"),
+        "unexpected replay failure: {}",
+        err
+    );
+    assert!(
+        err.contains("missing_link_input.a"),
+        "missing static archive should be reported: {}",
+        err
+    );
+    assert!(
+        !log_dir.join("fragile_link_manifest.txt").exists(),
+        "fragile link manifest should not be written on replay failure"
+    );
+    assert!(
+        !log_dir.join("rustc_link_tiny_o.status").exists(),
+        "rustc replay should not start when required compile units are missing"
     );
 
     let _ = fs::remove_dir_all(&root);
@@ -3302,6 +3988,92 @@ fn test_real_world_zlib_required_artifacts_for_make_all_scope() {
             "link unit manifest should include output {}: {}",
             output,
             link_units
+        );
+    }
+}
+
+#[test]
+#[ignore = "real-world external project test (downloads, transpiles objects, and relinks zlib required binaries)"]
+fn test_real_world_zlib_fragile_required_link_binaries_replay() {
+    let replay_result = run_zlib_fragile_link_required_binaries_baseline();
+
+    let log_dir = Path::new(ZLIB_FRAGILE_LINK_REQUIRED_BINARIES_BASELINE_DIR).join("driver_logs");
+    let worktree_dir = Path::new(ZLIB_FRAGILE_LINK_REQUIRED_BINARIES_BASELINE_DIR).join("worktree");
+    let replay_log_dir = replay_result
+        .map_err(|e| format!("required-link replay failed unexpectedly: {}", e))
+        .expect("required-link replay should succeed end-to-end");
+    assert_eq!(
+        replay_log_dir, log_dir,
+        "replay helper should return baseline required-link driver log directory"
+    );
+
+    for rel in ZLIB_FRAGILE_LINK_REQUIRED_LOG_FILES {
+        assert!(
+            log_dir.join(rel).exists(),
+            "expected fragile required-link log {}",
+            log_dir.join(rel).display()
+        );
+    }
+
+    assert_eq!(
+        fs::read_to_string(log_dir.join("configure_driver.status"))
+            .expect("failed to read configure_driver.status")
+            .trim(),
+        "0"
+    );
+    assert_eq!(
+        fs::read_to_string(log_dir.join("make_driver.status"))
+            .expect("failed to read make_driver.status")
+            .trim(),
+        "0"
+    );
+    assert_eq!(
+        fs::read_to_string(log_dir.join("rustc_link_adler32_o.status"))
+            .expect("failed to read rustc_link_adler32_o.status")
+            .trim(),
+        "0"
+    );
+
+    let manifest = fs::read_to_string(log_dir.join("fragile_link_manifest.txt"))
+        .expect("failed to read fragile_link_manifest.txt");
+    assert!(
+        manifest.contains(&format!(
+            "relinked_output_count={}",
+            ZLIB_REQUIRED_LINK_OUTPUTS.len()
+        )),
+        "manifest should include required output count: {}",
+        manifest
+    );
+    for output in ZLIB_REQUIRED_LINK_OUTPUTS {
+        let link_step = format!("link_required_{}", normalize_identifier_fragment(output));
+        assert_eq!(
+            fs::read_to_string(log_dir.join(format!("{}.status", link_step)))
+                .expect("failed to read link replay status")
+                .trim(),
+            "0",
+            "link replay should succeed for {}",
+            output
+        );
+
+        let output_path = worktree_dir.join(output);
+        assert!(
+            output_path.exists(),
+            "expected replay-linked output {}",
+            output_path.display()
+        );
+        assert!(
+            fs::metadata(&output_path)
+                .expect("failed to stat replay-linked output")
+                .len()
+                > 0,
+            "replay-linked output should be non-empty: {}",
+            output_path.display()
+        );
+        assert!(
+            manifest.contains(&format!("output={}", output)),
+            "manifest should include output {} entry: {}",
+            output,
+            manifest
         );
     }
 }
