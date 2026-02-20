@@ -34,7 +34,8 @@ Run upstream-style tests through the Fragile transpiler with runtime parity:
         - [x] Fix relational comparison cast-parenthesization in codegen so emitted Rust doesn't parse cast types as generic arguments (`(dist) as i32 < 256`).
         - [x] Re-run real-world `OBJZ` replay after cast-parenthesization fix and record the next first blocking error class in `deflate` compile logs.
           - Current first blocker class after replay: external symbol/type resolution in `deflate` output (missing `static_tree_desc_s`, `zcalloc`/`zcfree`, `adler32`/`crc32`, `_tr_*`), followed by pointer-function call and type-width/union-field mismatches.
-        - [ ] Fix external symbol/type resolution issues in `deflate` replay output (e.g., missing `adler32`/`crc32`/`_tr_*`/`static_tree_desc_s`) with source-faithful cross-unit declarations.
+        - [x] Fix external symbol/type resolution issues in `deflate` replay output (e.g., missing `adler32`/`crc32`/`_tr_*`/`static_tree_desc_s`) with source-faithful cross-unit declarations.
+          - Replay evidence (`/tmp/fragile_real_world_zlib_fragile_objz_objects/driver_logs/rustc_objz_deflate_o.stderr`): unresolved symbol/type diagnostics are cleared; current first blocker class is function-pointer/Option invocation and type-width mismatches.
         - [ ] Fix pointer/function-pointer invocation lowering regressions in `deflate` replay output (Option function pointers deref/call shape).
         - [ ] Fix remaining `deflate` type/union field/codegen mismatches in replay output (`freq` union field access, integer width mismatches, pointer arithmetic typing).
     - [ ] Replay `OBJG` units through Fragile to `.o` outputs and validate object completeness.

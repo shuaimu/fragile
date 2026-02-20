@@ -685,6 +685,11 @@ pub struct AstCodeGen {
     bit_field_groups: HashMap<String, Vec<BitFieldGroup>>,
     /// Track generated function signatures to handle overloads: name -> count
     generated_functions: HashMap<String, usize>,
+    /// Function names that have a definition in this translation unit.
+    /// Used to suppress emitting duplicate extern declarations.
+    defined_function_names: HashSet<String>,
+    /// C extern declarations already emitted in this translation unit.
+    emitted_extern_c_functions: HashSet<String>,
     /// Track actual Rust module nesting depth (excludes flattened namespaces like std, __)
     module_depth: usize,
     /// Track method names within current struct impl to handle overloads: name -> count
@@ -813,6 +818,8 @@ impl AstCodeGen {
             generated_modules: HashSet::new(),
             bit_field_groups: HashMap::new(),
             generated_functions: HashMap::new(),
+            defined_function_names: HashSet::new(),
+            emitted_extern_c_functions: HashSet::new(),
             module_depth: 0,
             current_struct_methods: HashMap::new(),
             merged_namespace_children: HashMap::new(),
@@ -2183,6 +2190,7 @@ impl AstCodeGen {
         if let ClangNodeKind::TranslationUnit = &ast.kind {
             self.collect_polymorphic_info(&ast.children);
             self.collect_unsafe_function_names(ast);
+            self.collect_defined_function_names(ast);
             self.collect_anon_union_defs(ast);
         }
         self.compute_virtual_bases();
@@ -12752,6 +12760,105 @@ impl AstCodeGen {
         )
     }
 
+    /// Track missing named alias targets so placeholder struct stubs can be emitted later.
+    fn maybe_track_alias_target_for_stub(&mut self, rust_type: &str) {
+        if rust_type.is_empty()
+            || rust_type == "_"
+            || rust_type.starts_with('*')
+            || rust_type.starts_with('&')
+            || rust_type.starts_with('[')
+            || rust_type.contains(' ')
+            || rust_type.contains("::")
+            || rust_type.contains('<')
+            || rust_type.contains('>')
+            || Self::is_primitive_type_name(rust_type)
+            || self.generated_structs.contains(rust_type)
+            || self.generated_aliases.contains(rust_type)
+            || self.generated_enums.contains(rust_type)
+            || self.primitive_aliases.contains(rust_type)
+        {
+            return;
+        }
+
+        let mut chars = rust_type.chars();
+        let Some(first) = chars.next() else {
+            return;
+        };
+        if !(first.is_alphabetic() || first == '_') {
+            return;
+        }
+        if !chars.all(|c| c.is_alphanumeric() || c == '_') {
+            return;
+        }
+
+        self.referenced_but_undefined_structs
+            .insert(rust_type.to_string());
+    }
+
+    /// Emit an `extern "C"` declaration for unresolved C functions.
+    fn generate_extern_c_function_decl(
+        &mut self,
+        name: &str,
+        mangled_name: &str,
+        return_type: &CppType,
+        params: &[(String, CppType)],
+        is_variadic: bool,
+    ) {
+        // Restrict to C-style declarations to avoid C++ overload collisions.
+        let looks_c_decl = mangled_name.is_empty() || mangled_name == name;
+        if !looks_c_decl
+            || !self.current_namespace.is_empty()
+            || self.defined_function_names.contains(name)
+        {
+            return;
+        }
+
+        let rust_name = sanitize_identifier(name);
+        let existing_decl_pattern = format!("fn {}(", rust_name);
+        if self.generated_functions.contains_key(&rust_name)
+            || self.emitted_extern_c_functions.contains(&rust_name)
+            || self.output.contains(&existing_decl_pattern)
+        {
+            return;
+        }
+
+        let ret_str = if *return_type == CppType::Void {
+            String::new()
+        } else {
+            let ret = Self::sanitize_return_type(&return_type.to_rust_type_str());
+            if ret.is_empty() {
+                String::new()
+            } else {
+                format!(" -> {}", ret)
+            }
+        };
+
+        let mut param_strs: Vec<String> = params
+            .iter()
+            .enumerate()
+            .map(|(i, (_, t))| format!("_arg{}: {}", i, t.to_rust_type_str()))
+            .collect();
+        if is_variadic {
+            param_strs.push("...".to_string());
+        }
+
+        self.writeln("unsafe extern \"C\" {");
+        self.indent += 1;
+        if rust_name != name {
+            self.writeln(&format!("#[link_name = \"{}\"]", name));
+        }
+        self.writeln(&format!(
+            "pub fn {}({}){};",
+            rust_name,
+            param_strs.join(", "),
+            ret_str
+        ));
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("");
+        self.emitted_extern_c_functions.insert(rust_name);
+    }
+
     /// Generate a top-level declaration.
     fn generate_top_level(&mut self, node: &ClangNode) {
         match &node.kind {
@@ -12776,6 +12883,14 @@ impl AstCodeGen {
                         *is_coroutine,
                         coroutine_info,
                         &node.children,
+                    );
+                } else {
+                    self.generate_extern_c_function_decl(
+                        name,
+                        mangled_name,
+                        return_type,
+                        params,
+                        *is_variadic,
                     );
                 }
             }
@@ -15582,6 +15697,12 @@ impl AstCodeGen {
             return;
         }
 
+        // Forward-declared/incomplete named targets can still appear in aliases.
+        // Track them so generate_missing_type_stubs can emit opaque placeholders.
+        if matches!(underlying_type, CppType::Named(_)) {
+            self.maybe_track_alias_target_for_stub(&rust_type);
+        }
+
         self.generated_aliases.insert(safe_name.clone());
         self.type_alias_targets
             .insert(safe_name.clone(), rust_type.clone());
@@ -17194,6 +17315,22 @@ impl AstCodeGen {
         }
         for child in &node.children {
             self.collect_unsafe_function_names(child);
+        }
+    }
+
+    /// Collect function names that have a definition in the current translation unit.
+    /// Used to suppress duplicate extern declaration emission.
+    fn collect_defined_function_names(&mut self, node: &ClangNode) {
+        if let ClangNodeKind::FunctionDecl {
+            name, is_definition, ..
+        } = &node.kind
+        {
+            if *is_definition {
+                self.defined_function_names.insert(name.clone());
+            }
+        }
+        for child in &node.children {
+            self.collect_defined_function_names(child);
         }
     }
 
@@ -28124,6 +28261,132 @@ mod tests {
         assert!(
             !code.contains("(dist) as i32 < 256"),
             "ungrouped cast before `<` can be parsed as generic args, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_non_definition_c_function_decl_emits_extern_declaration() {
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![make_node(
+                ClangNodeKind::FunctionDecl {
+                    name: "adler32".to_string(),
+                    mangled_name: "adler32".to_string(),
+                    return_type: CppType::Long { signed: false },
+                    params: vec![
+                        ("adler".to_string(), CppType::Long { signed: false }),
+                        (
+                            "buf".to_string(),
+                            CppType::Pointer {
+                                pointee: Box::new(CppType::Char { signed: false }),
+                                is_const: true,
+                            },
+                        ),
+                        ("len".to_string(), CppType::Int { signed: false }),
+                    ],
+                    is_definition: false,
+                    is_variadic: false,
+                    is_noexcept: false,
+                    is_coroutine: false,
+                    coroutine_info: None,
+                },
+                vec![],
+            )],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("unsafe extern \"C\" {\n    pub fn adler32("),
+            "expected extern declaration for unresolved C function, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_extern_decl_suppressed_when_definition_exists_in_tu() {
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![
+                make_node(
+                    ClangNodeKind::FunctionDecl {
+                        name: "adler32".to_string(),
+                        mangled_name: "adler32".to_string(),
+                        return_type: CppType::Int { signed: true },
+                        params: vec![("x".to_string(), CppType::Int { signed: true })],
+                        is_definition: false,
+                        is_variadic: false,
+                        is_noexcept: false,
+                        is_coroutine: false,
+                        coroutine_info: None,
+                    },
+                    vec![],
+                ),
+                make_node(
+                    ClangNodeKind::FunctionDecl {
+                        name: "adler32".to_string(),
+                        mangled_name: "adler32".to_string(),
+                        return_type: CppType::Int { signed: true },
+                        params: vec![("x".to_string(), CppType::Int { signed: true })],
+                        is_definition: true,
+                        is_variadic: false,
+                        is_noexcept: false,
+                        is_coroutine: false,
+                        coroutine_info: None,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![make_node(
+                            ClangNodeKind::ReturnStmt,
+                            vec![make_node(
+                                ClangNodeKind::DeclRefExpr {
+                                    name: "x".to_string(),
+                                    ty: CppType::Int { signed: true },
+                                    namespace_path: vec![],
+                                },
+                                vec![],
+                            )],
+                        )],
+                    )],
+                ),
+            ],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            !code.contains("unsafe extern \"C\" {\n    pub fn adler32("),
+            "extern declaration should not be emitted when TU defines symbol, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("pub fn adler32(x: i32) -> i32 {"),
+            "definition should still be generated, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_typedef_target_placeholder_generated_for_undefined_named_type() {
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![make_node(
+                ClangNodeKind::TypedefDecl {
+                    name: "static_tree_desc".to_string(),
+                    underlying_type: CppType::Named("static_tree_desc_s".to_string()),
+                },
+                vec![],
+            )],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("pub type static_tree_desc = static_tree_desc_s;"),
+            "typedef alias should be emitted, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("pub struct static_tree_desc_s {"),
+            "missing alias target should get placeholder struct, got:\n{}",
             code
         );
     }
