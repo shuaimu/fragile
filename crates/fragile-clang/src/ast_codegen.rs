@@ -11330,25 +11330,12 @@ impl AstCodeGen {
                     self.writeln("");
                     self.writeln("pub fn FindAttribute(&self, name: *const i8) -> *const XMLAttribute {");
                     self.indent += 1;
-                    self.writeln("let registry = XMLAttribute::__fragile_fallback_registry();");
                     self.writeln("let mut a: *const XMLAttribute = (self._rootAttribute) as *const XMLAttribute;");
-                    self.writeln("while !a.is_null() {");
+                    self.writeln("let mut steps: usize = 0;");
+                    self.writeln("while !a.is_null() && steps < 1024 {");
                     self.indent += 1;
+                    self.writeln("steps += 1;");
                     self.writeln("if (a as usize) < 4096 {");
-                    self.indent += 1;
-                    self.writeln("break;");
-                    self.indent -= 1;
-                    self.writeln("}");
-                    self.writeln("let tracked = if let Ok(registry_guard) = registry.lock() {");
-                    self.indent += 1;
-                    self.writeln("registry_guard.contains(&(a as usize))");
-                    self.indent -= 1;
-                    self.writeln("} else {");
-                    self.indent += 1;
-                    self.writeln("false");
-                    self.indent -= 1;
-                    self.writeln("};");
-                    self.writeln("if !tracked {");
                     self.indent += 1;
                     self.writeln("break;");
                     self.indent -= 1;
@@ -11372,25 +11359,22 @@ impl AstCodeGen {
                     self.writeln("break;");
                     self.indent -= 1;
                     self.writeln("}");
-                    self.writeln("if !next.is_null() {");
-                    self.indent += 1;
-                    self.writeln("let next_tracked = if let Ok(registry_guard) = registry.lock() {");
-                    self.indent += 1;
-                    self.writeln("registry_guard.contains(&(next as usize))");
-                    self.indent -= 1;
-                    self.writeln("} else {");
-                    self.indent += 1;
-                    self.writeln("false");
-                    self.indent -= 1;
-                    self.writeln("};");
-                    self.writeln("if !next_tracked {");
+                    self.writeln("if next.is_null() {");
                     self.indent += 1;
                     self.writeln("break;");
                     self.indent -= 1;
                     self.writeln("}");
+                    self.writeln("if (next as usize) < 4096 {");
+                    self.indent += 1;
+                    self.writeln("break;");
                     self.indent -= 1;
                     self.writeln("}");
                     self.writeln("a = next;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("if steps >= 1024 {");
+                    self.indent += 1;
+                    self.writeln("return std::ptr::null();");
                     self.indent -= 1;
                     self.writeln("}");
                     self.writeln("if name.is_null() {");
@@ -46505,10 +46489,11 @@ mod tests {
             code
         );
         assert!(
-            code.contains("let registry = XMLAttribute::__fragile_fallback_registry();")
-                && code.contains("if !tracked {")
-                && code.contains("if !next_tracked {"),
-            "XMLElement FindAttribute fallback should guard traversal with the tracked fallback-attribute registry, got:\n{}",
+            code.contains("let mut steps: usize = 0;")
+                && code.contains("while !a.is_null() && steps < 1024 {")
+                && code.contains("if steps >= 1024 {")
+                && code.contains("if (next as usize) < 4096 {"),
+            "XMLElement FindAttribute fallback should use bounded pointer-guarded traversal so both parser-owned and fallback-created attribute chains can be queried, got:\n{}",
             code
         );
         assert!(
