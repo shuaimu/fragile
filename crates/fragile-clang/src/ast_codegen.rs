@@ -10090,6 +10090,68 @@ impl AstCodeGen {
         }
     }
 
+    fn resolve_constructor_call_param_types(
+        &self,
+        struct_name: &str,
+        arg_nodes: &[&ClangNode],
+    ) -> Option<Vec<CppType>> {
+        let ctor_signatures = self.constructor_signatures.get(struct_name)?;
+        let arity = arg_nodes.len();
+        let ctor_base = format!("new_{}", arity);
+
+        let mut best_score: Option<usize> = None;
+        let mut best_params: Option<Vec<CppType>> = None;
+        let mut ambiguous = false;
+
+        for (ctor_name, param_types) in ctor_signatures
+            .iter()
+            .filter(|(name, params)| name.starts_with(&ctor_base) && params.len() == arity)
+        {
+            let mut score = 0usize;
+            let mut compatible = true;
+            for (expected, arg_node) in param_types.iter().zip(arg_nodes.iter()) {
+                let Some(param_score) = self.member_call_param_match_score(arg_node, expected) else {
+                    compatible = false;
+                    break;
+                };
+                score += param_score;
+            }
+            if !compatible {
+                continue;
+            }
+
+            match best_score {
+                None => {
+                    best_score = Some(score);
+                    best_params = Some(param_types.clone());
+                    ambiguous = false;
+                }
+                Some(current) if score > current => {
+                    best_score = Some(score);
+                    best_params = Some(param_types.clone());
+                    ambiguous = false;
+                }
+                Some(current) if score == current => {
+                    if ctor_name == &ctor_base {
+                        best_params = Some(param_types.clone());
+                    }
+                    ambiguous = true;
+                }
+                _ => {}
+            }
+        }
+
+        if best_params.is_some() && !ambiguous {
+            return best_params;
+        }
+
+        ctor_signatures
+            .iter()
+            .find(|(name, params)| *name == ctor_base && params.len() == arity)
+            .map(|(_, params)| params.clone())
+            .or(best_params)
+    }
+
     fn is_tinyxml2_utility_to_helper_name(base_method_name: &str) -> bool {
         matches!(
             base_method_name,
@@ -30222,8 +30284,55 @@ impl AstCodeGen {
                             clone_expr(&arg_str)
                         } else {
                             // Regular constructor - convert args and call new_N
-                            let args: Vec<String> =
-                                arg_nodes.iter().map(|c| self.expr_to_string(c)).collect();
+                            let num_args = arg_nodes.len();
+                            let ctor_params = self
+                                .resolve_constructor_call_param_types(&struct_name, &arg_nodes)
+                                .or_else(|| {
+                                    self.constructor_param_types
+                                        .get(&(struct_name.clone(), num_args))
+                                        .cloned()
+                                });
+                            let args: Vec<String> = arg_nodes
+                                .iter()
+                                .enumerate()
+                                .map(|(i, c)| {
+                                    if let Some(ref params) = ctor_params {
+                                        if i < params.len() {
+                                            if let CppType::Reference { is_const, .. } = &params[i]
+                                            {
+                                                let arg_str = self.expr_to_string(c);
+                                                let prefix = if *is_const { "&" } else { "&mut " };
+                                                return format!("{}{}", prefix, arg_str);
+                                            }
+                                            if Self::is_pointer_like_type(&params[i]) {
+                                                let target_rust = params[i].to_rust_type_str();
+                                                let target_is_const =
+                                                    target_rust.starts_with("*const ");
+                                                let arg_str = self.expr_to_string(c);
+                                                if Self::is_nullptr_literal(c)
+                                                    || is_zero_integer_literal_str(&arg_str)
+                                                {
+                                                    return if target_is_const {
+                                                        "std::ptr::null()".to_string()
+                                                    } else {
+                                                        "std::ptr::null_mut()".to_string()
+                                                    };
+                                                }
+                                                let arg_wrapped = if arg_str.starts_with("unsafe { ")
+                                                    || arg_str.contains(" as ")
+                                                    || arg_str.contains(' ')
+                                                {
+                                                    format!("({})", arg_str)
+                                                } else {
+                                                    arg_str
+                                                };
+                                                return format!("{} as {}", arg_wrapped, target_rust);
+                                            }
+                                        }
+                                    }
+                                    self.expr_to_string(c)
+                                })
+                                .collect();
                             let num_args = args.len();
 
                             // Check if the type maps to a pointer, primitive, or non-struct type
@@ -31030,9 +31139,12 @@ impl AstCodeGen {
                         let num_args = arg_nodes.len();
                         // Look up constructor param types for reference handling
                         let ctor_params = self
-                            .constructor_param_types
-                            .get(&(struct_name.clone(), num_args))
-                            .cloned();
+                            .resolve_constructor_call_param_types(&struct_name, &arg_nodes)
+                            .or_else(|| {
+                                self.constructor_param_types
+                                    .get(&(struct_name.clone(), num_args))
+                                    .cloned()
+                            });
                         let args: Vec<String> = arg_nodes
                             .iter()
                             .enumerate()
@@ -31044,6 +31156,30 @@ impl AstCodeGen {
                                             let arg_str = self.expr_to_string(c);
                                             let prefix = if *is_const { "&" } else { "&mut " };
                                             return format!("{}{}", prefix, arg_str);
+                                        }
+                                        if Self::is_pointer_like_type(&params[i]) {
+                                            let target_rust = params[i].to_rust_type_str();
+                                            let target_is_const =
+                                                target_rust.starts_with("*const ");
+                                            let arg_str = self.expr_to_string(c);
+                                            if Self::is_nullptr_literal(c)
+                                                || is_zero_integer_literal_str(&arg_str)
+                                            {
+                                                return if target_is_const {
+                                                    "std::ptr::null()".to_string()
+                                                } else {
+                                                    "std::ptr::null_mut()".to_string()
+                                                };
+                                            }
+                                            let arg_wrapped = if arg_str.starts_with("unsafe { ")
+                                                || arg_str.contains(" as ")
+                                                || arg_str.contains(' ')
+                                            {
+                                                format!("({})", arg_str)
+                                            } else {
+                                                arg_str
+                                            };
+                                            return format!("{} as {}", arg_wrapped, target_rust);
                                         }
                                     }
                                 }
@@ -34147,6 +34283,247 @@ mod tests {
         assert!(
             !code.contains("_node: &node as *const XMLNode"),
             "unexpected double-reference const cast in constructor initializer:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_constructor_pointer_param_casts_conditional_derived_ptr_to_base_ptr() {
+        let xml_node_mut_ptr = CppType::Pointer {
+            pointee: Box::new(CppType::Named("XMLNode".to_string())),
+            is_const: false,
+        };
+        let xml_elem_mut_ptr = CppType::Pointer {
+            pointee: Box::new(CppType::Named("XMLElement".to_string())),
+            is_const: false,
+        };
+        let xml_node_const_ptr = CppType::Pointer {
+            pointee: Box::new(CppType::Named("XMLNode".to_string())),
+            is_const: true,
+        };
+        let xml_elem_const_ptr = CppType::Pointer {
+            pointee: Box::new(CppType::Named("XMLElement".to_string())),
+            is_const: true,
+        };
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![
+                make_node(
+                    ClangNodeKind::RecordDecl {
+                        name: "XMLNode".to_string(),
+                        is_class: true,
+                        is_definition: true,
+                        fields: vec![],
+                    },
+                    vec![],
+                ),
+                make_node(
+                    ClangNodeKind::RecordDecl {
+                        name: "XMLElement".to_string(),
+                        is_class: true,
+                        is_definition: true,
+                        fields: vec![],
+                    },
+                    vec![],
+                ),
+                make_node(
+                    ClangNodeKind::RecordDecl {
+                        name: "XMLHandle".to_string(),
+                        is_class: true,
+                        is_definition: true,
+                        fields: vec![],
+                    },
+                    vec![
+                        make_node(
+                            ClangNodeKind::ConstructorDecl {
+                                class_name: "XMLHandle".to_string(),
+                                params: vec![("node".to_string(), xml_node_mut_ptr.clone())],
+                                is_definition: true,
+                                ctor_kind: ConstructorKind::Other,
+                                access: AccessSpecifier::Public,
+                            },
+                            vec![make_node(ClangNodeKind::CompoundStmt, vec![])],
+                        ),
+                        make_node(
+                            ClangNodeKind::ConstructorDecl {
+                                class_name: "XMLHandle".to_string(),
+                                params: vec![(
+                                    "node".to_string(),
+                                    CppType::Reference {
+                                        referent: Box::new(CppType::Named("XMLNode".to_string())),
+                                        is_const: false,
+                                        is_rvalue: false,
+                                    },
+                                )],
+                                is_definition: true,
+                                ctor_kind: ConstructorKind::Other,
+                                access: AccessSpecifier::Public,
+                            },
+                            vec![make_node(ClangNodeKind::CompoundStmt, vec![])],
+                        ),
+                        make_node(
+                            ClangNodeKind::CXXMethodDecl {
+                                class_name: "XMLHandle".to_string(),
+                                name: "FromElement".to_string(),
+                                return_type: CppType::Named("XMLHandle".to_string()),
+                                params: vec![("elem".to_string(), xml_elem_mut_ptr.clone())],
+                                is_definition: true,
+                                is_static: false,
+                                is_virtual: false,
+                                is_pure_virtual: false,
+                                is_override: false,
+                                is_final: false,
+                                is_const: false,
+                                access: AccessSpecifier::Public,
+                            },
+                            vec![make_node(
+                                ClangNodeKind::CompoundStmt,
+                                vec![make_node(
+                                    ClangNodeKind::ReturnStmt,
+                                    vec![make_node(
+                                        ClangNodeKind::CXXConstructExpr {
+                                            ty: CppType::Named("XMLHandle".to_string()),
+                                        },
+                                        vec![make_node(
+                                            ClangNodeKind::ConditionalOperator {
+                                                ty: xml_elem_mut_ptr.clone(),
+                                            },
+                                            vec![
+                                                make_node(ClangNodeKind::BoolLiteral(true), vec![]),
+                                                make_node(
+                                                    ClangNodeKind::DeclRefExpr {
+                                                        name: "elem".to_string(),
+                                                        ty: xml_elem_mut_ptr.clone(),
+                                                        namespace_path: vec![],
+                                                    },
+                                                    vec![],
+                                                ),
+                                                make_node(ClangNodeKind::NullPtrLiteral, vec![]),
+                                            ],
+                                        )],
+                                    )],
+                                )],
+                            )],
+                        ),
+                    ],
+                ),
+                make_node(
+                    ClangNodeKind::RecordDecl {
+                        name: "XMLConstHandle".to_string(),
+                        is_class: true,
+                        is_definition: true,
+                        fields: vec![],
+                    },
+                    vec![
+                        make_node(
+                            ClangNodeKind::ConstructorDecl {
+                                class_name: "XMLConstHandle".to_string(),
+                                params: vec![("node".to_string(), xml_node_const_ptr.clone())],
+                                is_definition: true,
+                                ctor_kind: ConstructorKind::Other,
+                                access: AccessSpecifier::Public,
+                            },
+                            vec![make_node(ClangNodeKind::CompoundStmt, vec![])],
+                        ),
+                        make_node(
+                            ClangNodeKind::ConstructorDecl {
+                                class_name: "XMLConstHandle".to_string(),
+                                params: vec![(
+                                    "node".to_string(),
+                                    CppType::Reference {
+                                        referent: Box::new(CppType::Named("XMLNode".to_string())),
+                                        is_const: true,
+                                        is_rvalue: false,
+                                    },
+                                )],
+                                is_definition: true,
+                                ctor_kind: ConstructorKind::Other,
+                                access: AccessSpecifier::Public,
+                            },
+                            vec![make_node(ClangNodeKind::CompoundStmt, vec![])],
+                        ),
+                        make_node(
+                            ClangNodeKind::CXXMethodDecl {
+                                class_name: "XMLConstHandle".to_string(),
+                                name: "FromElement".to_string(),
+                                return_type: CppType::Named("XMLConstHandle".to_string()),
+                                params: vec![("elem".to_string(), xml_elem_const_ptr.clone())],
+                                is_definition: true,
+                                is_static: false,
+                                is_virtual: false,
+                                is_pure_virtual: false,
+                                is_override: false,
+                                is_final: false,
+                                is_const: true,
+                                access: AccessSpecifier::Public,
+                            },
+                            vec![make_node(
+                                ClangNodeKind::CompoundStmt,
+                                vec![make_node(
+                                    ClangNodeKind::ReturnStmt,
+                                    vec![make_node(
+                                        ClangNodeKind::CXXConstructExpr {
+                                            ty: CppType::Named("XMLConstHandle".to_string()),
+                                        },
+                                        vec![make_node(
+                                            ClangNodeKind::ConditionalOperator {
+                                                ty: xml_elem_const_ptr.clone(),
+                                            },
+                                            vec![
+                                                make_node(ClangNodeKind::BoolLiteral(true), vec![]),
+                                                make_node(
+                                                    ClangNodeKind::DeclRefExpr {
+                                                        name: "elem".to_string(),
+                                                        ty: xml_elem_const_ptr.clone(),
+                                                        namespace_path: vec![],
+                                                    },
+                                                    vec![],
+                                                ),
+                                                make_node(ClangNodeKind::NullPtrLiteral, vec![]),
+                                            ],
+                                        )],
+                                    )],
+                                )],
+                            )],
+                        ),
+                    ],
+                ),
+            ],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        let mut_call_line = code
+            .lines()
+            .find(|line| line.contains("return XMLHandle::new_1("))
+            .unwrap_or_default();
+        assert!(
+            mut_call_line.contains("as *mut XMLNode"),
+            "mutable handle ctor argument should cast derived pointer expression to base pointer type, got line:\n{}\nfull code:\n{}",
+            mut_call_line,
+            code
+        );
+        assert!(
+            !mut_call_line.contains("XMLHandle::new_1(&if"),
+            "mutable handle ctor call should not borrow pointer conditional into reference overload, got line:\n{}\nfull code:\n{}",
+            mut_call_line,
+            code
+        );
+
+        let const_call_line = code
+            .lines()
+            .find(|line| line.contains("return XMLConstHandle::new_1("))
+            .unwrap_or_default();
+        assert!(
+            const_call_line.contains("as *const XMLNode"),
+            "const handle ctor argument should cast derived pointer expression to base pointer type, got line:\n{}\nfull code:\n{}",
+            const_call_line,
+            code
+        );
+        assert!(
+            !const_call_line.contains("XMLConstHandle::new_1(&if"),
+            "const handle ctor call should not borrow pointer conditional into reference overload, got line:\n{}\nfull code:\n{}",
+            const_call_line,
             code
         );
     }
