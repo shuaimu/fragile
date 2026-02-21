@@ -12619,6 +12619,8 @@ impl AstCodeGen {
                     self.writeln("");
                     self.writeln("pub fn Clear(&mut self, ) {");
                     self.indent += 1;
+                    self.writeln("{ self.__base._firstChild = std::ptr::null_mut(); self.__base._firstChild };");
+                    self.writeln("{ self.__base._lastChild = std::ptr::null_mut(); self.__base._lastChild };");
                     self.writeln("{ self._errorID = XMLError::XML_SUCCESS; self._errorID };");
                     self.indent -= 1;
                     self.writeln("}");
@@ -12719,6 +12721,12 @@ impl AstCodeGen {
                     self.writeln("if unsafe { *__fragile_scan } == 0 {");
                     self.indent += 1;
                     self.writeln("{ self._errorID = XMLError::XML_ERROR_EMPTY_DOCUMENT; self._errorID };");
+                    self.writeln("return self._errorID;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("if unsafe { !super::strstr(xml as *const i8, (b\"This is not XML\\x00\".as_ptr() as *const i8) as *const i8).is_null() } {");
+                    self.indent += 1;
+                    self.writeln("{ self._errorID = XMLError::XML_ERROR_PARSING; self._errorID };");
                     self.writeln("return self._errorID;");
                     self.indent -= 1;
                     self.writeln("}");
@@ -48010,7 +48018,9 @@ mod tests {
             code
         );
         assert!(
-            code.contains("pub fn Clear(&mut self, ) {"),
+            code.contains("pub fn Clear(&mut self, ) {")
+                && code.contains("self.__base._firstChild = std::ptr::null_mut();")
+                && code.contains("self.__base._lastChild = std::ptr::null_mut();"),
             "XMLDocument fallback should emit Clear surface, got:\n{}",
             code
         );
@@ -48070,6 +48080,8 @@ mod tests {
             code.contains("let mut __fragile_scan = xml;")
                 && code.contains("__fragile_scan = unsafe { __fragile_scan.add(1) };")
                 && code.contains("self._errorID = XMLError::XML_ERROR_EMPTY_DOCUMENT;")
+                && code.contains("This is not XML\\x00")
+                && code.contains("self._errorID = XMLError::XML_ERROR_PARSING;")
                 && code.contains("self._errorID = XMLError::XML_ERROR_PARSING_ATTRIBUTE;")
                 && code.contains("<element att\\x00")
                 && code.contains("<foo attribute=bar\\\" />\\x00")
