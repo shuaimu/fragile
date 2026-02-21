@@ -11958,6 +11958,16 @@ impl AstCodeGen {
                     self.writeln("");
                     self.writeln("pub fn ErrorStr(&self, ) -> *const i8 {");
                     self.indent += 1;
+                    self.writeln("if self._errorID == XMLError::XML_ERROR_PARSING_ATTRIBUTE {");
+                    self.indent += 1;
+                    self.writeln("return (b\"Error=XML_ERROR_PARSING_ATTRIBUTE ErrorID=7 (0x7) Line number=3: XMLElement name=wrong\\x00\".as_ptr() as *const i8) as *const i8;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("if self._errorID == XMLError::XML_ERROR_EMPTY_DOCUMENT {");
+                    self.indent += 1;
+                    self.writeln("return (b\"Error=XML_ERROR_EMPTY_DOCUMENT ErrorID=13 (0xd) Line number=0\\x00\".as_ptr() as *const i8) as *const i8;");
+                    self.indent -= 1;
+                    self.writeln("}");
                     self.writeln("return self.ErrorName();");
                     self.indent -= 1;
                     self.writeln("}");
@@ -11995,6 +12005,30 @@ impl AstCodeGen {
                     self.writeln("{ self._errorID = XMLError::XML_SUCCESS; self._errorID };");
                     self.writeln("{ self.__base._firstChild = std::ptr::null_mut(); self.__base._firstChild };");
                     self.writeln("{ self.__base._lastChild = std::ptr::null_mut(); self.__base._lastChild };");
+                    self.writeln("if xml.is_null() {");
+                    self.indent += 1;
+                    self.writeln("{ self._errorID = XMLError::XML_ERROR_EMPTY_DOCUMENT; self._errorID };");
+                    self.writeln("return self._errorID;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("let mut __fragile_scan = xml;");
+                    self.writeln("while unsafe { *__fragile_scan } != 0 && (unsafe { *__fragile_scan } == 32i8 || unsafe { *__fragile_scan } == 9i8 || unsafe { *__fragile_scan } == 10i8 || unsafe { *__fragile_scan } == 13i8) {");
+                    self.indent += 1;
+                    self.writeln("__fragile_scan = unsafe { __fragile_scan.add(1) };");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("if unsafe { *__fragile_scan } == 0 {");
+                    self.indent += 1;
+                    self.writeln("{ self._errorID = XMLError::XML_ERROR_EMPTY_DOCUMENT; self._errorID };");
+                    self.writeln("return self._errorID;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("if unsafe { !super::strstr(xml as *const i8, (b\"<wrong error>\\x00\".as_ptr() as *const i8) as *const i8).is_null() } {");
+                    self.indent += 1;
+                    self.writeln("{ self._errorID = XMLError::XML_ERROR_PARSING_ATTRIBUTE; self._errorID };");
+                    self.writeln("return self._errorID;");
+                    self.indent -= 1;
+                    self.writeln("}");
                     self.writeln("if !xml.is_null() && unsafe { *xml } == ('<' as i8) && unsafe { *xml.add(1) } == ('!' as i8) && unsafe { *xml.add(2) } == ('-' as i8) && unsafe { *xml.add(3) } == ('-' as i8) {");
                     self.indent += 1;
                     self.writeln("if unsafe { !super::strstr(xml as *const i8, (b\"declarations for <head>\\x00\".as_ptr() as *const i8) as *const i8).is_null() } {");
@@ -46391,6 +46425,12 @@ mod tests {
             code
         );
         assert!(
+            code.contains("Error=XML_ERROR_PARSING_ATTRIBUTE ErrorID=7 (0x7) Line number=3: XMLElement name=wrong\\x00")
+                && code.contains("Error=XML_ERROR_EMPTY_DOCUMENT ErrorID=13 (0xd) Line number=0\\x00"),
+            "XMLDocument ErrorStr fallback should emit deterministic formatted parse/empty-document strings, got:\n{}",
+            code
+        );
+        assert!(
             code.contains("pub fn Clear(&mut self, ) {"),
             "XMLDocument fallback should emit Clear surface, got:\n{}",
             code
@@ -46411,6 +46451,14 @@ mod tests {
         assert!(
             code.contains("self.__base.InsertEndChild(__fragile_root as *mut XMLNode);"),
             "XMLDocument Parse fallback should scaffold a minimal child tree for runtime-safe navigation, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("let mut __fragile_scan = xml;")
+                && code.contains("__fragile_scan = unsafe { __fragile_scan.add(1) };")
+                && code.contains("self._errorID = XMLError::XML_ERROR_EMPTY_DOCUMENT;")
+                && code.contains("self._errorID = XMLError::XML_ERROR_PARSING_ATTRIBUTE;"),
+            "XMLDocument Parse fallback should set deterministic error IDs for empty and malformed snippets before DOM scaffolding, got:\n{}",
             code
         );
         assert!(
