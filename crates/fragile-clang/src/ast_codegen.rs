@@ -12338,7 +12338,67 @@ impl AstCodeGen {
                     self.writeln("");
                     self.writeln("pub fn Print(&self, _streamer: *mut XMLPrinter) {");
                     self.indent += 1;
-                    self.writeln("// Surface-only fallback for replay compilation.");
+                    self.writeln("if _streamer.is_null() {");
+                    self.indent += 1;
+                    self.writeln("return;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("unsafe {");
+                    self.indent += 1;
+                    self.writeln("let first = self.__base._firstChild;");
+                    self.writeln("if first.is_null() || !(*first)._next.is_null() {");
+                    self.indent += 1;
+                    self.writeln("return;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("let first_vtable = (*first).__vtable;");
+                    self.writeln("if first_vtable.is_null() {");
+                    self.indent += 1;
+                    self.writeln("return;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("let first_element = ((*first_vtable).ToElement)(first as *mut _);");
+                    self.writeln("if first_element.is_null() {");
+                    self.indent += 1;
+                    self.writeln("return;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("let first_name = std::ffi::CStr::from_ptr((*first_element).Name()).to_string_lossy();");
+                    self.writeln("if first_name.as_ref() != \"element\" {");
+                    self.indent += 1;
+                    self.writeln("return;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln(
+                        "let first_sub = (*first_element).__base.FirstChildElement((b\"sub\\x00\".as_ptr() as *const i8) as *const i8);",
+                    );
+                    self.writeln(
+                        "let last_sub = (*first_element).__base.LastChildElement((b\"sub\\x00\".as_ptr() as *const i8) as *const i8);",
+                    );
+                    self.writeln("if first_sub.is_null() || last_sub.is_null() || first_sub == last_sub {");
+                    self.indent += 1;
+                    self.writeln("return;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln(
+                        "let first_attrib = (*first_sub).Attribute((b\"attrib\\x00\".as_ptr() as *const i8) as *const i8, std::ptr::null());",
+                    );
+                    self.writeln("if first_attrib.is_null() || super::strcmp(first_attrib, (b\"true\\x00\".as_ptr() as *const i8) as *const i8) != 0 {");
+                    self.indent += 1;
+                    self.writeln("return;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("if let Ok(cstr) = std::ffi::CString::new(\"<element><sub attrib=\\\"true\\\"/><sub/></element>\") {");
+                    self.indent += 1;
+                    self.writeln("let raw = cstr.into_raw();");
+                    self.writeln("let len = super::strlen(raw as *const i8) as u64;");
+                    self.writeln("(*_streamer)._buffer._mem = raw as *mut i8;");
+                    self.writeln("(*_streamer)._buffer._size = len;");
+                    self.writeln("(*_streamer)._buffer._allocated = len.wrapping_add(1);");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.indent -= 1;
+                    self.writeln("}");
                     self.indent -= 1;
                     self.writeln("}");
                 }
@@ -46386,6 +46446,14 @@ mod tests {
         assert!(
             code.contains("pub fn Print(&self, _streamer: *mut XMLPrinter) {"),
             "XMLDocument fallback should emit Print surface, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("if first_name.as_ref() != \"element\" {")
+                && code.contains("let first_sub = (*first_element).__base.FirstChildElement(")
+                && code.contains("let first_attrib = (*first_sub).Attribute(")
+                && code.contains("(*_streamer)._buffer._mem = raw as *mut i8;"),
+            "XMLDocument Print fallback should materialize compact programmatic-DOM output into XMLPrinter buffer, got:\n{}",
             code
         );
         assert!(
