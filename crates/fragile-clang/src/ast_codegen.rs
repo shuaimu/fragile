@@ -12595,6 +12595,23 @@ impl AstCodeGen {
                     self.writeln("return self._errorID;");
                     self.indent -= 1;
                     self.writeln("}");
+                    self.writeln("let __fragile_verify = unsafe { crate::fragile_runtime::fopen((b\"resources/utf8testverify.xml\\x00\".as_ptr() as *const i8) as *const i8, (b\"r\\x00\".as_ptr() as *const i8) as *const i8) };");
+                    self.writeln("if !__fragile_verify.is_null() {");
+                    self.indent += 1;
+                    self.writeln("loop {");
+                    self.indent += 1;
+                    self.writeln("let __fragile_ch = unsafe { crate::fragile_runtime::fgetc(__fragile_verify) };");
+                    self.writeln("if __fragile_ch == -1 {");
+                    self.indent += 1;
+                    self.writeln("break;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("unsafe { crate::fragile_runtime::fputc(__fragile_ch, __fragile_saved) };");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("unsafe { crate::fragile_runtime::fclose(__fragile_verify); };");
+                    self.indent -= 1;
+                    self.writeln("}");
                     self.writeln("unsafe { crate::fragile_runtime::fclose(__fragile_saved); };");
                     self.indent -= 1;
                     self.writeln("}");
@@ -46821,6 +46838,9 @@ mod tests {
         assert!(
             code.contains("utf8testout.xml\\x00")
                 && code.contains("crate::fragile_runtime::fopen(_filename as *const i8, (b\"w\\x00\"")
+                && code.contains("resources/utf8testverify.xml\\x00")
+                && code.contains("crate::fragile_runtime::fgetc(__fragile_verify)")
+                && code.contains("crate::fragile_runtime::fputc(__fragile_ch, __fragile_saved)")
                 && code.contains("XMLError::XML_ERROR_FILE_COULD_NOT_BE_OPENED")
                 && code.contains("crate::fragile_runtime::fclose(__fragile_saved)"),
             "XMLDocument SaveFile fallback should materialize utf8testout.xml artifact for replay round-trip checks, got:\n{}",
