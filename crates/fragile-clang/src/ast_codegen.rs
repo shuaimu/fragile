@@ -753,6 +753,10 @@ pub struct AstCodeGen {
     /// Per-class method overload metadata used to resolve member call suffixes.
     /// Key: class name (C++/Rust variants), Value: base method name -> overloads.
     class_method_overloads: HashMap<String, HashMap<String, Vec<MethodOverloadInfo>>>,
+    /// Per-class method declaration parameter metadata used for argument
+    /// normalization when method definitions appear later in TU order.
+    /// Key: class name (C++/Rust variants), Value: base method name -> param lists.
+    class_method_decl_param_types: HashMap<String, HashMap<String, Vec<Vec<CppType>>>>,
     /// Out-of-line class method definitions collected from top-level/namespace scope.
     /// Key: owning class name, Value: method-definition nodes.
     out_of_line_method_defs: HashMap<String, Vec<ClangNode>>,
@@ -911,6 +915,7 @@ impl AstCodeGen {
             module_depth: 0,
             current_struct_methods: HashMap::new(),
             class_method_overloads: HashMap::new(),
+            class_method_decl_param_types: HashMap::new(),
             out_of_line_method_defs: HashMap::new(),
             current_method_is_const: false,
             merged_namespace_children: HashMap::new(),
@@ -2729,6 +2734,7 @@ impl AstCodeGen {
             self.collect_out_of_line_method_defs(ast, false);
             self.collect_anon_union_defs(ast);
             self.collect_missing_union_member_types(ast);
+            self.precollect_class_method_overloads(ast);
         }
         self.compute_virtual_bases();
         self.build_all_vtables();
@@ -8709,6 +8715,52 @@ impl AstCodeGen {
         self.class_method_overloads.insert(rust_key, overloads);
     }
 
+    fn register_class_method_decl_param_types(
+        &mut self,
+        class_name: &str,
+        rust_name: &str,
+        children: &[ClangNode],
+    ) {
+        let mut method_params: HashMap<String, Vec<Vec<CppType>>> = HashMap::new();
+        for child in children {
+            let ClangNodeKind::CXXMethodDecl {
+                name,
+                return_type,
+                params,
+                ..
+            } = &child.kind
+            else {
+                continue;
+            };
+
+            let return_type_str = return_type.to_rust_type_str();
+            if Self::has_unresolved_template_placeholder(&return_type_str)
+                || params
+                    .iter()
+                    .any(|(_, t)| Self::has_unresolved_template_placeholder(&t.to_rust_type_str()))
+                || Self::has_unresolved_template_placeholder(class_name)
+            {
+                continue;
+            }
+
+            let base_method_name = sanitize_identifier(name);
+            if base_method_name.is_empty() {
+                continue;
+            }
+            let param_types: Vec<CppType> = params.iter().map(|(_, ty)| ty.clone()).collect();
+            let entry = method_params.entry(base_method_name).or_default();
+            if !entry.iter().any(|existing| existing == &param_types) {
+                entry.push(param_types);
+            }
+        }
+
+        let class_key = class_name.to_string();
+        let rust_key = rust_name.to_string();
+        self.class_method_decl_param_types
+            .insert(class_key, method_params.clone());
+        self.class_method_decl_param_types.insert(rust_key, method_params);
+    }
+
     fn get_class_method_overloads(
         &self,
         class_name: &str,
@@ -8718,6 +8770,60 @@ impl AstCodeGen {
         self.class_method_overloads
             .get(class_name)
             .or_else(|| self.class_method_overloads.get(&rust_name))
+    }
+
+    fn get_class_method_decl_param_types(
+        &self,
+        class_name: &str,
+    ) -> Option<&HashMap<String, Vec<Vec<CppType>>>> {
+        let rust_name = CppType::Named(class_name.to_string()).to_rust_type_str();
+        self.class_method_decl_param_types
+            .get(class_name)
+            .or_else(|| self.class_method_decl_param_types.get(&rust_name))
+    }
+
+    fn select_class_declared_member_param_types(
+        &self,
+        class_name: &str,
+        base_method_name: &str,
+        arg_count: usize,
+    ) -> Option<Vec<CppType>> {
+        let class_methods = self.get_class_method_decl_param_types(class_name)?;
+        let declared = class_methods.get(base_method_name)?;
+
+        let exact: Vec<&Vec<CppType>> = declared
+            .iter()
+            .filter(|params| params.len() == arg_count)
+            .collect();
+        if !exact.is_empty() {
+            let first = (*exact.first()?).clone();
+            if exact
+                .iter()
+                .all(|params| params.as_slice() == first.as_slice())
+            {
+                return Some(first);
+            }
+            return None;
+        }
+
+        let max_len = declared
+            .iter()
+            .filter(|params| params.len() <= arg_count)
+            .map(|params| params.len())
+            .max()?;
+        let relaxed: Vec<&Vec<CppType>> = declared
+            .iter()
+            .filter(|params| params.len() == max_len)
+            .collect();
+        let first = (*relaxed.first()?).clone();
+        if relaxed
+            .iter()
+            .all(|params| params.as_slice() == first.as_slice())
+        {
+            Some(first)
+        } else {
+            None
+        }
     }
 
     fn select_method_overload_name(
@@ -8817,6 +8923,34 @@ impl AstCodeGen {
         }
     }
 
+    /// Fallback for degraded call-site metadata where a member call carries more
+    /// arguments than any fixed-arity overload (e.g., variadic tail args).
+    /// We select the unique longest fixed-arity overload with arity <= arg_count.
+    fn select_member_param_types_allow_extra_args(
+        &self,
+        class_name: &str,
+        base_method_name: &str,
+        arg_count: usize,
+    ) -> Option<Vec<CppType>> {
+        let class_overloads = self.get_class_method_overloads(class_name)?;
+        let method_overloads = class_overloads.get(base_method_name)?;
+        let max_len = method_overloads
+            .iter()
+            .filter(|entry| entry.param_types.len() <= arg_count)
+            .map(|entry| entry.param_types.len())
+            .max()?;
+        let mut candidates = method_overloads
+            .iter()
+            .filter(|entry| entry.param_types.len() == max_len)
+            .map(|entry| entry.param_types.clone());
+        let first = candidates.next()?;
+        if candidates.all(|entry| entry == first) {
+            Some(first)
+        } else {
+            None
+        }
+    }
+
     fn member_call_prefers_const(&self, member_expr: &ClangNode, func: &str) -> bool {
         if let Some(base) = member_expr.children.first() {
             let base_type = Self::get_original_expr_type(base).or_else(|| Self::get_expr_type(base));
@@ -8870,6 +9004,87 @@ impl AstCodeGen {
         Some(out)
     }
 
+    fn push_member_call_class_candidate(
+        class_candidates: &mut Vec<String>,
+        seen: &mut HashSet<String>,
+        class_name: String,
+    ) {
+        let normalized = Self::normalize_cpp_record_type_name(&class_name);
+        for candidate in [class_name, normalized] {
+            if !candidate.is_empty() && seen.insert(candidate.clone()) {
+                class_candidates.push(candidate);
+            }
+        }
+    }
+
+    fn collect_member_call_base_class_candidates(
+        &self,
+        node: &ClangNode,
+        class_candidates: &mut Vec<String>,
+        seen: &mut HashSet<String>,
+    ) {
+        if let Some(base_class) = Self::extract_class_name(&Self::get_original_expr_type(node))
+            .or_else(|| Self::extract_class_name(&Self::get_expr_type(node)))
+        {
+            Self::push_member_call_class_candidate(class_candidates, seen, base_class);
+        }
+
+        for resolved_ty in [
+            self.resolve_member_declared_field_type(node),
+            self.resolve_member_declaring_class_field_type(node),
+            self.resolve_member_current_class_field_type(node),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if let Some(base_class) = Self::extract_class_name_from_type(&resolved_ty) {
+                Self::push_member_call_class_candidate(class_candidates, seen, base_class);
+            }
+        }
+
+        match &node.kind {
+            ClangNodeKind::ImplicitCastExpr { .. }
+            | ClangNodeKind::CastExpr { .. }
+            | ClangNodeKind::ParenExpr { .. }
+            | ClangNodeKind::Unknown(_)
+            | ClangNodeKind::UnaryOperator {
+                op: UnaryOp::AddrOf | UnaryOp::Deref,
+                ..
+            } => {
+                for child in node
+                    .children
+                    .iter()
+                    .filter(|child| !Self::is_expr_metadata_child(child))
+                {
+                    self.collect_member_call_base_class_candidates(child, class_candidates, seen);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn member_call_class_candidates(
+        &self,
+        member_expr: &ClangNode,
+        declaring_class: Option<&str>,
+    ) -> Vec<String> {
+        let mut class_candidates: Vec<String> = Vec::new();
+        let mut seen = HashSet::new();
+
+        if let Some(class_name) = declaring_class {
+            Self::push_member_call_class_candidate(
+                &mut class_candidates,
+                &mut seen,
+                class_name.to_string(),
+            );
+        }
+        if let Some(base) = member_expr.children.first() {
+            self.collect_member_call_base_class_candidates(base, &mut class_candidates, &mut seen);
+        }
+
+        class_candidates
+    }
+
     fn resolve_member_call_overload_name(
         &self,
         callee: &ClangNode,
@@ -8898,17 +9113,8 @@ impl AstCodeGen {
         } else {
             None
         };
-        let mut class_candidates: Vec<String> = Vec::new();
-        if let Some(class_name) = declaring_class {
-            class_candidates.push(class_name.clone());
-        }
-        if let Some(base) = member_expr.children.first() {
-            if let Some(base_class) = Self::extract_class_name(&Self::get_original_expr_type(base))
-                .or_else(|| Self::extract_class_name(&Self::get_expr_type(base)))
-            {
-                class_candidates.push(base_class);
-            }
-        }
+        let class_candidates =
+            self.member_call_class_candidates(member_expr, declaring_class.as_deref());
 
         for class_name in class_candidates {
             let prefer_const = self.member_call_prefers_const(member_expr, func);
@@ -8962,17 +9168,8 @@ impl AstCodeGen {
         } else {
             None
         };
-        let mut class_candidates: Vec<String> = Vec::new();
-        if let Some(class_name) = declaring_class {
-            class_candidates.push(class_name.clone());
-        }
-        if let Some(base) = member_expr.children.first() {
-            if let Some(base_class) = Self::extract_class_name(&Self::get_original_expr_type(base))
-                .or_else(|| Self::extract_class_name(&Self::get_expr_type(base)))
-            {
-                class_candidates.push(base_class);
-            }
-        }
+        let class_candidates =
+            self.member_call_class_candidates(member_expr, declaring_class.as_deref());
 
         for class_name in class_candidates {
             let prefer_const = self.member_call_prefers_const(member_expr, func);
@@ -8992,9 +9189,69 @@ impl AstCodeGen {
             ) {
                 return Some(common_params);
             }
+            if let Some(relaxed) = self.select_member_param_types_allow_extra_args(
+                &class_name,
+                &base_method_name,
+                arg_count,
+            ) {
+                return Some(relaxed);
+            }
+            if let Some(from_decls) = self.select_class_declared_member_param_types(
+                &class_name,
+                &base_method_name,
+                arg_count,
+            ) {
+                return Some(from_decls);
+            }
         }
 
         None
+    }
+
+    /// Fallback member parameter recovery from lowered callee text when AST
+    /// metadata is too degraded to recover a member expression.
+    fn resolve_member_call_param_types_from_func_name(
+        &self,
+        func: &str,
+        arg_count: usize,
+    ) -> Option<Vec<CppType>> {
+        let inner = Self::strip_outer_unsafe_block(func).unwrap_or(func).trim();
+        let method_leaf = inner.rsplit('.').next()?;
+        if method_leaf == inner {
+            return None;
+        }
+        let base_method_name = sanitize_identifier(method_leaf);
+        if base_method_name.is_empty() {
+            return None;
+        }
+
+        let mut best_len: Option<usize> = None;
+        let mut best_candidates: Vec<Vec<CppType>> = Vec::new();
+        for methods in self.class_method_overloads.values() {
+            let Some(overloads) = methods.get(&base_method_name) else {
+                continue;
+            };
+            for overload in overloads {
+                let len = overload.param_types.len();
+                if len > arg_count {
+                    continue;
+                }
+                if best_len.is_none_or(|m| len > m) {
+                    best_len = Some(len);
+                    best_candidates.clear();
+                    best_candidates.push(overload.param_types.clone());
+                } else if best_len == Some(len) {
+                    best_candidates.push(overload.param_types.clone());
+                }
+            }
+        }
+
+        let first = best_candidates.first()?.clone();
+        if best_candidates.iter().all(|types| *types == first) {
+            Some(first)
+        } else {
+            None
+        }
     }
 
     /// Resolve unqualified function calls inside class methods that refer to
@@ -15955,6 +16212,7 @@ impl AstCodeGen {
         }
 
         self.register_class_method_overloads(name, &rust_name, &methods);
+        self.register_class_method_decl_param_types(name, &rust_name, &methods);
 
         // Check if we have bit fields that need accessor methods
         let has_bit_fields = self.bit_field_groups.contains_key(name);
@@ -19453,6 +19711,20 @@ impl AstCodeGen {
         }
         for child in &node.children {
             self.collect_unsafe_function_names(child);
+        }
+    }
+
+    /// Pre-register method overload metadata for all class records before body generation.
+    /// This allows member-call argument normalization to resolve signatures even when a
+    /// call site appears before the class definition in translation-unit order.
+    fn precollect_class_method_overloads(&mut self, node: &ClangNode) {
+        if let ClangNodeKind::RecordDecl { name, .. } = &node.kind {
+            let rust_name = CppType::Named(name.clone()).to_rust_type_str();
+            self.register_class_method_overloads(name, &rust_name, &node.children);
+            self.register_class_method_decl_param_types(name, &rust_name, &node.children);
+        }
+        for child in &node.children {
+            self.precollect_class_method_overloads(child);
         }
     }
 
@@ -28130,7 +28402,17 @@ impl AstCodeGen {
                             // function types (which can degrade to integer placeholders).
                             param_types = Some(member_param_types);
                         }
-                        let args: Vec<String> = node.children[1..]
+                        if param_types.is_none() && Self::is_member_reference(callee) {
+                            if let Some(from_func_name) = self
+                                .resolve_member_call_param_types_from_func_name(
+                                    &func,
+                                    node.children.len().saturating_sub(1),
+                                )
+                            {
+                                param_types = Some(from_func_name);
+                            }
+                        }
+                        let mut args: Vec<String> = node.children[1..]
                             .iter()
                             .enumerate()
                             .map(|(i, c)| {
@@ -28418,6 +28700,13 @@ impl AstCodeGen {
                                 }
                             })
                             .collect();
+                        if Self::is_member_reference(callee) {
+                            if let Some(ref types) = param_types {
+                                if args.len() > types.len() {
+                                    args.truncate(types.len());
+                                }
+                            }
+                        }
                         if let Some((rust_code, needs_unsafe)) =
                             Self::map_builtin_function(&func, &args)
                         {
@@ -28636,7 +28925,14 @@ impl AstCodeGen {
                         // function type metadata.
                         param_types = Some(member_param_types);
                     }
-
+                    if param_types.is_none() && Self::is_member_reference(&node.children[0]) {
+                        if let Some(from_func_name) = self.resolve_member_call_param_types_from_func_name(
+                            &func,
+                            node.children.len().saturating_sub(1),
+                        ) {
+                            param_types = Some(from_func_name);
+                        }
+                    }
                     let mut args: Vec<String> = node.children[1..]
                         .iter()
                         .enumerate()
@@ -29012,6 +29308,13 @@ impl AstCodeGen {
                             }
                         })
                         .collect();
+                    if Self::is_member_reference(&node.children[0]) {
+                        if let Some(ref types) = param_types {
+                            if args.len() > types.len() {
+                                args.truncate(types.len());
+                            }
+                        }
+                    }
 
                     // Check if this is a compiler builtin function call
                     if let Some((rust_code, needs_unsafe)) =
@@ -32079,6 +32382,390 @@ mod tests {
         assert!(
             !code.contains("return (doc).clone();"),
             "missing one-arg ctor-like call fallback should not clone source argument into target type, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_member_call_enum_addr_of_and_extra_tail_args_are_normalized() {
+        let cstr_ty = CppType::Pointer {
+            pointee: Box::new(CppType::Char { signed: true }),
+            is_const: true,
+        };
+        let xml_doc_ptr = CppType::Pointer {
+            pointee: Box::new(CppType::Named("XMLDocument".to_string())),
+            is_const: false,
+        };
+
+        let set_error_callee = make_node(
+            ClangNodeKind::MemberExpr {
+                member_name: "SetError".to_string(),
+                is_arrow: false,
+                ty: CppType::Function {
+                    return_type: Box::new(CppType::Void),
+                    params: vec![CppType::Named("XMLError".to_string()), CppType::Int { signed: true }, cstr_ty.clone()],
+                    is_variadic: false,
+                },
+                declaring_class: Some("XMLDocument".to_string()),
+                is_static: false,
+            },
+            vec![make_node(
+                ClangNodeKind::CXXThisExpr { ty: xml_doc_ptr },
+                vec![],
+            )],
+        );
+
+        let set_error_call = make_node(
+            ClangNodeKind::CallExpr {
+                ty: CppType::Void,
+                template_instantiation: None,
+            },
+            vec![
+                set_error_callee,
+                make_node(
+                    ClangNodeKind::UnaryOperator {
+                        op: UnaryOp::AddrOf,
+                        ty: CppType::Pointer {
+                            pointee: Box::new(CppType::Named("XMLError".to_string())),
+                            is_const: true,
+                        },
+                    },
+                    vec![make_node(
+                        ClangNodeKind::DeclRefExpr {
+                            name: "XML_ERROR_PARSING".to_string(),
+                            ty: CppType::Named("XMLError".to_string()),
+                            namespace_path: vec![],
+                        },
+                        vec![],
+                    )],
+                ),
+                make_node(
+                    ClangNodeKind::IntegerLiteral {
+                        value: 7,
+                        cpp_type: Some(CppType::Int { signed: true }),
+                    },
+                    vec![],
+                ),
+                make_node(
+                    ClangNodeKind::DeclRefExpr {
+                        name: "fmt".to_string(),
+                        ty: cstr_ty.clone(),
+                        namespace_path: vec![],
+                    },
+                    vec![],
+                ),
+                make_node(
+                    ClangNodeKind::DeclRefExpr {
+                        name: "detail".to_string(),
+                        ty: cstr_ty.clone(),
+                        namespace_path: vec![],
+                    },
+                    vec![],
+                ),
+            ],
+        );
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![
+                make_node(
+                    ClangNodeKind::EnumDecl {
+                        name: "XMLError".to_string(),
+                        is_scoped: false,
+                        underlying_type: CppType::Int { signed: true },
+                    },
+                    vec![make_node(
+                        ClangNodeKind::EnumConstantDecl {
+                            name: "XML_ERROR_PARSING".to_string(),
+                            value: Some(15),
+                        },
+                        vec![],
+                    )],
+                ),
+                make_node(
+                    ClangNodeKind::RecordDecl {
+                        name: "XMLDocument".to_string(),
+                        is_class: true,
+                        is_definition: true,
+                        fields: vec![],
+                    },
+                    vec![
+                        make_node(
+                            ClangNodeKind::CXXMethodDecl {
+                                class_name: "XMLDocument".to_string(),
+                                name: "SetError".to_string(),
+                                return_type: CppType::Void,
+                                params: vec![
+                                    ("error".to_string(), CppType::Named("XMLError".to_string())),
+                                    ("lineNum".to_string(), CppType::Int { signed: true }),
+                                    ("format".to_string(), cstr_ty.clone()),
+                                ],
+                                is_definition: true,
+                                is_static: false,
+                                is_virtual: false,
+                                is_pure_virtual: false,
+                                is_override: false,
+                                is_final: false,
+                                is_const: false,
+                                access: AccessSpecifier::Public,
+                            },
+                            vec![make_node(ClangNodeKind::CompoundStmt, vec![])],
+                        ),
+                        make_node(
+                            ClangNodeKind::CXXMethodDecl {
+                                class_name: "XMLDocument".to_string(),
+                                name: "Report".to_string(),
+                                return_type: CppType::Void,
+                                params: vec![
+                                    ("fmt".to_string(), cstr_ty.clone()),
+                                    ("detail".to_string(), cstr_ty.clone()),
+                                ],
+                                is_definition: true,
+                                is_static: false,
+                                is_virtual: false,
+                                is_pure_virtual: false,
+                                is_override: false,
+                                is_final: false,
+                                is_const: false,
+                                access: AccessSpecifier::Public,
+                            },
+                            vec![make_node(
+                                ClangNodeKind::CompoundStmt,
+                                vec![make_node(ClangNodeKind::ReturnStmt, vec![set_error_call])],
+                            )],
+                        ),
+                    ],
+                ),
+            ],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("SetError(XMLError::XML_ERROR_PARSING"),
+            "enum address-of argument should normalize to by-value enum variant, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("SetError(&XMLError::XML_ERROR_PARSING"),
+            "enum by-value parameter should not keep borrowed enum argument, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("SetError(XMLError::XML_ERROR_PARSING, 7, fmt, detail")
+                && !code.contains(
+                    "SetError(XMLError::XML_ERROR_PARSING, 7, fmt as *const i8, detail"
+                ),
+            "extra call-site tail args should be dropped for fixed-arity member method lowering, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_member_call_enum_addr_of_and_extra_tail_args_are_normalized_for_pointer_field_receiver() {
+        let cstr_ty = CppType::Pointer {
+            pointee: Box::new(CppType::Char { signed: true }),
+            is_const: true,
+        };
+        let xml_doc_ptr = CppType::Pointer {
+            pointee: Box::new(CppType::Named("XMLDocument".to_string())),
+            is_const: false,
+        };
+        let xml_node_ptr = CppType::Pointer {
+            pointee: Box::new(CppType::Named("XMLNode".to_string())),
+            is_const: false,
+        };
+
+        let set_error_callee = make_node(
+            ClangNodeKind::MemberExpr {
+                member_name: "SetError".to_string(),
+                is_arrow: false,
+                ty: CppType::Named("<bound member function type>".to_string()),
+                declaring_class: None,
+                is_static: false,
+            },
+            vec![make_node(
+                ClangNodeKind::UnaryOperator {
+                    op: UnaryOp::Deref,
+                    ty: CppType::Named("XMLDocument".to_string()),
+                },
+                vec![make_node(
+                    ClangNodeKind::MemberExpr {
+                        member_name: "_document".to_string(),
+                        is_arrow: false,
+                        ty: xml_doc_ptr.clone(),
+                        declaring_class: Some("XMLNode".to_string()),
+                        is_static: false,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CXXThisExpr {
+                            ty: xml_node_ptr.clone(),
+                        },
+                        vec![],
+                    )],
+                )],
+            )],
+        );
+
+        let set_error_call = make_node(
+            ClangNodeKind::CallExpr {
+                ty: CppType::Void,
+                template_instantiation: None,
+            },
+            vec![
+                set_error_callee,
+                make_node(
+                    ClangNodeKind::UnaryOperator {
+                        op: UnaryOp::AddrOf,
+                        ty: CppType::Pointer {
+                            pointee: Box::new(CppType::Named("XMLError".to_string())),
+                            is_const: true,
+                        },
+                    },
+                    vec![make_node(
+                        ClangNodeKind::DeclRefExpr {
+                            name: "XML_ERROR_PARSING_DECLARATION".to_string(),
+                            ty: CppType::Named("XMLError".to_string()),
+                            namespace_path: vec![],
+                        },
+                        vec![],
+                    )],
+                ),
+                make_node(
+                    ClangNodeKind::IntegerLiteral {
+                        value: 7,
+                        cpp_type: Some(CppType::Int { signed: true }),
+                    },
+                    vec![],
+                ),
+                make_node(
+                    ClangNodeKind::DeclRefExpr {
+                        name: "fmt".to_string(),
+                        ty: cstr_ty.clone(),
+                        namespace_path: vec![],
+                    },
+                    vec![],
+                ),
+                make_node(
+                    ClangNodeKind::DeclRefExpr {
+                        name: "detail".to_string(),
+                        ty: cstr_ty.clone(),
+                        namespace_path: vec![],
+                    },
+                    vec![],
+                ),
+            ],
+        );
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![
+                make_node(
+                    ClangNodeKind::EnumDecl {
+                        name: "XMLError".to_string(),
+                        is_scoped: false,
+                        underlying_type: CppType::Int { signed: true },
+                    },
+                    vec![make_node(
+                        ClangNodeKind::EnumConstantDecl {
+                            name: "XML_ERROR_PARSING_DECLARATION".to_string(),
+                            value: Some(16),
+                        },
+                        vec![],
+                    )],
+                ),
+                make_node(
+                    ClangNodeKind::RecordDecl {
+                        name: "XMLDocument".to_string(),
+                        is_class: true,
+                        is_definition: true,
+                        fields: vec![],
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CXXMethodDecl {
+                            class_name: "XMLDocument".to_string(),
+                            name: "SetError".to_string(),
+                            return_type: CppType::Void,
+                            params: vec![
+                                ("error".to_string(), CppType::Named("XMLError".to_string())),
+                                ("lineNum".to_string(), CppType::Int { signed: true }),
+                                ("format".to_string(), cstr_ty.clone()),
+                            ],
+                            is_definition: true,
+                            is_static: false,
+                            is_virtual: false,
+                            is_pure_virtual: false,
+                            is_override: false,
+                            is_final: false,
+                            is_const: false,
+                            access: AccessSpecifier::Public,
+                        },
+                        vec![make_node(ClangNodeKind::CompoundStmt, vec![])],
+                    )],
+                ),
+                make_node(
+                    ClangNodeKind::RecordDecl {
+                        name: "XMLNode".to_string(),
+                        is_class: true,
+                        is_definition: true,
+                        fields: vec![],
+                    },
+                    vec![
+                        make_node(
+                            ClangNodeKind::FieldDecl {
+                                name: "_document".to_string(),
+                                ty: xml_doc_ptr.clone(),
+                                access: AccessSpecifier::Protected,
+                                is_static: false,
+                                bit_field_width: None,
+                            },
+                            vec![],
+                        ),
+                        make_node(
+                            ClangNodeKind::CXXMethodDecl {
+                                class_name: "XMLNode".to_string(),
+                                name: "Report".to_string(),
+                                return_type: CppType::Void,
+                                params: vec![
+                                    ("fmt".to_string(), cstr_ty.clone()),
+                                    ("detail".to_string(), cstr_ty.clone()),
+                                ],
+                                is_definition: true,
+                                is_static: false,
+                                is_virtual: false,
+                                is_pure_virtual: false,
+                                is_override: false,
+                                is_final: false,
+                                is_const: false,
+                                access: AccessSpecifier::Public,
+                            },
+                            vec![make_node(
+                                ClangNodeKind::CompoundStmt,
+                                vec![make_node(ClangNodeKind::ExprStmt, vec![set_error_call])],
+                            )],
+                        ),
+                    ],
+                ),
+            ],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("SetError(XMLError::XML_ERROR_PARSING_DECLARATION"),
+            "enum address-of argument on pointer-field receiver should normalize to by-value enum variant, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("SetError(&XMLError::XML_ERROR_PARSING_DECLARATION"),
+            "enum by-value parameter on pointer-field receiver should not keep borrowed enum argument, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains(
+                "SetError(XMLError::XML_ERROR_PARSING_DECLARATION, 7, fmt, detail"
+            ) && !code.contains(
+                "SetError(XMLError::XML_ERROR_PARSING_DECLARATION, 7, fmt as *const i8, detail"
+            ),
+            "extra call-site tail args should be dropped for fixed-arity pointer-field member call lowering, got:\n{}",
             code
         );
     }
