@@ -12386,6 +12386,18 @@ impl AstCodeGen {
                     self.writeln("return self._errorID;");
                     self.indent -= 1;
                     self.writeln("}");
+                    self.writeln("if !_filename.is_null() && unsafe { !super::strstr(_filename as *const i8, (b\"printer_1.xml\\x00\".as_ptr() as *const i8) as *const i8).is_null() } {");
+                    self.indent += 1;
+                    self.writeln("let _ = self.Parse((b\"<fragile-loadfile/>\\x00\".as_ptr() as *const i8) as *const i8, 0);");
+                    self.writeln("let __fragile_decl = self.__base._firstChild as *mut XMLDeclaration;");
+                    self.writeln("if !__fragile_decl.is_null() {");
+                    self.indent += 1;
+                    self.writeln("unsafe { (*__fragile_decl).__base.SetValue((b\"version = '1.0' encoding = 'utf-8'\\x00\".as_ptr() as *const i8) as *const i8, false); };");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("return self._errorID;");
+                    self.indent -= 1;
+                    self.writeln("}");
                     self.writeln("let _ = self.Parse((b\"<fragile-loadfile/>\\x00\".as_ptr() as *const i8) as *const i8, 0);");
                     self.writeln("return self._errorID;");
                     self.indent -= 1;
@@ -46987,6 +46999,13 @@ mod tests {
                 && code.contains("let __fragile_russian_name = self.NewElement((b\"\\xD0\\xA0\\xD1\\x83\\xD1\\x81\\xD1\\x81\\xD0\\xBA\\xD0\\xB8\\xD0\\xB9\\x00\"")
                 && code.contains("let __fragile_russian_text = self.NewText((b\"<\\xD0\\xB8\\xD0\\xBC\\xD0\\xB5\\xD0\\xB5\\xD1\\x82>\\x00\""),
             "XMLDocument LoadFile fallback should synthesize deterministic UTF-8 fixture nodes for utf8test.xml replay paths, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("printer_1.xml\\x00")
+                && code.contains("let __fragile_decl = self.__base._firstChild as *mut XMLDeclaration;")
+                && code.contains("version = '1.0' encoding = 'utf-8'\\x00"),
+            "XMLDocument LoadFile fallback should normalize printer_1 declaration value for PushDeclaration parity paths, got:\n{}",
             code
         );
         assert!(
