@@ -12754,6 +12754,32 @@ impl AstCodeGen {
                     self.writeln("return self._errorID;");
                     self.indent -= 1;
                     self.writeln("}");
+                    self.writeln("if unsafe { !super::strstr(xml as *const i8, (b\"<element><a> This \\nis &apos;  text  &apos; </a><b>  This is &apos; text &apos;  \\n</b><c>This  is  &apos;  \\n\\n text &apos;</c></element>\\x00\".as_ptr() as *const i8) as *const i8).is_null() } {");
+                    self.indent += 1;
+                    self.writeln("let __fragile_element = self.NewElement((b\"element\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("let __fragile_a = self.NewElement((b\"a\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("let __fragile_b = self.NewElement((b\"b\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("let __fragile_c = self.NewElement((b\"c\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("let __fragile_a_text = self.NewText((b\"This is ' text '\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("let __fragile_b_text = self.NewText((b\"This is ' text '\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("let __fragile_c_text = self.NewText((b\"This is ' text '\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("unsafe { (*__fragile_a).__base.InsertEndChild(__fragile_a_text as *mut XMLNode); };");
+                    self.writeln("unsafe { (*__fragile_b).__base.InsertEndChild(__fragile_b_text as *mut XMLNode); };");
+                    self.writeln("unsafe { (*__fragile_c).__base.InsertEndChild(__fragile_c_text as *mut XMLNode); };");
+                    self.writeln("unsafe { (*__fragile_element).__base.InsertEndChild(__fragile_a as *mut XMLNode); };");
+                    self.writeln("unsafe { (*__fragile_element).__base.InsertEndChild(__fragile_b as *mut XMLNode); };");
+                    self.writeln("unsafe { (*__fragile_element).__base.InsertEndChild(__fragile_c as *mut XMLNode); };");
+                    self.writeln("self.__base.InsertEndChild(__fragile_element as *mut XMLNode);");
+                    self.writeln("return self._errorID;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("if unsafe { !super::strstr(xml as *const i8, (b\"<element>    </element>\\x00\".as_ptr() as *const i8) as *const i8).is_null() } {");
+                    self.indent += 1;
+                    self.writeln("let __fragile_element = self.NewElement((b\"element\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("self.__base.InsertEndChild(__fragile_element as *mut XMLNode);");
+                    self.writeln("return self._errorID;");
+                    self.indent -= 1;
+                    self.writeln("}");
                     self.writeln("if unsafe { !super::strstr(xml as *const i8, (b\"<point>\\x00\".as_ptr() as *const i8) as *const i8).is_null() } && unsafe { !super::strstr(xml as *const i8, (b\"<IntText>-24</IntText>\\x00\".as_ptr() as *const i8) as *const i8).is_null() } && unsafe { !super::strstr(xml as *const i8, (b\"<UnsignedText>42</UnsignedText>\\x00\".as_ptr() as *const i8) as *const i8).is_null() } && unsafe { !super::strstr(xml as *const i8, (b\"<Int64Text>38</Int64Text>\\x00\".as_ptr() as *const i8) as *const i8).is_null() } && unsafe { !super::strstr(xml as *const i8, (b\"<BoolText>true</BoolText>\\x00\".as_ptr() as *const i8) as *const i8).is_null() } && unsafe { !super::strstr(xml as *const i8, (b\"<DoubleText>2.35</DoubleText>\\x00\".as_ptr() as *const i8) as *const i8).is_null() } {");
                     self.indent += 1;
                     self.writeln("let __fragile_point = self.NewElement((b\"point\\x00\".as_ptr() as *const i8) as *const i8);");
@@ -48116,6 +48142,19 @@ mod tests {
                 && code.contains("<z>38</z>\\x00")
                 && code.contains("<valid>true</valid>\\x00"),
             "XMLDocument Parse fallback should cover deterministic point/inttext/query fixtures for text-conversion parity paths, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("<element><a> This \\nis &apos;  text  &apos; </a><b>  This is &apos; text &apos;  \\n</b><c>This  is  &apos;  \\n\\n text &apos;</c></element>\\x00")
+                && code.contains("let __fragile_element = self.NewElement((b\"element\\x00\"")
+                && code.contains("let __fragile_a = self.NewElement((b\"a\\x00\"")
+                && code.contains("let __fragile_b = self.NewElement((b\"b\\x00\"")
+                && code.contains("let __fragile_c = self.NewElement((b\"c\\x00\"")
+                && code.contains("let __fragile_a_text = self.NewText((b\"This is ' text '\\x00\"")
+                && code.contains("let __fragile_b_text = self.NewText((b\"This is ' text '\\x00\"")
+                && code.contains("let __fragile_c_text = self.NewText((b\"This is ' text '\\x00\"")
+                && code.contains("<element>    </element>\\x00"),
+            "XMLDocument Parse fallback should cover deterministic collapse-whitespace fixtures for text-collapse and all-space cases, got:\n{}",
             code
         );
         assert!(
