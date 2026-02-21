@@ -22475,6 +22475,12 @@ impl AstCodeGen {
                             if let Some(ptr_expr) = Self::get_deref_pointer(&child.children[0]) {
                                 return Some(self.expr_to_string(ptr_expr));
                             }
+                            // Some destructor call-sites lower as dot-member calls on pointer-typed
+                            // expressions (instead of explicit `*ptr`). Preserve pointer semantics so
+                            // `drop_in_place` receives `*mut T` rather than `&mut *mut T`.
+                            if self.expr_is_pointer_like(&child.children[0]) {
+                                return Some(self.expr_to_string(&child.children[0]));
+                            }
                             // Otherwise, need to take address
                             let obj_expr = self.expr_to_string(&child.children[0]);
                             return Some(format!("&mut {}", obj_expr));
@@ -22509,12 +22515,25 @@ impl AstCodeGen {
                     if let Some(ptr_expr) = Self::get_deref_pointer(&node.children[0]) {
                         return Some(self.expr_to_string(ptr_expr));
                     }
+                    if self.expr_is_pointer_like(&node.children[0]) {
+                        return Some(self.expr_to_string(&node.children[0]));
+                    }
                     let obj_expr = self.expr_to_string(&node.children[0]);
                     return Some(format!("&mut {}", obj_expr));
                 }
             }
         }
         None
+    }
+
+    fn expr_is_pointer_like(&self, node: &ClangNode) -> bool {
+        match Self::get_original_expr_type(node).or_else(|| Self::get_expr_type(node)) {
+            Some(CppType::Pointer { .. }) => true,
+            Some(CppType::Reference { referent, .. }) => {
+                matches!(referent.as_ref(), CppType::Pointer { .. })
+            }
+            _ => false,
+        }
     }
 
     /// Check if a node is a dereference of a pointer (like *ptr or (*ptr)).
@@ -45309,6 +45328,75 @@ mod tests {
                 "pub fn vsnprintf(_s: *mut i8, _n: u64, _fmt: *const i8, _args: [std::ffi::VaList; 1]) -> i32 { 0 }"
             ),
             "unexpected hardcoded vsnprintf zero-return stub remained in output:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_explicit_destructor_on_pointer_typed_dot_receiver_uses_pointer_drop_in_place() {
+        let node_ptr_ty = CppType::Pointer {
+            pointee: Box::new(CppType::Named("XMLNode".to_string())),
+            is_const: false,
+        };
+        let destructor_call = make_node(
+            ClangNodeKind::CallExpr {
+                ty: CppType::Void,
+                template_instantiation: None,
+            },
+            vec![make_node(
+                ClangNodeKind::MemberExpr {
+                    member_name: "~XMLNode".to_string(),
+                    is_arrow: false,
+                    ty: CppType::Function {
+                        return_type: Box::new(CppType::Void),
+                        params: vec![],
+                        is_variadic: false,
+                    },
+                    declaring_class: Some("XMLNode".to_string()),
+                    is_static: false,
+                },
+                vec![make_node(
+                    ClangNodeKind::DeclRefExpr {
+                        name: "node".to_string(),
+                        ty: node_ptr_ty.clone(),
+                        namespace_path: vec![],
+                    },
+                    vec![],
+                )],
+            )],
+        );
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![make_node(
+                ClangNodeKind::FunctionDecl {
+                    name: "destroy_node".to_string(),
+                    mangled_name: "destroy_node".to_string(),
+                    is_static: false,
+                    return_type: CppType::Void,
+                    params: vec![("node".to_string(), node_ptr_ty)],
+                    is_definition: true,
+                    is_variadic: false,
+                    is_noexcept: false,
+                    is_coroutine: false,
+                    coroutine_info: None,
+                },
+                vec![make_node(
+                    ClangNodeKind::CompoundStmt,
+                    vec![make_node(ClangNodeKind::ExprStmt, vec![destructor_call])],
+                )],
+            )],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("std::ptr::drop_in_place(node)"),
+            "expected pointer-typed destructor call to drop pointee via pointer value, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("std::ptr::drop_in_place(&mut node)"),
+            "unexpected mutable reference to by-value pointer parameter in destructor lowering:\n{}",
             code
         );
     }
