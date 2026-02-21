@@ -26961,6 +26961,69 @@ impl AstCodeGen {
         )
     }
 
+    fn try_emit_xmlnode_navigation_wrapper_body(
+        &mut self,
+        struct_name: &str,
+        method_name: &str,
+        params: &[(String, CppType)],
+        return_type: &CppType,
+        is_static: bool,
+        is_const: bool,
+    ) -> bool {
+        if is_static || is_const {
+            return false;
+        }
+        let class_unqualified = Self::unqualified_cpp_name(struct_name);
+        if class_unqualified != "XMLNode" && !struct_name.ends_with("XMLNode") {
+            return false;
+        }
+        if params.len() != 1 {
+            return false;
+        }
+        let return_type_str = return_type.to_rust_type_str();
+        if return_type_str != "*mut XMLElement" && !return_type_str.ends_with("XMLElement") {
+            return false;
+        }
+        let name_param = sanitize_identifier(&params[0].0);
+        let param_ty = params[0].1.to_rust_type_str();
+        if param_ty != "*const i8" {
+            return false;
+        }
+
+        let (start_expr, step_field) = match method_name {
+            "FirstChildElement" => ("self._firstChild", "_next"),
+            "LastChildElement" => ("self._lastChild", "_prev"),
+            "NextSiblingElement" => ("self._next", "_next"),
+            "PreviousSiblingElement" => ("self._prev", "_prev"),
+            _ => return false,
+        };
+
+        self.writeln(&format!("let mut __fragile_node = {};", start_expr));
+        self.writeln("while !__fragile_node.is_null() {");
+        self.indent += 1;
+        self.writeln("let __fragile_element = unsafe { (*__fragile_node).ToElement() };");
+        self.writeln("if !__fragile_element.is_null() {");
+        self.indent += 1;
+        self.writeln(&format!(
+            "if {}.is_null() || XMLUtil::StringEqual(unsafe {{ (*__fragile_element).Name() }} as *const i8, {} as *const i8, 2147483647) {{",
+            name_param, name_param
+        ));
+        self.indent += 1;
+        self.writeln("return __fragile_element;");
+        self.indent -= 1;
+        self.writeln("}");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln(&format!(
+            "__fragile_node = unsafe {{ (*__fragile_node).{} }};",
+            step_field
+        ));
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("return std::ptr::null_mut();");
+        true
+    }
+
     /// Generate a method or constructor.
     fn generate_method(&mut self, node: &ClangNode, struct_name: &str) {
         // Skip methods/constructors for types whose generated code always gets rolled back
@@ -27224,9 +27287,20 @@ impl AstCodeGen {
                 }
 
                 // Find body
-                for child in &node.children {
-                    if let ClangNodeKind::CompoundStmt = &child.kind {
-                        self.generate_block_contents(&child.children, return_type);
+                let emitted_xmlnode_navigation_wrapper = self
+                    .try_emit_xmlnode_navigation_wrapper_body(
+                        struct_name,
+                        name,
+                        params,
+                        return_type,
+                        *is_static,
+                        *is_const,
+                    );
+                if !emitted_xmlnode_navigation_wrapper {
+                    for child in &node.children {
+                        if let ClangNodeKind::CompoundStmt = &child.kind {
+                            self.generate_block_contents(&child.children, return_type);
+                        }
                     }
                 }
 
@@ -39168,6 +39242,125 @@ mod tests {
         assert!(
             !code.contains("(*self._node).FirstChildElement(name as *const i8)"),
             "const pointer receiver mutable-only member call should avoid direct mutable call through *const base, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_xmlnode_mut_navigation_wrappers_emit_non_recursive_scan_bodies() {
+        let char_ptr_const = CppType::Pointer {
+            pointee: Box::new(CppType::Char { signed: true }),
+            is_const: true,
+        };
+        let xml_element_ptr_mut = CppType::Pointer {
+            pointee: Box::new(CppType::Named("XMLElement".to_string())),
+            is_const: false,
+        };
+
+        let make_xmlnode_nav_method = |name: &str| {
+            make_node(
+                ClangNodeKind::CXXMethodDecl {
+                    class_name: "XMLNode".to_string(),
+                    name: name.to_string(),
+                    return_type: xml_element_ptr_mut.clone(),
+                    params: vec![("name".to_string(), char_ptr_const.clone())],
+                    is_definition: true,
+                    is_static: false,
+                    is_virtual: false,
+                    is_pure_virtual: false,
+                    is_override: false,
+                    is_final: false,
+                    is_const: false,
+                    access: AccessSpecifier::Public,
+                },
+                vec![make_node(
+                    ClangNodeKind::CompoundStmt,
+                    vec![make_node(
+                        ClangNodeKind::ReturnStmt,
+                        vec![make_node(
+                            ClangNodeKind::CallExpr {
+                                ty: xml_element_ptr_mut.clone(),
+                                template_instantiation: None,
+                            },
+                            vec![
+                                make_node(
+                                    ClangNodeKind::MemberExpr {
+                                        member_name: name.to_string(),
+                                        is_arrow: false,
+                                        ty: CppType::Function {
+                                            return_type: Box::new(xml_element_ptr_mut.clone()),
+                                            params: vec![char_ptr_const.clone()],
+                                            is_variadic: false,
+                                        },
+                                        declaring_class: Some("XMLNode".to_string()),
+                                        is_static: false,
+                                    },
+                                    vec![make_node(
+                                        ClangNodeKind::CXXThisExpr {
+                                            ty: CppType::Pointer {
+                                                pointee: Box::new(CppType::Named(
+                                                    "XMLNode".to_string(),
+                                                )),
+                                                is_const: false,
+                                            },
+                                        },
+                                        vec![],
+                                    )],
+                                ),
+                                make_node(
+                                    ClangNodeKind::DeclRefExpr {
+                                        name: "name".to_string(),
+                                        ty: char_ptr_const.clone(),
+                                        namespace_path: vec![],
+                                    },
+                                    vec![],
+                                ),
+                            ],
+                        )],
+                    )],
+                )],
+            )
+        };
+
+        let xml_node_record = make_node(
+            ClangNodeKind::RecordDecl {
+                name: "XMLNode".to_string(),
+                is_class: true,
+                is_definition: true,
+                fields: vec![],
+            },
+            vec![
+                make_xmlnode_nav_method("FirstChildElement"),
+                make_xmlnode_nav_method("LastChildElement"),
+                make_xmlnode_nav_method("PreviousSiblingElement"),
+                make_xmlnode_nav_method("NextSiblingElement"),
+            ],
+        );
+        let ast = make_node(ClangNodeKind::TranslationUnit, vec![xml_node_record]);
+        let code = AstCodeGen::new().generate(&ast);
+
+        for method_name in [
+            "FirstChildElement",
+            "LastChildElement",
+            "PreviousSiblingElement",
+            "NextSiblingElement",
+        ] {
+            let recursive_call = format!(
+                "return (self.{}(name as *const i8)) as *mut XMLElement;",
+                method_name
+            );
+            assert!(
+                !code.contains(&recursive_call),
+                "XMLNode mutable navigation wrapper should not self-recurse, got:\n{}",
+                code
+            );
+        }
+        assert!(
+            code.contains("let mut __fragile_node = self._firstChild;")
+                && code.contains("let mut __fragile_node = self._lastChild;")
+                && code.contains("let mut __fragile_node = self._prev;")
+                && code.contains("let mut __fragile_node = self._next;"),
+            "XMLNode mutable navigation wrappers should emit field-scan fallback bodies, got:\n{}",
             code
         );
     }
