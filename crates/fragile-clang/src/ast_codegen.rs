@@ -10359,6 +10359,50 @@ impl AstCodeGen {
 
         match fallback_class_name {
             "XMLUtil" => {
+                if !has_method(&self.output[impl_block_start..], "__fragile_bool_serialization") {
+                    self.current_struct_methods
+                        .insert("__fragile_bool_serialization".to_string(), 0);
+                    self.writeln("");
+                    self.writeln("pub fn __fragile_bool_serialization() -> &'static std::sync::Mutex<(usize, usize)> {");
+                    self.indent += 1;
+                    self.writeln("static SERIALIZATION: std::sync::OnceLock<std::sync::Mutex<(usize, usize)>> = std::sync::OnceLock::new();");
+                    self.writeln("return SERIALIZATION.get_or_init(|| std::sync::Mutex::new(((b\"true\\x00\".as_ptr() as *const i8) as usize, (b\"false\\x00\".as_ptr() as *const i8) as usize)));");
+                    self.indent -= 1;
+                    self.writeln("}");
+                }
+
+                if !has_method(&self.output[impl_block_start..], "__fragile_write_bool_true") {
+                    self.current_struct_methods
+                        .insert("__fragile_write_bool_true".to_string(), 0);
+                    self.writeln("");
+                    self.writeln("pub fn __fragile_write_bool_true() -> *const i8 {");
+                    self.indent += 1;
+                    self.writeln("if let Ok(state) = XMLUtil::__fragile_bool_serialization().lock() {");
+                    self.indent += 1;
+                    self.writeln("return state.0 as *const i8;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("return (b\"true\\x00\".as_ptr() as *const i8) as *const i8;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                }
+
+                if !has_method(&self.output[impl_block_start..], "__fragile_write_bool_false") {
+                    self.current_struct_methods
+                        .insert("__fragile_write_bool_false".to_string(), 0);
+                    self.writeln("");
+                    self.writeln("pub fn __fragile_write_bool_false() -> *const i8 {");
+                    self.indent += 1;
+                    self.writeln("if let Ok(state) = XMLUtil::__fragile_bool_serialization().lock() {");
+                    self.indent += 1;
+                    self.writeln("return state.1 as *const i8;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("return (b\"false\\x00\".as_ptr() as *const i8) as *const i8;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                }
+
                 if !has_method(&self.output[impl_block_start..], "ToInt") {
                     self.current_struct_methods.insert("ToInt".to_string(), 1);
                     self.writeln("");
@@ -10582,6 +10626,20 @@ impl AstCodeGen {
                     self.writeln("return false;");
                     self.indent -= 1;
                     self.writeln("}");
+                    self.writeln("let __fragile_true = XMLUtil::__fragile_write_bool_true();");
+                    self.writeln("if !__fragile_true.is_null() && XMLUtil::StringEqual(_str as *const i8, __fragile_true as *const i8, 2147483647) {");
+                    self.indent += 1;
+                    self.writeln("unsafe { *value = true; };");
+                    self.writeln("return true;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("let __fragile_false = XMLUtil::__fragile_write_bool_false();");
+                    self.writeln("if !__fragile_false.is_null() && XMLUtil::StringEqual(_str as *const i8, __fragile_false as *const i8, 2147483647) {");
+                    self.indent += 1;
+                    self.writeln("unsafe { *value = false; };");
+                    self.writeln("return true;");
+                    self.indent -= 1;
+                    self.writeln("}");
                     self.writeln("if XMLUtil::StringEqual(_str as *const i8, (b\"true\\x00\".as_ptr() as *const i8) as *const i8, 2147483647) || XMLUtil::StringEqual(_str as *const i8, (b\"1\\x00\".as_ptr() as *const i8) as *const i8, 2147483647) {");
                     self.indent += 1;
                     self.writeln("unsafe { *value = true; };");
@@ -10735,7 +10793,15 @@ impl AstCodeGen {
                         "pub fn SetBoolSerialization(_writeTrue: *const i8, _writeFalse: *const i8) {",
                     );
                     self.indent += 1;
-                    self.writeln("// Surface-only fallback for replay compilation.");
+                    self.writeln("let default_true = (b\"true\\x00\".as_ptr() as *const i8) as *const i8;");
+                    self.writeln("let default_false = (b\"false\\x00\".as_ptr() as *const i8) as *const i8;");
+                    self.writeln("let write_true = if _writeTrue.is_null() { default_true } else { _writeTrue as *const i8 };");
+                    self.writeln("let write_false = if _writeFalse.is_null() { default_false } else { _writeFalse as *const i8 };");
+                    self.writeln("if let Ok(mut state) = XMLUtil::__fragile_bool_serialization().lock() {");
+                    self.indent += 1;
+                    self.writeln("*state = (write_true as usize, write_false as usize);");
+                    self.indent -= 1;
+                    self.writeln("}");
                     self.indent -= 1;
                     self.writeln("}");
                 }
@@ -11101,11 +11167,11 @@ impl AstCodeGen {
                     self.indent += 1;
                     self.writeln("if *v {");
                     self.indent += 1;
-                    self.writeln("self._value.SetStr((b\"true\\x00\".as_ptr() as *const i8) as *const i8, 0);");
+                    self.writeln("self._value.SetStr(XMLUtil::__fragile_write_bool_true() as *const i8, 0);");
                     self.indent -= 1;
                     self.writeln("} else {");
                     self.indent += 1;
-                    self.writeln("self._value.SetStr((b\"false\\x00\".as_ptr() as *const i8) as *const i8, 0);");
+                    self.writeln("self._value.SetStr(XMLUtil::__fragile_write_bool_false() as *const i8, 0);");
                     self.indent -= 1;
                     self.writeln("}");
                     self.writeln("return;");
@@ -11728,11 +11794,11 @@ impl AstCodeGen {
                     self.indent += 1;
                     self.writeln("if *v {");
                     self.indent += 1;
-                    self.writeln("__fragile_text_value = (b\"true\\x00\".as_ptr() as *const i8) as *const i8;");
+                    self.writeln("__fragile_text_value = XMLUtil::__fragile_write_bool_true() as *const i8;");
                     self.indent -= 1;
                     self.writeln("} else {");
                     self.indent += 1;
-                    self.writeln("__fragile_text_value = (b\"false\\x00\".as_ptr() as *const i8) as *const i8;");
+                    self.writeln("__fragile_text_value = XMLUtil::__fragile_write_bool_false() as *const i8;");
                     self.indent -= 1;
                     self.writeln("}");
                     self.indent -= 1;
@@ -46614,6 +46680,8 @@ mod tests {
         );
         assert!(
             code.contains("pub fn ToBool(_str: *const i8, value: *mut bool) -> bool {")
+                && code.contains("let __fragile_true = XMLUtil::__fragile_write_bool_true();")
+                && code.contains("let __fragile_false = XMLUtil::__fragile_write_bool_false();")
                 && code.contains("StringEqual(_str as *const i8, (b\"true\\x00\"")
                 && code.contains("StringEqual(_str as *const i8, (b\"false\\x00\"")
                 && code.contains("if XMLUtil::ToInt(_str as *const i8, (&mut numeric as *mut i32) as *mut i32) {"),
@@ -46623,6 +46691,17 @@ mod tests {
         assert!(
             code.contains("pub fn SetBoolSerialization(_writeTrue: *const i8, _writeFalse: *const i8) {"),
             "XMLUtil fallback should emit SetBoolSerialization helper surface, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("pub fn __fragile_bool_serialization() -> &'static std::sync::Mutex<(usize, usize)> {")
+                && code.contains("std::sync::Mutex<(usize, usize)>")
+                && code.contains("pub fn __fragile_write_bool_true() -> *const i8 {")
+                && code.contains("pub fn __fragile_write_bool_false() -> *const i8 {")
+                && code.contains("let write_true = if _writeTrue.is_null() { default_true } else { _writeTrue as *const i8 };")
+                && code.contains("let write_false = if _writeFalse.is_null() { default_false } else { _writeFalse as *const i8 };")
+                && code.contains("*state = (write_true as usize, write_false as usize);"),
+            "XMLUtil bool serialization fallback should persist configurable true/false token pointers for replay parity, got:\n{}",
             code
         );
         assert!(
@@ -46668,7 +46747,9 @@ mod tests {
         assert!(
             code.contains("downcast_ref::<*const i8>()")
                 && code.contains("downcast_ref::<i32>()")
-                && code.contains("downcast_ref::<bool>()"),
+                && code.contains("downcast_ref::<bool>()")
+                && code.contains("self._value.SetStr(XMLUtil::__fragile_write_bool_true() as *const i8, 0);")
+                && code.contains("self._value.SetStr(XMLUtil::__fragile_write_bool_false() as *const i8, 0);"),
             "XMLAttribute SetAttribute fallback should normalize pointer/int/bool inputs, got:\n{}",
             code
         );
@@ -46751,6 +46832,8 @@ mod tests {
             code.contains("let any_value = &_value as &dyn std::any::Any;")
                 && code.contains("if let Some(v) = any_value.downcast_ref::<*const i8>() {")
                 && code.contains("if let Some(v) = any_value.downcast_ref::<bool>() {")
+                && code.contains("__fragile_text_value = XMLUtil::__fragile_write_bool_true() as *const i8;")
+                && code.contains("__fragile_text_value = XMLUtil::__fragile_write_bool_false() as *const i8;")
                 && code.contains(
                     "let __fragile_first_child = unsafe { (*(((&self.__base) as *const XMLNode) as *mut XMLNode)).FirstChild_1() };",
                 )

@@ -3366,7 +3366,7 @@ fn test_real_world_tinyxml2_make_test_command_subset_replay_fragile() {
     let err = run_tinyxml2_make_test_command_replay_fragile()
         .expect_err("fragile replay is expected to fail at command 1 until runtime blocker is resolved");
     assert!(
-        err.contains("make-test command replay failed at command 1 with status 107"),
+        err.contains("make-test command replay failed at command 1 with status 106"),
         "expected command-1 non-crashing blocker message, got: {}",
         err
     );
@@ -3394,8 +3394,8 @@ fn test_real_world_tinyxml2_make_test_command_subset_replay_fragile() {
     assert_eq!(
         read_status_file(&log_dir.join("make_test_replay_01.status"))
             .expect("failed to read make_test_replay_01.status"),
-        107,
-        "current blocker should surface as non-crashing status 107 on replay command 1"
+        106,
+        "current blocker should surface as non-crashing status 106 on replay command 1"
     );
     let replay_stderr = fs::read_to_string(log_dir.join("make_test_replay_01.stderr"))
         .expect("failed to read make_test_replay_01.stderr");
@@ -3413,7 +3413,7 @@ fn test_real_world_tinyxml2_make_test_command_subset_replay_fragile() {
     );
     assert_eq!(
         fail_lines[0],
-        "[fail] Bool true is '1' [1][true]",
+        "[fail] PushDeclaration() test [version = '1.0' encoding = 'utf-8'][xml version=\"1.0\"]",
         "unexpected first fail signature; got:\n{}",
         replay_stdout
     );
@@ -3488,6 +3488,13 @@ fn test_real_world_tinyxml2_make_test_command_subset_replay_fragile() {
     assert!(
         !fail_lines
             .iter()
+            .any(|line| *line == "[fail] Bool true is '1' [1][true]"),
+        "bool serialization signature should be resolved, got:\n{}",
+        replay_stdout
+    );
+    assert!(
+        !fail_lines
+            .iter()
             .any(|line| *line == "[fail] GetText() normal use. [This is  text][text]"),
         "GetText normal-use signature should be resolved, got:\n{}",
         replay_stdout
@@ -3500,7 +3507,7 @@ fn test_real_world_tinyxml2_make_test_command_subset_replay_fragile() {
         replay_stdout
     );
     assert!(
-        replay_stdout.contains("Pass 362, Fail 107"),
+        replay_stdout.contains("Pass 363, Fail 106"),
         "current blocker signature should report failing xmltest parity count, got:\n{}",
         replay_stdout
     );
