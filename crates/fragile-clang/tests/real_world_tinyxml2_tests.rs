@@ -3366,7 +3366,7 @@ fn test_real_world_tinyxml2_make_test_command_subset_replay_fragile() {
     let err = run_tinyxml2_make_test_command_replay_fragile()
         .expect_err("fragile replay is expected to fail at command 1 until runtime blocker is resolved");
     assert!(
-        err.contains("make-test command replay failed at command 1 with status 129"),
+        err.contains("make-test command replay failed at command 1 with status 128"),
         "expected command-1 non-crashing blocker message, got: {}",
         err
     );
@@ -3394,8 +3394,8 @@ fn test_real_world_tinyxml2_make_test_command_subset_replay_fragile() {
     assert_eq!(
         read_status_file(&log_dir.join("make_test_replay_01.status"))
             .expect("failed to read make_test_replay_01.status"),
-        129,
-        "current blocker should surface as non-crashing status 129 on replay command 1"
+        128,
+        "current blocker should surface as non-crashing status 128 on replay command 1"
     );
     let replay_stderr = fs::read_to_string(log_dir.join("make_test_replay_01.stderr"))
         .expect("failed to read make_test_replay_01.stderr");
@@ -3413,7 +3413,7 @@ fn test_real_world_tinyxml2_make_test_command_subset_replay_fragile() {
     );
     assert_eq!(
         fail_lines[0],
-        "[fail] UTF-8: Open utf8testout.xml [true][false]",
+        "[fail] UTF-8: Verified multi-language round trip. [true][false]",
         "unexpected first fail signature; got:\n{}",
         replay_stdout
     );
@@ -3465,7 +3465,14 @@ fn test_real_world_tinyxml2_make_test_command_subset_replay_fragile() {
         replay_stdout
     );
     assert!(
-        replay_stdout.contains("Pass 340, Fail 129"),
+        !fail_lines
+            .iter()
+            .any(|line| *line == "[fail] UTF-8: Open utf8testout.xml [true][false]"),
+        "UTF-8 utf8testout artifact-open signature should be resolved, got:\n{}",
+        replay_stdout
+    );
+    assert!(
+        replay_stdout.contains("Pass 341, Fail 128"),
         "current blocker signature should report failing xmltest parity count, got:\n{}",
         replay_stdout
     );

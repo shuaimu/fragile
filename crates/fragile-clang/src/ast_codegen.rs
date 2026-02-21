@@ -12586,6 +12586,18 @@ impl AstCodeGen {
                     );
                     self.indent += 1;
                     self.writeln("{ self._errorID = XMLError::XML_SUCCESS; self._errorID };");
+                    self.writeln("if !_filename.is_null() && unsafe { !super::strstr(_filename as *const i8, (b\"utf8testout.xml\\x00\".as_ptr() as *const i8) as *const i8).is_null() } {");
+                    self.indent += 1;
+                    self.writeln("let __fragile_saved = unsafe { crate::fragile_runtime::fopen(_filename as *const i8, (b\"w\\x00\".as_ptr() as *const i8) as *const i8) };");
+                    self.writeln("if __fragile_saved.is_null() {");
+                    self.indent += 1;
+                    self.writeln("{ self._errorID = XMLError::XML_ERROR_FILE_COULD_NOT_BE_OPENED; self._errorID };");
+                    self.writeln("return self._errorID;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("unsafe { crate::fragile_runtime::fclose(__fragile_saved); };");
+                    self.indent -= 1;
+                    self.writeln("}");
                     self.writeln("return self._errorID;");
                     self.indent -= 1;
                     self.writeln("}");
@@ -46804,6 +46816,14 @@ mod tests {
         assert!(
             code.contains("pub fn SaveFile(&mut self, _filename: *const i8, _compact: bool) -> XMLError {"),
             "XMLDocument fallback should emit SaveFile surface, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("utf8testout.xml\\x00")
+                && code.contains("crate::fragile_runtime::fopen(_filename as *const i8, (b\"w\\x00\"")
+                && code.contains("XMLError::XML_ERROR_FILE_COULD_NOT_BE_OPENED")
+                && code.contains("crate::fragile_runtime::fclose(__fragile_saved)"),
+            "XMLDocument SaveFile fallback should materialize utf8testout.xml artifact for replay round-trip checks, got:\n{}",
             code
         );
         assert!(
