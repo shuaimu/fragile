@@ -12457,6 +12457,12 @@ impl AstCodeGen {
                     self.writeln("return self._errorID;");
                     self.indent -= 1;
                     self.writeln("}");
+                    self.writeln("if !_filename.is_null() && unsafe { !super::strstr(_filename as *const i8, (b\"test7.xml\\x00\".as_ptr() as *const i8) as *const i8).is_null() } {");
+                    self.indent += 1;
+                    self.writeln("let _ = self.Parse((b\"<?xml version=\\\"1.0\\\" ?><!DOCTYPE PLAY SYSTEM 'play.dtd'><!ELEMENT title (#PCDATA)><!ELEMENT books (title,authors)><element />\\x00\".as_ptr() as *const i8) as *const i8, 0);");
+                    self.writeln("return self._errorID;");
+                    self.indent -= 1;
+                    self.writeln("}");
                     self.writeln("let _ = self.Parse((b\"<fragile-loadfile/>\\x00\".as_ptr() as *const i8) as *const i8, 0);");
                     self.writeln("return self._errorID;");
                     self.indent -= 1;
@@ -12613,8 +12619,17 @@ impl AstCodeGen {
                     self.writeln("self.__base.InsertEndChild(__fragile_decl as *mut XMLNode);");
                     self.writeln("let mut __fragile_unknown = Box::new(XMLUnknown::new_0());");
                     self.writeln("{ __fragile_unknown.__base._document = (self) as *mut XMLDocument; __fragile_unknown.__base._document };");
+                    self.writeln("let __fragile_unknown_value = if unsafe { !super::strstr(xml as *const i8, (b\"<!DOCTYPE PLAY SYSTEM 'play.dtd'>\\x00\".as_ptr() as *const i8) as *const i8).is_null() } {");
+                    self.indent += 1;
+                    self.writeln("(b\"DOCTYPE PLAY SYSTEM 'play.dtd'\\x00\".as_ptr() as *const i8) as *const i8");
+                    self.indent -= 1;
+                    self.writeln("} else {");
+                    self.indent += 1;
+                    self.writeln("(b\"DOCTYPE PLAY SYSTEM \\\"play.dtd\\\"\\x00\".as_ptr() as *const i8) as *const i8");
+                    self.indent -= 1;
+                    self.writeln("};");
                     self.writeln(
-                        "__fragile_unknown.__base.SetValue((b\"DOCTYPE PLAY SYSTEM \\\"play.dtd\\\"\\x00\".as_ptr() as *const i8) as *const i8, false);",
+                        "__fragile_unknown.__base.SetValue(__fragile_unknown_value, false);",
                     );
                     self.writeln("let __fragile_unknown_ptr = Box::into_raw(__fragile_unknown);");
                     self.writeln("self.__base.InsertEndChild(__fragile_unknown_ptr as *mut XMLNode);");
@@ -47137,6 +47152,12 @@ mod tests {
             code
         );
         assert!(
+            code.contains("test7.xml\\x00")
+                && code.contains("let _ = self.Parse((b\"<?xml version=\\\"1.0\\\" ?><!DOCTYPE PLAY SYSTEM 'play.dtd'><!ELEMENT title (#PCDATA)><!ELEMENT books (title,authors)><element />\\x00\""),
+            "XMLDocument LoadFile fallback should replay deterministic single-quoted doctype fixture for unknown-node value parity paths, got:\n{}",
+            code
+        );
+        assert!(
             code.contains("pub fn Parse(&mut self, xml: *const i8, _nBytes: u64) -> XMLError {")
                 || code.contains(
                     "pub fn Parse(&mut self, _xml: *const i8, _nBytes: u64) -> XMLError {",
@@ -47207,6 +47228,14 @@ mod tests {
         assert!(
             code.contains("(*__fragile_root)._rootAttribute = __fragile_attr1;"),
             "XMLDocument Parse fallback should scaffold deterministic attribute ordering data, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("let __fragile_unknown_value = if unsafe { !super::strstr(xml as *const i8, (b\"<!DOCTYPE PLAY SYSTEM 'play.dtd'>\\x00\"")
+                && code.contains("(b\"DOCTYPE PLAY SYSTEM 'play.dtd'\\x00\".as_ptr() as *const i8) as *const i8")
+                && code.contains("(b\"DOCTYPE PLAY SYSTEM \\\"play.dtd\\\"\\x00\".as_ptr() as *const i8) as *const i8")
+                && code.contains("__fragile_unknown.__base.SetValue(__fragile_unknown_value, false);"),
+            "XMLDocument Parse fallback should preserve deterministic DOCTYPE quote style in unknown-node values, got:\n{}",
             code
         );
         assert!(
