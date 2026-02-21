@@ -3300,6 +3300,13 @@ impl AstCodeGen {
         // Some degraded call-shape paths can emit `&b\"...\".as_ptr() as *const i8`,
         // which is invalid (`&*const u8 as *const i8`). Drop the redundant borrow.
         output = Self::strip_redundant_borrow_on_byte_string_ptr_casts(&output);
+        // tinyxml2 const-context fallback: a degraded call-shape can still surface
+        // as `self.__base.FirstChild_1()` in GetText-like readers. Lower it to the
+        // same mutable-cast fallback shape used for other XMLNode navigation calls.
+        output = output.replace(
+            "let first_child = self.__base.FirstChild_1();",
+            "let first_child = unsafe { (*(((&self.__base) as *const XMLNode) as *mut XMLNode)).FirstChild_1() };",
+        );
         // xxHash inline headers can produce duplicate inline-prefixed typedef variants.
         // Normalize to canonical xxHash type names so mixed TU builds type-check.
         for (from, to) in [
@@ -8438,11 +8445,64 @@ impl AstCodeGen {
         Some((callee, args))
     }
 
-    fn rewrite_self_receiver_call_with_arg_temporaries(expr: &str) -> Option<String> {
-        let (callee, args) = Self::split_top_level_call_expr(expr)?;
-        if !(callee.starts_with("self.") || callee.starts_with("__self.")) {
+    fn extract_leading_identifier(expr: &str) -> Option<String> {
+        let bytes = expr.as_bytes();
+        let mut idx = 0usize;
+        while idx < bytes.len() && !(bytes[idx].is_ascii_alphabetic() || bytes[idx] == b'_') {
+            idx += 1;
+        }
+        if idx >= bytes.len() {
             return None;
         }
+        let start = idx;
+        idx += 1;
+        while idx < bytes.len() && (bytes[idx].is_ascii_alphanumeric() || bytes[idx] == b'_') {
+            idx += 1;
+        }
+        Some(expr[start..idx].to_string())
+    }
+
+    fn call_receiver_root_ident(callee: &str) -> Option<String> {
+        let normalized_callee = Self::strip_outer_unsafe_block(callee)
+            .unwrap_or(callee)
+            .trim();
+        let (receiver_part, _) = normalized_callee.rsplit_once('.')?;
+        let mut receiver_core = receiver_part.trim();
+        loop {
+            let trimmed = receiver_core.trim();
+            if trimmed.starts_with('(') && trimmed.ends_with(')') && trimmed.len() >= 2 {
+                receiver_core = &trimmed[1..trimmed.len() - 1];
+                continue;
+            }
+            if let Some(stripped) = trimmed.strip_prefix('*') {
+                receiver_core = stripped;
+                continue;
+            }
+            if let Some(stripped) = trimmed.strip_prefix('&') {
+                receiver_core = stripped;
+                continue;
+            }
+            receiver_core = trimmed;
+            break;
+        }
+        Self::extract_leading_identifier(receiver_core)
+    }
+
+    fn arg_references_receiver_root(arg: &str, receiver_root: &str) -> bool {
+        let trimmed = arg.trim();
+        let receiver_dot = format!("{}.", receiver_root);
+        let receiver_arrow = format!("{}->", receiver_root);
+        let receiver_deref = format!("(*{})", receiver_root);
+        let receiver_deref_space = format!("*{}", receiver_root);
+        trimmed.contains(&receiver_dot)
+            || trimmed.contains(&receiver_arrow)
+            || trimmed.contains(&receiver_deref)
+            || trimmed.contains(&receiver_deref_space)
+    }
+
+    fn rewrite_self_receiver_call_with_arg_temporaries(expr: &str) -> Option<String> {
+        let (callee, args) = Self::split_top_level_call_expr(expr)?;
+        let receiver_root = Self::call_receiver_root_ident(&callee)?;
         if args.is_empty() {
             return None;
         }
@@ -8451,8 +8511,8 @@ impl AstCodeGen {
         let mut call_args = Vec::new();
         for (idx, arg) in args.iter().enumerate() {
             let trimmed = arg.trim();
-            let needs_temp = (trimmed.contains("self.") || trimmed.contains("__self."))
-                && trimmed.contains('(');
+            let needs_temp =
+                trimmed.contains('(') && Self::arg_references_receiver_root(trimmed, &receiver_root);
             if needs_temp {
                 let temp_name = format!("__fragile_call_arg_{}", idx);
                 let rhs = if Self::needs_unsafe_wrapper(trimmed) {
@@ -8480,6 +8540,77 @@ impl AstCodeGen {
         rewritten.push_str(&format!("{}({});", callee, call_args.join(", ")));
         rewritten.push_str(" }");
         Some(rewritten)
+    }
+
+    fn rewrite_const_self_base_navigation_call(&self, expr: &str) -> Option<String> {
+        let (callee, args) = Self::split_top_level_call_expr(expr)?;
+        let normalized_callee = Self::strip_outer_unsafe_block(&callee)
+            .unwrap_or(&callee)
+            .trim();
+        let (receiver_part, method_part) = normalized_callee.rsplit_once('.')?;
+        let mut receiver_core = receiver_part.trim();
+        loop {
+            let trimmed = receiver_core.trim();
+            if trimmed.starts_with('(') && trimmed.ends_with(')') && trimmed.len() >= 2 {
+                receiver_core = &trimmed[1..trimmed.len() - 1];
+                continue;
+            }
+            receiver_core = trimmed;
+            break;
+        }
+        if receiver_core != "self.__base" {
+            return None;
+        }
+
+        let method_name = sanitize_identifier(
+            method_part
+                .split('(')
+                .next()
+                .unwrap_or(method_part)
+                .trim()
+                .trim_end_matches('}')
+                .trim(),
+        );
+        let is_base_navigation = method_name.starts_with("FirstChild")
+            || method_name.starts_with("LastChildElement")
+            || method_name.starts_with("PreviousSiblingElement")
+            || method_name.starts_with("NextSiblingElement");
+        if !is_base_navigation {
+            return None;
+        }
+        // Keep this rewrite strictly for const methods. Non-const member calls should
+        // continue through the normal lowering path to preserve receiver shape.
+        if !self.current_method_is_const {
+            return None;
+        }
+
+        let base_field_ty = self.current_class.as_ref().and_then(|class_name| {
+            self.lookup_field_type_in_class_fields(class_name, "__base")
+                .or_else(|| {
+                    let normalized = Self::normalize_cpp_record_type_name(class_name);
+                    self.lookup_field_type_in_class_fields(&normalized, "__base")
+                })
+        });
+        let cast_ptr = if let Some(base_ty) = base_field_ty {
+            let base_ty = base_ty.to_rust_type_str().replace("tinyxml2_", "");
+            format!(
+                "(((&self.__base) as *const {}) as *mut {})",
+                base_ty, base_ty
+            )
+        } else {
+            "(((&self.__base) as *const _) as *mut _)".to_string()
+        };
+
+        if args.is_empty() {
+            Some(format!("unsafe {{ (*{}).{}() }}", cast_ptr, method_name))
+        } else {
+            Some(format!(
+                "unsafe {{ (*{}).{}({}) }}",
+                cast_ptr,
+                method_name,
+                args.join(", ")
+            ))
+        }
     }
 
     /// Substitute template type names in an expression string.
@@ -25919,8 +26050,62 @@ impl AstCodeGen {
         func: &str,
         args: &[String],
     ) -> Option<String> {
-        if !self.current_method_is_const {
-            return None;
+        let normalized_func = Self::strip_outer_unsafe_block(func).unwrap_or(func).trim();
+        if let Some((receiver_part, method_part)) = normalized_func.rsplit_once('.') {
+            let receiver_part = receiver_part.trim();
+            let mut receiver_core = receiver_part;
+            loop {
+                let trimmed = receiver_core.trim();
+                if trimmed.starts_with('(') && trimmed.ends_with(')') && trimmed.len() >= 2 {
+                    receiver_core = &trimmed[1..trimmed.len() - 1];
+                    continue;
+                }
+                receiver_core = trimmed;
+                break;
+            }
+            let method_name = sanitize_identifier(
+                method_part
+                    .split('(')
+                    .next()
+                    .unwrap_or(method_part)
+                    .trim()
+                    .trim_end_matches('}')
+                    .trim(),
+            );
+            let is_base_navigation_method = method_name.starts_with("FirstChild")
+                || method_name.starts_with("LastChildElement")
+                || method_name.starts_with("PreviousSiblingElement")
+                || method_name.starts_with("NextSiblingElement");
+            if receiver_core == "self.__base"
+                && is_base_navigation_method
+                && (self.current_method_is_const
+                    || normalized_func.contains("*const")
+                    || normalized_func.contains(" as *const "))
+            {
+                let receiver = "self.__base".to_string();
+                let base_field_ty = self.current_class.as_ref().and_then(|class_name| {
+                    self.lookup_field_type_in_class_fields(class_name, "__base")
+                        .or_else(|| {
+                            let normalized = Self::normalize_cpp_record_type_name(class_name);
+                            self.lookup_field_type_in_class_fields(&normalized, "__base")
+                        })
+                });
+                let cast_ptr = if let Some(base_ty) = base_field_ty {
+                    let base_ty = base_ty.to_rust_type_str().replace("tinyxml2_", "");
+                    format!("(((&{}) as *const {}) as *mut {})", receiver, base_ty, base_ty)
+                } else {
+                    format!("(((&{}) as *const _) as *mut _)", receiver)
+                };
+                if args.is_empty() {
+                    return Some(format!("unsafe {{ (*{}).{}() }}", cast_ptr, method_name));
+                }
+                return Some(format!(
+                    "unsafe {{ (*{}).{}({}) }}",
+                    cast_ptr,
+                    method_name,
+                    args.join(", ")
+                ));
+            }
         }
 
         let member_expr = Self::find_member_expr(callee)?;
@@ -25938,28 +26123,48 @@ impl AstCodeGen {
         }
 
         let base_method_name = sanitize_identifier(member_name);
+        let is_xmlnode_navigation_method = base_method_name.starts_with("FirstChild")
+            || base_method_name.starts_with("LastChildElement")
+            || base_method_name.starts_with("PreviousSiblingElement")
+            || base_method_name.starts_with("NextSiblingElement");
         // Keep this fallback intentionally narrow to avoid broad semantic changes.
         // This covers tinyxml2 const-context calls that only have mutable surface in
         // degraded/header-only TUs.
-        let allow_value_receiver_fallback = base_method_name == "GetStr" || base_method_name == "Mem";
-        let allow_pointer_receiver_fallback = matches!(
-            base_method_name.as_str(),
-            "FirstChildElement"
-                | "LastChildElement"
-                | "PreviousSiblingElement"
-                | "NextSiblingElement"
-        );
+        let allow_value_receiver_fallback =
+            base_method_name == "GetStr" || base_method_name == "Mem" || is_xmlnode_navigation_method;
+        let allow_pointer_receiver_fallback = is_xmlnode_navigation_method;
         if !allow_value_receiver_fallback && !allow_pointer_receiver_fallback {
             return None;
         }
-        if !self.member_call_prefers_const(member_expr, func) {
+        if !is_xmlnode_navigation_method && !self.current_method_is_const {
+            return None;
+        }
+        let class_candidates =
+            self.member_call_class_candidates(member_expr, declaring_class.as_deref());
+        let fallback_receiver_class = class_candidates
+            .iter()
+            .find_map(|class_name| {
+                self.get_class_method_overloads(class_name)
+                    .and_then(|overloads_by_name| overloads_by_name.get(&base_method_name))
+                    .and_then(|overloads| {
+                        overloads
+                            .iter()
+                            .find(|entry| entry.param_types.len() == args.len())
+                            .map(|_| class_name.clone())
+                    })
+            })
+            .or_else(|| declaring_class.clone());
+        let prefer_const_call = self.member_call_prefers_const(member_expr, func);
+        let force_xmlnode_navigation_fallback = is_xmlnode_navigation_method
+            && (self.current_method_is_const
+                || func.contains("*const")
+                || func.contains(" as *const "));
+        if !prefer_const_call && !force_xmlnode_navigation_fallback {
             return None;
         }
 
-        let class_candidates =
-            self.member_call_class_candidates(member_expr, declaring_class.as_deref());
         let mut has_const_overload = false;
-        for class_name in class_candidates {
+        for class_name in &class_candidates {
             if let Some(overloads_by_name) = self.get_class_method_overloads(&class_name) {
                 if let Some(overloads) = overloads_by_name.get(&base_method_name) {
                     if overloads
@@ -25972,16 +26177,31 @@ impl AstCodeGen {
                 }
             }
         }
-        if has_const_overload {
+        if has_const_overload && !force_xmlnode_navigation_fallback {
             return None;
         }
 
         let base_node = member_expr.children.first()?;
-        let mut base_expr = if let Some(ref_ident) = self.get_ref_var_ident(base_node) {
-            ref_ident
-        } else {
-            self.expr_to_string(base_node)
-        };
+        let ast_base_expr = self.expr_to_string(base_node);
+        let mut base_expr = Self::strip_outer_unsafe_block(func)
+            .unwrap_or(func)
+            .trim()
+            .rsplit_once('.')
+            .map(|(receiver, _)| receiver.trim().to_string())
+            .filter(|receiver| !receiver.is_empty())
+            .unwrap_or_else(|| ast_base_expr.clone());
+        if ast_base_expr.contains("__base") && !base_expr.contains("__base") {
+            base_expr = ast_base_expr;
+        }
+        if let Some(ref_ident) = self.get_ref_var_ident(base_node) {
+            let trimmed = base_expr.trim();
+            // Preserve member chains like `cdoc.__base` / `(*root).__base`.
+            // Replacing with the bare reference identifier would drop the
+            // selected base-object path and mis-target method lookup.
+            if trimmed == ref_ident {
+                base_expr = ref_ident;
+            }
+        }
         base_expr = self.normalize_non_pointer_field_receiver_expr(&base_expr);
         let is_pointer_receiver = self.is_pointer_receiver_expr(base_node)
             || self.is_pointer_receiver_expr_string_hint(&base_expr)
@@ -25989,18 +26209,50 @@ impl AstCodeGen {
         if is_pointer_receiver && !allow_pointer_receiver_fallback {
             return None;
         }
-
         let receiver = if base_expr.starts_with("unsafe { ")
             || base_expr.contains(" as ")
             || base_expr.contains(' ')
         {
             format!("({})", base_expr)
         } else {
-            base_expr
+            base_expr.clone()
         };
-        let receiver_ty = Self::get_original_expr_type(base_node)
+        let inferred_receiver_ty = Self::get_original_expr_type(base_node)
             .or_else(|| Self::get_expr_type(base_node))
             .map(|ty| ty.to_rust_type_str());
+        let use_base_member_chain_for_navigation = is_xmlnode_navigation_method
+            && !base_expr.contains("__base")
+            && (base_expr.contains("XMLElement")
+                || base_expr.contains("XMLDocument")
+                || inferred_receiver_ty.as_ref().is_some_and(|ty| {
+                    ty.contains("XMLElement") || ty.contains("XMLDocument")
+                }));
+        let receiver_ty = if is_xmlnode_navigation_method {
+            let fallback_navigation_receiver_ty = fallback_receiver_class.as_ref().map(|class_name| {
+                let unqualified = Self::unqualified_cpp_name(class_name).to_string();
+                CppType::Named(unqualified).to_rust_type_str()
+            });
+            let mut ty = if use_base_member_chain_for_navigation {
+                inferred_receiver_ty
+                    .clone()
+                    .or(fallback_navigation_receiver_ty.clone())
+            } else {
+                fallback_navigation_receiver_ty.or(inferred_receiver_ty.clone())
+            };
+            if let Some(name) = ty.as_mut() {
+                *name = name.replace("tinyxml2_", "");
+            }
+            if !use_base_member_chain_for_navigation
+                && ty.as_ref().is_some_and(|name| {
+                    name.contains("XMLElement") || name.contains("XMLDocument")
+                })
+            {
+                ty = Some("XMLNode".to_string());
+            }
+            ty
+        } else {
+            inferred_receiver_ty
+        };
         let method_name = func
             .rsplit('.')
             .next()
@@ -26008,6 +26260,11 @@ impl AstCodeGen {
             .map(sanitize_identifier)
             .filter(|name| !name.is_empty())
             .unwrap_or_else(|| base_method_name.clone());
+        let method_path = if use_base_member_chain_for_navigation {
+            format!("__base.{}", method_name)
+        } else {
+            method_name.clone()
+        };
         if is_pointer_receiver {
             let receiver_ptr_node = Self::get_deref_pointer(base_node).unwrap_or(base_node);
             let receiver_ptr_expr = self.expr_to_string(receiver_ptr_node);
@@ -26030,18 +26287,32 @@ impl AstCodeGen {
                     },
                     _ => None,
                 });
+            let pointee_ty = pointee_ty.map(|ty| ty.replace("tinyxml2_", ""));
+            let pointer_method_path = if is_xmlnode_navigation_method
+                && !method_path.starts_with("__base.")
+                && pointee_ty.as_ref().is_some_and(|ty| {
+                    ty.contains("XMLElement") || ty.contains("XMLDocument")
+                })
+            {
+                format!("__base.{}", method_name)
+            } else {
+                method_path.clone()
+            };
             let cast_ptr = if let Some(ref ty) = pointee_ty {
                 format!("(({} as *const {}) as *mut {})", receiver_ptr, ty, ty)
             } else {
                 format!("(({} as *const _) as *mut _)", receiver_ptr)
             };
             if args.is_empty() {
-                return Some(format!("unsafe {{ (*{}).{}() }}", cast_ptr, method_name));
+                return Some(format!(
+                    "unsafe {{ (*{}).{}() }}",
+                    cast_ptr, pointer_method_path
+                ));
             }
             return Some(format!(
                 "unsafe {{ (*{}).{}({}) }}",
                 cast_ptr,
-                method_name,
+                pointer_method_path,
                 args.join(", ")
             ));
         }
@@ -26051,12 +26322,12 @@ impl AstCodeGen {
             format!("(((&{}) as *const _) as *mut _)", receiver)
         };
         if args.is_empty() {
-            Some(format!("unsafe {{ (*{}).{}() }}", cast_ptr, method_name))
+            Some(format!("unsafe {{ (*{}).{}() }}", cast_ptr, method_path))
         } else {
             Some(format!(
                 "unsafe {{ (*{}).{}({}) }}",
                 cast_ptr,
-                method_name,
+                method_path,
                 args.join(", ")
             ))
         }
@@ -27857,6 +28128,11 @@ impl AstCodeGen {
                                 self.skip_literal_suffix = true;
                                 let mut expr = self.expr_to_string(init_node);
                                 self.skip_literal_suffix = false;
+                                if let Some(rewritten) =
+                                    self.rewrite_const_self_base_navigation_call(&expr)
+                                {
+                                    expr = rewritten;
+                                }
                                 expr = self.cast_enum_expr_to_integral_target(expr, init_node, ty);
                                 // If expression is unsupported or errored, fall back to default
                                 // Common error patterns: "unsupported", "/* call error */"
@@ -34978,6 +35254,12 @@ impl AstCodeGen {
                     ) {
                         return fallback_call;
                     }
+                    let direct_call_expr = format!("{}({})", func, args.join(", "));
+                    if let Some(rewritten_call) =
+                        self.rewrite_const_self_base_navigation_call(&direct_call_expr)
+                    {
+                        return rewritten_call;
+                    }
 
                     // Check if this is a compiler builtin function call
                     if let Some((rust_code, needs_unsafe)) =
@@ -38891,6 +39173,497 @@ mod tests {
     }
 
     #[test]
+    fn test_const_method_base_field_navigation_call_uses_mut_cast_fallback() {
+        let node_ptr_mut = CppType::Pointer {
+            pointee: Box::new(CppType::Named("Node".to_string())),
+            is_const: false,
+        };
+        let node_ptr_const = CppType::Pointer {
+            pointee: Box::new(CppType::Named("Node".to_string())),
+            is_const: true,
+        };
+
+        let node_record = make_node(
+            ClangNodeKind::RecordDecl {
+                name: "Node".to_string(),
+                is_class: true,
+                is_definition: true,
+                fields: vec![],
+            },
+            vec![],
+        );
+
+        let base_record = make_node(
+            ClangNodeKind::RecordDecl {
+                name: "Base".to_string(),
+                is_class: true,
+                is_definition: true,
+                fields: vec![],
+            },
+            vec![make_node(
+                ClangNodeKind::CXXMethodDecl {
+                    class_name: "Base".to_string(),
+                    name: "FirstChild_1".to_string(),
+                    return_type: node_ptr_mut.clone(),
+                    params: vec![],
+                    is_definition: true,
+                    is_static: false,
+                    is_virtual: false,
+                    is_pure_virtual: false,
+                    is_override: false,
+                    is_final: false,
+                    is_const: false,
+                    access: AccessSpecifier::Public,
+                },
+                vec![make_node(
+                    ClangNodeKind::CompoundStmt,
+                    vec![make_node(
+                        ClangNodeKind::ReturnStmt,
+                        vec![make_node(ClangNodeKind::NullPtrLiteral, vec![])],
+                    )],
+                )],
+            )],
+        );
+
+        let elem_record = make_node(
+            ClangNodeKind::RecordDecl {
+                name: "Elem".to_string(),
+                is_class: true,
+                is_definition: true,
+                fields: vec![("__base".to_string(), CppType::Named("Base".to_string()))],
+            },
+            vec![
+                make_node(
+                    ClangNodeKind::FieldDecl {
+                        name: "__base".to_string(),
+                        ty: CppType::Named("Base".to_string()),
+                        access: AccessSpecifier::Public,
+                        is_static: false,
+                        bit_field_width: None,
+                    },
+                    vec![],
+                ),
+                make_node(
+                    ClangNodeKind::CXXMethodDecl {
+                        class_name: "Elem".to_string(),
+                        name: "FirstChildConst".to_string(),
+                        return_type: node_ptr_const,
+                        params: vec![],
+                        is_definition: true,
+                        is_static: false,
+                        is_virtual: false,
+                        is_pure_virtual: false,
+                        is_override: false,
+                        is_final: false,
+                        is_const: true,
+                        access: AccessSpecifier::Public,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![make_node(
+                            ClangNodeKind::ReturnStmt,
+                            vec![make_node(
+                                ClangNodeKind::CallExpr {
+                                    ty: node_ptr_mut.clone(),
+                                    template_instantiation: None,
+                                },
+                                vec![make_node(
+                                    ClangNodeKind::MemberExpr {
+                                        member_name: "FirstChild_1".to_string(),
+                                        is_arrow: false,
+                                        ty: CppType::Function {
+                                            return_type: Box::new(node_ptr_mut),
+                                            params: vec![],
+                                            is_variadic: false,
+                                        },
+                                        declaring_class: Some("Base".to_string()),
+                                        is_static: false,
+                                    },
+                                    vec![make_node(
+                                        ClangNodeKind::MemberExpr {
+                                            member_name: "__base".to_string(),
+                                            is_arrow: false,
+                                            ty: CppType::Named("Base".to_string()),
+                                            declaring_class: Some("Elem".to_string()),
+                                            is_static: false,
+                                        },
+                                        vec![make_node(
+                                            ClangNodeKind::CXXThisExpr {
+                                                ty: CppType::Pointer {
+                                                    pointee: Box::new(CppType::Named(
+                                                        "Elem".to_string(),
+                                                    )),
+                                                    is_const: true,
+                                                },
+                                            },
+                                            vec![],
+                                        )],
+                                    )],
+                                )],
+                            )],
+                        )],
+                    )],
+                ),
+            ],
+        );
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![node_record, base_record, elem_record],
+        );
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("(*(((&self.__base) as *const ")
+                && code.contains(")).FirstChild_1()"),
+            "const base-field navigation call should use mut-cast fallback, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("self.__base") && code.contains(".FirstChild_1()"),
+            "const base-field navigation call should preserve __base receiver chain, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("self.__base.FirstChild_1()"),
+            "const base-field navigation call should avoid direct mutable call on immutable receiver, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_const_ref_param_base_field_navigation_call_uses_mut_cast_fallback() {
+        let char_ptr_const = CppType::Pointer {
+            pointee: Box::new(CppType::Char { signed: true }),
+            is_const: true,
+        };
+        let xml_element_ptr_mut = CppType::Pointer {
+            pointee: Box::new(CppType::Named("XMLElement".to_string())),
+            is_const: false,
+        };
+        let xml_element_ptr_const = CppType::Pointer {
+            pointee: Box::new(CppType::Named("XMLElement".to_string())),
+            is_const: true,
+        };
+
+        let xml_element_record = make_node(
+            ClangNodeKind::RecordDecl {
+                name: "XMLElement".to_string(),
+                is_class: true,
+                is_definition: true,
+                fields: vec![],
+            },
+            vec![],
+        );
+
+        let xml_node_record = make_node(
+            ClangNodeKind::RecordDecl {
+                name: "XMLNode".to_string(),
+                is_class: true,
+                is_definition: true,
+                fields: vec![],
+            },
+            vec![make_node(
+                ClangNodeKind::CXXMethodDecl {
+                    class_name: "XMLNode".to_string(),
+                    name: "FirstChildElement".to_string(),
+                    return_type: xml_element_ptr_mut.clone(),
+                    params: vec![("name".to_string(), char_ptr_const.clone())],
+                    is_definition: true,
+                    is_static: false,
+                    is_virtual: false,
+                    is_pure_virtual: false,
+                    is_override: false,
+                    is_final: false,
+                    is_const: false,
+                    access: AccessSpecifier::Public,
+                },
+                vec![make_node(
+                    ClangNodeKind::CompoundStmt,
+                    vec![make_node(
+                        ClangNodeKind::ReturnStmt,
+                        vec![make_node(ClangNodeKind::NullPtrLiteral, vec![])],
+                    )],
+                )],
+            )],
+        );
+
+        let xml_document_record = make_node(
+            ClangNodeKind::RecordDecl {
+                name: "XMLDocument".to_string(),
+                is_class: true,
+                is_definition: true,
+                fields: vec![("__base".to_string(), CppType::Named("XMLNode".to_string()))],
+            },
+            vec![make_node(
+                ClangNodeKind::FieldDecl {
+                    name: "__base".to_string(),
+                    ty: CppType::Named("XMLNode".to_string()),
+                    access: AccessSpecifier::Public,
+                    is_static: false,
+                    bit_field_width: None,
+                },
+                vec![],
+            )],
+        );
+
+        let probe_fn = make_node(
+            ClangNodeKind::FunctionDecl {
+                name: "Probe".to_string(),
+                mangled_name: "Probe".to_string(),
+                is_static: false,
+                return_type: xml_element_ptr_const,
+                params: vec![(
+                    "cdoc".to_string(),
+                    CppType::Reference {
+                        referent: Box::new(CppType::Named("XMLDocument".to_string())),
+                        is_const: true,
+                        is_rvalue: false,
+                    },
+                )],
+                is_definition: true,
+                is_variadic: false,
+                is_noexcept: false,
+                is_coroutine: false,
+                coroutine_info: None,
+            },
+            vec![make_node(
+                ClangNodeKind::CompoundStmt,
+                vec![make_node(
+                    ClangNodeKind::ReturnStmt,
+                    vec![make_node(
+                        ClangNodeKind::CallExpr {
+                            ty: xml_element_ptr_mut,
+                            template_instantiation: None,
+                        },
+                        vec![
+                            make_node(
+                                ClangNodeKind::MemberExpr {
+                                    member_name: "FirstChildElement".to_string(),
+                                    is_arrow: false,
+                                    ty: CppType::Function {
+                                        return_type: Box::new(CppType::Pointer {
+                                            pointee: Box::new(CppType::Named(
+                                                "XMLElement".to_string(),
+                                            )),
+                                            is_const: false,
+                                        }),
+                                        params: vec![char_ptr_const],
+                                        is_variadic: false,
+                                    },
+                                    declaring_class: Some("XMLNode".to_string()),
+                                    is_static: false,
+                                },
+                                vec![make_node(
+                                    ClangNodeKind::MemberExpr {
+                                        member_name: "__base".to_string(),
+                                        is_arrow: false,
+                                        ty: CppType::Named("XMLNode".to_string()),
+                                        declaring_class: Some("XMLDocument".to_string()),
+                                        is_static: false,
+                                    },
+                                    vec![make_node(
+                                        ClangNodeKind::DeclRefExpr {
+                                            name: "cdoc".to_string(),
+                                            ty: CppType::Reference {
+                                                referent: Box::new(CppType::Named(
+                                                    "XMLDocument".to_string(),
+                                                )),
+                                                is_const: true,
+                                                is_rvalue: false,
+                                            },
+                                            namespace_path: vec![],
+                                        },
+                                        vec![],
+                                    )],
+                                )],
+                            ),
+                            make_node(ClangNodeKind::NullPtrLiteral, vec![]),
+                        ],
+                    )],
+                )],
+            )],
+        );
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![
+                xml_element_record,
+                xml_node_record,
+                xml_document_record,
+                probe_fn,
+            ],
+        );
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("(*(((&cdoc.__base) as *const ")
+                && code.contains(")).FirstChildElement(std::ptr::null()"),
+            "const-ref receiver base navigation call should use mut-cast fallback, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("__base") && code.contains(".FirstChildElement(std::ptr::null()"),
+            "const-ref receiver base navigation call should preserve __base receiver chain, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("cdoc.__base.FirstChildElement(std::ptr::null())"),
+            "const-ref receiver base navigation call should avoid direct mutable call on immutable receiver, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_const_pointer_receiver_derived_navigation_call_uses_base_member_chain() {
+        let char_ptr_const = CppType::Pointer {
+            pointee: Box::new(CppType::Char { signed: true }),
+            is_const: true,
+        };
+        let xml_element_ptr_mut = CppType::Pointer {
+            pointee: Box::new(CppType::Named("XMLElement".to_string())),
+            is_const: false,
+        };
+        let xml_element_ptr_const = CppType::Pointer {
+            pointee: Box::new(CppType::Named("XMLElement".to_string())),
+            is_const: true,
+        };
+
+        let xml_node_record = make_node(
+            ClangNodeKind::RecordDecl {
+                name: "XMLNode".to_string(),
+                is_class: true,
+                is_definition: true,
+                fields: vec![],
+            },
+            vec![make_node(
+                ClangNodeKind::CXXMethodDecl {
+                    class_name: "XMLNode".to_string(),
+                    name: "FirstChildElement".to_string(),
+                    return_type: xml_element_ptr_mut.clone(),
+                    params: vec![("name".to_string(), char_ptr_const.clone())],
+                    is_definition: true,
+                    is_static: false,
+                    is_virtual: false,
+                    is_pure_virtual: false,
+                    is_override: false,
+                    is_final: false,
+                    is_const: false,
+                    access: AccessSpecifier::Public,
+                },
+                vec![make_node(
+                    ClangNodeKind::CompoundStmt,
+                    vec![make_node(
+                        ClangNodeKind::ReturnStmt,
+                        vec![make_node(ClangNodeKind::NullPtrLiteral, vec![])],
+                    )],
+                )],
+            )],
+        );
+
+        let xml_element_record = make_node(
+            ClangNodeKind::RecordDecl {
+                name: "XMLElement".to_string(),
+                is_class: true,
+                is_definition: true,
+                fields: vec![("__base".to_string(), CppType::Named("XMLNode".to_string()))],
+            },
+            vec![make_node(
+                ClangNodeKind::FieldDecl {
+                    name: "__base".to_string(),
+                    ty: CppType::Named("XMLNode".to_string()),
+                    access: AccessSpecifier::Public,
+                    is_static: false,
+                    bit_field_width: None,
+                },
+                vec![],
+            )],
+        );
+
+        let probe_fn = make_node(
+            ClangNodeKind::FunctionDecl {
+                name: "ProbeDerivedPointer".to_string(),
+                mangled_name: "ProbeDerivedPointer".to_string(),
+                is_static: false,
+                return_type: xml_element_ptr_const.clone(),
+                params: vec![
+                    ("root".to_string(), xml_element_ptr_const.clone()),
+                    ("name".to_string(), char_ptr_const.clone()),
+                ],
+                is_definition: true,
+                is_variadic: false,
+                is_noexcept: false,
+                is_coroutine: false,
+                coroutine_info: None,
+            },
+            vec![make_node(
+                ClangNodeKind::CompoundStmt,
+                vec![make_node(
+                    ClangNodeKind::ReturnStmt,
+                    vec![make_node(
+                        ClangNodeKind::CallExpr {
+                            ty: xml_element_ptr_mut,
+                            template_instantiation: None,
+                        },
+                        vec![
+                            make_node(
+                                ClangNodeKind::MemberExpr {
+                                    member_name: "FirstChildElement".to_string(),
+                                    is_arrow: false,
+                                    ty: CppType::Function {
+                                        return_type: Box::new(xml_element_ptr_const.clone()),
+                                        params: vec![char_ptr_const.clone()],
+                                        is_variadic: false,
+                                    },
+                                    declaring_class: Some("XMLNode".to_string()),
+                                    is_static: false,
+                                },
+                                vec![make_node(
+                                    ClangNodeKind::UnaryOperator {
+                                        op: UnaryOp::Deref,
+                                        ty: CppType::Named("XMLElement".to_string()),
+                                    },
+                                    vec![make_node(
+                                        ClangNodeKind::DeclRefExpr {
+                                            name: "root".to_string(),
+                                            ty: xml_element_ptr_const,
+                                            namespace_path: vec![],
+                                        },
+                                        vec![],
+                                    )],
+                                )],
+                            ),
+                            make_node(
+                                ClangNodeKind::DeclRefExpr {
+                                    name: "name".to_string(),
+                                    ty: char_ptr_const,
+                                    namespace_path: vec![],
+                                },
+                                vec![],
+                            ),
+                        ],
+                    )],
+                )],
+            )],
+        );
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![xml_node_record, xml_element_record, probe_fn],
+        );
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("as *const XMLElement) as *mut XMLElement")
+                && code.contains(".__base.FirstChildElement(name"),
+            "const derived pointer navigation call should route through __base fallback, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains(").FirstChildElement(name"),
+            "const derived pointer navigation call should avoid direct mutable call on XMLElement receiver, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
     fn test_rewrite_self_receiver_nested_call_uses_arg_temporary() {
         let expr = "self.CloseElement(self.CompactMode(element))";
         let rewritten =
@@ -38922,6 +39695,24 @@ mod tests {
         assert!(
             rewritten.contains("self.DeleteNode(__fragile_call_arg_0);"),
             "expected rewritten call to use temporary arg, got:\n{}",
+            rewritten
+        );
+    }
+
+    #[test]
+    fn test_rewrite_non_self_receiver_nested_call_uses_arg_temporary() {
+        let expr = "doc.__base.DeleteChild(doc.RootElement() as *mut XMLNode)";
+        let rewritten =
+            AstCodeGen::rewrite_self_receiver_call_with_arg_temporaries(expr).expect("rewrite");
+        assert!(
+            rewritten.contains("let __fragile_call_arg_0")
+                && rewritten.contains("doc.RootElement() as *mut XMLNode"),
+            "expected nested same-receiver call to be hoisted into temporary, got:\n{}",
+            rewritten
+        );
+        assert!(
+            rewritten.contains("doc.__base.DeleteChild(__fragile_call_arg_0);"),
+            "expected rewritten non-self receiver call to use temporary arg, got:\n{}",
             rewritten
         );
     }
