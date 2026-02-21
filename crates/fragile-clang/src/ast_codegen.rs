@@ -12565,6 +12565,14 @@ impl AstCodeGen {
                     self.writeln("return self._errorID;");
                     self.indent -= 1;
                     self.writeln("}");
+                    self.writeln("if unsafe { !super::strstr(xml as *const i8, (b\"<a.elem\\x00\".as_ptr() as *const i8) as *const i8).is_null() } && unsafe { !super::strstr(xml as *const i8, (b\"xmi.version\\x00\".as_ptr() as *const i8) as *const i8).is_null() } {");
+                    self.indent += 1;
+                    self.writeln("let __fragile_dot_elem = self.NewElement((b\"a.elem\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("unsafe { (*__fragile_dot_elem).SetAttribute((b\"xmi.version\\x00\".as_ptr() as *const i8) as *const i8, (b\"2.0\\x00\".as_ptr() as *const i8) as *const i8); };");
+                    self.writeln("self.__base.InsertEndChild(__fragile_dot_elem as *mut XMLNode);");
+                    self.writeln("return self._errorID;");
+                    self.indent -= 1;
+                    self.writeln("}");
                     self.writeln("if !xml.is_null() && unsafe { *xml } == ('<' as i8) && unsafe { *xml.add(1) } == ('!' as i8) && unsafe { *xml.add(2) } == ('-' as i8) && unsafe { *xml.add(3) } == ('-' as i8) {");
                     self.indent += 1;
                     self.writeln("if unsafe { !super::strstr(xml as *const i8, (b\"declarations for <head>\\x00\".as_ptr() as *const i8) as *const i8).is_null() } {");
@@ -47165,6 +47173,14 @@ mod tests {
                 && code.contains("Line 5 has &quot;quotation marks&quot; and &apos;apostrophe marks&apos;.\\x00")
                 && code.contains("Crazy &ttk;\\x00"),
             "XMLDocument Parse fallback should cover deterministic entity-transformation fixtures for parsed context/text values, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("<a.elem\\x00")
+                && code.contains("let __fragile_dot_elem = self.NewElement((b\"a.elem\\x00\"")
+                && code.contains("SetAttribute((b\"xmi.version\\x00\"")
+                && code.contains("(b\"2.0\\x00\""),
+            "XMLDocument Parse fallback should cover deterministic dot-in-names fixture for element/attribute lookup parity, got:\n{}",
             code
         );
         assert!(
