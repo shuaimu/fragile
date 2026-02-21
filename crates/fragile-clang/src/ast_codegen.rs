@@ -8838,6 +8838,154 @@ impl AstCodeGen {
         None
     }
 
+    /// Resolve unqualified function calls inside class methods that refer to
+    /// same-class static helpers.
+    fn resolve_unqualified_current_class_method_call(
+        &self,
+        callee: &ClangNode,
+        arg_count: usize,
+    ) -> Option<String> {
+        if Self::is_function_pointer_variable(callee) {
+            return None;
+        }
+
+        let decl_ref = Self::get_declref_expr_node(callee)?;
+        let ClangNodeKind::DeclRefExpr {
+            name,
+            namespace_path,
+            ty,
+            ..
+        } = &decl_ref.kind
+        else {
+            return None;
+        };
+
+        if !matches!(ty, CppType::Function { .. }) {
+            return None;
+        }
+        let current_class = self.current_class.as_ref()?;
+        let current_class_base = Self::unqualified_cpp_name(current_class);
+        if !namespace_path.is_empty() {
+            let class_parts: Vec<&str> = current_class.split("::").collect();
+            let class_namespace = &class_parts[..class_parts.len().saturating_sub(1)];
+            let path_matches_class_namespace =
+                namespace_path.len() == class_namespace.len()
+                    && namespace_path
+                        .iter()
+                        .zip(class_namespace.iter())
+                        .all(|(segment, class_segment)| {
+                            Self::unqualified_cpp_name(segment)
+                                == Self::unqualified_cpp_name(class_segment)
+                        });
+            let path_mentions_current_class = namespace_path
+                .iter()
+                .any(|segment| Self::unqualified_cpp_name(segment) == current_class_base);
+            let current_namespace_parts: Vec<&str> =
+                self.current_namespace.iter().map(|(name, _)| name.as_str()).collect();
+            let path_matches_current_namespace =
+                namespace_path.len() == current_namespace_parts.len()
+                    && namespace_path
+                        .iter()
+                        .zip(current_namespace_parts.iter())
+                        .all(|(segment, ns_segment)| {
+                            Self::unqualified_cpp_name(segment)
+                                == Self::unqualified_cpp_name(ns_segment)
+                        });
+            if !path_matches_class_namespace
+                && !path_mentions_current_class
+                && !path_matches_current_namespace
+            {
+                return None;
+            }
+        }
+        let base_name_cpp = Self::strip_namespace_and_template(name);
+        if self.local_vars.contains(name)
+            || self.local_vars.contains(&base_name_cpp)
+            || self.defined_function_names.contains(name)
+            || self.defined_function_names.contains(&base_name_cpp)
+            || self.declared_function_names.contains(name)
+            || self.declared_function_names.contains(&base_name_cpp)
+            || name.starts_with("__builtin_")
+            || base_name_cpp.starts_with("__builtin_")
+            || Self::map_runtime_function_name(name).is_some()
+            || Self::map_runtime_function_name(&base_name_cpp).is_some()
+        {
+            return None;
+        }
+
+        let base_method_name = sanitize_identifier(&base_name_cpp);
+        let signature = if let CppType::Function {
+            params,
+            return_type,
+            ..
+        } = ty
+        {
+            Some((params.as_slice(), return_type.as_ref()))
+        } else {
+            None
+        };
+        let mut class_candidates = vec![current_class.clone()];
+        if current_class_base != current_class {
+            class_candidates.push(current_class_base.to_string());
+        }
+        for class_name in class_candidates {
+            if let Some(resolved) = self.select_method_overload_name(
+                &class_name,
+                &base_method_name,
+                arg_count,
+                signature,
+                false,
+            ) {
+                return Some(format!("Self::{}", resolved));
+            }
+        }
+
+        None
+    }
+
+    /// Fallback resolver when callee AST metadata is degraded but function text is known.
+    fn resolve_current_class_method_from_func_name(
+        &self,
+        func: &str,
+        arg_count: usize,
+    ) -> Option<String> {
+        if func.starts_with("Self::")
+            || func.starts_with("self::")
+            || func.starts_with("super::")
+            || func.starts_with("unsafe { ")
+        {
+            return None;
+        }
+
+        let leaf = func.rsplit("::").next().unwrap_or(func);
+        if leaf.is_empty()
+            || leaf.starts_with("__builtin_")
+            || Self::map_runtime_function_name(leaf).is_some()
+        {
+            return None;
+        }
+
+        let base_method_name = sanitize_identifier(leaf);
+        let current_class = self.current_class.as_ref()?;
+        let current_class_base = Self::unqualified_cpp_name(current_class);
+        let mut class_candidates = vec![current_class.clone()];
+        if current_class_base != current_class {
+            class_candidates.push(current_class_base.to_string());
+        }
+        for class_name in class_candidates {
+            if let Some(resolved) = self.select_method_overload_name(
+                &class_name,
+                &base_method_name,
+                arg_count,
+                None,
+                false,
+            ) {
+                return Some(format!("Self::{}", resolved));
+            }
+        }
+        None
+    }
+
     /// Get the path to access __vtable from a derived class pointer
     /// Returns something like ".__base" or ".__base.__base" for inheritance chains
     fn get_vtable_access_path(&self, class_name: &str) -> String {
@@ -17653,6 +17801,18 @@ impl AstCodeGen {
         }
     }
 
+    /// Get the innermost DeclRefExpr node (possibly wrapped in casts/parens/unknown wrappers).
+    fn get_declref_expr_node(node: &ClangNode) -> Option<&ClangNode> {
+        match &node.kind {
+            ClangNodeKind::DeclRefExpr { .. } => Some(node),
+            ClangNodeKind::ImplicitCastExpr { .. }
+            | ClangNodeKind::CastExpr { .. }
+            | ClangNodeKind::ParenExpr { .. }
+            | ClangNodeKind::Unknown(_) => node.children.first().and_then(Self::get_declref_expr_node),
+            _ => None,
+        }
+    }
+
     /// Get the base DeclRefExpr name for assignable targets.
     /// This supports member chains like `param.field.subfield`.
     fn get_assignable_base_declref_name(node: &ClangNode) -> Option<String> {
@@ -17846,6 +18006,27 @@ impl AstCodeGen {
                 false
             }
             _ => false,
+        }
+    }
+
+    /// Cast a `this` expression (`self`/`__self`) to a raw pointer for
+    /// pointer-comparison contexts.
+    fn cast_this_expr_for_pointer_compare(
+        this_expr: &str,
+        this_ty: Option<&CppType>,
+        other_ty: Option<&CppType>,
+    ) -> String {
+        let prefer_const = other_ty
+            .map(|ty| ty.to_rust_type_str().starts_with("*const "))
+            .unwrap_or_else(|| {
+                this_ty
+                    .map(|ty| ty.to_rust_type_str().starts_with("*const "))
+                    .unwrap_or(false)
+            });
+        if prefer_const {
+            format!("({}) as *const _", this_expr)
+        } else {
+            format!("({}) as *mut _", this_expr)
         }
     }
 
@@ -24551,7 +24732,7 @@ impl AstCodeGen {
                     let default_val = default_value_for_type(element_type);
                     // Allocate with size header so delete[] can free correctly
                     format!(
-                        "unsafe {{ fragile_new_array::<{}>({} as usize, {}) }}",
+                        "unsafe {{ fragile_new_array::<{}>(({}) as usize, {}) }}",
                         element_type.to_rust_type_str(),
                         size_expr,
                         default_val
@@ -25819,6 +26000,40 @@ impl AstCodeGen {
                                         .as_ref()
                                         .is_some_and(Self::is_pointer_like_type)
                                     || self.is_ptr_var_expr(&node.children[1]);
+                            let left_type_ref = left_type.as_ref().or(left_orig_type.as_ref());
+                            let right_type_ref = right_type.as_ref().or(right_orig_type.as_ref());
+                            let left_is_this = Self::expr_is_this(&node.children[0]);
+                            let right_is_this = Self::expr_is_this(&node.children[1]);
+
+                            if (left_is_this && right_is_ptr) || (right_is_this && left_is_ptr) {
+                                let left = self.expr_to_string(&node.children[0]);
+                                let right = self.expr_to_string(&node.children[1]);
+                                let left = if left_is_this {
+                                    Self::cast_this_expr_for_pointer_compare(
+                                        &left,
+                                        left_type_ref,
+                                        right_type_ref,
+                                    )
+                                } else {
+                                    left
+                                };
+                                let right = if right_is_this {
+                                    Self::cast_this_expr_for_pointer_compare(
+                                        &right,
+                                        right_type_ref,
+                                        left_type_ref,
+                                    )
+                                } else {
+                                    right
+                                };
+                                return format!(
+                                    "{} {} {}",
+                                    wrap_unsafe_for_binop(&left),
+                                    op_str,
+                                    wrap_unsafe_for_binop(&right)
+                                );
+                            }
+
                             let left_is_array = left_type
                                 .as_ref()
                                 .is_some_and(Self::is_array_decay_source_type)
@@ -27418,6 +27633,19 @@ impl AstCodeGen {
                         ) {
                             func = resolved;
                         }
+                        if let Some(resolved) = self.resolve_unqualified_current_class_method_call(
+                            callee,
+                            node.children.len().saturating_sub(1),
+                        ) {
+                            func = resolved;
+                        } else if let Some(resolved) =
+                            self.resolve_current_class_method_from_func_name(
+                                &func,
+                                node.children.len().saturating_sub(1),
+                            )
+                        {
+                            func = resolved;
+                        }
                         let is_fn_ptr_call = Self::is_function_pointer_variable(callee);
                         let param_types = Self::get_function_param_types(callee);
                         let args: Vec<String> = node.children[1..]
@@ -27867,6 +28095,19 @@ impl AstCodeGen {
                         &func,
                         node.children.len().saturating_sub(1),
                     ) {
+                        func = resolved;
+                    }
+                    if let Some(resolved) = self.resolve_unqualified_current_class_method_call(
+                        &node.children[0],
+                        node.children.len().saturating_sub(1),
+                    ) {
+                        func = resolved;
+                    } else if let Some(resolved) =
+                        self.resolve_current_class_method_from_func_name(
+                            &func,
+                            node.children.len().saturating_sub(1),
+                        )
+                    {
                         func = resolved;
                     }
 
@@ -31201,6 +31442,162 @@ mod tests {
     }
 
     #[test]
+    fn test_this_eq_raw_pointer_compares_using_pointer_cast() {
+        let self_ptr_ty = CppType::Pointer {
+            pointee: Box::new(CppType::Named("StrPair".to_string())),
+            is_const: false,
+        };
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![make_node(
+                ClangNodeKind::RecordDecl {
+                    name: "StrPair".to_string(),
+                    is_class: true,
+                    is_definition: true,
+                    fields: vec![],
+                },
+                vec![make_node(
+                    ClangNodeKind::CXXMethodDecl {
+                        class_name: "StrPair".to_string(),
+                        name: "SameAs".to_string(),
+                        return_type: CppType::Bool,
+                        params: vec![("other".to_string(), self_ptr_ty.clone())],
+                        is_definition: true,
+                        is_static: false,
+                        is_virtual: false,
+                        is_pure_virtual: false,
+                        is_override: false,
+                        is_final: false,
+                        is_const: false,
+                        access: AccessSpecifier::Public,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![make_node(
+                            ClangNodeKind::ReturnStmt,
+                            vec![make_node(
+                                ClangNodeKind::BinaryOperator {
+                                    op: BinaryOp::Eq,
+                                    ty: CppType::Bool,
+                                },
+                                vec![
+                                    make_node(
+                                        ClangNodeKind::CXXThisExpr {
+                                            ty: self_ptr_ty.clone(),
+                                        },
+                                        vec![],
+                                    ),
+                                    make_node(
+                                        ClangNodeKind::DeclRefExpr {
+                                            name: "other".to_string(),
+                                            ty: self_ptr_ty,
+                                            namespace_path: vec![],
+                                        },
+                                        vec![],
+                                    ),
+                                ],
+                            )],
+                        )],
+                    )],
+                )],
+            )],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("(self as *mut _) == other")
+                || code.contains("(self) as *mut _ == other")
+                || code.contains("other == (self as *mut _)"),
+            "this-pointer equality should cast self to raw pointer before comparison, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("return self == other;"),
+            "this-pointer equality must not compare &mut self directly with raw pointer, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_new_array_size_cast_parenthesizes_compound_size_expr() {
+        let len_ty = CppType::Long { signed: false };
+        let char_ptr_ty = CppType::Pointer {
+            pointee: Box::new(CppType::Char { signed: true }),
+            is_const: false,
+        };
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![make_node(
+                ClangNodeKind::FunctionDecl {
+                    name: "alloc_chars".to_string(),
+                    mangled_name: "alloc_chars".to_string(),
+                    is_static: false,
+                    return_type: char_ptr_ty.clone(),
+                    params: vec![("len".to_string(), len_ty.clone())],
+                    is_definition: true,
+                    is_variadic: false,
+                    is_noexcept: false,
+                    is_coroutine: false,
+                    coroutine_info: None,
+                },
+                vec![make_node(
+                    ClangNodeKind::CompoundStmt,
+                    vec![make_node(
+                        ClangNodeKind::ReturnStmt,
+                        vec![make_node(
+                            ClangNodeKind::CXXNewExpr {
+                                ty: char_ptr_ty,
+                                is_array: true,
+                                is_placement: false,
+                            },
+                            vec![make_node(
+                                ClangNodeKind::BinaryOperator {
+                                    op: BinaryOp::Add,
+                                    ty: len_ty.clone(),
+                                },
+                                vec![
+                                    make_node(
+                                        ClangNodeKind::DeclRefExpr {
+                                            name: "len".to_string(),
+                                            ty: len_ty,
+                                            namespace_path: vec![],
+                                        },
+                                        vec![],
+                                    ),
+                                    make_node(
+                                        ClangNodeKind::IntegerLiteral {
+                                            value: 1,
+                                            cpp_type: Some(CppType::Int { signed: true }),
+                                        },
+                                        vec![],
+                                    ),
+                                ],
+                            )],
+                        )],
+                    )],
+                )],
+            )],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("fragile_new_array::<i8>("),
+            "expected generated array allocation helper call, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("fragile_new_array::<i8>(len + 1 as usize"),
+            "array allocation size cast must wrap full expression to avoid `len + 1 as usize` precedence bug, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains(") as usize, 0"),
+            "array allocation should cast wrapped size expression to usize, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
     fn test_namespaced_type_alias_export_for_top_level_references() {
         let namespaced_type = make_node(
             ClangNodeKind::NamespaceDecl {
@@ -33106,6 +33503,133 @@ mod tests {
         assert!(
             code.contains("XMLUTIL_WRITEBOOLTRUE"),
             "namespace-only static member DeclRefExpr should resolve using current class static mapping, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_unqualified_same_class_static_helper_call_uses_self_qualification() {
+        let cchar_ptr = CppType::Pointer {
+            pointee: Box::new(CppType::Char { signed: true }),
+            is_const: true,
+        };
+        let i32_ptr = CppType::Pointer {
+            pointee: Box::new(CppType::Int { signed: true }),
+            is_const: false,
+        };
+        let to_int_fn_ty = CppType::Function {
+            return_type: Box::new(CppType::Bool),
+            params: vec![cchar_ptr.clone(), i32_ptr.clone()],
+            is_variadic: false,
+        };
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![make_node(
+                ClangNodeKind::RecordDecl {
+                    name: "XMLUtil".to_string(),
+                    is_class: true,
+                    is_definition: true,
+                    fields: vec![],
+                },
+                vec![
+                    make_node(
+                        ClangNodeKind::CXXMethodDecl {
+                            class_name: "tinyxml2::XMLUtil".to_string(),
+                            name: "ToInt".to_string(),
+                            return_type: CppType::Bool,
+                            params: vec![
+                                ("str".to_string(), cchar_ptr.clone()),
+                                ("value".to_string(), i32_ptr.clone()),
+                            ],
+                            is_definition: true,
+                            is_static: true,
+                            is_virtual: false,
+                            is_pure_virtual: false,
+                            is_override: false,
+                            is_final: false,
+                            is_const: false,
+                            access: AccessSpecifier::Public,
+                        },
+                        vec![make_node(
+                            ClangNodeKind::CompoundStmt,
+                            vec![make_node(
+                                ClangNodeKind::ReturnStmt,
+                                vec![make_node(ClangNodeKind::BoolLiteral(true), vec![])],
+                            )],
+                        )],
+                    ),
+                    make_node(
+                        ClangNodeKind::CXXMethodDecl {
+                            class_name: "tinyxml2::XMLUtil".to_string(),
+                            name: "ToBool".to_string(),
+                            return_type: CppType::Bool,
+                            params: vec![
+                                ("str".to_string(), cchar_ptr.clone()),
+                                ("value".to_string(), i32_ptr.clone()),
+                            ],
+                            is_definition: true,
+                            is_static: true,
+                            is_virtual: false,
+                            is_pure_virtual: false,
+                            is_override: false,
+                            is_final: false,
+                            is_const: false,
+                            access: AccessSpecifier::Public,
+                        },
+                        vec![make_node(
+                            ClangNodeKind::CompoundStmt,
+                            vec![make_node(
+                                ClangNodeKind::ReturnStmt,
+                                vec![make_node(
+                                    ClangNodeKind::CallExpr {
+                                        ty: CppType::Bool,
+                                        template_instantiation: None,
+                                    },
+                                    vec![
+                                        make_node(
+                                            ClangNodeKind::DeclRefExpr {
+                                                name: "ToInt".to_string(),
+                                                ty: to_int_fn_ty,
+                                                namespace_path: vec!["tinyxml2".to_string()],
+                                            },
+                                            vec![],
+                                        ),
+                                        make_node(
+                                            ClangNodeKind::DeclRefExpr {
+                                                name: "str".to_string(),
+                                                ty: cchar_ptr,
+                                                namespace_path: vec![],
+                                            },
+                                            vec![],
+                                        ),
+                                        make_node(
+                                            ClangNodeKind::DeclRefExpr {
+                                                name: "value".to_string(),
+                                                ty: i32_ptr,
+                                                namespace_path: vec![],
+                                            },
+                                            vec![],
+                                        ),
+                                    ],
+                                )],
+                            )],
+                        )],
+                    ),
+                ],
+            )],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("return Self::ToInt(str, value);")
+                || code.contains("return Self::ToInt(str as *const i8, value as *mut i32);"),
+            "unqualified same-class static helper call should be qualified with Self::, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("return ToInt(str, value);")
+                && !code.contains("return ToInt(str as *const i8, value as *mut i32);"),
+            "unqualified helper call should not stay as unresolved free function call, got:\n{}",
             code
         );
     }
