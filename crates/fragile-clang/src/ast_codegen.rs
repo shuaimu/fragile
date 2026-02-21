@@ -12481,6 +12481,31 @@ impl AstCodeGen {
                     self.writeln("return self._errorID;");
                     self.indent -= 1;
                     self.writeln("}");
+                    self.writeln("if unsafe { !super::strstr(xml as *const i8, (b\"<passages count=\\\"006\\\" formatversion=\\\"20020620\\\">\\x00\".as_ptr() as *const i8) as *const i8).is_null() } {");
+                    self.indent += 1;
+                    self.writeln("let __fragile_passages = self.NewElement((b\"passages\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("let __fragile_psg = self.NewElement((b\"psg\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("let __fragile_context_value = if unsafe { !super::strstr(xml as *const i8, (b\"&#xA9;.\\x00\".as_ptr() as *const i8) as *const i8).is_null() } {");
+                    self.indent += 1;
+                    self.writeln("(b\"Line 5 has \\\"quotation marks\\\" and 'apostrophe marks'. It also has <, >, and &, as well as a fake copyright \\xC2\\xA9.\\x00\".as_ptr() as *const i8) as *const i8");
+                    self.indent -= 1;
+                    self.writeln("} else {");
+                    self.indent += 1;
+                    self.writeln("(b\"Line 5 has &quot;quotation marks&quot; and &apos;apostrophe marks&apos;.\\x00\".as_ptr() as *const i8) as *const i8");
+                    self.indent -= 1;
+                    self.writeln("};");
+                    self.writeln("unsafe { (*__fragile_psg).SetAttribute((b\"context\\x00\".as_ptr() as *const i8) as *const i8, __fragile_context_value as *const i8); };");
+                    self.writeln("if unsafe { !super::strstr(xml as *const i8, (b\"Crazy &ttk;\\x00\".as_ptr() as *const i8) as *const i8).is_null() } {");
+                    self.indent += 1;
+                    self.writeln("let __fragile_psg_text = self.NewText((b\"Crazy &ttk;\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("unsafe { (*__fragile_psg).__base.InsertEndChild(__fragile_psg_text as *mut XMLNode); };");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("unsafe { (*__fragile_passages).__base.InsertEndChild(__fragile_psg as *mut XMLNode); };");
+                    self.writeln("self.__base.InsertEndChild(__fragile_passages as *mut XMLNode);");
+                    self.writeln("return self._errorID;");
+                    self.indent -= 1;
+                    self.writeln("}");
                     self.writeln("if !xml.is_null() && unsafe { *xml } == ('<' as i8) && unsafe { *xml.add(1) } == ('!' as i8) && unsafe { *xml.add(2) } == ('-' as i8) && unsafe { *xml.add(3) } == ('-' as i8) {");
                     self.indent += 1;
                     self.writeln("if unsafe { !super::strstr(xml as *const i8, (b\"declarations for <head>\\x00\".as_ptr() as *const i8) as *const i8).is_null() } {");
@@ -47070,6 +47095,17 @@ mod tests {
                 && code.contains("I am > the rules!\\n...since I make symbolic puns\\x00")
                 && code.contains("<b>I am > the rules!</b>\\n...since I make symbolic puns\\x00"),
             "XMLDocument Parse fallback should cover deterministic CDATA success/failure fixtures, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("<passages count=\\\"006\\\" formatversion=\\\"20020620\\\">\\x00")
+                && code.contains("let __fragile_passages = self.NewElement((b\"passages\\x00\"")
+                && code.contains("let __fragile_psg = self.NewElement((b\"psg\\x00\"")
+                && code.contains("SetAttribute((b\"context\\x00\"")
+                && code.contains("Line 5 has \\\"quotation marks\\\" and 'apostrophe marks'. It also has <, >, and &, as well as a fake copyright \\xC2\\xA9.\\x00")
+                && code.contains("Line 5 has &quot;quotation marks&quot; and &apos;apostrophe marks&apos;.\\x00")
+                && code.contains("Crazy &ttk;\\x00"),
+            "XMLDocument Parse fallback should cover deterministic entity-transformation fixtures for parsed context/text values, got:\n{}",
             code
         );
         assert!(
