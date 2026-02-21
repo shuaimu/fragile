@@ -476,6 +476,10 @@ impl CppType {
                     "std::byte" => "byte".to_string(),
                     // C++11 memory_order - map to the generated memory_order enum
                     "std::memory_order" => "memory_order".to_string(),
+                    // tinyxml2 namespaced enums are also auto-exported as top-level aliases.
+                    // Normalize these spellings so call/return typing stays consistent.
+                    "tinyxml2::XMLError" | "tinyxml2_XMLError" => "XMLError".to_string(),
+                    "tinyxml2::Whitespace" | "tinyxml2_Whitespace" => "Whitespace".to_string(),
                     // C++11 chars_format (from <charconv>)
                     "std::chars_format" => "u32".to_string(), // Flags enum, treat as u32
                     // iostream base types
@@ -1534,6 +1538,26 @@ mod tests {
         assert_eq!(
             CppType::Named("std::__ndk1::vector<int>".to_string()).to_rust_type_str(),
             "std_vector_int"
+        );
+    }
+
+    #[test]
+    fn test_tinyxml2_namespaced_enum_alias_mappings() {
+        assert_eq!(
+            CppType::Named("tinyxml2::XMLError".to_string()).to_rust_type_str(),
+            "XMLError"
+        );
+        assert_eq!(
+            CppType::Named("tinyxml2_XMLError".to_string()).to_rust_type_str(),
+            "XMLError"
+        );
+        assert_eq!(
+            CppType::Named("tinyxml2::Whitespace".to_string()).to_rust_type_str(),
+            "Whitespace"
+        );
+        assert_eq!(
+            CppType::Named("tinyxml2_Whitespace".to_string()).to_rust_type_str(),
+            "Whitespace"
         );
     }
 

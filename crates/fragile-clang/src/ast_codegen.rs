@@ -8502,25 +8502,35 @@ impl AstCodeGen {
     }
 
     fn method_definition_key(node: &ClangNode) -> Option<String> {
-        if let ClangNodeKind::CXXMethodDecl {
-            class_name,
-            name,
-            params,
-            is_static,
-            is_const,
-            ..
-        } = &node.kind
-        {
-            Some(format!(
+        match &node.kind {
+            ClangNodeKind::CXXMethodDecl {
+                class_name,
+                name,
+                params,
+                is_static,
+                is_const,
+                ..
+            } => Some(format!(
                 "{}::{}#{}#{}#{}",
                 class_name,
                 name,
                 params.len(),
                 is_static,
                 is_const
-            ))
-        } else {
-            None
+            )),
+            ClangNodeKind::ConstructorDecl {
+                class_name, params, ..
+            } => Some(format!(
+                "{}::ctor#{}#{}",
+                class_name,
+                params.len(),
+                params
+                    .iter()
+                    .map(|(_, ty)| ty.to_rust_type_str())
+                    .collect::<Vec<_>>()
+                    .join("|")
+            )),
+            _ => None,
         }
     }
 
@@ -18934,18 +18944,33 @@ impl AstCodeGen {
             );
 
         if !in_record_scope {
-            if let ClangNodeKind::CXXMethodDecl {
-                class_name,
-                is_definition,
-                ..
-            } = &node.kind
-            {
-                if *is_definition && !class_name.is_empty() {
-                    self.out_of_line_method_defs
-                        .entry(class_name.clone())
-                        .or_default()
-                        .push(node.clone());
+            match &node.kind {
+                ClangNodeKind::CXXMethodDecl {
+                    class_name,
+                    is_definition,
+                    ..
                 }
+                | ClangNodeKind::ConstructorDecl {
+                    class_name,
+                    is_definition,
+                    ..
+                } => {
+                    if *is_definition && !class_name.is_empty() {
+                        self.out_of_line_method_defs
+                            .entry(class_name.clone())
+                            .or_default()
+                            .push(node.clone());
+                        if let Some(last) = class_name.rsplit("::").next() {
+                            if last != class_name {
+                                self.out_of_line_method_defs
+                                    .entry(last.to_string())
+                                    .or_default()
+                                    .push(node.clone());
+                            }
+                        }
+                    }
+                }
+                _ => {}
             }
         }
 
@@ -30896,6 +30921,46 @@ mod tests {
         assert!(
             code.contains("return self.Reset()"),
             "expected in-class caller to resolve Reset call, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_out_of_line_constructor_definition_is_emitted_into_class_impl() {
+        let node_record = make_node(
+            ClangNodeKind::RecordDecl {
+                name: "XMLNode".to_string(),
+                is_class: true,
+                is_definition: true,
+                fields: vec![],
+            },
+            vec![],
+        );
+        let out_of_line_ctor = make_node(
+            ClangNodeKind::ConstructorDecl {
+                class_name: "tinyxml2::XMLNode".to_string(),
+                params: vec![(
+                    "doc".to_string(),
+                    CppType::Pointer {
+                        pointee: Box::new(CppType::Named("XMLDocument".to_string())),
+                        is_const: false,
+                    },
+                )],
+                is_definition: true,
+                ctor_kind: ConstructorKind::Other,
+                access: AccessSpecifier::Public,
+            },
+            vec![make_node(ClangNodeKind::CompoundStmt, vec![])],
+        );
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![node_record, out_of_line_ctor],
+        );
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("pub fn new_1(doc: *mut XMLDocument) -> Self"),
+            "expected out-of-line constructor definition to be emitted in impl, got:\n{}",
             code
         );
     }
