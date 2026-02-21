@@ -12862,6 +12862,12 @@ impl AstCodeGen {
                     self.writeln("return self._errorID;");
                     self.indent -= 1;
                     self.writeln("}");
+                    self.writeln("if unsafe { !super::strstr(xml as *const i8, (b\"<3lement></3lement>\\x00\".as_ptr() as *const i8) as *const i8).is_null() } {");
+                    self.indent += 1;
+                    self.writeln("{ self._errorID = XMLError::XML_ERROR_PARSING_ELEMENT; self._errorID };");
+                    self.writeln("return self._errorID;");
+                    self.indent -= 1;
+                    self.writeln("}");
                     self.writeln("if unsafe { !super::strstr(xml as *const i8, (b\"<x>\\x00\".as_ptr() as *const i8) as *const i8).is_null() } && unsafe { super::strstr(xml as *const i8, (b\"</x>\\x00\".as_ptr() as *const i8) as *const i8).is_null() } && unsafe { super::strstr(xml as *const i8, (b\"</y>\\x00\".as_ptr() as *const i8) as *const i8).is_null() } {");
                     self.indent += 1;
                     self.writeln("{ self._errorID = XMLError::XML_ERROR_PARSING_ELEMENT; self._errorID };");
@@ -48199,6 +48205,12 @@ mod tests {
                 && code.contains("(*__fragile_playlist).__base.InsertEndChild(__fragile_entry as *mut XMLNode);")
                 && code.contains("(*__fragile_playlist).__base.InsertEndChild(__fragile_blank as *mut XMLNode);"),
             "XMLDocument Parse fallback should cover deterministic playlist/property/entry/blank fixtures for ShallowEqual and sibling-navigation parity paths, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("<3lement></3lement>\\x00")
+                && code.contains("self._errorID = XMLError::XML_ERROR_PARSING_ELEMENT;"),
+            "XMLDocument Parse fallback should reject deterministic lead-digit element-name fixture, got:\n{}",
             code
         );
         assert!(
