@@ -632,6 +632,7 @@ struct MethodOverloadInfo {
     param_types: Vec<CppType>,
     return_type: CppType,
     is_const: bool,
+    is_static: bool,
 }
 
 /// Rust code generator that works directly with Clang AST.
@@ -8704,6 +8705,7 @@ impl AstCodeGen {
                     param_types: params.iter().map(|(_, ty)| ty.clone()).collect(),
                     return_type: return_type.clone(),
                     is_const: *is_const && !*is_static,
+                    is_static: *is_static,
                 });
         }
 
@@ -8842,6 +8844,46 @@ impl AstCodeGen {
             prefer_const,
         )
         .map(|entry| entry.rust_name.clone())
+    }
+
+    fn select_static_method_overload_name(
+        &self,
+        class_name: &str,
+        base_method_name: &str,
+        arg_count: usize,
+        signature: Option<(&[CppType], &CppType)>,
+    ) -> Option<String> {
+        let class_overloads = self.get_class_method_overloads(class_name)?;
+        let method_overloads = class_overloads.get(base_method_name)?;
+
+        let mut candidates: Vec<&MethodOverloadInfo> = method_overloads
+            .iter()
+            .filter(|entry| entry.is_static && entry.param_types.len() == arg_count)
+            .collect();
+        if candidates.is_empty() {
+            return None;
+        }
+
+        let mut has_exact_signature = false;
+        if let Some((params, return_type)) = signature {
+            let signature_matches: Vec<&MethodOverloadInfo> = candidates
+                .iter()
+                .copied()
+                .filter(|entry| {
+                    entry.param_types.as_slice() == params && entry.return_type == *return_type
+                })
+                .collect();
+            if !signature_matches.is_empty() {
+                candidates = signature_matches;
+                has_exact_signature = true;
+            }
+        }
+
+        if candidates.len() > 1 && !has_exact_signature {
+            return None;
+        }
+
+        Some(candidates.first()?.rust_name.clone())
     }
 
     fn select_method_overload_info(
@@ -9254,6 +9296,134 @@ impl AstCodeGen {
         }
     }
 
+    fn is_tinyxml2_utility_to_helper_name(base_method_name: &str) -> bool {
+        matches!(
+            base_method_name,
+            "ToInt"
+                | "ToUnsigned"
+                | "ToInt64"
+                | "ToUnsigned64"
+                | "ToBool"
+                | "ToFloat"
+                | "ToDouble"
+        )
+    }
+
+    fn is_tinyxml2_helper_resolution_context(
+        &self,
+        current_class: &str,
+        namespace_path: &[String],
+    ) -> bool {
+        namespace_path
+            .iter()
+            .any(|segment| Self::unqualified_cpp_name(segment) == "tinyxml2")
+            || current_class
+                .split("::")
+                .any(|segment| Self::unqualified_cpp_name(segment) == "tinyxml2")
+            || self
+                .current_namespace
+                .iter()
+                .any(|(segment, _)| Self::unqualified_cpp_name(segment) == "tinyxml2")
+    }
+
+    fn resolve_tinyxml2_xmlutil_helper_call(
+        &self,
+        current_class: &str,
+        namespace_path: &[String],
+        base_method_name: &str,
+        arg_count: usize,
+        signature: Option<(&[CppType], &CppType)>,
+    ) -> Option<String> {
+        if Self::unqualified_cpp_name(current_class) == "XMLUtil"
+            || !Self::is_tinyxml2_utility_to_helper_name(base_method_name)
+        {
+            return None;
+        }
+        if !namespace_path.is_empty()
+            && !namespace_path.iter().all(|segment| {
+                let normalized = Self::unqualified_cpp_name(segment);
+                normalized == "tinyxml2" || normalized == "XMLUtil"
+            })
+        {
+            return None;
+        }
+        if !self.is_tinyxml2_helper_resolution_context(current_class, namespace_path) {
+            return None;
+        }
+
+        for class_name in ["XMLUtil", "tinyxml2::XMLUtil"] {
+            let Some(resolved) = self.select_static_method_overload_name(
+                class_name,
+                base_method_name,
+                arg_count,
+                signature,
+            ) else {
+                continue;
+            };
+
+            let class_segments: Vec<String> =
+                class_name.split("::").map(|part| part.to_string()).collect();
+            let class_path = if class_segments.len() > 1 {
+                let target_ns = class_segments[..class_segments.len() - 1].to_vec();
+                let class_ident = sanitize_identifier(
+                    class_segments
+                        .last()
+                        .map(String::as_str)
+                        .unwrap_or("XMLUtil"),
+                );
+                self.compute_relative_path(&target_ns, &class_ident)
+            } else {
+                sanitize_identifier(class_name)
+            };
+            return Some(format!("{}::{}", class_path, resolved));
+        }
+
+        None
+    }
+
+    fn resolve_tinyxml2_xmlutil_helper_from_func_name(
+        &self,
+        func: &str,
+        arg_count: usize,
+    ) -> Option<String> {
+        let current_class = self.current_class.as_ref()?;
+        if Self::unqualified_cpp_name(current_class) == "XMLUtil" {
+            return None;
+        }
+
+        let stripped = Self::strip_outer_unsafe_block(func).unwrap_or(func).trim();
+        if stripped.is_empty() || stripped.contains('.') {
+            return None;
+        }
+
+        let mut segments: Vec<&str> = stripped.split("::").collect();
+        let leaf = segments.pop()?.trim();
+        if leaf.is_empty() {
+            return None;
+        }
+        if !segments.is_empty()
+            && !segments.iter().all(|segment| {
+                let normalized = Self::unqualified_cpp_name(segment.trim());
+                normalized == "tinyxml2" || normalized == "XMLUtil"
+            })
+        {
+            return None;
+        }
+        let namespace_path: Vec<String> = segments
+            .into_iter()
+            .map(|segment| segment.trim().to_string())
+            .collect();
+        let base_method_name = sanitize_identifier(leaf);
+
+        self.resolve_tinyxml2_xmlutil_helper_call(
+            current_class,
+            &namespace_path,
+            &base_method_name,
+            arg_count,
+            None,
+        )
+    }
+
     /// Resolve unqualified function calls inside class methods that refer to
     /// same-class static helpers.
     fn resolve_unqualified_current_class_method_call(
@@ -9356,6 +9526,16 @@ impl AstCodeGen {
             }
         }
 
+        if let Some(resolved) = self.resolve_tinyxml2_xmlutil_helper_call(
+            current_class,
+            namespace_path,
+            &base_method_name,
+            arg_count,
+            signature,
+        ) {
+            return Some(resolved);
+        }
+
         None
     }
 
@@ -9399,7 +9579,8 @@ impl AstCodeGen {
                 return Some(format!("Self::{}", resolved));
             }
         }
-        None
+
+        self.resolve_tinyxml2_xmlutil_helper_from_func_name(func, arg_count)
     }
 
     /// Get the path to access __vtable from a derived class pointer
@@ -35242,6 +35423,151 @@ mod tests {
             !code.contains("return ToInt(str, value);")
                 && !code.contains("return ToInt(str as *const i8, value as *mut i32);"),
             "unqualified helper call should not stay as unresolved free function call, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_unqualified_tinyxml2_helper_call_from_non_owner_class_uses_xmlutil_qualification() {
+        let cchar_ptr = CppType::Pointer {
+            pointee: Box::new(CppType::Char { signed: true }),
+            is_const: true,
+        };
+        let i32_ptr = CppType::Pointer {
+            pointee: Box::new(CppType::Int { signed: true }),
+            is_const: false,
+        };
+        let to_int_fn_ty = CppType::Function {
+            return_type: Box::new(CppType::Bool),
+            params: vec![cchar_ptr.clone(), i32_ptr.clone()],
+            is_variadic: false,
+        };
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![make_node(
+                ClangNodeKind::NamespaceDecl {
+                    name: Some("tinyxml2".to_string()),
+                    is_inline: false,
+                },
+                vec![
+                    make_node(
+                        ClangNodeKind::RecordDecl {
+                            name: "XMLUtil".to_string(),
+                            is_class: true,
+                            is_definition: true,
+                            fields: vec![],
+                        },
+                        vec![make_node(
+                            ClangNodeKind::CXXMethodDecl {
+                                class_name: "tinyxml2::XMLUtil".to_string(),
+                                name: "ToInt".to_string(),
+                                return_type: CppType::Bool,
+                                params: vec![
+                                    ("str".to_string(), cchar_ptr.clone()),
+                                    ("value".to_string(), i32_ptr.clone()),
+                                ],
+                                is_definition: true,
+                                is_static: true,
+                                is_virtual: false,
+                                is_pure_virtual: false,
+                                is_override: false,
+                                is_final: false,
+                                is_const: false,
+                                access: AccessSpecifier::Public,
+                            },
+                            vec![make_node(
+                                ClangNodeKind::CompoundStmt,
+                                vec![make_node(
+                                    ClangNodeKind::ReturnStmt,
+                                    vec![make_node(ClangNodeKind::BoolLiteral(true), vec![])],
+                                )],
+                            )],
+                        )],
+                    ),
+                    make_node(
+                        ClangNodeKind::RecordDecl {
+                            name: "XMLAttribute".to_string(),
+                            is_class: true,
+                            is_definition: true,
+                            fields: vec![],
+                        },
+                        vec![make_node(
+                            ClangNodeKind::CXXMethodDecl {
+                                class_name: "tinyxml2::XMLAttribute".to_string(),
+                                name: "QueryIntValue".to_string(),
+                                return_type: CppType::Bool,
+                                params: vec![
+                                    ("str".to_string(), cchar_ptr.clone()),
+                                    ("value".to_string(), i32_ptr.clone()),
+                                ],
+                                is_definition: true,
+                                is_static: false,
+                                is_virtual: false,
+                                is_pure_virtual: false,
+                                is_override: false,
+                                is_final: false,
+                                is_const: false,
+                                access: AccessSpecifier::Public,
+                            },
+                            vec![make_node(
+                                ClangNodeKind::CompoundStmt,
+                                vec![make_node(
+                                    ClangNodeKind::ReturnStmt,
+                                    vec![make_node(
+                                        ClangNodeKind::CallExpr {
+                                            ty: CppType::Bool,
+                                            template_instantiation: None,
+                                        },
+                                        vec![
+                                            make_node(
+                                                ClangNodeKind::DeclRefExpr {
+                                                    name: "ToInt".to_string(),
+                                                    ty: to_int_fn_ty,
+                                                    namespace_path: vec![
+                                                        "tinyxml2".to_string(),
+                                                        "XMLUtil".to_string(),
+                                                    ],
+                                                },
+                                                vec![],
+                                            ),
+                                            make_node(
+                                                ClangNodeKind::DeclRefExpr {
+                                                    name: "str".to_string(),
+                                                    ty: cchar_ptr,
+                                                    namespace_path: vec![],
+                                                },
+                                                vec![],
+                                            ),
+                                            make_node(
+                                                ClangNodeKind::DeclRefExpr {
+                                                    name: "value".to_string(),
+                                                    ty: i32_ptr,
+                                                    namespace_path: vec![],
+                                                },
+                                                vec![],
+                                            ),
+                                        ],
+                                    )],
+                                )],
+                            )],
+                        )],
+                    ),
+                ],
+            )],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("return XMLUtil::ToInt(str, value);")
+                || code.contains("return XMLUtil::ToInt(str as *const i8, value as *mut i32);"),
+            "unqualified tinyxml2 helper call in non-owning class should dispatch through XMLUtil, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("return ToInt(str, value);")
+                && !code.contains("return ToInt(str as *const i8, value as *mut i32);"),
+            "unqualified helper call should not remain an unresolved free function call, got:\n{}",
             code
         );
     }
