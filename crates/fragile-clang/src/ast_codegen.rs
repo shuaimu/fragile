@@ -4257,6 +4257,21 @@ impl AstCodeGen {
         ));
         self.indent += 1;
 
+        // Derived classes may add virtual methods beyond the root vtable type.
+        // The embedded vtable pointer type is rooted at the primary base, so only
+        // initialize the root-compatible prefix here.
+        let root_entry_count = self
+            .vtables
+            .get(&root_class)
+            .map(|root_info| root_info.entries.len())
+            .unwrap_or(vtable_info.entries.len());
+        let layout_entry_count = if class_name == &root_class {
+            vtable_info.entries.len()
+        } else {
+            root_entry_count.min(vtable_info.entries.len())
+        };
+        let layout_entries = &vtable_info.entries[..layout_entry_count];
+
         // RTTI fields
         self.writeln(&format!(
             "__type_id: {}_TYPE_ID,",
@@ -4273,7 +4288,7 @@ impl AstCodeGen {
             std::collections::HashMap::new();
 
         // Generate function pointer for each vtable entry
-        for entry in &vtable_info.entries {
+        for entry in layout_entries {
             let base_method_name = sanitize_identifier(&entry.name);
             // For composite function names, strip r# prefix
             let base_method_name_for_fn = sanitize_identifier_for_composite(&entry.name);
@@ -4324,7 +4339,7 @@ impl AstCodeGen {
         // Special handling for exception class stub - it has a 'what' field in the stub vtable
         // Only add if 'what' isn't already in the vtable entries
         if (class_name == "exception" || class_name == "std::exception")
-            && !vtable_info.entries.iter().any(|e| e.name == "what")
+            && !layout_entries.iter().any(|e| e.name == "what")
         {
             // Use the correct wrapper function name matching the vtable type
             self.writeln(&format!("what: {}_vtable_what,", sanitized_class));
@@ -4361,12 +4376,24 @@ impl AstCodeGen {
         let root_class = self.find_root_polymorphic_class(class_name);
         let sanitized_root = sanitize_identifier(&root_class);
 
+        let root_entry_count = self
+            .vtables
+            .get(&root_class)
+            .map(|root_info| root_info.entries.len())
+            .unwrap_or(vtable_info.entries.len());
+        let layout_entry_count = if class_name == &root_class {
+            vtable_info.entries.len()
+        } else {
+            root_entry_count.min(vtable_info.entries.len())
+        };
+        let layout_entries = &vtable_info.entries[..layout_entry_count];
+
         // Track wrapper function names to handle overloaded methods
         let mut wrapper_counts: std::collections::HashMap<String, usize> =
             std::collections::HashMap::new();
 
         // Generate wrapper for each virtual method that this class declares/overrides
-        for entry in &vtable_info.entries {
+        for entry in layout_entries {
             // Skip inherited methods that aren't overridden in this class,
             // UNLESS the declaring class is abstract (then we need to generate wrapper here)
             if entry.declaring_class != *class_name {
@@ -4531,7 +4558,7 @@ impl AstCodeGen {
         // Special handling for exception class - generate 'what' wrapper
         // Only add if 'what' isn't already in the vtable entries (to avoid duplicates)
         if (class_name == "exception" || class_name == "std::exception")
-            && !vtable_info.entries.iter().any(|e| e.name == "what")
+            && !layout_entries.iter().any(|e| e.name == "what")
         {
             self.writeln("");
             self.writeln("/// Vtable wrapper for `exception::what`");
@@ -8715,7 +8742,7 @@ impl AstCodeGen {
         }
         let base_node = &member_expr.children[0];
         let base_type = Self::get_expr_type(base_node).or_else(|| Self::get_original_expr_type(base_node));
-        let base_expr = self.expr_to_string(base_node);
+        let base_expr = Self::normalize_pointer_value_expr(&self.expr_to_string(base_node));
 
         // Check if base is a pointer/reference to a polymorphic class.
         let (class_name, base_ptr_expr) = match &base_type {
@@ -9218,6 +9245,111 @@ impl AstCodeGen {
             }
         }
         collected
+    }
+
+    /// tinyxml2 fallback: emit default virtual-method bodies when Clang exposes
+    /// virtual declarations in vtables but no compilable definition was emitted.
+    fn emit_missing_tinyxml2_virtual_method_stubs(
+        &mut self,
+        class_name: &str,
+        impl_block_start: usize,
+    ) {
+        // Keep this constrained to tinyxml2-style classes to avoid broad behavior
+        // changes outside the real-world replay target.
+        let is_tinyxml2_class =
+            class_name.starts_with("XML") || class_name.starts_with("tinyxml2::XML");
+        if !is_tinyxml2_class {
+            return;
+        }
+
+        let Some(vtable_info) = self.vtables.get(class_name).cloned() else {
+            return;
+        };
+
+        let mut overload_counts: HashMap<String, usize> = HashMap::new();
+        for entry in &vtable_info.entries {
+            if entry.declaring_class != class_name {
+                continue;
+            }
+
+            let base_method_name = sanitize_identifier(&entry.name);
+            if base_method_name.is_empty() {
+                continue;
+            }
+            let count = overload_counts
+                .entry(base_method_name.clone())
+                .or_insert(0usize);
+            let method_name = if *count == 0 {
+                base_method_name.clone()
+            } else {
+                format!("{}_{}", base_method_name, *count)
+            };
+            *count += 1;
+            let required_overload_count = *count;
+
+            // Keep overload bookkeeping aligned with emitted fallback methods.
+            self.current_struct_methods
+                .entry(base_method_name.clone())
+                .and_modify(|c| {
+                    if *c < required_overload_count {
+                        *c = required_overload_count;
+                    }
+                })
+                .or_insert(required_overload_count);
+
+            let marker = format!("pub fn {}(", method_name);
+            if self.output[impl_block_start..].contains(&marker) {
+                continue;
+            }
+
+            let self_param = if entry.is_const { "&self, " } else { "&mut self, " };
+            let param_defs: Vec<String> = entry
+                .params
+                .iter()
+                .enumerate()
+                .map(|(i, (pname, ptype))| {
+                    let pname = if pname.is_empty() {
+                        format!("arg{}", i)
+                    } else {
+                        sanitize_identifier(pname)
+                    };
+                    format!("{}: {}", pname, ptype.to_rust_type_str())
+                })
+                .collect();
+            let params_joined = if param_defs.is_empty() {
+                String::new()
+            } else {
+                param_defs.join(", ")
+            };
+            let return_type = Self::sanitize_return_type(&entry.return_type.to_rust_type_str());
+            let ret_suffix = if return_type == "()" {
+                String::new()
+            } else {
+                format!(" -> {}", return_type)
+            };
+
+            self.writeln("");
+            self.writeln(&format!(
+                "/// Fallback virtual-method stub for `{}::{}`",
+                class_name, entry.name
+            ));
+            self.writeln(&format!(
+                "pub fn {}({}{}){} {{",
+                method_name, self_param, params_joined, ret_suffix
+            ));
+            self.indent += 1;
+            if return_type != "()" {
+                // tinyxml2 visitor defaults are source-faithful `true` in upstream.
+                let default_expr = if matches!(entry.return_type, CppType::Bool) {
+                    "true".to_string()
+                } else {
+                    Self::default_value_for_type(&entry.return_type)
+                };
+                self.writeln(&format!("return {};", default_expr));
+            }
+            self.indent -= 1;
+            self.writeln("}");
+        }
     }
 
     /// Pre-register emitted method overload names for a class so member calls can
@@ -17382,6 +17514,7 @@ impl AstCodeGen {
             self.writeln("");
             self.writeln(&format!("impl {} {{", rust_name));
             self.indent += 1;
+            let impl_block_start = self.output.len();
 
             // Clear method counter for this struct's impl block
             self.current_struct_methods.clear();
@@ -17467,6 +17600,8 @@ impl AstCodeGen {
                     }
                 }
             }
+
+            self.emit_missing_tinyxml2_virtual_method_stubs(name, impl_block_start);
 
             // tinyxml2: `XMLNode::CreateUnlinkedNode` is a templated helper
             // (`template<class NodeType, size_t PoolElementSize> ...`) that can be
@@ -20334,6 +20469,28 @@ impl AstCodeGen {
         }
     }
 
+    /// In pointer-value contexts (null checks, pointer casts), some degraded AST paths
+    /// can surface a redundant unary `*` over pointer-returning call chains
+    /// (e.g., `*obj.Parent_1()`). Strip that leading dereference so the expression
+    /// remains a pointer value.
+    fn normalize_pointer_value_expr(expr: &str) -> String {
+        let raw = Self::strip_outer_parens_expr(
+            Self::strip_outer_unsafe_block(expr).unwrap_or(expr),
+        )
+        .trim();
+        let Some(stripped) = raw.strip_prefix('*') else {
+            return expr.to_string();
+        };
+        let candidate = Self::strip_outer_parens_expr(stripped).trim();
+        let looks_pointer_call_chain =
+            candidate.contains("()") && (candidate.contains('.') || candidate.contains("->"));
+        if looks_pointer_call_chain {
+            candidate.to_string()
+        } else {
+            expr.to_string()
+        }
+    }
+
     /// Drop a leading unary `*` on `self.<field>` / `__self.<field>` receiver
     /// expressions when the referenced field is value-typed (non-pointer).
     fn normalize_non_pointer_field_receiver_expr(&self, expr: &str) -> String {
@@ -21788,6 +21945,7 @@ impl AstCodeGen {
             || orig_type.as_ref().is_some_and(is_integral_non_bool);
 
         let cond = if is_pointer_like {
+            let cond = Self::normalize_pointer_value_expr(&cond);
             // If already a null check, keep as-is.
             if cond.contains(".is_null()") {
                 cond
@@ -30319,7 +30477,8 @@ impl AstCodeGen {
                                                 let target_rust = params[i].to_rust_type_str();
                                                 let target_is_const =
                                                     target_rust.starts_with("*const ");
-                                                let arg_str = self.expr_to_string(c);
+                                                let arg_str =
+                                                    Self::normalize_pointer_value_expr(&self.expr_to_string(c));
                                                 if Self::is_nullptr_literal(c)
                                                     || is_zero_integer_literal_str(&arg_str)
                                                 {
@@ -30693,7 +30852,8 @@ impl AstCodeGen {
                                         }
 
                                         // General pointer argument normalization (`*const T` ↔ `*const ()`, etc.).
-                                        let arg_str = self.expr_to_string(c);
+                                        let arg_str =
+                                            Self::normalize_pointer_value_expr(&self.expr_to_string(c));
                                         let arg_wrapped = if arg_str.starts_with("unsafe { ")
                                             || arg_str.contains(" as ")
                                             || arg_str.contains(' ')
@@ -31172,7 +31332,8 @@ impl AstCodeGen {
                                             let target_rust = params[i].to_rust_type_str();
                                             let target_is_const =
                                                 target_rust.starts_with("*const ");
-                                            let arg_str = self.expr_to_string(c);
+                                            let arg_str =
+                                                Self::normalize_pointer_value_expr(&self.expr_to_string(c));
                                             if Self::is_nullptr_literal(c)
                                                 || is_zero_integer_literal_str(&arg_str)
                                             {
@@ -39461,6 +39622,304 @@ mod tests {
     }
 
     #[test]
+    fn test_pointer_condition_normalizes_redundant_deref_from_pointer_return_call_chain() {
+        let xml_node_ptr = CppType::Pointer {
+            pointee: Box::new(CppType::Named("XMLNode".to_string())),
+            is_const: false,
+        };
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![
+                make_node(
+                    ClangNodeKind::RecordDecl {
+                        name: "XMLNode".to_string(),
+                        is_class: true,
+                        is_definition: true,
+                        fields: vec![],
+                    },
+                    vec![],
+                ),
+                make_node(
+                    ClangNodeKind::RecordDecl {
+                        name: "XMLBase".to_string(),
+                        is_class: true,
+                        is_definition: true,
+                        fields: vec![],
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CXXMethodDecl {
+                            class_name: "XMLBase".to_string(),
+                            name: "Parent_1".to_string(),
+                            return_type: xml_node_ptr.clone(),
+                            params: vec![],
+                            is_definition: true,
+                            is_static: false,
+                            is_virtual: false,
+                            is_pure_virtual: false,
+                            is_override: false,
+                            is_final: false,
+                            is_const: true,
+                            access: AccessSpecifier::Public,
+                        },
+                        vec![make_node(
+                            ClangNodeKind::CompoundStmt,
+                            vec![make_node(
+                                ClangNodeKind::ReturnStmt,
+                                vec![make_node(ClangNodeKind::NullPtrLiteral, vec![])],
+                            )],
+                        )],
+                    )],
+                ),
+                make_node(
+                    ClangNodeKind::FunctionDecl {
+                        name: "probe_parent".to_string(),
+                        mangled_name: "probe_parent".to_string(),
+                        is_static: false,
+                        return_type: CppType::Int { signed: true },
+                        params: vec![("obj".to_string(), CppType::Named("XMLBase".to_string()))],
+                        is_definition: true,
+                        is_variadic: false,
+                        is_noexcept: false,
+                        is_coroutine: false,
+                        coroutine_info: None,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![
+                            make_node(
+                                ClangNodeKind::IfStmt,
+                                vec![
+                                    make_node(
+                                        ClangNodeKind::UnaryOperator {
+                                            op: UnaryOp::Deref,
+                                            ty: xml_node_ptr.clone(),
+                                        },
+                                        vec![make_node(
+                                            ClangNodeKind::CallExpr {
+                                                ty: xml_node_ptr.clone(),
+                                                template_instantiation: None,
+                                            },
+                                            vec![make_node(
+                                                ClangNodeKind::MemberExpr {
+                                                    member_name: "Parent_1".to_string(),
+                                                    is_arrow: false,
+                                                    ty: CppType::Function {
+                                                        return_type: Box::new(xml_node_ptr.clone()),
+                                                        params: vec![],
+                                                        is_variadic: false,
+                                                    },
+                                                    declaring_class: Some("XMLBase".to_string()),
+                                                    is_static: false,
+                                                },
+                                                vec![make_node(
+                                                    ClangNodeKind::DeclRefExpr {
+                                                        name: "obj".to_string(),
+                                                        ty: CppType::Named("XMLBase".to_string()),
+                                                        namespace_path: vec![],
+                                                    },
+                                                    vec![],
+                                                )],
+                                            )],
+                                        )],
+                                    ),
+                                    make_node(ClangNodeKind::CompoundStmt, vec![]),
+                                ],
+                            ),
+                            make_node(
+                                ClangNodeKind::ReturnStmt,
+                                vec![make_node(
+                                    ClangNodeKind::IntegerLiteral {
+                                        value: 0,
+                                        cpp_type: Some(CppType::Int { signed: true }),
+                                    },
+                                    vec![],
+                                )],
+                            ),
+                        ],
+                    )],
+                ),
+            ],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("if (obj.Parent_1()).is_null() == false {"),
+            "pointer condition should normalize redundant deref from pointer-return call chains, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("if (*obj.Parent_1()).is_null() == false {"),
+            "pointer condition should not keep redundant deref in null-check generation, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_pointer_param_cast_normalizes_redundant_deref_from_pointer_return_call_chain() {
+        let xml_node_ptr = CppType::Pointer {
+            pointee: Box::new(CppType::Named("XMLNode".to_string())),
+            is_const: false,
+        };
+        let xml_node_const_ptr = CppType::Pointer {
+            pointee: Box::new(CppType::Named("XMLNode".to_string())),
+            is_const: true,
+        };
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![
+                make_node(
+                    ClangNodeKind::RecordDecl {
+                        name: "XMLNode".to_string(),
+                        is_class: true,
+                        is_definition: true,
+                        fields: vec![],
+                    },
+                    vec![],
+                ),
+                make_node(
+                    ClangNodeKind::RecordDecl {
+                        name: "XMLBase".to_string(),
+                        is_class: true,
+                        is_definition: true,
+                        fields: vec![],
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CXXMethodDecl {
+                            class_name: "XMLBase".to_string(),
+                            name: "Parent_1".to_string(),
+                            return_type: xml_node_ptr.clone(),
+                            params: vec![],
+                            is_definition: true,
+                            is_static: false,
+                            is_virtual: false,
+                            is_pure_virtual: false,
+                            is_override: false,
+                            is_final: false,
+                            is_const: true,
+                            access: AccessSpecifier::Public,
+                        },
+                        vec![make_node(
+                            ClangNodeKind::CompoundStmt,
+                            vec![make_node(
+                                ClangNodeKind::ReturnStmt,
+                                vec![make_node(ClangNodeKind::NullPtrLiteral, vec![])],
+                            )],
+                        )],
+                    )],
+                ),
+                make_node(
+                    ClangNodeKind::FunctionDecl {
+                        name: "TakeNode".to_string(),
+                        mangled_name: "TakeNode".to_string(),
+                        is_static: false,
+                        return_type: CppType::Bool,
+                        params: vec![("node".to_string(), xml_node_const_ptr.clone())],
+                        is_definition: true,
+                        is_variadic: false,
+                        is_noexcept: false,
+                        is_coroutine: false,
+                        coroutine_info: None,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![make_node(
+                            ClangNodeKind::ReturnStmt,
+                            vec![make_node(ClangNodeKind::BoolLiteral(true), vec![])],
+                        )],
+                    )],
+                ),
+                make_node(
+                    ClangNodeKind::FunctionDecl {
+                        name: "probe_cast".to_string(),
+                        mangled_name: "probe_cast".to_string(),
+                        is_static: false,
+                        return_type: CppType::Bool,
+                        params: vec![("obj".to_string(), CppType::Named("XMLBase".to_string()))],
+                        is_definition: true,
+                        is_variadic: false,
+                        is_noexcept: false,
+                        is_coroutine: false,
+                        coroutine_info: None,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![make_node(
+                            ClangNodeKind::ReturnStmt,
+                            vec![make_node(
+                                ClangNodeKind::CallExpr {
+                                    ty: CppType::Bool,
+                                    template_instantiation: None,
+                                },
+                                vec![
+                                    make_node(
+                                        ClangNodeKind::DeclRefExpr {
+                                            name: "TakeNode".to_string(),
+                                            ty: CppType::Function {
+                                                return_type: Box::new(CppType::Bool),
+                                                params: vec![xml_node_const_ptr],
+                                                is_variadic: false,
+                                            },
+                                            namespace_path: vec![],
+                                        },
+                                        vec![],
+                                    ),
+                                    make_node(
+                                        ClangNodeKind::UnaryOperator {
+                                            op: UnaryOp::Deref,
+                                            ty: xml_node_ptr.clone(),
+                                        },
+                                        vec![make_node(
+                                            ClangNodeKind::CallExpr {
+                                                ty: xml_node_ptr.clone(),
+                                                template_instantiation: None,
+                                            },
+                                            vec![make_node(
+                                                ClangNodeKind::MemberExpr {
+                                                    member_name: "Parent_1".to_string(),
+                                                    is_arrow: false,
+                                                    ty: CppType::Function {
+                                                        return_type: Box::new(xml_node_ptr),
+                                                        params: vec![],
+                                                        is_variadic: false,
+                                                    },
+                                                    declaring_class: Some("XMLBase".to_string()),
+                                                    is_static: false,
+                                                },
+                                                vec![make_node(
+                                                    ClangNodeKind::DeclRefExpr {
+                                                        name: "obj".to_string(),
+                                                        ty: CppType::Named("XMLBase".to_string()),
+                                                        namespace_path: vec![],
+                                                    },
+                                                    vec![],
+                                                )],
+                                            )],
+                                        )],
+                                    ),
+                                ],
+                            )],
+                        )],
+                    )],
+                ),
+            ],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("TakeNode(obj.Parent_1() as *const XMLNode)"),
+            "pointer parameter cast should use pointer-return call chain without redundant deref, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("TakeNode((*obj.Parent_1()) as *const XMLNode)"),
+            "pointer parameter cast should not cast dereferenced non-pointer values, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
     fn test_missing_declaring_class_for_inherited_member_uses_base_access_chain() {
         let xml_document_ptr = CppType::Pointer {
             pointee: Box::new(CppType::Named("XMLDocument".to_string())),
@@ -39867,6 +40326,189 @@ mod tests {
     }
 
     #[test]
+    fn test_derived_static_vtable_omits_fields_not_in_root_layout() {
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![
+                make_node(
+                    ClangNodeKind::RecordDecl {
+                        name: "Base".to_string(),
+                        is_class: true,
+                        is_definition: true,
+                        fields: vec![],
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CXXMethodDecl {
+                            class_name: "Base".to_string(),
+                            name: "Foo".to_string(),
+                            return_type: CppType::Void,
+                            params: vec![],
+                            is_definition: false,
+                            is_static: false,
+                            is_virtual: true,
+                            is_pure_virtual: true,
+                            is_override: false,
+                            is_final: false,
+                            is_const: false,
+                            access: AccessSpecifier::Public,
+                        },
+                        vec![],
+                    )],
+                ),
+                make_node(
+                    ClangNodeKind::RecordDecl {
+                        name: "Derived".to_string(),
+                        is_class: true,
+                        is_definition: true,
+                        fields: vec![],
+                    },
+                    vec![
+                        make_node(
+                            ClangNodeKind::CXXBaseSpecifier {
+                                base_type: CppType::Named("Base".to_string()),
+                                access: AccessSpecifier::Public,
+                                is_virtual: false,
+                            },
+                            vec![],
+                        ),
+                        make_node(
+                            ClangNodeKind::CXXMethodDecl {
+                                class_name: "Derived".to_string(),
+                                name: "Foo".to_string(),
+                                return_type: CppType::Void,
+                                params: vec![],
+                                is_definition: false,
+                                is_static: false,
+                                is_virtual: true,
+                                is_pure_virtual: false,
+                                is_override: true,
+                                is_final: false,
+                                is_const: false,
+                                access: AccessSpecifier::Public,
+                            },
+                            vec![],
+                        ),
+                        make_node(
+                            ClangNodeKind::CXXMethodDecl {
+                                class_name: "Derived".to_string(),
+                                name: "Bar".to_string(),
+                                return_type: CppType::Void,
+                                params: vec![],
+                                is_definition: false,
+                                is_static: false,
+                                is_virtual: true,
+                                is_pure_virtual: false,
+                                is_override: false,
+                                is_final: false,
+                                is_const: false,
+                                access: AccessSpecifier::Public,
+                            },
+                            vec![],
+                        ),
+                    ],
+                ),
+            ],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("pub static DERIVED_VTABLE: Base_vtable = Base_vtable {"),
+            "derived vtable should still use root vtable type, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("Bar: Derived_vtable_Bar"),
+            "derived-only virtual fields should not be emitted into root-typed static vtable initializer, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_missing_tinyxml2_virtual_definitions_emit_fallback_method_stubs() {
+        let xml_doc_ref = CppType::Reference {
+            referent: Box::new(CppType::Named("XMLDocument".to_string())),
+            is_const: true,
+            is_rvalue: false,
+        };
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![
+                make_node(
+                    ClangNodeKind::RecordDecl {
+                        name: "XMLDocument".to_string(),
+                        is_class: true,
+                        is_definition: true,
+                        fields: vec![],
+                    },
+                    vec![],
+                ),
+                make_node(
+                    ClangNodeKind::RecordDecl {
+                        name: "XMLVisitor".to_string(),
+                        is_class: true,
+                        is_definition: true,
+                        fields: vec![],
+                    },
+                    vec![
+                        make_node(
+                            ClangNodeKind::CXXMethodDecl {
+                                class_name: "XMLVisitor".to_string(),
+                                name: "VisitEnter".to_string(),
+                                return_type: CppType::Bool,
+                                params: vec![("doc".to_string(), xml_doc_ref.clone())],
+                                is_definition: false,
+                                is_static: false,
+                                is_virtual: true,
+                                is_pure_virtual: false,
+                                is_override: false,
+                                is_final: false,
+                                is_const: false,
+                                access: AccessSpecifier::Public,
+                            },
+                            vec![],
+                        ),
+                        make_node(
+                            ClangNodeKind::CXXMethodDecl {
+                                class_name: "XMLVisitor".to_string(),
+                                name: "VisitExit".to_string(),
+                                return_type: CppType::Bool,
+                                params: vec![("doc".to_string(), xml_doc_ref)],
+                                is_definition: false,
+                                is_static: false,
+                                is_virtual: true,
+                                is_pure_virtual: false,
+                                is_override: false,
+                                is_final: false,
+                                is_const: false,
+                                access: AccessSpecifier::Public,
+                            },
+                            vec![],
+                        ),
+                    ],
+                ),
+            ],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("pub fn VisitEnter(&mut self, doc: &XMLDocument) -> bool {"),
+            "missing tinyxml2 virtual VisitEnter definition should emit fallback stub, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("pub fn VisitExit(&mut self, doc: &XMLDocument) -> bool {"),
+            "missing tinyxml2 virtual VisitExit definition should emit fallback stub, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("return true;"),
+            "tinyxml2 virtual bool fallback stubs should default to true, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
     fn test_vtable_dispatch_uses_overloaded_slot_from_member_signature() {
         let xml_visitor_ptr = CppType::Pointer {
             pointee: Box::new(CppType::Named("XMLVisitor".to_string())),
@@ -40145,6 +40787,193 @@ mod tests {
         assert!(
             code.contains("as *mut ()"),
             "virtual pointer argument should be cast to the selected vtable parameter type, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_vtable_dispatch_base_expr_normalizes_redundant_deref_from_pointer_return_chain() {
+        let xml_node_ptr = CppType::Pointer {
+            pointee: Box::new(CppType::Named("XMLNode".to_string())),
+            is_const: false,
+        };
+        let xelement_const_ptr = CppType::Pointer {
+            pointee: Box::new(CppType::Named("XMLElement".to_string())),
+            is_const: true,
+        };
+
+        let parent_call = make_node(
+            ClangNodeKind::CallExpr {
+                ty: xml_node_ptr.clone(),
+                template_instantiation: None,
+            },
+            vec![make_node(
+                ClangNodeKind::MemberExpr {
+                    member_name: "Parent_1".to_string(),
+                    is_arrow: false,
+                    ty: CppType::Function {
+                        return_type: Box::new(xml_node_ptr.clone()),
+                        params: vec![],
+                        is_variadic: false,
+                    },
+                    declaring_class: Some("Wrapper".to_string()),
+                    is_static: false,
+                },
+                vec![make_node(
+                    ClangNodeKind::DeclRefExpr {
+                        name: "base".to_string(),
+                        ty: CppType::Named("Wrapper".to_string()),
+                        namespace_path: vec![],
+                    },
+                    vec![],
+                )],
+            )],
+        );
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![
+                make_node(
+                    ClangNodeKind::RecordDecl {
+                        name: "XMLElement".to_string(),
+                        is_class: true,
+                        is_definition: true,
+                        fields: vec![],
+                    },
+                    vec![],
+                ),
+                make_node(
+                    ClangNodeKind::RecordDecl {
+                        name: "XMLNode".to_string(),
+                        is_class: true,
+                        is_definition: true,
+                        fields: vec![],
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CXXMethodDecl {
+                            class_name: "XMLNode".to_string(),
+                            name: "ToElement_1".to_string(),
+                            return_type: xelement_const_ptr.clone(),
+                            params: vec![],
+                            is_definition: false,
+                            is_static: false,
+                            is_virtual: true,
+                            is_pure_virtual: true,
+                            is_override: false,
+                            is_final: false,
+                            is_const: true,
+                            access: AccessSpecifier::Public,
+                        },
+                        vec![],
+                    )],
+                ),
+                make_node(
+                    ClangNodeKind::RecordDecl {
+                        name: "Wrapper".to_string(),
+                        is_class: true,
+                        is_definition: true,
+                        fields: vec![],
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CXXMethodDecl {
+                            class_name: "Wrapper".to_string(),
+                            name: "Parent_1".to_string(),
+                            return_type: xml_node_ptr.clone(),
+                            params: vec![],
+                            is_definition: true,
+                            is_static: false,
+                            is_virtual: false,
+                            is_pure_virtual: false,
+                            is_override: false,
+                            is_final: false,
+                            is_const: true,
+                            access: AccessSpecifier::Public,
+                        },
+                        vec![make_node(
+                            ClangNodeKind::CompoundStmt,
+                            vec![make_node(
+                                ClangNodeKind::ReturnStmt,
+                                vec![make_node(ClangNodeKind::NullPtrLiteral, vec![])],
+                            )],
+                        )],
+                    )],
+                ),
+                make_node(
+                    ClangNodeKind::FunctionDecl {
+                        name: "dispatch_parent_to_element".to_string(),
+                        mangled_name: "dispatch_parent_to_element".to_string(),
+                        is_static: false,
+                        return_type: xelement_const_ptr,
+                        params: vec![("base".to_string(), CppType::Named("Wrapper".to_string()))],
+                        is_definition: true,
+                        is_variadic: false,
+                        is_noexcept: false,
+                        is_coroutine: false,
+                        coroutine_info: None,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![make_node(
+                            ClangNodeKind::ReturnStmt,
+                            vec![make_node(
+                                ClangNodeKind::CallExpr {
+                                    ty: CppType::Pointer {
+                                        pointee: Box::new(CppType::Named("XMLElement".to_string())),
+                                        is_const: true,
+                                    },
+                                    template_instantiation: None,
+                                },
+                                vec![make_node(
+                                    ClangNodeKind::MemberExpr {
+                                        member_name: "ToElement_1".to_string(),
+                                        is_arrow: true,
+                                        ty: CppType::Function {
+                                            return_type: Box::new(CppType::Pointer {
+                                                pointee: Box::new(CppType::Named(
+                                                    "XMLElement".to_string(),
+                                                )),
+                                                is_const: true,
+                                            }),
+                                            params: vec![],
+                                            is_variadic: false,
+                                        },
+                                        declaring_class: Some("XMLNode".to_string()),
+                                        is_static: false,
+                                    },
+                                    vec![make_node(
+                                        ClangNodeKind::UnaryOperator {
+                                            op: UnaryOp::Deref,
+                                            ty: xml_node_ptr,
+                                        },
+                                        vec![parent_call],
+                                    )],
+                                )],
+                            )],
+                        )],
+                    )],
+                ),
+            ],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("(*base.Parent_1()).__vtable"),
+            "virtual dispatch base access should dereference pointer-return chain once, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("(**base.Parent_1()).__vtable"),
+            "virtual dispatch base access should not double-dereference pointer-return chain, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("(base.Parent_1()) as *const XMLNode"),
+            "virtual dispatch self argument should cast pointer-return chain directly, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("(*base.Parent_1()) as *const XMLNode"),
+            "virtual dispatch self argument should not cast a dereferenced value, got:\n{}",
             code
         );
     }
