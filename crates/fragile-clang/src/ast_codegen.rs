@@ -22977,13 +22977,10 @@ impl AstCodeGen {
             format!("(((&{}) as *const _) as *mut _)", receiver)
         };
         if args.is_empty() {
-            Some(format!(
-                "unsafe {{ (&mut *{}).{}() }}",
-                cast_ptr, method_name
-            ))
+            Some(format!("unsafe {{ (*{}).{}() }}", cast_ptr, method_name))
         } else {
             Some(format!(
-                "unsafe {{ (&mut *{}).{}({}) }}",
+                "unsafe {{ (*{}).{}({}) }}",
                 cast_ptr,
                 method_name,
                 args.join(", ")
@@ -35067,6 +35064,11 @@ mod tests {
             "const context mutable-only member call should use mut-cast fallback, got:\n{}",
             code
         );
+        assert!(
+            !code.contains("(&mut *(((&self._value) as *const Str) as *mut Str)).GetStr()"),
+            "const context mutable-only member call should avoid &T -> &mut T reference casting, got:\n{}",
+            code
+        );
     }
 
     #[test]
@@ -35206,6 +35208,11 @@ mod tests {
             code.contains("as *const Buffer) as *mut Buffer")
                 && code.contains(".Mem()"),
             "const context mutable-only Mem call should use mut-cast fallback, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("(&mut *(((&self._buffer) as *const Buffer) as *mut Buffer)).Mem()"),
+            "const context mutable-only Mem call should avoid &T -> &mut T reference casting, got:\n{}",
             code
         );
     }
