@@ -20242,22 +20242,8 @@ impl AstCodeGen {
             return expr.to_string();
         };
         let candidate = Self::strip_outer_parens_expr(stripped).trim();
-        let field_path = candidate
-            .strip_prefix("self.")
-            .or_else(|| candidate.strip_prefix("__self."));
-        let Some(field_path) = field_path else {
-            return expr.to_string();
-        };
-        let mut segments = field_path.split('.');
-        let field_ident = sanitize_identifier(segments.next().unwrap_or_default());
-        if field_ident.is_empty() {
-            return expr.to_string();
-        }
-        let Some(current_class) = self.current_class.as_ref() else {
-            return expr.to_string();
-        };
         let is_non_pointer_field = self
-            .lookup_field_type_in_class_fields(current_class, &field_ident)
+            .resolve_self_field_chain_type(candidate)
             .is_some_and(|ty| !Self::is_pointer_like_type(&ty));
         if is_non_pointer_field {
             candidate.to_string()
@@ -20267,22 +20253,7 @@ impl AstCodeGen {
     }
 
     fn is_known_non_pointer_self_field_expr(&self, expr: &str) -> bool {
-        let raw = Self::strip_outer_unsafe_block(expr).unwrap_or(expr).trim();
-        let raw = Self::strip_outer_parens_expr(raw).trim();
-        let field_path = raw
-            .strip_prefix("self.")
-            .or_else(|| raw.strip_prefix("__self."));
-        let Some(field_path) = field_path else {
-            return false;
-        };
-        let field_ident = sanitize_identifier(field_path.split('.').next().unwrap_or_default());
-        if field_ident.is_empty() {
-            return false;
-        }
-        let Some(current_class) = self.current_class.as_ref() else {
-            return false;
-        };
-        self.lookup_field_type_in_class_fields(current_class, &field_ident)
+        self.resolve_self_field_chain_type(expr)
             .is_some_and(|ty| !Self::is_pointer_like_type(&ty))
     }
 
@@ -20316,24 +20287,35 @@ impl AstCodeGen {
             return self.ptr_vars.contains(raw) || self.ptr_vars.contains(&sanitize_identifier(raw));
         }
 
-        if !raw.starts_with("self.") && !raw.starts_with("__self.") {
-            return false;
+        self.resolve_self_field_chain_type(raw)
+            .as_ref()
+            .is_some_and(Self::is_pointer_like_type)
+    }
+
+    fn resolve_self_field_chain_type(&self, expr: &str) -> Option<CppType> {
+        let raw = Self::strip_outer_parens_expr(
+            Self::strip_outer_unsafe_block(expr).unwrap_or(expr),
+        )
+        .trim();
+        let field_path = raw
+            .strip_prefix("self.")
+            .or_else(|| raw.strip_prefix("__self."))?;
+        if field_path.is_empty()
+            || field_path.contains('(')
+            || field_path.contains(')')
+            || field_path.contains('[')
+            || field_path.contains(']')
+            || field_path.contains(' ')
+        {
+            return None;
         }
 
-        let mut parts = raw.split('.');
-        let root = parts.next().unwrap_or_default();
-        if root != "self" && root != "__self" {
-            return false;
-        }
-        let mut class_name = match &self.current_class {
-            Some(name) => name.clone(),
-            None => return false,
-        };
-
-        let fields: Vec<&str> = parts.collect();
+        let mut class_name = self.current_class.as_ref()?.clone();
+        let fields: Vec<&str> = field_path.split('.').collect();
         if fields.is_empty() {
-            return false;
+            return None;
         }
+
         for (idx, field) in fields.iter().enumerate() {
             let field = field.trim();
             if field.is_empty()
@@ -20341,35 +20323,32 @@ impl AstCodeGen {
                     .chars()
                     .all(|c| c == '_' || c.is_ascii_alphanumeric())
             {
-                return false;
+                return None;
             }
             let field_ident = sanitize_identifier(field);
-            let field_ty = self.lookup_field_type_in_class_fields(&class_name, &field_ident);
-            let Some(field_ty) = field_ty else {
-                return false;
-            };
+            let field_ty = self.lookup_field_type_in_class_fields(&class_name, &field_ident)?;
             if idx + 1 == fields.len() {
-                return Self::is_pointer_like_type(&field_ty);
+                return Some(field_ty);
             }
-            let next_class = match field_ty {
-                CppType::Named(name) => name,
-                CppType::Pointer { pointee, .. } => match *pointee {
-                    CppType::Named(name) => name,
-                    _ => return false,
+            let next_class = match &field_ty {
+                CppType::Named(name) => name.clone(),
+                CppType::Pointer { pointee, .. } => match pointee.as_ref() {
+                    CppType::Named(name) => name.clone(),
+                    _ => return None,
                 },
-                CppType::Reference { referent, .. } => match *referent {
-                    CppType::Named(name) => name,
-                    _ => return false,
+                CppType::Reference { referent, .. } => match referent.as_ref() {
+                    CppType::Named(name) => name.clone(),
+                    _ => return None,
                 },
-                _ => return false,
+                _ => return None,
             };
             class_name = Self::normalize_cpp_record_type_name(&next_class);
             if class_name.is_empty() {
-                return false;
+                return None;
             }
         }
 
-        false
+        None
     }
 
     fn is_expr_metadata_child(node: &ClangNode) -> bool {
@@ -21849,6 +21828,66 @@ impl AstCodeGen {
         // that wasn't fully parsed. Return empty access to indicate no base field needed.
         // The calling code should check for empty field names and skip base access.
         BaseAccess::DirectField(String::new())
+    }
+
+    /// Find the nearest base class that declares `member_name` for fallback
+    /// inherited-member lowering when clang omits declaring-class metadata.
+    fn infer_declaring_base_class_for_member(
+        &self,
+        current_class: &str,
+        member_name: &str,
+    ) -> Option<String> {
+        let target_field = sanitize_identifier(member_name);
+        if target_field.is_empty() {
+            return None;
+        }
+
+        let mut stack = vec![current_class.to_string()];
+        let mut visited = HashSet::new();
+        while let Some(class_name) = stack.pop() {
+            let normalized = Self::normalize_cpp_record_type_name(&class_name);
+            if normalized.is_empty() || !visited.insert(normalized.clone()) {
+                continue;
+            }
+            let unqual = normalized
+                .rsplit("::")
+                .next()
+                .unwrap_or(normalized.as_str())
+                .to_string();
+
+            let mut base_lists = Vec::new();
+            if let Some(bases) = self.class_bases.get(&normalized) {
+                base_lists.push(bases);
+            }
+            if unqual != normalized {
+                if let Some(bases) = self.class_bases.get(&unqual) {
+                    base_lists.push(bases);
+                }
+            }
+
+            for bases in base_lists {
+                for base in bases {
+                    let base_name = base.name.clone();
+                    let base_normalized = Self::normalize_cpp_record_type_name(&base_name);
+                    let found_on_base =
+                        self.lookup_field_type_in_class_fields(&base_name, &target_field)
+                            .or_else(|| {
+                                self.lookup_field_type_in_class_fields(
+                                    &base_normalized,
+                                    &target_field,
+                                )
+                            })
+                            .is_some();
+                    if found_on_base {
+                        return Some(base_name);
+                    }
+                    if !base_normalized.is_empty() && !visited.contains(&base_normalized) {
+                        stack.push(base_name);
+                    }
+                }
+            }
+        }
+        None
     }
 
     /// Get function parameter types from a function reference node.
@@ -26092,6 +26131,57 @@ impl AstCodeGen {
                             .as_ref()
                             .is_some_and(Self::is_pointer_like_type)
                         || self.is_ptr_var_expr(&node.children[0]));
+                    let base_is_implicit_self = matches!(
+                        &node.children[0].kind,
+                        ClangNodeKind::CXXThisExpr { .. }
+                    ) || base == "self"
+                        || base == "__self";
+                    let (mut needs_base_access, mut base_access) = if let Some(decl_class) =
+                        declaring_class
+                    {
+                        if decl_class.starts_with("(anonymous") || decl_class.starts_with("__anon_")
+                        {
+                            (false, BaseAccess::DirectField(String::new()))
+                        } else {
+                            let base_class_name = Self::extract_class_name(&base_type);
+                            if let Some(name) = base_class_name {
+                                let name_base = Self::strip_namespace_and_template(&name);
+                                let decl_class_base =
+                                    Self::strip_namespace_and_template(decl_class);
+                                if name_base != decl_class_base {
+                                    let access = self.get_base_access_for_class(&name, decl_class);
+                                    (true, access)
+                                } else {
+                                    (false, BaseAccess::DirectField(String::new()))
+                                }
+                            } else {
+                                (false, BaseAccess::DirectField(String::new()))
+                            }
+                        }
+                    } else {
+                        (false, BaseAccess::DirectField(String::new()))
+                    };
+                    if !needs_base_access && base_is_implicit_self {
+                        if let Some(current) = self.current_class.as_ref() {
+                            let missing_on_current =
+                                self.lookup_field_type_in_class_fields(current, &member).is_none();
+                            if missing_on_current {
+                                if let Some(inferred_declaring_base) = self
+                                    .infer_declaring_base_class_for_member(current, &member)
+                                {
+                                    let access = self.get_base_access_for_class(
+                                        current,
+                                        &inferred_declaring_base,
+                                    );
+                                    if !matches!(access, BaseAccess::DirectField(ref field) if field.is_empty())
+                                    {
+                                        needs_base_access = true;
+                                        base_access = access;
+                                    }
+                                }
+                            }
+                        }
+                    }
                     let member_is_array = matches!(ty, CppType::Array { .. });
                     let array_ref_prefix = if base_type.as_ref().is_some_and(|t| {
                         matches!(
@@ -26104,7 +26194,30 @@ impl AstCodeGen {
                     } else {
                         "&mut "
                     };
-                    if (*is_arrow && !base_is_value_field) || base_is_ptr {
+                    if needs_base_access {
+                        match base_access {
+                            BaseAccess::VirtualPtr(field) => format!("(*{}.{}).{}", base, field, member),
+                            BaseAccess::DirectField(field) | BaseAccess::FieldChain(field) => {
+                                if field.is_empty() {
+                                    if (*is_arrow && !base_is_value_field) || base_is_ptr {
+                                        if member_is_array {
+                                            format!("({}(*{}).{})", array_ref_prefix, base, member)
+                                        } else {
+                                            format!("(*{}).{}", base, member)
+                                        }
+                                    } else if base.starts_with('*') || base.contains(" as ") {
+                                        format!("({}).{}", base, member)
+                                    } else {
+                                        format!("{}.{}", base, member)
+                                    }
+                                } else if (*is_arrow && !base_is_value_field) || base_is_ptr {
+                                    format!("(*{}).{}.{}", base, field, member)
+                                } else {
+                                    format!("{}.{}.{}", base, field, member)
+                                }
+                            }
+                        }
+                    } else if (*is_arrow && !base_is_value_field) || base_is_ptr {
                         // Arrow access without unsafe wrapper (caller handles unsafe)
                         if member_is_array {
                             format!("({}(*{}).{})", array_ref_prefix, base, member)
@@ -26127,7 +26240,32 @@ impl AstCodeGen {
                     }
                 } else {
                     // Implicit this - no children means this->member
-                    format!("self.{}", sanitize_identifier(member_name))
+                    let member = sanitize_identifier(member_name);
+                    if let Some(current) = self.current_class.as_ref() {
+                        let missing_on_current =
+                            self.lookup_field_type_in_class_fields(current, &member).is_none();
+                        if missing_on_current {
+                            if let Some(inferred_declaring_base) = self
+                                .infer_declaring_base_class_for_member(current, &member)
+                            {
+                                let access =
+                                    self.get_base_access_for_class(current, &inferred_declaring_base);
+                                match access {
+                                    BaseAccess::VirtualPtr(field) => {
+                                        if !field.is_empty() {
+                                            return format!("(*self.{}).{}", field, member);
+                                        }
+                                    }
+                                    BaseAccess::DirectField(field) | BaseAccess::FieldChain(field) => {
+                                        if !field.is_empty() {
+                                            return format!("self.{}.{}", field, member);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    format!("self.{}", member)
                 }
             }
             ClangNodeKind::BinaryOperator { op, .. } => {
@@ -31092,7 +31230,9 @@ impl AstCodeGen {
 
                     // Determine if we need base access and get the correct base field name
                     // Skip base access for anonymous struct members (they are flattened into parent)
-                    let (needs_base_access, base_access) = if let Some(decl_class) = declaring_class
+                    let member = sanitize_identifier(member_name);
+                    let (mut needs_base_access, mut base_access) =
+                        if let Some(decl_class) = declaring_class
                     {
                         // Anonymous struct members are flattened - access directly
                         if decl_class.starts_with("(anonymous") || decl_class.starts_with("__anon_")
@@ -31122,7 +31262,28 @@ impl AstCodeGen {
                         (false, BaseAccess::DirectField(String::new()))
                     };
 
-                    let member = sanitize_identifier(member_name);
+                    if !needs_base_access && base_is_implicit_self {
+                        if let Some(current) = self.current_class.as_ref() {
+                            let missing_on_current =
+                                self.lookup_field_type_in_class_fields(current, &member).is_none();
+                            if missing_on_current {
+                                if let Some(inferred_declaring_base) = self
+                                    .infer_declaring_base_class_for_member(current, &member)
+                                {
+                                    let access = self.get_base_access_for_class(
+                                        current,
+                                        &inferred_declaring_base,
+                                    );
+                                    if !matches!(access, BaseAccess::DirectField(ref field) if field.is_empty())
+                                    {
+                                        needs_base_access = true;
+                                        base_access = access;
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     if *is_arrow && base_is_ptr {
                         // Check if this is a trait object (polymorphic pointer)
                         // Trait objects are already references, so no dereference needed
@@ -31283,7 +31444,7 @@ impl AstCodeGen {
                     // Implicit this - check if member is inherited
                     let member = sanitize_identifier(member_name);
                     let self_name = if self.use_ctor_self { "__self" } else { "self" };
-                    let (needs_base_access, base_access) =
+                    let (mut needs_base_access, mut base_access) =
                         if let (Some(current), Some(decl_class)) =
                             (&self.current_class, declaring_class)
                         {
@@ -31310,6 +31471,27 @@ impl AstCodeGen {
                         } else {
                             (false, BaseAccess::DirectField(String::new()))
                         };
+                    if !needs_base_access {
+                        if let Some(current) = self.current_class.as_ref() {
+                            let missing_on_current =
+                                self.lookup_field_type_in_class_fields(current, &member).is_none();
+                            if missing_on_current {
+                                if let Some(inferred_declaring_base) = self
+                                    .infer_declaring_base_class_for_member(current, &member)
+                                {
+                                    let access = self.get_base_access_for_class(
+                                        current,
+                                        &inferred_declaring_base,
+                                    );
+                                    if !matches!(access, BaseAccess::DirectField(ref field) if field.is_empty())
+                                    {
+                                        needs_base_access = true;
+                                        base_access = access;
+                                    }
+                                }
+                            }
+                        }
+                    }
                     if needs_base_access {
                         match base_access {
                             BaseAccess::VirtualPtr(field) => {
@@ -38166,6 +38348,382 @@ mod tests {
         assert!(
             !code.contains("self._document.Error()"),
             "degraded pointer field receiver should not emit raw dot method call without dereference, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_member_call_on_pointer_returned_from_base_method_uses_deref_receiver() {
+        let cchar_ptr = CppType::Pointer {
+            pointee: Box::new(CppType::Char { signed: true }),
+            is_const: true,
+        };
+        let xml_node_ptr = CppType::Pointer {
+            pointee: Box::new(CppType::Named("XMLNode".to_string())),
+            is_const: false,
+        };
+        let xml_base_ptr = CppType::Pointer {
+            pointee: Box::new(CppType::Named("XMLBase".to_string())),
+            is_const: false,
+        };
+        let xml_element_ptr = CppType::Pointer {
+            pointee: Box::new(CppType::Named("XMLElement".to_string())),
+            is_const: false,
+        };
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![
+                make_node(
+                    ClangNodeKind::RecordDecl {
+                        name: "XMLNode".to_string(),
+                        is_class: true,
+                        is_definition: true,
+                        fields: vec![],
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CXXMethodDecl {
+                            class_name: "XMLNode".to_string(),
+                            name: "SetValue".to_string(),
+                            return_type: CppType::Void,
+                            params: vec![
+                                ("text".to_string(), cchar_ptr.clone()),
+                                ("staticMem".to_string(), CppType::Bool),
+                            ],
+                            is_definition: true,
+                            is_static: false,
+                            is_virtual: false,
+                            is_pure_virtual: false,
+                            is_override: false,
+                            is_final: false,
+                            is_const: false,
+                            access: AccessSpecifier::Public,
+                        },
+                        vec![make_node(ClangNodeKind::CompoundStmt, vec![])],
+                    )],
+                ),
+                make_node(
+                    ClangNodeKind::RecordDecl {
+                        name: "XMLBase".to_string(),
+                        is_class: true,
+                        is_definition: true,
+                        fields: vec![],
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CXXMethodDecl {
+                            class_name: "XMLBase".to_string(),
+                            name: "FirstChild_1".to_string(),
+                            return_type: xml_node_ptr.clone(),
+                            params: vec![],
+                            is_definition: true,
+                            is_static: false,
+                            is_virtual: false,
+                            is_pure_virtual: false,
+                            is_override: false,
+                            is_final: false,
+                            is_const: false,
+                            access: AccessSpecifier::Public,
+                        },
+                        vec![make_node(
+                            ClangNodeKind::CompoundStmt,
+                            vec![make_node(
+                                ClangNodeKind::ReturnStmt,
+                                vec![make_node(ClangNodeKind::NullPtrLiteral, vec![])],
+                            )],
+                        )],
+                    )],
+                ),
+                make_node(
+                    ClangNodeKind::RecordDecl {
+                        name: "XMLElement".to_string(),
+                        is_class: true,
+                        is_definition: true,
+                        fields: vec![],
+                    },
+                    vec![
+                        make_node(
+                            ClangNodeKind::CXXBaseSpecifier {
+                                base_type: CppType::Named("XMLBase".to_string()),
+                                access: AccessSpecifier::Public,
+                                is_virtual: false,
+                            },
+                            vec![],
+                        ),
+                        make_node(
+                            ClangNodeKind::CXXMethodDecl {
+                                class_name: "XMLElement".to_string(),
+                                name: "SetText".to_string(),
+                                return_type: CppType::Void,
+                                params: vec![("inText".to_string(), cchar_ptr.clone())],
+                                is_definition: true,
+                                is_static: false,
+                                is_virtual: false,
+                                is_pure_virtual: false,
+                                is_override: false,
+                                is_final: false,
+                                is_const: false,
+                                access: AccessSpecifier::Public,
+                            },
+                            vec![make_node(
+                                ClangNodeKind::CompoundStmt,
+                                vec![make_node(
+                                    ClangNodeKind::ExprStmt,
+                                    vec![make_node(
+                                        ClangNodeKind::CallExpr {
+                                            ty: CppType::Void,
+                                            template_instantiation: None,
+                                        },
+                                        vec![
+                                            make_node(
+                                                ClangNodeKind::MemberExpr {
+                                                    member_name: "SetValue".to_string(),
+                                                    is_arrow: false,
+                                                    ty: CppType::Function {
+                                                        return_type: Box::new(CppType::Void),
+                                                        params: vec![
+                                                            cchar_ptr.clone(),
+                                                            CppType::Bool,
+                                                        ],
+                                                        is_variadic: false,
+                                                    },
+                                                    declaring_class: Some("XMLNode".to_string()),
+                                                    is_static: false,
+                                                },
+                                                vec![make_node(
+                                                    ClangNodeKind::CallExpr {
+                                                        ty: xml_node_ptr,
+                                                        template_instantiation: None,
+                                                    },
+                                                    vec![make_node(
+                                                        ClangNodeKind::MemberExpr {
+                                                            member_name: "FirstChild_1".to_string(),
+                                                            is_arrow: false,
+                                                            ty: CppType::Function {
+                                                                return_type: Box::new(
+                                                                    CppType::Pointer {
+                                                                        pointee: Box::new(
+                                                                            CppType::Named(
+                                                                                "XMLNode"
+                                                                                    .to_string(),
+                                                                            ),
+                                                                        ),
+                                                                        is_const: false,
+                                                                    },
+                                                                ),
+                                                                params: vec![],
+                                                                is_variadic: false,
+                                                            },
+                                                            declaring_class: Some(
+                                                                "XMLBase".to_string(),
+                                                            ),
+                                                            is_static: false,
+                                                        },
+                                                        vec![make_node(
+                                                            ClangNodeKind::CXXThisExpr {
+                                                                ty: xml_element_ptr,
+                                                            },
+                                                            vec![],
+                                                        )],
+                                                    )],
+                                                )],
+                                            ),
+                                            make_node(
+                                                ClangNodeKind::DeclRefExpr {
+                                                    name: "inText".to_string(),
+                                                    ty: cchar_ptr,
+                                                    namespace_path: vec![],
+                                                },
+                                                vec![],
+                                            ),
+                                            make_node(ClangNodeKind::BoolLiteral(false), vec![]),
+                                        ],
+                                    )],
+                                )],
+                            )],
+                        ),
+                    ],
+                ),
+                // Keep the pointer type referenced so AST shape mirrors real-world class usage.
+                make_node(
+                    ClangNodeKind::FunctionDecl {
+                        name: "touch_base_ptr".to_string(),
+                        mangled_name: "touch_base_ptr".to_string(),
+                        is_static: false,
+                        return_type: CppType::Void,
+                        params: vec![("base".to_string(), xml_base_ptr)],
+                        is_definition: true,
+                        is_variadic: false,
+                        is_noexcept: false,
+                        is_coroutine: false,
+                        coroutine_info: None,
+                    },
+                    vec![make_node(ClangNodeKind::CompoundStmt, vec![])],
+                ),
+            ],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("(*self.__base.FirstChild_1()).SetValue("),
+            "member call on pointer returned from base method should use explicit receiver dereference, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("self.__base.FirstChild_1().SetValue("),
+            "pointer-return receiver call should not emit raw dot dispatch on pointer return values, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_missing_declaring_class_for_inherited_member_uses_base_access_chain() {
+        let xml_document_ptr = CppType::Pointer {
+            pointee: Box::new(CppType::Named("XMLDocument".to_string())),
+            is_const: false,
+        };
+        let xml_element_ptr = CppType::Pointer {
+            pointee: Box::new(CppType::Named("XMLElement".to_string())),
+            is_const: false,
+        };
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![
+                make_node(
+                    ClangNodeKind::RecordDecl {
+                        name: "XMLDocument".to_string(),
+                        is_class: true,
+                        is_definition: true,
+                        fields: vec![],
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CXXMethodDecl {
+                            class_name: "XMLDocument".to_string(),
+                            name: "ProcessEntities".to_string(),
+                            return_type: CppType::Bool,
+                            params: vec![],
+                            is_definition: true,
+                            is_static: false,
+                            is_virtual: false,
+                            is_pure_virtual: false,
+                            is_override: false,
+                            is_final: false,
+                            is_const: true,
+                            access: AccessSpecifier::Public,
+                        },
+                        vec![make_node(
+                            ClangNodeKind::CompoundStmt,
+                            vec![make_node(
+                                ClangNodeKind::ReturnStmt,
+                                vec![make_node(ClangNodeKind::BoolLiteral(true), vec![])],
+                            )],
+                        )],
+                    )],
+                ),
+                make_node(
+                    ClangNodeKind::RecordDecl {
+                        name: "XMLNode".to_string(),
+                        is_class: true,
+                        is_definition: true,
+                        fields: vec![],
+                    },
+                    vec![make_node(
+                        ClangNodeKind::FieldDecl {
+                            name: "_document".to_string(),
+                            ty: xml_document_ptr.clone(),
+                            access: AccessSpecifier::Public,
+                            is_static: false,
+                            bit_field_width: None,
+                        },
+                        vec![],
+                    )],
+                ),
+                make_node(
+                    ClangNodeKind::RecordDecl {
+                        name: "XMLElement".to_string(),
+                        is_class: true,
+                        is_definition: true,
+                        fields: vec![],
+                    },
+                    vec![
+                        make_node(
+                            ClangNodeKind::CXXBaseSpecifier {
+                                base_type: CppType::Named("XMLNode".to_string()),
+                                access: AccessSpecifier::Public,
+                                is_virtual: false,
+                            },
+                            vec![],
+                        ),
+                        make_node(
+                            ClangNodeKind::CXXMethodDecl {
+                                class_name: "XMLElement".to_string(),
+                                name: "HasEntities".to_string(),
+                                return_type: CppType::Bool,
+                                params: vec![],
+                                is_definition: true,
+                                is_static: false,
+                                is_virtual: false,
+                                is_pure_virtual: false,
+                                is_override: false,
+                                is_final: false,
+                                is_const: false,
+                                access: AccessSpecifier::Public,
+                            },
+                            vec![make_node(
+                                ClangNodeKind::CompoundStmt,
+                                vec![make_node(
+                                    ClangNodeKind::ReturnStmt,
+                                    vec![make_node(
+                                        ClangNodeKind::CallExpr {
+                                            ty: CppType::Bool,
+                                            template_instantiation: None,
+                                        },
+                                        vec![make_node(
+                                            ClangNodeKind::MemberExpr {
+                                                member_name: "ProcessEntities".to_string(),
+                                                is_arrow: false,
+                                                ty: CppType::Function {
+                                                    return_type: Box::new(CppType::Bool),
+                                                    params: vec![],
+                                                    is_variadic: false,
+                                                },
+                                                declaring_class: Some("XMLDocument".to_string()),
+                                                is_static: false,
+                                            },
+                                            vec![make_node(
+                                                ClangNodeKind::MemberExpr {
+                                                    member_name: "_document".to_string(),
+                                                    is_arrow: false,
+                                                    ty: xml_document_ptr,
+                                                    // Simulate degraded AST metadata where
+                                                    // declaring class information is missing.
+                                                    declaring_class: None,
+                                                    is_static: false,
+                                                },
+                                                vec![make_node(
+                                                    ClangNodeKind::CXXThisExpr { ty: xml_element_ptr },
+                                                    vec![],
+                                                )],
+                                            )],
+                                        )],
+                                    )],
+                                )],
+                            )],
+                        ),
+                    ],
+                ),
+            ],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("(*self.__base._document).ProcessEntities()"),
+            "inherited member fallback should resolve missing declaring_class through __base chain, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("self._document.ProcessEntities()"),
+            "inherited member fallback should not emit direct self._document access on derived type, got:\n{}",
             code
         );
     }
