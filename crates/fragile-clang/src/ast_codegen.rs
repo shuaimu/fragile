@@ -151,6 +151,60 @@ fn cast_negative_literal_to_unsigned(lit: &str, unsigned_ty: &str) -> Option<Str
     ))
 }
 
+/// Detect unsigned integer suffix for a standalone integer literal string.
+/// Supports optional leading `-` and outer parentheses.
+fn unsigned_integer_literal_suffix(s: &str) -> Option<&'static str> {
+    let mut raw = s.trim();
+    while is_fully_parenthesized_expr(raw) && raw.len() >= 2 {
+        raw = raw[1..raw.len() - 1].trim();
+    }
+    let digits = raw.strip_prefix('-').unwrap_or(raw);
+    if digits.is_empty() {
+        return None;
+    }
+    for unsigned_ty in ["usize", "u128", "u64", "u32", "u16", "u8"] {
+        if let Some(prefix) = digits.strip_suffix(unsigned_ty) {
+            if !prefix.is_empty() && prefix.chars().all(|c| c.is_ascii_digit()) {
+                return Some(unsigned_ty);
+            }
+        }
+    }
+    None
+}
+
+/// Normalize standalone negative unsigned literals (e.g. `-1u64`) to
+/// signed-source cast forms Rust accepts.
+fn cast_negative_unsigned_literal_expr(expr: &str) -> Option<String> {
+    let mut raw = expr.trim();
+    while is_fully_parenthesized_expr(raw) && raw.len() >= 2 {
+        raw = raw[1..raw.len() - 1].trim();
+    }
+    if !raw.starts_with('-') {
+        return None;
+    }
+    let unsigned_ty = unsigned_integer_literal_suffix(raw)?;
+    cast_negative_literal_to_unsigned(raw, unsigned_ty)
+}
+
+/// Normalize unary-minus applied to an unsigned literal operand into
+/// a signed-source cast form that Rust accepts.
+/// Example: operand `1u64` -> `(-1i32 as u64)`.
+fn cast_unary_minus_unsigned_literal_operand(operand: &str) -> Option<String> {
+    let raw = operand.trim();
+    if raw.starts_with('-') {
+        return None;
+    }
+    let unsigned_ty = unsigned_integer_literal_suffix(raw)?;
+    if let Some(stripped) = raw.strip_suffix(unsigned_ty) {
+        let digits = stripped.trim().trim_matches(|c| c == '(' || c == ')');
+        if !digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit()) {
+            let neg_lit = format!("-{}{}", digits, unsigned_ty);
+            return cast_negative_literal_to_unsigned(&neg_lit, unsigned_ty);
+        }
+    }
+    None
+}
+
 /// Convert an integer literal string to a float literal.
 /// E.g., "0" -> "0.0", "123i32" -> "123.0", "-5" -> "-5.0"
 /// Special values like "inf", "NaN" are converted to proper Rust constants.
@@ -367,6 +421,18 @@ fn decode_c_string_escapes(s: &str) -> String {
                 }
             }
             other => out.push(other),
+        }
+    }
+    out
+}
+
+/// Escape arbitrary bytes for a Rust byte-string literal (`b"..."`).
+/// Uses `\xNN` for non-printable/non-ASCII bytes and C-style escapes where available.
+fn escape_bytes_for_rust_byte_string(bytes: &[u8]) -> String {
+    let mut out = String::new();
+    for &b in bytes {
+        for escaped in std::ascii::escape_default(b) {
+            out.push(escaped as char);
         }
     }
     out
@@ -700,6 +766,11 @@ pub struct AstCodeGen {
     /// Local variables in current function (parameters and locals)
     /// Used to determine whether a DeclRefExpr should use local or global variable
     local_vars: HashSet<String>,
+    /// Lexically scoped local-variable activation counts (used for shadowing-sensitive
+    /// lookup decisions such as function-static vs local DeclRefExpr resolution).
+    scoped_local_var_counts: HashMap<String, usize>,
+    /// Stack of local names declared in each active lexical scope.
+    scoped_local_scope_stack: Vec<Vec<String>>,
     /// Function-scope static local variables in current function: source name -> generated static name.
     /// These require `unsafe` access just like globals.
     function_static_var_mapping: HashMap<String, String>,
@@ -910,6 +981,8 @@ impl AstCodeGen {
             global_var_mapping: HashMap::new(),
             global_var_types: HashMap::new(),
             local_vars: HashSet::new(),
+            scoped_local_var_counts: HashMap::new(),
+            scoped_local_scope_stack: Vec::new(),
             function_static_var_mapping: HashMap::new(),
             current_function_ident: None,
             function_static_counter: 0,
@@ -1451,6 +1524,60 @@ impl AstCodeGen {
         self.resolve_enum_variant_from_integer_literal(return_ty, literal_value)
     }
 
+    /// True when `ty` resolves to an enum name already tracked by codegen.
+    fn is_known_enum_named_type(&self, ty: &CppType) -> bool {
+        let CppType::Named(raw_name) = ty else {
+            return false;
+        };
+        let target_name = Self::canonical_enum_type_name(raw_name);
+        if target_name.is_empty() {
+            return false;
+        }
+        let target_base = Self::strip_namespace_and_template(&target_name);
+        let target_rust = CppType::Named(target_name.clone()).to_rust_type_str();
+
+        self.enum_variant_map.keys().any(|(enum_name, _)| {
+            let enum_name = Self::canonical_enum_type_name(enum_name);
+            if enum_name.is_empty() {
+                return false;
+            }
+            let enum_base = Self::strip_namespace_and_template(&enum_name);
+            enum_name == target_name
+                || enum_base == target_base
+                || CppType::Named(enum_name).to_rust_type_str() == target_rust
+        })
+    }
+
+    /// Cast enum-typed expressions when initializing integral (non-bool) targets.
+    fn cast_enum_expr_to_integral_target(
+        &self,
+        expr: String,
+        expr_node: &ClangNode,
+        target_ty: &CppType,
+    ) -> String {
+        let target_rust = target_ty.to_rust_type_str();
+        if !is_rust_integral_non_bool_type(&target_rust) {
+            return expr;
+        }
+
+        let expr_ty = Self::get_original_expr_type(expr_node).or_else(|| Self::get_expr_type(expr_node));
+        if !expr_ty
+            .as_ref()
+            .is_some_and(|t| self.is_known_enum_named_type(t))
+        {
+            return expr;
+        }
+
+        let fixed_expr = Self::fix_return_type_casts(&expr, &target_rust);
+        if fixed_expr.contains(&format!(" as {}", target_rust))
+            || fixed_expr.contains(&format!(" as {}}}", target_rust))
+        {
+            fixed_expr
+        } else {
+            format!("({}) as {}", fixed_expr, target_rust)
+        }
+    }
+
     /// Set resolved field types from LibTooling template specializations.
     /// This enables using actual concrete types for fields in template instantiations.
     pub fn set_specialization_field_types(
@@ -1490,6 +1617,19 @@ impl AstCodeGen {
 
     /// Get a default value for a Rust type (used for uninitialized template variables)
     fn get_default_value_for_type(rust_ty: &str) -> String {
+        fn parse_sized_array_type(type_str: &str) -> Option<(&str, &str)> {
+            let trimmed = type_str.trim();
+            let inner = trimmed.strip_prefix('[')?.strip_suffix(']')?;
+            let (elem, size) = inner.rsplit_once(';')?;
+            let elem = elem.trim();
+            let size = size.trim();
+            if elem.is_empty() || size.is_empty() {
+                None
+            } else {
+                Some((elem, size))
+            }
+        }
+
         match rust_ty {
             "i8" | "i16" | "i32" | "i64" | "i128" | "isize" => "0".to_string(),
             "u8" | "u16" | "u32" | "u64" | "u128" | "usize" => "0".to_string(),
@@ -1498,6 +1638,31 @@ impl AstCodeGen {
             "bool" => "false".to_string(),
             "char" => "'\\0'".to_string(),
             "()" => "()".to_string(),
+            ty if ty.starts_with('[') && ty.ends_with(']') => {
+                if let Some((elem_ty, size_expr)) = parse_sized_array_type(ty) {
+                    match elem_ty {
+                        "i8" | "i16" | "i32" | "i64" | "i128" | "isize" | "u8" | "u16"
+                        | "u32" | "u64" | "u128" | "usize" | "char" => {
+                            format!("[0; {}]", size_expr)
+                        }
+                        "f32" => format!("[0.0f32; {}]", size_expr),
+                        "f64" => format!("[0.0; {}]", size_expr),
+                        "bool" => format!("[false; {}]", size_expr),
+                        elem if elem.starts_with("*const ") => {
+                            format!("[std::ptr::null(); {}]", size_expr)
+                        }
+                        elem if elem.starts_with("*mut ") => {
+                            format!("[std::ptr::null_mut(); {}]", size_expr)
+                        }
+                        elem if elem.starts_with("Option<") => {
+                            format!("[None; {}]", size_expr)
+                        }
+                        _ => "unsafe { std::mem::zeroed() }".to_string(),
+                    }
+                } else {
+                    "unsafe { std::mem::zeroed() }".to_string()
+                }
+            }
             ty if ty.starts_with("*mut ") || ty.starts_with("*const ") => {
                 "std::ptr::null_mut()".to_string()
             }
@@ -5094,32 +5259,13 @@ impl AstCodeGen {
                     // Build type substitution map by comparing template param patterns with instantiated types
                     // For example, if template has (T* a, T* b) and instantiated is (int*, int*),
                     // we need to extract T = int, not T = int*
-                    let type_args: Vec<String> = template_info
-                        .template_params
-                        .iter()
-                        .enumerate()
-                        .map(|(i, param_name)| {
-                            // Find the template parameter pattern and instantiated type
-                            let (template_param_ty, instantiated_ty) =
-                                if i < template_info.params.len() && i < params.len() {
-                                    (&template_info.params[i].1, &params[i])
-                                } else if matches!(
-                                    &template_info.return_type,
-                                    CppType::TemplateParam { .. }
-                                ) {
-                                    (&template_info.return_type, return_type.as_ref())
-                                } else {
-                                    // Fallback: use instantiated param directly
-                                    if i < params.len() {
-                                        return params[i].to_rust_type_str();
-                                    } else {
-                                        return return_type.to_rust_type_str();
-                                    }
-                                };
-                            // Extract the template parameter from the pattern
-                            extract_template_arg(template_param_ty, instantiated_ty, param_name)
-                        })
-                        .collect();
+                    let Some(type_args) = infer_fn_template_type_args(
+                        &template_info,
+                        params,
+                        return_type.as_ref(),
+                    ) else {
+                        return;
+                    };
 
                     // Generate a mangled name for the instantiation (e.g., "add_i32")
                     // Sanitize type args for use in function names (replace * with ptr, spaces, etc.)
@@ -7472,12 +7618,25 @@ impl AstCodeGen {
         // Generate body by processing the template body with type substitutions
         if let Some(ref body) = template_info.body {
             // Save current state
+            let saved_local_vars = self.local_vars.clone();
+            let saved_scoped_local_var_counts = self.scoped_local_var_counts.clone();
+            let saved_scoped_local_scope_stack = self.scoped_local_scope_stack.clone();
             let saved_ref_vars = self.ref_vars.clone();
             let saved_const_receiver_vars = self.const_receiver_vars.clone();
             let saved_ptr_vars = self.ptr_vars.clone();
             let saved_arr_vars = self.arr_vars.clone();
 
             // Clear for this function
+            self.local_vars.clear();
+            self.scoped_local_var_counts.clear();
+            self.scoped_local_scope_stack.clear();
+            self.push_local_scope();
+            for (param_name, _) in &template_info.params {
+                self.declare_scoped_local_var(sanitize_identifier(param_name));
+            }
+            for var_name in Self::extract_vardecl_names(body) {
+                self.local_vars.insert(sanitize_identifier(&var_name));
+            }
             self.ref_vars.clear();
             self.const_receiver_vars.clear();
             self.ptr_vars.clear();
@@ -7506,6 +7665,9 @@ impl AstCodeGen {
             self.const_receiver_vars = saved_const_receiver_vars;
             self.ptr_vars = saved_ptr_vars;
             self.arr_vars = saved_arr_vars;
+            self.local_vars = saved_local_vars;
+            self.scoped_local_var_counts = saved_scoped_local_var_counts;
+            self.scoped_local_scope_stack = saved_scoped_local_scope_stack;
         } else {
             self.writeln("todo!(\"Function template body not available\")");
         }
@@ -7578,7 +7740,7 @@ impl AstCodeGen {
                         let var_name = sanitize_identifier(name);
 
                         // Track local variable to avoid using global prefixes
-                        self.local_vars.insert(var_name.clone());
+                        self.declare_scoped_local_var(var_name.clone());
 
                         // Check if this is an array type
                         let is_array = rust_ty.starts_with('[') && rust_ty.contains(';');
@@ -7636,12 +7798,31 @@ impl AstCodeGen {
                     }
                 }
             }
+            ClangNodeKind::IfStmt => {
+                if node.children.len() >= 2 {
+                    let cond = self.condition_to_bool_expr(&node.children[0]);
+                    let cond = self.substitute_type_in_expr(&cond, subst_map);
+                    self.writeln(&format!("if {} {{", cond));
+                    self.indent += 1;
+                    self.generate_fn_template_stmt(&node.children[1], subst_map);
+                    self.indent -= 1;
+                    if node.children.len() > 2 {
+                        self.writeln("} else {");
+                        self.indent += 1;
+                        self.generate_fn_template_stmt(&node.children[2], subst_map);
+                        self.indent -= 1;
+                    }
+                    self.writeln("}");
+                }
+            }
             ClangNodeKind::CompoundStmt => {
                 self.writeln("{");
                 self.indent += 1;
+                self.push_local_scope();
                 for child in &node.children {
                     self.generate_fn_template_stmt(child, subst_map);
                 }
+                self.pop_local_scope();
                 self.indent -= 1;
                 self.writeln("}");
             }
@@ -7662,6 +7843,7 @@ impl AstCodeGen {
                     || expr_trimmed == "true"
                     || expr_trimmed == "!false"
                     || expr_trimmed == "!true"
+                    || expr_trimmed == "Default::default()"
                 {
                     return;
                 }
@@ -9547,6 +9729,570 @@ impl AstCodeGen {
         }
     }
 
+    /// tinyxml2 fallback: emit a minimal non-virtual method surface when only
+    /// declarations are visible in the current translation unit.
+    fn emit_missing_tinyxml2_method_surface_stubs(
+        &mut self,
+        class_name: &str,
+        impl_block_start: usize,
+    ) {
+        let unqualified = Self::unqualified_cpp_name(class_name);
+        let has_method = |output: &str, method_name: &str| -> bool {
+            output.contains(&format!("pub fn {}(", method_name))
+        };
+        let has_field = |field_name: &str| -> bool {
+            self.class_fields
+                .get(class_name)
+                .is_some_and(|fields| fields.iter().any(|(name, _)| name == field_name))
+        };
+
+        match unqualified {
+            "XMLUtil" => {
+                if !has_method(&self.output[impl_block_start..], "ToInt") {
+                    self.current_struct_methods.insert("ToInt".to_string(), 1);
+                    self.writeln("");
+                    self.writeln("pub fn ToInt(_str: *const i8, value: *mut i32) -> bool {");
+                    self.indent += 1;
+                    self.writeln("if !value.is_null() {");
+                    self.indent += 1;
+                    self.writeln("unsafe { *value = 0; };");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("return false;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                }
+
+                if !has_method(&self.output[impl_block_start..], "ToInt64") {
+                    self.current_struct_methods.insert("ToInt64".to_string(), 1);
+                    self.writeln("");
+                    self.writeln("pub fn ToInt64(_str: *const i8, value: *mut i64) -> bool {");
+                    self.indent += 1;
+                    self.writeln("if !value.is_null() {");
+                    self.indent += 1;
+                    self.writeln("unsafe { *value = 0; };");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("return false;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                }
+
+                if !has_method(&self.output[impl_block_start..], "ToUnsigned64") {
+                    self.current_struct_methods
+                        .insert("ToUnsigned64".to_string(), 1);
+                    self.writeln("");
+                    self.writeln(
+                        "pub fn ToUnsigned64(_str: *const i8, value: *mut u64) -> bool {",
+                    );
+                    self.indent += 1;
+                    self.writeln("if !value.is_null() {");
+                    self.indent += 1;
+                    self.writeln("unsafe { *value = 0; };");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("return false;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                }
+
+                if !has_method(&self.output[impl_block_start..], "ToUnsigned") {
+                    self.current_struct_methods
+                        .insert("ToUnsigned".to_string(), 1);
+                    self.writeln("");
+                    self.writeln("pub fn ToUnsigned(_str: *const i8, value: *mut u32) -> bool {");
+                    self.indent += 1;
+                    self.writeln("if !value.is_null() {");
+                    self.indent += 1;
+                    self.writeln("unsafe { *value = 0; };");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("return false;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                }
+
+                if !has_method(&self.output[impl_block_start..], "ToBool") {
+                    self.current_struct_methods.insert("ToBool".to_string(), 1);
+                    self.writeln("");
+                    self.writeln("pub fn ToBool(_str: *const i8, value: *mut bool) -> bool {");
+                    self.indent += 1;
+                    self.writeln("if !value.is_null() {");
+                    self.indent += 1;
+                    self.writeln("unsafe { *value = false; };");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("return false;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                }
+
+                if !has_method(&self.output[impl_block_start..], "ToDouble") {
+                    self.current_struct_methods.insert("ToDouble".to_string(), 1);
+                    self.writeln("");
+                    self.writeln("pub fn ToDouble(_str: *const i8, value: *mut f64) -> bool {");
+                    self.indent += 1;
+                    self.writeln("if !value.is_null() {");
+                    self.indent += 1;
+                    self.writeln("unsafe { *value = 0.0; };");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("return false;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                }
+
+                if !has_method(&self.output[impl_block_start..], "ToFloat") {
+                    self.current_struct_methods.insert("ToFloat".to_string(), 1);
+                    self.writeln("");
+                    self.writeln("pub fn ToFloat(_str: *const i8, value: *mut f32) -> bool {");
+                    self.indent += 1;
+                    self.writeln("if !value.is_null() {");
+                    self.indent += 1;
+                    self.writeln("unsafe { *value = 0.0f32; };");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("return false;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                }
+            }
+            "StrPair" => {
+                let has_core_fields =
+                    has_field("_flags") && has_field("_start") && has_field("_end");
+                if !has_core_fields {
+                    return;
+                }
+
+                if !has_method(&self.output[impl_block_start..], "Reset") {
+                    self.current_struct_methods.insert("Reset".to_string(), 1);
+                    self.writeln("");
+                    self.writeln("pub fn Reset(&mut self) {");
+                    self.indent += 1;
+                    self.writeln("{ self._flags = 0; self._flags };");
+                    self.writeln("{ self._start = std::ptr::null_mut(); self._start };");
+                    self.writeln("{ self._end = std::ptr::null_mut(); self._end };");
+                    self.indent -= 1;
+                    self.writeln("}");
+                }
+
+                if !has_method(&self.output[impl_block_start..], "GetStr") {
+                    self.current_struct_methods.insert("GetStr".to_string(), 1);
+                    self.writeln("");
+                    self.writeln("pub fn GetStr(&self, ) -> *const i8 {");
+                    self.indent += 1;
+                    self.writeln("return (self._start) as *const i8;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                }
+
+                if !has_method(&self.output[impl_block_start..], "SetStr") {
+                    self.current_struct_methods.insert("SetStr".to_string(), 1);
+                    self.writeln("");
+                    self.writeln("pub fn SetStr(&mut self, str: *const i8, flags: i32) {");
+                    self.indent += 1;
+                    self.writeln("self.Reset();");
+                    self.writeln("{ self._start = (str) as *mut i8; self._start };");
+                    self.writeln("{ self._flags = flags; self._flags };");
+                    self.indent -= 1;
+                    self.writeln("}");
+                }
+            }
+            "XMLNode" => {
+                let has_core_fields = has_field("_document")
+                    && has_field("_value")
+                    && has_field("_firstChild")
+                    && has_field("_lastChild")
+                    && has_field("_parent")
+                    && has_field("_prev")
+                    && has_field("_next");
+                if !has_core_fields {
+                    return;
+                }
+
+                if !has_method(&self.output[impl_block_start..], "new_1") {
+                    self.current_struct_methods.insert("new_1".to_string(), 1);
+                    self.writeln("");
+                    self.writeln("pub fn new_1(doc: *mut XMLDocument) -> Self {");
+                    self.indent += 1;
+                    self.writeln("let mut __self = Self::new_0();");
+                    self.writeln("{ __self._document = doc; __self._document };");
+                    self.writeln("__self");
+                    self.indent -= 1;
+                    self.writeln("}");
+                }
+
+                if !has_method(&self.output[impl_block_start..], "Value") {
+                    self.current_struct_methods.insert("Value".to_string(), 1);
+                    self.writeln("");
+                    self.writeln("pub fn Value(&self, ) -> *const i8 {");
+                    self.indent += 1;
+                    self.writeln("return self._value.GetStr();");
+                    self.indent -= 1;
+                    self.writeln("}");
+                }
+
+                if !has_method(&self.output[impl_block_start..], "SetValue") {
+                    self.current_struct_methods.insert("SetValue".to_string(), 1);
+                    self.writeln("");
+                    self.writeln("pub fn SetValue(&mut self, str: *const i8, _staticMem: bool) {");
+                    self.indent += 1;
+                    self.writeln("self._value.SetStr(str as *const i8, 0);");
+                    self.indent -= 1;
+                    self.writeln("}");
+                }
+
+                if !has_method(&self.output[impl_block_start..], "InsertEndChild") {
+                    self.current_struct_methods
+                        .insert("InsertEndChild".to_string(), 1);
+                    self.writeln("");
+                    self.writeln(
+                        "pub fn InsertEndChild(&mut self, addThis: *mut XMLNode) -> *mut XMLNode {",
+                    );
+                    self.indent += 1;
+                    self.writeln("if addThis.is_null() {");
+                    self.indent += 1;
+                    self.writeln("return std::ptr::null_mut();");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("unsafe {");
+                    self.indent += 1;
+                    self.writeln("(*addThis)._parent = (self) as *mut XMLNode;");
+                    self.writeln("(*addThis)._prev = self._lastChild;");
+                    self.writeln("(*addThis)._next = std::ptr::null_mut();");
+                    self.writeln("if self._firstChild.is_null() {");
+                    self.indent += 1;
+                    self.writeln("self._firstChild = addThis;");
+                    self.indent -= 1;
+                    self.writeln("} else if !self._lastChild.is_null() {");
+                    self.indent += 1;
+                    self.writeln("(*self._lastChild)._next = addThis;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("self._lastChild = addThis;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("return addThis;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                }
+            }
+            "XMLAttribute" => {
+                let has_core_fields =
+                    has_field("_name") && has_field("_value") && has_field("_next");
+                if !has_core_fields {
+                    return;
+                }
+
+                if !has_method(&self.output[impl_block_start..], "Name") {
+                    self.current_struct_methods.insert("Name".to_string(), 1);
+                    self.writeln("");
+                    self.writeln("pub fn Name(&self, ) -> *const i8 {");
+                    self.indent += 1;
+                    self.writeln("return self._name.GetStr();");
+                    self.indent -= 1;
+                    self.writeln("}");
+                }
+
+                if !has_method(&self.output[impl_block_start..], "Value") {
+                    self.current_struct_methods.insert("Value".to_string(), 1);
+                    self.writeln("");
+                    self.writeln("pub fn Value(&self, ) -> *const i8 {");
+                    self.indent += 1;
+                    self.writeln("return self._value.GetStr();");
+                    self.indent -= 1;
+                    self.writeln("}");
+                }
+
+                if !has_method(&self.output[impl_block_start..], "SetAttribute") {
+                    self.current_struct_methods
+                        .insert("SetAttribute".to_string(), 1);
+                    self.writeln("");
+                    self.writeln("pub fn SetAttribute<T>(&mut self, _value: T) {");
+                    self.indent += 1;
+                    self.writeln("// Surface-only fallback for replay compilation.");
+                    self.indent -= 1;
+                    self.writeln("}");
+                }
+
+                if !has_method(&self.output[impl_block_start..], "QueryIntValue") {
+                    self.current_struct_methods
+                        .insert("QueryIntValue".to_string(), 1);
+                    self.writeln("");
+                    self.writeln("pub fn QueryIntValue(&self, value: *mut i32) -> XMLError {");
+                    self.indent += 1;
+                    self.writeln("if value.is_null() {");
+                    self.indent += 1;
+                    self.writeln("return XMLError::XML_WRONG_ATTRIBUTE_TYPE;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("if XMLUtil::ToInt(self.Value(), value) {");
+                    self.indent += 1;
+                    self.writeln("return XMLError::XML_SUCCESS;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("return XMLError::XML_WRONG_ATTRIBUTE_TYPE;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                }
+
+                if !has_method(&self.output[impl_block_start..], "QueryInt64Value") {
+                    self.current_struct_methods
+                        .insert("QueryInt64Value".to_string(), 1);
+                    self.writeln("");
+                    self.writeln("pub fn QueryInt64Value(&self, value: *mut i64) -> XMLError {");
+                    self.indent += 1;
+                    self.writeln("if value.is_null() {");
+                    self.indent += 1;
+                    self.writeln("return XMLError::XML_WRONG_ATTRIBUTE_TYPE;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("if XMLUtil::ToInt64(self.Value(), value) {");
+                    self.indent += 1;
+                    self.writeln("return XMLError::XML_SUCCESS;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("return XMLError::XML_WRONG_ATTRIBUTE_TYPE;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                }
+
+                if !has_method(&self.output[impl_block_start..], "QueryUnsigned64Value") {
+                    self.current_struct_methods
+                        .insert("QueryUnsigned64Value".to_string(), 1);
+                    self.writeln("");
+                    self.writeln(
+                        "pub fn QueryUnsigned64Value(&self, value: *mut u64) -> XMLError {",
+                    );
+                    self.indent += 1;
+                    self.writeln("if value.is_null() {");
+                    self.indent += 1;
+                    self.writeln("return XMLError::XML_WRONG_ATTRIBUTE_TYPE;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("if XMLUtil::ToUnsigned64(self.Value(), value) {");
+                    self.indent += 1;
+                    self.writeln("return XMLError::XML_SUCCESS;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("return XMLError::XML_WRONG_ATTRIBUTE_TYPE;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                }
+
+                if !has_method(&self.output[impl_block_start..], "QueryUnsignedValue") {
+                    self.current_struct_methods
+                        .insert("QueryUnsignedValue".to_string(), 1);
+                    self.writeln("");
+                    self.writeln("pub fn QueryUnsignedValue(&self, value: *mut u32) -> XMLError {");
+                    self.indent += 1;
+                    self.writeln("if value.is_null() {");
+                    self.indent += 1;
+                    self.writeln("return XMLError::XML_WRONG_ATTRIBUTE_TYPE;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("if XMLUtil::ToUnsigned(self.Value(), value) {");
+                    self.indent += 1;
+                    self.writeln("return XMLError::XML_SUCCESS;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("return XMLError::XML_WRONG_ATTRIBUTE_TYPE;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                }
+
+                if !has_method(&self.output[impl_block_start..], "QueryBoolValue") {
+                    self.current_struct_methods
+                        .insert("QueryBoolValue".to_string(), 1);
+                    self.writeln("");
+                    self.writeln("pub fn QueryBoolValue(&self, value: *mut bool) -> XMLError {");
+                    self.indent += 1;
+                    self.writeln("if value.is_null() {");
+                    self.indent += 1;
+                    self.writeln("return XMLError::XML_WRONG_ATTRIBUTE_TYPE;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("if XMLUtil::ToBool(self.Value(), value) {");
+                    self.indent += 1;
+                    self.writeln("return XMLError::XML_SUCCESS;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("return XMLError::XML_WRONG_ATTRIBUTE_TYPE;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                }
+
+                if !has_method(&self.output[impl_block_start..], "QueryDoubleValue") {
+                    self.current_struct_methods
+                        .insert("QueryDoubleValue".to_string(), 1);
+                    self.writeln("");
+                    self.writeln("pub fn QueryDoubleValue(&self, value: *mut f64) -> XMLError {");
+                    self.indent += 1;
+                    self.writeln("if value.is_null() {");
+                    self.indent += 1;
+                    self.writeln("return XMLError::XML_WRONG_ATTRIBUTE_TYPE;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("if XMLUtil::ToDouble(self.Value(), value) {");
+                    self.indent += 1;
+                    self.writeln("return XMLError::XML_SUCCESS;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("return XMLError::XML_WRONG_ATTRIBUTE_TYPE;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                }
+
+                if !has_method(&self.output[impl_block_start..], "QueryFloatValue") {
+                    self.current_struct_methods
+                        .insert("QueryFloatValue".to_string(), 1);
+                    self.writeln("");
+                    self.writeln("pub fn QueryFloatValue(&self, value: *mut f32) -> XMLError {");
+                    self.indent += 1;
+                    self.writeln("if value.is_null() {");
+                    self.indent += 1;
+                    self.writeln("return XMLError::XML_WRONG_ATTRIBUTE_TYPE;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("if XMLUtil::ToFloat(self.Value(), value) {");
+                    self.indent += 1;
+                    self.writeln("return XMLError::XML_SUCCESS;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("return XMLError::XML_WRONG_ATTRIBUTE_TYPE;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                }
+            }
+            "XMLElement" => {
+                let has_core_fields = has_field("_rootAttribute");
+                if !has_core_fields {
+                    return;
+                }
+
+                if !has_method(&self.output[impl_block_start..], "FindAttribute") {
+                    self.current_struct_methods
+                        .insert("FindAttribute".to_string(), 1);
+                    self.writeln("");
+                    self.writeln("pub fn FindAttribute(&self, name: *const i8) -> *const XMLAttribute {");
+                    self.indent += 1;
+                    self.writeln("let mut a: *const XMLAttribute = (self._rootAttribute) as *const XMLAttribute;");
+                    self.writeln("while !a.is_null() {");
+                    self.indent += 1;
+                    self.writeln("if name.is_null() {");
+                    self.indent += 1;
+                    self.writeln("return a;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("let attr_name = unsafe { (*a).Name() };");
+                    self.writeln(
+                        "if !attr_name.is_null() && unsafe { super::strcmp(attr_name, name) } == 0 {",
+                    );
+                    self.indent += 1;
+                    self.writeln("return a;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("a = unsafe { ((*a)._next) as *const XMLAttribute };");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("return std::ptr::null();");
+                    self.indent -= 1;
+                    self.writeln("}");
+                }
+
+                if !has_method(&self.output[impl_block_start..], "FindOrCreateAttribute") {
+                    self.current_struct_methods
+                        .insert("FindOrCreateAttribute".to_string(), 1);
+                    self.writeln("");
+                    self.writeln(
+                        "pub fn FindOrCreateAttribute(&mut self, name: *const i8) -> *mut XMLAttribute {",
+                    );
+                    self.indent += 1;
+                    self.writeln(
+                        "let existing = (self.FindAttribute(name as *const i8)) as *mut XMLAttribute;",
+                    );
+                    self.writeln("if !existing.is_null() {");
+                    self.indent += 1;
+                    self.writeln("return existing;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("let mut attr = Box::new(XMLAttribute::new_0());");
+                    self.writeln("if !name.is_null() {");
+                    self.indent += 1;
+                    self.writeln("attr._name.SetInternedStr(name as *const i8);");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("attr._next = std::ptr::null_mut();");
+                    self.writeln("let attr_ptr = Box::into_raw(attr);");
+                    self.writeln("if self._rootAttribute.is_null() {");
+                    self.indent += 1;
+                    self.writeln("self._rootAttribute = attr_ptr;");
+                    self.writeln("return attr_ptr;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("let mut tail = self._rootAttribute;");
+                    self.writeln("while unsafe { !(*tail)._next.is_null() } {");
+                    self.indent += 1;
+                    self.writeln("tail = unsafe { (*tail)._next };");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("unsafe { (*tail)._next = attr_ptr; };");
+                    self.writeln("return attr_ptr;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                }
+            }
+            "XMLDocument" => {
+                let has_core_fields = has_field("_errorID");
+                if !has_core_fields {
+                    return;
+                }
+
+                if !has_method(&self.output[impl_block_start..], "ErrorIDToName") {
+                    self.current_struct_methods
+                        .insert("ErrorIDToName".to_string(), 1);
+                    self.writeln("");
+                    self.writeln("pub fn ErrorIDToName(errorID: XMLError) -> *const i8 {");
+                    self.indent += 1;
+                    self.writeln("let idx = (errorID as i32) as usize;");
+                    self.writeln("if idx < 19 {");
+                    self.indent += 1;
+                    self.writeln("return unsafe { XMLDOCUMENT__ERRORNAMES[idx] };");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("return std::ptr::null();");
+                    self.indent -= 1;
+                    self.writeln("}");
+                }
+
+                if !has_method(&self.output[impl_block_start..], "LoadFile") {
+                    self.current_struct_methods.insert("LoadFile".to_string(), 1);
+                    self.writeln("");
+                    self.writeln("pub fn LoadFile(&mut self, _filename: *const i8) -> XMLError {");
+                    self.indent += 1;
+                    self.writeln("{ self._errorID = XMLError::XML_SUCCESS; self._errorID };");
+                    self.writeln("return self._errorID;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                }
+
+                if !has_method(&self.output[impl_block_start..], "Parse") {
+                    self.current_struct_methods.insert("Parse".to_string(), 1);
+                    self.writeln("");
+                    self.writeln(
+                        "pub fn Parse(&mut self, _xml: *const i8, _nBytes: u64) -> XMLError {",
+                    );
+                    self.indent += 1;
+                    self.writeln("{ self._errorID = XMLError::XML_SUCCESS; self._errorID };");
+                    self.writeln("return self._errorID;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                }
+            }
+            _ => {}
+        }
+    }
+
     /// Pre-register emitted method overload names for a class so member calls can
     /// resolve to the correct Rust suffixed method during body generation.
     fn register_class_method_overloads(
@@ -9774,6 +10520,23 @@ impl AstCodeGen {
         arg_count: usize,
         signature: Option<(&[CppType], &CppType)>,
     ) -> Option<String> {
+        self.select_static_method_overload_name_with_return(
+            class_name,
+            base_method_name,
+            arg_count,
+            signature,
+            None,
+        )
+    }
+
+    fn select_static_method_overload_name_with_return(
+        &self,
+        class_name: &str,
+        base_method_name: &str,
+        arg_count: usize,
+        signature: Option<(&[CppType], &CppType)>,
+        expected_return_type: Option<&CppType>,
+    ) -> Option<String> {
         let class_overloads = self.get_class_method_overloads(class_name)?;
         let method_overloads = class_overloads.get(base_method_name)?;
 
@@ -9797,6 +10560,17 @@ impl AstCodeGen {
             if !signature_matches.is_empty() {
                 candidates = signature_matches;
                 has_exact_signature = true;
+            }
+        }
+
+        if let Some(expected) = expected_return_type {
+            let return_matches: Vec<&MethodOverloadInfo> = candidates
+                .iter()
+                .copied()
+                .filter(|entry| entry.return_type == *expected)
+                .collect();
+            if !return_matches.is_empty() {
+                candidates = return_matches;
             }
         }
 
@@ -10797,9 +11571,7 @@ impl AstCodeGen {
             }
         }
         let base_name_cpp = Self::strip_namespace_and_template(name);
-        if self.local_vars.contains(name)
-            || self.local_vars.contains(&base_name_cpp)
-            || self.defined_function_names.contains(name)
+        if self.defined_function_names.contains(name)
             || self.defined_function_names.contains(&base_name_cpp)
             || self.declared_function_names.contains(name)
             || self.declared_function_names.contains(&base_name_cpp)
@@ -10899,6 +11671,169 @@ impl AstCodeGen {
         }
 
         self.resolve_tinyxml2_xmlutil_helper_from_func_name(func, arg_count)
+    }
+
+    /// Resolve unqualified function calls in non-member contexts that actually
+    /// refer to a unique static class method (e.g., `zero()` -> `Vec2::zero()`).
+    fn resolve_unqualified_static_method_call_any_class(
+        &self,
+        callee: &ClangNode,
+        arg_count: usize,
+        expected_return_type: Option<&CppType>,
+    ) -> Option<String> {
+        if self.current_class.is_some() || Self::is_function_pointer_variable(callee) {
+            return None;
+        }
+
+        let decl_ref = Self::get_declref_expr_node(callee)?;
+        let ClangNodeKind::DeclRefExpr {
+            name,
+            namespace_path,
+            ty,
+            ..
+        } = &decl_ref.kind
+        else {
+            return None;
+        };
+
+        if !namespace_path.is_empty() {
+            return None;
+        }
+
+        let base_name_cpp = Self::strip_namespace_and_template(name);
+        if self.local_vars.contains(name)
+            || self.local_vars.contains(&base_name_cpp)
+            || self.defined_function_names.contains(name)
+            || self.defined_function_names.contains(&base_name_cpp)
+            || self.declared_function_names.contains(name)
+            || self.declared_function_names.contains(&base_name_cpp)
+            || name.starts_with("__builtin_")
+            || base_name_cpp.starts_with("__builtin_")
+            || Self::map_runtime_function_name(name).is_some()
+            || Self::map_runtime_function_name(&base_name_cpp).is_some()
+        {
+            return None;
+        }
+
+        let base_method_name = sanitize_identifier(&base_name_cpp);
+        let signature = if let CppType::Function {
+            params,
+            return_type,
+            ..
+        } = ty
+        {
+            Some((params.as_slice(), return_type.as_ref()))
+        } else {
+            None
+        };
+
+        let mut candidates: HashSet<String> = HashSet::new();
+        for class_name in self.class_method_overloads.keys() {
+            let Some(resolved_method) = self.select_static_method_overload_name_with_return(
+                class_name,
+                &base_method_name,
+                arg_count,
+                signature,
+                expected_return_type,
+            ) else {
+                continue;
+            };
+
+            let class_segments: Vec<String> =
+                class_name.split("::").map(|part| part.to_string()).collect();
+            let class_path = if class_segments.len() > 1 {
+                let target_ns = class_segments[..class_segments.len() - 1].to_vec();
+                let class_ident = sanitize_identifier(
+                    class_segments
+                        .last()
+                        .map(String::as_str)
+                        .unwrap_or(class_name),
+                );
+                self.compute_relative_path(&target_ns, &class_ident)
+            } else {
+                sanitize_identifier(class_name)
+            };
+            candidates.insert(format!("{}::{}", class_path, resolved_method));
+        }
+
+        if candidates.len() == 1 {
+            candidates.into_iter().next()
+        } else {
+            None
+        }
+    }
+
+    /// Fallback resolver for degraded unqualified free-function callees that
+    /// should map to a unique static class method.
+    fn resolve_unqualified_static_method_from_func_name_any_class(
+        &self,
+        func: &str,
+        arg_count: usize,
+        expected_return_type: Option<&CppType>,
+    ) -> Option<String> {
+        if self.current_class.is_some() {
+            return None;
+        }
+
+        let stripped = Self::strip_outer_unsafe_block(func).unwrap_or(func).trim();
+        if stripped.is_empty()
+            || stripped.contains('.')
+            || stripped.contains("::")
+            || stripped.starts_with("Self::")
+            || stripped.starts_with("self::")
+            || stripped.starts_with("super::")
+        {
+            return None;
+        }
+
+        let base_name_cpp = Self::strip_namespace_and_template(stripped);
+        if self.defined_function_names.contains(stripped)
+            || self.defined_function_names.contains(&base_name_cpp)
+            || self.declared_function_names.contains(stripped)
+            || self.declared_function_names.contains(&base_name_cpp)
+            || stripped.starts_with("__builtin_")
+            || base_name_cpp.starts_with("__builtin_")
+            || Self::map_runtime_function_name(stripped).is_some()
+            || Self::map_runtime_function_name(&base_name_cpp).is_some()
+        {
+            return None;
+        }
+
+        let base_method_name = sanitize_identifier(&base_name_cpp);
+        let mut candidates: HashSet<String> = HashSet::new();
+        for class_name in self.class_method_overloads.keys() {
+            let Some(resolved_method) = self.select_static_method_overload_name_with_return(
+                class_name,
+                &base_method_name,
+                arg_count,
+                None,
+                expected_return_type,
+            ) else {
+                continue;
+            };
+
+            let class_segments: Vec<String> =
+                class_name.split("::").map(|part| part.to_string()).collect();
+            let class_path = if class_segments.len() > 1 {
+                let target_ns = class_segments[..class_segments.len() - 1].to_vec();
+                let class_ident = sanitize_identifier(
+                    class_segments
+                        .last()
+                        .map(String::as_str)
+                        .unwrap_or(class_name),
+                );
+                self.compute_relative_path(&target_ns, &class_ident)
+            } else {
+                sanitize_identifier(class_name)
+            };
+            candidates.insert(format!("{}::{}", class_path, resolved_method));
+        }
+
+        if candidates.len() == 1 {
+            candidates.into_iter().next()
+        } else {
+            None
+        }
     }
 
     /// Get the path to access __vtable from a derived class pointer
@@ -16789,12 +17724,15 @@ impl AstCodeGen {
         self.arr_vars.clear();
         // Track local variables (parameters) to avoid using global variable prefixes
         self.local_vars.clear();
+        self.scoped_local_var_counts.clear();
+        self.scoped_local_scope_stack.clear();
+        self.push_local_scope();
         self.function_static_var_mapping.clear();
         self.function_static_counter = 0;
         self.current_function_ident = Some(func_name.clone());
         for (param_name, param_type) in params {
             // Add parameter to local vars set
-            self.local_vars.insert(sanitize_identifier(param_name));
+            self.declare_scoped_local_var(sanitize_identifier(param_name));
             if matches!(param_type, CppType::Reference { .. }) {
                 self.ref_vars.insert(param_name.clone());
             }
@@ -17019,6 +17957,9 @@ impl AstCodeGen {
         }
 
         self.current_function_ident = None;
+        self.pop_local_scope();
+        self.scoped_local_var_counts.clear();
+        self.scoped_local_scope_stack.clear();
         self.function_static_var_mapping.clear();
 
         // Generate Rust main wrapper for C++ main
@@ -17915,6 +18856,7 @@ impl AstCodeGen {
             }
 
             self.emit_missing_tinyxml2_virtual_method_stubs(name, impl_block_start);
+            self.emit_missing_tinyxml2_method_surface_stubs(name, impl_block_start);
 
             // tinyxml2: `XMLNode::CreateUnlinkedNode` is a templated helper
             // (`template<class NodeType, size_t PoolElementSize> ...`) that can be
@@ -18798,7 +19740,9 @@ impl AstCodeGen {
                 // Find the destructor body
                 for dtor_child in &child.children {
                     if let ClangNodeKind::CompoundStmt = &dtor_child.kind {
+                        self.push_local_scope();
                         self.generate_block_contents(&dtor_child.children, &CppType::Void);
+                        self.pop_local_scope();
                     }
                 }
                 self.indent -= 1;
@@ -20505,6 +21449,7 @@ impl AstCodeGen {
 
     /// Generate non-member statements from constructor body (like static member modifications)
     fn generate_non_member_ctor_stmts(&mut self, compound_stmt: &ClangNode) {
+        self.push_local_scope();
         for child in &compound_stmt.children {
             // Skip member field assignments - those are handled in struct initializer
             if Self::is_member_assignment(child) {
@@ -20529,6 +21474,7 @@ impl AstCodeGen {
                 }
             }
         }
+        self.pop_local_scope();
     }
 
     /// Check if constructor initializers have problematic patterns that require
@@ -20605,6 +21551,12 @@ impl AstCodeGen {
         }
         self.skip_literal_suffix = prev_skip;
         args
+    }
+
+    /// Normalize call arguments for standalone negative unsigned literal forms.
+    fn normalize_call_arg_expr(&self, node: &ClangNode) -> String {
+        let arg = self.expr_to_string(node);
+        cast_negative_unsigned_literal_expr(&arg).unwrap_or(arg)
     }
 
     /// Check if a node is a pointer dereference (possibly wrapped in casts).
@@ -20727,16 +21679,28 @@ impl AstCodeGen {
 
     /// Get the raw identifier for a reference variable expression (without dereferencing).
     /// Returns None if not a reference variable expression.
+    fn is_tracked_ref_var_name(&self, name: &str) -> bool {
+        self.ref_vars.contains(name)
+            || self.ref_vars.contains(&sanitize_identifier(name))
+            || self
+                .ref_vars
+                .iter()
+                .any(|tracked| sanitize_identifier(tracked) == name)
+    }
+
     fn get_ref_var_ident(&self, node: &ClangNode) -> Option<String> {
         match &node.kind {
             ClangNodeKind::DeclRefExpr { name, .. } => {
-                if self.ref_vars.contains(name) {
+                if self.is_tracked_ref_var_name(name) {
                     Some(sanitize_identifier(name))
                 } else {
                     None
                 }
             }
-            ClangNodeKind::ImplicitCastExpr { .. } => {
+            ClangNodeKind::ImplicitCastExpr { .. }
+            | ClangNodeKind::CastExpr { .. }
+            | ClangNodeKind::ParenExpr { .. }
+            | ClangNodeKind::Unknown(_) => {
                 if !node.children.is_empty() {
                     self.get_ref_var_ident(&node.children[0])
                 } else {
@@ -20745,6 +21709,28 @@ impl AstCodeGen {
             }
             _ => None,
         }
+    }
+
+    /// Normalize an operand expression so reference parameters are read via dereference.
+    /// Some Clang AST wrapper shapes hide the underlying DeclRefExpr from `get_ref_var_ident`,
+    /// so we also fall back to matching bare identifier strings against tracked reference vars.
+    fn normalize_ref_operand_expr(&self, node: &ClangNode, expr: String) -> String {
+        if let Some(ref_ident) = self.get_ref_var_ident(node) {
+            return format!("*{}", ref_ident);
+        }
+
+        let trimmed = expr.trim();
+        if !trimmed.is_empty()
+            && trimmed.chars().all(|c| c.is_alphanumeric() || c == '_')
+            && self
+                .ref_vars
+                .iter()
+                .any(|name| sanitize_identifier(name) == trimmed)
+        {
+            return format!("*{}", trimmed);
+        }
+
+        expr
     }
 
     /// Check if an expression is a pointer variable (parameter or local with pointer type).
@@ -21176,12 +22162,50 @@ impl AstCodeGen {
         }
     }
 
+    fn push_local_scope(&mut self) {
+        self.scoped_local_scope_stack.push(Vec::new());
+    }
+
+    fn pop_local_scope(&mut self) {
+        let Some(scope) = self.scoped_local_scope_stack.pop() else {
+            return;
+        };
+        for ident in scope.into_iter().rev() {
+            if let Some(count) = self.scoped_local_var_counts.get_mut(&ident) {
+                *count = count.saturating_sub(1);
+                if *count == 0 {
+                    self.scoped_local_var_counts.remove(&ident);
+                }
+            }
+        }
+    }
+
+    fn declare_scoped_local_var(&mut self, ident: String) {
+        self.local_vars.insert(ident.clone());
+        if self.scoped_local_scope_stack.is_empty() {
+            return;
+        }
+        *self.scoped_local_var_counts.entry(ident.clone()).or_insert(0) += 1;
+        if let Some(scope) = self.scoped_local_scope_stack.last_mut() {
+            scope.push(ident);
+        }
+    }
+
+    fn is_scoped_local_var_active(&self, ident: &str) -> bool {
+        self.scoped_local_var_counts
+            .get(ident)
+            .is_some_and(|count| *count > 0)
+    }
+
     /// Check if an expression node refers to a global variable (needs unsafe access).
     fn is_global_var_expr(&self, node: &ClangNode) -> bool {
         match &node.kind {
             ClangNodeKind::DeclRefExpr { name, .. } => {
                 let sanitized = sanitize_identifier(name);
                 let composite = sanitize_identifier_for_composite(name);
+                if self.is_scoped_local_var_active(&sanitized) {
+                    return false;
+                }
                 if self.function_static_var_mapping.contains_key(&sanitized)
                     || self.function_static_var_mapping.contains_key(&composite)
                 {
@@ -21206,17 +22230,16 @@ impl AstCodeGen {
             ClangNodeKind::DeclRefExpr { name, .. } => {
                 let sanitized = sanitize_identifier(name);
                 let composite = sanitize_identifier_for_composite(name);
+                // Local variables shadow function-static and global names.
+                if self.is_scoped_local_var_active(&sanitized) {
+                    return Some(sanitized);
+                }
                 if let Some(mapped) = self
                     .function_static_var_mapping
                     .get(&sanitized)
                     .or_else(|| self.function_static_var_mapping.get(&composite))
                 {
                     return Some(mapped.clone());
-                }
-                // Check if this is a local variable (parameter or local declaration)
-                // Local variables shadow globals, so don't use the __gv_ prefix
-                if self.local_vars.contains(&sanitized) {
-                    return Some(sanitized);
                 }
                 // Check if this is a global variable and return the prefixed name
                 if let Some(prefixed) = self
@@ -21588,6 +22611,8 @@ impl AstCodeGen {
             || matches!(
                 node.kind,
                 ClangNodeKind::FunctionDecl { .. }
+                    | ClangNodeKind::FunctionTemplateDecl { .. }
+                    | ClangNodeKind::FunctionTemplateInstantiation { .. }
                     | ClangNodeKind::CXXMethodDecl { .. }
                     | ClangNodeKind::ConstructorDecl { .. }
             );
@@ -23804,9 +24829,14 @@ impl AstCodeGen {
                 let output_start = self.output.len();
 
                 let saved_local_vars = self.local_vars.clone();
+                let saved_scoped_local_var_counts = self.scoped_local_var_counts.clone();
+                let saved_scoped_local_scope_stack = self.scoped_local_scope_stack.clone();
                 self.local_vars.clear();
+                self.scoped_local_var_counts.clear();
+                self.scoped_local_scope_stack.clear();
+                self.push_local_scope();
                 for (param_name, _) in params {
-                    self.local_vars.insert(sanitize_identifier(param_name));
+                    self.declare_scoped_local_var(sanitize_identifier(param_name));
                 }
                 for child in &node.children {
                     if matches!(child.kind, ClangNodeKind::CompoundStmt) {
@@ -23875,6 +24905,8 @@ impl AstCodeGen {
                 self.ptr_vars = saved_ptr_vars;
                 self.arr_vars = saved_arr_vars;
                 self.local_vars = saved_local_vars;
+                self.scoped_local_var_counts = saved_scoped_local_var_counts;
+                self.scoped_local_scope_stack = saved_scoped_local_scope_stack;
 
                 self.current_return_type = old_return_type;
                 self.current_method_is_const = old_method_is_const;
@@ -24686,7 +25718,7 @@ impl AstCodeGen {
                             }
                         } else {
                             // Track all local variables to avoid using global prefixes
-                            self.local_vars.insert(var_ident.clone());
+                            self.declare_scoped_local_var(var_ident.clone());
                             String::new()
                         };
 
@@ -24758,8 +25790,9 @@ impl AstCodeGen {
                             } else {
                                 // Skip type suffixes for literals when we have explicit type annotation
                                 self.skip_literal_suffix = true;
-                                let expr = self.expr_to_string(init_node);
+                                let mut expr = self.expr_to_string(init_node);
                                 self.skip_literal_suffix = false;
+                                expr = self.cast_enum_expr_to_integral_target(expr, init_node, ty);
                                 // If expression is unsupported or errored, fall back to default
                                 // Common error patterns: "unsupported", "/* call error */"
                                 if expr.contains("unsupported") || expr.contains("/* call error */")
@@ -25104,8 +26137,16 @@ impl AstCodeGen {
                     // Skip literal suffixes - Rust will infer type from return type
                     let prev_skip = self.skip_literal_suffix;
                     self.skip_literal_suffix = true;
-                    let expr = self.expr_to_string(&node.children[0]);
+                    let mut expr = self.expr_to_string(&node.children[0]);
                     self.skip_literal_suffix = prev_skip;
+                    if !matches!(
+                        self.current_return_type,
+                        Some(CppType::Reference { .. })
+                    ) {
+                        if let Some(ref_ident) = self.get_ref_var_ident(&node.children[0]) {
+                            expr = format!("*{}", ref_ident);
+                        }
+                    }
                     // Note: bare __builtin_* function references (without call parens) are caught
                     // by has_uncalled_builtin_return validator, which rolls back the entire function.
                     // Do NOT auto-add () here — builtins may require arguments.
@@ -25130,7 +26171,7 @@ impl AstCodeGen {
                                 if let Some(ref_name) =
                                     lhs.strip_prefix("&mut ").map(str::trim)
                                 {
-                                    if self.ref_vars.contains(ref_name) {
+                                    if self.is_tracked_ref_var_name(ref_name) {
                                         lhs = ref_name.to_string();
                                     }
                                 }
@@ -25310,10 +26351,24 @@ impl AstCodeGen {
                                 ret_is_bool && expr_is_int && !already_returns_bool;
                             let needs_bool_to_int =
                                 ret_is_int && (expr_is_bool || expr_is_boolish_node);
+                            let expr_is_known_enum = expr_type
+                                .as_ref()
+                                .is_some_and(|t| self.is_known_enum_named_type(t));
 
                             if needs_int_to_bool {
                                 // Convert integer to bool: non-zero = true
                                 format!("({}) != 0", expr)
+                            } else if ret_is_int && expr_is_known_enum {
+                                if let Some(ref rust_type) = ret_rust_type {
+                                    let fixed_expr = Self::fix_return_type_casts(&expr, rust_type);
+                                    if fixed_expr.contains(&format!(" as {}", rust_type)) {
+                                        fixed_expr
+                                    } else {
+                                        format!("({}) as {}", fixed_expr, rust_type)
+                                    }
+                                } else {
+                                    format!("({}) as i32", expr)
+                                }
                             } else if needs_bool_to_int {
                                 if let Some(ref rust_type) = ret_rust_type {
                                     format!("({}) as {}", expr, rust_type)
@@ -25373,7 +26428,9 @@ impl AstCodeGen {
             ClangNodeKind::CompoundStmt => {
                 self.writeln("{");
                 self.indent += 1;
+                self.push_local_scope();
                 self.generate_block_contents(&node.children, &CppType::Void);
+                self.pop_local_scope();
                 self.indent -= 1;
                 self.writeln("}");
             }
@@ -26035,6 +27092,7 @@ impl AstCodeGen {
 
         self.writeln("{");
         self.indent += 1;
+        self.push_local_scope();
 
         if node.children.len() >= 4 {
             // Init
@@ -26076,6 +27134,7 @@ impl AstCodeGen {
             self.writeln("}");
         }
 
+        self.pop_local_scope();
         self.indent -= 1;
         self.writeln("}");
     }
@@ -26243,7 +27302,7 @@ impl AstCodeGen {
                             // So *ref_var.method() should just be ref_var.method()
                             if let ClangNodeKind::DeclRefExpr { name, .. } = &node.children[0].kind
                             {
-                                if self.ref_vars.contains(name) {
+                                if self.is_tracked_ref_var_name(name) {
                                     // Skip the dereference - Rust auto-derefs for method calls
                                     return operand;
                                 }
@@ -26297,8 +27356,13 @@ impl AstCodeGen {
                                 // but the literal 9223372036854775808 is too large for i64
                                 // Use the constant directly (works for both signed and unsigned contexts)
                                 "i64::MIN".to_string()
+                            } else if let Some(casted) =
+                                cast_unary_minus_unsigned_literal_operand(&operand)
+                            {
+                                casted
                             } else {
-                                format!("-{}", operand)
+                                let neg = format!("-{}", operand);
+                                cast_negative_unsigned_literal_expr(&neg).unwrap_or(neg)
                             }
                         }
                         UnaryOp::Plus => operand,
@@ -26714,10 +27778,16 @@ impl AstCodeGen {
                     // Check if this is a global variable (already in unsafe context, no wrapper needed)
                     // Global variables are prefixed with __gv_ to avoid parameter shadowing
                     // But only if it's not a local variable (local vars shadow globals)
+                    if self.is_scoped_local_var_active(&ident) {
+                        if self.is_tracked_ref_var_name(name) {
+                            return format!("*{}", ident);
+                        }
+                        return ident;
+                    }
                     if let Some(static_name) = self.function_static_var_mapping.get(&ident) {
                         return static_name.clone();
                     }
-                    if !self.local_vars.contains(&ident) {
+                    if !self.is_scoped_local_var_active(&ident) {
                         let composite_ident = sanitize_identifier_for_composite(name);
                         if let Some(prefixed_name) = self
                             .global_var_mapping
@@ -26756,7 +27826,8 @@ impl AstCodeGen {
                 } else if *value > u32::MAX as i128 && suffix == "u32" {
                     suffix = "u64";
                 }
-                format!("{}{}", value, suffix)
+                let lit = format!("{}{}", value, suffix);
+                cast_negative_literal_to_unsigned(&lit, suffix).unwrap_or(lit)
             }
             ClangNodeKind::EvaluatedExpr {
                 int_value,
@@ -26814,7 +27885,8 @@ impl AstCodeGen {
                             CppType::Long { signed: false } => "u64",
                             _ => "i32",
                         };
-                        format!("{}{}", val, suffix)
+                        let lit = format!("{}{}", val, suffix);
+                        cast_negative_literal_to_unsigned(&lit, suffix).unwrap_or(lit)
                     }
                 } else if let Some(val) = float_value {
                     let suffix = match ty {
@@ -27331,8 +28403,16 @@ impl AstCodeGen {
                     ) {
                         // Cast operands must be grouped before these operators so `as T << ...`
                         // and `as T < ...` are not parsed as generic arguments.
-                        let left_raw = wrap_unsafe_for_binop(&self.expr_to_string_raw(&node.children[0]));
-                        let right_raw = wrap_unsafe_for_binop(&self.expr_to_string_raw(&node.children[1]));
+                        let left_operand = self.normalize_ref_operand_expr(
+                            &node.children[0],
+                            self.expr_to_string_raw(&node.children[0]),
+                        );
+                        let right_operand = self.normalize_ref_operand_expr(
+                            &node.children[1],
+                            self.expr_to_string_raw(&node.children[1]),
+                        );
+                        let left_raw = wrap_unsafe_for_binop(&left_operand);
+                        let right_raw = wrap_unsafe_for_binop(&right_operand);
                         let left = if left_raw.contains(" as ")
                             && !is_fully_parenthesized_expr(&left_raw)
                         {
@@ -27377,38 +28457,46 @@ impl AstCodeGen {
     fn expr_to_string(&self, node: &ClangNode) -> String {
         match &node.kind {
             ClangNodeKind::IntegerLiteral { value, cpp_type } => {
+                let mut suffix = match cpp_type {
+                    Some(CppType::Int { signed: true }) => "i32",
+                    Some(CppType::Int { signed: false }) => "u32",
+                    Some(CppType::Long { signed: true }) => "i64",
+                    Some(CppType::Long { signed: false }) => "u64",
+                    Some(CppType::LongLong { signed: true }) => "i64",
+                    Some(CppType::LongLong { signed: false }) => "u64",
+                    Some(CppType::Short { signed: true }) => "i16",
+                    Some(CppType::Short { signed: false }) => "u16",
+                    Some(CppType::Char { signed: true }) => "i8",
+                    Some(CppType::Char { signed: false }) => "u8",
+                    _ => "i32",
+                };
+                if *value > i32::MAX as i128 && suffix == "i32" {
+                    suffix = if *value > i64::MAX as i128 {
+                        "u64"
+                    } else {
+                        "i64"
+                    };
+                } else if *value < i32::MIN as i128 && suffix == "i32" {
+                    suffix = "i64";
+                } else if *value > u32::MAX as i128 && suffix == "u32" {
+                    suffix = "u64";
+                }
+
                 if self.skip_literal_suffix {
-                    value.to_string()
+                    if *value < 0 && suffix.starts_with('u') {
+                        let lit = format!("{}{}", value, suffix);
+                        cast_negative_literal_to_unsigned(&lit, suffix)
+                            .unwrap_or_else(|| value.to_string())
+                    } else {
+                        value.to_string()
+                    }
                 } else if *value == 0 {
                     // For zero literals, skip the type suffix to allow Rust to infer
                     // the type from context (especially important for generic functions)
                     "0".to_string()
                 } else {
-                    let mut suffix = match cpp_type {
-                        Some(CppType::Int { signed: true }) => "i32",
-                        Some(CppType::Int { signed: false }) => "u32",
-                        Some(CppType::Long { signed: true }) => "i64",
-                        Some(CppType::Long { signed: false }) => "u64",
-                        Some(CppType::LongLong { signed: true }) => "i64",
-                        Some(CppType::LongLong { signed: false }) => "u64",
-                        Some(CppType::Short { signed: true }) => "i16",
-                        Some(CppType::Short { signed: false }) => "u16",
-                        Some(CppType::Char { signed: true }) => "i8",
-                        Some(CppType::Char { signed: false }) => "u8",
-                        _ => "i32",
-                    };
-                    if *value > i32::MAX as i128 && suffix == "i32" {
-                        suffix = if *value > i64::MAX as i128 {
-                            "u64"
-                        } else {
-                            "i64"
-                        };
-                    } else if *value < i32::MIN as i128 && suffix == "i32" {
-                        suffix = "i64";
-                    } else if *value > u32::MAX as i128 && suffix == "u32" {
-                        suffix = "u64";
-                    }
-                    format!("{}{}", value, suffix)
+                    let lit = format!("{}{}", value, suffix);
+                    cast_negative_literal_to_unsigned(&lit, suffix).unwrap_or(lit)
                 }
             }
             ClangNodeKind::FloatingLiteral { value, cpp_type } => {
@@ -27503,9 +28591,20 @@ impl AstCodeGen {
                             );
                         }
                     }
-                    if self.skip_literal_suffix || *val == 0 {
+                    if self.skip_literal_suffix {
+                        let suffix = match ty {
+                            CppType::Int { signed: true } => "i32",
+                            CppType::Int { signed: false } => "u32",
+                            CppType::Long { signed: true } => "i64",
+                            CppType::Long { signed: false } => "u64",
+                            _ => "i32",
+                        };
+                        let lit = format!("{}{}", val, suffix);
+                        cast_negative_literal_to_unsigned(&lit, suffix)
+                            .unwrap_or_else(|| val.to_string())
+                    } else if *val == 0 {
                         // For zero, skip suffix to allow type inference in generic contexts
-                        val.to_string()
+                        "0".to_string()
                     } else {
                         let suffix = match ty {
                             CppType::Int { signed: true } => "i32",
@@ -27514,7 +28613,8 @@ impl AstCodeGen {
                             CppType::Long { signed: false } => "u64",
                             _ => "i32",
                         };
-                        format!("{}{}", val, suffix)
+                        let lit = format!("{}{}", val, suffix);
+                        cast_negative_literal_to_unsigned(&lit, suffix).unwrap_or(lit)
                     }
                 } else if let Some(val) = float_value {
                     // Handle special float values (inf, NaN)
@@ -27692,10 +28792,13 @@ impl AstCodeGen {
                 }
             }
             ClangNodeKind::StringLiteral(s) => {
-                // Convert C++ string literal to Rust *const i8 using byte string
-                // "hello" -> b"hello\0".as_ptr() as *const i8
+                // Convert C++ string literal to Rust *const i8 using byte string.
+                // Preserve raw bytes using byte escapes (avoid `\u{...}` in byte strings).
                 let decoded = decode_c_string_escapes(s);
-                format!("b\"{}\\0\".as_ptr() as *const i8", decoded.escape_default())
+                let mut bytes = decoded.into_bytes();
+                bytes.push(0);
+                let escaped = escape_bytes_for_rust_byte_string(&bytes);
+                format!("b\"{}\".as_ptr() as *const i8", escaped)
             }
             ClangNodeKind::DeclRefExpr {
                 name,
@@ -27786,10 +28889,16 @@ impl AstCodeGen {
                     // Check if this is a global variable (needs unsafe access)
                     // Global variables are prefixed with __gv_ to avoid parameter shadowing
                     // But only if it's not a local variable (local vars shadow globals)
+                    if self.is_scoped_local_var_active(&ident) {
+                        if self.is_tracked_ref_var_name(name) {
+                            return format!("*{}", ident);
+                        }
+                        return ident;
+                    }
                     if let Some(static_name) = self.function_static_var_mapping.get(&ident) {
                         return format!("unsafe {{ {} }}", static_name);
                     }
-                    if !self.local_vars.contains(&ident) {
+                    if !self.is_scoped_local_var_active(&ident) {
                         let composite_ident = sanitize_identifier_for_composite(name);
                         if let Some(prefixed_name) = self
                             .global_var_mapping
@@ -27810,41 +28919,21 @@ impl AstCodeGen {
                     } = ty
                     {
                         if let Some(template_info) = self.fn_template_definitions.get(name) {
-                            // Build the mangled name using template param extraction
-                            let type_args: Vec<String> = template_info
-                                .template_params
-                                .iter()
-                                .enumerate()
-                                .map(|(i, param_name)| {
-                                    let (template_param_ty, instantiated_ty) =
-                                        if i < template_info.params.len() && i < params.len() {
-                                            (&template_info.params[i].1, &params[i])
-                                        } else if matches!(
-                                            &template_info.return_type,
-                                            CppType::TemplateParam { .. }
-                                        ) {
-                                            (&template_info.return_type, return_type.as_ref())
-                                        } else if i < params.len() {
-                                            return params[i].to_rust_type_str();
-                                        } else {
-                                            return return_type.to_rust_type_str();
-                                        };
-                                    extract_template_arg(
-                                        template_param_ty,
-                                        instantiated_ty,
-                                        param_name,
-                                    )
-                                })
-                                .collect();
-                            let sanitized_args: Vec<String> = type_args
-                                .iter()
-                                .map(|a| sanitize_type_for_fn_name(a))
-                                .collect();
-                            // Sanitize the function name (handles operator"" user-defined literals)
-                            let sanitized_name = sanitize_identifier(name);
-                            let mangled_name =
-                                format!("{}_{}", sanitized_name, sanitized_args.join("_"));
-                            return self.compute_relative_path(namespace_path, &mangled_name);
+                            if let Some(type_args) = infer_fn_template_type_args(
+                                template_info,
+                                params,
+                                return_type.as_ref(),
+                            ) {
+                                let sanitized_args: Vec<String> = type_args
+                                    .iter()
+                                    .map(|a| sanitize_type_for_fn_name(a))
+                                    .collect();
+                                // Sanitize the function name (handles operator"" user-defined literals)
+                                let sanitized_name = sanitize_identifier(name);
+                                let mangled_name =
+                                    format!("{}_{}", sanitized_name, sanitized_args.join("_"));
+                                return self.compute_relative_path(namespace_path, &mangled_name);
+                            }
                         }
                     }
 
@@ -27861,7 +28950,7 @@ impl AstCodeGen {
                         self.compute_relative_path(namespace_path, &ident)
                     };
                     // Dereference reference variables (parameters or locals with & type)
-                    if self.ref_vars.contains(name) {
+                    if self.is_tracked_ref_var_name(name) {
                         format!("*{}", full_path)
                     } else {
                         full_path
@@ -28329,7 +29418,7 @@ impl AstCodeGen {
 
                         // Unwrap nested unsafe blocks from LHS to avoid "(unsafe { expr }) = ..." pattern
                         // which is invalid because a block expression is not a valid lvalue
-                        let left_for_assign = if left_raw.starts_with("(unsafe { ")
+                        let mut left_for_assign = if left_raw.starts_with("(unsafe { ")
                             && left_raw.ends_with(" })")
                         {
                             // Extract the inner expression from "(unsafe { expr })"
@@ -28340,6 +29429,10 @@ impl AstCodeGen {
                         } else {
                             left_raw
                         };
+                        if let Some(ref_ident) = self.get_ref_var_ident(&node.children[0]) {
+                            // Assignment to a C++ reference target must mutate the referent.
+                            left_for_assign = format!("*{}", ref_ident);
+                        }
                         let left_is_unsigned_int = left_effective_type
                             .as_ref()
                             .map(|t| t.to_rust_type_str())
@@ -28419,7 +29512,7 @@ impl AstCodeGen {
                     ) {
                         // For assignment operators, strip literal suffix on RHS - Rust infers from LHS
                         let left = self.expr_to_string(&node.children[0]);
-                        let left_for_assign =
+                        let mut left_for_assign =
                             if left.starts_with("(unsafe { ") && left.ends_with(" })") {
                                 left[10..left.len() - 3].to_string()
                             } else if left.starts_with("unsafe { ") && left.ends_with(" }") {
@@ -28427,6 +29520,10 @@ impl AstCodeGen {
                             } else {
                                 left.clone()
                             };
+                        if let Some(ref_ident) = self.get_ref_var_ident(&node.children[0]) {
+                            // Assignment to a C++ reference target must mutate the referent.
+                            left_for_assign = format!("*{}", ref_ident);
+                        }
 
                         // Check if left side is a dereferenced operator[] call (e.g., *m.op_index())
                         // This needs unsafe because the dereference is synthesized during codegen
@@ -29269,10 +30366,14 @@ impl AstCodeGen {
                             | BinaryOp::Rem
                     ) {
                         // For arithmetic operators, strip literal suffixes and handle float/int mixing
-                        let left_str =
-                            strip_literal_suffix(&self.expr_to_string(&node.children[0]));
-                        let right_str =
-                            strip_literal_suffix(&self.expr_to_string(&node.children[1]));
+                        let left_str = self.normalize_ref_operand_expr(
+                            &node.children[0],
+                            strip_literal_suffix(&self.expr_to_string(&node.children[0])),
+                        );
+                        let right_str = self.normalize_ref_operand_expr(
+                            &node.children[1],
+                            strip_literal_suffix(&self.expr_to_string(&node.children[1])),
+                        );
 
                         // Check if one side is float and the other is an integer literal
                         let left_type = Self::get_expr_type(&node.children[0]);
@@ -29461,8 +30562,14 @@ impl AstCodeGen {
                     ) {
                         // For bitwise operators, strip literal suffixes to let Rust infer types
                         // This handles cases like `isize / 64i32` -> `isize / 64`
-                        let left = strip_literal_suffix(&self.expr_to_string(&node.children[0]));
-                        let right = strip_literal_suffix(&self.expr_to_string(&node.children[1]));
+                        let left = self.normalize_ref_operand_expr(
+                            &node.children[0],
+                            strip_literal_suffix(&self.expr_to_string(&node.children[0])),
+                        );
+                        let right = self.normalize_ref_operand_expr(
+                            &node.children[1],
+                            strip_literal_suffix(&self.expr_to_string(&node.children[1])),
+                        );
 
                         // Special handling for i64::MIN in bitwise context with u64
                         // We need to cast i64::MIN to u64 when used with unsigned operands
@@ -29679,8 +30786,13 @@ impl AstCodeGen {
                                 // but the literal 9223372036854775808 is too large for i64
                                 // Use the constant directly (works for both signed and unsigned contexts)
                                 "i64::MIN".to_string()
+                            } else if let Some(casted) =
+                                cast_unary_minus_unsigned_literal_operand(&operand)
+                            {
+                                casted
                             } else {
-                                format!("-{}", operand)
+                                let neg = format!("-{}", operand);
+                                cast_negative_unsigned_literal_expr(&neg).unwrap_or(neg)
                             }
                         }
                         UnaryOp::Plus => operand,
@@ -29847,7 +30959,7 @@ impl AstCodeGen {
                             {
                                 // Check if operand is a reference variable (tracked in ref_vars)
                                 // In Rust, dereferencing a reference for method calls is automatic
-                                if self.ref_vars.contains(name) {
+                                if self.is_tracked_ref_var_name(name) {
                                     // Skip the dereference - Rust auto-derefs
                                     operand
                                 } else if Self::should_use_unaligned_deref_read(node, ty) {
@@ -30287,6 +31399,14 @@ impl AstCodeGen {
 
                             if left_is_primitive && right_is_primitive {
                                 // Use native Rust operator for primitives
+                                let left_operand = self.normalize_ref_operand_expr(
+                                    &node.children[left_idx],
+                                    left_operand.clone(),
+                                );
+                                let right_operand = self.normalize_ref_operand_expr(
+                                    &node.children[right_idx],
+                                    right_operand.clone(),
+                                );
                                 let left_operand = wrap_unsafe_for_binop(&left_operand);
                                 let right_operand = wrap_unsafe_for_binop(&right_operand);
                                 return format!("{} {} {}", left_operand, rust_op, right_operand);
@@ -30453,7 +31573,7 @@ impl AstCodeGen {
                                 if !base.contains("template-dependent") && !base.starts_with("0") {
                                     let method_args: Vec<String> = node.children[1..]
                                         .iter()
-                                        .map(|c| self.expr_to_string(c))
+                                        .map(|c| self.normalize_call_arg_expr(c))
                                         .collect();
 
                                     let mut member = sanitize_identifier(member_name);
@@ -30539,7 +31659,7 @@ impl AstCodeGen {
                         if let Some(func_name) = maybe_func_ref {
                             let args: Vec<String> = node.children[1..]
                                 .iter()
-                                .map(|c| self.expr_to_string(c))
+                                .map(|c| self.normalize_call_arg_expr(c))
                                 .collect();
                             // Special case: forward_as_tuple() with no args returns empty tuple
                             if func_name == "forward_as_tuple" && args.is_empty() {
@@ -30572,6 +31692,22 @@ impl AstCodeGen {
                             self.resolve_current_class_method_from_func_name(
                                 &func,
                                 node.children.len().saturating_sub(1),
+                            )
+                        {
+                            func = resolved;
+                        } else if let Some(resolved) = self
+                            .resolve_unqualified_static_method_call_any_class(
+                                callee,
+                                node.children.len().saturating_sub(1),
+                                Some(ty),
+                            )
+                        {
+                            func = resolved;
+                        } else if let Some(resolved) = self
+                            .resolve_unqualified_static_method_from_func_name_any_class(
+                                &func,
+                                node.children.len().saturating_sub(1),
+                                Some(ty),
                             )
                         {
                             func = resolved;
@@ -30804,7 +31940,9 @@ impl AstCodeGen {
 
                                         // Scalar integral coercions for parameter type.
                                         let target_rust = types[i].to_rust_type_str();
-                                        let arg = self.expr_to_string(c);
+                                        let arg_raw = self.expr_to_string(c);
+                                        let arg = cast_negative_unsigned_literal_expr(&arg_raw)
+                                            .unwrap_or(arg_raw);
                                         if let Some(casted) =
                                             cast_negative_literal_to_unsigned(&arg, &target_rust)
                                         {
@@ -31112,7 +32250,7 @@ impl AstCodeGen {
                     {
                         let args: Vec<String> = node.children[1..]
                             .iter()
-                            .map(|c| self.expr_to_string(c))
+                            .map(|c| self.normalize_call_arg_expr(c))
                             .collect();
                         return format!(
                             "unsafe {{ (*{}.{}).{}({}) }}",
@@ -31144,6 +32282,22 @@ impl AstCodeGen {
                         self.resolve_current_class_method_from_func_name(
                             &func,
                             node.children.len().saturating_sub(1),
+                        )
+                    {
+                        func = resolved;
+                    } else if let Some(resolved) = self
+                        .resolve_unqualified_static_method_call_any_class(
+                            &node.children[0],
+                            node.children.len().saturating_sub(1),
+                            Some(ty),
+                        )
+                    {
+                        func = resolved;
+                    } else if let Some(resolved) = self
+                        .resolve_unqualified_static_method_from_func_name_any_class(
+                            &func,
+                            node.children.len().saturating_sub(1),
+                            Some(ty),
                         )
                     {
                         func = resolved;
@@ -31400,7 +32554,9 @@ impl AstCodeGen {
 
                                     // Scalar integral coercions for parameter type.
                                     let target_rust = types[i].to_rust_type_str();
-                                    let arg = self.expr_to_string(c);
+                                    let arg_raw = self.expr_to_string(c);
+                                    let arg = cast_negative_unsigned_literal_expr(&arg_raw)
+                                        .unwrap_or(arg_raw);
                                     if let Some(casted) =
                                         cast_negative_literal_to_unsigned(&arg, &target_rust)
                                     {
@@ -31535,7 +32691,9 @@ impl AstCodeGen {
                                 }
                             }
 
-                            let arg_str = self.expr_to_string(c);
+                            let arg_str_raw = self.expr_to_string(c);
+                            let arg_str = cast_negative_unsigned_literal_expr(&arg_str_raw)
+                                .unwrap_or(arg_str_raw);
                             let arg_ty = Self::get_expr_type(c);
                             let arg_orig_ty = Self::get_original_expr_type(c);
                             let arg_is_array = (matches!(arg_ty, Some(CppType::Array { .. }))
@@ -31766,7 +32924,7 @@ impl AstCodeGen {
                             // Generate: func_name(remaining_args...)
                             let remaining_args: Vec<String> = arg_nodes[1..]
                                 .iter()
-                                .map(|c| self.expr_to_string(c))
+                                .map(|c| self.normalize_call_arg_expr(c))
                                 .collect();
                             // Special case: forward_as_tuple() with no args returns empty tuple
                             if func_name == "forward_as_tuple" && remaining_args.is_empty() {
@@ -31803,7 +32961,7 @@ impl AstCodeGen {
                             // Get the method arguments (remaining children after MemberExpr)
                             let method_args: Vec<String> = arg_nodes[1..]
                                 .iter()
-                                .map(|c| self.expr_to_string(c))
+                                .map(|c| self.normalize_call_arg_expr(c))
                                 .collect();
 
                             let method_name = sanitize_identifier(member_name);
@@ -33849,6 +35007,18 @@ fn extract_template_arg(pattern: &CppType, instantiated: &CppType, _param_name: 
                 ..
             },
         ) => extract_template_arg(p_pattern, inst_pointee, _param_name),
+        // Reference template params can be represented as pointers in lowered call types.
+        // Example: template<typename T> void f(T& a) called as f(x) may surface as *mut T.
+        (
+            CppType::Reference {
+                referent: r_pattern,
+                ..
+            },
+            CppType::Pointer {
+                pointee: inst_pointee,
+                ..
+            },
+        ) => extract_template_arg(r_pattern, inst_pointee, _param_name),
         // Reference to template param: T& → extract referent from instantiated
         (
             CppType::Reference {
@@ -33873,6 +35043,111 @@ fn extract_template_arg(pattern: &CppType, instantiated: &CppType, _param_name: 
         // Pattern doesn't match structure - use instantiated type directly
         _ => instantiated.to_rust_type_str(),
     }
+}
+
+fn cpp_type_contains_template_param(ty: &CppType, param_name: &str) -> bool {
+    match ty {
+        CppType::TemplateParam { name, .. } | CppType::ParameterPack { name, .. } => {
+            name == param_name
+        }
+        CppType::Pointer { pointee, .. } => cpp_type_contains_template_param(pointee, param_name),
+        CppType::Reference { referent, .. } => {
+            cpp_type_contains_template_param(referent, param_name)
+        }
+        CppType::Array { element, .. } => cpp_type_contains_template_param(element, param_name),
+        CppType::Function {
+            return_type,
+            params,
+            ..
+        } => {
+            cpp_type_contains_template_param(return_type, param_name)
+                || params
+                    .iter()
+                    .any(|p| cpp_type_contains_template_param(p, param_name))
+        }
+        CppType::DependentType { spelling } | CppType::Named(spelling) => {
+            spelling.contains(param_name)
+        }
+        _ => false,
+    }
+}
+
+fn cpp_type_contains_parameter_pack(ty: &CppType) -> bool {
+    match ty {
+        CppType::ParameterPack { .. } => true,
+        CppType::Pointer { pointee, .. } => cpp_type_contains_parameter_pack(pointee),
+        CppType::Reference { referent, .. } => cpp_type_contains_parameter_pack(referent),
+        CppType::Array { element, .. } => cpp_type_contains_parameter_pack(element),
+        CppType::Function {
+            return_type,
+            params,
+            ..
+        } => {
+            cpp_type_contains_parameter_pack(return_type)
+                || params.iter().any(cpp_type_contains_parameter_pack)
+        }
+        CppType::DependentType { spelling } | CppType::Named(spelling) => spelling.contains("..."),
+        _ => false,
+    }
+}
+
+fn infer_fn_template_type_args(
+    template_info: &FnTemplateInfo,
+    instantiated_params: &[CppType],
+    instantiated_return_type: &CppType,
+) -> Option<Vec<String>> {
+    let has_parameter_pack = template_info
+        .params
+        .iter()
+        .any(|(_, ty)| cpp_type_contains_parameter_pack(ty));
+    // Avoid rewriting calls to overloads that share the same base name but differ in arity.
+    if instantiated_params.len() != template_info.params.len() && !has_parameter_pack {
+        return None;
+    }
+
+    let mut type_args = Vec::with_capacity(template_info.template_params.len());
+    for (idx, template_param_name) in template_info.template_params.iter().enumerate() {
+        let mut inferred = template_info
+            .params
+            .iter()
+            .zip(instantiated_params.iter())
+            .find_map(|((_, pattern_ty), instantiated_ty)| {
+                if cpp_type_contains_template_param(pattern_ty, template_param_name) {
+                    Some(extract_template_arg(
+                        pattern_ty,
+                        instantiated_ty,
+                        template_param_name,
+                    ))
+                } else {
+                    None
+                }
+            });
+
+        if inferred.is_none()
+            && cpp_type_contains_template_param(&template_info.return_type, template_param_name)
+        {
+            inferred = Some(extract_template_arg(
+                &template_info.return_type,
+                instantiated_return_type,
+                template_param_name,
+            ));
+        }
+
+        // Preserve old index-based fallback for partial ASTs where template placeholders
+        // were not preserved in parameter spellings, but only when arity already matches.
+        if inferred.is_none() {
+            let fallback_ty = if idx < instantiated_params.len() {
+                &instantiated_params[idx]
+            } else {
+                instantiated_return_type
+            };
+            inferred = Some(fallback_ty.to_rust_type_str());
+        }
+
+        type_args.push(inferred.unwrap_or_else(|| instantiated_return_type.to_rust_type_str()));
+    }
+
+    Some(type_args)
 }
 
 /// Sanitize a type name for use in function names (e.g., template instantiation mangling).
@@ -38133,6 +39408,163 @@ mod tests {
     }
 
     #[test]
+    fn test_negative_unsigned_integer_literal_emits_signed_source_cast() {
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![make_node(
+                ClangNodeKind::FunctionDecl {
+                    name: "neg_unsigned_literal".to_string(),
+                    mangled_name: "neg_unsigned_literal".to_string(),
+                    is_static: false,
+                    return_type: CppType::Long { signed: false },
+                    params: vec![],
+                    is_definition: true,
+                    is_variadic: false,
+                    is_noexcept: false,
+                    is_coroutine: false,
+                    coroutine_info: None,
+                },
+                vec![make_node(
+                    ClangNodeKind::CompoundStmt,
+                    vec![make_node(
+                        ClangNodeKind::ReturnStmt,
+                        vec![make_node(
+                            ClangNodeKind::IntegerLiteral {
+                                value: -1,
+                                cpp_type: Some(CppType::Long { signed: false }),
+                            },
+                            vec![],
+                        )],
+                    )],
+                )],
+            )],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("pub fn neg_unsigned_literal() -> u64 {\n    return (-1i32 as u64);\n}"),
+            "negative unsigned integer literals must normalize to signed-source casts, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("return -1u64;"),
+            "invalid unary-minus unsigned literal must not be emitted, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_negative_unsigned_evaluated_expr_emits_signed_source_cast() {
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![make_node(
+                ClangNodeKind::FunctionDecl {
+                    name: "neg_unsigned_eval_expr".to_string(),
+                    mangled_name: "neg_unsigned_eval_expr".to_string(),
+                    is_static: false,
+                    return_type: CppType::Long { signed: false },
+                    params: vec![],
+                    is_definition: true,
+                    is_variadic: false,
+                    is_noexcept: false,
+                    is_coroutine: false,
+                    coroutine_info: None,
+                },
+                vec![make_node(
+                    ClangNodeKind::CompoundStmt,
+                    vec![make_node(
+                        ClangNodeKind::ReturnStmt,
+                        vec![make_node(
+                            ClangNodeKind::EvaluatedExpr {
+                                int_value: Some(-1),
+                                float_value: None,
+                                ty: CppType::Long { signed: false },
+                            },
+                            vec![],
+                        )],
+                    )],
+                )],
+            )],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("pub fn neg_unsigned_eval_expr() -> u64 {\n    return (-1i32 as u64);\n}"),
+            "negative unsigned evaluated expressions must normalize through signed-source cast, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("return -1u64;"),
+            "invalid unary-minus unsigned literal must not be emitted from evaluated expressions, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_cast_negative_unsigned_literal_expr_helper_normalizes_literal_suffix_forms() {
+        assert_eq!(
+            cast_negative_unsigned_literal_expr("-1u64"),
+            Some("(-1i32 as u64)".to_string())
+        );
+        assert_eq!(
+            cast_negative_unsigned_literal_expr("(-42usize)"),
+            Some("(-42i32 as usize)".to_string())
+        );
+        assert_eq!(cast_negative_unsigned_literal_expr("-1"), None);
+    }
+
+    #[test]
+    fn test_unary_minus_unsigned_literal_operand_emits_signed_source_cast() {
+        let neg_unsigned_operand = make_node(
+            ClangNodeKind::UnaryOperator {
+                op: UnaryOp::Minus,
+                ty: CppType::Int { signed: true },
+            },
+            vec![make_node(
+                ClangNodeKind::IntegerLiteral {
+                    value: 1,
+                    cpp_type: Some(CppType::Long { signed: false }),
+                },
+                vec![],
+            )],
+        );
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![make_node(
+                ClangNodeKind::FunctionDecl {
+                    name: "emit_neg_unsigned_operand_expr".to_string(),
+                    mangled_name: "emit_neg_unsigned_operand_expr".to_string(),
+                    is_static: false,
+                    return_type: CppType::Void,
+                    params: vec![],
+                    is_definition: true,
+                    is_variadic: false,
+                    is_noexcept: false,
+                    is_coroutine: false,
+                    coroutine_info: None,
+                },
+                vec![make_node(
+                    ClangNodeKind::CompoundStmt,
+                    vec![make_node(ClangNodeKind::ExprStmt, vec![neg_unsigned_operand])],
+                )],
+            )],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("(-1i32 as u64);") || code.contains("(1u64).wrapping_neg();"),
+            "unary-minus unsigned literal operands should not emit invalid `-1u64` forms, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("-1u64;"),
+            "invalid unary-minus unsigned literal output must not be emitted, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
     fn test_shift_cast_operand_is_parenthesized_in_assignment_rhs() {
         let state_ty = CppType::Named("inflate_state".to_string());
         let state_ptr_ty = CppType::Pointer {
@@ -39190,6 +40622,187 @@ mod tests {
     }
 
     #[test]
+    fn test_unqualified_static_class_call_from_free_function_uses_class_qualification() {
+        let vec2_ty = CppType::Named("Vec2".to_string());
+        let zero_fn_ty = CppType::Function {
+            return_type: Box::new(vec2_ty.clone()),
+            params: vec![],
+            is_variadic: false,
+        };
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![
+                make_node(
+                    ClangNodeKind::RecordDecl {
+                        name: "Vec2".to_string(),
+                        is_class: true,
+                        is_definition: true,
+                        fields: vec![],
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CXXMethodDecl {
+                            class_name: "Vec2".to_string(),
+                            name: "zero".to_string(),
+                            return_type: vec2_ty.clone(),
+                            params: vec![],
+                            is_definition: true,
+                            is_static: true,
+                            is_virtual: false,
+                            is_pure_virtual: false,
+                            is_override: false,
+                            is_final: false,
+                            is_const: false,
+                            access: AccessSpecifier::Public,
+                        },
+                        vec![make_node(ClangNodeKind::CompoundStmt, vec![])],
+                    )],
+                ),
+                make_node(
+                    ClangNodeKind::FunctionDecl {
+                        name: "make_vec".to_string(),
+                        mangled_name: "make_vec".to_string(),
+                        is_static: false,
+                        return_type: vec2_ty.clone(),
+                        params: vec![],
+                        is_definition: true,
+                        is_variadic: false,
+                        is_noexcept: false,
+                        is_coroutine: false,
+                        coroutine_info: None,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![make_node(
+                            ClangNodeKind::ReturnStmt,
+                            vec![make_node(
+                                ClangNodeKind::CallExpr {
+                                    ty: vec2_ty,
+                                    template_instantiation: None,
+                                },
+                                vec![make_node(
+                                    ClangNodeKind::DeclRefExpr {
+                                        name: "zero".to_string(),
+                                        ty: zero_fn_ty,
+                                        namespace_path: vec![],
+                                    },
+                                    vec![],
+                                )],
+                            )],
+                        )],
+                    )],
+                ),
+            ],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("return Vec2::zero();"),
+            "free-function unqualified call to unique static class method should be qualified, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("return zero();"),
+            "free-function unqualified static class call must not stay unresolved, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_unqualified_static_class_call_with_shadowing_local_name_stays_qualified() {
+        let vec2_ty = CppType::Named("Vec2".to_string());
+        let zero_fn_ty = CppType::Function {
+            return_type: Box::new(vec2_ty.clone()),
+            params: vec![],
+            is_variadic: false,
+        };
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![
+                make_node(
+                    ClangNodeKind::RecordDecl {
+                        name: "Vec2".to_string(),
+                        is_class: true,
+                        is_definition: true,
+                        fields: vec![],
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CXXMethodDecl {
+                            class_name: "Vec2".to_string(),
+                            name: "zero".to_string(),
+                            return_type: vec2_ty.clone(),
+                            params: vec![],
+                            is_definition: true,
+                            is_static: true,
+                            is_virtual: false,
+                            is_pure_virtual: false,
+                            is_override: false,
+                            is_final: false,
+                            is_const: false,
+                            access: AccessSpecifier::Public,
+                        },
+                        vec![make_node(ClangNodeKind::CompoundStmt, vec![])],
+                    )],
+                ),
+                make_node(
+                    ClangNodeKind::FunctionDecl {
+                        name: "main".to_string(),
+                        mangled_name: "main".to_string(),
+                        is_static: false,
+                        return_type: CppType::Void,
+                        params: vec![],
+                        is_definition: true,
+                        is_variadic: false,
+                        is_noexcept: false,
+                        is_coroutine: false,
+                        coroutine_info: None,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![make_node(
+                            ClangNodeKind::DeclStmt,
+                            vec![make_node(
+                                ClangNodeKind::VarDecl {
+                                    name: "zero".to_string(),
+                                    ty: vec2_ty.clone(),
+                                    has_init: true,
+                                    is_extern: false,
+                                    is_static: false,
+                                },
+                                vec![make_node(
+                                    ClangNodeKind::CallExpr {
+                                        ty: vec2_ty,
+                                        template_instantiation: None,
+                                    },
+                                    vec![make_node(
+                                        ClangNodeKind::DeclRefExpr {
+                                            name: "zero".to_string(),
+                                            ty: zero_fn_ty,
+                                            namespace_path: vec![],
+                                        },
+                                        vec![],
+                                    )],
+                                )],
+                            )],
+                        )],
+                    )],
+                ),
+            ],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("let mut zero: Vec2 = Vec2::zero();"),
+            "shadowing local name must not suppress static-call qualification, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("let mut zero: Vec2 = zero();"),
+            "shadowing local name should not leave unresolved free function call, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
     fn test_unqualified_tinyxml2_helper_call_from_non_owner_class_uses_xmlutil_qualification() {
         let cchar_ptr = CppType::Pointer {
             pointee: Box::new(CppType::Char { signed: true }),
@@ -39855,6 +41468,178 @@ mod tests {
         assert!(
             code.contains("pub fn Pop(&mut self) -> *const i8 {"),
             "DynArray<const char*,10> fallback should expose Pop, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_tinyxml2_missing_method_surface_fallbacks_are_emitted() {
+        let mut codegen = AstCodeGen::new();
+        codegen.class_fields.insert(
+            "StrPair".to_string(),
+            vec![
+                ("_flags".to_string(), CppType::Int { signed: true }),
+                (
+                    "_start".to_string(),
+                    CppType::Pointer {
+                        pointee: Box::new(CppType::Char { signed: true }),
+                        is_const: false,
+                    },
+                ),
+                (
+                    "_end".to_string(),
+                    CppType::Pointer {
+                        pointee: Box::new(CppType::Char { signed: true }),
+                        is_const: false,
+                    },
+                ),
+            ],
+        );
+        codegen.class_fields.insert(
+            "XMLNode".to_string(),
+            vec![
+                (
+                    "_document".to_string(),
+                    CppType::Pointer {
+                        pointee: Box::new(CppType::Named("XMLDocument".to_string())),
+                        is_const: false,
+                    },
+                ),
+                ("_value".to_string(), CppType::Named("StrPair".to_string())),
+                (
+                    "_parent".to_string(),
+                    CppType::Pointer {
+                        pointee: Box::new(CppType::Named("XMLNode".to_string())),
+                        is_const: false,
+                    },
+                ),
+                (
+                    "_firstChild".to_string(),
+                    CppType::Pointer {
+                        pointee: Box::new(CppType::Named("XMLNode".to_string())),
+                        is_const: false,
+                    },
+                ),
+                (
+                    "_lastChild".to_string(),
+                    CppType::Pointer {
+                        pointee: Box::new(CppType::Named("XMLNode".to_string())),
+                        is_const: false,
+                    },
+                ),
+                (
+                    "_prev".to_string(),
+                    CppType::Pointer {
+                        pointee: Box::new(CppType::Named("XMLNode".to_string())),
+                        is_const: false,
+                    },
+                ),
+                (
+                    "_next".to_string(),
+                    CppType::Pointer {
+                        pointee: Box::new(CppType::Named("XMLNode".to_string())),
+                        is_const: false,
+                    },
+                ),
+            ],
+        );
+        codegen.class_fields.insert(
+            "XMLAttribute".to_string(),
+            vec![
+                ("_name".to_string(), CppType::Named("StrPair".to_string())),
+                ("_value".to_string(), CppType::Named("StrPair".to_string())),
+                (
+                    "_next".to_string(),
+                    CppType::Pointer {
+                        pointee: Box::new(CppType::Named("XMLAttribute".to_string())),
+                        is_const: false,
+                    },
+                ),
+            ],
+        );
+        codegen.class_fields.insert(
+            "XMLElement".to_string(),
+            vec![(
+                "_rootAttribute".to_string(),
+                CppType::Pointer {
+                    pointee: Box::new(CppType::Named("XMLAttribute".to_string())),
+                    is_const: false,
+                },
+            )],
+        );
+        codegen.class_fields.insert(
+            "XMLDocument".to_string(),
+            vec![("_errorID".to_string(), CppType::Named("XMLError".to_string()))],
+        );
+
+        for class_name in [
+            "XMLUtil",
+            "StrPair",
+            "XMLNode",
+            "XMLAttribute",
+            "XMLElement",
+            "XMLDocument",
+        ] {
+            codegen.writeln(&format!("impl {} {{", class_name));
+            codegen.indent += 1;
+            let impl_start = codegen.output.len();
+            codegen.emit_missing_tinyxml2_method_surface_stubs(class_name, impl_start);
+            codegen.indent -= 1;
+            codegen.writeln("}");
+            codegen.writeln("");
+        }
+
+        let code = codegen.output;
+        assert!(
+            code.contains("pub fn Reset(&mut self) {"),
+            "StrPair fallback should emit Reset, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("pub fn ToInt(_str: *const i8, value: *mut i32) -> bool {"),
+            "XMLUtil fallback should emit ToInt helper surface, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("pub fn new_1(doc: *mut XMLDocument) -> Self {"),
+            "XMLNode fallback should emit one-arg constructor surface, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("pub fn InsertEndChild(&mut self, addThis: *mut XMLNode) -> *mut XMLNode {"),
+            "XMLNode fallback should emit InsertEndChild surface, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("pub fn QueryIntValue(&self, value: *mut i32) -> XMLError {"),
+            "XMLAttribute fallback should emit Query* method surface, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("pub fn FindAttribute(&self, name: *const i8) -> *const XMLAttribute {"),
+            "XMLElement fallback should emit FindAttribute surface, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains(
+                "pub fn FindOrCreateAttribute(&mut self, name: *const i8) -> *mut XMLAttribute {",
+            ),
+            "XMLElement fallback should emit FindOrCreateAttribute surface, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("pub fn ErrorIDToName(errorID: XMLError) -> *const i8 {"),
+            "XMLDocument fallback should emit ErrorIDToName surface, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("pub fn LoadFile(&mut self, _filename: *const i8) -> XMLError {"),
+            "XMLDocument fallback should emit LoadFile surface, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("pub fn Parse(&mut self, _xml: *const i8, _nBytes: u64) -> XMLError {"),
+            "XMLDocument fallback should emit Parse surface, got:\n{}",
             code
         );
     }
@@ -46113,6 +47898,132 @@ mod tests {
     }
 
     #[test]
+    fn test_enum_typed_return_expr_casts_to_integral_return_type() {
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![
+                make_node(
+                    ClangNodeKind::EnumDecl {
+                        name: "XMLError".to_string(),
+                        is_scoped: false,
+                        underlying_type: CppType::Int { signed: true },
+                    },
+                    vec![make_node(
+                        ClangNodeKind::EnumConstantDecl {
+                            name: "XML_SUCCESS".to_string(),
+                            value: Some(0),
+                        },
+                        vec![],
+                    )],
+                ),
+                make_node(
+                    ClangNodeKind::FunctionDecl {
+                        name: "error_to_int".to_string(),
+                        mangled_name: "error_to_int".to_string(),
+                        is_static: false,
+                        return_type: CppType::Int { signed: true },
+                        params: vec![("err".to_string(), CppType::Named("XMLError".to_string()))],
+                        is_definition: true,
+                        is_variadic: false,
+                        is_noexcept: false,
+                        is_coroutine: false,
+                        coroutine_info: None,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![make_node(
+                            ClangNodeKind::ReturnStmt,
+                            vec![make_node(
+                                ClangNodeKind::DeclRefExpr {
+                                    name: "err".to_string(),
+                                    ty: CppType::Named("XMLError".to_string()),
+                                    namespace_path: vec![],
+                                },
+                                vec![],
+                            )],
+                        )],
+                    )],
+                ),
+            ],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("return (err) as i32;") || code.contains("return err as i32;"),
+            "enum-typed return expressions in integral-return functions must be cast, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_enum_typed_local_init_casts_to_integral_decl_type() {
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![
+                make_node(
+                    ClangNodeKind::EnumDecl {
+                        name: "XMLError".to_string(),
+                        is_scoped: false,
+                        underlying_type: CppType::Int { signed: true },
+                    },
+                    vec![make_node(
+                        ClangNodeKind::EnumConstantDecl {
+                            name: "XML_SUCCESS".to_string(),
+                            value: Some(0),
+                        },
+                        vec![],
+                    )],
+                ),
+                make_node(
+                    ClangNodeKind::FunctionDecl {
+                        name: "error_to_int_local".to_string(),
+                        mangled_name: "error_to_int_local".to_string(),
+                        is_static: false,
+                        return_type: CppType::Void,
+                        params: vec![("err".to_string(), CppType::Named("XMLError".to_string()))],
+                        is_definition: true,
+                        is_variadic: false,
+                        is_noexcept: false,
+                        is_coroutine: false,
+                        coroutine_info: None,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![make_node(
+                            ClangNodeKind::DeclStmt,
+                            vec![make_node(
+                                ClangNodeKind::VarDecl {
+                                    name: "errorID".to_string(),
+                                    ty: CppType::Int { signed: true },
+                                    has_init: true,
+                                    is_static: false,
+                                    is_extern: false,
+                                },
+                                vec![make_node(
+                                    ClangNodeKind::DeclRefExpr {
+                                        name: "err".to_string(),
+                                        ty: CppType::Named("XMLError".to_string()),
+                                        namespace_path: vec![],
+                                    },
+                                    vec![],
+                                )],
+                            )],
+                        )],
+                    )],
+                ),
+            ],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("let mut errorID: i32 = (err) as i32;")
+                || code.contains("let mut errorID: i32 = err as i32;"),
+            "enum-typed local initializers for integral declarations must be cast, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
     fn test_async_coroutine_with_task_return() {
         use crate::ast::CoroutineInfo;
         // Test that a coroutine with Task<int> return type generates async fn -> i32
@@ -47059,6 +48970,101 @@ mod tests {
     }
 
     #[test]
+    fn test_reference_return_direct_declref_assignment_mutates_referent() {
+        let int_ty = CppType::Int { signed: true };
+        let int_ref_ty = CppType::Reference {
+            referent: Box::new(int_ty.clone()),
+            is_const: false,
+            is_rvalue: false,
+        };
+
+        let lhs_ref = || {
+            make_node(
+                ClangNodeKind::DeclRefExpr {
+                    name: "__lhs".to_string(),
+                    ty: int_ty.clone(),
+                    namespace_path: vec![],
+                },
+                vec![],
+            )
+        };
+        let rhs_ref = || {
+            make_node(
+                ClangNodeKind::DeclRefExpr {
+                    name: "__rhs".to_string(),
+                    ty: int_ty.clone(),
+                    namespace_path: vec![],
+                },
+                vec![],
+            )
+        };
+
+        let assign_expr = make_node(
+            ClangNodeKind::BinaryOperator {
+                op: BinaryOp::Assign,
+                ty: int_ty.clone(),
+            },
+            vec![
+                lhs_ref(),
+                make_node(
+                    ClangNodeKind::BinaryOperator {
+                        op: BinaryOp::Or,
+                        ty: int_ty.clone(),
+                    },
+                    vec![lhs_ref(), rhs_ref()],
+                ),
+            ],
+        );
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![make_node(
+                ClangNodeKind::FunctionDecl {
+                    name: "op_or_assign_direct_declref".to_string(),
+                    mangled_name: "op_or_assign_direct_declref".to_string(),
+                    is_static: false,
+                    return_type: int_ref_ty.clone(),
+                    params: vec![
+                        ("__lhs".to_string(), int_ref_ty.clone()),
+                        ("__rhs".to_string(), int_ty.clone()),
+                    ],
+                    is_definition: true,
+                    is_variadic: false,
+                    is_noexcept: false,
+                    is_coroutine: false,
+                    coroutine_info: None,
+                },
+                vec![make_node(
+                    ClangNodeKind::CompoundStmt,
+                    vec![make_node(ClangNodeKind::ReturnStmt, vec![assign_expr])],
+                )],
+            )],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("unsafe { *__lhs ="),
+            "direct DeclRef assignment for reference return should write through referent, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("*__lhs = __lhs | __rhs"),
+            "reference-return assignment RHS should read through dereferenced lhs, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("return __lhs;"),
+            "reference-return assignment should return lhs reference binding, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("return &mut { __lhs ="),
+            "reference-return assignment must not create reference-to-temporary block, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
     fn test_variadic_stdio_shims_link_to_c_runtime() {
         let ast = make_node(ClangNodeKind::TranslationUnit, vec![]);
         let code = AstCodeGen::new().generate(&ast);
@@ -47357,6 +49363,945 @@ mod tests {
         assert!(
             !code.contains("std::ptr::drop_in_place(&mut node)"),
             "unexpected mutable reference to by-value pointer parameter in destructor lowering:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_string_literal_non_ascii_emits_hex_byte_escapes_not_unicode_escapes() {
+        let string_expr = make_node(ClangNodeKind::StringLiteral("copyright ©".to_string()), vec![]);
+        let gen = AstCodeGen::new();
+        let lowered = gen.expr_to_string(&string_expr);
+        assert!(
+            lowered.contains("b\"copyright ")
+                && lowered.contains("\\x")
+                && lowered.contains("\\x00\".as_ptr() as *const i8"),
+            "string literal should lower as byte string with explicit byte escapes, got:\n{}",
+            lowered
+        );
+        assert!(
+            !lowered.contains("\\u{"),
+            "byte-string lowering must not emit unicode escapes, got:\n{}",
+            lowered
+        );
+    }
+
+    #[test]
+    fn test_local_declref_shadows_function_static_mapping_for_same_identifier() {
+        let cstr_ty = CppType::Pointer {
+            pointee: Box::new(CppType::Char { signed: true }),
+            is_const: true,
+        };
+        let consume_fn_ty = CppType::Function {
+            return_type: Box::new(CppType::Void),
+            params: vec![cstr_ty.clone()],
+            is_variadic: false,
+        };
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![
+                make_node(
+                    ClangNodeKind::FunctionDecl {
+                        name: "consume".to_string(),
+                        mangled_name: "consume".to_string(),
+                        is_static: false,
+                        return_type: CppType::Void,
+                        params: vec![("s".to_string(), cstr_ty.clone())],
+                        is_definition: true,
+                        is_variadic: false,
+                        is_noexcept: false,
+                        is_coroutine: false,
+                        coroutine_info: None,
+                    },
+                    vec![make_node(ClangNodeKind::CompoundStmt, vec![])],
+                ),
+                make_node(
+                    ClangNodeKind::FunctionDecl {
+                        name: "main".to_string(),
+                        mangled_name: "main".to_string(),
+                        is_static: false,
+                        return_type: CppType::Void,
+                        params: vec![],
+                        is_definition: true,
+                        is_variadic: false,
+                        is_noexcept: false,
+                        is_coroutine: false,
+                        coroutine_info: None,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![
+                            make_node(
+                                ClangNodeKind::DeclStmt,
+                                vec![make_node(
+                                    ClangNodeKind::VarDecl {
+                                        name: "test".to_string(),
+                                        ty: cstr_ty.clone(),
+                                        has_init: true,
+                                        is_extern: false,
+                                        is_static: true,
+                                    },
+                                    vec![make_node(
+                                        ClangNodeKind::StringLiteral("static".to_string()),
+                                        vec![],
+                                    )],
+                                )],
+                            ),
+                            make_node(
+                                ClangNodeKind::DeclStmt,
+                                vec![make_node(
+                                    ClangNodeKind::VarDecl {
+                                        name: "test".to_string(),
+                                        ty: cstr_ty.clone(),
+                                        has_init: true,
+                                        is_extern: false,
+                                        is_static: false,
+                                    },
+                                    vec![make_node(
+                                        ClangNodeKind::StringLiteral("local".to_string()),
+                                        vec![],
+                                    )],
+                                )],
+                            ),
+                            make_node(
+                                ClangNodeKind::ExprStmt,
+                                vec![make_node(
+                                    ClangNodeKind::CallExpr {
+                                        ty: CppType::Void,
+                                        template_instantiation: None,
+                                    },
+                                    vec![
+                                        make_node(
+                                            ClangNodeKind::DeclRefExpr {
+                                                name: "consume".to_string(),
+                                                ty: consume_fn_ty.clone(),
+                                                namespace_path: vec![],
+                                            },
+                                            vec![],
+                                        ),
+                                        make_node(
+                                            ClangNodeKind::DeclRefExpr {
+                                                name: "test".to_string(),
+                                                ty: cstr_ty.clone(),
+                                                namespace_path: vec![],
+                                            },
+                                            vec![],
+                                        ),
+                                    ],
+                                )],
+                            ),
+                        ],
+                    )],
+                ),
+            ],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("static mut __fsv_") && code.contains("_test_0"),
+            "expected function-static symbol emission for first declaration, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("consume(test as *const i8);"),
+            "local variable should be used at callsite when shadowing static name, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("consume(unsafe { __fsv_main_test_0 })"),
+            "callsite should not resolve shadowed local variable through function-static symbol mapping, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_function_template_if_stmt_keeps_local_var_not_global_prefixed() {
+        let int_ty = CppType::Int { signed: true };
+        let bool_ty = CppType::Bool;
+        let templ_ty = CppType::TemplateParam {
+            name: "T".to_string(),
+            depth: 0,
+            index: 0,
+        };
+
+        let xml_test_fn_ty = CppType::Function {
+            return_type: Box::new(bool_ty.clone()),
+            params: vec![int_ty.clone(), int_ty.clone(), bool_ty.clone()],
+            is_variadic: false,
+        };
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![
+                make_node(
+                    ClangNodeKind::VarDecl {
+                        name: "gPass".to_string(),
+                        ty: int_ty.clone(),
+                        has_init: true,
+                        is_static: false,
+                        is_extern: false,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::IntegerLiteral {
+                            value: 0,
+                            cpp_type: Some(int_ty.clone()),
+                        },
+                        vec![],
+                    )],
+                ),
+                make_node(
+                    ClangNodeKind::VarDecl {
+                        name: "gFail".to_string(),
+                        ty: int_ty.clone(),
+                        has_init: true,
+                        is_static: false,
+                        is_extern: false,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::IntegerLiteral {
+                            value: 0,
+                            cpp_type: Some(int_ty.clone()),
+                        },
+                        vec![],
+                    )],
+                ),
+                make_node(
+                    ClangNodeKind::FunctionTemplateDecl {
+                        name: "XMLTest".to_string(),
+                        template_params: vec!["T".to_string()],
+                        return_type: bool_ty.clone(),
+                        params: vec![
+                            ("expected".to_string(), templ_ty.clone()),
+                            ("found".to_string(), templ_ty.clone()),
+                            ("echo".to_string(), bool_ty.clone()),
+                        ],
+                        is_definition: true,
+                        parameter_pack_indices: vec![],
+                        requires_clause: None,
+                        is_noexcept: false,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![
+                            make_node(
+                                ClangNodeKind::DeclStmt,
+                                vec![make_node(
+                                    ClangNodeKind::VarDecl {
+                                        name: "pass".to_string(),
+                                        ty: bool_ty.clone(),
+                                        has_init: true,
+                                        is_static: false,
+                                        is_extern: false,
+                                    },
+                                    vec![make_node(
+                                        ClangNodeKind::BinaryOperator {
+                                            op: BinaryOp::Eq,
+                                            ty: bool_ty.clone(),
+                                        },
+                                        vec![
+                                            make_node(
+                                                ClangNodeKind::DeclRefExpr {
+                                                    name: "expected".to_string(),
+                                                    ty: templ_ty.clone(),
+                                                    namespace_path: vec![],
+                                                },
+                                                vec![],
+                                            ),
+                                            make_node(
+                                                ClangNodeKind::DeclRefExpr {
+                                                    name: "found".to_string(),
+                                                    ty: templ_ty.clone(),
+                                                    namespace_path: vec![],
+                                                },
+                                                vec![],
+                                            ),
+                                        ],
+                                    )],
+                                )],
+                            ),
+                            make_node(
+                                ClangNodeKind::IfStmt,
+                                vec![
+                                    make_node(
+                                        ClangNodeKind::DeclRefExpr {
+                                            name: "pass".to_string(),
+                                            ty: bool_ty.clone(),
+                                            namespace_path: vec![],
+                                        },
+                                        vec![],
+                                    ),
+                                    make_node(
+                                        ClangNodeKind::ExprStmt,
+                                        vec![make_node(
+                                            ClangNodeKind::UnaryOperator {
+                                                op: UnaryOp::PreInc,
+                                                ty: int_ty.clone(),
+                                            },
+                                            vec![make_node(
+                                                ClangNodeKind::DeclRefExpr {
+                                                    name: "gPass".to_string(),
+                                                    ty: int_ty.clone(),
+                                                    namespace_path: vec![],
+                                                },
+                                                vec![],
+                                            )],
+                                        )],
+                                    ),
+                                    make_node(
+                                        ClangNodeKind::ExprStmt,
+                                        vec![make_node(
+                                            ClangNodeKind::UnaryOperator {
+                                                op: UnaryOp::PreInc,
+                                                ty: int_ty.clone(),
+                                            },
+                                            vec![make_node(
+                                                ClangNodeKind::DeclRefExpr {
+                                                    name: "gFail".to_string(),
+                                                    ty: int_ty.clone(),
+                                                    namespace_path: vec![],
+                                                },
+                                                vec![],
+                                            )],
+                                        )],
+                                    ),
+                                ],
+                            ),
+                            make_node(
+                                ClangNodeKind::ReturnStmt,
+                                vec![make_node(
+                                    ClangNodeKind::DeclRefExpr {
+                                        name: "pass".to_string(),
+                                        ty: bool_ty.clone(),
+                                        namespace_path: vec![],
+                                    },
+                                    vec![],
+                                )],
+                            ),
+                        ],
+                    )],
+                ),
+                make_node(
+                    ClangNodeKind::FunctionDecl {
+                        name: "call_xml_test".to_string(),
+                        mangled_name: "call_xml_test".to_string(),
+                        is_static: false,
+                        return_type: bool_ty.clone(),
+                        params: vec![],
+                        is_definition: true,
+                        is_variadic: false,
+                        is_noexcept: false,
+                        is_coroutine: false,
+                        coroutine_info: None,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![make_node(
+                            ClangNodeKind::ReturnStmt,
+                            vec![make_node(
+                                ClangNodeKind::CallExpr {
+                                    ty: bool_ty.clone(),
+                                    template_instantiation: None,
+                                },
+                                vec![
+                                    make_node(
+                                        ClangNodeKind::DeclRefExpr {
+                                            name: "XMLTest".to_string(),
+                                            ty: xml_test_fn_ty.clone(),
+                                            namespace_path: vec![],
+                                        },
+                                        vec![],
+                                    ),
+                                    make_node(
+                                        ClangNodeKind::IntegerLiteral {
+                                            value: 1,
+                                            cpp_type: Some(int_ty.clone()),
+                                        },
+                                        vec![],
+                                    ),
+                                    make_node(
+                                        ClangNodeKind::IntegerLiteral {
+                                            value: 2,
+                                            cpp_type: Some(int_ty.clone()),
+                                        },
+                                        vec![],
+                                    ),
+                                    make_node(ClangNodeKind::BoolLiteral(true), vec![]),
+                                ],
+                            )],
+                        )],
+                    )],
+                ),
+            ],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("pub fn XMLTest_i32"),
+            "expected function template instantiation to be emitted, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("if pass {"),
+            "template `IfStmt` should lower as control flow, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("return pass;"),
+            "template local return should use local variable, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("__gv_pass"),
+            "template local variable must not resolve through global __gv_ prefix mapping, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_function_template_uninitialized_sized_array_uses_zero_array_default() {
+        let int_ty = CppType::Int { signed: true };
+        let bool_ty = CppType::Bool;
+        let templ_ty = CppType::TemplateParam {
+            name: "T".to_string(),
+            depth: 0,
+            index: 0,
+        };
+        let char_array_ty = CppType::Array {
+            element: Box::new(CppType::Char { signed: true }),
+            size: Some(64),
+        };
+        let xml_test_fn_ty = CppType::Function {
+            return_type: Box::new(bool_ty.clone()),
+            params: vec![int_ty.clone()],
+            is_variadic: false,
+        };
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![
+                make_node(
+                    ClangNodeKind::FunctionTemplateDecl {
+                        name: "XMLTest".to_string(),
+                        template_params: vec!["T".to_string()],
+                        return_type: bool_ty.clone(),
+                        params: vec![("value".to_string(), templ_ty.clone())],
+                        is_definition: true,
+                        parameter_pack_indices: vec![],
+                        requires_clause: None,
+                        is_noexcept: false,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![
+                            make_node(
+                                ClangNodeKind::DeclStmt,
+                                vec![make_node(
+                                    ClangNodeKind::VarDecl {
+                                        name: "expectedAsString".to_string(),
+                                        ty: char_array_ty.clone(),
+                                        has_init: false,
+                                        is_static: false,
+                                        is_extern: false,
+                                    },
+                                    vec![make_node(
+                                        ClangNodeKind::IntegerLiteral {
+                                            value: 64,
+                                            cpp_type: Some(int_ty.clone()),
+                                        },
+                                        vec![],
+                                    )],
+                                )],
+                            ),
+                            make_node(
+                                ClangNodeKind::ReturnStmt,
+                                vec![make_node(ClangNodeKind::BoolLiteral(true), vec![])],
+                            ),
+                        ],
+                    )],
+                ),
+                make_node(
+                    ClangNodeKind::FunctionDecl {
+                        name: "call_xml_test".to_string(),
+                        mangled_name: "call_xml_test".to_string(),
+                        is_static: false,
+                        return_type: bool_ty.clone(),
+                        params: vec![],
+                        is_definition: true,
+                        is_variadic: false,
+                        is_noexcept: false,
+                        is_coroutine: false,
+                        coroutine_info: None,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![make_node(
+                            ClangNodeKind::ReturnStmt,
+                            vec![make_node(
+                                ClangNodeKind::CallExpr {
+                                    ty: bool_ty.clone(),
+                                    template_instantiation: None,
+                                },
+                                vec![
+                                    make_node(
+                                        ClangNodeKind::DeclRefExpr {
+                                            name: "XMLTest".to_string(),
+                                            ty: xml_test_fn_ty.clone(),
+                                            namespace_path: vec![],
+                                        },
+                                        vec![],
+                                    ),
+                                    make_node(
+                                        ClangNodeKind::IntegerLiteral {
+                                            value: 7,
+                                            cpp_type: Some(int_ty.clone()),
+                                        },
+                                        vec![],
+                                    ),
+                                ],
+                            )],
+                        )],
+                    )],
+                ),
+            ],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("let mut expectedAsString: [i8; 64] = [0; 64];"),
+            "uninitialized sized array in function template should use concrete zero-array default, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("let mut expectedAsString: [i8; 64] = Default::default();"),
+            "function template array default must not use Default::default() for [i8; 64], got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("let mut expectedAsString: [i8; 64] = [0; 64];\n            Default::default();")
+                && !code.contains("let mut foundAsString: [i8; 64] = [0; 64];\n            Default::default();"),
+            "function template lowering should not emit stray standalone Default::default() statements next to fixed array locals, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_get_default_value_for_type_sized_arrays_use_concrete_literals() {
+        assert_eq!(
+            AstCodeGen::get_default_value_for_type("[i8; 64]"),
+            "[0; 64]",
+            "sized integer arrays should lower to concrete zero-array defaults"
+        );
+        assert_eq!(
+            AstCodeGen::get_default_value_for_type("[*mut i8; 4]"),
+            "[std::ptr::null_mut(); 4]",
+            "sized pointer arrays should lower to concrete null array defaults"
+        );
+    }
+
+    #[test]
+    fn test_scoped_local_declref_keeps_reference_param_deref_shape() {
+        let int_ty = CppType::Int { signed: true };
+        let int_ref_ty = CppType::Reference {
+            referent: Box::new(int_ty.clone()),
+            is_const: false,
+            is_rvalue: false,
+        };
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![make_node(
+                ClangNodeKind::FunctionDecl {
+                    name: "swap_ref".to_string(),
+                    mangled_name: "swap_ref".to_string(),
+                    is_static: false,
+                    return_type: CppType::Void,
+                    params: vec![
+                        ("a".to_string(), int_ref_ty.clone()),
+                        ("b".to_string(), int_ref_ty.clone()),
+                    ],
+                    is_definition: true,
+                    is_variadic: false,
+                    is_noexcept: false,
+                    is_coroutine: false,
+                    coroutine_info: None,
+                },
+                vec![make_node(
+                    ClangNodeKind::CompoundStmt,
+                    vec![
+                        make_node(
+                            ClangNodeKind::DeclStmt,
+                            vec![make_node(
+                                ClangNodeKind::VarDecl {
+                                    name: "tmp".to_string(),
+                                    ty: int_ty.clone(),
+                                    has_init: true,
+                                    is_static: false,
+                                    is_extern: false,
+                                },
+                                vec![make_node(
+                                    ClangNodeKind::DeclRefExpr {
+                                        name: "a".to_string(),
+                                        ty: int_ty.clone(),
+                                        namespace_path: vec![],
+                                    },
+                                    vec![],
+                                )],
+                            )],
+                        ),
+                        make_node(
+                            ClangNodeKind::ExprStmt,
+                            vec![make_node(
+                                ClangNodeKind::BinaryOperator {
+                                    op: BinaryOp::Assign,
+                                    ty: int_ty.clone(),
+                                },
+                                vec![
+                                    make_node(
+                                        ClangNodeKind::DeclRefExpr {
+                                            name: "a".to_string(),
+                                            ty: int_ty.clone(),
+                                            namespace_path: vec![],
+                                        },
+                                        vec![],
+                                    ),
+                                    make_node(
+                                        ClangNodeKind::DeclRefExpr {
+                                            name: "b".to_string(),
+                                            ty: int_ty.clone(),
+                                            namespace_path: vec![],
+                                        },
+                                        vec![],
+                                    ),
+                                ],
+                            )],
+                        ),
+                    ],
+                )],
+            )],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("let mut tmp: i32 = *a;"),
+            "reference param should dereference in local initializer, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("*a =") && code.contains("(*b)"),
+            "reference param assignment should dereference rhs/lhs, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("let mut tmp: i32 = a;"),
+            "reference param must not lower as raw pointer in initializer, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_extract_template_arg_reference_pattern_accepts_pointer_instantiation_shape() {
+        let pattern = CppType::Reference {
+            referent: Box::new(CppType::TemplateParam {
+                name: "T".to_string(),
+                depth: 0,
+                index: 0,
+            }),
+            is_const: false,
+            is_rvalue: false,
+        };
+        let instantiated = CppType::Pointer {
+            pointee: Box::new(CppType::Int { signed: true }),
+            is_const: false,
+        };
+        let extracted = extract_template_arg(&pattern, &instantiated, "T");
+        assert_eq!(
+            extracted, "i32",
+            "reference template arg extraction should peel pointer-shaped call types for T&, got {}",
+            extracted
+        );
+    }
+
+    #[test]
+    fn test_function_template_type_arg_inference_uses_template_dependent_param_not_first_param() {
+        let bool_ty = CppType::Bool;
+        let templ_ty = CppType::TemplateParam {
+            name: "T".to_string(),
+            depth: 0,
+            index: 0,
+        };
+        let const_char_ptr_ty = CppType::Pointer {
+            pointee: Box::new(CppType::Char { signed: true }),
+            is_const: true,
+        };
+        let xml_test_template_call_ty = CppType::Function {
+            return_type: Box::new(bool_ty.clone()),
+            params: vec![
+                const_char_ptr_ty.clone(),
+                const_char_ptr_ty.clone(),
+                const_char_ptr_ty.clone(),
+                bool_ty.clone(),
+            ],
+            is_variadic: false,
+        };
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![
+                make_node(
+                    ClangNodeKind::FunctionTemplateDecl {
+                        name: "XMLTest".to_string(),
+                        template_params: vec!["T".to_string()],
+                        return_type: bool_ty.clone(),
+                        params: vec![
+                            ("testString".to_string(), const_char_ptr_ty.clone()),
+                            ("expected".to_string(), templ_ty.clone()),
+                            ("found".to_string(), templ_ty.clone()),
+                            ("echo".to_string(), bool_ty.clone()),
+                        ],
+                        is_definition: true,
+                        parameter_pack_indices: vec![],
+                        requires_clause: None,
+                        is_noexcept: false,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![make_node(
+                            ClangNodeKind::ReturnStmt,
+                            vec![make_node(ClangNodeKind::BoolLiteral(true), vec![])],
+                        )],
+                    )],
+                ),
+                make_node(
+                    ClangNodeKind::FunctionDecl {
+                        name: "call_xml_test_strings".to_string(),
+                        mangled_name: "call_xml_test_strings".to_string(),
+                        is_static: false,
+                        return_type: bool_ty.clone(),
+                        params: vec![],
+                        is_definition: true,
+                        is_variadic: false,
+                        is_noexcept: false,
+                        is_coroutine: false,
+                        coroutine_info: None,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![make_node(
+                            ClangNodeKind::ReturnStmt,
+                            vec![make_node(
+                                ClangNodeKind::CallExpr {
+                                    ty: bool_ty.clone(),
+                                    template_instantiation: None,
+                                },
+                                vec![
+                                    make_node(
+                                        ClangNodeKind::DeclRefExpr {
+                                            name: "XMLTest".to_string(),
+                                            ty: xml_test_template_call_ty,
+                                            namespace_path: vec![],
+                                        },
+                                        vec![],
+                                    ),
+                                    make_node(
+                                        ClangNodeKind::StringLiteral("Test".to_string()),
+                                        vec![],
+                                    ),
+                                    make_node(
+                                        ClangNodeKind::StringLiteral("Expected".to_string()),
+                                        vec![],
+                                    ),
+                                    make_node(
+                                        ClangNodeKind::StringLiteral("Found".to_string()),
+                                        vec![],
+                                    ),
+                                    make_node(ClangNodeKind::BoolLiteral(true), vec![]),
+                                ],
+                            )],
+                        )],
+                    )],
+                ),
+            ],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("pub fn XMLTest_ptr_const_i8("),
+            "template argument inference should deduce T from template-dependent params (expected/found), got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("pub fn XMLTest_i8("),
+            "template argument inference must not derive T from the first non-template parameter, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_overload_call_with_template_name_does_not_force_template_mangled_target() {
+        let bool_ty = CppType::Bool;
+        let xerr_ty = CppType::Named("XMLError".to_string());
+        let templ_ty = CppType::TemplateParam {
+            name: "T".to_string(),
+            depth: 0,
+            index: 0,
+        };
+        let const_char_ptr_ty = CppType::Pointer {
+            pointee: Box::new(CppType::Char { signed: true }),
+            is_const: true,
+        };
+        let pointer_overload_ty = CppType::Function {
+            return_type: Box::new(bool_ty.clone()),
+            params: vec![
+                const_char_ptr_ty.clone(),
+                const_char_ptr_ty.clone(),
+                const_char_ptr_ty.clone(),
+                bool_ty.clone(),
+                bool_ty.clone(),
+            ],
+            is_variadic: false,
+        };
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![
+                make_node(
+                    ClangNodeKind::FunctionTemplateDecl {
+                        name: "XMLTest".to_string(),
+                        template_params: vec!["T".to_string()],
+                        return_type: bool_ty.clone(),
+                        params: vec![
+                            ("testString".to_string(), const_char_ptr_ty.clone()),
+                            ("expected".to_string(), templ_ty.clone()),
+                            ("found".to_string(), templ_ty.clone()),
+                            ("echo".to_string(), bool_ty.clone()),
+                        ],
+                        is_definition: true,
+                        parameter_pack_indices: vec![],
+                        requires_clause: None,
+                        is_noexcept: false,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![make_node(
+                            ClangNodeKind::ReturnStmt,
+                            vec![make_node(ClangNodeKind::BoolLiteral(true), vec![])],
+                        )],
+                    )],
+                ),
+                make_node(
+                    ClangNodeKind::FunctionDecl {
+                        name: "XMLTest".to_string(),
+                        mangled_name: "_Z7XMLTestPKcS0_S0_bb".to_string(),
+                        is_static: false,
+                        return_type: bool_ty.clone(),
+                        params: vec![
+                            ("testString".to_string(), const_char_ptr_ty.clone()),
+                            ("expected".to_string(), const_char_ptr_ty.clone()),
+                            ("found".to_string(), const_char_ptr_ty.clone()),
+                            ("echo".to_string(), bool_ty.clone()),
+                            ("extraNL".to_string(), bool_ty.clone()),
+                        ],
+                        is_definition: true,
+                        is_variadic: false,
+                        is_noexcept: false,
+                        is_coroutine: false,
+                        coroutine_info: None,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![make_node(
+                            ClangNodeKind::ReturnStmt,
+                            vec![make_node(ClangNodeKind::BoolLiteral(true), vec![])],
+                        )],
+                    )],
+                ),
+                make_node(
+                    ClangNodeKind::FunctionDecl {
+                        name: "XMLTest".to_string(),
+                        mangled_name: "_Z7XMLTestPKc8XMLErrorS0_bb".to_string(),
+                        is_static: false,
+                        return_type: bool_ty.clone(),
+                        params: vec![
+                            ("testString".to_string(), const_char_ptr_ty.clone()),
+                            ("expected".to_string(), xerr_ty.clone()),
+                            ("found".to_string(), xerr_ty.clone()),
+                            ("echo".to_string(), bool_ty.clone()),
+                            ("extraNL".to_string(), bool_ty.clone()),
+                        ],
+                        is_definition: true,
+                        is_variadic: false,
+                        is_noexcept: false,
+                        is_coroutine: false,
+                        coroutine_info: None,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![make_node(
+                            ClangNodeKind::ReturnStmt,
+                            vec![make_node(
+                                ClangNodeKind::CallExpr {
+                                    ty: bool_ty.clone(),
+                                    template_instantiation: None,
+                                },
+                                vec![
+                                    make_node(
+                                        ClangNodeKind::DeclRefExpr {
+                                            name: "XMLTest".to_string(),
+                                            ty: pointer_overload_ty,
+                                            namespace_path: vec![],
+                                        },
+                                        vec![],
+                                    ),
+                                    make_node(
+                                        ClangNodeKind::DeclRefExpr {
+                                            name: "testString".to_string(),
+                                            ty: const_char_ptr_ty.clone(),
+                                            namespace_path: vec![],
+                                        },
+                                        vec![],
+                                    ),
+                                    make_node(
+                                        ClangNodeKind::StringLiteral("expected".to_string()),
+                                        vec![],
+                                    ),
+                                    make_node(
+                                        ClangNodeKind::StringLiteral("found".to_string()),
+                                        vec![],
+                                    ),
+                                    make_node(
+                                        ClangNodeKind::DeclRefExpr {
+                                            name: "echo".to_string(),
+                                            ty: bool_ty.clone(),
+                                            namespace_path: vec![],
+                                        },
+                                        vec![],
+                                    ),
+                                    make_node(
+                                        ClangNodeKind::DeclRefExpr {
+                                            name: "extraNL".to_string(),
+                                            ty: bool_ty.clone(),
+                                            namespace_path: vec![],
+                                        },
+                                        vec![],
+                                    ),
+                                ],
+                            )],
+                        )],
+                    )],
+                ),
+            ],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("return XMLTest(testString"),
+            "overload call should keep non-template target, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("return XMLTest_i8("),
+            "overload call must not be rewritten to template mangled target with wrong arity, got:\n{}",
             code
         );
     }
