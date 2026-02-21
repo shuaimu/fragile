@@ -10362,17 +10362,16 @@ impl AstCodeGen {
                     self.writeln("return false;");
                     self.indent -= 1;
                     self.writeln("}");
-                    self.writeln("let mut end_ptr: *mut i8 = std::ptr::null_mut();");
                     self.writeln(
-                        "let parsed = unsafe { super::strtol(_str as *const i8, (&mut end_ptr as *mut *mut i8) as *mut *mut i8, 10) };",
+                        "let parsed = unsafe { std::ffi::CStr::from_ptr(_str as *const i8) }.to_string_lossy();",
                     );
-                    self.writeln("if end_ptr == _str as *mut i8 {");
+                    self.writeln("if let Ok(v) = parsed.trim().parse::<i32>() {");
                     self.indent += 1;
-                    self.writeln("return false;");
+                    self.writeln("unsafe { *value = v; };");
+                    self.writeln("return true;");
                     self.indent -= 1;
                     self.writeln("}");
-                    self.writeln("unsafe { *value = parsed as i32; };");
-                    self.writeln("return true;");
+                    self.writeln("return false;");
                     self.indent -= 1;
                     self.writeln("}");
                 }
@@ -46088,10 +46087,11 @@ mod tests {
             code
         );
         assert!(
-            code.contains("let parsed = unsafe { super::strtol")
-                && code.contains("unsafe { *value = parsed as i32; };")
+            code.contains("let parsed = unsafe { std::ffi::CStr::from_ptr")
+                && code.contains("if let Ok(v) = parsed.trim().parse::<i32>() {")
+                && code.contains("unsafe { *value = v; };")
                 && code.contains("return true;"),
-            "XMLUtil ToInt fallback should parse integer text via strtol, got:\n{}",
+            "XMLUtil ToInt fallback should parse integer text directly from CStr content, got:\n{}",
             code
         );
         assert!(
