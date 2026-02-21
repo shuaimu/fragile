@@ -24405,6 +24405,17 @@ impl AstCodeGen {
                                 final_init = format!(" = ({}) as {}", init_expr, final_type);
                             }
                         }
+                        if is_unsigned_rust_int_type(&final_type) && final_init.starts_with(" = ")
+                        {
+                            let init_expr = final_init[3..].trim();
+                            // Pointer differences lower to `isize` via `.offset_from(...)`.
+                            // Cast declaration initializers to the declared unsigned width.
+                            if init_expr.contains(".offset_from(")
+                                && !init_expr.contains(&format!(" as {}", final_type))
+                            {
+                                final_init = format!(" = ({}) as {}", init_expr, final_type);
+                            }
+                        }
 
                         if *is_static {
                             self.writeln(&format!(
@@ -41962,6 +41973,98 @@ mod tests {
         assert!(
             !code.contains("(*ds).pending_buf +"),
             "pointer addition should not use raw `+` in Rust, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_unsigned_var_init_from_pointer_difference_casts_offset_from_result() {
+        let cchar_ptr = CppType::Pointer {
+            pointee: Box::new(CppType::Char { signed: true }),
+            is_const: true,
+        };
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![make_node(
+                ClangNodeKind::FunctionDecl {
+                    name: "distance_u64".to_string(),
+                    mangled_name: "distance_u64".to_string(),
+                    is_static: false,
+                    return_type: CppType::Int { signed: true },
+                    params: vec![
+                        ("p".to_string(), cchar_ptr.clone()),
+                        ("q".to_string(), cchar_ptr.clone()),
+                    ],
+                    is_definition: true,
+                    is_variadic: false,
+                    is_noexcept: false,
+                    is_coroutine: false,
+                    coroutine_info: None,
+                },
+                vec![make_node(
+                    ClangNodeKind::CompoundStmt,
+                    vec![
+                        make_node(
+                            ClangNodeKind::DeclStmt,
+                            vec![make_node(
+                                ClangNodeKind::VarDecl {
+                                    name: "delta".to_string(),
+                                    ty: CppType::LongLong { signed: false },
+                                    has_init: true,
+                                    is_static: false,
+                                    is_extern: false,
+                                },
+                                vec![make_node(
+                                    ClangNodeKind::BinaryOperator {
+                                        op: BinaryOp::Sub,
+                                        ty: CppType::LongLong { signed: true },
+                                    },
+                                    vec![
+                                        make_node(
+                                            ClangNodeKind::DeclRefExpr {
+                                                name: "q".to_string(),
+                                                ty: cchar_ptr.clone(),
+                                                namespace_path: vec![],
+                                            },
+                                            vec![],
+                                        ),
+                                        make_node(
+                                            ClangNodeKind::DeclRefExpr {
+                                                name: "p".to_string(),
+                                                ty: cchar_ptr.clone(),
+                                                namespace_path: vec![],
+                                            },
+                                            vec![],
+                                        ),
+                                    ],
+                                )],
+                            )],
+                        ),
+                        make_node(
+                            ClangNodeKind::ReturnStmt,
+                            vec![make_node(
+                                ClangNodeKind::IntegerLiteral {
+                                    value: 0,
+                                    cpp_type: Some(CppType::Int { signed: true }),
+                                },
+                                vec![],
+                            )],
+                        ),
+                    ],
+                )],
+            )],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("let mut delta: u64 = (unsafe { q.offset_from(p) }) as u64;"),
+            "unsigned var init from pointer difference should cast offset_from result to declaration type, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("let mut delta: u64 = unsafe { q.offset_from(p) };"),
+            "offset_from result should not be assigned to u64 without explicit cast, got:\n{}",
             code
         );
     }
