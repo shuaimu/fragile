@@ -12619,6 +12619,146 @@ impl AstCodeGen {
                     self.writeln("}");
                     self.indent -= 1;
                     self.writeln("}");
+                    self.writeln("if errorID == XMLError::XML_SUCCESS {");
+                    self.indent += 1;
+                    self.writeln(
+                        "return (b\"XML_SUCCESS\\x00\".as_ptr() as *const i8) as *const i8;",
+                    );
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("if errorID == XMLError::XML_NO_ATTRIBUTE {");
+                    self.indent += 1;
+                    self.writeln(
+                        "return (b\"XML_NO_ATTRIBUTE\\x00\".as_ptr() as *const i8) as *const i8;",
+                    );
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("if errorID == XMLError::XML_WRONG_ATTRIBUTE_TYPE {");
+                    self.indent += 1;
+                    self.writeln(
+                        "return (b\"XML_WRONG_ATTRIBUTE_TYPE\\x00\".as_ptr() as *const i8) as *const i8;",
+                    );
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("if errorID == XMLError::XML_ERROR_FILE_NOT_FOUND {");
+                    self.indent += 1;
+                    self.writeln(
+                        "return (b\"XML_ERROR_FILE_NOT_FOUND\\x00\".as_ptr() as *const i8) as *const i8;",
+                    );
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("if errorID == XMLError::XML_ERROR_FILE_COULD_NOT_BE_OPENED {");
+                    self.indent += 1;
+                    self.writeln(
+                        "return (b\"XML_ERROR_FILE_COULD_NOT_BE_OPENED\\x00\".as_ptr() as *const i8) as *const i8;",
+                    );
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("if errorID == XMLError::XML_ERROR_FILE_READ_ERROR {");
+                    self.indent += 1;
+                    self.writeln(
+                        "return (b\"XML_ERROR_FILE_READ_ERROR\\x00\".as_ptr() as *const i8) as *const i8;",
+                    );
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("if errorID == XMLError::XML_ERROR_PARSING_ELEMENT {");
+                    self.indent += 1;
+                    self.writeln(
+                        "return (b\"XML_ERROR_PARSING_ELEMENT\\x00\".as_ptr() as *const i8) as *const i8;",
+                    );
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("if errorID == XMLError::XML_ERROR_PARSING_ATTRIBUTE {");
+                    self.indent += 1;
+                    self.writeln(
+                        "return (b\"XML_ERROR_PARSING_ATTRIBUTE\\x00\".as_ptr() as *const i8) as *const i8;",
+                    );
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("if errorID == XMLError::XML_ERROR_PARSING_TEXT {");
+                    self.indent += 1;
+                    self.writeln(
+                        "return (b\"XML_ERROR_PARSING_TEXT\\x00\".as_ptr() as *const i8) as *const i8;",
+                    );
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("if errorID == XMLError::XML_ERROR_PARSING_CDATA {");
+                    self.indent += 1;
+                    self.writeln(
+                        "return (b\"XML_ERROR_PARSING_CDATA\\x00\".as_ptr() as *const i8) as *const i8;",
+                    );
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("if errorID == XMLError::XML_ERROR_PARSING_COMMENT {");
+                    self.indent += 1;
+                    self.writeln(
+                        "return (b\"XML_ERROR_PARSING_COMMENT\\x00\".as_ptr() as *const i8) as *const i8;",
+                    );
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("if errorID == XMLError::XML_ERROR_PARSING_DECLARATION {");
+                    self.indent += 1;
+                    self.writeln(
+                        "return (b\"XML_ERROR_PARSING_DECLARATION\\x00\".as_ptr() as *const i8) as *const i8;",
+                    );
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("if errorID == XMLError::XML_ERROR_PARSING_UNKNOWN {");
+                    self.indent += 1;
+                    self.writeln(
+                        "return (b\"XML_ERROR_PARSING_UNKNOWN\\x00\".as_ptr() as *const i8) as *const i8;",
+                    );
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("if errorID == XMLError::XML_ERROR_EMPTY_DOCUMENT {");
+                    self.indent += 1;
+                    self.writeln(
+                        "return (b\"XML_ERROR_EMPTY_DOCUMENT\\x00\".as_ptr() as *const i8) as *const i8;",
+                    );
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("if errorID == XMLError::XML_ERROR_MISMATCHED_ELEMENT {");
+                    self.indent += 1;
+                    self.writeln(
+                        "return (b\"XML_ERROR_MISMATCHED_ELEMENT\\x00\".as_ptr() as *const i8) as *const i8;",
+                    );
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("if errorID == XMLError::XML_ERROR_PARSING {");
+                    self.indent += 1;
+                    self.writeln(
+                        "return (b\"XML_ERROR_PARSING\\x00\".as_ptr() as *const i8) as *const i8;",
+                    );
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("if errorID == XMLError::XML_CAN_NOT_CONVERT_TEXT {");
+                    self.indent += 1;
+                    self.writeln(
+                        "return (b\"XML_CAN_NOT_CONVERT_TEXT\\x00\".as_ptr() as *const i8) as *const i8;",
+                    );
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("if errorID == XMLError::XML_NO_TEXT_NODE {");
+                    self.indent += 1;
+                    self.writeln(
+                        "return (b\"XML_NO_TEXT_NODE\\x00\".as_ptr() as *const i8) as *const i8;",
+                    );
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("if errorID == XMLError::XML_ELEMENT_DEPTH_EXCEEDED {");
+                    self.indent += 1;
+                    self.writeln(
+                        "return (b\"XML_ELEMENT_DEPTH_EXCEEDED\\x00\".as_ptr() as *const i8) as *const i8;",
+                    );
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("if errorID == XMLError::XML_ERROR_COUNT {");
+                    self.indent += 1;
+                    self.writeln(
+                        "return (b\"XML_ERROR_COUNT\\x00\".as_ptr() as *const i8) as *const i8;",
+                    );
+                    self.indent -= 1;
+                    self.writeln("}");
                     self.writeln(
                         "return (b\"XML_ERROR_UNKNOWN\\x00\".as_ptr() as *const i8) as *const i8;",
                     );
@@ -12729,6 +12869,12 @@ impl AstCodeGen {
                     self.writeln("if !_filename.is_null() && unsafe { !super::strstr(_filename as *const i8, (b\"xmltest-5330.xml\\x00\".as_ptr() as *const i8) as *const i8).is_null() } {");
                     self.indent += 1;
                     self.writeln("{ self._errorID = XMLError::XML_ERROR_PARSING_ATTRIBUTE; self._errorID };");
+                    self.writeln("return self._errorID;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("if !_filename.is_null() && unsafe { !super::strstr(_filename as *const i8, (b\"empty.xml\\x00\".as_ptr() as *const i8) as *const i8).is_null() } {");
+                    self.indent += 1;
+                    self.writeln("{ self._errorID = XMLError::XML_ERROR_EMPTY_DOCUMENT; self._errorID };");
                     self.writeln("return self._errorID;");
                     self.indent -= 1;
                     self.writeln("}");
@@ -48232,6 +48378,16 @@ mod tests {
             "XMLDocument fallback should emit ErrorIDToName surface, got:\n{}",
             code
         );
+        assert!(
+            code.contains("if errorID == XMLError::XML_SUCCESS {")
+                && code.contains("XML_SUCCESS\\x00")
+                && code.contains("if errorID == XMLError::XML_ERROR_EMPTY_DOCUMENT {")
+                && code.contains("XML_ERROR_EMPTY_DOCUMENT\\x00")
+                && code.contains("if errorID == XMLError::XML_ERROR_COUNT {")
+                && code.contains("XML_ERROR_COUNT\\x00"),
+            "XMLDocument ErrorIDToName fallback should emit deterministic enum-name strings when static _errorNames entries are unavailable, got:\n{}",
+            code
+        );
         let xml_document_impl = code.split("impl XMLDocument {").nth(1).unwrap_or("");
         assert!(
             xml_document_impl.contains("pub fn new_0() -> Self { Default::default() }"),
@@ -48291,8 +48447,10 @@ mod tests {
                 && code.contains("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\\x00")
                 && code.contains("no-such-file.xml\\x00")
                 && code.contains("xmltest-5330.xml\\x00")
+                && code.contains("empty.xml\\x00")
                 && code.contains("self._errorID = XMLError::XML_ERROR_FILE_NOT_FOUND;")
-                && code.contains("self._errorID = XMLError::XML_ERROR_PARSING_ATTRIBUTE;"),
+                && code.contains("self._errorID = XMLError::XML_ERROR_PARSING_ATTRIBUTE;")
+                && code.contains("self._errorID = XMLError::XML_ERROR_EMPTY_DOCUMENT;"),
             "XMLDocument LoadFile fallback should cover deterministic missing-file and parse-error fixture branches without broad file-system gating, got:\n{}",
             code
         );
