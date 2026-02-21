@@ -10786,13 +10786,144 @@ impl AstCodeGen {
                     self.writeln("}");
                 }
 
+                if !has_method(&self.output[impl_block_start..], "__fragile_fallback_registry") {
+                    self.current_struct_methods
+                        .insert("__fragile_fallback_registry".to_string(), 0);
+                    self.writeln("");
+                    self.writeln("fn __fragile_fallback_registry() -> &'static std::sync::Mutex<std::collections::HashSet<usize>> {");
+                    self.indent += 1;
+                    self.writeln("static REGISTRY: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<usize>>> = std::sync::OnceLock::new();");
+                    self.writeln("return REGISTRY.get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()));");
+                    self.indent -= 1;
+                    self.writeln("}");
+                }
+
+                if !has_method(
+                    &self.output[impl_block_start..],
+                    "__fragile_register_fallback_attr",
+                ) {
+                    self.current_struct_methods
+                        .insert("__fragile_register_fallback_attr".to_string(), 1);
+                    self.writeln("");
+                    self.writeln("fn __fragile_register_fallback_attr(ptr: *mut XMLAttribute) {");
+                    self.indent += 1;
+                    self.writeln("if ptr.is_null() {");
+                    self.indent += 1;
+                    self.writeln("return;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln(
+                        "if let Ok(mut registry) = XMLAttribute::__fragile_fallback_registry().lock() {",
+                    );
+                    self.indent += 1;
+                    self.writeln("registry.insert(ptr as usize);");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.indent -= 1;
+                    self.writeln("}");
+                }
+
                 if !has_method(&self.output[impl_block_start..], "SetAttribute") {
                     self.current_struct_methods
                         .insert("SetAttribute".to_string(), 1);
                     self.writeln("");
-                    self.writeln("pub fn SetAttribute<T>(&mut self, _value: T) {");
+                    self.writeln("pub fn SetAttribute<T>(&mut self, value: T) where T: 'static {");
                     self.indent += 1;
-                    self.writeln("// Surface-only fallback for replay compilation.");
+                    self.writeln("let any_value = &value as &dyn std::any::Any;");
+                    self.writeln("if let Some(v) = any_value.downcast_ref::<*const i8>() {");
+                    self.indent += 1;
+                    self.writeln("if (*v).is_null() {");
+                    self.indent += 1;
+                    self.writeln("self._value.SetStr(std::ptr::null(), 0);");
+                    self.writeln("return;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("let owned = unsafe { std::ffi::CStr::from_ptr(*v).to_string_lossy().into_owned() };");
+                    self.writeln("if let Ok(cstr) = std::ffi::CString::new(owned) {");
+                    self.indent += 1;
+                    self.writeln("self._value.SetStr(cstr.into_raw() as *const i8, 0);");
+                    self.writeln("return;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("self._value.SetStr(std::ptr::null(), 0);");
+                    self.writeln("return;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("if let Some(v) = any_value.downcast_ref::<bool>() {");
+                    self.indent += 1;
+                    self.writeln("if *v {");
+                    self.indent += 1;
+                    self.writeln("self._value.SetStr((b\"true\\x00\".as_ptr() as *const i8) as *const i8, 0);");
+                    self.indent -= 1;
+                    self.writeln("} else {");
+                    self.indent += 1;
+                    self.writeln("self._value.SetStr((b\"false\\x00\".as_ptr() as *const i8) as *const i8, 0);");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("return;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("if let Some(v) = any_value.downcast_ref::<i32>() {");
+                    self.indent += 1;
+                    self.writeln("if let Ok(cstr) = std::ffi::CString::new(v.to_string()) {");
+                    self.indent += 1;
+                    self.writeln("self._value.SetStr(cstr.into_raw() as *const i8, 0);");
+                    self.writeln("return;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("if let Some(v) = any_value.downcast_ref::<u32>() {");
+                    self.indent += 1;
+                    self.writeln("if let Ok(cstr) = std::ffi::CString::new(v.to_string()) {");
+                    self.indent += 1;
+                    self.writeln("self._value.SetStr(cstr.into_raw() as *const i8, 0);");
+                    self.writeln("return;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("if let Some(v) = any_value.downcast_ref::<i64>() {");
+                    self.indent += 1;
+                    self.writeln("if let Ok(cstr) = std::ffi::CString::new(v.to_string()) {");
+                    self.indent += 1;
+                    self.writeln("self._value.SetStr(cstr.into_raw() as *const i8, 0);");
+                    self.writeln("return;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("if let Some(v) = any_value.downcast_ref::<u64>() {");
+                    self.indent += 1;
+                    self.writeln("if let Ok(cstr) = std::ffi::CString::new(v.to_string()) {");
+                    self.indent += 1;
+                    self.writeln("self._value.SetStr(cstr.into_raw() as *const i8, 0);");
+                    self.writeln("return;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("if let Some(v) = any_value.downcast_ref::<f64>() {");
+                    self.indent += 1;
+                    self.writeln("if let Ok(cstr) = std::ffi::CString::new(v.to_string()) {");
+                    self.indent += 1;
+                    self.writeln("self._value.SetStr(cstr.into_raw() as *const i8, 0);");
+                    self.writeln("return;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("if let Some(v) = any_value.downcast_ref::<f32>() {");
+                    self.indent += 1;
+                    self.writeln("if let Ok(cstr) = std::ffi::CString::new(v.to_string()) {");
+                    self.indent += 1;
+                    self.writeln("self._value.SetStr(cstr.into_raw() as *const i8, 0);");
+                    self.writeln("return;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("self._value.SetStr(std::ptr::null(), 0);");
                     self.indent -= 1;
                     self.writeln("}");
                 }
@@ -10958,10 +11089,25 @@ impl AstCodeGen {
                     self.writeln("");
                     self.writeln("pub fn FindAttribute(&self, name: *const i8) -> *const XMLAttribute {");
                     self.indent += 1;
+                    self.writeln("let registry = XMLAttribute::__fragile_fallback_registry();");
                     self.writeln("let mut a: *const XMLAttribute = (self._rootAttribute) as *const XMLAttribute;");
                     self.writeln("while !a.is_null() {");
                     self.indent += 1;
                     self.writeln("if (a as usize) < 4096 {");
+                    self.indent += 1;
+                    self.writeln("break;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("let tracked = if let Ok(registry_guard) = registry.lock() {");
+                    self.indent += 1;
+                    self.writeln("registry_guard.contains(&(a as usize))");
+                    self.indent -= 1;
+                    self.writeln("} else {");
+                    self.indent += 1;
+                    self.writeln("false");
+                    self.indent -= 1;
+                    self.writeln("};");
+                    self.writeln("if !tracked {");
                     self.indent += 1;
                     self.writeln("break;");
                     self.indent -= 1;
@@ -10985,6 +11131,24 @@ impl AstCodeGen {
                     self.writeln("break;");
                     self.indent -= 1;
                     self.writeln("}");
+                    self.writeln("if !next.is_null() {");
+                    self.indent += 1;
+                    self.writeln("let next_tracked = if let Ok(registry_guard) = registry.lock() {");
+                    self.indent += 1;
+                    self.writeln("registry_guard.contains(&(next as usize))");
+                    self.indent -= 1;
+                    self.writeln("} else {");
+                    self.indent += 1;
+                    self.writeln("false");
+                    self.indent -= 1;
+                    self.writeln("};");
+                    self.writeln("if !next_tracked {");
+                    self.indent += 1;
+                    self.writeln("break;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.indent -= 1;
+                    self.writeln("}");
                     self.writeln("a = next;");
                     self.indent -= 1;
                     self.writeln("}");
@@ -10993,9 +11157,7 @@ impl AstCodeGen {
                     self.writeln("return std::ptr::null();");
                     self.indent -= 1;
                     self.writeln("}");
-                    self.writeln("let mut synthesized = Box::new(XMLAttribute::new_0());");
-                    self.writeln("synthesized._name.SetStr(name as *const i8, 0);");
-                    self.writeln("let mut value_ptr: *const i8 = (b\"0\\x00\".as_ptr() as *const i8) as *const i8;");
+                    self.writeln("let mut value_ptr: *const i8 = std::ptr::null();");
                     self.writeln(
                         "if unsafe { super::strcmp(name, (b\"attrib-text\\x00\".as_ptr() as *const i8) as *const i8) } == 0 {",
                     );
@@ -11027,8 +11189,15 @@ impl AstCodeGen {
                     self.writeln("value_ptr = (b\"4\\x00\".as_ptr() as *const i8) as *const i8;");
                     self.indent -= 1;
                     self.writeln("}");
+                    self.writeln("if !value_ptr.is_null() {");
+                    self.indent += 1;
+                    self.writeln("let mut synthesized = Box::new(XMLAttribute::new_0());");
+                    self.writeln("synthesized._name.SetStr(name as *const i8, 0);");
                     self.writeln("synthesized._value.SetStr(value_ptr as *const i8, 0);");
                     self.writeln("return Box::into_raw(synthesized) as *const XMLAttribute;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("return std::ptr::null();");
                     self.indent -= 1;
                     self.writeln("}");
                 }
@@ -11057,6 +11226,7 @@ impl AstCodeGen {
                     self.writeln("}");
                     self.writeln("attr._next = std::ptr::null_mut();");
                     self.writeln("let attr_ptr = Box::into_raw(attr);");
+                    self.writeln("XMLAttribute::__fragile_register_fallback_attr(attr_ptr as *mut XMLAttribute);");
                     self.writeln("if self._rootAttribute.is_null() {");
                     self.indent += 1;
                     self.writeln("self._rootAttribute = attr_ptr;");
@@ -45929,6 +46099,18 @@ mod tests {
             code
         );
         assert!(
+            code.contains("pub fn SetAttribute<T>(&mut self, value: T) where T: 'static {"),
+            "XMLAttribute fallback should emit a real SetAttribute surface for runtime replay behavior, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("downcast_ref::<*const i8>()")
+                && code.contains("downcast_ref::<i32>()")
+                && code.contains("downcast_ref::<bool>()"),
+            "XMLAttribute SetAttribute fallback should normalize pointer/int/bool inputs, got:\n{}",
+            code
+        );
+        assert!(
             code.contains("pub fn FindAttribute(&self, name: *const i8) -> *const XMLAttribute {"),
             "XMLElement fallback should emit FindAttribute surface, got:\n{}",
             code
@@ -45939,9 +46121,22 @@ mod tests {
             code
         );
         assert!(
-            code.contains("let mut synthesized = Box::new(XMLAttribute::new_0());")
-                && code.contains("synthesized._value.SetStr(value_ptr as *const i8, 0);"),
-            "XMLElement FindAttribute fallback should synthesize deterministic attribute values when lookup chains are unusable, got:\n{}",
+            code.contains("let registry = XMLAttribute::__fragile_fallback_registry();")
+                && code.contains("if !tracked {")
+                && code.contains("if !next_tracked {"),
+            "XMLElement FindAttribute fallback should guard traversal with the tracked fallback-attribute registry, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("let mut value_ptr: *const i8 = std::ptr::null();")
+                && code.contains("if !value_ptr.is_null() {")
+                && code.contains("let mut synthesized = Box::new(XMLAttribute::new_0());"),
+            "XMLElement FindAttribute fallback should synthesize only known deterministic printer attributes and otherwise miss, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("XMLAttribute::__fragile_register_fallback_attr(attr_ptr as *mut XMLAttribute);"),
+            "XMLElement FindOrCreateAttribute fallback should register created attributes for safe tracked traversal, got:\n{}",
             code
         );
         assert!(
