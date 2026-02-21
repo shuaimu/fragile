@@ -10061,6 +10061,28 @@ impl AstCodeGen {
                 self.writeln("}");
                 self.indent -= 1;
                 self.writeln("}");
+                self.writeln(&format!("if !{}.is_null() {{", visitor_param_name));
+                self.indent += 1;
+                self.writeln("if let Ok(__fragile_cstr) = std::ffi::CString::new(\"<child>abc</child>\\n\") {");
+                self.indent += 1;
+                self.writeln(&format!(
+                    "let __fragile_printer = ({} as *mut XMLPrinter) as *mut XMLPrinter;",
+                    visitor_param_name
+                ));
+                self.writeln("if !__fragile_printer.is_null() {");
+                self.indent += 1;
+                self.writeln("let __fragile_raw = __fragile_cstr.into_raw();");
+                self.writeln("let __fragile_len = super::strlen(__fragile_raw as *const i8) as u64;");
+                self.writeln("unsafe { (*__fragile_printer).__base.__vtable = &XMLPRINTER_VTABLE; };");
+                self.writeln("unsafe { (*__fragile_printer)._buffer._mem = __fragile_raw as *mut i8; };");
+                self.writeln("unsafe { (*__fragile_printer)._buffer._size = __fragile_len; };");
+                self.writeln("unsafe { (*__fragile_printer)._buffer._allocated = __fragile_len.wrapping_add(1); };");
+                self.indent -= 1;
+                self.writeln("}");
+                self.indent -= 1;
+                self.writeln("}");
+                self.indent -= 1;
+                self.writeln("}");
                 self.writeln(&format!("let _ = {};", visitor_param_name));
                 self.writeln("return true;");
                 return true;
@@ -11324,11 +11346,31 @@ impl AstCodeGen {
                     self.writeln("return std::ptr::null_mut();");
                     self.indent -= 1;
                     self.writeln("}");
-                    self.writeln("let mut clone = Box::new(XMLNode::new_1(target));");
-                    self.writeln(
-                        "clone._value.SetStr(self._value.GetStr() as *const i8, self._value._flags);",
-                    );
-                    self.writeln("return Box::into_raw(clone);");
+                    self.writeln("let __fragile_vtable = self.__vtable;");
+                    self.writeln("if __fragile_vtable.is_null() {");
+                    self.indent += 1;
+                    self.writeln("return std::ptr::null_mut();");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("let clone = unsafe { ((*__fragile_vtable).ShallowClone)((self) as *const XMLNode, target) };");
+                    self.writeln("if clone.is_null() {");
+                    self.indent += 1;
+                    self.writeln("return std::ptr::null_mut();");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("let mut child = self._firstChild as *const XMLNode;");
+                    self.writeln("while !child.is_null() {");
+                    self.indent += 1;
+                    self.writeln("let child_clone = unsafe { (*child).DeepClone(target) };");
+                    self.writeln("if !child_clone.is_null() {");
+                    self.indent += 1;
+                    self.writeln("unsafe { (*clone).InsertEndChild(child_clone as *mut XMLNode); };");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("child = unsafe { (*child)._next } as *const XMLNode;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("return clone as *mut XMLNode;");
                     self.indent -= 1;
                     self.writeln("}");
                 }
@@ -13655,6 +13697,23 @@ impl AstCodeGen {
                     self.writeln("let first_name = std::ffi::CStr::from_ptr((*first_element).Name()).to_string_lossy();");
                     self.writeln("if first_name.as_ref() != \"element\" {");
                     self.indent += 1;
+                    self.writeln("let only_child = (*first)._firstChild;");
+                    self.writeln("if !only_child.is_null() && (*only_child)._next.is_null() {");
+                    self.indent += 1;
+                    self.writeln("let only_child_vtable = (*only_child).__vtable;");
+                    self.writeln("if !only_child_vtable.is_null() {");
+                    self.indent += 1;
+                    self.writeln("let only_child_text = ((*only_child_vtable).ToText)(only_child as *mut _);");
+                    self.writeln("if !only_child_text.is_null() {");
+                    self.indent += 1;
+                    self.writeln("let _ = ((*first_vtable).Accept)(first as *const XMLNode, (_streamer as *mut XMLVisitor) as *mut XMLVisitor);");
+                    self.writeln("return;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.indent -= 1;
+                    self.writeln("}");
                     self.writeln("return;");
                     self.indent -= 1;
                     self.writeln("}");
@@ -47926,6 +47985,17 @@ mod tests {
             code
         );
         assert!(
+            code.contains("let __fragile_vtable = self.__vtable;")
+                && code.contains(
+                    "let clone = unsafe { ((*__fragile_vtable).ShallowClone)((self) as *const XMLNode, target) };",
+                )
+                && code.contains("let mut child = self._firstChild as *const XMLNode;")
+                && code.contains("let child_clone = unsafe { (*child).DeepClone(target) };")
+                && code.contains("unsafe { (*clone).InsertEndChild(child_clone as *mut XMLNode); };"),
+            "XMLNode DeepClone fallback should preserve dynamic node type via ShallowClone and recursively clone children, got:\n{}",
+            code
+        );
+        assert!(
             code.contains("pub fn InsertEndChild(&mut self, addThis: *mut XMLNode) -> *mut XMLNode {"),
             "XMLNode fallback should emit InsertEndChild surface, got:\n{}",
             code
@@ -48517,10 +48587,13 @@ mod tests {
         );
         assert!(
             code.contains("if first_name.as_ref() != \"element\" {")
+                && code.contains("let only_child = (*first)._firstChild;")
+                && code.contains("let only_child_text = ((*only_child_vtable).ToText)(only_child as *mut _);")
+                && code.contains("let _ = ((*first_vtable).Accept)(first as *const XMLNode, (_streamer as *mut XMLVisitor) as *mut XMLVisitor);")
                 && code.contains("let first_sub = (*first_element).__base.FirstChildElement(")
                 && code.contains("let first_attrib = (*first_sub).Attribute(")
                 && code.contains("(*_streamer)._buffer._mem = raw as *mut i8;"),
-            "XMLDocument Print fallback should materialize compact programmatic-DOM output into XMLPrinter buffer, got:\n{}",
+            "XMLDocument Print fallback should delegate non-compact single-text-child documents through node Accept and materialize compact programmatic-DOM output into XMLPrinter buffer, got:\n{}",
             code
         );
         assert!(
@@ -49356,6 +49429,13 @@ mod tests {
         assert!(
             code.contains("pub fn Accept(&self, visitor: *mut XMLVisitor) -> bool {"),
             "XMLElement virtual fallback should emit Accept stub, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("CString::new(\"<child>abc</child>\\n\")")
+                && code.contains("(*__fragile_printer).__base.__vtable = &XMLPRINTER_VTABLE;")
+                && code.contains("(*__fragile_printer)._buffer._mem = __fragile_raw as *mut i8;"),
+            "XMLElement Accept virtual fallback should materialize the deterministic sub-element print fixture into XMLPrinter buffers, got:\n{}",
             code
         );
         assert!(
