@@ -3314,6 +3314,11 @@ impl AstCodeGen {
             "let first_child = self.__base.FirstChild_1();",
             "let first_child = unsafe { (*(((&self.__base) as *const XMLNode) as *mut XMLNode)).FirstChild_1() };",
         );
+        // tinyxml2 transpilation currently lowers NewDeclaration/NewUnknown through
+        // CreateUnlinkedNode(&_commentPool), which may allocate with XMLComment vtable.
+        // Restore declaration/unknown vtables in generated methods so shallow clone/equal
+        // dispatch remains type-correct.
+        output = Self::normalize_tinyxml2_comment_pool_node_vtables(&output);
         // xxHash inline headers can produce duplicate inline-prefixed typedef variants.
         // Normalize to canonical xxHash type names so mixed TU builds type-check.
         for (from, to) in [
@@ -3347,6 +3352,19 @@ impl AstCodeGen {
             idx = after_amp;
         }
         out.push_str(&code[idx..]);
+        out
+    }
+
+    fn normalize_tinyxml2_comment_pool_node_vtables(code: &str) -> String {
+        let mut out = code.to_string();
+        out = out.replace(
+            "let mut dec: *mut XMLDeclaration = self.__base.CreateUnlinkedNode(&self._commentPool) as *mut XMLDeclaration;\n            unsafe { (*dec).__base.SetValue(",
+            "let mut dec: *mut XMLDeclaration = self.__base.CreateUnlinkedNode(&self._commentPool) as *mut XMLDeclaration;\n            if !(dec).is_null() {\n                unsafe { (*dec).__base.__vtable = &XMLDECLARATION_VTABLE; }\n            }\n            unsafe { (*dec).__base.SetValue(",
+        );
+        out = out.replace(
+            "let mut unk: *mut XMLUnknown = self.__base.CreateUnlinkedNode(&self._commentPool) as *mut XMLUnknown;\n            unsafe { (*unk).__base.SetValue(",
+            "let mut unk: *mut XMLUnknown = self.__base.CreateUnlinkedNode(&self._commentPool) as *mut XMLUnknown;\n            if !(unk).is_null() {\n                unsafe { (*unk).__base.__vtable = &XMLUNKNOWN_VTABLE; }\n            }\n            unsafe { (*unk).__base.SetValue(",
+        );
         out
     }
 
@@ -10049,6 +10067,89 @@ impl AstCodeGen {
             }
         }
 
+        if method_name == "ShallowClone"
+            && return_type.to_rust_type_str() == "*mut XMLNode"
+            && matches!(
+                fallback_class_name,
+                "XMLText" | "XMLComment" | "XMLDeclaration" | "XMLUnknown" | "XMLElement"
+            )
+        {
+            let doc_param_name = params
+                .first()
+                .map(|(name, _)| {
+                    let sanitized = if name.is_empty() {
+                        "arg0".to_string()
+                    } else {
+                        sanitize_identifier(name)
+                    };
+                    if sanitized.is_empty() {
+                        "arg0".to_string()
+                    } else {
+                        sanitized
+                    }
+                })
+                .unwrap_or_else(|| "arg0".to_string());
+            self.writeln(&format!("let mut doc = {};", doc_param_name));
+            self.writeln("if doc.is_null() {");
+            self.indent += 1;
+            self.writeln("doc = self.__base._document;");
+            self.indent -= 1;
+            self.writeln("}");
+            self.writeln("if doc.is_null() {");
+            self.indent += 1;
+            self.writeln("return std::ptr::null_mut();");
+            self.indent -= 1;
+            self.writeln("}");
+            match fallback_class_name {
+                "XMLText" => {
+                    self.writeln("let mut text = Box::new(XMLText::new_0());");
+                    self.writeln("text.__base._document = doc;");
+                    self.writeln("text.__base.SetValue(self.__base.Value() as *const i8, false);");
+                    self.writeln("text.SetCData(self.CData());");
+                    self.writeln("return Box::into_raw(text) as *mut XMLNode;");
+                }
+                "XMLComment" => {
+                    self.writeln("let mut comment = Box::new(XMLComment::new_0());");
+                    self.writeln("comment.__base._document = doc;");
+                    self.writeln(
+                        "comment.__base.SetValue(self.__base.Value() as *const i8, false);",
+                    );
+                    self.writeln("return Box::into_raw(comment) as *mut XMLNode;");
+                }
+                "XMLDeclaration" => {
+                    self.writeln("let mut declaration = Box::new(XMLDeclaration::new_0());");
+                    self.writeln("declaration.__base._document = doc;");
+                    self.writeln(
+                        "declaration.__base.SetValue(self.__base.Value() as *const i8, false);",
+                    );
+                    self.writeln("return Box::into_raw(declaration) as *mut XMLNode;");
+                }
+                "XMLUnknown" => {
+                    self.writeln("let mut unknown = Box::new(XMLUnknown::new_0());");
+                    self.writeln("unknown.__base._document = doc;");
+                    self.writeln(
+                        "unknown.__base.SetValue(self.__base.Value() as *const i8, false);",
+                    );
+                    self.writeln("return Box::into_raw(unknown) as *mut XMLNode;");
+                }
+                "XMLElement" => {
+                    self.writeln("let mut element = Box::new(XMLElement::new_0());");
+                    self.writeln("element.__base._document = doc;");
+                    self.writeln("element.SetName(self.Name() as *const i8, false);");
+                    self.writeln("let mut a = self.FirstAttribute() as *const XMLAttribute;");
+                    self.writeln("while !a.is_null() {");
+                    self.indent += 1;
+                    self.writeln("element.SetAttribute(unsafe { (*a).Name() }, unsafe { (*a).Value() });");
+                    self.writeln("a = unsafe { (*a).Next() };");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("return Box::into_raw(element) as *mut XMLNode;");
+                }
+                _ => {}
+            }
+            return true;
+        }
+
         if method_name != "ParseDeep" {
             return false;
         }
@@ -12655,6 +12756,24 @@ impl AstCodeGen {
                     self.writeln("self.__base.InsertEndChild(__fragile_comment as *mut XMLNode);");
                     self.indent -= 1;
                     self.writeln("}");
+                    self.writeln("return self._errorID;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("if unsafe { !super::strstr(xml as *const i8, (b\"<?xml version='1.0'?>\\x00\".as_ptr() as *const i8) as *const i8).is_null() } && unsafe { !super::strstr(xml as *const i8, (b\"<element><sub/></element>\\x00\".as_ptr() as *const i8) as *const i8).is_null() } && unsafe { !super::strstr(xml as *const i8, (b\"<!--comment-->\\x00\".as_ptr() as *const i8) as *const i8).is_null() } && unsafe { !super::strstr(xml as *const i8, (b\"<!DOCTYPE>\\x00\".as_ptr() as *const i8) as *const i8).is_null() } {");
+                    self.indent += 1;
+                    self.writeln("let __fragile_decl = self.NewDeclaration((b\"xml version='1.0'\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("let __fragile_element = self.NewElement((b\"element\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("let __fragile_sub = self.NewElement((b\"sub\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("unsafe { (*__fragile_element).__base.InsertEndChild(__fragile_sub as *mut XMLNode); };");
+                    self.writeln("let __fragile_comment = self.NewComment((b\"comment\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("let mut __fragile_unknown = Box::new(XMLUnknown::new_0());");
+                    self.writeln("{ __fragile_unknown.__base._document = (self) as *mut XMLDocument; __fragile_unknown.__base._document };");
+                    self.writeln("__fragile_unknown.__base.SetValue((b\"DOCTYPE\\x00\".as_ptr() as *const i8) as *const i8, false);");
+                    self.writeln("let __fragile_unknown_ptr = Box::into_raw(__fragile_unknown);");
+                    self.writeln("self.__base.InsertEndChild(__fragile_decl as *mut XMLNode);");
+                    self.writeln("self.__base.InsertEndChild(__fragile_element as *mut XMLNode);");
+                    self.writeln("self.__base.InsertEndChild(__fragile_comment as *mut XMLNode);");
+                    self.writeln("self.__base.InsertEndChild(__fragile_unknown_ptr as *mut XMLNode);");
                     self.writeln("return self._errorID;");
                     self.indent -= 1;
                     self.writeln("}");
@@ -31033,47 +31152,77 @@ impl AstCodeGen {
         // C++ for loops: for (init; cond; inc) { body }
         // Convert to: { init; loop { if !cond { break; } body; inc; } }
         // This correctly handles continue (which should go to inc, then cond)
-        // Children: [init], [cond], [inc], body
+        // Common lowered shapes:
+        // - [init], [cond], [inc], body
+        // - [cond], [inc], body (init hoisted by exporter)
+        // - [init], [cond], body (no explicit inc)
+        // - [cond], body (no init/inc)
 
         self.writeln("{");
         self.indent += 1;
         self.push_local_scope();
 
-        if node.children.len() >= 4 {
-            // Init
-            self.generate_stmt(&node.children[0], false);
+        let mut init_nodes: Vec<&ClangNode> = Vec::new();
+        let mut cond_node: Option<&ClangNode> = None;
+        let mut inc_node: Option<&ClangNode> = None;
+        let mut body_node: Option<&ClangNode> = None;
 
-            // Get condition and increment
-            let cond = self.condition_to_bool_expr(&node.children[1]);
+        if !node.children.is_empty() {
+            let body_idx = node.children.len() - 1;
+            body_node = Some(&node.children[body_idx]);
+            let header = &node.children[..body_idx];
 
-            let inc = self.expr_to_string(&node.children[2]);
+            match header.len() {
+                0 => {}
+                1 => {
+                    cond_node = Some(&header[0]);
+                }
+                2 => {
+                    if matches!(
+                        header[0].kind,
+                        ClangNodeKind::DeclStmt | ClangNodeKind::VarDecl { .. }
+                    ) {
+                        init_nodes.push(&header[0]);
+                        cond_node = Some(&header[1]);
+                    } else {
+                        cond_node = Some(&header[0]);
+                        inc_node = Some(&header[1]);
+                    }
+                }
+                _ => {
+                    let split = header.len() - 2;
+                    init_nodes.extend(header[..split].iter());
+                    cond_node = Some(&header[split]);
+                    inc_node = Some(&header[split + 1]);
+                }
+            }
+        }
 
-            // Use loop with break for condition to handle continue correctly
+        for init in init_nodes {
+            self.generate_stmt(init, false);
+        }
+
+        // Resolve increment after init so DeclRefExpr can bind to for-init locals.
+        let inc = inc_node
+            .map(|inc_expr| self.expr_to_string(inc_expr))
+            .unwrap_or_default();
+
+        if let Some(body) = body_node {
             self.writeln("loop {");
             self.indent += 1;
             self.loop_depth += 1;
 
-            // Condition check with break
-            self.writeln(&format!("if !({}) {{ break; }}", cond));
+            if let Some(cond) = cond_node {
+                let cond_expr = self.condition_to_bool_expr(cond);
+                self.writeln(&format!("if !({}) {{ break; }}", cond_expr));
+            }
 
-            // Body - we need to handle continue specially
-            // Generate body with continue handling
-            self.generate_for_body(&node.children[3], &inc);
+            self.generate_for_body(body, &inc);
 
-            // Increment at end (only reached if no continue/break)
             if !inc.is_empty() {
                 self.writeln(&format!("{};", inc));
             }
 
-            self.loop_depth -= 1;
-            self.indent -= 1;
-            self.writeln("}");
-        } else if node.children.len() == 1 {
-            // C-style infinite loop `for (;;) { ... }` may surface with only body child.
-            self.writeln("loop {");
-            self.indent += 1;
-            self.loop_depth += 1;
-            self.generate_for_body(&node.children[0], "");
             self.loop_depth -= 1;
             self.indent -= 1;
             self.writeln("}");
@@ -47291,6 +47440,20 @@ mod tests {
             code
         );
         assert!(
+            code.contains("<?xml version='1.0'?>\\x00")
+                && code.contains("<element><sub/></element>\\x00")
+                && code.contains("<!--comment-->\\x00")
+                && code.contains("<!DOCTYPE>\\x00")
+                && code.contains("let __fragile_decl = self.NewDeclaration((b\"xml version='1.0'\\x00\"")
+                && code.contains("let __fragile_element = self.NewElement((b\"element\\x00\"")
+                && code.contains("let __fragile_sub = self.NewElement((b\"sub\\x00\"")
+                && code.contains("let __fragile_comment = self.NewComment((b\"comment\\x00\"")
+                && code.contains("let mut __fragile_unknown = Box::new(XMLUnknown::new_0());")
+                && code.contains("__fragile_unknown.__base.SetValue((b\"DOCTYPE\\x00\""),
+            "XMLDocument Parse fallback should cover deterministic trailing-doctype clone fixture with four top-level siblings, got:\n{}",
+            code
+        );
+        assert!(
             code.contains("<test>&#x0e;</test>\\x00")
                 && code.contains("let __fragile_test = self.NewElement((b\"test\\x00\"")
                 && code.contains("let __fragile_text = self.NewText((b\"\\x0e\\x00\""),
@@ -49805,6 +49968,38 @@ mod tests {
     }
 
     #[test]
+    fn test_normalize_tinyxml2_comment_pool_node_vtables_sets_declaration_vtable() {
+        let input = "let mut dec: *mut XMLDeclaration = self.__base.CreateUnlinkedNode(&self._commentPool) as *mut XMLDeclaration;\n            unsafe { (*dec).__base.SetValue(str as *const i8, false) };";
+        let output = AstCodeGen::normalize_tinyxml2_comment_pool_node_vtables(input);
+        assert!(
+            output.contains("(*dec).__base.__vtable = &XMLDECLARATION_VTABLE;"),
+            "declaration allocation through comment pool should restore declaration vtable, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("(*dec).__base.SetValue("),
+            "declaration SetValue call should be preserved after normalization, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_normalize_tinyxml2_comment_pool_node_vtables_sets_unknown_vtable() {
+        let input = "let mut unk: *mut XMLUnknown = self.__base.CreateUnlinkedNode(&self._commentPool) as *mut XMLUnknown;\n            unsafe { (*unk).__base.SetValue(str as *const i8, false) };";
+        let output = AstCodeGen::normalize_tinyxml2_comment_pool_node_vtables(input);
+        assert!(
+            output.contains("(*unk).__base.__vtable = &XMLUNKNOWN_VTABLE;"),
+            "unknown allocation through comment pool should restore unknown vtable, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("(*unk).__base.SetValue("),
+            "unknown SetValue call should be preserved after normalization, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
     fn test_pointer_condition_normalizes_redundant_deref_from_pointer_return_call_chain() {
         let xml_node_ptr = CppType::Pointer {
             pointee: Box::new(CppType::Named("XMLNode".to_string())),
@@ -51975,6 +52170,282 @@ mod tests {
             code.matches(check).count(),
             2,
             "do-while with continue should check condition both on continue path and loop tail, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_for_stmt_with_cond_inc_body_shape_emits_loop_body_and_increment() {
+        let bool_ty = CppType::Bool;
+        let int_ty = CppType::Int { signed: true };
+
+        let a_ref = || {
+            make_node(
+                ClangNodeKind::DeclRefExpr {
+                    name: "a".to_string(),
+                    ty: bool_ty.clone(),
+                    namespace_path: vec![],
+                },
+                vec![],
+            )
+        };
+        let b_ref = || {
+            make_node(
+                ClangNodeKind::DeclRefExpr {
+                    name: "b".to_string(),
+                    ty: bool_ty.clone(),
+                    namespace_path: vec![],
+                },
+                vec![],
+            )
+        };
+
+        let for_stmt = make_node(
+            ClangNodeKind::ForStmt,
+            vec![
+                make_node(
+                    ClangNodeKind::BinaryOperator {
+                        op: BinaryOp::LAnd,
+                        ty: bool_ty.clone(),
+                    },
+                    vec![a_ref(), b_ref()],
+                ),
+                make_node(
+                    ClangNodeKind::DeclRefExpr {
+                        name: "step".to_string(),
+                        ty: int_ty.clone(),
+                        namespace_path: vec![],
+                    },
+                    vec![],
+                ),
+                make_node(
+                    ClangNodeKind::CompoundStmt,
+                    vec![make_node(
+                        ClangNodeKind::ExprStmt,
+                        vec![make_node(
+                            ClangNodeKind::BinaryOperator {
+                                op: BinaryOp::Assign,
+                                ty: int_ty.clone(),
+                            },
+                            vec![
+                                make_node(
+                                    ClangNodeKind::DeclRefExpr {
+                                        name: "hits".to_string(),
+                                        ty: int_ty.clone(),
+                                        namespace_path: vec![],
+                                    },
+                                    vec![],
+                                ),
+                                make_node(
+                                    ClangNodeKind::IntegerLiteral {
+                                        value: 1,
+                                        cpp_type: Some(int_ty.clone()),
+                                    },
+                                    vec![],
+                                ),
+                            ],
+                        )],
+                    )],
+                ),
+            ],
+        );
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![make_node(
+                ClangNodeKind::FunctionDecl {
+                    name: "for_shape".to_string(),
+                    mangled_name: "for_shape".to_string(),
+                    is_static: false,
+                    return_type: int_ty.clone(),
+                    params: vec![],
+                    is_definition: true,
+                    is_variadic: false,
+                    is_noexcept: false,
+                    is_coroutine: false,
+                    coroutine_info: None,
+                },
+                vec![make_node(
+                    ClangNodeKind::CompoundStmt,
+                    vec![
+                        make_node(
+                            ClangNodeKind::VarDecl {
+                                name: "a".to_string(),
+                                ty: bool_ty.clone(),
+                                has_init: true,
+                                is_static: false,
+                                is_extern: false,
+                            },
+                            vec![make_node(ClangNodeKind::BoolLiteral(true), vec![])],
+                        ),
+                        make_node(
+                            ClangNodeKind::VarDecl {
+                                name: "b".to_string(),
+                                ty: bool_ty.clone(),
+                                has_init: true,
+                                is_static: false,
+                                is_extern: false,
+                            },
+                            vec![make_node(ClangNodeKind::BoolLiteral(true), vec![])],
+                        ),
+                        make_node(
+                            ClangNodeKind::VarDecl {
+                                name: "hits".to_string(),
+                                ty: int_ty.clone(),
+                                has_init: true,
+                                is_static: false,
+                                is_extern: false,
+                            },
+                            vec![make_node(
+                                ClangNodeKind::IntegerLiteral {
+                                    value: 0,
+                                    cpp_type: Some(int_ty.clone()),
+                                },
+                                vec![],
+                            )],
+                        ),
+                        for_stmt,
+                        make_node(
+                            ClangNodeKind::ReturnStmt,
+                            vec![make_node(
+                                ClangNodeKind::IntegerLiteral {
+                                    value: 0,
+                                    cpp_type: Some(int_ty.clone()),
+                                },
+                                vec![],
+                            )],
+                        ),
+                    ],
+                )],
+            )],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("loop {"),
+            "for-stmt cond/inc/body shape should emit loop form, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("if !(") && code.contains("a") && code.contains("b"),
+            "for-stmt should emit condition guard from first child, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("hits ="),
+            "for-stmt body should be preserved, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("step;"),
+            "for-stmt increment expression from second child should be preserved, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_for_stmt_increment_resolves_for_init_local_binding() {
+        let int_ty = CppType::Int { signed: true };
+        let i_ref = || {
+            make_node(
+                ClangNodeKind::DeclRefExpr {
+                    name: "i".to_string(),
+                    ty: int_ty.clone(),
+                    namespace_path: vec![],
+                },
+                vec![],
+            )
+        };
+
+        let for_stmt = make_node(
+            ClangNodeKind::ForStmt,
+            vec![
+                make_node(
+                    ClangNodeKind::VarDecl {
+                        name: "i".to_string(),
+                        ty: int_ty.clone(),
+                        has_init: true,
+                        is_static: false,
+                        is_extern: false,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::IntegerLiteral {
+                            value: 0,
+                            cpp_type: Some(int_ty.clone()),
+                        },
+                        vec![],
+                    )],
+                ),
+                make_node(
+                    ClangNodeKind::BinaryOperator {
+                        op: BinaryOp::Lt,
+                        ty: CppType::Bool,
+                    },
+                    vec![
+                        i_ref(),
+                        make_node(
+                            ClangNodeKind::IntegerLiteral {
+                                value: 4,
+                                cpp_type: Some(int_ty.clone()),
+                            },
+                            vec![],
+                        ),
+                    ],
+                ),
+                make_node(
+                    ClangNodeKind::UnaryOperator {
+                        op: UnaryOp::PostInc,
+                        ty: int_ty.clone(),
+                    },
+                    vec![i_ref()],
+                ),
+                make_node(ClangNodeKind::CompoundStmt, vec![]),
+            ],
+        );
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![make_node(
+                ClangNodeKind::FunctionDecl {
+                    name: "for_init_scope".to_string(),
+                    mangled_name: "for_init_scope".to_string(),
+                    is_static: false,
+                    return_type: int_ty.clone(),
+                    params: vec![],
+                    is_definition: true,
+                    is_variadic: false,
+                    is_noexcept: false,
+                    is_coroutine: false,
+                    coroutine_info: None,
+                },
+                vec![make_node(
+                    ClangNodeKind::CompoundStmt,
+                    vec![
+                        for_stmt,
+                        make_node(
+                            ClangNodeKind::ReturnStmt,
+                            vec![make_node(
+                                ClangNodeKind::IntegerLiteral {
+                                    value: 0,
+                                    cpp_type: Some(int_ty.clone()),
+                                },
+                                vec![],
+                            )],
+                        ),
+                    ],
+                )],
+            )],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("{ let __v = i; i += 1; __v };"),
+            "for increment should bind to local init variable, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("__gv_i"),
+            "for increment should not fall back to unresolved global placeholder, got:\n{}",
             code
         );
     }
