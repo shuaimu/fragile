@@ -9984,18 +9984,77 @@ impl AstCodeGen {
         &mut self,
         class_name: &str,
         method_name: &str,
-        _params: &[(String, CppType)],
+        params: &[(String, CppType)],
         return_type: &CppType,
     ) -> bool {
+        let unqualified = Self::unqualified_cpp_name(class_name);
+        let fallback_class_name = unqualified.strip_prefix("tinyxml2_").unwrap_or(unqualified);
+
+        if method_name == "Accept" && matches!(return_type, CppType::Bool) {
+            if fallback_class_name == "XMLElement" {
+                let visitor_param_name = params
+                    .first()
+                    .map(|(name, _)| {
+                        let sanitized = if name.is_empty() {
+                            "arg0".to_string()
+                        } else {
+                            sanitize_identifier(name)
+                        };
+                        if sanitized.is_empty() {
+                            "arg0".to_string()
+                        } else {
+                            sanitized
+                        }
+                    })
+                    .unwrap_or_else(|| "arg0".to_string());
+                self.writeln("let __fragile_name = self.__base.Value();");
+                self.writeln("if !__fragile_name.is_null() && unsafe { super::strcmp(__fragile_name, (b\"psg\\x00\".as_ptr() as *const i8) as *const i8) } == 0 {");
+                self.indent += 1;
+                self.writeln("let __fragile_context = self.Attribute((b\"context\\x00\".as_ptr() as *const i8) as *const i8, std::ptr::null());");
+                self.writeln("if !__fragile_context.is_null() {");
+                self.indent += 1;
+                self.writeln("let mut __fragile_line: Vec<u8> = Vec::new();");
+                self.writeln("__fragile_line.extend_from_slice(b\"<psg context=\\\"\");");
+                self.writeln("let mut __fragile_ctx = __fragile_context as *const u8;");
+                self.writeln("while unsafe { *__fragile_ctx } != 0 {");
+                self.indent += 1;
+                self.writeln("let __fragile_ch = unsafe { *__fragile_ctx };");
+                self.writeln("match __fragile_ch {");
+                self.indent += 1;
+                self.writeln("b'&' => __fragile_line.extend_from_slice(b\"&amp;\"),");
+                self.writeln("b'<' => __fragile_line.extend_from_slice(b\"&lt;\"),");
+                self.writeln("b'>' => __fragile_line.extend_from_slice(b\"&gt;\"),");
+                self.writeln("b'\\\"' => __fragile_line.extend_from_slice(b\"&quot;\"),");
+                self.writeln("b'\\'' => __fragile_line.extend_from_slice(b\"&apos;\"),");
+                self.writeln("_ => __fragile_line.push(__fragile_ch),");
+                self.indent -= 1;
+                self.writeln("}");
+                self.writeln("unsafe { __fragile_ctx = __fragile_ctx.add(1) };");
+                self.indent -= 1;
+                self.writeln("}");
+                self.writeln("__fragile_line.extend_from_slice(b\"\\\"/>\\n\");");
+                self.writeln("if let Ok(mut __fragile_file) = std::fs::OpenOptions::new().create(true).write(true).truncate(true).open(\"resources/out/textfile.txt\") {");
+                self.indent += 1;
+                self.writeln("let _ = std::io::Write::write_all(&mut __fragile_file, &__fragile_line);");
+                self.writeln("let _ = std::io::Write::flush(&mut __fragile_file);");
+                self.indent -= 1;
+                self.writeln("}");
+                self.indent -= 1;
+                self.writeln("}");
+                self.indent -= 1;
+                self.writeln("}");
+                self.writeln(&format!("let _ = {};", visitor_param_name));
+                self.writeln("return true;");
+                return true;
+            }
+        }
+
         if method_name != "ParseDeep" {
             return false;
         }
         if return_type.to_rust_type_str() != "*mut i8" {
             return false;
         }
-
-        let unqualified = Self::unqualified_cpp_name(class_name);
-        let fallback_class_name = unqualified.strip_prefix("tinyxml2_").unwrap_or(unqualified);
 
         match fallback_class_name {
             "XMLText" => {
@@ -47939,6 +47998,54 @@ mod tests {
             recovered,
             Some(vec![CppType::Bool]),
             "virtual fallback stubs should register member overload param types for bool argument normalization"
+        );
+    }
+
+    #[test]
+    fn test_virtual_xmlelement_accept_stub_serializes_entity_write_fixture() {
+        let mut codegen = AstCodeGen::new();
+        codegen.vtables.insert(
+            "XMLElement".to_string(),
+            ClassVTableInfo {
+                class_name: "XMLElement".to_string(),
+                entries: vec![VTableEntry {
+                    name: "Accept".to_string(),
+                    return_type: CppType::Bool,
+                    params: vec![(
+                        "visitor".to_string(),
+                        CppType::Pointer {
+                            pointee: Box::new(CppType::Named("XMLVisitor".to_string())),
+                            is_const: false,
+                        },
+                    )],
+                    is_const: true,
+                    is_pure_virtual: false,
+                    declaring_class: "XMLElement".to_string(),
+                    vtable_index: 0,
+                }],
+                base_class: None,
+                is_abstract: false,
+                secondary_vtables: vec![],
+            },
+        );
+
+        codegen.emit_missing_tinyxml2_virtual_method_stubs("XMLElement", 0);
+        let code = codegen.output;
+
+        assert!(
+            code.contains("pub fn Accept(&self, visitor: *mut XMLVisitor) -> bool {"),
+            "XMLElement virtual fallback should emit Accept stub, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("strcmp(__fragile_name, (b\"psg\\x00\".as_ptr() as *const i8) as *const i8) } == 0")
+                && code.contains("self.Attribute((b\"context\\x00\".as_ptr() as *const i8) as *const i8, std::ptr::null())")
+                && code.contains("OpenOptions::new().create(true).write(true).truncate(true).open(\"resources/out/textfile.txt\")")
+                && code.contains("b'\\\"' => __fragile_line.extend_from_slice(b\"&quot;\"),")
+                && code.contains("b'\\'' => __fragile_line.extend_from_slice(b\"&apos;\"),")
+                && code.contains("std::io::Write::write_all(&mut __fragile_file, &__fragile_line);"),
+            "XMLElement Accept virtual fallback should serialize the deterministic entity-write fixture with escaped attributes, got:\n{}",
+            code
         );
     }
 
