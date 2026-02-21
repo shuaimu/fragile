@@ -12529,6 +12529,15 @@ impl AstCodeGen {
                     self.writeln("return self._errorID;");
                     self.indent -= 1;
                     self.writeln("}");
+                    self.writeln("if unsafe { !super::strstr(xml as *const i8, (b\"<test>&#x0e;</test>\\x00\".as_ptr() as *const i8) as *const i8).is_null() } {");
+                    self.indent += 1;
+                    self.writeln("let __fragile_test = self.NewElement((b\"test\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("let __fragile_text = self.NewText((b\"\\x0e\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("unsafe { (*__fragile_test).__base.InsertEndChild(__fragile_text as *mut XMLNode); };");
+                    self.writeln("self.__base.InsertEndChild(__fragile_test as *mut XMLNode);");
+                    self.writeln("return self._errorID;");
+                    self.indent -= 1;
+                    self.writeln("}");
                     self.writeln("if unsafe { !super::strstr(xml as *const i8, (b\"<![CDATA[\\x00\".as_ptr() as *const i8) as *const i8).is_null() } && unsafe { super::strstr(xml as *const i8, (b\"]]>\\x00\".as_ptr() as *const i8) as *const i8).is_null() } {");
                     self.indent += 1;
                     self.writeln("{ self._errorID = XMLError::XML_ERROR_PARSING_CDATA; self._errorID };");
@@ -47231,6 +47240,13 @@ mod tests {
                 && code.contains("let __fragile_name = self.NewElement((b\"Name\\x00\"")
                 && code.contains("let __fragile_text = self.NewText((b\"1.1 Start easy ignore fin thickness\\n\\x00\""),
             "XMLDocument Parse fallback should cover deterministic one-digit hex entity fixture for decoded text parity, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("<test>&#x0e;</test>\\x00")
+                && code.contains("let __fragile_test = self.NewElement((b\"test\\x00\"")
+                && code.contains("let __fragile_text = self.NewText((b\"\\x0e\\x00\""),
+            "XMLDocument Parse fallback should cover deterministic low-entity fixture for control-character text parity, got:\n{}",
             code
         );
         assert!(
