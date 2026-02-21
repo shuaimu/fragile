@@ -3413,7 +3413,7 @@ fn test_real_world_tinyxml2_make_test_command_subset_replay_fragile() {
     );
     assert_eq!(
         fail_lines[0],
-        "[fail] UTF-8: Browsing russian element name. [][<имеет>]",
+        "[fail] UTF-8: Open utf8testout.xml [true][false]",
         "unexpected first fail signature; got:\n{}",
         replay_stdout
     );
@@ -3455,6 +3455,13 @@ fn test_real_world_tinyxml2_make_test_command_subset_replay_fragile() {
             .iter()
             .any(|line| *line == "[fail] UTF-8: Russian value. [ценность][(null)]"),
         "UTF-8 Russian attribute-value first-fail signature should be resolved, got:\n{}",
+        replay_stdout
+    );
+    assert!(
+        !fail_lines
+            .iter()
+            .any(|line| *line == "[fail] UTF-8: Browsing russian element name. [][<имеет>]"),
+        "UTF-8 russian element-name browsing signature should be resolved, got:\n{}",
         replay_stdout
     );
     assert!(

@@ -339,11 +339,16 @@ fn string_literal_to_char_array_init(
     size: Option<&usize>,
 ) -> Option<String> {
     let suffix = if signed { "i8" } else { "u8" };
-    let decoded = decode_c_string_escapes(s);
+    let decoded = decode_c_string_escapes_to_bytes(s);
     let mut elems: Vec<String> = decoded
-        .as_bytes()
         .iter()
-        .map(|b| format!("{}{}", *b, suffix))
+        .map(|b| {
+            if signed {
+                format!("{}{}", i8::from_ne_bytes([*b]), suffix)
+            } else {
+                format!("{}{}", *b, suffix)
+            }
+        })
         .collect();
     elems.push(format!("0{}", suffix));
 
@@ -361,33 +366,35 @@ fn string_literal_to_char_array_init(
     Some(format!("[{}]", elems.join(", ")))
 }
 
-/// Decode common C string escapes from libclang string-literal payloads.
-fn decode_c_string_escapes(s: &str) -> String {
-    let mut out = String::new();
+/// Decode common C string escapes from libclang string-literal payloads into raw bytes.
+fn decode_c_string_escapes_to_bytes(s: &str) -> Vec<u8> {
+    let mut out = Vec::new();
     let mut chars = s.chars().peekable();
     while let Some(ch) = chars.next() {
         if ch != '\\' {
-            out.push(ch);
+            let mut encoded = [0u8; 4];
+            let utf8 = ch.encode_utf8(&mut encoded);
+            out.extend_from_slice(utf8.as_bytes());
             continue;
         }
 
         let Some(esc) = chars.next() else {
-            out.push('\\');
+            out.push(b'\\');
             break;
         };
 
         match esc {
-            'n' => out.push('\n'),
-            'r' => out.push('\r'),
-            't' => out.push('\t'),
-            'a' => out.push('\u{0007}'),
-            'b' => out.push('\u{0008}'),
-            'f' => out.push('\u{000C}'),
-            'v' => out.push('\u{000B}'),
-            '\\' => out.push('\\'),
-            '\'' => out.push('\''),
-            '"' => out.push('"'),
-            '?' => out.push('?'),
+            'n' => out.push(b'\n'),
+            'r' => out.push(b'\r'),
+            't' => out.push(b'\t'),
+            'a' => out.push(0x07),
+            'b' => out.push(0x08),
+            'f' => out.push(0x0c),
+            'v' => out.push(0x0b),
+            '\\' => out.push(b'\\'),
+            '\'' => out.push(b'\''),
+            '"' => out.push(b'"'),
+            '?' => out.push(b'?'),
             '0'..='7' => {
                 let mut val = esc.to_digit(8).unwrap_or(0);
                 for _ in 0..2 {
@@ -400,7 +407,7 @@ fn decode_c_string_escapes(s: &str) -> String {
                         }
                     }
                 }
-                out.push((val as u8) as char);
+                out.push(val as u8);
             }
             'x' => {
                 let mut val: u32 = 0;
@@ -415,12 +422,12 @@ fn decode_c_string_escapes(s: &str) -> String {
                     }
                 }
                 if seen == 0 {
-                    out.push('x');
+                    out.push(b'x');
                 } else {
-                    out.push((val as u8) as char);
+                    out.push(val as u8);
                 }
             }
-            other => out.push(other),
+            other => out.push(other as u8),
         }
     }
     out
@@ -29280,6 +29287,29 @@ impl AstCodeGen {
                                     };
                                 format!(" = {}.arg::<{}>()", va_param, rust_type)
                             } else {
+                                let array_char_string_init = if is_array {
+                                    if let CppType::Array { element, size } = ty {
+                                        if let CppType::Char { signed } = element.as_ref() {
+                                            Self::get_string_literal_value(init_node).and_then(|s| {
+                                                string_literal_to_char_array_init(
+                                                    &s,
+                                                    *signed,
+                                                    size.as_ref(),
+                                                )
+                                            })
+                                        } else {
+                                            None
+                                        }
+                                    } else {
+                                        None
+                                    }
+                                } else {
+                                    None
+                                };
+
+                                if let Some(array_init) = array_char_string_init {
+                                    format!(" = {}", array_init)
+                                } else {
                                 // Skip type suffixes for literals when we have explicit type annotation
                                 self.skip_literal_suffix = true;
                                 let mut expr = self.expr_to_string(init_node);
@@ -29548,6 +29578,7 @@ impl AstCodeGen {
                                     }
                                 } else {
                                     format!(" = {}", correct_initializer_for_type(&expr, ty))
+                                }
                                 }
                             }
                         } else {
@@ -32312,8 +32343,7 @@ impl AstCodeGen {
             ClangNodeKind::StringLiteral(s) => {
                 // Convert C++ string literal to Rust *const i8 using byte string.
                 // Preserve raw bytes using byte escapes (avoid `\u{...}` in byte strings).
-                let decoded = decode_c_string_escapes(s);
-                let mut bytes = decoded.into_bytes();
+                let mut bytes = decode_c_string_escapes_to_bytes(s);
                 bytes.push(0);
                 let escaped = escape_bytes_for_rust_byte_string(&bytes);
                 format!("b\"{}\".as_ptr() as *const i8", escaped)
@@ -55719,6 +55749,12 @@ mod tests {
     }
 
     #[test]
+    fn test_decode_c_string_escapes_to_bytes_preserves_high_hex_escape_bytes() {
+        let decoded = decode_c_string_escapes_to_bytes("<\\xD0\\xB8\\xD1\\x82>".trim());
+        assert_eq!(decoded, vec![b'<', 0xD0, 0xB8, 0xD1, 0x82, b'>']);
+    }
+
+    #[test]
     fn test_expr_to_string_raw_addr_of_pointer_valued_expr_avoids_extra_borrow() {
         let cstr_ty = CppType::Pointer {
             pointee: Box::new(CppType::Char { signed: true }),
@@ -56722,6 +56758,84 @@ mod tests {
             AstCodeGen::get_default_value_for_type("[*mut i8; 4]"),
             "[std::ptr::null_mut(); 4]",
             "sized pointer arrays should lower to concrete null array defaults"
+        );
+    }
+
+    #[test]
+    fn test_local_signed_char_array_string_literal_emits_utf8_byte_initializer() {
+        let bool_ty = CppType::Bool;
+        let int_ty = CppType::Int { signed: true };
+        let char_array_ty = CppType::Array {
+            element: Box::new(CppType::Char { signed: true }),
+            size: Some(13),
+        };
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![make_node(
+                ClangNodeKind::FunctionDecl {
+                    name: "utf8_local_array".to_string(),
+                    mangled_name: "utf8_local_array".to_string(),
+                    is_static: false,
+                    return_type: bool_ty.clone(),
+                    params: vec![],
+                    is_definition: true,
+                    is_variadic: false,
+                    is_noexcept: false,
+                    is_coroutine: false,
+                    coroutine_info: None,
+                },
+                vec![make_node(
+                    ClangNodeKind::CompoundStmt,
+                    vec![
+                        make_node(
+                            ClangNodeKind::DeclStmt,
+                            vec![make_node(
+                                ClangNodeKind::VarDecl {
+                                    name: "russianText".to_string(),
+                                    ty: char_array_ty,
+                                    has_init: true,
+                                    is_static: false,
+                                    is_extern: false,
+                                },
+                                vec![
+                                    make_node(
+                                        ClangNodeKind::IntegerLiteral {
+                                            value: 13,
+                                            cpp_type: Some(int_ty),
+                                        },
+                                        vec![],
+                                    ),
+                                    make_node(
+                                        ClangNodeKind::StringLiteral(
+                                            "<\\xD0\\xB8\\xD0\\xBC\\xD0\\xB5\\xD0\\xB5\\xD1\\x82>"
+                                                .to_string(),
+                                        ),
+                                        vec![],
+                                    ),
+                                ],
+                            )],
+                        ),
+                        make_node(
+                            ClangNodeKind::ReturnStmt,
+                            vec![make_node(ClangNodeKind::BoolLiteral(true), vec![])],
+                        ),
+                    ],
+                )],
+            )],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains(
+                "let mut russianText: [i8; 13] = [60i8, -48i8, -72i8, -48i8, -68i8, -48i8, -75i8, -48i8, -75i8, -47i8, -126i8, 62i8, 0i8];"
+            ),
+            "local signed char array string initializer should preserve UTF-8 bytes, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("let mut russianText: [i8; 13] = [0; 13];"),
+            "local string-literal initialized array should not degrade to zero array default, got:\n{}",
+            code
         );
     }
 
