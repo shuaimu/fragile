@@ -19265,11 +19265,19 @@ impl AstCodeGen {
                         // Normalize pointer initializers (0/[]/nullptr and function pointers).
                         correct_initializer_for_type(&init_str, ty)
                     } else if matches!(ty, CppType::Named(_)) {
+                        let init_norm = Self::strip_outer_parens_expr(init_str.trim());
+                        let ctor_default = format!("{}::new_0()", rust_type);
+                        let lowered_ctor_default = format!("{}_new_0()", rust_type);
                         // For struct types, convert 0 to zeroed memory initialization
                         // Also handle Default::default() which can't be used in statics
-                        match init_str.as_str() {
+                        match init_norm {
                             "0" | "0i32" | "Default::default()" => {
                                 "unsafe { std::mem::zeroed() }".to_string()
+                            }
+                            _ if init_norm == ctor_default || init_norm == lowered_ctor_default => {
+                                // `Type::new_0()` is commonly used for implicit default construction,
+                                // but constructor calls are not const in static initializers.
+                                Self::default_value_for_static(ty)
                             }
                             _ => init_str,
                         }
@@ -20484,7 +20492,17 @@ impl AstCodeGen {
         let candidate = Self::strip_outer_parens_expr(stripped).trim();
         let looks_pointer_call_chain =
             candidate.contains("()") && (candidate.contains('.') || candidate.contains("->"));
-        if looks_pointer_call_chain {
+        let has_pointer_arithmetic = [
+            ".add(",
+            ".sub(",
+            ".offset(",
+            ".wrapping_offset(",
+            ".byte_add(",
+            ".byte_sub(",
+        ]
+        .iter()
+        .any(|marker| candidate.contains(marker));
+        if looks_pointer_call_chain && !has_pointer_arithmetic {
             candidate.to_string()
         } else {
             expr.to_string()
@@ -39622,6 +39640,16 @@ mod tests {
     }
 
     #[test]
+    fn test_pointer_value_normalization_keeps_deref_for_pointer_arithmetic_chains() {
+        let expr = "unsafe { *__fsv___func_TRUE_VALS_4.as_mut_ptr().add((i) as usize) }";
+        let normalized = AstCodeGen::normalize_pointer_value_expr(expr);
+        assert_eq!(
+            normalized, expr,
+            "pointer-value normalization must preserve deref on pointer arithmetic chains"
+        );
+    }
+
+    #[test]
     fn test_pointer_condition_normalizes_redundant_deref_from_pointer_return_call_chain() {
         let xml_node_ptr = CppType::Pointer {
             pointee: Box::new(CppType::Named("XMLNode".to_string())),
@@ -41433,6 +41461,65 @@ mod tests {
         assert!(
             !code.contains("clone.InsertEndChild("),
             "arrow method call on polymorphic pointer should not emit raw dot call, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_named_global_new_0_initializer_falls_back_to_const_safe_default() {
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![
+                make_node(
+                    ClangNodeKind::RecordDecl {
+                        name: "destroying_delete_t".to_string(),
+                        is_class: false,
+                        is_definition: true,
+                        fields: vec![],
+                    },
+                    vec![],
+                ),
+                make_node(
+                    ClangNodeKind::VarDecl {
+                        name: "destroying_delete".to_string(),
+                        ty: CppType::Named("destroying_delete_t".to_string()),
+                        has_init: true,
+                        is_static: true,
+                        is_extern: false,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CallExpr {
+                            ty: CppType::Named("destroying_delete_t".to_string()),
+                            template_instantiation: None,
+                        },
+                        vec![make_node(
+                            ClangNodeKind::DeclRefExpr {
+                                name: "destroying_delete_t::new_0".to_string(),
+                                ty: CppType::Function {
+                                    return_type: Box::new(CppType::Named(
+                                        "destroying_delete_t".to_string(),
+                                    )),
+                                    params: vec![],
+                                    is_variadic: false,
+                                },
+                                namespace_path: vec![],
+                            },
+                            vec![],
+                        )],
+                    )],
+                ),
+            ],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("static mut __gv_destroying_delete: destroying_delete_t = unsafe { std::mem::zeroed() };"),
+            "named global new_0 initializer should use const-safe static default, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("__gv_destroying_delete: destroying_delete_t = destroying_delete_t::new_0();"),
+            "named global new_0 initializer should not call constructor in static initializer, got:\n{}",
             code
         );
     }
