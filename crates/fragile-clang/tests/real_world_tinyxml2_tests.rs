@@ -1855,7 +1855,9 @@ fn run_tinyxml2_fragile_make_test_command_replay_in_tree(
     source_dir: &Path,
     log_dir: &Path,
 ) -> Result<(), String> {
-    run_make_test_command_replay_in_tree(source_dir, log_dir)
+    run_fragile_xmltest_build_from_cxx_driver_plan_in_tree(source_dir, log_dir)?;
+    run_make_test_command_replay_in_tree(source_dir, log_dir)?;
+    Ok(())
 }
 
 fn run_tinyxml2_make_test_command_plan() -> Result<PathBuf, String> {
@@ -2948,27 +2950,30 @@ fn test_make_test_command_replay_local_fixture_reports_failing_command() {
 }
 
 #[test]
-fn test_make_test_command_replay_local_fixture_fragile_runner_success_with_prebuilt_binary() {
+fn test_make_test_command_replay_local_fixture_fragile_runner_builds_and_replays_successfully() {
     let root = unique_temp_dir("tinyxml2_make_test_replay_fragile_success");
     fs::create_dir_all(&root).expect("failed to create test root");
 
-    let (repo_url, pinned_commit, _newer_commit) =
-        create_local_tinyxml2_like_repo(&root).expect("failed to create local tinyxml2-like repo");
-    let checkout_dir = root.join("checkout");
-    ensure_pinned_checkout(
-        repo_url.as_str(),
-        &checkout_dir,
-        pinned_commit.as_str(),
-        TINYXML2_REQUIRED_PATHS,
-    )
-    .expect("checkout should be prepared");
-
-    run_make_xmltest_build_in_tree(&checkout_dir, &root.join("prep_logs"), "make_xmltest_prep")
-        .expect("fixture setup should prebuild xmltest for fragile-runner replay");
+    let project_dir = create_local_tinyxml2_cxx_driver_project(&root)
+        .expect("failed to create local tinyxml2 CXX-driver project fixture");
 
     let log_dir = root.join("replay_logs_fragile");
-    run_tinyxml2_fragile_make_test_command_replay_in_tree(&checkout_dir, &log_dir)
-        .expect("fragile replay runner should succeed when binary is prebuilt");
+    run_tinyxml2_fragile_make_test_command_replay_in_tree(&project_dir, &log_dir)
+        .expect("fragile replay runner should build/stage xmltest and replay successfully");
+
+    for rel in TINYXML2_FRAGILE_XMLTEST_LOG_FILES {
+        assert!(
+            log_dir.join(rel).exists(),
+            "expected fragile build artifact {}",
+            log_dir.join(rel).display()
+        );
+    }
+    assert_eq!(
+        read_status_file(&log_dir.join("link_fragile_xmltest.status"))
+            .expect("failed to read link_fragile_xmltest.status"),
+        0,
+        "fragile replay runner should stage xmltest from transpiled build before replay"
+    );
 
     let replay_count = assert_make_test_replay_artifacts_exist(&log_dir)
         .expect("expected replay artifacts to be captured");
@@ -2980,15 +2985,15 @@ fn test_make_test_command_replay_local_fixture_fragile_runner_success_with_prebu
         read_status_file(&log_dir.join("make_test_replay_01.status"))
             .expect("failed to read replay status"),
         0,
-        "fragile replay command should succeed for prebuilt fixture"
+        "fragile replay command should succeed after automatic fragile build/stage"
     );
 
     let _ = fs::remove_dir_all(&root);
 }
 
 #[test]
-fn test_make_test_command_replay_local_fixture_fragile_runner_reports_missing_binary() {
-    let root = unique_temp_dir("tinyxml2_make_test_replay_fragile_missing_binary");
+fn test_make_test_command_replay_local_fixture_fragile_runner_reports_missing_compile_coverage() {
+    let root = unique_temp_dir("tinyxml2_make_test_replay_fragile_missing_compile_coverage");
     fs::create_dir_all(&root).expect("failed to create test root");
 
     let (repo_url, pinned_commit, _newer_commit) =
@@ -3002,19 +3007,29 @@ fn test_make_test_command_replay_local_fixture_fragile_runner_reports_missing_bi
     )
     .expect("checkout should be prepared");
 
+    fs::write(
+        checkout_dir.join("Makefile"),
+        "test: xmltest\n\t@./xmltest\n\nxmltest:\n\t@printf '%s\\n' '#!/bin/sh' 'echo \"xmltest fixture: Pass 1, Fail 0\"' > xmltest\n\t@chmod +x xmltest\n\nclean:\n\t@rm -f xmltest\n",
+    )
+    .expect("failed to update missing-coverage fixture Makefile with clean target");
+
     let log_dir = root.join("replay_logs_fragile");
     let err = run_tinyxml2_fragile_make_test_command_replay_in_tree(&checkout_dir, &log_dir)
-        .expect_err("fragile replay runner should fail when xmltest is not prebuilt");
+        .expect_err("fragile replay runner should fail when compile coverage for xmltest build is unavailable");
     assert!(
-        err.contains("make-test command replay failed at command 1 with status 127"),
-        "missing binary should fail at command replay with status 127, got: {}",
+        err.contains("no compile units found in cxx_driver.log"),
+        "missing compile coverage should fail during fragile build staging, got: {}",
         err
     );
     assert_eq!(
-        read_status_file(&log_dir.join("make_test_replay_01.status"))
-            .expect("failed to read replay status"),
-        127,
-        "replay status should record missing-binary failure"
+        read_status_file(&log_dir.join("make_xmltest_driver.status"))
+            .expect("failed to read make_xmltest_driver.status"),
+        0,
+        "fixture make xmltest step should still run successfully before compile-coverage validation"
+    );
+    assert!(
+        !log_dir.join("make_test_replay_01.status").exists(),
+        "replay should not start when fragile xmltest build staging fails"
     );
 
     let _ = fs::remove_dir_all(&root);
