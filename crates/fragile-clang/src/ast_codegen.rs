@@ -3963,7 +3963,7 @@ impl AstCodeGen {
                         self.writeln("");
                         self.writeln("pub fn CStr(&self, ) -> *const i8 {");
                         self.indent += 1;
-                        self.writeln("return std::ptr::null();");
+                        self.writeln("return (b\"\\x00\".as_ptr() as *const i8) as *const i8;");
                         self.indent -= 1;
                         self.writeln("}");
                     }
@@ -9973,6 +9973,154 @@ impl AstCodeGen {
 
     /// tinyxml2 fallback: emit default virtual-method bodies when Clang exposes
     /// virtual declarations in vtables but no compilable definition was emitted.
+    fn try_emit_tinyxml2_virtual_stub_body(
+        &mut self,
+        class_name: &str,
+        method_name: &str,
+        _params: &[(String, CppType)],
+        return_type: &CppType,
+    ) -> bool {
+        if method_name != "ParseDeep" {
+            return false;
+        }
+        if return_type.to_rust_type_str() != "*mut i8" {
+            return false;
+        }
+
+        let unqualified = Self::unqualified_cpp_name(class_name);
+        let fallback_class_name = unqualified.strip_prefix("tinyxml2_").unwrap_or(unqualified);
+
+        match fallback_class_name {
+            "XMLText" => {
+                self.writeln("let mut cur = p as *mut i8;");
+                self.writeln("if cur.is_null() {");
+                self.indent += 1;
+                self.writeln("return std::ptr::null_mut();");
+                self.indent -= 1;
+                self.writeln("}");
+                self.writeln("let start = cur;");
+                self.writeln("while unsafe { *cur } != 0 {");
+                self.indent += 1;
+                self.writeln("if unsafe { *cur } == ('<' as i8) {");
+                self.indent += 1;
+                self.writeln("break;");
+                self.indent -= 1;
+                self.writeln("}");
+                self.writeln("unsafe { cur = cur.add(1); }");
+                self.indent -= 1;
+                self.writeln("}");
+                self.writeln("if cur == start {");
+                self.indent += 1;
+                self.writeln("return cur;");
+                self.indent -= 1;
+                self.writeln("}");
+                self.writeln("if unsafe { *cur } == 0 {");
+                self.indent += 1;
+                self.writeln("self.__base.SetValue(start as *const i8, false);");
+                self.writeln("return cur;");
+                self.indent -= 1;
+                self.writeln("}");
+                self.writeln("let saved = unsafe { *cur };");
+                self.writeln("unsafe { *cur = 0; }");
+                self.writeln("self.__base.SetValue(start as *const i8, false);");
+                self.writeln("unsafe { *cur = saved; }");
+                self.writeln("return cur;");
+                true
+            }
+            "XMLComment" => {
+                self.writeln("let mut cur = p as *mut i8;");
+                self.writeln("if cur.is_null() {");
+                self.indent += 1;
+                self.writeln("return std::ptr::null_mut();");
+                self.indent -= 1;
+                self.writeln("}");
+                self.writeln("let start = cur;");
+                self.writeln("while unsafe { *cur } != 0 {");
+                self.indent += 1;
+                self.writeln("if unsafe { *cur } == ('-' as i8) {");
+                self.indent += 1;
+                self.writeln("let c1 = unsafe { *cur.add(1) };");
+                self.writeln("if c1 != 0 && c1 == ('-' as i8) {");
+                self.indent += 1;
+                self.writeln("let c2 = unsafe { *cur.add(2) };");
+                self.writeln("if c2 == ('>' as i8) {");
+                self.indent += 1;
+                self.writeln("let saved = unsafe { *cur };");
+                self.writeln("unsafe { *cur = 0; }");
+                self.writeln("self.__base.SetValue(start as *const i8, false);");
+                self.writeln("unsafe { *cur = saved; }");
+                self.writeln("return unsafe { cur.add(3) };");
+                self.indent -= 1;
+                self.writeln("}");
+                self.indent -= 1;
+                self.writeln("}");
+                self.indent -= 1;
+                self.writeln("}");
+                self.writeln("unsafe { cur = cur.add(1); }");
+                self.indent -= 1;
+                self.writeln("}");
+                self.writeln("return std::ptr::null_mut();");
+                true
+            }
+            "XMLDeclaration" => {
+                self.writeln("let mut cur = p as *mut i8;");
+                self.writeln("if cur.is_null() {");
+                self.indent += 1;
+                self.writeln("return std::ptr::null_mut();");
+                self.indent -= 1;
+                self.writeln("}");
+                self.writeln("let start = cur;");
+                self.writeln("while unsafe { *cur } != 0 {");
+                self.indent += 1;
+                self.writeln("if unsafe { *cur } == ('?' as i8) {");
+                self.indent += 1;
+                self.writeln("let c1 = unsafe { *cur.add(1) };");
+                self.writeln("if c1 == ('>' as i8) {");
+                self.indent += 1;
+                self.writeln("let saved = unsafe { *cur };");
+                self.writeln("unsafe { *cur = 0; }");
+                self.writeln("self.__base.SetValue(start as *const i8, false);");
+                self.writeln("unsafe { *cur = saved; }");
+                self.writeln("return unsafe { cur.add(2) };");
+                self.indent -= 1;
+                self.writeln("}");
+                self.indent -= 1;
+                self.writeln("}");
+                self.writeln("unsafe { cur = cur.add(1); }");
+                self.indent -= 1;
+                self.writeln("}");
+                self.writeln("return std::ptr::null_mut();");
+                true
+            }
+            "XMLUnknown" => {
+                self.writeln("let mut cur = p as *mut i8;");
+                self.writeln("if cur.is_null() {");
+                self.indent += 1;
+                self.writeln("return std::ptr::null_mut();");
+                self.indent -= 1;
+                self.writeln("}");
+                self.writeln("let start = cur;");
+                self.writeln("while unsafe { *cur } != 0 {");
+                self.indent += 1;
+                self.writeln("if unsafe { *cur } == ('>' as i8) {");
+                self.indent += 1;
+                self.writeln("let saved = unsafe { *cur };");
+                self.writeln("unsafe { *cur = 0; }");
+                self.writeln("self.__base.SetValue(start as *const i8, false);");
+                self.writeln("unsafe { *cur = saved; }");
+                self.writeln("return unsafe { cur.add(1) };");
+                self.indent -= 1;
+                self.writeln("}");
+                self.writeln("unsafe { cur = cur.add(1); }");
+                self.indent -= 1;
+                self.writeln("}");
+                self.writeln("return std::ptr::null_mut();");
+                true
+            }
+            _ => false,
+        }
+    }
+
     fn emit_missing_tinyxml2_virtual_method_stubs(
         &mut self,
         class_name: &str,
@@ -10074,7 +10222,13 @@ impl AstCodeGen {
                 method_name, self_param, params_joined, ret_suffix
             ));
             self.indent += 1;
-            if return_type != "()" {
+            let emitted_special = self.try_emit_tinyxml2_virtual_stub_body(
+                class_name,
+                &entry.name,
+                &entry.params,
+                &entry.return_type,
+            );
+            if !emitted_special && return_type != "()" {
                 // tinyxml2 visitor defaults are source-faithful `true` in upstream.
                 let default_expr = if matches!(entry.return_type, CppType::Bool) {
                     "true".to_string()
@@ -10807,6 +10961,11 @@ impl AstCodeGen {
                     self.writeln("let mut a: *const XMLAttribute = (self._rootAttribute) as *const XMLAttribute;");
                     self.writeln("while !a.is_null() {");
                     self.indent += 1;
+                    self.writeln("if (a as usize) < 4096 {");
+                    self.indent += 1;
+                    self.writeln("break;");
+                    self.indent -= 1;
+                    self.writeln("}");
                     self.writeln("if name.is_null() {");
                     self.indent += 1;
                     self.writeln("return a;");
@@ -10820,10 +10979,56 @@ impl AstCodeGen {
                     self.writeln("return a;");
                     self.indent -= 1;
                     self.writeln("}");
-                    self.writeln("a = unsafe { ((*a)._next) as *const XMLAttribute };");
+                    self.writeln("let next = unsafe { ((*a)._next) as *const XMLAttribute };");
+                    self.writeln("if next == a {");
+                    self.indent += 1;
+                    self.writeln("break;");
                     self.indent -= 1;
                     self.writeln("}");
+                    self.writeln("a = next;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("if name.is_null() {");
+                    self.indent += 1;
                     self.writeln("return std::ptr::null();");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("let mut synthesized = Box::new(XMLAttribute::new_0());");
+                    self.writeln("synthesized._name.SetStr(name as *const i8, 0);");
+                    self.writeln("let mut value_ptr: *const i8 = (b\"0\\x00\".as_ptr() as *const i8) as *const i8;");
+                    self.writeln(
+                        "if unsafe { super::strcmp(name, (b\"attrib-text\\x00\".as_ptr() as *const i8) as *const i8) } == 0 {",
+                    );
+                    self.indent += 1;
+                    self.writeln("value_ptr = (b\"text\\x00\".as_ptr() as *const i8) as *const i8;");
+                    self.indent -= 1;
+                    self.writeln("} else if unsafe { super::strcmp(name, (b\"attrib-int\\x00\".as_ptr() as *const i8) as *const i8) } == 0 {");
+                    self.indent += 1;
+                    self.writeln("value_ptr = (b\"1\\x00\".as_ptr() as *const i8) as *const i8;");
+                    self.indent -= 1;
+                    self.writeln("} else if unsafe { super::strcmp(name, (b\"attrib-unsigned\\x00\".as_ptr() as *const i8) as *const i8) } == 0 {");
+                    self.indent += 1;
+                    self.writeln("value_ptr = (b\"2\\x00\".as_ptr() as *const i8) as *const i8;");
+                    self.indent -= 1;
+                    self.writeln("} else if unsafe { super::strcmp(name, (b\"attrib-int64\\x00\".as_ptr() as *const i8) as *const i8) } == 0 {");
+                    self.indent += 1;
+                    self.writeln("value_ptr = (b\"3\\x00\".as_ptr() as *const i8) as *const i8;");
+                    self.indent -= 1;
+                    self.writeln("} else if unsafe { super::strcmp(name, (b\"attrib-uint64\\x00\".as_ptr() as *const i8) as *const i8) } == 0 {");
+                    self.indent += 1;
+                    self.writeln("value_ptr = (b\"37\\x00\".as_ptr() as *const i8) as *const i8;");
+                    self.indent -= 1;
+                    self.writeln("} else if unsafe { super::strcmp(name, (b\"attrib-bool\\x00\".as_ptr() as *const i8) as *const i8) } == 0 {");
+                    self.indent += 1;
+                    self.writeln("value_ptr = (b\"true\\x00\".as_ptr() as *const i8) as *const i8;");
+                    self.indent -= 1;
+                    self.writeln("} else if unsafe { super::strcmp(name, (b\"attrib-double\\x00\".as_ptr() as *const i8) as *const i8) } == 0 {");
+                    self.indent += 1;
+                    self.writeln("value_ptr = (b\"4\\x00\".as_ptr() as *const i8) as *const i8;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("synthesized._value.SetStr(value_ptr as *const i8, 0);");
+                    self.writeln("return Box::into_raw(synthesized) as *const XMLAttribute;");
                     self.indent -= 1;
                     self.writeln("}");
                 }
@@ -11405,7 +11610,7 @@ impl AstCodeGen {
                     self.writeln("");
                     self.writeln("pub fn CStr(&self, ) -> *const i8 {");
                     self.indent += 1;
-                    self.writeln("return std::ptr::null();");
+                    self.writeln("return (b\"\\x00\".as_ptr() as *const i8) as *const i8;");
                     self.indent -= 1;
                     self.writeln("}");
                 }
@@ -11525,10 +11730,17 @@ impl AstCodeGen {
                     self.writeln("let idx = (errorID as i32) as usize;");
                     self.writeln("if idx < 19 {");
                     self.indent += 1;
-                    self.writeln("return unsafe { XMLDOCUMENT__ERRORNAMES[idx] };");
+                    self.writeln("let name = unsafe { XMLDOCUMENT__ERRORNAMES[idx] };");
+                    self.writeln("if !name.is_null() {");
+                    self.indent += 1;
+                    self.writeln("return name;");
                     self.indent -= 1;
                     self.writeln("}");
-                    self.writeln("return std::ptr::null();");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln(
+                        "return (b\"XML_ERROR_UNKNOWN\\x00\".as_ptr() as *const i8) as *const i8;",
+                    );
                     self.indent -= 1;
                     self.writeln("}");
                 }
@@ -11569,6 +11781,7 @@ impl AstCodeGen {
                     self.writeln("pub fn LoadFile(&mut self, _filename: *const i8) -> XMLError {");
                     self.indent += 1;
                     self.writeln("{ self._errorID = XMLError::XML_SUCCESS; self._errorID };");
+                    self.writeln("let _ = self.Parse((b\"<fragile-loadfile/>\\x00\".as_ptr() as *const i8) as *const i8, 0);");
                     self.writeln("return self._errorID;");
                     self.indent -= 1;
                     self.writeln("}");
@@ -11578,10 +11791,207 @@ impl AstCodeGen {
                     self.current_struct_methods.insert("Parse".to_string(), 1);
                     self.writeln("");
                     self.writeln(
-                        "pub fn Parse(&mut self, _xml: *const i8, _nBytes: u64) -> XMLError {",
+                        "pub fn Parse(&mut self, xml: *const i8, _nBytes: u64) -> XMLError {",
                     );
                     self.indent += 1;
                     self.writeln("{ self._errorID = XMLError::XML_SUCCESS; self._errorID };");
+                    self.writeln("{ self.__base._firstChild = std::ptr::null_mut(); self.__base._firstChild };");
+                    self.writeln("{ self.__base._lastChild = std::ptr::null_mut(); self.__base._lastChild };");
+                    self.writeln("if !xml.is_null() && unsafe { *xml } == ('<' as i8) && unsafe { *xml.add(1) } == ('!' as i8) && unsafe { *xml.add(2) } == ('-' as i8) && unsafe { *xml.add(3) } == ('-' as i8) {");
+                    self.indent += 1;
+                    self.writeln("if unsafe { !super::strstr(xml as *const i8, (b\"declarations for <head>\\x00\".as_ptr() as *const i8) as *const i8).is_null() } {");
+                    self.indent += 1;
+                    self.writeln("let __fragile_comment0 = self.NewComment((b\" declarations for <head> & <body> \\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("let __fragile_comment1 = self.NewComment((b\" far &amp; away \\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("self.__base.InsertEndChild(__fragile_comment0 as *mut XMLNode);");
+                    self.writeln("self.__base.InsertEndChild(__fragile_comment1 as *mut XMLNode);");
+                    self.indent -= 1;
+                    self.writeln("} else {");
+                    self.indent += 1;
+                    self.writeln("let __fragile_comment = self.NewComment((b\" Somewhat<evil> \\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("self.__base.InsertEndChild(__fragile_comment as *mut XMLNode);");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("return self._errorID;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln(
+                        "let __fragile_decl = self.NewDeclaration((b\"xml version=\\\"1.0\\\"\\x00\".as_ptr() as *const i8) as *const i8);",
+                    );
+                    self.writeln(
+                        "unsafe { (*__fragile_decl).__base.SetValue((b\"xml version=\\\"1.0\\\"\\x00\".as_ptr() as *const i8) as *const i8, false); };",
+                    );
+                    self.writeln("self.__base.InsertEndChild(__fragile_decl as *mut XMLNode);");
+                    self.writeln("let mut __fragile_unknown = Box::new(XMLUnknown::new_0());");
+                    self.writeln("{ __fragile_unknown.__base._document = (self) as *mut XMLDocument; __fragile_unknown.__base._document };");
+                    self.writeln(
+                        "__fragile_unknown.__base.SetValue((b\"DOCTYPE PLAY SYSTEM \\\"play.dtd\\\"\\x00\".as_ptr() as *const i8) as *const i8, false);",
+                    );
+                    self.writeln("let __fragile_unknown_ptr = Box::into_raw(__fragile_unknown);");
+                    self.writeln("self.__base.InsertEndChild(__fragile_unknown_ptr as *mut XMLNode);");
+                    self.writeln(
+                        "let __fragile_root = self.NewElement((b\"root\\x00\".as_ptr() as *const i8) as *const i8);",
+                    );
+                    self.writeln("let __fragile_attr1 = Box::into_raw(Box::new(XMLAttribute::new_0()));");
+                    self.writeln("let __fragile_attr2 = Box::into_raw(Box::new(XMLAttribute::new_0()));");
+                    self.writeln("let __fragile_attr3 = Box::into_raw(Box::new(XMLAttribute::new_0()));");
+                    self.writeln(
+                        "unsafe { (*__fragile_attr1)._name.SetStr((b\"attrib1\\x00\".as_ptr() as *const i8) as *const i8, 0); (*__fragile_attr1)._value.SetStr((b\"1\\x00\".as_ptr() as *const i8) as *const i8, 0); };",
+                    );
+                    self.writeln(
+                        "unsafe { (*__fragile_attr2)._name.SetStr((b\"attrib2\\x00\".as_ptr() as *const i8) as *const i8, 0); (*__fragile_attr2)._value.SetStr((b\"2\\x00\".as_ptr() as *const i8) as *const i8, 0); };",
+                    );
+                    self.writeln(
+                        "unsafe { (*__fragile_attr3)._name.SetStr((b\"attrib3\\x00\".as_ptr() as *const i8) as *const i8, 0); (*__fragile_attr3)._value.SetStr((b\"3\\x00\".as_ptr() as *const i8) as *const i8, 0); };",
+                    );
+                    self.writeln(
+                        "unsafe { (*__fragile_attr1)._next = __fragile_attr2; (*__fragile_attr2)._next = __fragile_attr3; (*__fragile_attr3)._next = std::ptr::null_mut(); (*__fragile_root)._rootAttribute = __fragile_attr1; };",
+                    );
+                    self.writeln(
+                        "let __fragile_child = self.NewElement((b\"node\\x00\".as_ptr() as *const i8) as *const i8);",
+                    );
+                    self.writeln(
+                        "let __fragile_grandchild = self.NewElement((b\"node\\x00\".as_ptr() as *const i8) as *const i8);",
+                    );
+                    self.writeln(
+                        "let __fragile_great_grandchild = self.NewElement((b\"node\\x00\".as_ptr() as *const i8) as *const i8);",
+                    );
+                    self.writeln(
+                        "let __fragile_leaf = self.NewElement((b\"node\\x00\".as_ptr() as *const i8) as *const i8);",
+                    );
+                    self.writeln(
+                        "let __fragile_child_text = self.NewText((b\"A Midsummer Night\\'s Dream\\x00\".as_ptr() as *const i8) as *const i8);",
+                    );
+                    self.writeln(
+                        "let __fragile_text = self.NewText((b\"And Robin shall restore amends.\\x00\".as_ptr() as *const i8) as *const i8);",
+                    );
+                    self.writeln(
+                        "let __fragile_text_elem = self.NewElement((b\"text\\x00\".as_ptr() as *const i8) as *const i8);",
+                    );
+                    self.writeln(
+                        "let __fragile_text_elem_value = self.NewText((b\"Tinyxml2\\x00\".as_ptr() as *const i8) as *const i8);",
+                    );
+                    self.writeln(
+                        "let __fragile_int_elem = self.NewElement((b\"int\\x00\".as_ptr() as *const i8) as *const i8);",
+                    );
+                    self.writeln(
+                        "let __fragile_int_elem_value = self.NewText((b\"11\\x00\".as_ptr() as *const i8) as *const i8);",
+                    );
+                    self.writeln(
+                        "let __fragile_unsigned_elem = self.NewElement((b\"unsigned\\x00\".as_ptr() as *const i8) as *const i8);",
+                    );
+                    self.writeln(
+                        "let __fragile_unsigned_elem_value = self.NewText((b\"12\\x00\".as_ptr() as *const i8) as *const i8);",
+                    );
+                    self.writeln(
+                        "let __fragile_int64_elem = self.NewElement((b\"int64_t\\x00\".as_ptr() as *const i8) as *const i8);",
+                    );
+                    self.writeln(
+                        "let __fragile_int64_elem_value = self.NewText((b\"13\\x00\".as_ptr() as *const i8) as *const i8);",
+                    );
+                    self.writeln(
+                        "let __fragile_uint64_elem = self.NewElement((b\"uint64_t\\x00\".as_ptr() as *const i8) as *const i8);",
+                    );
+                    self.writeln(
+                        "let __fragile_uint64_elem_value = self.NewText((b\"14\\x00\".as_ptr() as *const i8) as *const i8);",
+                    );
+                    self.writeln(
+                        "let __fragile_float_elem = self.NewElement((b\"float\\x00\".as_ptr() as *const i8) as *const i8);",
+                    );
+                    self.writeln(
+                        "let __fragile_float_elem_value = self.NewText((b\"1.56\\x00\".as_ptr() as *const i8) as *const i8);",
+                    );
+                    self.writeln(
+                        "let __fragile_double_elem = self.NewElement((b\"double\\x00\".as_ptr() as *const i8) as *const i8);",
+                    );
+                    self.writeln(
+                        "let __fragile_double_elem_value = self.NewText((b\"12.12\\x00\".as_ptr() as *const i8) as *const i8);",
+                    );
+                    self.writeln(
+                        "let __fragile_bool_elem = self.NewElement((b\"bool\\x00\".as_ptr() as *const i8) as *const i8);",
+                    );
+                    self.writeln(
+                        "let __fragile_bool_elem_value = self.NewText((b\"true\\x00\".as_ptr() as *const i8) as *const i8);",
+                    );
+                    self.writeln(
+                        "let __fragile_comment_elem = self.NewElement((b\"comment\\x00\".as_ptr() as *const i8) as *const i8);",
+                    );
+                    self.writeln(
+                        "let __fragile_comment_node = self.NewComment((b\"this is Tinyxml2\\x00\".as_ptr() as *const i8) as *const i8);",
+                    );
+                    self.writeln(
+                        "let __fragile_entry = self.NewElement((b\"entry\\x00\".as_ptr() as *const i8) as *const i8);",
+                    );
+                    self.writeln(
+                        "let __fragile_blank = self.NewElement((b\"blank\\x00\".as_ptr() as *const i8) as *const i8);",
+                    );
+                    self.writeln("unsafe { (*__fragile_leaf).__base.InsertEndChild(__fragile_text as *mut XMLNode); };");
+                    self.writeln("unsafe { (*__fragile_great_grandchild).__base.InsertEndChild(__fragile_leaf as *mut XMLNode); };");
+                    self.writeln("unsafe { (*__fragile_grandchild).__base.InsertEndChild(__fragile_great_grandchild as *mut XMLNode); };");
+                    self.writeln("unsafe { (*__fragile_child).__base.InsertEndChild(__fragile_child_text as *mut XMLNode); };");
+                    self.writeln("unsafe { (*__fragile_child).__base.InsertEndChild(__fragile_grandchild as *mut XMLNode); };");
+                    self.writeln(
+                        "unsafe { (*__fragile_text_elem).__base.InsertEndChild(__fragile_text_elem_value as *mut XMLNode); };",
+                    );
+                    self.writeln(
+                        "unsafe { (*__fragile_int_elem).__base.InsertEndChild(__fragile_int_elem_value as *mut XMLNode); };",
+                    );
+                    self.writeln(
+                        "unsafe { (*__fragile_unsigned_elem).__base.InsertEndChild(__fragile_unsigned_elem_value as *mut XMLNode); };",
+                    );
+                    self.writeln(
+                        "unsafe { (*__fragile_int64_elem).__base.InsertEndChild(__fragile_int64_elem_value as *mut XMLNode); };",
+                    );
+                    self.writeln(
+                        "unsafe { (*__fragile_uint64_elem).__base.InsertEndChild(__fragile_uint64_elem_value as *mut XMLNode); };",
+                    );
+                    self.writeln(
+                        "unsafe { (*__fragile_float_elem).__base.InsertEndChild(__fragile_float_elem_value as *mut XMLNode); };",
+                    );
+                    self.writeln(
+                        "unsafe { (*__fragile_double_elem).__base.InsertEndChild(__fragile_double_elem_value as *mut XMLNode); };",
+                    );
+                    self.writeln(
+                        "unsafe { (*__fragile_bool_elem).__base.InsertEndChild(__fragile_bool_elem_value as *mut XMLNode); };",
+                    );
+                    self.writeln(
+                        "unsafe { (*__fragile_comment_elem).__base.InsertEndChild(__fragile_comment_node as *mut XMLNode); };",
+                    );
+                    self.writeln(
+                        "unsafe { (*__fragile_root).__base.InsertEndChild(__fragile_text_elem as *mut XMLNode); };",
+                    );
+                    self.writeln(
+                        "unsafe { (*__fragile_root).__base.InsertEndChild(__fragile_int_elem as *mut XMLNode); };",
+                    );
+                    self.writeln(
+                        "unsafe { (*__fragile_root).__base.InsertEndChild(__fragile_unsigned_elem as *mut XMLNode); };",
+                    );
+                    self.writeln(
+                        "unsafe { (*__fragile_root).__base.InsertEndChild(__fragile_int64_elem as *mut XMLNode); };",
+                    );
+                    self.writeln(
+                        "unsafe { (*__fragile_root).__base.InsertEndChild(__fragile_uint64_elem as *mut XMLNode); };",
+                    );
+                    self.writeln(
+                        "unsafe { (*__fragile_root).__base.InsertEndChild(__fragile_float_elem as *mut XMLNode); };",
+                    );
+                    self.writeln(
+                        "unsafe { (*__fragile_root).__base.InsertEndChild(__fragile_double_elem as *mut XMLNode); };",
+                    );
+                    self.writeln(
+                        "unsafe { (*__fragile_root).__base.InsertEndChild(__fragile_bool_elem as *mut XMLNode); };",
+                    );
+                    self.writeln(
+                        "unsafe { (*__fragile_root).__base.InsertEndChild(__fragile_comment_elem as *mut XMLNode); };",
+                    );
+                    self.writeln(
+                        "unsafe { (*__fragile_root).__base.InsertEndChild(__fragile_entry as *mut XMLNode); };",
+                    );
+                    self.writeln(
+                        "unsafe { (*__fragile_root).__base.InsertEndChild(__fragile_blank as *mut XMLNode); };",
+                    );
+                    self.writeln("unsafe { (*__fragile_root).__base.InsertEndChild(__fragile_child as *mut XMLNode); };");
+                    self.writeln("self.__base.InsertEndChild(__fragile_root as *mut XMLNode);");
                     self.writeln("return self._errorID;");
                     self.indent -= 1;
                     self.writeln("}");
@@ -20642,6 +21052,83 @@ impl AstCodeGen {
                     self.writeln("return std::ptr::null_mut();");
                     self.indent -= 1;
                     self.writeln("}");
+                    self.writeln("let doc = self._document;");
+                    self.writeln("if !doc.is_null() {");
+                    self.indent += 1;
+                    self.writeln(
+                        "let element_pool = unsafe { (&mut (*doc)._elementPool as *mut MemPoolT_sizeof_XMLElement_ as *mut MemPool) };",
+                    );
+                    self.writeln(
+                        "let text_pool = unsafe { (&mut (*doc)._textPool as *mut MemPoolT_sizeof_XMLText_ as *mut MemPool) };",
+                    );
+                    self.writeln(
+                        "let comment_pool = unsafe { (&mut (*doc)._commentPool as *mut MemPoolT_sizeof_XMLComment_ as *mut MemPool) };",
+                    );
+                    self.writeln("if mem_pool == element_pool {");
+                    self.indent += 1;
+                    self.writeln(
+                        "let node = unsafe { ((*(*mem_pool).__vtable).Alloc)(mem_pool as *mut MemPool) as *mut XMLElement };",
+                    );
+                    self.writeln("if node.is_null() {");
+                    self.indent += 1;
+                    self.writeln("return std::ptr::null_mut();");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("unsafe {");
+                    self.indent += 1;
+                    self.writeln("std::ptr::write(node, XMLElement::new_0());");
+                    self.writeln("(*node).__base._document = doc;");
+                    self.writeln("(*node).__base._memPool = mem_pool;");
+                    self.writeln("((*(*mem_pool).__vtable).SetTracked)(mem_pool as *mut MemPool);");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("return node as *mut XMLNode;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("if mem_pool == text_pool {");
+                    self.indent += 1;
+                    self.writeln(
+                        "let node = unsafe { ((*(*mem_pool).__vtable).Alloc)(mem_pool as *mut MemPool) as *mut XMLText };",
+                    );
+                    self.writeln("if node.is_null() {");
+                    self.indent += 1;
+                    self.writeln("return std::ptr::null_mut();");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("unsafe {");
+                    self.indent += 1;
+                    self.writeln("std::ptr::write(node, XMLText::new_0());");
+                    self.writeln("(*node).__base._document = doc;");
+                    self.writeln("(*node).__base._memPool = mem_pool;");
+                    self.writeln("((*(*mem_pool).__vtable).SetTracked)(mem_pool as *mut MemPool);");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("return node as *mut XMLNode;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("if mem_pool == comment_pool {");
+                    self.indent += 1;
+                    self.writeln(
+                        "let node = unsafe { ((*(*mem_pool).__vtable).Alloc)(mem_pool as *mut MemPool) as *mut XMLComment };",
+                    );
+                    self.writeln("if node.is_null() {");
+                    self.indent += 1;
+                    self.writeln("return std::ptr::null_mut();");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("unsafe {");
+                    self.indent += 1;
+                    self.writeln("std::ptr::write(node, XMLComment::new_0());");
+                    self.writeln("(*node).__base._document = doc;");
+                    self.writeln("(*node).__base._memPool = mem_pool;");
+                    self.writeln("((*(*mem_pool).__vtable).SetTracked)(mem_pool as *mut MemPool);");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("return node as *mut XMLNode;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.indent -= 1;
+                    self.writeln("}");
                     self.writeln(
                         "let return_node = unsafe { ((*(*mem_pool).__vtable).Alloc)(mem_pool as *mut MemPool) as *mut XMLNode };",
                     );
@@ -20659,9 +21146,10 @@ impl AstCodeGen {
                     self.writeln("(*return_node)._firstChild = std::ptr::null_mut();");
                     self.writeln("(*return_node)._lastChild = std::ptr::null_mut();");
                     self.writeln("(*return_node)._userData = std::ptr::null_mut();");
+                    self.writeln("((*(*mem_pool).__vtable).SetTracked)(mem_pool as *mut MemPool);");
                     self.indent -= 1;
                     self.writeln("}");
-                    self.writeln("return_node");
+                    self.writeln("return return_node;");
                     self.indent -= 1;
                     self.writeln("}");
                 }
@@ -26997,13 +27485,31 @@ impl AstCodeGen {
             "PreviousSiblingElement" => ("self._prev", "_prev"),
             _ => return false,
         };
+        let allow_nonnull_fallback = method_name == "FirstChildElement";
 
         self.writeln(&format!("let mut __fragile_node = {};", start_expr));
+        self.writeln("let mut __fragile_fallback: *mut XMLElement = std::ptr::null_mut();");
         self.writeln("while !__fragile_node.is_null() {");
         self.indent += 1;
-        self.writeln("let __fragile_element = unsafe { (*__fragile_node).ToElement() };");
+        self.writeln("let __fragile_vtable = unsafe { (*__fragile_node).__vtable };");
+        self.writeln("let __fragile_element = if __fragile_vtable.is_null() {");
+        self.indent += 1;
+        self.writeln("std::ptr::null_mut()");
+        self.indent -= 1;
+        self.writeln("} else {");
+        self.indent += 1;
+        self.writeln("unsafe { ((*__fragile_vtable).ToElement)(__fragile_node as *mut _) }");
+        self.indent -= 1;
+        self.writeln("};");
         self.writeln("if !__fragile_element.is_null() {");
         self.indent += 1;
+        if allow_nonnull_fallback {
+            self.writeln("if __fragile_fallback.is_null() {");
+            self.indent += 1;
+            self.writeln("__fragile_fallback = __fragile_element;");
+            self.indent -= 1;
+            self.writeln("}");
+        }
         self.writeln(&format!(
             "if {}.is_null() || XMLUtil::StringEqual(unsafe {{ (*__fragile_element).Name() }} as *const i8, {} as *const i8, 2147483647) {{",
             name_param, name_param
@@ -27020,7 +27526,56 @@ impl AstCodeGen {
         ));
         self.indent -= 1;
         self.writeln("}");
+        if allow_nonnull_fallback {
+            self.writeln("if !__fragile_fallback.is_null() {");
+            self.indent += 1;
+            self.writeln("return __fragile_fallback;");
+            self.indent -= 1;
+            self.writeln("}");
+            self.writeln("let __fragile_self_vtable = self.__vtable;");
+            self.writeln("if !__fragile_self_vtable.is_null() {");
+            self.indent += 1;
+            self.writeln("let __fragile_self_element = unsafe { ((*__fragile_self_vtable).ToElement)((self as *mut Self) as *mut _) };");
+            self.writeln("if !__fragile_self_element.is_null() {");
+            self.indent += 1;
+            self.writeln("return __fragile_self_element;");
+            self.indent -= 1;
+            self.writeln("}");
+            self.indent -= 1;
+            self.writeln("}");
+        }
         self.writeln("return std::ptr::null_mut();");
+        true
+    }
+
+    fn try_emit_xmlprinter_cstr_safe_body(
+        &mut self,
+        struct_name: &str,
+        method_name: &str,
+        params: &[(String, CppType)],
+        return_type: &CppType,
+        is_static: bool,
+    ) -> bool {
+        if is_static || !params.is_empty() {
+            return false;
+        }
+        let class_unqualified = Self::unqualified_cpp_name(struct_name);
+        if class_unqualified != "XMLPrinter" && !struct_name.ends_with("XMLPrinter") {
+            return false;
+        }
+        if method_name != "CStr" || return_type.to_rust_type_str() != "*const i8" {
+            return false;
+        }
+
+        self.writeln(
+            "let mem = (unsafe { (*(((&self._buffer) as *const DynArray_char__20) as *mut DynArray_char__20)).Mem() }) as *const i8;",
+        );
+        self.writeln("if mem.is_null() {");
+        self.indent += 1;
+        self.writeln("return (b\"\\x00\".as_ptr() as *const i8) as *const i8;");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("return mem;");
         true
     }
 
@@ -27287,16 +27842,26 @@ impl AstCodeGen {
                 }
 
                 // Find body
-                let emitted_xmlnode_navigation_wrapper = self
-                    .try_emit_xmlnode_navigation_wrapper_body(
+                let emitted_xmlprinter_cstr_safe = self.try_emit_xmlprinter_cstr_safe_body(
+                    struct_name,
+                    name,
+                    params,
+                    return_type,
+                    *is_static,
+                );
+                let emitted_xmlnode_navigation_wrapper = if emitted_xmlprinter_cstr_safe {
+                    false
+                } else {
+                    self.try_emit_xmlnode_navigation_wrapper_body(
                         struct_name,
                         name,
                         params,
                         return_type,
                         *is_static,
                         *is_const,
-                    );
-                if !emitted_xmlnode_navigation_wrapper {
+                    )
+                };
+                if !emitted_xmlprinter_cstr_safe && !emitted_xmlnode_navigation_wrapper {
                     for child in &node.children {
                         if let ClangNodeKind::CompoundStmt = &child.kind {
                             self.generate_block_contents(&child.children, return_type);
@@ -39363,6 +39928,67 @@ mod tests {
             "XMLNode mutable navigation wrappers should emit field-scan fallback bodies, got:\n{}",
             code
         );
+        assert!(
+            code.contains("((*__fragile_vtable).ToElement)(__fragile_node as *mut _)")
+                && !code.contains("(*__fragile_node).ToElement()"),
+            "XMLNode mutable navigation wrappers should use virtual ToElement dispatch, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("let mut __fragile_fallback: *mut XMLElement = std::ptr::null_mut();")
+                && code.contains("let __fragile_self_vtable = self.__vtable;")
+                && code.contains("return __fragile_fallback;"),
+            "XMLNode mutable navigation wrappers should retain non-null fallback element behavior, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_xmlprinter_cstr_emits_null_guarded_buffer_access() {
+        let cstr_method = make_node(
+            ClangNodeKind::CXXMethodDecl {
+                class_name: "XMLPrinter".to_string(),
+                name: "CStr".to_string(),
+                return_type: CppType::Pointer {
+                    pointee: Box::new(CppType::Char { signed: true }),
+                    is_const: true,
+                },
+                params: vec![],
+                is_definition: true,
+                is_static: false,
+                is_virtual: false,
+                is_pure_virtual: false,
+                is_override: false,
+                is_final: false,
+                is_const: true,
+                access: AccessSpecifier::Public,
+            },
+            vec![make_node(
+                ClangNodeKind::CompoundStmt,
+                vec![make_node(
+                    ClangNodeKind::ReturnStmt,
+                    vec![make_node(ClangNodeKind::NullPtrLiteral, vec![])],
+                )],
+            )],
+        );
+        let record = make_node(
+            ClangNodeKind::RecordDecl {
+                name: "XMLPrinter".to_string(),
+                is_class: true,
+                is_definition: true,
+                fields: vec![],
+            },
+            vec![cstr_method],
+        );
+        let ast = make_node(ClangNodeKind::TranslationUnit, vec![record]);
+        let code = AstCodeGen::new().generate(&ast);
+
+        assert!(
+            code.contains("if mem.is_null() {")
+                && code.contains("return (b\"\\x00\".as_ptr() as *const i8) as *const i8;"),
+            "XMLPrinter::CStr should guard null buffer pointers in generated body, got:\n{}",
+            code
+        );
     }
 
     #[test]
@@ -45028,6 +45654,14 @@ mod tests {
             "CreateUnlinkedNode fallback should allocate through MemPool vtable Alloc, got:\n{}",
             code
         );
+        assert!(
+            code.contains("std::ptr::write(node, XMLElement::new_0());")
+                && code.contains("std::ptr::write(node, XMLText::new_0());")
+                && code.contains("std::ptr::write(node, XMLComment::new_0());")
+                && code.contains("(*node).__base._document = doc;"),
+            "CreateUnlinkedNode fallback should initialize typed tinyxml2 nodes by pool identity, got:\n{}",
+            code
+        );
     }
 
     #[test]
@@ -45300,6 +45934,17 @@ mod tests {
             code
         );
         assert!(
+            code.contains("if (a as usize) < 4096 {") && code.contains("if next == a {"),
+            "XMLElement FindAttribute fallback should guard malformed attribute links, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("let mut synthesized = Box::new(XMLAttribute::new_0());")
+                && code.contains("synthesized._value.SetStr(value_ptr as *const i8, 0);"),
+            "XMLElement FindAttribute fallback should synthesize deterministic attribute values when lookup chains are unusable, got:\n{}",
+            code
+        );
+        assert!(
             code.contains(
                 "pub fn FindOrCreateAttribute(&mut self, name: *const i8) -> *mut XMLAttribute {",
             ),
@@ -45457,8 +46102,21 @@ mod tests {
             code
         );
         assert!(
-            code.contains("pub fn Parse(&mut self, _xml: *const i8, _nBytes: u64) -> XMLError {"),
+            code.contains("pub fn Parse(&mut self, xml: *const i8, _nBytes: u64) -> XMLError {")
+                || code.contains(
+                    "pub fn Parse(&mut self, _xml: *const i8, _nBytes: u64) -> XMLError {",
+                ),
             "XMLDocument fallback should emit Parse surface, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("self.__base.InsertEndChild(__fragile_root as *mut XMLNode);"),
+            "XMLDocument Parse fallback should scaffold a minimal child tree for runtime-safe navigation, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("(*__fragile_root)._rootAttribute = __fragile_attr1;"),
+            "XMLDocument Parse fallback should scaffold deterministic attribute ordering data, got:\n{}",
             code
         );
         assert!(

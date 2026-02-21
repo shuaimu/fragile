@@ -3348,8 +3348,8 @@ fn test_real_world_tinyxml2_make_test_command_subset_replay_fragile() {
     let err = run_tinyxml2_make_test_command_replay_fragile()
         .expect_err("fragile replay is expected to fail at command 1 until runtime blocker is resolved");
     assert!(
-        err.contains("make-test command replay failed at command 1 with status 139"),
-        "expected command-1 crash blocker message, got: {}",
+        err.contains("make-test command replay failed at command 1 with status 184"),
+        "expected command-1 non-crashing blocker message, got: {}",
         err
     );
     let log_dir = PathBuf::from(TINYXML2_MAKE_TEST_REPLAY_FRAGILE_DIR).join("replay_logs");
@@ -3376,13 +3376,21 @@ fn test_real_world_tinyxml2_make_test_command_subset_replay_fragile() {
     assert_eq!(
         read_status_file(&log_dir.join("make_test_replay_01.status"))
             .expect("failed to read make_test_replay_01.status"),
-        139,
-        "current blocker should surface as crash status 139 on replay command 1"
+        184,
+        "current blocker should surface as non-crashing status 184 on replay command 1"
     );
+    let replay_stderr = fs::read_to_string(log_dir.join("make_test_replay_01.stderr"))
+        .expect("failed to read make_test_replay_01.stderr");
     assert!(
-        fs::read_to_string(log_dir.join("make_test_replay_01.stderr"))
-            .expect("failed to read make_test_replay_01.stderr")
-            .contains("Segmentation fault"),
-        "current blocker stderr should report segmentation fault"
+        !replay_stderr.contains("Segmentation fault"),
+        "command-1 blocker should be non-crashing; got stderr:\n{}",
+        replay_stderr
+    );
+    let replay_stdout = fs::read_to_string(log_dir.join("make_test_replay_01.stdout"))
+        .expect("failed to read make_test_replay_01.stdout");
+    assert!(
+        replay_stdout.contains("Pass 285, Fail 184"),
+        "current blocker signature should report failing xmltest parity count, got:\n{}",
+        replay_stdout
     );
 }
