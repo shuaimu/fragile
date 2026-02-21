@@ -9809,6 +9809,8 @@ impl AstCodeGen {
                 | "ToBool"
                 | "ToFloat"
                 | "ToDouble"
+                | "ToStr"
+                | "ReadBOM"
         )
     }
 
@@ -36286,6 +36288,291 @@ mod tests {
             !code.contains("return ToInt(str, value);")
                 && !code.contains("return ToInt(str as *const i8, value as *mut i32);"),
             "unqualified helper call should not remain an unresolved free function call, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_unqualified_tinyxml2_tostr_helper_call_from_non_owner_class_uses_xmlutil_qualification(
+    ) {
+        let i32_ty = CppType::Int { signed: true };
+        let char_ptr = CppType::Pointer {
+            pointee: Box::new(CppType::Char { signed: true }),
+            is_const: false,
+        };
+        let to_str_fn_ty = CppType::Function {
+            return_type: Box::new(CppType::Void),
+            params: vec![i32_ty.clone(), char_ptr.clone(), i32_ty.clone()],
+            is_variadic: false,
+        };
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![make_node(
+                ClangNodeKind::NamespaceDecl {
+                    name: Some("tinyxml2".to_string()),
+                    is_inline: false,
+                },
+                vec![
+                    make_node(
+                        ClangNodeKind::RecordDecl {
+                            name: "XMLUtil".to_string(),
+                            is_class: true,
+                            is_definition: true,
+                            fields: vec![],
+                        },
+                        vec![make_node(
+                            ClangNodeKind::CXXMethodDecl {
+                                class_name: "tinyxml2::XMLUtil".to_string(),
+                                name: "ToStr".to_string(),
+                                return_type: CppType::Void,
+                                params: vec![
+                                    ("v".to_string(), i32_ty.clone()),
+                                    ("buffer".to_string(), char_ptr.clone()),
+                                    ("bufferSize".to_string(), i32_ty.clone()),
+                                ],
+                                is_definition: true,
+                                is_static: true,
+                                is_virtual: false,
+                                is_pure_virtual: false,
+                                is_override: false,
+                                is_final: false,
+                                is_const: false,
+                                access: AccessSpecifier::Public,
+                            },
+                            vec![make_node(ClangNodeKind::CompoundStmt, vec![])],
+                        )],
+                    ),
+                    make_node(
+                        ClangNodeKind::RecordDecl {
+                            name: "XMLPrinter".to_string(),
+                            is_class: true,
+                            is_definition: true,
+                            fields: vec![],
+                        },
+                        vec![make_node(
+                            ClangNodeKind::CXXMethodDecl {
+                                class_name: "tinyxml2::XMLPrinter".to_string(),
+                                name: "PushText_3".to_string(),
+                                return_type: CppType::Void,
+                                params: vec![
+                                    ("v".to_string(), i32_ty.clone()),
+                                    ("buffer".to_string(), char_ptr.clone()),
+                                ],
+                                is_definition: true,
+                                is_static: false,
+                                is_virtual: false,
+                                is_pure_virtual: false,
+                                is_override: false,
+                                is_final: false,
+                                is_const: false,
+                                access: AccessSpecifier::Public,
+                            },
+                            vec![make_node(
+                                ClangNodeKind::CompoundStmt,
+                                vec![make_node(
+                                    ClangNodeKind::CallExpr {
+                                        ty: CppType::Void,
+                                        template_instantiation: None,
+                                    },
+                                    vec![
+                                        make_node(
+                                            ClangNodeKind::DeclRefExpr {
+                                                name: "ToStr".to_string(),
+                                                ty: to_str_fn_ty,
+                                                namespace_path: vec!["tinyxml2".to_string()],
+                                            },
+                                            vec![],
+                                        ),
+                                        make_node(
+                                            ClangNodeKind::DeclRefExpr {
+                                                name: "v".to_string(),
+                                                ty: i32_ty.clone(),
+                                                namespace_path: vec![],
+                                            },
+                                            vec![],
+                                        ),
+                                        make_node(
+                                            ClangNodeKind::DeclRefExpr {
+                                                name: "buffer".to_string(),
+                                                ty: char_ptr.clone(),
+                                                namespace_path: vec![],
+                                            },
+                                            vec![],
+                                        ),
+                                        make_node(
+                                            ClangNodeKind::IntegerLiteral {
+                                                value: 200,
+                                                cpp_type: Some(i32_ty.clone()),
+                                            },
+                                            vec![],
+                                        ),
+                                    ],
+                                )],
+                            )],
+                        )],
+                    ),
+                ],
+            )],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("XMLUtil::ToStr("),
+            "unqualified tinyxml2 ToStr helper call should dispatch through XMLUtil, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("\n            ToStr("),
+            "unqualified tinyxml2 ToStr helper call should not remain unresolved, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_unqualified_tinyxml2_readbom_helper_call_from_non_owner_class_uses_xmlutil_qualification(
+    ) {
+        let cchar_ptr = CppType::Pointer {
+            pointee: Box::new(CppType::Char { signed: true }),
+            is_const: true,
+        };
+        let bool_ptr = CppType::Pointer {
+            pointee: Box::new(CppType::Bool),
+            is_const: false,
+        };
+        let read_bom_fn_ty = CppType::Function {
+            return_type: Box::new(cchar_ptr.clone()),
+            params: vec![cchar_ptr.clone(), bool_ptr.clone()],
+            is_variadic: false,
+        };
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![make_node(
+                ClangNodeKind::NamespaceDecl {
+                    name: Some("tinyxml2".to_string()),
+                    is_inline: false,
+                },
+                vec![
+                    make_node(
+                        ClangNodeKind::RecordDecl {
+                            name: "XMLUtil".to_string(),
+                            is_class: true,
+                            is_definition: true,
+                            fields: vec![],
+                        },
+                        vec![make_node(
+                            ClangNodeKind::CXXMethodDecl {
+                                class_name: "tinyxml2::XMLUtil".to_string(),
+                                name: "ReadBOM".to_string(),
+                                return_type: cchar_ptr.clone(),
+                                params: vec![
+                                    ("p".to_string(), cchar_ptr.clone()),
+                                    ("bom".to_string(), bool_ptr.clone()),
+                                ],
+                                is_definition: true,
+                                is_static: true,
+                                is_virtual: false,
+                                is_pure_virtual: false,
+                                is_override: false,
+                                is_final: false,
+                                is_const: false,
+                                access: AccessSpecifier::Public,
+                            },
+                            vec![make_node(
+                                ClangNodeKind::CompoundStmt,
+                                vec![make_node(
+                                    ClangNodeKind::ReturnStmt,
+                                    vec![make_node(
+                                        ClangNodeKind::DeclRefExpr {
+                                            name: "p".to_string(),
+                                            ty: cchar_ptr.clone(),
+                                            namespace_path: vec![],
+                                        },
+                                        vec![],
+                                    )],
+                                )],
+                            )],
+                        )],
+                    ),
+                    make_node(
+                        ClangNodeKind::RecordDecl {
+                            name: "XMLDocument".to_string(),
+                            is_class: true,
+                            is_definition: true,
+                            fields: vec![],
+                        },
+                        vec![make_node(
+                            ClangNodeKind::CXXMethodDecl {
+                                class_name: "tinyxml2::XMLDocument".to_string(),
+                                name: "ConsumeBOM".to_string(),
+                                return_type: cchar_ptr.clone(),
+                                params: vec![
+                                    ("p".to_string(), cchar_ptr.clone()),
+                                    ("bom".to_string(), bool_ptr.clone()),
+                                ],
+                                is_definition: true,
+                                is_static: false,
+                                is_virtual: false,
+                                is_pure_virtual: false,
+                                is_override: false,
+                                is_final: false,
+                                is_const: false,
+                                access: AccessSpecifier::Public,
+                            },
+                            vec![make_node(
+                                ClangNodeKind::CompoundStmt,
+                                vec![make_node(
+                                    ClangNodeKind::ReturnStmt,
+                                    vec![make_node(
+                                        ClangNodeKind::CallExpr {
+                                            ty: cchar_ptr.clone(),
+                                            template_instantiation: None,
+                                        },
+                                        vec![
+                                            make_node(
+                                                ClangNodeKind::DeclRefExpr {
+                                                    name: "ReadBOM".to_string(),
+                                                    ty: read_bom_fn_ty,
+                                                    namespace_path: vec!["tinyxml2".to_string()],
+                                                },
+                                                vec![],
+                                            ),
+                                            make_node(
+                                                ClangNodeKind::DeclRefExpr {
+                                                    name: "p".to_string(),
+                                                    ty: cchar_ptr,
+                                                    namespace_path: vec![],
+                                                },
+                                                vec![],
+                                            ),
+                                            make_node(
+                                                ClangNodeKind::DeclRefExpr {
+                                                    name: "bom".to_string(),
+                                                    ty: bool_ptr,
+                                                    namespace_path: vec![],
+                                                },
+                                                vec![],
+                                            ),
+                                        ],
+                                    )],
+                                )],
+                            )],
+                        )],
+                    ),
+                ],
+            )],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("XMLUtil::ReadBOM("),
+            "unqualified tinyxml2 ReadBOM helper call should dispatch through XMLUtil, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("return ReadBOM(") && !code.contains("return (ReadBOM("),
+            "unqualified tinyxml2 ReadBOM helper call should not remain unresolved, got:\n{}",
             code
         );
     }
