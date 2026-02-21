@@ -7903,6 +7903,168 @@ impl AstCodeGen {
         false
     }
 
+    fn split_top_level_expr_list(exprs: &str) -> Vec<String> {
+        let mut parts = Vec::new();
+        let mut current = String::new();
+        let mut paren_depth = 0i32;
+        let mut brace_depth = 0i32;
+        let mut bracket_depth = 0i32;
+        let mut in_single_quote = false;
+        let mut in_double_quote = false;
+        let mut prev_escape = false;
+
+        for ch in exprs.chars() {
+            if in_single_quote {
+                current.push(ch);
+                if ch == '\'' && !prev_escape {
+                    in_single_quote = false;
+                }
+                prev_escape = ch == '\\' && !prev_escape;
+                continue;
+            }
+            if in_double_quote {
+                current.push(ch);
+                if ch == '"' && !prev_escape {
+                    in_double_quote = false;
+                }
+                prev_escape = ch == '\\' && !prev_escape;
+                continue;
+            }
+
+            match ch {
+                '\'' => {
+                    in_single_quote = true;
+                    current.push(ch);
+                    prev_escape = false;
+                }
+                '"' => {
+                    in_double_quote = true;
+                    current.push(ch);
+                    prev_escape = false;
+                }
+                '(' => {
+                    paren_depth += 1;
+                    current.push(ch);
+                    prev_escape = false;
+                }
+                ')' => {
+                    paren_depth -= 1;
+                    current.push(ch);
+                    prev_escape = false;
+                }
+                '{' => {
+                    brace_depth += 1;
+                    current.push(ch);
+                    prev_escape = false;
+                }
+                '}' => {
+                    brace_depth -= 1;
+                    current.push(ch);
+                    prev_escape = false;
+                }
+                '[' => {
+                    bracket_depth += 1;
+                    current.push(ch);
+                    prev_escape = false;
+                }
+                ']' => {
+                    bracket_depth -= 1;
+                    current.push(ch);
+                    prev_escape = false;
+                }
+                ',' if paren_depth == 0 && brace_depth == 0 && bracket_depth == 0 => {
+                    parts.push(current.trim().to_string());
+                    current.clear();
+                    prev_escape = false;
+                }
+                _ => {
+                    current.push(ch);
+                    prev_escape = false;
+                }
+            }
+        }
+
+        if !current.trim().is_empty() {
+            parts.push(current.trim().to_string());
+        }
+        parts
+    }
+
+    fn split_top_level_call_expr(expr: &str) -> Option<(String, Vec<String>)> {
+        let trimmed = expr.trim();
+        if !trimmed.ends_with(')') {
+            return None;
+        }
+
+        let mut depth = 0i32;
+        let mut open_idx = None;
+        for (idx, ch) in trimmed.char_indices().rev() {
+            match ch {
+                ')' => depth += 1,
+                '(' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        open_idx = Some(idx);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let open_idx = open_idx?;
+        let callee = trimmed[..open_idx].trim().to_string();
+        if callee.is_empty() {
+            return None;
+        }
+        let args_str = &trimmed[open_idx + 1..trimmed.len() - 1];
+        let args = Self::split_top_level_expr_list(args_str);
+        Some((callee, args))
+    }
+
+    fn rewrite_self_receiver_call_with_arg_temporaries(expr: &str) -> Option<String> {
+        let (callee, args) = Self::split_top_level_call_expr(expr)?;
+        if !(callee.starts_with("self.") || callee.starts_with("__self.")) {
+            return None;
+        }
+        if args.is_empty() {
+            return None;
+        }
+
+        let mut temp_bindings = Vec::new();
+        let mut call_args = Vec::new();
+        for (idx, arg) in args.iter().enumerate() {
+            let trimmed = arg.trim();
+            let needs_temp = (trimmed.contains("self.") || trimmed.contains("__self."))
+                && trimmed.contains('(');
+            if needs_temp {
+                let temp_name = format!("__fragile_call_arg_{}", idx);
+                let rhs = if Self::needs_unsafe_wrapper(trimmed) {
+                    format!("unsafe {{ {} }}", trimmed)
+                } else {
+                    trimmed.to_string()
+                };
+                temp_bindings.push(format!("let {} = {};", temp_name, rhs));
+                call_args.push(temp_name);
+            } else {
+                call_args.push(trimmed.to_string());
+            }
+        }
+
+        if temp_bindings.is_empty() {
+            return None;
+        }
+
+        let mut rewritten = String::new();
+        rewritten.push_str("{ ");
+        for binding in &temp_bindings {
+            rewritten.push_str(binding);
+            rewritten.push(' ');
+        }
+        rewritten.push_str(&format!("{}({});", callee, call_args.join(", ")));
+        rewritten.push_str(" }");
+        Some(rewritten)
+    }
+
     /// Substitute template type names in an expression string.
     fn substitute_type_in_expr(&self, expr: &str, subst_map: &HashMap<String, String>) -> String {
         let mut result = expr.to_string();
@@ -25176,7 +25338,12 @@ impl AstCodeGen {
                         return;
                     }
 
-                    let expr = self.expr_to_string(&node.children[0]);
+                    let mut expr = self.expr_to_string(&node.children[0]);
+                    if let Some(rewritten) =
+                        Self::rewrite_self_receiver_call_with_arg_temporaries(&expr)
+                    {
+                        expr = rewritten;
+                    }
                     if is_tail_expr {
                         self.writeln(&expr);
                     } else {
@@ -25282,7 +25449,14 @@ impl AstCodeGen {
                 }
 
                 // For expressions at statement level
-                let expr = self.expr_to_string(node);
+                let mut expr = self.expr_to_string(node);
+                if matches!(&node.kind, ClangNodeKind::CallExpr { .. }) {
+                    if let Some(rewritten) =
+                        Self::rewrite_self_receiver_call_with_arg_temporaries(&expr)
+                    {
+                        expr = rewritten;
+                    }
+                }
                 // Skip "_unnamed" placeholder expressions (from unresolved AST nodes)
                 if expr == "_unnamed" {
                     self.writeln("// unresolved expression");
@@ -34978,6 +35152,53 @@ mod tests {
                 && code.contains(".Mem()"),
             "const context mutable-only Mem call should use mut-cast fallback, got:\n{}",
             code
+        );
+    }
+
+    #[test]
+    fn test_rewrite_self_receiver_nested_call_uses_arg_temporary() {
+        let expr = "self.CloseElement(self.CompactMode(element))";
+        let rewritten =
+            AstCodeGen::rewrite_self_receiver_call_with_arg_temporaries(expr).expect("rewrite");
+        assert!(
+            rewritten.contains("let __fragile_call_arg_0 = self.CompactMode(element);"),
+            "expected nested self call to be hoisted into temporary, got:\n{}",
+            rewritten
+        );
+        assert!(
+            rewritten.contains("self.CloseElement(__fragile_call_arg_0);"),
+            "expected call argument to use generated temporary, got:\n{}",
+            rewritten
+        );
+    }
+
+    #[test]
+    fn test_rewrite_self_receiver_nested_call_wraps_raw_deref_arg_in_unsafe_temp() {
+        let expr = "self.DeleteNode(*self._unlinked.op_index(0) as *mut XMLNode)";
+        let rewritten =
+            AstCodeGen::rewrite_self_receiver_call_with_arg_temporaries(expr).expect("rewrite");
+        assert!(
+            rewritten.contains(
+                "let __fragile_call_arg_0 = unsafe { *self._unlinked.op_index(0) as *mut XMLNode };"
+            ),
+            "expected raw-pointer deref argument to be hoisted under unsafe temporary, got:\n{}",
+            rewritten
+        );
+        assert!(
+            rewritten.contains("self.DeleteNode(__fragile_call_arg_0);"),
+            "expected rewritten call to use temporary arg, got:\n{}",
+            rewritten
+        );
+    }
+
+    #[test]
+    fn test_rewrite_self_receiver_nested_call_skips_non_self_callee() {
+        let expr = "other.CloseElement(self.CompactMode(element))";
+        let rewritten = AstCodeGen::rewrite_self_receiver_call_with_arg_temporaries(expr);
+        assert!(
+            rewritten.is_none(),
+            "non-self callsite should not be rewritten, got:\n{:?}",
+            rewritten
         );
     }
 
