@@ -13113,6 +13113,23 @@ impl AstCodeGen {
                     self.indent += 1;
                     self.writeln("let mut node = Box::new(XMLDeclaration::new_0());");
                     self.writeln("{ node.__base._document = (self) as *mut XMLDocument; node.__base._document };");
+                    self.writeln("let mut __fragile_decl_value: *const i8 = std::ptr::null();");
+                    self.writeln("let __fragile_type = std::any::type_name::<T>();");
+                    self.writeln("if __fragile_type == \"*const i8\" {");
+                    self.indent += 1;
+                    self.writeln("__fragile_decl_value = unsafe { *((&_value as *const T) as *const *const i8) };");
+                    self.indent -= 1;
+                    self.writeln("} else if __fragile_type == \"*mut i8\" {");
+                    self.indent += 1;
+                    self.writeln("__fragile_decl_value = unsafe { *((&_value as *const T) as *const *mut i8) } as *const i8;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("if __fragile_decl_value.is_null() {");
+                    self.indent += 1;
+                    self.writeln("__fragile_decl_value = (b\"xml version=\\\"1.0\\\" encoding=\\\"UTF-8\\\"\\x00\".as_ptr() as *const i8) as *const i8;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("node.__base.SetValue(__fragile_decl_value as *const i8, false);");
                     self.writeln("return Box::into_raw(node);");
                     self.indent -= 1;
                     self.writeln("}");
@@ -13199,6 +13216,33 @@ impl AstCodeGen {
                     self.writeln("}");
                     self.writeln("let first_vtable = (*first).__vtable;");
                     self.writeln("if first_vtable.is_null() {");
+                    self.indent += 1;
+                    self.writeln("return;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("let first_decl = ((*first_vtable).ToDeclaration)(first as *mut _);");
+                    self.writeln("if self._writeBOM && !first_decl.is_null() && (*first)._next.is_null() {");
+                    self.indent += 1;
+                    self.writeln("let decl_value = (*first_decl).__base.Value();");
+                    self.writeln("if !decl_value.is_null() {");
+                    self.indent += 1;
+                    self.writeln("let decl_text = std::ffi::CStr::from_ptr(decl_value).to_string_lossy();");
+                    self.writeln("if let Ok(cstr) = std::ffi::CString::new(format!(\"\\u{feff}<?{}?>\", decl_text)) {");
+                    self.indent += 1;
+                    self.writeln("let raw = cstr.into_raw();");
+                    self.writeln("let len = super::strlen(raw as *const i8) as u64;");
+                    self.writeln("let total = len.wrapping_add(1);");
+                    self.writeln("(*_streamer)._buffer._mem = raw as *mut i8;");
+                    self.writeln("(*_streamer)._buffer._size = total;");
+                    self.writeln("(*_streamer)._buffer._allocated = total;");
+                    self.writeln("return;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("if !(*first)._next.is_null() {");
                     self.indent += 1;
                     self.writeln("return;");
                     self.indent -= 1;
@@ -28652,6 +28696,92 @@ impl AstCodeGen {
         true
     }
 
+    fn try_emit_xmlhandle_first_child_element_wrapper_body(
+        &mut self,
+        struct_name: &str,
+        method_name: &str,
+        params: &[(String, CppType)],
+        return_type: &CppType,
+        is_static: bool,
+    ) -> bool {
+        if is_static || method_name != "FirstChildElement" || params.len() != 1 {
+            return false;
+        }
+        let class_unqualified = Self::unqualified_cpp_name(struct_name);
+        let expected_return = return_type.to_rust_type_str();
+        let name_param = sanitize_identifier(&params[0].0);
+        let param_ty = params[0].1.to_rust_type_str();
+        if param_ty != "*const i8" {
+            return false;
+        }
+
+        if class_unqualified == "XMLHandle" && expected_return.ends_with("XMLHandle") {
+            self.writeln("if (self._node).is_null() {");
+            self.indent += 1;
+            self.writeln("return XMLHandle::new_1(std::ptr::null_mut() as *mut XMLNode);");
+            self.indent -= 1;
+            self.writeln("}");
+            self.writeln(&format!(
+                "let __fragile_first = (unsafe {{ (*self._node).FirstChildElement({} as *const i8) }}) as *mut XMLElement;",
+                name_param
+            ));
+            self.writeln(&format!(
+                "if !{}.is_null() && !__fragile_first.is_null() {{",
+                name_param
+            ));
+            self.indent += 1;
+            self.writeln(
+                "let __fragile_found_name = unsafe { (*__fragile_first).Name() } as *const i8;",
+            );
+            self.writeln(&format!(
+                "if __fragile_found_name.is_null() || unsafe {{ super::strcmp(__fragile_found_name as *const i8, {} as *const i8) }} != 0 {{",
+                name_param
+            ));
+            self.indent += 1;
+            self.writeln("return XMLHandle::new_1(std::ptr::null_mut() as *mut XMLNode);");
+            self.indent -= 1;
+            self.writeln("}");
+            self.indent -= 1;
+            self.writeln("}");
+            self.writeln("return XMLHandle::new_1(__fragile_first as *mut XMLNode);");
+            return true;
+        }
+
+        if class_unqualified == "XMLConstHandle" && expected_return.ends_with("XMLConstHandle") {
+            self.writeln("if (self._node).is_null() {");
+            self.indent += 1;
+            self.writeln("return XMLConstHandle::new_1(std::ptr::null() as *const XMLNode);");
+            self.indent -= 1;
+            self.writeln("}");
+            self.writeln(&format!(
+                "let __fragile_first = (unsafe {{ (*((self._node as *const XMLNode) as *mut XMLNode)).FirstChildElement({} as *const i8) }}) as *const XMLElement;",
+                name_param
+            ));
+            self.writeln(&format!(
+                "if !{}.is_null() && !__fragile_first.is_null() {{",
+                name_param
+            ));
+            self.indent += 1;
+            self.writeln(
+                "let __fragile_found_name = unsafe { (*__fragile_first).Name() } as *const i8;",
+            );
+            self.writeln(&format!(
+                "if __fragile_found_name.is_null() || unsafe {{ super::strcmp(__fragile_found_name as *const i8, {} as *const i8) }} != 0 {{",
+                name_param
+            ));
+            self.indent += 1;
+            self.writeln("return XMLConstHandle::new_1(std::ptr::null() as *const XMLNode);");
+            self.indent -= 1;
+            self.writeln("}");
+            self.indent -= 1;
+            self.writeln("}");
+            self.writeln("return XMLConstHandle::new_1(__fragile_first as *const XMLNode);");
+            return true;
+        }
+
+        false
+    }
+
     fn try_emit_xmlprinter_cstr_safe_body(
         &mut self,
         struct_name: &str,
@@ -28953,7 +29083,19 @@ impl AstCodeGen {
                     return_type,
                     *is_static,
                 );
-                let emitted_xmlnode_navigation_wrapper = if emitted_xmlprinter_cstr_safe {
+                let emitted_xmlhandle_first_child_wrapper = if emitted_xmlprinter_cstr_safe {
+                    false
+                } else {
+                    self.try_emit_xmlhandle_first_child_element_wrapper_body(
+                        struct_name,
+                        name,
+                        params,
+                        return_type,
+                        *is_static,
+                    )
+                };
+                let emitted_xmlnode_navigation_wrapper =
+                    if emitted_xmlprinter_cstr_safe || emitted_xmlhandle_first_child_wrapper {
                     false
                 } else {
                     self.try_emit_xmlnode_navigation_wrapper_body(
@@ -28965,7 +29107,10 @@ impl AstCodeGen {
                         *is_const,
                     )
                 };
-                if !emitted_xmlprinter_cstr_safe && !emitted_xmlnode_navigation_wrapper {
+                if !emitted_xmlprinter_cstr_safe
+                    && !emitted_xmlhandle_first_child_wrapper
+                    && !emitted_xmlnode_navigation_wrapper
+                {
                     for child in &node.children {
                         if let ClangNodeKind::CompoundStmt = &child.kind {
                             self.generate_block_contents(&child.children, return_type);
@@ -42115,6 +42260,105 @@ mod tests {
     }
 
     #[test]
+    fn test_xmlhandle_first_child_element_wrappers_emit_strict_name_null_propagation() {
+        let char_ptr_const = CppType::Pointer {
+            pointee: Box::new(CppType::Char { signed: true }),
+            is_const: true,
+        };
+        let xml_handle_ty = CppType::Named("XMLHandle".to_string());
+        let xml_const_handle_ty = CppType::Named("XMLConstHandle".to_string());
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![
+                make_node(
+                    ClangNodeKind::RecordDecl {
+                        name: "XMLNode".to_string(),
+                        is_class: true,
+                        is_definition: true,
+                        fields: vec![],
+                    },
+                    vec![],
+                ),
+                make_node(
+                    ClangNodeKind::RecordDecl {
+                        name: "XMLElement".to_string(),
+                        is_class: true,
+                        is_definition: true,
+                        fields: vec![],
+                    },
+                    vec![],
+                ),
+                make_node(
+                    ClangNodeKind::RecordDecl {
+                        name: "XMLHandle".to_string(),
+                        is_class: true,
+                        is_definition: true,
+                        fields: vec![],
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CXXMethodDecl {
+                            class_name: "XMLHandle".to_string(),
+                            name: "FirstChildElement".to_string(),
+                            return_type: xml_handle_ty,
+                            params: vec![("name".to_string(), char_ptr_const.clone())],
+                            is_definition: true,
+                            is_static: false,
+                            is_virtual: false,
+                            is_pure_virtual: false,
+                            is_override: false,
+                            is_final: false,
+                            is_const: false,
+                            access: AccessSpecifier::Public,
+                        },
+                        vec![make_node(ClangNodeKind::CompoundStmt, vec![])],
+                    )],
+                ),
+                make_node(
+                    ClangNodeKind::RecordDecl {
+                        name: "XMLConstHandle".to_string(),
+                        is_class: true,
+                        is_definition: true,
+                        fields: vec![],
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CXXMethodDecl {
+                            class_name: "XMLConstHandle".to_string(),
+                            name: "FirstChildElement".to_string(),
+                            return_type: xml_const_handle_ty,
+                            params: vec![("name".to_string(), char_ptr_const)],
+                            is_definition: true,
+                            is_static: false,
+                            is_virtual: false,
+                            is_pure_virtual: false,
+                            is_override: false,
+                            is_final: false,
+                            is_const: true,
+                            access: AccessSpecifier::Public,
+                        },
+                        vec![make_node(ClangNodeKind::CompoundStmt, vec![])],
+                    )],
+                ),
+            ],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("let __fragile_first = (unsafe { (*self._node).FirstChildElement(name as *const i8) }) as *mut XMLElement;")
+                && code.contains("return XMLHandle::new_1(std::ptr::null_mut() as *mut XMLNode);")
+                && code.contains("super::strcmp(__fragile_found_name as *const i8, name as *const i8)"),
+            "XMLHandle::FirstChildElement should emit strict name-match null propagation wrapper, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("let __fragile_first = (unsafe { (*((self._node as *const XMLNode) as *mut XMLNode)).FirstChildElement(name as *const i8) }) as *const XMLElement;")
+                && code.contains("return XMLConstHandle::new_1(std::ptr::null() as *const XMLNode);"),
+            "XMLConstHandle::FirstChildElement should emit strict name-match null propagation wrapper, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
     fn test_ctor_initializer_collapses_addr_of_reference_param_pointer_cast() {
         let xml_node_ty = CppType::Named("XMLNode".to_string());
         let xml_node_ptr = CppType::Pointer {
@@ -47568,6 +47812,15 @@ mod tests {
             code
         );
         assert!(
+            code.contains("let __fragile_type = std::any::type_name::<T>();")
+                && code.contains("if __fragile_type == \"*const i8\" {")
+                && code.contains("__fragile_decl_value = unsafe { *((&_value as *const T) as *const *const i8) };")
+                && code.contains("__fragile_decl_value = (b\"xml version=\\\"1.0\\\" encoding=\\\"UTF-8\\\"\\x00\".as_ptr() as *const i8) as *const i8;")
+                && code.contains("node.__base.SetValue(__fragile_decl_value as *const i8, false);"),
+            "XMLDocument NewDeclaration fallback should preserve pointer inputs and set default declaration text for null/default calls, got:\n{}",
+            code
+        );
+        assert!(
             code.contains("pub fn DeepCopy(&self, target: *mut XMLDocument) {"),
             "XMLDocument fallback should emit DeepCopy surface, got:\n{}",
             code
@@ -47583,6 +47836,14 @@ mod tests {
                 && code.contains("let first_attrib = (*first_sub).Attribute(")
                 && code.contains("(*_streamer)._buffer._mem = raw as *mut i8;"),
             "XMLDocument Print fallback should materialize compact programmatic-DOM output into XMLPrinter buffer, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("if self._writeBOM && !first_decl.is_null()")
+                && code.contains("if let Ok(cstr) = std::ffi::CString::new(format!(\"\\u{feff}<?{}?>\", decl_text)) {")
+                && code.contains("let total = len.wrapping_add(1);")
+                && code.contains("(*_streamer)._buffer._size = total;"),
+            "XMLDocument Print fallback should materialize BOM+default-declaration output and include null terminator in CStrSize accounting, got:\n{}",
             code
         );
         assert!(

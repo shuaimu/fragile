@@ -3366,7 +3366,7 @@ fn test_real_world_tinyxml2_make_test_command_subset_replay_fragile() {
     let err = run_tinyxml2_make_test_command_replay_fragile()
         .expect_err("fragile replay is expected to fail at command 1 until runtime blocker is resolved");
     assert!(
-        err.contains("make-test command replay failed at command 1 with status 78"),
+        err.contains("make-test command replay failed at command 1 with status 74"),
         "expected command-1 non-crashing blocker message, got: {}",
         err
     );
@@ -3394,8 +3394,8 @@ fn test_real_world_tinyxml2_make_test_command_subset_replay_fragile() {
     assert_eq!(
         read_status_file(&log_dir.join("make_test_replay_01.status"))
             .expect("failed to read make_test_replay_01.status"),
-        78,
-        "current blocker should surface as non-crashing status 78 on replay command 1"
+        74,
+        "current blocker should surface as non-crashing status 74 on replay command 1"
     );
     let replay_stderr = fs::read_to_string(log_dir.join("make_test_replay_01.stderr"))
         .expect("failed to read make_test_replay_01.stderr");
@@ -3413,8 +3413,20 @@ fn test_real_world_tinyxml2_make_test_command_subset_replay_fragile() {
     );
     assert_eq!(
         fail_lines[0],
-        "[fail] Handle, non-const, element not found [true][false]",
+        "[fail] Ill formed XML [true][false]",
         "unexpected first fail signature; got:\n{}",
+        replay_stdout
+    );
+    assert!(
+        !fail_lines
+            .iter()
+            .any(|line| *line == "[fail] BOM and default declaration"),
+        "BOM/default-declaration signature should be resolved, got:\n{}",
+        replay_stdout
+    );
+    assert!(
+        !fail_lines.iter().any(|line| *line == "[fail] CStrSize"),
+        "BOM declaration CStrSize signature should be resolved, got:\n{}",
         replay_stdout
     );
     assert!(
@@ -3422,6 +3434,20 @@ fn test_real_world_tinyxml2_make_test_command_subset_replay_fragile() {
             .iter()
             .any(|line| *line == "[fail] Handle, non-const, element name matches [sub][text]"),
         "handle nested-element name-match signature should be resolved, got:\n{}",
+        replay_stdout
+    );
+    assert!(
+        !fail_lines
+            .iter()
+            .any(|line| *line == "[fail] Handle, non-const, element not found [true][false]"),
+        "handle non-const missing-element signature should be resolved, got:\n{}",
+        replay_stdout
+    );
+    assert!(
+        !fail_lines
+            .iter()
+            .any(|line| *line == "[fail] Handle, const, element not found [true][false]"),
+        "handle const missing-element signature should be resolved, got:\n{}",
         replay_stdout
     );
     assert!(
@@ -3652,7 +3678,7 @@ fn test_real_world_tinyxml2_make_test_command_subset_replay_fragile() {
         replay_stdout
     );
     assert!(
-        replay_stdout.contains("Pass 395, Fail 78"),
+        replay_stdout.contains("Pass 399, Fail 74"),
         "current blocker signature should report failing xmltest parity count, got:\n{}",
         replay_stdout
     );
