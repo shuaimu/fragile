@@ -480,6 +480,11 @@ impl CppType {
                     // Normalize these spellings so call/return typing stays consistent.
                     "tinyxml2::XMLError" | "tinyxml2_XMLError" => "XMLError".to_string(),
                     "tinyxml2::Whitespace" | "tinyxml2_Whitespace" => "Whitespace".to_string(),
+                    "tinyxml2::XMLElement::ElementClosingType"
+                    | "tinyxml2_XMLElement_ElementClosingType" => {
+                        "ElementClosingType".to_string()
+                    }
+                    "tinyxml2::StrPair::Mode" | "tinyxml2_StrPair_Mode" => "Mode".to_string(),
                     // C++11 chars_format (from <charconv>)
                     "std::chars_format" => "u32".to_string(), // Flags enum, treat as u32
                     // iostream base types
@@ -1558,6 +1563,24 @@ mod tests {
         assert_eq!(
             CppType::Named("tinyxml2_Whitespace".to_string()).to_rust_type_str(),
             "Whitespace"
+        );
+        assert_eq!(
+            CppType::Named("tinyxml2::XMLElement::ElementClosingType".to_string())
+                .to_rust_type_str(),
+            "ElementClosingType"
+        );
+        assert_eq!(
+            CppType::Named("tinyxml2_XMLElement_ElementClosingType".to_string())
+                .to_rust_type_str(),
+            "ElementClosingType"
+        );
+        assert_eq!(
+            CppType::Named("tinyxml2::StrPair::Mode".to_string()).to_rust_type_str(),
+            "Mode"
+        );
+        assert_eq!(
+            CppType::Named("tinyxml2_StrPair_Mode".to_string()).to_rust_type_str(),
+            "Mode"
         );
     }
 

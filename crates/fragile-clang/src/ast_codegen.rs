@@ -14044,6 +14044,10 @@ impl AstCodeGen {
             }
         }
 
+        // Emit nested enum declarations before field/method emission so class-local
+        // enum references resolve in the generated struct body and impl methods.
+        self.generate_record_nested_enums(name, children, true);
+
         let kind = if is_class { "class" } else { "struct" };
         self.writeln(&format!("/// C++ {} `{}`", kind, name));
         self.writeln("#[repr(C)]");
@@ -14208,6 +14212,92 @@ impl AstCodeGen {
         self.indent -= 1;
         self.writeln("}");
         self.writeln("");
+    }
+
+    /// Normalize nested record type names to the enum base name used by class-local
+    /// references while preserving compatibility aliases for fully-qualified spellings.
+    fn normalize_nested_record_type_name(record_name: &str, nested_name: &str) -> String {
+        let nested = nested_name.trim();
+        if nested.is_empty() {
+            return nested.to_string();
+        }
+
+        if nested.contains("::") {
+            if let Some(last) = nested.rsplit("::").next() {
+                if !last.is_empty() {
+                    return last.to_string();
+                }
+            }
+        }
+
+        let record_full_flat = record_name.replace("::", "_");
+        if !record_full_flat.is_empty() {
+            let prefix = format!("{}_", record_full_flat);
+            if let Some(rest) = nested.strip_prefix(&prefix) {
+                if !rest.is_empty() {
+                    return rest.to_string();
+                }
+            }
+        }
+
+        let record_unqualified = record_name.rsplit("::").next().unwrap_or(record_name);
+        let record_unqualified_flat = record_unqualified.replace("::", "_");
+        if !record_unqualified_flat.is_empty() {
+            let prefix = format!("{}_", record_unqualified_flat);
+            if let Some(rest) = nested.strip_prefix(&prefix) {
+                if !rest.is_empty() {
+                    return rest.to_string();
+                }
+            }
+        }
+
+        nested.to_string()
+    }
+
+    /// Generate nested enum declarations found inside a record/class declaration.
+    /// For qualified/flattened nested enum spellings, emit a compatibility type
+    /// alias back to the emitted base enum name.
+    fn generate_record_nested_enums(
+        &mut self,
+        record_name: &str,
+        children: &[ClangNode],
+        as_stub: bool,
+    ) {
+        for child in children {
+            let ClangNodeKind::EnumDecl {
+                name: enum_name,
+                is_scoped,
+                underlying_type,
+            } = &child.kind
+            else {
+                continue;
+            };
+
+            let emitted_name = Self::normalize_nested_record_type_name(record_name, enum_name);
+            if as_stub {
+                self.generate_enum_stub(&emitted_name, *is_scoped, underlying_type, &child.children);
+            } else {
+                self.generate_enum(&emitted_name, *is_scoped, underlying_type, &child.children);
+            }
+
+            let original_rust_name = CppType::Named(enum_name.clone()).to_rust_type_str();
+            let emitted_rust_name = CppType::Named(emitted_name).to_rust_type_str();
+            if original_rust_name.is_empty()
+                || original_rust_name == emitted_rust_name
+                || self.generated_aliases.contains(&original_rust_name)
+                || self.generated_structs.contains(&original_rust_name)
+                || self.generated_enums.contains(&original_rust_name)
+            {
+                continue;
+            }
+
+            self.writeln(&format!(
+                "pub type {} = {};",
+                original_rust_name, emitted_rust_name
+            ));
+            self.writeln("");
+            self.generated_aliases.insert(original_rust_name);
+        }
     }
 
     /// Generate an enum stub.
@@ -15758,6 +15848,10 @@ impl AstCodeGen {
                 }
             }
         }
+
+        // Emit nested enum declarations before field/method emission so class-local
+        // enum references resolve in generated record code.
+        self.generate_record_nested_enums(name, children, false);
 
         // Check if there's an explicit copy constructor - if so, we'll generate Clone impl later
         // Otherwise, derive Clone along with Default
@@ -17320,6 +17414,21 @@ impl AstCodeGen {
                     "pub const {}: {} = {}::{};",
                     alias_const, safe_name, safe_name, original_name
                 ));
+            }
+
+            // Preserve `Enum::ALIAS` lookup shape for duplicate-discriminant names
+            // by emitting associated const aliases on the enum type.
+            if !duplicates.is_empty() {
+                self.writeln(&format!("impl {} {{", safe_name));
+                self.indent += 1;
+                for (alias_name, _value, original_name) in &duplicates {
+                    self.writeln(&format!(
+                        "pub const {}: i32 = {}::{} as i32;",
+                        alias_name, safe_name, original_name
+                    ));
+                }
+                self.indent -= 1;
+                self.writeln("}");
             }
         } else {
             // Empty enum - generate as a type alias instead of struct
@@ -33086,6 +33195,120 @@ mod tests {
         assert!(
             !code.contains("pub type Node = a::Node;") && !code.contains("pub type Node = b::Node;"),
             "ambiguous namespaced type aliases should be skipped, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_record_nested_enum_name_normalization_emits_base_enum_with_alias() {
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![make_node(
+                ClangNodeKind::RecordDecl {
+                    name: "Outer".to_string(),
+                    is_class: true,
+                    is_definition: true,
+                    fields: vec![],
+                },
+                vec![
+                    make_node(
+                        ClangNodeKind::EnumDecl {
+                            name: "Outer::InnerMode".to_string(),
+                            is_scoped: true,
+                            underlying_type: CppType::Int { signed: true },
+                        },
+                        vec![
+                            make_node(
+                                ClangNodeKind::EnumConstantDecl {
+                                    name: "ALPHA".to_string(),
+                                    value: Some(0),
+                                },
+                                vec![],
+                            ),
+                            make_node(
+                                ClangNodeKind::EnumConstantDecl {
+                                    name: "BETA".to_string(),
+                                    value: Some(1),
+                                },
+                                vec![],
+                            ),
+                        ],
+                    ),
+                    make_node(
+                        ClangNodeKind::FieldDecl {
+                            name: "mode".to_string(),
+                            ty: CppType::Named("Outer::InnerMode".to_string()),
+                            access: crate::ast::AccessSpecifier::Public,
+                            is_static: false,
+                            bit_field_width: None,
+                        },
+                        vec![],
+                    ),
+                ],
+            )],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("pub enum InnerMode {"),
+            "nested enum should emit with normalized base name, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("pub type Outer_InnerMode = InnerMode;"),
+            "qualified nested enum spelling should emit a compatibility alias, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("pub mode: Outer_InnerMode,"),
+            "field type should continue using the lowered qualified spelling via alias, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("pub struct Outer_InnerMode {\n    _opaque: [u8; 64],"),
+            "nested enum alias target should not degrade into an opaque placeholder struct, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_duplicate_enum_values_emit_associated_const_aliases() {
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![make_node(
+                ClangNodeKind::EnumDecl {
+                    name: "Mode".to_string(),
+                    is_scoped: true,
+                    underlying_type: CppType::Int { signed: true },
+                },
+                vec![
+                    make_node(
+                        ClangNodeKind::EnumConstantDecl {
+                            name: "A".to_string(),
+                            value: Some(0),
+                        },
+                        vec![],
+                    ),
+                    make_node(
+                        ClangNodeKind::EnumConstantDecl {
+                            name: "B".to_string(),
+                            value: Some(0),
+                        },
+                        vec![],
+                    ),
+                ],
+            )],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("impl Mode {"),
+            "duplicate enum discriminants should emit an impl block for associated aliases, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("pub const B: i32 = Mode::A as i32;"),
+            "duplicate enum alias should be available as Mode::B associated const, got:\n{}",
             code
         );
     }
