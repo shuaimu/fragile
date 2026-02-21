@@ -8675,6 +8675,24 @@ impl AstCodeGen {
         signature: Option<(&[CppType], &CppType)>,
         prefer_const: bool,
     ) -> Option<String> {
+        self.select_method_overload_info(
+            class_name,
+            base_method_name,
+            arg_count,
+            signature,
+            prefer_const,
+        )
+        .map(|entry| entry.rust_name.clone())
+    }
+
+    fn select_method_overload_info(
+        &self,
+        class_name: &str,
+        base_method_name: &str,
+        arg_count: usize,
+        signature: Option<(&[CppType], &CppType)>,
+        prefer_const: bool,
+    ) -> Option<MethodOverloadInfo> {
         let class_overloads = self.get_class_method_overloads(class_name)?;
         let method_overloads = class_overloads.get(base_method_name)?;
 
@@ -8720,7 +8738,30 @@ impl AstCodeGen {
                 .or_else(|| candidates.first().copied())
         }?;
 
-        Some(selected.rust_name.clone())
+        Some(selected.clone())
+    }
+
+    /// If overload resolution is ambiguous but every same-arity overload shares
+    /// the same parameter types, we can still use those parameter types for
+    /// argument normalization.
+    fn select_common_member_param_types_for_arity(
+        &self,
+        class_name: &str,
+        base_method_name: &str,
+        arg_count: usize,
+    ) -> Option<Vec<CppType>> {
+        let class_overloads = self.get_class_method_overloads(class_name)?;
+        let method_overloads = class_overloads.get(base_method_name)?;
+        let mut candidates = method_overloads
+            .iter()
+            .filter(|entry| entry.param_types.len() == arg_count);
+
+        let first = candidates.next()?.param_types.clone();
+        if candidates.all(|entry| entry.param_types == first) {
+            Some(first)
+        } else {
+            None
+        }
     }
 
     fn member_call_prefers_const(&self, member_expr: &ClangNode, func: &str) -> bool {
@@ -8832,6 +8873,71 @@ impl AstCodeGen {
                 ) {
                     return Some(rewritten);
                 }
+            }
+        }
+
+        None
+    }
+
+    /// Resolve parameter types for a member call from emitted overload metadata
+    /// when call-site function type info is degraded/missing.
+    fn resolve_member_call_param_types(
+        &self,
+        callee: &ClangNode,
+        func: &str,
+        arg_count: usize,
+    ) -> Option<Vec<CppType>> {
+        let member_expr = Self::find_member_expr(callee)?;
+        let ClangNodeKind::MemberExpr {
+            member_name,
+            declaring_class,
+            ty,
+            ..
+        } = &member_expr.kind
+        else {
+            return None;
+        };
+
+        let base_method_name = sanitize_identifier(member_name);
+        let signature = if let CppType::Function {
+            params,
+            return_type,
+            ..
+        } = ty
+        {
+            Some((params.as_slice(), return_type.as_ref()))
+        } else {
+            None
+        };
+        let mut class_candidates: Vec<String> = Vec::new();
+        if let Some(class_name) = declaring_class {
+            class_candidates.push(class_name.clone());
+        }
+        if let Some(base) = member_expr.children.first() {
+            if let Some(base_class) = Self::extract_class_name(&Self::get_original_expr_type(base))
+                .or_else(|| Self::extract_class_name(&Self::get_expr_type(base)))
+            {
+                class_candidates.push(base_class);
+            }
+        }
+
+        for class_name in class_candidates {
+            let prefer_const = self.member_call_prefers_const(member_expr, func);
+            if let Some(overload) = self.select_method_overload_info(
+                &class_name,
+                &base_method_name,
+                arg_count,
+                signature,
+                prefer_const,
+            ) {
+                return Some(overload.param_types);
+            }
+            if let Some(common_params) = self.select_common_member_param_types_for_arity(
+                &class_name,
+                &base_method_name,
+                arg_count,
+            ) {
+                return Some(common_params);
             }
         }
 
@@ -27647,7 +27753,17 @@ impl AstCodeGen {
                             func = resolved;
                         }
                         let is_fn_ptr_call = Self::is_function_pointer_variable(callee);
-                        let param_types = Self::get_function_param_types(callee);
+                        let mut param_types = Self::get_function_param_types(callee);
+                        if let Some(member_param_types) = self.resolve_member_call_param_types(
+                            callee,
+                            &func,
+                            node.children.len().saturating_sub(1),
+                        ) {
+                            // Prefer class overload metadata for member calls. In real-world
+                            // C++ ASTs this is often more accurate than bound-member call-site
+                            // function types (which can degrade to integer placeholders).
+                            param_types = Some(member_param_types);
+                        }
                         let args: Vec<String> = node.children[1..]
                             .iter()
                             .enumerate()
@@ -28134,6 +28250,15 @@ impl AstCodeGen {
                         {
                             param_types = Some(declared);
                         }
+                    }
+                    if let Some(member_param_types) = self.resolve_member_call_param_types(
+                        &node.children[0],
+                        &func,
+                        node.children.len().saturating_sub(1),
+                    ) {
+                        // Prefer overload metadata for member calls over degraded call-site
+                        // function type metadata.
+                        param_types = Some(member_param_types);
                     }
 
                     let mut args: Vec<String> = node.children[1..]
@@ -33630,6 +33755,299 @@ mod tests {
             !code.contains("return ToInt(str, value);")
                 && !code.contains("return ToInt(str as *const i8, value as *mut i32);"),
             "unqualified helper call should not stay as unresolved free function call, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_member_call_zero_literal_uses_null_pointer_when_param_types_resolved_from_overloads() {
+        let xml_element_ptr = CppType::Pointer {
+            pointee: Box::new(CppType::Named("XMLElement".to_string())),
+            is_const: false,
+        };
+        let cchar_ptr = CppType::Pointer {
+            pointee: Box::new(CppType::Char { signed: true }),
+            is_const: true,
+        };
+        let xml_node_ptr = CppType::Pointer {
+            pointee: Box::new(CppType::Named("XMLNode".to_string())),
+            is_const: false,
+        };
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![
+                make_node(
+                    ClangNodeKind::RecordDecl {
+                        name: "XMLElement".to_string(),
+                        is_class: true,
+                        is_definition: true,
+                        fields: vec![],
+                    },
+                    vec![],
+                ),
+                make_node(
+                    ClangNodeKind::RecordDecl {
+                        name: "XMLNode".to_string(),
+                        is_class: true,
+                        is_definition: true,
+                        fields: vec![],
+                    },
+                    vec![
+                        make_node(
+                            ClangNodeKind::CXXMethodDecl {
+                                class_name: "XMLNode".to_string(),
+                                name: "FirstChildElement".to_string(),
+                                return_type: xml_element_ptr.clone(),
+                                params: vec![("name".to_string(), cchar_ptr.clone())],
+                                is_definition: true,
+                                is_static: false,
+                                is_virtual: false,
+                                is_pure_virtual: false,
+                                is_override: false,
+                                is_final: false,
+                                is_const: false,
+                                access: AccessSpecifier::Public,
+                            },
+                            vec![make_node(
+                                ClangNodeKind::CompoundStmt,
+                                vec![make_node(
+                                    ClangNodeKind::ReturnStmt,
+                                    vec![make_node(ClangNodeKind::NullPtrLiteral, vec![])],
+                                )],
+                            )],
+                        ),
+                        make_node(
+                            ClangNodeKind::CXXMethodDecl {
+                                class_name: "XMLNode".to_string(),
+                                name: "FirstOrNull".to_string(),
+                                return_type: xml_element_ptr.clone(),
+                                params: vec![],
+                                is_definition: true,
+                                is_static: false,
+                                is_virtual: false,
+                                is_pure_virtual: false,
+                                is_override: false,
+                                is_final: false,
+                                is_const: false,
+                                access: AccessSpecifier::Public,
+                            },
+                            vec![make_node(
+                                ClangNodeKind::CompoundStmt,
+                                vec![make_node(
+                                    ClangNodeKind::ReturnStmt,
+                                    vec![make_node(
+                                        ClangNodeKind::CallExpr {
+                                            ty: xml_element_ptr,
+                                            template_instantiation: None,
+                                        },
+                                        vec![
+                                            make_node(
+                                                ClangNodeKind::MemberExpr {
+                                                    member_name: "FirstChildElement".to_string(),
+                                                    is_arrow: false,
+                                                    ty: CppType::Named(
+                                                        "<bound member function type>".to_string(),
+                                                    ),
+                                                    declaring_class: Some("XMLNode".to_string()),
+                                                    is_static: false,
+                                                },
+                                                vec![make_node(
+                                                    ClangNodeKind::CXXThisExpr { ty: xml_node_ptr },
+                                                    vec![],
+                                                )],
+                                            ),
+                                            make_node(
+                                                ClangNodeKind::IntegerLiteral {
+                                                    value: 0,
+                                                    cpp_type: Some(CppType::Int { signed: true }),
+                                                },
+                                                vec![],
+                                            ),
+                                        ],
+                                    )],
+                                )],
+                            )],
+                        ),
+                    ],
+                ),
+            ],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("FirstChildElement(std::ptr::null()")
+                || code.contains("FirstChildElement(std::ptr::null_mut()"),
+            "zero literal pointer argument should lower to null pointer for resolved member overload params, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("FirstChildElement(0)"),
+            "zero integer literal should not remain as integer argument to pointer parameter, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_member_call_zero_literal_uses_null_pointer_with_const_nonconst_overload_ambiguity() {
+        let xml_element_ptr = CppType::Pointer {
+            pointee: Box::new(CppType::Named("XMLElement".to_string())),
+            is_const: false,
+        };
+        let xml_element_const_ptr = CppType::Pointer {
+            pointee: Box::new(CppType::Named("XMLElement".to_string())),
+            is_const: true,
+        };
+        let cchar_ptr = CppType::Pointer {
+            pointee: Box::new(CppType::Char { signed: true }),
+            is_const: true,
+        };
+        let xml_node_ptr = CppType::Pointer {
+            pointee: Box::new(CppType::Named("XMLNode".to_string())),
+            is_const: false,
+        };
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![
+                make_node(
+                    ClangNodeKind::RecordDecl {
+                        name: "XMLElement".to_string(),
+                        is_class: true,
+                        is_definition: true,
+                        fields: vec![],
+                    },
+                    vec![],
+                ),
+                make_node(
+                    ClangNodeKind::RecordDecl {
+                        name: "XMLNode".to_string(),
+                        is_class: true,
+                        is_definition: true,
+                        fields: vec![],
+                    },
+                    vec![
+                        make_node(
+                            ClangNodeKind::CXXMethodDecl {
+                                class_name: "XMLNode".to_string(),
+                                name: "FirstChildElement".to_string(),
+                                return_type: xml_element_ptr.clone(),
+                                params: vec![("name".to_string(), cchar_ptr.clone())],
+                                is_definition: true,
+                                is_static: false,
+                                is_virtual: false,
+                                is_pure_virtual: false,
+                                is_override: false,
+                                is_final: false,
+                                is_const: false,
+                                access: AccessSpecifier::Public,
+                            },
+                            vec![make_node(
+                                ClangNodeKind::CompoundStmt,
+                                vec![make_node(
+                                    ClangNodeKind::ReturnStmt,
+                                    vec![make_node(ClangNodeKind::NullPtrLiteral, vec![])],
+                                )],
+                            )],
+                        ),
+                        make_node(
+                            ClangNodeKind::CXXMethodDecl {
+                                class_name: "XMLNode".to_string(),
+                                name: "FirstChildElement".to_string(),
+                                return_type: xml_element_const_ptr.clone(),
+                                params: vec![("name".to_string(), cchar_ptr.clone())],
+                                is_definition: true,
+                                is_static: false,
+                                is_virtual: false,
+                                is_pure_virtual: false,
+                                is_override: false,
+                                is_final: false,
+                                is_const: true,
+                                access: AccessSpecifier::Public,
+                            },
+                            vec![make_node(
+                                ClangNodeKind::CompoundStmt,
+                                vec![make_node(
+                                    ClangNodeKind::ReturnStmt,
+                                    vec![make_node(ClangNodeKind::NullPtrLiteral, vec![])],
+                                )],
+                            )],
+                        ),
+                        make_node(
+                            ClangNodeKind::CXXMethodDecl {
+                                class_name: "XMLNode".to_string(),
+                                name: "FirstOrNullConst".to_string(),
+                                return_type: xml_element_const_ptr,
+                                params: vec![],
+                                is_definition: true,
+                                is_static: false,
+                                is_virtual: false,
+                                is_pure_virtual: false,
+                                is_override: false,
+                                is_final: false,
+                                is_const: true,
+                                access: AccessSpecifier::Public,
+                            },
+                            vec![make_node(
+                                ClangNodeKind::CompoundStmt,
+                                vec![make_node(
+                                    ClangNodeKind::ReturnStmt,
+                                    vec![make_node(
+                                        ClangNodeKind::CallExpr {
+                                            ty: CppType::Pointer {
+                                                pointee: Box::new(CppType::Named(
+                                                    "XMLElement".to_string(),
+                                                )),
+                                                is_const: true,
+                                            },
+                                            template_instantiation: None,
+                                        },
+                                        vec![
+                                            make_node(
+                                                ClangNodeKind::MemberExpr {
+                                                    member_name: "FirstChildElement".to_string(),
+                                                    is_arrow: false,
+                                                    ty: CppType::Named(
+                                                        "<bound member function type>".to_string(),
+                                                    ),
+                                                    declaring_class: Some("XMLNode".to_string()),
+                                                    is_static: false,
+                                                },
+                                                vec![make_node(
+                                                    ClangNodeKind::CXXThisExpr {
+                                                        ty: xml_node_ptr,
+                                                    },
+                                                    vec![],
+                                                )],
+                                            ),
+                                            make_node(
+                                                ClangNodeKind::IntegerLiteral {
+                                                    value: 0,
+                                                    cpp_type: Some(CppType::Int { signed: true }),
+                                                },
+                                                vec![],
+                                            ),
+                                        ],
+                                    )],
+                                )],
+                            )],
+                        ),
+                    ],
+                ),
+            ],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("FirstChildElement(std::ptr::null()")
+                || code.contains("FirstChildElement(std::ptr::null_mut()")
+                || code.contains("FirstChildElement_1(std::ptr::null()")
+                || code.contains("FirstChildElement_1(std::ptr::null_mut()"),
+            "zero literal pointer argument should lower to null pointer even when overload selection is ambiguous by constness, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("FirstChildElement(0)") && !code.contains("FirstChildElement_1(0)"),
+            "zero integer literal should not remain as integer argument for ambiguous const/non-const pointer overloads, got:\n{}",
             code
         );
     }
