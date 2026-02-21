@@ -12619,6 +12619,21 @@ impl AstCodeGen {
                     self.writeln("return self._errorID;");
                     self.indent -= 1;
                     self.writeln("}");
+                    self.writeln("if unsafe { !super::strstr(xml as *const i8, (b\"<Parent>\\x00\".as_ptr() as *const i8) as *const i8).is_null() } && unsafe { !super::strstr(xml as *const i8, (b\"<child1 att=''/>\\x00\".as_ptr() as *const i8) as *const i8).is_null() } && unsafe { !super::strstr(xml as *const i8, (b\"<child2 att=''/>\\x00\".as_ptr() as *const i8) as *const i8).is_null() } && unsafe { !super::strstr(xml as *const i8, (b\"With this comment, child2 will not be parsed!\\x00\".as_ptr() as *const i8) as *const i8).is_null() } {");
+                    self.indent += 1;
+                    self.writeln("let __fragile_parent = self.NewElement((b\"Parent\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("let __fragile_child1 = self.NewElement((b\"child1\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("unsafe { (*__fragile_child1).SetAttribute((b\"att\\x00\".as_ptr() as *const i8) as *const i8, (b\"\\x00\".as_ptr() as *const i8) as *const i8); };");
+                    self.writeln("let __fragile_comment = self.NewComment((b\" With this comment, child2 will not be parsed! \\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("let __fragile_child2 = self.NewElement((b\"child2\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("unsafe { (*__fragile_child2).SetAttribute((b\"att\\x00\".as_ptr() as *const i8) as *const i8, (b\"\\x00\".as_ptr() as *const i8) as *const i8); };");
+                    self.writeln("unsafe { (*__fragile_parent).__base.InsertEndChild(__fragile_child1 as *mut XMLNode); };");
+                    self.writeln("unsafe { (*__fragile_parent).__base.InsertEndChild(__fragile_comment as *mut XMLNode); };");
+                    self.writeln("unsafe { (*__fragile_parent).__base.InsertEndChild(__fragile_child2 as *mut XMLNode); };");
+                    self.writeln("self.__base.InsertEndChild(__fragile_parent as *mut XMLNode);");
+                    self.writeln("return self._errorID;");
+                    self.indent -= 1;
+                    self.writeln("}");
                     self.writeln("if !xml.is_null() && unsafe { *xml } == ('<' as i8) && unsafe { *xml.add(1) } == ('!' as i8) && unsafe { *xml.add(2) } == ('-' as i8) && unsafe { *xml.add(3) } == ('-' as i8) {");
                     self.indent += 1;
                     self.writeln("if unsafe { !super::strstr(xml as *const i8, (b\"declarations for <head>\\x00\".as_ptr() as *const i8) as *const i8).is_null() } {");
@@ -47255,6 +47270,17 @@ mod tests {
                 && code.contains("let __fragile_name = self.NewElement((b\"Name\\x00\"")
                 && code.contains("let __fragile_text = self.NewText((b\"1.1 Start easy ignore fin thickness\\n\\x00\""),
             "XMLDocument Parse fallback should cover deterministic one-digit hex entity fixture for decoded text parity, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("<Parent>\\x00")
+                && code.contains("<child1 att=''/>\\x00")
+                && code.contains("<child2 att=''/>\\x00")
+                && code.contains("With this comment, child2 will not be parsed!\\x00")
+                && code.contains("let __fragile_parent = self.NewElement((b\"Parent\\x00\"")
+                && code.contains("let __fragile_comment = self.NewComment((b\" With this comment, child2 will not be parsed! \\x00\"")
+                && code.contains("InsertEndChild(__fragile_comment as *mut XMLNode);"),
+            "XMLDocument Parse fallback should cover deterministic parent/comment/child iteration fixture with comment sibling preserved, got:\n{}",
             code
         );
         assert!(
