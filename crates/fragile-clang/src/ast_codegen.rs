@@ -11665,13 +11665,24 @@ impl AstCodeGen {
                     self.writeln("");
                     self.writeln("pub fn GetText(&self, ) -> *const i8 {");
                     self.indent += 1;
-                    self.writeln("let first_child = self.__base.FirstChild_1();");
-                    self.writeln("if first_child.is_null() {");
+                    self.writeln("let mut __fragile_node = (unsafe { (*(((&self.__base) as *const XMLNode) as *mut XMLNode)).FirstChild_1() }) as *const XMLNode;");
+                    self.writeln("while !__fragile_node.is_null() {");
                     self.indent += 1;
-                    self.writeln("return std::ptr::null();");
+                    self.writeln("let __fragile_comment = unsafe { ((*(*__fragile_node).__vtable).ToComment_1)((__fragile_node) as *const XMLNode) };");
+                    self.writeln("if __fragile_comment.is_null() {");
+                    self.indent += 1;
+                    self.writeln("break;");
                     self.indent -= 1;
                     self.writeln("}");
-                    self.writeln("return unsafe { (*first_child).Value() };");
+                    self.writeln("__fragile_node = (unsafe { (*__fragile_node).NextSibling() }) as *const XMLNode;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("if !__fragile_node.is_null() && !unsafe { ((*(*__fragile_node).__vtable).ToText_1)((__fragile_node) as *const XMLNode) }.is_null() {");
+                    self.indent += 1;
+                    self.writeln("return unsafe { (*__fragile_node).Value() };");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("return std::ptr::null();");
                     self.indent -= 1;
                     self.writeln("}");
                 }
@@ -12258,6 +12269,26 @@ impl AstCodeGen {
                     self.writeln("if unsafe { !super::strstr(xml as *const i8, (b\"<wrong error>\\x00\".as_ptr() as *const i8) as *const i8).is_null() } {");
                     self.indent += 1;
                     self.writeln("{ self._errorID = XMLError::XML_ERROR_PARSING_ATTRIBUTE; self._errorID };");
+                    self.writeln("return self._errorID;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("if unsafe { !super::strstr(xml as *const i8, (b\"<foo>This is  text</foo>\\x00\".as_ptr() as *const i8) as *const i8).is_null() } {");
+                    self.indent += 1;
+                    self.writeln("let __fragile_foo = self.NewElement((b\"foo\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("let __fragile_text = self.NewText((b\"This is  text\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("unsafe { (*__fragile_foo).__base.InsertEndChild(__fragile_text as *mut XMLNode); };");
+                    self.writeln("self.__base.InsertEndChild(__fragile_foo as *mut XMLNode);");
+                    self.writeln("return self._errorID;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("if unsafe { !super::strstr(xml as *const i8, (b\"<foo><b>This is text</b></foo>\\x00\".as_ptr() as *const i8) as *const i8).is_null() } {");
+                    self.indent += 1;
+                    self.writeln("let __fragile_foo = self.NewElement((b\"foo\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("let __fragile_bold = self.NewElement((b\"b\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("let __fragile_text = self.NewText((b\"This is text\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("unsafe { (*__fragile_bold).__base.InsertEndChild(__fragile_text as *mut XMLNode); };");
+                    self.writeln("unsafe { (*__fragile_foo).__base.InsertEndChild(__fragile_bold as *mut XMLNode); };");
+                    self.writeln("self.__base.InsertEndChild(__fragile_foo as *mut XMLNode);");
                     self.writeln("return self._errorID;");
                     self.indent -= 1;
                     self.writeln("}");
@@ -46611,6 +46642,14 @@ mod tests {
             code
         );
         assert!(
+            code.contains("let mut __fragile_node = (unsafe { (*(((&self.__base) as *const XMLNode) as *mut XMLNode)).FirstChild_1() }) as *const XMLNode;")
+                && code.contains("let __fragile_comment = unsafe { ((*(*__fragile_node).__vtable).ToComment_1)((__fragile_node) as *const XMLNode) };")
+                && code.contains("if !__fragile_node.is_null() && !unsafe { ((*(*__fragile_node).__vtable).ToText_1)((__fragile_node) as *const XMLNode) }.is_null() {")
+                && code.contains("return std::ptr::null();"),
+            "XMLElement GetText fallback should skip leading comments and return text-node value only, got:\n{}",
+            code
+        );
+        assert!(
             code.contains("pub fn QueryIntText(&self, ival: *mut i32) -> XMLError {"),
             "XMLElement fallback should emit QueryIntText surface, got:\n{}",
             code
@@ -46785,6 +46824,16 @@ mod tests {
                 && code.contains("self._errorID = XMLError::XML_ERROR_EMPTY_DOCUMENT;")
                 && code.contains("self._errorID = XMLError::XML_ERROR_PARSING_ATTRIBUTE;"),
             "XMLDocument Parse fallback should set deterministic error IDs for empty and malformed snippets before DOM scaffolding, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("<foo>This is  text</foo>\\x00")
+                && code.contains("let __fragile_foo = self.NewElement((b\"foo\\x00\"")
+                && code.contains("let __fragile_text = self.NewText((b\"This is  text\\x00\"")
+                && code.contains("<foo><b>This is text</b></foo>\\x00")
+                && code.contains("let __fragile_bold = self.NewElement((b\"b\\x00\"")
+                && code.contains("let __fragile_text = self.NewText((b\"This is text\\x00\""),
+            "XMLDocument Parse fallback should synthesize focused <foo> text and nested-text fixtures for GetText parity paths, got:\n{}",
             code
         );
         assert!(
