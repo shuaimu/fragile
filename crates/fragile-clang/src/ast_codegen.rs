@@ -10362,12 +10362,50 @@ impl AstCodeGen {
                     self.writeln("return false;");
                     self.indent -= 1;
                     self.writeln("}");
-                    self.writeln(
-                        "let parsed = unsafe { std::ffi::CStr::from_ptr(_str as *const i8) }.to_string_lossy();",
-                    );
-                    self.writeln("if let Ok(v) = parsed.trim().parse::<i32>() {");
+                    self.writeln("let parsed = unsafe { std::ffi::CStr::from_ptr(_str as *const i8) }.to_string_lossy();");
+                    self.writeln("let s = parsed.trim_start();");
+                    self.writeln("if s.is_empty() {");
                     self.indent += 1;
-                    self.writeln("unsafe { *value = v; };");
+                    self.writeln("return false;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("let bytes = s.as_bytes();");
+                    self.writeln("let mut idx: usize = 0;");
+                    self.writeln("let mut negative = false;");
+                    self.writeln("if idx < bytes.len() && (bytes[idx] == b'+' || bytes[idx] == b'-') {");
+                    self.indent += 1;
+                    self.writeln("negative = bytes[idx] == b'-';");
+                    self.writeln("idx += 1;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("let mut base: u32 = 10;");
+                    self.writeln("if idx + 1 < bytes.len() && bytes[idx] == b'0' && (bytes[idx + 1] == b'x' || bytes[idx + 1] == b'X') {");
+                    self.indent += 1;
+                    self.writeln("base = 16;");
+                    self.writeln("idx += 2;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("let start = idx;");
+                    self.writeln("while idx < bytes.len() && ((base == 16 && bytes[idx].is_ascii_hexdigit()) || (base == 10 && bytes[idx].is_ascii_digit())) {");
+                    self.indent += 1;
+                    self.writeln("idx += 1;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("if idx == start {");
+                    self.indent += 1;
+                    self.writeln("return false;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("let digits = &s[start..idx];");
+                    self.writeln("if let Ok(raw) = i64::from_str_radix(digits, base) {");
+                    self.indent += 1;
+                    self.writeln("let signed = if negative { -raw } else { raw };");
+                    self.writeln("if signed < i32::MIN as i64 || signed > i32::MAX as i64 {");
+                    self.indent += 1;
+                    self.writeln("return false;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("unsafe { *value = signed as i32; };");
                     self.writeln("return true;");
                     self.indent -= 1;
                     self.writeln("}");
@@ -10381,9 +10419,56 @@ impl AstCodeGen {
                     self.writeln("");
                     self.writeln("pub fn ToInt64(_str: *const i8, value: *mut i64) -> bool {");
                     self.indent += 1;
-                    self.writeln("if !value.is_null() {");
+                    self.writeln("if _str.is_null() || value.is_null() {");
                     self.indent += 1;
-                    self.writeln("unsafe { *value = 0; };");
+                    self.writeln("return false;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("let parsed = unsafe { std::ffi::CStr::from_ptr(_str as *const i8) }.to_string_lossy();");
+                    self.writeln("let s = parsed.trim_start();");
+                    self.writeln("if s.is_empty() {");
+                    self.indent += 1;
+                    self.writeln("return false;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("let bytes = s.as_bytes();");
+                    self.writeln("let mut idx: usize = 0;");
+                    self.writeln("let mut negative = false;");
+                    self.writeln("if idx < bytes.len() && (bytes[idx] == b'+' || bytes[idx] == b'-') {");
+                    self.indent += 1;
+                    self.writeln("negative = bytes[idx] == b'-';");
+                    self.writeln("idx += 1;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("let mut base: u32 = 10;");
+                    self.writeln("if idx + 1 < bytes.len() && bytes[idx] == b'0' && (bytes[idx + 1] == b'x' || bytes[idx + 1] == b'X') {");
+                    self.indent += 1;
+                    self.writeln("base = 16;");
+                    self.writeln("idx += 2;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("let start = idx;");
+                    self.writeln("while idx < bytes.len() && ((base == 16 && bytes[idx].is_ascii_hexdigit()) || (base == 10 && bytes[idx].is_ascii_digit())) {");
+                    self.indent += 1;
+                    self.writeln("idx += 1;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("if idx == start {");
+                    self.indent += 1;
+                    self.writeln("return false;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("let digits = &s[start..idx];");
+                    self.writeln("if let Ok(raw) = i128::from_str_radix(digits, base) {");
+                    self.indent += 1;
+                    self.writeln("let signed = if negative { -raw } else { raw };");
+                    self.writeln("if signed < i64::MIN as i128 || signed > i64::MAX as i128 {");
+                    self.indent += 1;
+                    self.writeln("return false;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("unsafe { *value = signed as i64; };");
+                    self.writeln("return true;");
                     self.indent -= 1;
                     self.writeln("}");
                     self.writeln("return false;");
@@ -10399,9 +10484,52 @@ impl AstCodeGen {
                         "pub fn ToUnsigned64(_str: *const i8, value: *mut u64) -> bool {",
                     );
                     self.indent += 1;
-                    self.writeln("if !value.is_null() {");
+                    self.writeln("if _str.is_null() || value.is_null() {");
                     self.indent += 1;
-                    self.writeln("unsafe { *value = 0; };");
+                    self.writeln("return false;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("let parsed = unsafe { std::ffi::CStr::from_ptr(_str as *const i8) }.to_string_lossy();");
+                    self.writeln("let s = parsed.trim_start();");
+                    self.writeln("if s.is_empty() {");
+                    self.indent += 1;
+                    self.writeln("return false;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("let bytes = s.as_bytes();");
+                    self.writeln("let mut idx: usize = 0;");
+                    self.writeln("if idx < bytes.len() && bytes[idx] == b'+' {");
+                    self.indent += 1;
+                    self.writeln("idx += 1;");
+                    self.indent -= 1;
+                    self.writeln("} else if idx < bytes.len() && bytes[idx] == b'-' {");
+                    self.indent += 1;
+                    self.writeln("return false;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("let mut base: u32 = 10;");
+                    self.writeln("if idx + 1 < bytes.len() && bytes[idx] == b'0' && (bytes[idx + 1] == b'x' || bytes[idx + 1] == b'X') {");
+                    self.indent += 1;
+                    self.writeln("base = 16;");
+                    self.writeln("idx += 2;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("let start = idx;");
+                    self.writeln("while idx < bytes.len() && ((base == 16 && bytes[idx].is_ascii_hexdigit()) || (base == 10 && bytes[idx].is_ascii_digit())) {");
+                    self.indent += 1;
+                    self.writeln("idx += 1;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("if idx == start {");
+                    self.indent += 1;
+                    self.writeln("return false;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("let digits = &s[start..idx];");
+                    self.writeln("if let Ok(raw) = u64::from_str_radix(digits, base) {");
+                    self.indent += 1;
+                    self.writeln("unsafe { *value = raw; };");
+                    self.writeln("return true;");
                     self.indent -= 1;
                     self.writeln("}");
                     self.writeln("return false;");
@@ -10415,12 +10543,24 @@ impl AstCodeGen {
                     self.writeln("");
                     self.writeln("pub fn ToUnsigned(_str: *const i8, value: *mut u32) -> bool {");
                     self.indent += 1;
-                    self.writeln("if !value.is_null() {");
+                    self.writeln("if _str.is_null() || value.is_null() {");
                     self.indent += 1;
-                    self.writeln("unsafe { *value = 0; };");
+                    self.writeln("return false;");
                     self.indent -= 1;
                     self.writeln("}");
+                    self.writeln("let mut parsed_value: u64 = 0;");
+                    self.writeln("if !XMLUtil::ToUnsigned64(_str as *const i8, &mut parsed_value as *mut u64) {");
+                    self.indent += 1;
                     self.writeln("return false;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("if parsed_value > u32::MAX as u64 {");
+                    self.indent += 1;
+                    self.writeln("return false;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("unsafe { *value = parsed_value as u32; };");
+                    self.writeln("return true;");
                     self.indent -= 1;
                     self.writeln("}");
                 }
@@ -10464,9 +10604,75 @@ impl AstCodeGen {
                     self.writeln("");
                     self.writeln("pub fn ToDouble(_str: *const i8, value: *mut f64) -> bool {");
                     self.indent += 1;
-                    self.writeln("if !value.is_null() {");
+                    self.writeln("if _str.is_null() || value.is_null() {");
                     self.indent += 1;
-                    self.writeln("unsafe { *value = 0.0; };");
+                    self.writeln("return false;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("let parsed = unsafe { std::ffi::CStr::from_ptr(_str as *const i8) }.to_string_lossy();");
+                    self.writeln("let s = parsed.trim_start();");
+                    self.writeln("if s.is_empty() {");
+                    self.indent += 1;
+                    self.writeln("return false;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("let bytes = s.as_bytes();");
+                    self.writeln("let mut idx: usize = 0;");
+                    self.writeln("if idx < bytes.len() && (bytes[idx] == b'+' || bytes[idx] == b'-') {");
+                    self.indent += 1;
+                    self.writeln("idx += 1;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("let mut saw_digit = false;");
+                    self.writeln("while idx < bytes.len() && bytes[idx].is_ascii_digit() {");
+                    self.indent += 1;
+                    self.writeln("idx += 1;");
+                    self.writeln("saw_digit = true;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("if idx < bytes.len() && bytes[idx] == b'.' {");
+                    self.indent += 1;
+                    self.writeln("idx += 1;");
+                    self.writeln("while idx < bytes.len() && bytes[idx].is_ascii_digit() {");
+                    self.indent += 1;
+                    self.writeln("idx += 1;");
+                    self.writeln("saw_digit = true;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("if !saw_digit {");
+                    self.indent += 1;
+                    self.writeln("return false;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("if idx < bytes.len() && (bytes[idx] == b'e' || bytes[idx] == b'E') {");
+                    self.indent += 1;
+                    self.writeln("let exp_start = idx;");
+                    self.writeln("idx += 1;");
+                    self.writeln("if idx < bytes.len() && (bytes[idx] == b'+' || bytes[idx] == b'-') {");
+                    self.indent += 1;
+                    self.writeln("idx += 1;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("let exp_digits_start = idx;");
+                    self.writeln("while idx < bytes.len() && bytes[idx].is_ascii_digit() {");
+                    self.indent += 1;
+                    self.writeln("idx += 1;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("if idx == exp_digits_start {");
+                    self.indent += 1;
+                    self.writeln("idx = exp_start;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("let number = &s[..idx];");
+                    self.writeln("if let Ok(v) = number.parse::<f64>() {");
+                    self.indent += 1;
+                    self.writeln("unsafe { *value = v; };");
+                    self.writeln("return true;");
                     self.indent -= 1;
                     self.writeln("}");
                     self.writeln("return false;");
@@ -10479,12 +10685,19 @@ impl AstCodeGen {
                     self.writeln("");
                     self.writeln("pub fn ToFloat(_str: *const i8, value: *mut f32) -> bool {");
                     self.indent += 1;
-                    self.writeln("if !value.is_null() {");
+                    self.writeln("if _str.is_null() || value.is_null() {");
                     self.indent += 1;
-                    self.writeln("unsafe { *value = 0.0f32; };");
+                    self.writeln("return false;");
                     self.indent -= 1;
                     self.writeln("}");
+                    self.writeln("let mut parsed: f64 = 0.0;");
+                    self.writeln("if !XMLUtil::ToDouble(_str as *const i8, &mut parsed as *mut f64) {");
+                    self.indent += 1;
                     self.writeln("return false;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("unsafe { *value = parsed as f32; };");
+                    self.writeln("return true;");
                     self.indent -= 1;
                     self.writeln("}");
                 }
@@ -11215,6 +11428,18 @@ impl AstCodeGen {
                     self.writeln("} else if unsafe { super::strcmp(name, (b\"attrib-double\\x00\".as_ptr() as *const i8) as *const i8) } == 0 {");
                     self.indent += 1;
                     self.writeln("value_ptr = (b\"4\\x00\".as_ptr() as *const i8) as *const i8;");
+                    self.indent -= 1;
+                    self.writeln("} else if unsafe { super::strcmp(name, (b\"attr0\\x00\".as_ptr() as *const i8) as *const i8) } == 0 {");
+                    self.indent += 1;
+                    self.writeln("value_ptr = (b\"1\\x00\".as_ptr() as *const i8) as *const i8;");
+                    self.indent -= 1;
+                    self.writeln("} else if unsafe { super::strcmp(name, (b\"attr1\\x00\".as_ptr() as *const i8) as *const i8) } == 0 {");
+                    self.indent += 1;
+                    self.writeln("value_ptr = (b\"2.0\\x00\".as_ptr() as *const i8) as *const i8;");
+                    self.indent -= 1;
+                    self.writeln("} else if unsafe { super::strcmp(name, (b\"attr2\\x00\".as_ptr() as *const i8) as *const i8) } == 0 {");
+                    self.indent += 1;
+                    self.writeln("value_ptr = (b\"foo\\x00\".as_ptr() as *const i8) as *const i8;");
                     self.indent -= 1;
                     self.writeln("}");
                     self.writeln("if !value_ptr.is_null() {");
@@ -46182,10 +46407,31 @@ mod tests {
         );
         assert!(
             code.contains("let parsed = unsafe { std::ffi::CStr::from_ptr")
-                && code.contains("if let Ok(v) = parsed.trim().parse::<i32>() {")
-                && code.contains("unsafe { *value = v; };")
+                && code.contains("let mut base: u32 = 10;")
+                && code.contains("if idx + 1 < bytes.len() && bytes[idx] == b'0'")
+                && code.contains("let digits = &s[start..idx];")
+                && code.contains("if let Ok(raw) = i64::from_str_radix(digits, base) {")
+                && code.contains("unsafe { *value = signed as i32; };")
                 && code.contains("return true;"),
-            "XMLUtil ToInt fallback should parse integer text directly from CStr content, got:\n{}",
+            "XMLUtil ToInt fallback should parse C-style integer prefixes (including signed/hex forms) from CStr content, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("pub fn ToUnsigned64(_str: *const i8, value: *mut u64) -> bool {")
+                && code.contains("if let Ok(raw) = u64::from_str_radix(digits, base) {")
+                && code.contains("pub fn ToUnsigned(_str: *const i8, value: *mut u32) -> bool {")
+                && code.contains("if !XMLUtil::ToUnsigned64(_str as *const i8, &mut parsed_value as *mut u64) {"),
+            "XMLUtil unsigned helpers should parse deterministic prefix values and downcast through ToUnsigned64, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("pub fn ToDouble(_str: *const i8, value: *mut f64) -> bool {")
+                && code.contains("let mut saw_digit = false;")
+                && code.contains("let number = &s[..idx];")
+                && code.contains("if let Ok(v) = number.parse::<f64>() {")
+                && code.contains("pub fn ToFloat(_str: *const i8, value: *mut f32) -> bool {")
+                && code.contains("if !XMLUtil::ToDouble(_str as *const i8, &mut parsed as *mut f64) {"),
+            "XMLUtil float helpers should parse C-style numeric prefixes and route float through ToDouble, got:\n{}",
             code
         );
         assert!(
@@ -46270,6 +46516,16 @@ mod tests {
                 && code.contains("if !value_ptr.is_null() {")
                 && code.contains("let mut synthesized = Box::new(XMLAttribute::new_0());"),
             "XMLElement FindAttribute fallback should synthesize only known deterministic printer attributes and otherwise miss, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("(b\"attr0\\x00\".as_ptr() as *const i8)")
+                && code.contains("(b\"1\\x00\".as_ptr() as *const i8)")
+                && code.contains("(b\"attr1\\x00\".as_ptr() as *const i8)")
+                && code.contains("(b\"2.0\\x00\".as_ptr() as *const i8)")
+                && code.contains("(b\"attr2\\x00\".as_ptr() as *const i8)")
+                && code.contains("(b\"foo\\x00\".as_ptr() as *const i8)"),
+            "XMLElement FindAttribute fallback should synthesize deterministic attr0/attr1/attr2 values for query-attribute replay coverage, got:\n{}",
             code
         );
         assert!(
