@@ -23,6 +23,8 @@ const TINYXML2_MAKE_TEST_COMMAND_PLAN_DIR: &str =
     "/tmp/fragile_real_world_tinyxml2_make_test_command_plan";
 const TINYXML2_MAKE_TEST_REPLAY_NATIVE_DIR: &str =
     "/tmp/fragile_real_world_tinyxml2_make_test_replay_native";
+const TINYXML2_MAKE_TEST_REPLAY_FRAGILE_DIR: &str =
+    "/tmp/fragile_real_world_tinyxml2_make_test_replay_fragile";
 const TINYXML2_CXX_DRIVER_XMLTEST_DIR: &str = "/tmp/fragile_real_world_tinyxml2_cxx_driver_xmltest";
 const TINYXML2_FRAGILE_XMLTEST_BUILD_DIR: &str =
     "/tmp/fragile_real_world_tinyxml2_fragile_xmltest_build";
@@ -1972,6 +1974,43 @@ fn run_tinyxml2_make_test_command_replay_native() -> Result<PathBuf, String> {
     Ok(log_dir)
 }
 
+fn run_tinyxml2_make_test_command_replay_fragile() -> Result<PathBuf, String> {
+    let checkout_dir = ensure_tinyxml2_checkout()?;
+    let baseline_root = PathBuf::from(TINYXML2_MAKE_TEST_REPLAY_FRAGILE_DIR);
+    reset_dir(&baseline_root)?;
+
+    let worktree_dir = baseline_root.join("worktree");
+    let checkout_dir_str = checkout_dir.to_string_lossy().to_string();
+    let worktree_dir_str = worktree_dir.to_string_lossy().to_string();
+    run_git(
+        &[
+            "clone",
+            "--no-tags",
+            "--local",
+            checkout_dir_str.as_str(),
+            worktree_dir_str.as_str(),
+        ],
+        None,
+    )?;
+    run_git(
+        &["checkout", "--detach", TINYXML2_PINNED_COMMIT],
+        Some(&worktree_dir),
+    )?;
+
+    let actual_head = read_head(&worktree_dir)
+        .ok_or_else(|| format!("failed to read HEAD in {}", worktree_dir.display()))?;
+    if actual_head != TINYXML2_PINNED_COMMIT {
+        return Err(format!(
+            "make-test replay fragile worktree expected commit {} but got {}",
+            TINYXML2_PINNED_COMMIT, actual_head
+        ));
+    }
+
+    let log_dir = baseline_root.join("replay_logs");
+    run_tinyxml2_fragile_make_test_command_replay_in_tree(&worktree_dir, &log_dir)?;
+    Ok(log_dir)
+}
+
 fn run_tinyxml2_cxx_driver_xmltest_baseline() -> Result<PathBuf, String> {
     let checkout_dir = ensure_tinyxml2_checkout()?;
     let baseline_root = PathBuf::from(TINYXML2_CXX_DRIVER_XMLTEST_DIR);
@@ -3301,4 +3340,43 @@ fn test_real_world_tinyxml2_make_test_command_subset_replay_native() {
             step
         );
     }
+}
+
+#[test]
+#[ignore = "real-world external project test (captures current tinyxml2 fragile replay timeout blocker)"]
+fn test_real_world_tinyxml2_make_test_command_subset_replay_fragile() {
+    let err = run_tinyxml2_make_test_command_replay_fragile()
+        .expect_err("fragile replay is expected to time out at command 1 until runtime blocker is resolved");
+    assert!(
+        err.contains("make-test command replay timed out at command 1"),
+        "expected command-1 timeout blocker message, got: {}",
+        err
+    );
+    let log_dir = PathBuf::from(TINYXML2_MAKE_TEST_REPLAY_FRAGILE_DIR).join("replay_logs");
+    for rel in TINYXML2_MAKE_TEST_COMMAND_PLAN_LOG_FILES {
+        assert!(
+            log_dir.join(rel).exists(),
+            "expected replay prerequisite file {}",
+            log_dir.join(rel).display()
+        );
+    }
+    for rel in TINYXML2_FRAGILE_XMLTEST_LOG_FILES {
+        assert!(
+            log_dir.join(rel).exists(),
+            "expected fragile xmltest build artifact {}",
+            log_dir.join(rel).display()
+        );
+    }
+    assert_eq!(
+        read_status_file(&log_dir.join("link_fragile_xmltest.status"))
+            .expect("failed to read link_fragile_xmltest.status"),
+        0,
+        "fragile replay should build and stage xmltest before command replay"
+    );
+    assert_eq!(
+        read_status_file(&log_dir.join("make_test_replay_01.status"))
+            .expect("failed to read make_test_replay_01.status"),
+        124,
+        "current blocker should surface as timeout status 124 on replay command 1"
+    );
 }
