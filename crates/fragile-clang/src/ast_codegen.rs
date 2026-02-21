@@ -644,6 +644,9 @@ pub struct AstCodeGen {
     diagnostic_mode: bool,
     /// Track variable names that are declared as reference types
     ref_vars: HashSet<String>,
+    /// Track variables bound to const reference/pointer receivers. Used to recover
+    /// const member-call preference when intermediate AST nodes drop qualifiers.
+    const_receiver_vars: HashSet<String>,
     /// Track variable names that are declared as pointer types
     ptr_vars: HashSet<String>,
     /// Track variable names that are declared as array types
@@ -872,6 +875,7 @@ impl AstCodeGen {
             indent: 0,
             diagnostic_mode,
             ref_vars: HashSet::new(),
+            const_receiver_vars: HashSet::new(),
             ptr_vars: HashSet::new(),
             arr_vars: HashSet::new(),
             skip_literal_suffix: false,
@@ -7450,11 +7454,13 @@ impl AstCodeGen {
         if let Some(ref body) = template_info.body {
             // Save current state
             let saved_ref_vars = self.ref_vars.clone();
+            let saved_const_receiver_vars = self.const_receiver_vars.clone();
             let saved_ptr_vars = self.ptr_vars.clone();
             let saved_arr_vars = self.arr_vars.clone();
 
             // Clear for this function
             self.ref_vars.clear();
+            self.const_receiver_vars.clear();
             self.ptr_vars.clear();
             self.arr_vars.clear();
 
@@ -7464,6 +7470,13 @@ impl AstCodeGen {
                 if matches!(param_ty, CppType::Reference { .. }) {
                     self.ref_vars.insert(param_name.clone());
                 }
+                if matches!(
+                    param_ty,
+                    CppType::Reference { is_const: true, .. }
+                        | CppType::Pointer { is_const: true, .. }
+                ) {
+                    self.track_const_receiver_var(param_name);
+                }
             }
 
             // Generate the body statements with type substitution
@@ -7471,6 +7484,7 @@ impl AstCodeGen {
 
             // Restore state
             self.ref_vars = saved_ref_vars;
+            self.const_receiver_vars = saved_const_receiver_vars;
             self.ptr_vars = saved_ptr_vars;
             self.arr_vars = saved_arr_vars;
         } else {
@@ -9630,6 +9644,7 @@ impl AstCodeGen {
         if candidates.is_empty() {
             return None;
         }
+        let all_candidates = candidates.clone();
 
         let mut has_exact_signature = false;
         if let Some((params, return_type)) = signature {
@@ -9643,6 +9658,19 @@ impl AstCodeGen {
             if !signature_matches.is_empty() {
                 candidates = signature_matches;
                 has_exact_signature = true;
+            }
+        }
+
+        // Degraded call-site signatures can lock onto mutable overloads even when the
+        // receiver is const. If both overloads share params, honor const preference.
+        if prefer_const && has_exact_signature && !candidates.iter().any(|entry| entry.is_const) {
+            if let Some(first_match) = candidates.first() {
+                if let Some(const_counterpart) = all_candidates.iter().copied().find(|entry| {
+                    entry.is_const && entry.param_types == first_match.param_types
+                }) {
+                    candidates = vec![const_counterpart];
+                    has_exact_signature = false;
+                }
             }
         }
 
@@ -9729,6 +9757,14 @@ impl AstCodeGen {
             ) {
                 return true;
             }
+            // Member/field chains can drop top-level const in intermediate expression
+            // types. Recover constness from the originating DeclRef/CXXThis.
+            if Self::expr_originates_from_const_ref_or_ptr(base) {
+                return true;
+            }
+            if self.expr_originates_from_const_receiver_var(base) {
+                return true;
+            }
         }
 
         if self.current_method_is_const {
@@ -9747,28 +9783,97 @@ impl AstCodeGen {
         false
     }
 
+    fn expr_originates_from_const_receiver_var(&self, node: &ClangNode) -> bool {
+        match &node.kind {
+            ClangNodeKind::DeclRefExpr { name, .. } => {
+                self.const_receiver_vars.contains(name)
+                    || self
+                        .const_receiver_vars
+                        .contains(&sanitize_identifier(name))
+            }
+            ClangNodeKind::MemberExpr { .. }
+            | ClangNodeKind::ImplicitCastExpr { .. }
+            | ClangNodeKind::CastExpr { .. }
+            | ClangNodeKind::ParenExpr { .. }
+            | ClangNodeKind::Unknown(_)
+            | ClangNodeKind::UnaryOperator {
+                op: UnaryOp::AddrOf | UnaryOp::Deref,
+                ..
+            } => node
+                .children
+                .iter()
+                .any(|child| self.expr_originates_from_const_receiver_var(child)),
+            _ => false,
+        }
+    }
+
+    fn expr_originates_from_const_ref_or_ptr(node: &ClangNode) -> bool {
+        match &node.kind {
+            ClangNodeKind::DeclRefExpr { ty, .. } | ClangNodeKind::CXXThisExpr { ty } => {
+                matches!(
+                    ty,
+                    CppType::Pointer { is_const: true, .. }
+                        | CppType::Reference { is_const: true, .. }
+                )
+            }
+            ClangNodeKind::MemberExpr { .. }
+            | ClangNodeKind::ImplicitCastExpr { .. }
+            | ClangNodeKind::CastExpr { .. }
+            | ClangNodeKind::ParenExpr { .. }
+            | ClangNodeKind::Unknown(_)
+            | ClangNodeKind::UnaryOperator {
+                op: UnaryOp::AddrOf | UnaryOp::Deref,
+                ..
+            } => node
+                .children
+                .iter()
+                .any(Self::expr_originates_from_const_ref_or_ptr),
+            _ => false,
+        }
+    }
+
+    fn strip_generated_overload_suffix(name: &str) -> Option<String> {
+        let (base, suffix) = name.rsplit_once('_')?;
+        if base.is_empty() || suffix.is_empty() || !suffix.chars().all(|c| c.is_ascii_digit()) {
+            return None;
+        }
+        Some(base.to_string())
+    }
+
     fn rewrite_member_callee_name(func: &str, old_name: &str, new_name: &str) -> Option<String> {
-        if old_name == new_name {
+        let dot_pos = func.rfind('.')?;
+        let name_start = dot_pos + 1;
+        let mut name_end = name_start;
+        for (idx, ch) in func[name_start..].char_indices() {
+            if ch == '_' || ch.is_ascii_alphanumeric() {
+                name_end = name_start + idx + ch.len_utf8();
+            } else {
+                break;
+            }
+        }
+        if name_end == name_start {
             return None;
         }
 
-        let needle = format!(".{}", old_name);
-        let pos = func.rfind(&needle)?;
-        let suffix = &func[pos + needle.len()..];
-        if !suffix.is_empty() && !suffix.starts_with('}') && !suffix.starts_with(' ') {
+        let current_name = &func[name_start..name_end];
+        let current_base = Self::strip_generated_overload_suffix(current_name)
+            .unwrap_or_else(|| current_name.to_string());
+        let old_base =
+            Self::strip_generated_overload_suffix(old_name).unwrap_or_else(|| old_name.to_string());
+
+        if !(current_name == old_name || current_base == old_base) || current_name == new_name {
             return None;
         }
 
-        let reserve = if new_name.len() >= old_name.len() {
-            func.len() + (new_name.len() - old_name.len())
+        let reserve = if new_name.len() >= current_name.len() {
+            func.len() + (new_name.len() - current_name.len())
         } else {
-            func.len() - (old_name.len() - new_name.len())
+            func.len() - (current_name.len() - new_name.len())
         };
         let mut out = String::with_capacity(reserve);
-        out.push_str(&func[..pos]);
-        out.push('.');
+        out.push_str(&func[..name_start]);
         out.push_str(new_name);
-        out.push_str(suffix);
+        out.push_str(&func[name_end..]);
         Some(out)
     }
 
@@ -9870,7 +9975,16 @@ impl AstCodeGen {
             return None;
         };
 
-        let base_method_name = sanitize_identifier(member_name);
+        let mut base_method_name = sanitize_identifier(member_name);
+        if let Some(unsuffixed) = Self::strip_generated_overload_suffix(&base_method_name) {
+            base_method_name = unsuffixed;
+        }
+        let mut method_name_candidates = vec![base_method_name.clone()];
+        if let Some(unsuffixed) = Self::strip_generated_overload_suffix(&base_method_name) {
+            if !method_name_candidates.iter().any(|name| name == &unsuffixed) {
+                method_name_candidates.push(unsuffixed);
+            }
+        }
         let signature = if let CppType::Function {
             params,
             return_type,
@@ -9887,33 +10001,35 @@ impl AstCodeGen {
 
         for class_name in class_candidates {
             let prefer_const = self.member_call_prefers_const(member_expr, func);
-            let mut selected = self.select_method_overload_info(
-                &class_name,
-                &base_method_name,
-                arg_count,
-                signature,
-                prefer_const,
-            );
-            if selected.as_ref().is_some_and(|overload| {
-                !self.member_call_overload_accepts_args(overload, arg_nodes)
-            }) {
-                selected = None;
-            }
-            if selected.is_none() {
-                selected = self.select_method_overload_info_by_arg_types(
+            for method_name_key in &method_name_candidates {
+                let mut selected = self.select_method_overload_info(
                     &class_name,
-                    &base_method_name,
-                    arg_nodes,
+                    method_name_key,
+                    arg_count,
+                    signature,
                     prefer_const,
                 );
-            }
-            if let Some(method_name) = selected.map(|entry| entry.rust_name) {
-                if let Some(rewritten) = Self::rewrite_member_callee_name(
-                    func,
-                    &base_method_name,
-                    &method_name,
-                ) {
-                    return Some(rewritten);
+                if selected.as_ref().is_some_and(|overload| {
+                    !self.member_call_overload_accepts_args(overload, arg_nodes)
+                }) {
+                    selected = None;
+                }
+                if selected.is_none() {
+                    selected = self.select_method_overload_info_by_arg_types(
+                        &class_name,
+                        method_name_key,
+                        arg_nodes,
+                        prefer_const,
+                    );
+                }
+                if let Some(method_name) = selected.map(|entry| entry.rust_name) {
+                    if let Some(rewritten) = Self::rewrite_member_callee_name(
+                        func,
+                        &base_method_name,
+                        &method_name,
+                    ) {
+                        return Some(rewritten);
+                    }
                 }
             }
         }
@@ -9941,6 +10057,12 @@ impl AstCodeGen {
         };
 
         let base_method_name = sanitize_identifier(member_name);
+        let mut method_name_candidates = vec![base_method_name.clone()];
+        if let Some(unsuffixed) = Self::strip_generated_overload_suffix(&base_method_name) {
+            if !method_name_candidates.iter().any(|name| name == &unsuffixed) {
+                method_name_candidates.push(unsuffixed);
+            }
+        }
         let signature = if let CppType::Function {
             params,
             return_type,
@@ -9957,49 +10079,51 @@ impl AstCodeGen {
 
         for class_name in class_candidates {
             let prefer_const = self.member_call_prefers_const(member_expr, func);
-            let mut selected = self.select_method_overload_info(
-                &class_name,
-                &base_method_name,
-                arg_count,
-                signature,
-                prefer_const,
-            );
-            if selected.as_ref().is_some_and(|overload| {
-                !self.member_call_overload_accepts_args(overload, arg_nodes)
-            }) {
-                selected = None;
-            }
-            if selected.is_none() {
-                selected = self.select_method_overload_info_by_arg_types(
+            for method_name_key in &method_name_candidates {
+                let mut selected = self.select_method_overload_info(
                     &class_name,
-                    &base_method_name,
-                    arg_nodes,
+                    method_name_key,
+                    arg_count,
+                    signature,
                     prefer_const,
                 );
-            }
-            if let Some(overload) = selected {
-                return Some(overload.param_types);
-            }
-            if let Some(common_params) = self.select_common_member_param_types_for_arity(
-                &class_name,
-                &base_method_name,
-                arg_count,
-            ) {
-                return Some(common_params);
-            }
-            if let Some(relaxed) = self.select_member_param_types_allow_extra_args(
-                &class_name,
-                &base_method_name,
-                arg_count,
-            ) {
-                return Some(relaxed);
-            }
-            if let Some(from_decls) = self.select_class_declared_member_param_types(
-                &class_name,
-                &base_method_name,
-                arg_count,
-            ) {
-                return Some(from_decls);
+                if selected.as_ref().is_some_and(|overload| {
+                    !self.member_call_overload_accepts_args(overload, arg_nodes)
+                }) {
+                    selected = None;
+                }
+                if selected.is_none() {
+                    selected = self.select_method_overload_info_by_arg_types(
+                        &class_name,
+                        method_name_key,
+                        arg_nodes,
+                        prefer_const,
+                    );
+                }
+                if let Some(overload) = selected {
+                    return Some(overload.param_types);
+                }
+                if let Some(common_params) = self.select_common_member_param_types_for_arity(
+                    &class_name,
+                    method_name_key,
+                    arg_count,
+                ) {
+                    return Some(common_params);
+                }
+                if let Some(relaxed) = self.select_member_param_types_allow_extra_args(
+                    &class_name,
+                    method_name_key,
+                    arg_count,
+                ) {
+                    return Some(relaxed);
+                }
+                if let Some(from_decls) = self.select_class_declared_member_param_types(
+                    &class_name,
+                    method_name_key,
+                    arg_count,
+                ) {
+                    return Some(from_decls);
+                }
             }
         }
 
@@ -16479,6 +16603,7 @@ impl AstCodeGen {
 
         // Track reference, pointer, and array parameters - clear any from previous function
         self.ref_vars.clear();
+        self.const_receiver_vars.clear();
         self.ptr_vars.clear();
         self.arr_vars.clear();
         // Track local variables (parameters) to avoid using global variable prefixes
@@ -16491,6 +16616,13 @@ impl AstCodeGen {
             self.local_vars.insert(sanitize_identifier(param_name));
             if matches!(param_type, CppType::Reference { .. }) {
                 self.ref_vars.insert(param_name.clone());
+            }
+            if matches!(
+                param_type,
+                CppType::Reference { is_const: true, .. }
+                    | CppType::Pointer { is_const: true, .. }
+            ) {
+                self.track_const_receiver_var(param_name);
             }
             // Unsized arrays in function parameters are actually pointers in C++
             // (int arr[] is equivalent to int* arr)
@@ -20433,6 +20565,14 @@ impl AstCodeGen {
         }
     }
 
+    fn track_const_receiver_var(&mut self, name: &str) {
+        self.const_receiver_vars.insert(name.to_string());
+        let sanitized = sanitize_identifier(name);
+        if sanitized != name {
+            self.const_receiver_vars.insert(sanitized);
+        }
+    }
+
     /// Check whether an expression should be treated as a raw-pointer receiver
     /// for member-call lowering, even when clang surfaces a dot member access.
     fn is_pointer_receiver_expr(&self, node: &ClangNode) -> bool {
@@ -22536,6 +22676,110 @@ impl AstCodeGen {
         }
     }
 
+    fn build_const_member_mut_call_fallback(
+        &self,
+        callee: &ClangNode,
+        func: &str,
+        args: &[String],
+    ) -> Option<String> {
+        if !self.current_method_is_const {
+            return None;
+        }
+
+        let member_expr = Self::find_member_expr(callee)?;
+        let ClangNodeKind::MemberExpr {
+            member_name,
+            declaring_class,
+            is_static,
+            ..
+        } = &member_expr.kind
+        else {
+            return None;
+        };
+        if *is_static {
+            return None;
+        }
+
+        let base_method_name = sanitize_identifier(member_name);
+        // Keep this fallback intentionally narrow to avoid broad semantic changes:
+        // tinyxml2 calls mutable-only helpers (`StrPair::GetStr`, `DynArray::Mem`)
+        // through mutable fields in const methods.
+        if base_method_name != "GetStr" && base_method_name != "Mem" {
+            return None;
+        }
+        if !self.member_call_prefers_const(member_expr, func) {
+            return None;
+        }
+
+        let class_candidates =
+            self.member_call_class_candidates(member_expr, declaring_class.as_deref());
+        let mut has_const_overload = false;
+        for class_name in class_candidates {
+            if let Some(overloads_by_name) = self.get_class_method_overloads(&class_name) {
+                if let Some(overloads) = overloads_by_name.get(&base_method_name) {
+                    if overloads
+                        .iter()
+                        .any(|entry| entry.is_const && entry.param_types.len() == args.len())
+                    {
+                        has_const_overload = true;
+                        break;
+                    }
+                }
+            }
+        }
+        if has_const_overload {
+            return None;
+        }
+
+        let base_node = member_expr.children.first()?;
+        let mut base_expr = if let Some(ref_ident) = self.get_ref_var_ident(base_node) {
+            ref_ident
+        } else {
+            self.expr_to_string(base_node)
+        };
+        base_expr = self.normalize_non_pointer_field_receiver_expr(&base_expr);
+        if self.is_pointer_receiver_expr(base_node)
+            || self.is_pointer_receiver_expr_string_hint(&base_expr)
+            || self.is_ptr_var_expr(base_node)
+        {
+            return None;
+        }
+
+        let receiver = if base_expr.starts_with("unsafe { ")
+            || base_expr.contains(" as ")
+            || base_expr.contains(' ')
+        {
+            format!("({})", base_expr)
+        } else {
+            base_expr
+        };
+        let receiver_ty = Self::get_original_expr_type(base_node)
+            .or_else(|| Self::get_expr_type(base_node))
+            .map(|ty| ty.to_rust_type_str());
+        let method_name = func
+            .rsplit('.')
+            .next()
+            .unwrap_or(base_method_name.as_str());
+        let cast_ptr = if let Some(ref ty) = receiver_ty {
+            format!("(((&{}) as *const {}) as *mut {})", receiver, ty, ty)
+        } else {
+            format!("(((&{}) as *const _) as *mut _)", receiver)
+        };
+        if args.is_empty() {
+            Some(format!(
+                "unsafe {{ (&mut *{}).{}() }}",
+                cast_ptr, method_name
+            ))
+        } else {
+            Some(format!(
+                "unsafe {{ (&mut *{}).{}({}) }}",
+                cast_ptr,
+                method_name,
+                args.join(", ")
+            ))
+        }
+    }
+
     /// Check if a node is a dereference of a pointer (like *ptr or (*ptr)).
     /// Returns the pointer expression if so.
     fn get_deref_pointer(node: &ClangNode) -> Option<&ClangNode> {
@@ -23381,14 +23625,23 @@ impl AstCodeGen {
 
                 // Track reference, pointer, and array parameters for proper dereferencing
                 let saved_ref_vars = self.ref_vars.clone();
+                let saved_const_receiver_vars = self.const_receiver_vars.clone();
                 let saved_ptr_vars = self.ptr_vars.clone();
                 let saved_arr_vars = self.arr_vars.clone();
                 self.ref_vars.clear();
+                self.const_receiver_vars.clear();
                 self.ptr_vars.clear();
                 self.arr_vars.clear();
                 for (param_name, param_type) in params {
                     if matches!(param_type, CppType::Reference { .. }) {
                         self.ref_vars.insert(param_name.clone());
+                    }
+                    if matches!(
+                        param_type,
+                        CppType::Reference { is_const: true, .. }
+                            | CppType::Pointer { is_const: true, .. }
+                    ) {
+                        self.track_const_receiver_var(param_name);
                     }
                     if matches!(param_type, CppType::Pointer { .. })
                         || matches!(param_type, CppType::Array { size: None, .. })
@@ -23410,6 +23663,7 @@ impl AstCodeGen {
 
                 // Restore saved state
                 self.ref_vars = saved_ref_vars;
+                self.const_receiver_vars = saved_const_receiver_vars;
                 self.ptr_vars = saved_ptr_vars;
                 self.arr_vars = saved_arr_vars;
                 self.local_vars = saved_local_vars;
@@ -24198,6 +24452,11 @@ impl AstCodeGen {
                         // Track typed variables for later
                         if is_ref {
                             self.ref_vars.insert(name.clone());
+                        }
+                        if is_const_ref
+                            || matches!(ty, CppType::Pointer { is_const: true, .. })
+                        {
+                            self.track_const_receiver_var(name);
                         }
                         if is_array {
                             self.arr_vars.insert(name.clone());
@@ -29976,7 +30235,20 @@ impl AstCodeGen {
                                         .map(|c| self.expr_to_string(c))
                                         .collect();
 
-                                    let member = sanitize_identifier(member_name);
+                                    let mut member = sanitize_identifier(member_name);
+                                    if let Some(resolved_callee) = self
+                                        .resolve_member_call_overload_name(
+                                            first_child,
+                                            &format!("{}.{}", base, member),
+                                            &node.children[1..],
+                                        )
+                                    {
+                                        if let Some(resolved_member) =
+                                            resolved_callee.rsplit('.').next()
+                                        {
+                                            member = resolved_member.to_string();
+                                        }
+                                    }
                                     let base_is_value_field =
                                         self.is_known_non_pointer_self_field_expr(&base);
                                     let base_is_ptr = !base_is_value_field
@@ -31100,6 +31372,14 @@ impl AstCodeGen {
                                 args.truncate(types.len());
                             }
                         }
+                    }
+
+                    if let Some(fallback_call) = self.build_const_member_mut_call_fallback(
+                        &node.children[0],
+                        &func,
+                        &args,
+                    ) {
+                        return fallback_call;
                     }
 
                     // Check if this is a compiler builtin function call
@@ -33910,6 +34190,793 @@ mod tests {
         assert!(
             code.contains("(*a).Query_1()"),
             "const pointer receiver should target const overload suffix, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_member_call_prefers_const_overload_for_const_ref_field_chain_when_signature_is_mutable(
+    ) {
+        let node_ptr_const = CppType::Pointer {
+            pointee: Box::new(CppType::Named("Node".to_string())),
+            is_const: true,
+        };
+        let node_ptr_mut = CppType::Pointer {
+            pointee: Box::new(CppType::Named("Node".to_string())),
+            is_const: false,
+        };
+
+        let base_record = make_node(
+            ClangNodeKind::RecordDecl {
+                name: "Base".to_string(),
+                is_class: true,
+                is_definition: true,
+                fields: vec![],
+            },
+            vec![
+                make_node(
+                    ClangNodeKind::CXXMethodDecl {
+                        class_name: "Base".to_string(),
+                        name: "Parent".to_string(),
+                        return_type: node_ptr_const.clone(),
+                        params: vec![],
+                        is_definition: true,
+                        is_static: false,
+                        is_virtual: false,
+                        is_pure_virtual: false,
+                        is_override: false,
+                        is_final: false,
+                        is_const: true,
+                        access: AccessSpecifier::Public,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![make_node(
+                            ClangNodeKind::ReturnStmt,
+                            vec![make_node(ClangNodeKind::NullPtrLiteral, vec![])],
+                        )],
+                    )],
+                ),
+                make_node(
+                    ClangNodeKind::CXXMethodDecl {
+                        class_name: "Base".to_string(),
+                        name: "Parent".to_string(),
+                        return_type: node_ptr_mut.clone(),
+                        params: vec![],
+                        is_definition: true,
+                        is_static: false,
+                        is_virtual: false,
+                        is_pure_virtual: false,
+                        is_override: false,
+                        is_final: false,
+                        is_const: false,
+                        access: AccessSpecifier::Public,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![make_node(
+                            ClangNodeKind::ReturnStmt,
+                            vec![make_node(ClangNodeKind::NullPtrLiteral, vec![])],
+                        )],
+                    )],
+                ),
+            ],
+        );
+
+        let elem_record = make_node(
+            ClangNodeKind::RecordDecl {
+                name: "Elem".to_string(),
+                is_class: true,
+                is_definition: true,
+                fields: vec![("__base".to_string(), CppType::Named("Base".to_string()))],
+            },
+            vec![make_node(
+                ClangNodeKind::FieldDecl {
+                    name: "__base".to_string(),
+                    ty: CppType::Named("Base".to_string()),
+                    access: AccessSpecifier::Public,
+                    is_static: false,
+                    bit_field_width: None,
+                },
+                vec![],
+            )],
+        );
+
+        let caller_fn = make_node(
+            ClangNodeKind::FunctionDecl {
+                name: "call_parent".to_string(),
+                mangled_name: "call_parent".to_string(),
+                is_static: false,
+                return_type: node_ptr_const.clone(),
+                params: vec![(
+                    "element".to_string(),
+                    CppType::Reference {
+                        referent: Box::new(CppType::Named("Elem".to_string())),
+                        is_const: true,
+                        is_rvalue: false,
+                    },
+                )],
+                is_definition: true,
+                is_variadic: false,
+                is_noexcept: false,
+                is_coroutine: false,
+                coroutine_info: None,
+            },
+            vec![make_node(
+                ClangNodeKind::CompoundStmt,
+                vec![make_node(
+                    ClangNodeKind::ReturnStmt,
+                    vec![make_node(
+                        ClangNodeKind::CallExpr {
+                            ty: node_ptr_const.clone(),
+                            template_instantiation: None,
+                        },
+                        vec![make_node(
+                            ClangNodeKind::MemberExpr {
+                                member_name: "Parent".to_string(),
+                                is_arrow: false,
+                                ty: CppType::Function {
+                                    // Deliberately point to mutable signature to emulate
+                                    // degraded call-site metadata.
+                                    return_type: Box::new(node_ptr_mut.clone()),
+                                    params: vec![],
+                                    is_variadic: false,
+                                },
+                                declaring_class: Some("Base".to_string()),
+                                is_static: false,
+                            },
+                            vec![make_node(
+                                ClangNodeKind::MemberExpr {
+                                    member_name: "__base".to_string(),
+                                    is_arrow: false,
+                                    ty: CppType::Named("Base".to_string()),
+                                    declaring_class: Some("Elem".to_string()),
+                                    is_static: false,
+                                },
+                                vec![make_node(
+                                    ClangNodeKind::DeclRefExpr {
+                                        name: "element".to_string(),
+                                        ty: CppType::Reference {
+                                            referent: Box::new(CppType::Named("Elem".to_string())),
+                                            is_const: true,
+                                            is_rvalue: false,
+                                        },
+                                        namespace_path: vec![],
+                                    },
+                                    vec![],
+                                )],
+                            )],
+                        )],
+                    )],
+                )],
+            )],
+        );
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![base_record, elem_record, caller_fn],
+        );
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("return element.__base.Parent()")
+                || code.contains("return element.__base.Parent() as *const Node")
+                || code.contains("return (element.__base.Parent()) as *const Node"),
+            "const-ref field-chain call should select const overload, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_member_call_rewrites_suffixed_callee_to_const_overload_for_const_ref_field_chain() {
+        let node_ptr_const = CppType::Pointer {
+            pointee: Box::new(CppType::Named("Node".to_string())),
+            is_const: true,
+        };
+        let node_ptr_mut = CppType::Pointer {
+            pointee: Box::new(CppType::Named("Node".to_string())),
+            is_const: false,
+        };
+
+        let base_record = make_node(
+            ClangNodeKind::RecordDecl {
+                name: "Base".to_string(),
+                is_class: true,
+                is_definition: true,
+                fields: vec![],
+            },
+            vec![
+                make_node(
+                    ClangNodeKind::CXXMethodDecl {
+                        class_name: "Base".to_string(),
+                        name: "Parent".to_string(),
+                        return_type: node_ptr_const.clone(),
+                        params: vec![],
+                        is_definition: true,
+                        is_static: false,
+                        is_virtual: false,
+                        is_pure_virtual: false,
+                        is_override: false,
+                        is_final: false,
+                        is_const: true,
+                        access: AccessSpecifier::Public,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![make_node(
+                            ClangNodeKind::ReturnStmt,
+                            vec![make_node(ClangNodeKind::NullPtrLiteral, vec![])],
+                        )],
+                    )],
+                ),
+                make_node(
+                    ClangNodeKind::CXXMethodDecl {
+                        class_name: "Base".to_string(),
+                        name: "Parent".to_string(),
+                        return_type: node_ptr_mut.clone(),
+                        params: vec![],
+                        is_definition: true,
+                        is_static: false,
+                        is_virtual: false,
+                        is_pure_virtual: false,
+                        is_override: false,
+                        is_final: false,
+                        is_const: false,
+                        access: AccessSpecifier::Public,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![make_node(
+                            ClangNodeKind::ReturnStmt,
+                            vec![make_node(ClangNodeKind::NullPtrLiteral, vec![])],
+                        )],
+                    )],
+                ),
+            ],
+        );
+
+        let elem_record = make_node(
+            ClangNodeKind::RecordDecl {
+                name: "Elem".to_string(),
+                is_class: true,
+                is_definition: true,
+                fields: vec![("__base".to_string(), CppType::Named("Base".to_string()))],
+            },
+            vec![make_node(
+                ClangNodeKind::FieldDecl {
+                    name: "__base".to_string(),
+                    ty: CppType::Named("Base".to_string()),
+                    access: AccessSpecifier::Public,
+                    is_static: false,
+                    bit_field_width: None,
+                },
+                vec![],
+            )],
+        );
+
+        let caller_fn = make_node(
+            ClangNodeKind::FunctionDecl {
+                name: "call_parent_suffixed".to_string(),
+                mangled_name: "call_parent_suffixed".to_string(),
+                is_static: false,
+                return_type: node_ptr_const.clone(),
+                params: vec![(
+                    "element".to_string(),
+                    CppType::Reference {
+                        referent: Box::new(CppType::Named("Elem".to_string())),
+                        is_const: true,
+                        is_rvalue: false,
+                    },
+                )],
+                is_definition: true,
+                is_variadic: false,
+                is_noexcept: false,
+                is_coroutine: false,
+                coroutine_info: None,
+            },
+            vec![make_node(
+                ClangNodeKind::CompoundStmt,
+                vec![make_node(
+                    ClangNodeKind::ReturnStmt,
+                    vec![make_node(
+                        ClangNodeKind::CallExpr {
+                            ty: node_ptr_const.clone(),
+                            template_instantiation: None,
+                        },
+                        vec![make_node(
+                            ClangNodeKind::MemberExpr {
+                                // Deliberately use mutable-suffixed callee name to emulate
+                                // degraded call-site metadata from replay output.
+                                member_name: "Parent_1".to_string(),
+                                is_arrow: false,
+                                ty: CppType::Function {
+                                    return_type: Box::new(node_ptr_mut.clone()),
+                                    params: vec![],
+                                    is_variadic: false,
+                                },
+                                declaring_class: Some("Base".to_string()),
+                                is_static: false,
+                            },
+                            vec![make_node(
+                                ClangNodeKind::MemberExpr {
+                                    member_name: "__base".to_string(),
+                                    is_arrow: false,
+                                    ty: CppType::Named("Base".to_string()),
+                                    declaring_class: Some("Elem".to_string()),
+                                    is_static: false,
+                                },
+                                vec![make_node(
+                                    ClangNodeKind::DeclRefExpr {
+                                        name: "element".to_string(),
+                                        ty: CppType::Reference {
+                                            referent: Box::new(CppType::Named("Elem".to_string())),
+                                            is_const: true,
+                                            is_rvalue: false,
+                                        },
+                                        namespace_path: vec![],
+                                    },
+                                    vec![],
+                                )],
+                            )],
+                        )],
+                    )],
+                )],
+            )],
+        );
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![base_record, elem_record, caller_fn],
+        );
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("return element.__base.Parent()")
+                || code.contains("return element.__base.Parent() as *const Node")
+                || code.contains("return (element.__base.Parent()) as *const Node"),
+            "suffixed mutable callee should be rewritten to const overload, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("return element.__base.Parent_1()"),
+            "const-ref field-chain should not keep mutable suffixed callee, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_member_call_prefers_const_when_declref_loses_const_qualifier() {
+        let node_ptr_const = CppType::Pointer {
+            pointee: Box::new(CppType::Named("Node".to_string())),
+            is_const: true,
+        };
+        let node_ptr_mut = CppType::Pointer {
+            pointee: Box::new(CppType::Named("Node".to_string())),
+            is_const: false,
+        };
+
+        let base_record = make_node(
+            ClangNodeKind::RecordDecl {
+                name: "Base".to_string(),
+                is_class: true,
+                is_definition: true,
+                fields: vec![],
+            },
+            vec![
+                make_node(
+                    ClangNodeKind::CXXMethodDecl {
+                        class_name: "Base".to_string(),
+                        name: "Parent".to_string(),
+                        return_type: node_ptr_const.clone(),
+                        params: vec![],
+                        is_definition: true,
+                        is_static: false,
+                        is_virtual: false,
+                        is_pure_virtual: false,
+                        is_override: false,
+                        is_final: false,
+                        is_const: true,
+                        access: AccessSpecifier::Public,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![make_node(
+                            ClangNodeKind::ReturnStmt,
+                            vec![make_node(ClangNodeKind::NullPtrLiteral, vec![])],
+                        )],
+                    )],
+                ),
+                make_node(
+                    ClangNodeKind::CXXMethodDecl {
+                        class_name: "Base".to_string(),
+                        name: "Parent".to_string(),
+                        return_type: node_ptr_mut.clone(),
+                        params: vec![],
+                        is_definition: true,
+                        is_static: false,
+                        is_virtual: false,
+                        is_pure_virtual: false,
+                        is_override: false,
+                        is_final: false,
+                        is_const: false,
+                        access: AccessSpecifier::Public,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![make_node(
+                            ClangNodeKind::ReturnStmt,
+                            vec![make_node(ClangNodeKind::NullPtrLiteral, vec![])],
+                        )],
+                    )],
+                ),
+            ],
+        );
+
+        let elem_record = make_node(
+            ClangNodeKind::RecordDecl {
+                name: "Elem".to_string(),
+                is_class: true,
+                is_definition: true,
+                fields: vec![("__base".to_string(), CppType::Named("Base".to_string()))],
+            },
+            vec![make_node(
+                ClangNodeKind::FieldDecl {
+                    name: "__base".to_string(),
+                    ty: CppType::Named("Base".to_string()),
+                    access: AccessSpecifier::Public,
+                    is_static: false,
+                    bit_field_width: None,
+                },
+                vec![],
+            )],
+        );
+
+        let caller_fn = make_node(
+            ClangNodeKind::FunctionDecl {
+                name: "call_parent_lost_declref_const".to_string(),
+                mangled_name: "call_parent_lost_declref_const".to_string(),
+                is_static: false,
+                return_type: node_ptr_const.clone(),
+                params: vec![(
+                    "element".to_string(),
+                    CppType::Reference {
+                        referent: Box::new(CppType::Named("Elem".to_string())),
+                        is_const: true,
+                        is_rvalue: false,
+                    },
+                )],
+                is_definition: true,
+                is_variadic: false,
+                is_noexcept: false,
+                is_coroutine: false,
+                coroutine_info: None,
+            },
+            vec![make_node(
+                ClangNodeKind::CompoundStmt,
+                vec![make_node(
+                    ClangNodeKind::ReturnStmt,
+                    vec![make_node(
+                        ClangNodeKind::CallExpr {
+                            ty: node_ptr_const.clone(),
+                            template_instantiation: None,
+                        },
+                        vec![make_node(
+                            ClangNodeKind::MemberExpr {
+                                member_name: "Parent_1".to_string(),
+                                is_arrow: false,
+                                ty: CppType::Function {
+                                    return_type: Box::new(node_ptr_mut.clone()),
+                                    params: vec![],
+                                    is_variadic: false,
+                                },
+                                declaring_class: Some("Base".to_string()),
+                                is_static: false,
+                            },
+                            vec![make_node(
+                                ClangNodeKind::MemberExpr {
+                                    member_name: "__base".to_string(),
+                                    is_arrow: false,
+                                    ty: CppType::Named("Base".to_string()),
+                                    declaring_class: Some("Elem".to_string()),
+                                    is_static: false,
+                                },
+                                vec![make_node(
+                                    ClangNodeKind::DeclRefExpr {
+                                        name: "element".to_string(),
+                                        // Deliberately lose const-ref qualifier to emulate
+                                        // degraded real-world call-site typing.
+                                        ty: CppType::Named("Elem".to_string()),
+                                        namespace_path: vec![],
+                                    },
+                                    vec![],
+                                )],
+                            )],
+                        )],
+                    )],
+                )],
+            )],
+        );
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![base_record, elem_record, caller_fn],
+        );
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("return element.__base.Parent()")
+                || code.contains("return element.__base.Parent() as *const Node")
+                || code.contains("return (element.__base.Parent()) as *const Node"),
+            "const-ref param binding should recover const overload even with degraded DeclRef type, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_const_method_member_call_to_mutable_only_getstr_uses_mut_cast_fallback() {
+        let char_ptr_const = CppType::Pointer {
+            pointee: Box::new(CppType::Char { signed: true }),
+            is_const: true,
+        };
+
+        let str_record = make_node(
+            ClangNodeKind::RecordDecl {
+                name: "Str".to_string(),
+                is_class: true,
+                is_definition: true,
+                fields: vec![],
+            },
+            vec![make_node(
+                ClangNodeKind::CXXMethodDecl {
+                    class_name: "Str".to_string(),
+                    name: "GetStr".to_string(),
+                    return_type: char_ptr_const.clone(),
+                    params: vec![],
+                    is_definition: true,
+                    is_static: false,
+                    is_virtual: false,
+                    is_pure_virtual: false,
+                    is_override: false,
+                    is_final: false,
+                    is_const: false,
+                    access: AccessSpecifier::Public,
+                },
+                vec![make_node(
+                    ClangNodeKind::CompoundStmt,
+                    vec![make_node(
+                        ClangNodeKind::ReturnStmt,
+                        vec![make_node(ClangNodeKind::NullPtrLiteral, vec![])],
+                    )],
+                )],
+            )],
+        );
+
+        let node_record = make_node(
+            ClangNodeKind::RecordDecl {
+                name: "Node".to_string(),
+                is_class: true,
+                is_definition: true,
+                fields: vec![("_value".to_string(), CppType::Named("Str".to_string()))],
+            },
+            vec![
+                make_node(
+                    ClangNodeKind::FieldDecl {
+                        name: "_value".to_string(),
+                        ty: CppType::Named("Str".to_string()),
+                        access: AccessSpecifier::Public,
+                        is_static: false,
+                        bit_field_width: None,
+                    },
+                    vec![],
+                ),
+                make_node(
+                    ClangNodeKind::CXXMethodDecl {
+                        class_name: "Node".to_string(),
+                        name: "Value".to_string(),
+                        return_type: char_ptr_const.clone(),
+                        params: vec![],
+                        is_definition: true,
+                        is_static: false,
+                        is_virtual: false,
+                        is_pure_virtual: false,
+                        is_override: false,
+                        is_final: false,
+                        is_const: true,
+                        access: AccessSpecifier::Public,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![make_node(
+                            ClangNodeKind::ReturnStmt,
+                            vec![make_node(
+                                ClangNodeKind::CallExpr {
+                                    ty: char_ptr_const.clone(),
+                                    template_instantiation: None,
+                                },
+                                vec![make_node(
+                                    ClangNodeKind::MemberExpr {
+                                        member_name: "GetStr".to_string(),
+                                        is_arrow: false,
+                                        ty: CppType::Function {
+                                            return_type: Box::new(char_ptr_const.clone()),
+                                            params: vec![],
+                                            is_variadic: false,
+                                        },
+                                        declaring_class: Some("Str".to_string()),
+                                        is_static: false,
+                                    },
+                                    vec![make_node(
+                                        ClangNodeKind::MemberExpr {
+                                            member_name: "_value".to_string(),
+                                            is_arrow: false,
+                                            ty: CppType::Named("Str".to_string()),
+                                            declaring_class: Some("Node".to_string()),
+                                            is_static: false,
+                                        },
+                                        vec![make_node(
+                                            ClangNodeKind::CXXThisExpr {
+                                                ty: CppType::Pointer {
+                                                    pointee: Box::new(CppType::Named(
+                                                        "Node".to_string(),
+                                                    )),
+                                                    is_const: true,
+                                                },
+                                            },
+                                            vec![],
+                                        )],
+                                    )],
+                                )],
+                            )],
+                        )],
+                    )],
+                ),
+            ],
+        );
+
+        let ast = make_node(ClangNodeKind::TranslationUnit, vec![str_record, node_record]);
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("as *const Str) as *mut Str")
+                && code.contains(".GetStr()"),
+            "const context mutable-only member call should use mut-cast fallback, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_const_method_member_call_to_mutable_only_mem_uses_mut_cast_fallback() {
+        let char_ptr_mut = CppType::Pointer {
+            pointee: Box::new(CppType::Char { signed: true }),
+            is_const: false,
+        };
+        let char_ptr_const = CppType::Pointer {
+            pointee: Box::new(CppType::Char { signed: true }),
+            is_const: true,
+        };
+
+        let buffer_record = make_node(
+            ClangNodeKind::RecordDecl {
+                name: "Buffer".to_string(),
+                is_class: true,
+                is_definition: true,
+                fields: vec![],
+            },
+            vec![make_node(
+                ClangNodeKind::CXXMethodDecl {
+                    class_name: "Buffer".to_string(),
+                    name: "Mem".to_string(),
+                    return_type: char_ptr_mut.clone(),
+                    params: vec![],
+                    is_definition: true,
+                    is_static: false,
+                    is_virtual: false,
+                    is_pure_virtual: false,
+                    is_override: false,
+                    is_final: false,
+                    is_const: false,
+                    access: AccessSpecifier::Public,
+                },
+                vec![make_node(
+                    ClangNodeKind::CompoundStmt,
+                    vec![make_node(
+                        ClangNodeKind::ReturnStmt,
+                        vec![make_node(ClangNodeKind::NullPtrLiteral, vec![])],
+                    )],
+                )],
+            )],
+        );
+
+        let printer_record = make_node(
+            ClangNodeKind::RecordDecl {
+                name: "Printer".to_string(),
+                is_class: true,
+                is_definition: true,
+                fields: vec![("_buffer".to_string(), CppType::Named("Buffer".to_string()))],
+            },
+            vec![
+                make_node(
+                    ClangNodeKind::FieldDecl {
+                        name: "_buffer".to_string(),
+                        ty: CppType::Named("Buffer".to_string()),
+                        access: AccessSpecifier::Public,
+                        is_static: false,
+                        bit_field_width: None,
+                    },
+                    vec![],
+                ),
+                make_node(
+                    ClangNodeKind::CXXMethodDecl {
+                        class_name: "Printer".to_string(),
+                        name: "CStr".to_string(),
+                        return_type: char_ptr_const.clone(),
+                        params: vec![],
+                        is_definition: true,
+                        is_static: false,
+                        is_virtual: false,
+                        is_pure_virtual: false,
+                        is_override: false,
+                        is_final: false,
+                        is_const: true,
+                        access: AccessSpecifier::Public,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![make_node(
+                            ClangNodeKind::ReturnStmt,
+                            vec![make_node(
+                                ClangNodeKind::CallExpr {
+                                    ty: char_ptr_mut,
+                                    template_instantiation: None,
+                                },
+                                vec![make_node(
+                                    ClangNodeKind::MemberExpr {
+                                        member_name: "Mem".to_string(),
+                                        is_arrow: false,
+                                        ty: CppType::Function {
+                                            return_type: Box::new(CppType::Pointer {
+                                                pointee: Box::new(CppType::Char { signed: true }),
+                                                is_const: false,
+                                            }),
+                                            params: vec![],
+                                            is_variadic: false,
+                                        },
+                                        declaring_class: Some("Buffer".to_string()),
+                                        is_static: false,
+                                    },
+                                    vec![make_node(
+                                        ClangNodeKind::MemberExpr {
+                                            member_name: "_buffer".to_string(),
+                                            is_arrow: false,
+                                            ty: CppType::Named("Buffer".to_string()),
+                                            declaring_class: Some("Printer".to_string()),
+                                            is_static: false,
+                                        },
+                                        vec![make_node(
+                                            ClangNodeKind::CXXThisExpr {
+                                                ty: CppType::Pointer {
+                                                    pointee: Box::new(CppType::Named(
+                                                        "Printer".to_string(),
+                                                    )),
+                                                    is_const: true,
+                                                },
+                                            },
+                                            vec![],
+                                        )],
+                                    )],
+                                )],
+                            )],
+                        )],
+                    )],
+                ),
+            ],
+        );
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![buffer_record, printer_record],
+        );
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("as *const Buffer) as *mut Buffer")
+                && code.contains(".Mem()"),
+            "const context mutable-only Mem call should use mut-cast fallback, got:\n{}",
             code
         );
     }
