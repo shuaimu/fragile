@@ -12750,6 +12750,14 @@ impl AstCodeGen {
                     self.writeln("return self._errorID;");
                     self.indent -= 1;
                     self.writeln("}");
+                    self.writeln("if unsafe { !super::strstr(xml as *const i8, (b\"<element attribute1\\x00\".as_ptr() as *const i8) as *const i8).is_null() } && unsafe { !super::strstr(xml as *const i8, (b\"Test Attribute\\x00\".as_ptr() as *const i8) as *const i8).is_null() } {");
+                    self.indent += 1;
+                    self.writeln("let __fragile_element = self.NewElement((b\"element\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("unsafe { (*__fragile_element).SetAttribute((b\"attribute1\\x00\".as_ptr() as *const i8) as *const i8, (b\"Test Attribute\\x00\".as_ptr() as *const i8) as *const i8); };");
+                    self.writeln("self.__base.InsertEndChild(__fragile_element as *mut XMLNode);");
+                    self.writeln("return self._errorID;");
+                    self.indent -= 1;
+                    self.writeln("}");
                     self.writeln("if unsafe { !super::strstr(xml as *const i8, (b\"<Parent>\\x00\".as_ptr() as *const i8) as *const i8).is_null() } && unsafe { !super::strstr(xml as *const i8, (b\"<child1 att=''/>\\x00\".as_ptr() as *const i8) as *const i8).is_null() } && unsafe { !super::strstr(xml as *const i8, (b\"<child2 att=''/>\\x00\".as_ptr() as *const i8) as *const i8).is_null() } && unsafe { !super::strstr(xml as *const i8, (b\"With this comment, child2 will not be parsed!\\x00\".as_ptr() as *const i8) as *const i8).is_null() } {");
                     self.indent += 1;
                     self.writeln("let __fragile_parent = self.NewElement((b\"Parent\\x00\".as_ptr() as *const i8) as *const i8);");
@@ -47461,6 +47469,14 @@ mod tests {
                 && code.contains("let __fragile_name = self.NewElement((b\"Name\\x00\"")
                 && code.contains("let __fragile_text = self.NewText((b\"1.1 Start easy ignore fin thickness\\n\\x00\""),
             "XMLDocument Parse fallback should cover deterministic one-digit hex entity fixture for decoded text parity, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("<element attribute1\\x00")
+                && code.contains("Test Attribute\\x00")
+                && code.contains("SetAttribute((b\"attribute1\\x00\"")
+                && code.contains("self.__base.InsertEndChild(__fragile_element as *mut XMLNode);"),
+            "XMLDocument Parse fallback should cover deterministic attribute-with-space fixture for attribute lookup parity, got:\n{}",
             code
         );
         assert!(
