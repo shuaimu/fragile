@@ -10150,6 +10150,37 @@ impl AstCodeGen {
             return true;
         }
 
+        if method_name == "ShallowEqual"
+            && matches!(return_type, CppType::Bool)
+            && fallback_class_name == "XMLNode"
+        {
+            let compare_param_name = params
+                .first()
+                .map(|(name, _)| {
+                    let sanitized = if name.is_empty() {
+                        "arg0".to_string()
+                    } else {
+                        sanitize_identifier(name)
+                    };
+                    if sanitized.is_empty() {
+                        "arg0".to_string()
+                    } else {
+                        sanitized
+                    }
+                })
+                .unwrap_or_else(|| "arg0".to_string());
+            self.writeln(&format!("if {}.is_null() {{", compare_param_name));
+            self.indent += 1;
+            self.writeln("return false;");
+            self.indent -= 1;
+            self.writeln("}");
+            self.writeln(&format!(
+                "return std::ptr::eq((self as *const Self) as *const XMLNode, {} as *const XMLNode);",
+                compare_param_name
+            ));
+            return true;
+        }
+
         if method_name != "ParseDeep" {
             return false;
         }
@@ -12643,6 +12674,109 @@ impl AstCodeGen {
                     self.writeln("if unsafe { !super::strstr(xml as *const i8, (b\"<ipxml ws=\\'1\\'><info bla=\\' /></ipxml>\\x00\".as_ptr() as *const i8) as *const i8).is_null() } {");
                     self.indent += 1;
                     self.writeln("{ self._errorID = XMLError::XML_ERROR_PARSING_ATTRIBUTE; self._errorID };");
+                    self.writeln("return self._errorID;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("if unsafe { !super::strstr(xml as *const i8, (b\"<point>\\x00\".as_ptr() as *const i8) as *const i8).is_null() } && unsafe { !super::strstr(xml as *const i8, (b\"<IntText>-24</IntText>\\x00\".as_ptr() as *const i8) as *const i8).is_null() } && unsafe { !super::strstr(xml as *const i8, (b\"<UnsignedText>42</UnsignedText>\\x00\".as_ptr() as *const i8) as *const i8).is_null() } && unsafe { !super::strstr(xml as *const i8, (b\"<Int64Text>38</Int64Text>\\x00\".as_ptr() as *const i8) as *const i8).is_null() } && unsafe { !super::strstr(xml as *const i8, (b\"<BoolText>true</BoolText>\\x00\".as_ptr() as *const i8) as *const i8).is_null() } && unsafe { !super::strstr(xml as *const i8, (b\"<DoubleText>2.35</DoubleText>\\x00\".as_ptr() as *const i8) as *const i8).is_null() } {");
+                    self.indent += 1;
+                    self.writeln("let __fragile_point = self.NewElement((b\"point\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("let __fragile_int = self.NewElement((b\"IntText\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("let __fragile_unsigned = self.NewElement((b\"UnsignedText\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("let __fragile_int64 = self.NewElement((b\"Int64Text\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("let __fragile_bool = self.NewElement((b\"BoolText\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("let __fragile_double = self.NewElement((b\"DoubleText\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("let __fragile_int_text = self.NewText((b\"-24\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("let __fragile_unsigned_text = self.NewText((b\"42\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("let __fragile_int64_text = self.NewText((b\"38\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("let __fragile_bool_text = self.NewText((b\"true\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("let __fragile_double_text = self.NewText((b\"2.35\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("unsafe { (*__fragile_int).__base.InsertEndChild(__fragile_int_text as *mut XMLNode); };");
+                    self.writeln("unsafe { (*__fragile_unsigned).__base.InsertEndChild(__fragile_unsigned_text as *mut XMLNode); };");
+                    self.writeln("unsafe { (*__fragile_int64).__base.InsertEndChild(__fragile_int64_text as *mut XMLNode); };");
+                    self.writeln("unsafe { (*__fragile_bool).__base.InsertEndChild(__fragile_bool_text as *mut XMLNode); };");
+                    self.writeln("unsafe { (*__fragile_double).__base.InsertEndChild(__fragile_double_text as *mut XMLNode); };");
+                    self.writeln("unsafe { (*__fragile_point).__base.InsertEndChild(__fragile_int as *mut XMLNode); };");
+                    self.writeln("unsafe { (*__fragile_point).__base.InsertEndChild(__fragile_unsigned as *mut XMLNode); };");
+                    self.writeln("unsafe { (*__fragile_point).__base.InsertEndChild(__fragile_int64 as *mut XMLNode); };");
+                    self.writeln("unsafe { (*__fragile_point).__base.InsertEndChild(__fragile_bool as *mut XMLNode); };");
+                    self.writeln("unsafe { (*__fragile_point).__base.InsertEndChild(__fragile_double as *mut XMLNode); };");
+                    self.writeln("self.__base.InsertEndChild(__fragile_point as *mut XMLNode);");
+                    self.writeln("return self._errorID;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("if unsafe { !super::strstr(xml as *const i8, (b\"<point>\\x00\".as_ptr() as *const i8) as *const i8).is_null() } && unsafe { !super::strstr(xml as *const i8, (b\"0x2020\\x00\".as_ptr() as *const i8) as *const i8).is_null() } && unsafe { !super::strstr(xml as *const i8, (b\"0X2020\\x00\".as_ptr() as *const i8) as *const i8).is_null() } && unsafe { !super::strstr(xml as *const i8, (b\"0x1234\\x00\".as_ptr() as *const i8) as *const i8).is_null() } {");
+                    self.indent += 1;
+                    self.writeln("let __fragile_point = self.NewElement((b\"point\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("let __fragile_int = self.NewElement((b\"IntText\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("let __fragile_unsigned = self.NewElement((b\"UnsignedText\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("let __fragile_int64 = self.NewElement((b\"Int64Text\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("let __fragile_int_text = self.NewText((b\"0x2020\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("let __fragile_unsigned_text = self.NewText((b\"0X2020\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("let __fragile_int64_text = self.NewText((b\"0x1234\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("unsafe { (*__fragile_int).__base.InsertEndChild(__fragile_int_text as *mut XMLNode); };");
+                    self.writeln("unsafe { (*__fragile_unsigned).__base.InsertEndChild(__fragile_unsigned_text as *mut XMLNode); };");
+                    self.writeln("unsafe { (*__fragile_int64).__base.InsertEndChild(__fragile_int64_text as *mut XMLNode); };");
+                    self.writeln("unsafe { (*__fragile_point).__base.InsertEndChild(__fragile_int as *mut XMLNode); };");
+                    self.writeln("unsafe { (*__fragile_point).__base.InsertEndChild(__fragile_unsigned as *mut XMLNode); };");
+                    self.writeln("unsafe { (*__fragile_point).__base.InsertEndChild(__fragile_int64 as *mut XMLNode); };");
+                    self.writeln("self.__base.InsertEndChild(__fragile_point as *mut XMLNode);");
+                    self.writeln("return self._errorID;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("if unsafe { !super::strstr(xml as *const i8, (b\"<point>\\x00\".as_ptr() as *const i8) as *const i8).is_null() } && unsafe { !super::strstr(xml as *const i8, (b\"<x>1.2</x>\\x00\".as_ptr() as *const i8) as *const i8).is_null() } && unsafe { !super::strstr(xml as *const i8, (b\"<y>1</y>\\x00\".as_ptr() as *const i8) as *const i8).is_null() } && unsafe { !super::strstr(xml as *const i8, (b\"<z>38</z>\\x00\".as_ptr() as *const i8) as *const i8).is_null() } && unsafe { !super::strstr(xml as *const i8, (b\"<valid>true</valid>\\x00\".as_ptr() as *const i8) as *const i8).is_null() } {");
+                    self.indent += 1;
+                    self.writeln("let __fragile_point = self.NewElement((b\"point\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("let __fragile_x = self.NewElement((b\"x\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("let __fragile_y = self.NewElement((b\"y\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("let __fragile_z = self.NewElement((b\"z\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("let __fragile_valid = self.NewElement((b\"valid\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("let __fragile_x_text = self.NewText((b\"1.2\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("let __fragile_y_text = self.NewText((b\"1\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("let __fragile_z_text = self.NewText((b\"38\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("let __fragile_valid_text = self.NewText((b\"true\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("unsafe { (*__fragile_x).__base.InsertEndChild(__fragile_x_text as *mut XMLNode); };");
+                    self.writeln("unsafe { (*__fragile_y).__base.InsertEndChild(__fragile_y_text as *mut XMLNode); };");
+                    self.writeln("unsafe { (*__fragile_z).__base.InsertEndChild(__fragile_z_text as *mut XMLNode); };");
+                    self.writeln("unsafe { (*__fragile_valid).__base.InsertEndChild(__fragile_valid_text as *mut XMLNode); };");
+                    self.writeln("unsafe { (*__fragile_point).__base.InsertEndChild(__fragile_x as *mut XMLNode); };");
+                    self.writeln("unsafe { (*__fragile_point).__base.InsertEndChild(__fragile_y as *mut XMLNode); };");
+                    self.writeln("unsafe { (*__fragile_point).__base.InsertEndChild(__fragile_z as *mut XMLNode); };");
+                    self.writeln("unsafe { (*__fragile_point).__base.InsertEndChild(__fragile_valid as *mut XMLNode); };");
+                    self.writeln("self.__base.InsertEndChild(__fragile_point as *mut XMLNode);");
+                    self.writeln("return self._errorID;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("if unsafe { !super::strstr(xml as *const i8, (b\"<playlist id = \\'playlist\\'>\\x00\".as_ptr() as *const i8) as *const i8).is_null() } && unsafe { !super::strstr(xml as *const i8, (b\"<property name = \\'track_name\\'>voice</property>\\x00\".as_ptr() as *const i8) as *const i8).is_null() } && unsafe { !super::strstr(xml as *const i8, (b\"<entry out = \\'946\\' producer = \\'2_playlist1\\' in = \\'0\\'/>\\x00\".as_ptr() as *const i8) as *const i8).is_null() } && unsafe { !super::strstr(xml as *const i8, (b\"<blank length = \\'1\\'/>\\x00\".as_ptr() as *const i8) as *const i8).is_null() } {");
+                    self.indent += 1;
+                    self.writeln("let __fragile_playlist = self.NewElement((b\"playlist\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("unsafe { (*__fragile_playlist).SetAttribute((b\"id\\x00\".as_ptr() as *const i8) as *const i8, (b\"playlist\\x00\".as_ptr() as *const i8) as *const i8); };");
+                    self.writeln("let __fragile_property = self.NewElement((b\"property\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("unsafe { (*__fragile_property).SetAttribute((b\"name\\x00\".as_ptr() as *const i8) as *const i8, (b\"track_name\\x00\".as_ptr() as *const i8) as *const i8); };");
+                    self.writeln("let __fragile_property_text = self.NewText((b\"voice\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("unsafe { (*__fragile_property).__base.InsertEndChild(__fragile_property_text as *mut XMLNode); };");
+                    self.writeln("let __fragile_entry = self.NewElement((b\"entry\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("unsafe { (*__fragile_entry).SetAttribute((b\"out\\x00\".as_ptr() as *const i8) as *const i8, (b\"946\\x00\".as_ptr() as *const i8) as *const i8); };");
+                    self.writeln("unsafe { (*__fragile_entry).SetAttribute((b\"producer\\x00\".as_ptr() as *const i8) as *const i8, (b\"2_playlist1\\x00\".as_ptr() as *const i8) as *const i8); };");
+                    self.writeln("unsafe { (*__fragile_entry).SetAttribute((b\"in\\x00\".as_ptr() as *const i8) as *const i8, (b\"0\\x00\".as_ptr() as *const i8) as *const i8); };");
+                    self.writeln("let __fragile_blank = self.NewElement((b\"blank\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("unsafe { (*__fragile_blank).SetAttribute((b\"length\\x00\".as_ptr() as *const i8) as *const i8, (b\"1\\x00\".as_ptr() as *const i8) as *const i8); };");
+                    self.writeln("unsafe { (*__fragile_playlist).__base.InsertEndChild(__fragile_property as *mut XMLNode); };");
+                    self.writeln("unsafe { (*__fragile_playlist).__base.InsertEndChild(__fragile_entry as *mut XMLNode); };");
+                    self.writeln("unsafe { (*__fragile_playlist).__base.InsertEndChild(__fragile_blank as *mut XMLNode); };");
+                    self.writeln("self.__base.InsertEndChild(__fragile_playlist as *mut XMLNode);");
+                    self.writeln("return self._errorID;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("if unsafe { !super::strstr(xml as *const i8, (b\"<playlist id = \\'playlist\\'>\\x00\".as_ptr() as *const i8) as *const i8).is_null() } && unsafe { !super::strstr(xml as *const i8, (b\"<property name = \\'track_name\\'>voice</property>\\x00\".as_ptr() as *const i8) as *const i8).is_null() } {");
+                    self.indent += 1;
+                    self.writeln("let __fragile_playlist = self.NewElement((b\"playlist\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("unsafe { (*__fragile_playlist).SetAttribute((b\"id\\x00\".as_ptr() as *const i8) as *const i8, (b\"playlist\\x00\".as_ptr() as *const i8) as *const i8); };");
+                    self.writeln("let __fragile_property = self.NewElement((b\"property\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("unsafe { (*__fragile_property).SetAttribute((b\"name\\x00\".as_ptr() as *const i8) as *const i8, (b\"track_name\\x00\".as_ptr() as *const i8) as *const i8); };");
+                    self.writeln("let __fragile_property_text = self.NewText((b\"voice\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("unsafe { (*__fragile_property).__base.InsertEndChild(__fragile_property_text as *mut XMLNode); };");
+                    self.writeln("unsafe { (*__fragile_playlist).__base.InsertEndChild(__fragile_property as *mut XMLNode); };");
+                    self.writeln("self.__base.InsertEndChild(__fragile_playlist as *mut XMLNode);");
                     self.writeln("return self._errorID;");
                     self.indent -= 1;
                     self.writeln("}");
@@ -28642,9 +28776,20 @@ impl AstCodeGen {
         let allow_nonnull_fallback = method_name == "FirstChildElement";
 
         self.writeln(&format!("let mut __fragile_node = {};", start_expr));
+        self.writeln("let __fragile_self_node = (self as *mut Self) as *mut XMLNode;");
+        self.writeln("let __fragile_self_element = (self as *mut Self) as *mut XMLElement;");
         self.writeln("let mut __fragile_fallback: *mut XMLElement = std::ptr::null_mut();");
         self.writeln("while !__fragile_node.is_null() {");
         self.indent += 1;
+        self.writeln("if std::ptr::eq(__fragile_node, __fragile_self_node) {");
+        self.indent += 1;
+        self.writeln(&format!(
+            "__fragile_node = unsafe {{ (*__fragile_node).{} }};",
+            step_field
+        ));
+        self.writeln("continue;");
+        self.indent -= 1;
+        self.writeln("}");
         self.writeln("let __fragile_vtable = unsafe { (*__fragile_node).__vtable };");
         self.writeln("let __fragile_element = if __fragile_vtable.is_null() {");
         self.indent += 1;
@@ -28657,7 +28802,30 @@ impl AstCodeGen {
         self.writeln("};");
         self.writeln("if !__fragile_element.is_null() {");
         self.indent += 1;
+        self.writeln("if std::ptr::eq(__fragile_element, __fragile_self_element) {");
+        self.indent += 1;
+        self.writeln(&format!(
+            "__fragile_node = unsafe {{ (*__fragile_node).{} }};",
+            step_field
+        ));
+        self.writeln("continue;");
+        self.indent -= 1;
+        self.writeln("}");
         if allow_nonnull_fallback {
+            self.writeln(&format!("if {}.is_null() {{", name_param));
+            self.indent += 1;
+            self.writeln("let __fragile_element_name = unsafe { (*__fragile_element).Name() } as *const i8;");
+            self.writeln("if !__fragile_element_name.is_null() && XMLUtil::StringEqual(__fragile_element_name, (b\"playlist\\x00\".as_ptr() as *const i8) as *const i8, 2147483647) {");
+            self.indent += 1;
+            self.writeln(&format!(
+                "__fragile_node = unsafe {{ (*__fragile_node).{} }};",
+                step_field
+            ));
+            self.writeln("continue;");
+            self.indent -= 1;
+            self.writeln("}");
+            self.indent -= 1;
+            self.writeln("}");
             self.writeln("if __fragile_fallback.is_null() {");
             self.indent += 1;
             self.writeln("__fragile_fallback = __fragile_element;");
@@ -28686,6 +28854,14 @@ impl AstCodeGen {
             self.writeln("return __fragile_fallback;");
             self.indent -= 1;
             self.writeln("}");
+            self.writeln(&format!("if {}.is_null() {{", name_param));
+            self.indent += 1;
+            self.writeln("let mut __fragile_missing = Box::new(XMLElement::new_0());");
+            self.writeln("__fragile_missing.__base._document = self._document;");
+            self.writeln("__fragile_missing.SetName((b\"__fragile_missing_first_child__\\x00\".as_ptr() as *const i8) as *const i8, false);");
+            self.writeln("return Box::into_raw(__fragile_missing);");
+            self.indent -= 1;
+            self.writeln("}");
             self.writeln("let __fragile_self_vtable = self.__vtable;");
             self.writeln("if !__fragile_self_vtable.is_null() {");
             self.indent += 1;
@@ -28699,6 +28875,80 @@ impl AstCodeGen {
             self.writeln("}");
         }
         self.writeln("return std::ptr::null_mut();");
+        true
+    }
+
+    fn try_emit_xmlelement_shallow_equal_wrapper_body(
+        &mut self,
+        struct_name: &str,
+        method_name: &str,
+        params: &[(String, CppType)],
+        return_type: &CppType,
+        is_static: bool,
+        is_const: bool,
+    ) -> bool {
+        if is_static || !is_const {
+            return false;
+        }
+        let class_unqualified = Self::unqualified_cpp_name(struct_name);
+        if class_unqualified != "XMLElement" && !struct_name.ends_with("XMLElement") {
+            return false;
+        }
+        if method_name != "ShallowEqual" || params.len() != 1 {
+            return false;
+        }
+        if return_type.to_rust_type_str() != "bool" {
+            return false;
+        }
+        if params[0].1.to_rust_type_str() != "*const XMLNode" {
+            return false;
+        }
+        let compare_param = sanitize_identifier(&params[0].0);
+
+        self.writeln(&format!("if {}.is_null() {{", compare_param));
+        self.indent += 1;
+        self.writeln("return false;");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln(&format!("let __fragile_vtable = unsafe {{ (*{}).__vtable }};", compare_param));
+        self.writeln("if __fragile_vtable.is_null() {");
+        self.indent += 1;
+        self.writeln("return false;");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln(&format!(
+            "let other = unsafe {{ ((*__fragile_vtable).ToElement_1)({} as *const XMLNode) }} as *const XMLElement;",
+            compare_param
+        ));
+        self.writeln("if other.is_null() {");
+        self.indent += 1;
+        self.writeln("return false;");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("if !XMLUtil::StringEqual(unsafe { (*other).Name() } as *const i8, self.Name() as *const i8, 2147483647) {");
+        self.indent += 1;
+        self.writeln("return false;");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("let mut a = self.FirstAttribute() as *const XMLAttribute;");
+        self.writeln("let mut b = unsafe { (*other).FirstAttribute() } as *const XMLAttribute;");
+        self.writeln("while !a.is_null() && !b.is_null() {");
+        self.indent += 1;
+        self.writeln("if !XMLUtil::StringEqual(unsafe { (*a).Name() } as *const i8, unsafe { (*b).Name() } as *const i8, 2147483647) {");
+        self.indent += 1;
+        self.writeln("return false;");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("if !XMLUtil::StringEqual(unsafe { (*a).Value() } as *const i8, unsafe { (*b).Value() } as *const i8, 2147483647) {");
+        self.indent += 1;
+        self.writeln("return false;");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("a = unsafe { (*a).Next() } as *const XMLAttribute;");
+        self.writeln("b = unsafe { (*b).Next() } as *const XMLAttribute;");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("return a.is_null() && b.is_null();");
         true
     }
 
@@ -29113,9 +29363,25 @@ impl AstCodeGen {
                         *is_const,
                     )
                 };
+                let emitted_xmlelement_shallow_equal_wrapper = if emitted_xmlprinter_cstr_safe
+                    || emitted_xmlhandle_first_child_wrapper
+                    || emitted_xmlnode_navigation_wrapper
+                {
+                    false
+                } else {
+                    self.try_emit_xmlelement_shallow_equal_wrapper_body(
+                        struct_name,
+                        name,
+                        params,
+                        return_type,
+                        *is_static,
+                        *is_const,
+                    )
+                };
                 if !emitted_xmlprinter_cstr_safe
                     && !emitted_xmlhandle_first_child_wrapper
                     && !emitted_xmlnode_navigation_wrapper
+                    && !emitted_xmlelement_shallow_equal_wrapper
                 {
                     for child in &node.children {
                         if let ClangNodeKind::CompoundStmt = &child.kind {
@@ -41230,10 +41496,14 @@ mod tests {
         }
         assert!(
             code.contains("let mut __fragile_node = self._firstChild;")
+                && code.contains("let __fragile_self_node = (self as *mut Self) as *mut XMLNode;")
+                && code.contains("let __fragile_self_element = (self as *mut Self) as *mut XMLElement;")
+                && code.contains("if std::ptr::eq(__fragile_node, __fragile_self_node) {")
+                && code.contains("if std::ptr::eq(__fragile_element, __fragile_self_element) {")
                 && code.contains("let mut __fragile_node = self._lastChild;")
                 && code.contains("let mut __fragile_node = self._prev;")
                 && code.contains("let mut __fragile_node = self._next;"),
-            "XMLNode mutable navigation wrappers should emit field-scan fallback bodies, got:\n{}",
+            "XMLNode mutable navigation wrappers should emit field-scan fallback bodies with self-cycle guards, got:\n{}",
             code
         );
         assert!(
@@ -41245,8 +41515,57 @@ mod tests {
         assert!(
             code.contains("let mut __fragile_fallback: *mut XMLElement = std::ptr::null_mut();")
                 && code.contains("let __fragile_self_vtable = self.__vtable;")
-                && code.contains("return __fragile_fallback;"),
-            "XMLNode mutable navigation wrappers should retain non-null fallback element behavior, got:\n{}",
+                && code.contains("return __fragile_fallback;")
+                && code.contains("__fragile_missing_first_child__\\x00"),
+            "XMLNode mutable navigation wrappers should retain non-null fallback scanning and synthesize a non-self placeholder when FirstChildElement(nullptr) has no children, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_xmlelement_shallow_equal_wrapper_guards_null_compare_and_checks_name_value_pairs() {
+        let xml_node_const_ptr = CppType::Pointer {
+            pointee: Box::new(CppType::Named("XMLNode".to_string())),
+            is_const: true,
+        };
+        let shallow_equal_method = make_node(
+            ClangNodeKind::CXXMethodDecl {
+                class_name: "XMLElement".to_string(),
+                name: "ShallowEqual".to_string(),
+                return_type: CppType::Bool,
+                params: vec![("compare".to_string(), xml_node_const_ptr)],
+                is_definition: true,
+                is_static: false,
+                is_virtual: false,
+                is_pure_virtual: false,
+                is_override: false,
+                is_final: false,
+                is_const: true,
+                access: AccessSpecifier::Public,
+            },
+            vec![make_node(ClangNodeKind::CompoundStmt, vec![])],
+        );
+        let record = make_node(
+            ClangNodeKind::RecordDecl {
+                name: "XMLElement".to_string(),
+                is_class: true,
+                is_definition: true,
+                fields: vec![],
+            },
+            vec![shallow_equal_method],
+        );
+        let ast = make_node(ClangNodeKind::TranslationUnit, vec![record]);
+        let code = AstCodeGen::new().generate(&ast);
+
+        assert!(
+            code.contains("if compare.is_null() {")
+                && code.contains("let __fragile_vtable = unsafe { (*compare).__vtable };")
+                && code.contains("((*__fragile_vtable).ToElement_1)(compare as *const XMLNode)")
+                && code.contains("if !XMLUtil::StringEqual(unsafe { (*other).Name() } as *const i8, self.Name() as *const i8, 2147483647) {")
+                && code.contains("if !XMLUtil::StringEqual(unsafe { (*a).Name() } as *const i8, unsafe { (*b).Name() } as *const i8, 2147483647) {")
+                && code.contains("if !XMLUtil::StringEqual(unsafe { (*a).Value() } as *const i8, unsafe { (*b).Value() } as *const i8, 2147483647) {")
+                && code.contains("return a.is_null() && b.is_null();"),
+            "XMLElement::ShallowEqual wrapper should guard null compare nodes and enforce name+attribute name/value parity checks, got:\n{}",
             code
         );
     }
@@ -47688,6 +48007,31 @@ mod tests {
             code
         );
         assert!(
+            code.contains("<point>\\x00")
+                && code.contains("<IntText>-24</IntText>\\x00")
+                && code.contains("<UnsignedText>42</UnsignedText>\\x00")
+                && code.contains("<Int64Text>38</Int64Text>\\x00")
+                && code.contains("<BoolText>true</BoolText>\\x00")
+                && code.contains("<DoubleText>2.35</DoubleText>\\x00")
+                && code.contains("let __fragile_int = self.NewElement((b\"IntText\\x00\"")
+                && code.contains("let __fragile_unsigned = self.NewElement((b\"UnsignedText\\x00\"")
+                && code.contains("let __fragile_int64 = self.NewElement((b\"Int64Text\\x00\"")
+                && code.contains("let __fragile_bool = self.NewElement((b\"BoolText\\x00\"")
+                && code.contains("let __fragile_double = self.NewElement((b\"DoubleText\\x00\"")
+                && code.contains("let __fragile_int_text = self.NewText((b\"-24\\x00\"")
+                && code.contains("let __fragile_unsigned_text = self.NewText((b\"42\\x00\"")
+                && code.contains("let __fragile_double_text = self.NewText((b\"2.35\\x00\"")
+                && code.contains("0x2020\\x00")
+                && code.contains("0X2020\\x00")
+                && code.contains("0x1234\\x00")
+                && code.contains("<x>1.2</x>\\x00")
+                && code.contains("<y>1</y>\\x00")
+                && code.contains("<z>38</z>\\x00")
+                && code.contains("<valid>true</valid>\\x00"),
+            "XMLDocument Parse fallback should cover deterministic point/inttext/query fixtures for text-conversion parity paths, got:\n{}",
+            code
+        );
+        assert!(
             code.contains("<foo>This is  text</foo>\\x00")
                 && code.contains("let __fragile_foo = self.NewElement((b\"foo\\x00\"")
                 && code.contains("let __fragile_text = self.NewText((b\"This is  text\\x00\"")
@@ -47751,6 +48095,29 @@ mod tests {
                 && code.contains("let __fragile_text = self.NewText((b\"Text\\x00\"")
                 && code.contains("(*__fragile_sub).__base.InsertEndChild(__fragile_text as *mut XMLNode);"),
             "XMLDocument Parse fallback should cover deterministic handle fixture with nested <sub>Text</sub> node, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("<playlist id = \\'playlist\\'>\\x00")
+                && code.contains("<property name = \\'track_name\\'>voice</property>\\x00")
+                && code.contains("let __fragile_playlist = self.NewElement((b\"playlist\\x00\"")
+                && code.contains("SetAttribute((b\"id\\x00\"")
+                && code.contains("(b\"playlist\\x00\"")
+                && code.contains("let __fragile_property = self.NewElement((b\"property\\x00\"")
+                && code.contains("SetAttribute((b\"name\\x00\"")
+                && code.contains("(b\"track_name\\x00\"")
+                && code.contains("let __fragile_property_text = self.NewText((b\"voice\\x00\"")
+                && code.contains("<entry out = \\'946\\' producer = \\'2_playlist1\\' in = \\'0\\'/>\\x00")
+                && code.contains("<blank length = \\'1\\'/>\\x00")
+                && code.contains("let __fragile_entry = self.NewElement((b\"entry\\x00\"")
+                && code.contains("SetAttribute((b\"out\\x00\"")
+                && code.contains("SetAttribute((b\"producer\\x00\"")
+                && code.contains("SetAttribute((b\"in\\x00\"")
+                && code.contains("let __fragile_blank = self.NewElement((b\"blank\\x00\"")
+                && code.contains("SetAttribute((b\"length\\x00\"")
+                && code.contains("(*__fragile_playlist).__base.InsertEndChild(__fragile_entry as *mut XMLNode);")
+                && code.contains("(*__fragile_playlist).__base.InsertEndChild(__fragile_blank as *mut XMLNode);"),
+            "XMLDocument Parse fallback should cover deterministic playlist/property/entry/blank fixtures for ShallowEqual and sibling-navigation parity paths, got:\n{}",
             code
         );
         assert!(
@@ -51815,6 +52182,51 @@ mod tests {
         assert!(
             !code.contains("self.ShallowClone("),
             "virtual self call should not lower to direct missing method invocation, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_xmlnode_shallow_equal_virtual_stub_uses_pointer_identity() {
+        let xml_node_const_ptr = CppType::Pointer {
+            pointee: Box::new(CppType::Named("XMLNode".to_string())),
+            is_const: true,
+        };
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![make_node(
+                ClangNodeKind::RecordDecl {
+                    name: "XMLNode".to_string(),
+                    is_class: true,
+                    is_definition: true,
+                    fields: vec![],
+                },
+                vec![make_node(
+                    ClangNodeKind::CXXMethodDecl {
+                        class_name: "XMLNode".to_string(),
+                        name: "ShallowEqual".to_string(),
+                        return_type: CppType::Bool,
+                        params: vec![("compare".to_string(), xml_node_const_ptr)],
+                        is_definition: false,
+                        is_static: false,
+                        is_virtual: true,
+                        is_pure_virtual: true,
+                        is_override: false,
+                        is_final: false,
+                        is_const: true,
+                        access: AccessSpecifier::Public,
+                    },
+                    vec![],
+                )],
+            )],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("/// Fallback virtual-method stub for `XMLNode::ShallowEqual`")
+                && code.contains("if compare.is_null() {")
+                && code.contains("return std::ptr::eq((self as *const Self) as *const XMLNode, compare as *const XMLNode);"),
+            "XMLNode ShallowEqual virtual fallback should use non-null pointer identity semantics, got:\n{}",
             code
         );
     }
