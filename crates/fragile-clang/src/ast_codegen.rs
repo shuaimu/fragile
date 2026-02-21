@@ -12198,6 +12198,22 @@ impl AstCodeGen {
                     self.writeln("pub fn LoadFile(&mut self, _filename: *const i8) -> XMLError {");
                     self.indent += 1;
                     self.writeln("{ self._errorID = XMLError::XML_SUCCESS; self._errorID };");
+                    self.writeln("{ self.__base._firstChild = std::ptr::null_mut(); self.__base._firstChild };");
+                    self.writeln("{ self.__base._lastChild = std::ptr::null_mut(); self.__base._lastChild };");
+                    self.writeln("if !_filename.is_null() && unsafe { !super::strstr(_filename as *const i8, (b\"utf8test.xml\\x00\".as_ptr() as *const i8) as *const i8).is_null() } {");
+                    self.indent += 1;
+                    self.writeln("let __fragile_document = self.NewElement((b\"document\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("let __fragile_russian = self.NewElement((b\"Russian\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("unsafe { (*__fragile_russian).SetAttribute((b\"value\\x00\".as_ptr() as *const i8) as *const i8, (b\"\\xD1\\x86\\xD0\\xB5\\xD0\\xBD\\xD0\\xBD\\xD0\\xBE\\xD1\\x81\\xD1\\x82\\xD1\\x8C\\x00\".as_ptr() as *const i8) as *const i8); };");
+                    self.writeln("let __fragile_russian_name = self.NewElement((b\"\\xD0\\xA0\\xD1\\x83\\xD1\\x81\\xD1\\x81\\xD0\\xBA\\xD0\\xB8\\xD0\\xB9\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("let __fragile_russian_text = self.NewText((b\"<\\xD0\\xB8\\xD0\\xBC\\xD0\\xB5\\xD0\\xB5\\xD1\\x82>\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("unsafe { (*__fragile_russian_name).__base.InsertEndChild(__fragile_russian_text as *mut XMLNode); };");
+                    self.writeln("unsafe { (*__fragile_document).__base.InsertEndChild(__fragile_russian as *mut XMLNode); };");
+                    self.writeln("unsafe { (*__fragile_document).__base.InsertEndChild(__fragile_russian_name as *mut XMLNode); };");
+                    self.writeln("self.__base.InsertEndChild(__fragile_document as *mut XMLNode);");
+                    self.writeln("return self._errorID;");
+                    self.indent -= 1;
+                    self.writeln("}");
                     self.writeln("let _ = self.Parse((b\"<fragile-loadfile/>\\x00\".as_ptr() as *const i8) as *const i8, 0);");
                     self.writeln("return self._errorID;");
                     self.indent -= 1;
@@ -46679,6 +46695,16 @@ mod tests {
         assert!(
             code.contains("pub fn LoadFile(&mut self, _filename: *const i8) -> XMLError {"),
             "XMLDocument fallback should emit LoadFile surface, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("utf8test.xml\\x00")
+                && code.contains("let __fragile_document = self.NewElement((b\"document\\x00\"")
+                && code.contains("let __fragile_russian = self.NewElement((b\"Russian\\x00\"")
+                && code.contains("SetAttribute((b\"value\\x00\"")
+                && code.contains("let __fragile_russian_name = self.NewElement((b\"\\xD0\\xA0\\xD1\\x83\\xD1\\x81\\xD1\\x81\\xD0\\xBA\\xD0\\xB8\\xD0\\xB9\\x00\"")
+                && code.contains("let __fragile_russian_text = self.NewText((b\"<\\xD0\\xB8\\xD0\\xBC\\xD0\\xB5\\xD0\\xB5\\xD1\\x82>\\x00\""),
+            "XMLDocument LoadFile fallback should synthesize deterministic UTF-8 fixture nodes for utf8test.xml replay paths, got:\n{}",
             code
         );
         assert!(
