@@ -13697,11 +13697,11 @@ impl AstCodeGen {
         );
         self.writeln("pub unsafe fn fragile_pthread_attr_setdetachstate(_: *mut std::ffi::c_void, _: i32) -> i32 { 0 }");
         self.writeln("pub unsafe fn fragile_pthread_attr_getdetachstate(_: *const std::ffi::c_void, _: *mut i32) -> i32 { 0 }");
-        self.writeln("pub unsafe fn fragile_pthread_mutex_init(_: *mut usize, _: *const super::pthread_mutexattr_t) -> i32 { 0 }");
-        self.writeln("pub unsafe fn fragile_pthread_mutex_destroy(_: *mut usize) -> i32 { 0 }");
-        self.writeln("pub unsafe fn fragile_pthread_mutex_lock(_: *mut usize) -> i32 { 0 }");
-        self.writeln("pub unsafe fn fragile_pthread_mutex_trylock(_: *mut usize) -> i32 { 0 }");
-        self.writeln("pub unsafe fn fragile_pthread_mutex_unlock(_: *mut usize) -> i32 { 0 }");
+        self.writeln("pub unsafe fn fragile_pthread_mutex_init(mutex: *mut usize, _: *const super::pthread_mutexattr_t) -> i32 { if mutex.is_null() { return 22; } std::ptr::write(mutex, 0usize); 0 }");
+        self.writeln("pub unsafe fn fragile_pthread_mutex_destroy(mutex: *mut usize) -> i32 { if mutex.is_null() { return 22; } std::ptr::write(mutex, 0usize); 0 }");
+        self.writeln("pub unsafe fn fragile_pthread_mutex_lock(mutex: *mut usize) -> i32 { if mutex.is_null() { return 22; } let atomic = &*(mutex as *const std::sync::atomic::AtomicUsize); while atomic.compare_exchange_weak(0, 1, std::sync::atomic::Ordering::Acquire, std::sync::atomic::Ordering::Relaxed).is_err() { std::thread::yield_now(); } 0 }");
+        self.writeln("pub unsafe fn fragile_pthread_mutex_trylock(mutex: *mut usize) -> i32 { if mutex.is_null() { return 22; } let atomic = &*(mutex as *const std::sync::atomic::AtomicUsize); if atomic.compare_exchange(0, 1, std::sync::atomic::Ordering::Acquire, std::sync::atomic::Ordering::Relaxed).is_ok() { 0 } else { 16 } }");
+        self.writeln("pub unsafe fn fragile_pthread_mutex_unlock(mutex: *mut usize) -> i32 { if mutex.is_null() { return 22; } let atomic = &*(mutex as *const std::sync::atomic::AtomicUsize); atomic.store(0, std::sync::atomic::Ordering::Release); 0 }");
         // Use super:: to access pthread_mutexattr_t struct defined in the outer scope
         self.writeln("pub unsafe fn fragile_pthread_mutexattr_init(_: *mut super::pthread_mutexattr_t) -> i32 { 0 }");
         self.writeln("pub unsafe fn fragile_pthread_mutexattr_destroy(_: *mut super::pthread_mutexattr_t) -> i32 { 0 }");
