@@ -259,6 +259,25 @@ fn clone_expr(expr: &str) -> String {
     }
 }
 
+/// Borrow an expression for a reference parameter.
+/// For raw-pointer dereference expressions (e.g. `unsafe { *ptr }`), place
+/// the borrow inside the unsafe block to avoid moving from `*ptr`.
+fn borrow_expr_for_reference(expr: &str, is_const: bool) -> String {
+    let prefix = if is_const { "&" } else { "&mut " };
+    let trimmed = expr.trim();
+
+    if let Some(inner) = unwrap_outer_unsafe_expr(trimmed) {
+        let inner = inner.trim();
+        if inner.starts_with('*') {
+            return format!("unsafe {{ {}{} }}", prefix, inner);
+        }
+    } else if trimmed.starts_with('*') {
+        return format!("unsafe {{ {}{} }}", prefix, trimmed);
+    }
+
+    format!("{}{}", prefix, expr)
+}
+
 /// Convert a C string literal to a fixed Rust byte array literal with trailing NUL.
 fn string_literal_to_char_array_init(
     s: &str,
@@ -30590,8 +30609,7 @@ impl AstCodeGen {
                                     if i < types.len() {
                                         if let CppType::Reference { is_const, .. } = &types[i] {
                                             let arg = self.expr_to_string(c);
-                                            let prefix = if *is_const { "&" } else { "&mut " };
-                                            return format!("{}{}", prefix, arg);
+                                            return borrow_expr_for_reference(&arg, *is_const);
                                         }
 
                                         if Self::is_function_pointer_type_or_typedef(&types[i]) {
@@ -30633,7 +30651,7 @@ impl AstCodeGen {
                                                 return "[__va_args]".to_string();
                                             }
                                             if let Some(raw_name) = self.get_raw_var_name(c) {
-                                                return raw_name;
+                                                return format!("{}.clone()", raw_name);
                                             }
                                             return arg;
                                         }
@@ -30984,8 +31002,10 @@ impl AstCodeGen {
                                             if let CppType::Reference { is_const, .. } = &params[i]
                                             {
                                                 let arg_str = self.expr_to_string(c);
-                                                let prefix = if *is_const { "&" } else { "&mut " };
-                                                return format!("{}{}", prefix, arg_str);
+                                                return borrow_expr_for_reference(
+                                                    &arg_str,
+                                                    *is_const,
+                                                );
                                             }
                                             if Self::is_pointer_like_type(&params[i]) {
                                                 let target_rust = params[i].to_rust_type_str();
@@ -31189,8 +31209,10 @@ impl AstCodeGen {
                                         } else {
                                             // Add borrow for non-reference-variable arguments
                                             let arg_str = self.expr_to_string(c);
-                                            let prefix = if *is_const { "&" } else { "&mut " };
-                                            return format!("{}{}", prefix, arg_str);
+                                            return borrow_expr_for_reference(
+                                                &arg_str,
+                                                *is_const,
+                                            );
                                         }
                                     }
                                     // Handle function-pointer parameters (Option<fn(...)>).
@@ -31239,7 +31261,7 @@ impl AstCodeGen {
                                             return "[__va_args]".to_string();
                                         }
                                         if let Some(raw_name) = self.get_raw_var_name(c) {
-                                            return raw_name;
+                                            return format!("{}.clone()", raw_name);
                                         }
                                         return arg;
                                     }
@@ -31847,8 +31869,10 @@ impl AstCodeGen {
                                     if i < params.len() {
                                         if let CppType::Reference { is_const, .. } = &params[i] {
                                             let arg_str = self.expr_to_string(c);
-                                            let prefix = if *is_const { "&" } else { "&mut " };
-                                            return format!("{}{}", prefix, arg_str);
+                                            return borrow_expr_for_reference(
+                                                &arg_str,
+                                                *is_const,
+                                            );
                                         }
                                         if Self::is_pointer_like_type(&params[i]) {
                                             let target_rust = params[i].to_rust_type_str();
@@ -40978,6 +41002,147 @@ mod tests {
     }
 
     #[test]
+    fn test_member_call_reference_param_borrows_raw_pointer_deref_in_unsafe_block() {
+        let xml_element = CppType::Named("XMLElement".to_string());
+        let xml_element_ptr = CppType::Pointer {
+            pointee: Box::new(xml_element.clone()),
+            is_const: true,
+        };
+        let xml_printer_ptr = CppType::Pointer {
+            pointee: Box::new(CppType::Named("XMLPrinter".to_string())),
+            is_const: false,
+        };
+        let xml_element_ref = CppType::Reference {
+            referent: Box::new(xml_element.clone()),
+            is_const: true,
+            is_rvalue: false,
+        };
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![
+                make_node(
+                    ClangNodeKind::RecordDecl {
+                        name: "XMLElement".to_string(),
+                        is_class: true,
+                        is_definition: true,
+                        fields: vec![],
+                    },
+                    vec![],
+                ),
+                make_node(
+                    ClangNodeKind::RecordDecl {
+                        name: "XMLPrinter".to_string(),
+                        is_class: true,
+                        is_definition: true,
+                        fields: vec![],
+                    },
+                    vec![
+                        make_node(
+                            ClangNodeKind::CXXMethodDecl {
+                                class_name: "XMLPrinter".to_string(),
+                                name: "CompactMode".to_string(),
+                                return_type: CppType::Bool,
+                                params: vec![("element".to_string(), xml_element_ref.clone())],
+                                is_definition: true,
+                                is_static: false,
+                                is_virtual: false,
+                                is_pure_virtual: false,
+                                is_override: false,
+                                is_final: false,
+                                is_const: false,
+                                access: AccessSpecifier::Public,
+                            },
+                            vec![make_node(
+                                ClangNodeKind::CompoundStmt,
+                                vec![make_node(
+                                    ClangNodeKind::ReturnStmt,
+                                    vec![make_node(ClangNodeKind::BoolLiteral(false), vec![])],
+                                )],
+                            )],
+                        ),
+                        make_node(
+                            ClangNodeKind::CXXMethodDecl {
+                                class_name: "XMLPrinter".to_string(),
+                                name: "VisitEnter_1".to_string(),
+                                return_type: CppType::Bool,
+                                params: vec![("parentElem".to_string(), xml_element_ptr.clone())],
+                                is_definition: true,
+                                is_static: false,
+                                is_virtual: false,
+                                is_pure_virtual: false,
+                                is_override: false,
+                                is_final: false,
+                                is_const: false,
+                                access: AccessSpecifier::Public,
+                            },
+                            vec![make_node(
+                                ClangNodeKind::CompoundStmt,
+                                vec![make_node(
+                                    ClangNodeKind::ReturnStmt,
+                                    vec![make_node(
+                                        ClangNodeKind::CallExpr {
+                                            ty: CppType::Bool,
+                                            template_instantiation: None,
+                                        },
+                                        vec![
+                                            make_node(
+                                                ClangNodeKind::MemberExpr {
+                                                    member_name: "CompactMode".to_string(),
+                                                    is_arrow: false,
+                                                    ty: CppType::Function {
+                                                        return_type: Box::new(CppType::Bool),
+                                                        params: vec![xml_element_ref],
+                                                        is_variadic: false,
+                                                    },
+                                                    declaring_class: Some("XMLPrinter".to_string()),
+                                                    is_static: false,
+                                                },
+                                                vec![make_node(
+                                                    ClangNodeKind::CXXThisExpr {
+                                                        ty: xml_printer_ptr,
+                                                    },
+                                                    vec![],
+                                                )],
+                                            ),
+                                            make_node(
+                                                ClangNodeKind::UnaryOperator {
+                                                    op: UnaryOp::Deref,
+                                                    ty: xml_element.clone(),
+                                                },
+                                                vec![make_node(
+                                                    ClangNodeKind::DeclRefExpr {
+                                                        name: "parentElem".to_string(),
+                                                        ty: xml_element_ptr,
+                                                        namespace_path: vec![],
+                                                    },
+                                                    vec![],
+                                                )],
+                                            ),
+                                        ],
+                                    )],
+                                )],
+                            )],
+                        ),
+                    ],
+                ),
+            ],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("self.CompactMode(unsafe { &*parentElem })"),
+            "reference argument from raw-pointer deref should borrow inside unsafe block, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("self.CompactMode(&unsafe { *parentElem })"),
+            "reference argument should not move through `&unsafe {{ *ptr }}` call shape, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
     fn test_pointer_value_normalization_keeps_deref_for_pointer_arithmetic_chains() {
         let expr = "unsafe { *__fsv___func_TRUE_VALS_4.as_mut_ptr().add((i) as usize) }";
         let normalized = AstCodeGen::normalize_pointer_value_expr(expr);
@@ -46911,6 +47076,211 @@ mod tests {
                 "pub fn vsnprintf(_s: *mut i8, _n: u64, _fmt: *const i8, _args: [std::ffi::VaList; 1]) -> i32 { 0 }"
             ),
             "unexpected hardcoded vsnprintf zero-return stub remained in output:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_va_list_args_are_cloned_for_by_value_function_calls() {
+        let va_list_array_ty = CppType::Array {
+            element: Box::new(CppType::Named("va_list".to_string())),
+            size: Some(1),
+        };
+
+        let va_decl = || {
+            make_node(
+                ClangNodeKind::DeclRefExpr {
+                    name: "va".to_string(),
+                    ty: va_list_array_ty.clone(),
+                    namespace_path: vec![],
+                },
+                vec![],
+            )
+        };
+
+        let call_consume_i = || {
+            make_node(
+                ClangNodeKind::CallExpr {
+                    ty: CppType::Int { signed: true },
+                    template_instantiation: None,
+                },
+                vec![
+                    make_node(
+                        ClangNodeKind::DeclRefExpr {
+                            name: "consume_i".to_string(),
+                            ty: CppType::Function {
+                                return_type: Box::new(CppType::Int { signed: true }),
+                                params: vec![va_list_array_ty.clone()],
+                                is_variadic: false,
+                            },
+                            namespace_path: vec![],
+                        },
+                        vec![],
+                    ),
+                    va_decl(),
+                ],
+            )
+        };
+
+        let call_consume_foo = || {
+            make_node(
+                ClangNodeKind::CallExpr {
+                    ty: CppType::Named("Foo".to_string()),
+                    template_instantiation: None,
+                },
+                vec![
+                    make_node(
+                        ClangNodeKind::DeclRefExpr {
+                            name: "consume_foo".to_string(),
+                            ty: CppType::Function {
+                                return_type: Box::new(CppType::Named("Foo".to_string())),
+                                params: vec![va_list_array_ty.clone()],
+                                is_variadic: false,
+                            },
+                            namespace_path: vec![],
+                        },
+                        vec![],
+                    ),
+                    va_decl(),
+                ],
+            )
+        };
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![
+                make_node(
+                    ClangNodeKind::RecordDecl {
+                        name: "Foo".to_string(),
+                        is_class: false,
+                        is_definition: true,
+                        fields: vec![],
+                    },
+                    vec![],
+                ),
+                make_node(
+                    ClangNodeKind::FunctionDecl {
+                        name: "consume_i".to_string(),
+                        mangled_name: "consume_i".to_string(),
+                        is_static: false,
+                        return_type: CppType::Int { signed: true },
+                        params: vec![("va".to_string(), va_list_array_ty.clone())],
+                        is_definition: true,
+                        is_variadic: false,
+                        is_noexcept: false,
+                        is_coroutine: false,
+                        coroutine_info: None,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![make_node(
+                            ClangNodeKind::ReturnStmt,
+                            vec![make_node(
+                                ClangNodeKind::IntegerLiteral {
+                                    value: 0,
+                                    cpp_type: Some(CppType::Int { signed: true }),
+                                },
+                                vec![],
+                            )],
+                        )],
+                    )],
+                ),
+                make_node(
+                    ClangNodeKind::FunctionDecl {
+                        name: "consume_foo".to_string(),
+                        mangled_name: "consume_foo".to_string(),
+                        is_static: false,
+                        return_type: CppType::Named("Foo".to_string()),
+                        params: vec![("va".to_string(), va_list_array_ty.clone())],
+                        is_definition: true,
+                        is_variadic: false,
+                        is_noexcept: false,
+                        is_coroutine: false,
+                        coroutine_info: None,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![make_node(
+                            ClangNodeKind::ReturnStmt,
+                            vec![make_node(
+                                ClangNodeKind::CallExpr {
+                                    ty: CppType::Named("Foo".to_string()),
+                                    template_instantiation: None,
+                                },
+                                vec![make_node(
+                                    ClangNodeKind::CXXConstructExpr {
+                                        ty: CppType::Named("Foo".to_string()),
+                                    },
+                                    vec![],
+                                )],
+                            )],
+                        )],
+                    )],
+                ),
+                make_node(
+                    ClangNodeKind::FunctionDecl {
+                        name: "use_va_twice".to_string(),
+                        mangled_name: "use_va_twice".to_string(),
+                        is_static: false,
+                        return_type: CppType::Int { signed: true },
+                        params: vec![("va".to_string(), va_list_array_ty.clone())],
+                        is_definition: true,
+                        is_variadic: false,
+                        is_noexcept: false,
+                        is_coroutine: false,
+                        coroutine_info: None,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![
+                            make_node(ClangNodeKind::ExprStmt, vec![call_consume_i()]),
+                            make_node(ClangNodeKind::ExprStmt, vec![call_consume_i()]),
+                            make_node(
+                                ClangNodeKind::ReturnStmt,
+                                vec![make_node(
+                                    ClangNodeKind::IntegerLiteral {
+                                        value: 0,
+                                        cpp_type: Some(CppType::Int { signed: true }),
+                                    },
+                                    vec![],
+                                )],
+                            ),
+                        ],
+                    )],
+                ),
+                make_node(
+                    ClangNodeKind::FunctionDecl {
+                        name: "use_va_named_return".to_string(),
+                        mangled_name: "use_va_named_return".to_string(),
+                        is_static: false,
+                        return_type: CppType::Named("Foo".to_string()),
+                        params: vec![("va".to_string(), va_list_array_ty.clone())],
+                        is_definition: true,
+                        is_variadic: false,
+                        is_noexcept: false,
+                        is_coroutine: false,
+                        coroutine_info: None,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![make_node(
+                            ClangNodeKind::ReturnStmt,
+                            vec![call_consume_foo()],
+                        )],
+                    )],
+                ),
+            ],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.matches("consume_i(va.clone())").count() >= 2,
+            "va_list arguments passed by value should be cloned at repeated call sites, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("return consume_foo(va.clone());"),
+            "va_list argument should be cloned in named-return call path too, got:\n{}",
             code
         );
     }
