@@ -2721,9 +2721,11 @@ impl AstCodeGen {
         // First pass: collect polymorphic class information
         if let ClangNodeKind::TranslationUnit = &ast.kind {
             self.collect_polymorphic_info(&ast.children);
+            self.collect_static_member_mappings(ast);
             self.collect_unsafe_function_names(ast);
             self.collect_defined_function_names(ast);
             self.collect_defined_global_var_names(ast, false);
+            self.collect_global_var_lookup_mappings(ast, false);
             self.collect_out_of_line_method_defs(ast, false);
             self.collect_anon_union_defs(ast);
             self.collect_missing_union_member_types(ast);
@@ -14094,52 +14096,11 @@ impl AstCodeGen {
                 is_static,
                 is_extern,
             } => {
-                // Header-only declaration (typically `extern`) without initializer.
-                // Prefer emitting the definition from the `.c/.cc` translation unit.
-                if !*has_init
-                    && node.children.is_empty()
-                    && node.location.file.as_deref().is_some_and(|f| {
-                        f.ends_with(".h")
-                            || f.ends_with(".hpp")
-                            || f.ends_with(".hh")
-                            || f.ends_with(".hxx")
-                    })
-                {
+                if Self::is_header_decl_without_initializer(node, *has_init) {
                     return;
                 }
 
-                // Skip out-of-class static member definitions (TypeRef child indicates qualified name)
-                // These are already handled in the class generation
-                // BUT: TypeRef can also just refer to the variable's type (e.g., "TypeRef:S" for "S s1 = {};")
-                // Only skip if the TypeRef name doesn't match the variable's type name
-                // AND the TypeRef is NOT a known typedef/type alias (typedef'd types have TypeRef children)
-                let type_name = ty.to_rust_type_str();
-                let is_static_member_def = node.children.iter().any(|c| {
-                    if let ClangNodeKind::Unknown(s) = &c.kind {
-                        if let Some(type_ref_name) = s.strip_prefix("TypeRef:") {
-                            // If TypeRef matches the variable's type, it's just a type reference, not a qualifier
-                            // Static member defs have TypeRef to the containing class, not the variable's type
-                            //
-                            // Also skip checking if the TypeRef refers to a known typedef/type alias
-                            // This happens for variables with typedef'd types like "static my_type_t myvar;"
-                            // where my_type_t is a typedef - the VarDecl has a TypeRef:my_type_t child
-                            // but the parsed type is the underlying type (e.g., u64)
-                            let is_typedef_ref = self.generated_aliases.contains(type_ref_name)
-                                || Self::is_primitive_type_name(type_ref_name);
-                            if is_typedef_ref {
-                                // This is a typedef/type alias reference, not a class qualifier
-                                false
-                            } else {
-                                type_ref_name != type_name && !type_name.contains(type_ref_name)
-                            }
-                        } else {
-                            false
-                        }
-                    } else {
-                        false
-                    }
-                });
-                if !is_static_member_def {
+                if !self.is_out_of_class_static_member_definition(name, ty, &node.children) {
                     self.generate_global_var(
                         name,
                         ty,
@@ -17312,7 +17273,7 @@ impl AstCodeGen {
                         || init_str.contains("_Qn")  // Unresolved _Qn from ratio template
                         || init_str.contains("__atomic_always_lock_free(0, 0)")  // Wrong arg type
                         || init_str.contains("(0 & (0 - 1))"); // Broken arithmetic in condition
-                    if has_template_pattern {
+                    if has_template_pattern || rust_type == "()" {
                         Self::default_value_for_static(ty)
                     } else if matches!(ty, CppType::Bool) {
                         // Handle bool type with integer initializer (C++ allows 0/1 for bool)
@@ -17389,6 +17350,7 @@ impl AstCodeGen {
     /// Generate a const-safe default value for static variables.
     fn default_value_for_static(ty: &CppType) -> String {
         match ty {
+            CppType::Void => "()".to_string(),
             CppType::Int { .. }
             | CppType::Short { .. }
             | CppType::Long { .. }
@@ -18624,10 +18586,14 @@ impl AstCodeGen {
         match &node.kind {
             ClangNodeKind::DeclRefExpr { name, .. } => {
                 let sanitized = sanitize_identifier(name);
-                if self.function_static_var_mapping.contains_key(&sanitized) {
+                let composite = sanitize_identifier_for_composite(name);
+                if self.function_static_var_mapping.contains_key(&sanitized)
+                    || self.function_static_var_mapping.contains_key(&composite)
+                {
                     return true;
                 }
                 self.global_var_mapping.contains_key(&sanitized)
+                    || self.global_var_mapping.contains_key(&composite)
             }
             ClangNodeKind::ImplicitCastExpr { .. } | ClangNodeKind::Unknown(_) => {
                 // Look through casts and unknown wrappers
@@ -18644,7 +18610,12 @@ impl AstCodeGen {
         match &node.kind {
             ClangNodeKind::DeclRefExpr { name, .. } => {
                 let sanitized = sanitize_identifier(name);
-                if let Some(mapped) = self.function_static_var_mapping.get(&sanitized) {
+                let composite = sanitize_identifier_for_composite(name);
+                if let Some(mapped) = self
+                    .function_static_var_mapping
+                    .get(&sanitized)
+                    .or_else(|| self.function_static_var_mapping.get(&composite))
+                {
                     return Some(mapped.clone());
                 }
                 // Check if this is a local variable (parameter or local declaration)
@@ -18653,7 +18624,11 @@ impl AstCodeGen {
                     return Some(sanitized);
                 }
                 // Check if this is a global variable and return the prefixed name
-                if let Some(prefixed) = self.global_var_mapping.get(&sanitized) {
+                if let Some(prefixed) = self
+                    .global_var_mapping
+                    .get(&sanitized)
+                    .or_else(|| self.global_var_mapping.get(&composite))
+                {
                     Some(prefixed.clone())
                 } else {
                     Some(sanitized)
@@ -18929,6 +18904,178 @@ impl AstCodeGen {
 
         for child in &node.children {
             self.collect_defined_global_var_names(child, next_in_function_scope);
+        }
+    }
+
+    /// Pre-collect static member mappings so out-of-class definitions and
+    /// references can resolve against class static storage symbols.
+    fn collect_static_member_mappings(&mut self, node: &ClangNode) {
+        if let ClangNodeKind::RecordDecl { name, .. } = &node.kind {
+            for child in &node.children {
+                if let ClangNodeKind::FieldDecl {
+                    name: field_name,
+                    is_static: true,
+                    ..
+                } = &child.kind
+                {
+                    let sanitized_field = sanitize_static_member_name(field_name);
+                    let sanitized_struct = sanitize_static_member_name(name);
+                    let global_name = format!(
+                        "{}_{}",
+                        sanitized_struct.to_uppercase(),
+                        sanitized_field.to_uppercase()
+                    );
+                    self.static_members
+                        .insert((name.to_string(), field_name.clone()), global_name.clone());
+                    if let Some(last) = name.rsplit("::").next() {
+                        if last != name {
+                            self.static_members
+                                .insert((last.to_string(), field_name.clone()), global_name);
+                        }
+                    }
+                }
+            }
+        }
+        for child in &node.children {
+            self.collect_static_member_mappings(child);
+        }
+    }
+
+    fn normalize_type_ref_name(name: &str) -> String {
+        name.trim()
+            .trim_start_matches("const ")
+            .trim_start_matches("volatile ")
+            .trim_start_matches("struct ")
+            .trim_start_matches("class ")
+            .trim_start_matches("union ")
+            .trim_start_matches("enum ")
+            .trim()
+            .to_string()
+    }
+
+    fn unqualified_cpp_name(name: &str) -> &str {
+        name.rsplit("::").next().unwrap_or(name)
+    }
+
+    fn cpp_type_mentions_type_ref(ty: &CppType, type_ref_name: &str) -> bool {
+        let norm_ref = Self::normalize_type_ref_name(type_ref_name);
+        if norm_ref.is_empty() {
+            return false;
+        }
+        let norm_ref_unqualified = Self::unqualified_cpp_name(&norm_ref);
+
+        match ty {
+            CppType::Named(name) => {
+                let norm_name = Self::normalize_type_ref_name(name);
+                norm_name == norm_ref
+                    || Self::unqualified_cpp_name(&norm_name) == norm_ref_unqualified
+            }
+            CppType::Pointer { pointee, .. } => Self::cpp_type_mentions_type_ref(pointee, &norm_ref),
+            CppType::Reference { referent, .. } => {
+                Self::cpp_type_mentions_type_ref(referent, &norm_ref)
+            }
+            CppType::Array { element, .. } => Self::cpp_type_mentions_type_ref(element, &norm_ref),
+            CppType::Function {
+                return_type, params, ..
+            } => {
+                Self::cpp_type_mentions_type_ref(return_type, &norm_ref)
+                    || params
+                        .iter()
+                        .any(|p| Self::cpp_type_mentions_type_ref(p, &norm_ref))
+            }
+            CppType::DependentType { spelling } => {
+                let norm_spelling = Self::normalize_type_ref_name(spelling);
+                norm_spelling == norm_ref
+                    || Self::unqualified_cpp_name(&norm_spelling) == norm_ref_unqualified
+            }
+            _ => false,
+        }
+    }
+
+    fn is_header_decl_without_initializer(node: &ClangNode, has_init: bool) -> bool {
+        !has_init
+            && node.children.is_empty()
+            && node.location.file.as_deref().is_some_and(|f| {
+                f.ends_with(".h")
+                    || f.ends_with(".hpp")
+                    || f.ends_with(".hh")
+                    || f.ends_with(".hxx")
+            })
+    }
+
+    /// Detect out-of-class static member definitions such as
+    /// `const char* XMLUtil::writeBoolTrue = ...;`.
+    fn is_out_of_class_static_member_definition(
+        &self,
+        var_name: &str,
+        ty: &CppType,
+        children: &[ClangNode],
+    ) -> bool {
+        let var_name = var_name.to_string();
+        children.iter().any(|child| {
+            let ClangNodeKind::Unknown(s) = &child.kind else {
+                return false;
+            };
+            let Some(raw_type_ref_name) = s.strip_prefix("TypeRef:") else {
+                return false;
+            };
+            let type_ref_name = Self::normalize_type_ref_name(raw_type_ref_name);
+            if type_ref_name.is_empty()
+                || Self::is_primitive_type_name(&type_ref_name)
+                || Self::cpp_type_mentions_type_ref(ty, &type_ref_name)
+            {
+                return false;
+            }
+
+            let mut class_candidates = vec![type_ref_name.clone()];
+            if let Some(last) = type_ref_name.rsplit("::").next() {
+                if last != type_ref_name {
+                    class_candidates.push(last.to_string());
+                }
+            }
+            class_candidates.into_iter().any(|class_name| {
+                self.static_members
+                    .contains_key(&(class_name, var_name.clone()))
+            })
+        })
+    }
+
+    /// Pre-collect global variable lookup mappings so forward references can
+    /// lower to `__gv_*` even when definitions are emitted later.
+    fn collect_global_var_lookup_mappings(&mut self, node: &ClangNode, in_function_scope: bool) {
+        let next_in_function_scope = in_function_scope
+            || matches!(
+                node.kind,
+                ClangNodeKind::FunctionDecl { .. }
+                    | ClangNodeKind::CXXMethodDecl { .. }
+                    | ClangNodeKind::ConstructorDecl { .. }
+            );
+
+        if !in_function_scope {
+            if let ClangNodeKind::VarDecl {
+                name,
+                ty,
+                has_init,
+                ..
+            } = &node.kind
+            {
+                if !Self::is_header_decl_without_initializer(node, *has_init)
+                    && !self.is_out_of_class_static_member_definition(name, ty, &node.children)
+                {
+                    let base_name = sanitize_identifier_for_composite(name);
+                    let safe_name = format!("__gv_{}", base_name);
+                    self.global_var_mapping
+                        .entry(base_name)
+                        .or_insert_with(|| safe_name.clone());
+                    self.global_var_types
+                        .entry(safe_name)
+                        .or_insert_with(|| ty.clone());
+                }
+            }
+        }
+
+        for child in &node.children {
+            self.collect_global_var_lookup_mappings(child, next_in_function_scope);
         }
     }
 
@@ -20759,6 +20906,19 @@ impl AstCodeGen {
                 // Save output position for potential rollback
                 let output_start = self.output.len();
 
+                let saved_local_vars = self.local_vars.clone();
+                self.local_vars.clear();
+                for (param_name, _) in params {
+                    self.local_vars.insert(sanitize_identifier(param_name));
+                }
+                for child in &node.children {
+                    if matches!(child.kind, ClangNodeKind::CompoundStmt) {
+                        for var_name in Self::extract_vardecl_names(child) {
+                            self.local_vars.insert(sanitize_identifier(&var_name));
+                        }
+                    }
+                }
+
                 self.writeln(&format!(
                     "pub fn {}({}{}){} {{",
                     method_name, self_param, params_str, ret_str
@@ -20804,6 +20964,7 @@ impl AstCodeGen {
                 self.ref_vars = saved_ref_vars;
                 self.ptr_vars = saved_ptr_vars;
                 self.arr_vars = saved_arr_vars;
+                self.local_vars = saved_local_vars;
 
                 self.current_return_type = old_return_type;
                 self.current_method_is_const = old_method_is_const;
@@ -23556,8 +23717,10 @@ impl AstCodeGen {
                             return global_name;
                         }
                     }
-                    // Check if this is a static member of the current class (accessed without Class:: prefix)
-                    if namespace_path.is_empty() && !matches!(ty, CppType::Function { .. }) {
+                    // Check if this is a static member of the current class.
+                    // Clang can report namespace-only qualification for static members,
+                    // so don't require `namespace_path` to be empty.
+                    if !matches!(ty, CppType::Function { .. }) {
                         if let Some(ref current_class) = self.current_class {
                             if let Some(global_name) = self
                                 .static_members
@@ -23575,7 +23738,12 @@ impl AstCodeGen {
                         return static_name.clone();
                     }
                     if !self.local_vars.contains(&ident) {
-                        if let Some(prefixed_name) = self.global_var_mapping.get(&ident) {
+                        let composite_ident = sanitize_identifier_for_composite(name);
+                        if let Some(prefixed_name) = self
+                            .global_var_mapping
+                            .get(&ident)
+                            .or_else(|| self.global_var_mapping.get(&composite_ident))
+                        {
                             return prefixed_name.clone();
                         }
                     }
@@ -24506,8 +24674,10 @@ impl AstCodeGen {
                         }
                     }
 
-                    // Check if this is a static member of the current class (accessed without Class:: prefix)
-                    if namespace_path.is_empty() && !matches!(ty, CppType::Function { .. }) {
+                    // Check if this is a static member of the current class.
+                    // Clang can report namespace-only qualification for static members,
+                    // so don't require `namespace_path` to be empty.
+                    if !matches!(ty, CppType::Function { .. }) {
                         if let Some(ref current_class) = self.current_class {
                             if let Some(global_name) = self
                                 .static_members
@@ -24525,7 +24695,12 @@ impl AstCodeGen {
                         return format!("unsafe {{ {} }}", static_name);
                     }
                     if !self.local_vars.contains(&ident) {
-                        if let Some(prefixed_name) = self.global_var_mapping.get(&ident) {
+                        let composite_ident = sanitize_identifier_for_composite(name);
+                        if let Some(prefixed_name) = self
+                            .global_var_mapping
+                            .get(&ident)
+                            .or_else(|| self.global_var_mapping.get(&composite_ident))
+                        {
                             return format!("unsafe {{ {} }}", prefixed_name);
                         }
                     }
@@ -32755,6 +32930,218 @@ mod tests {
         assert!(
             !code.contains("#[export_name = \"_dist_code\"]"),
             "extern declaration should not export C symbol storage, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_namespaced_typeref_global_array_decl_not_skipped_as_static_member_definition() {
+        let entities_ty = CppType::Array {
+            element: Box::new(CppType::Named("tinyxml2::Entity".to_string())),
+            size: Some(1),
+        };
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![
+                make_node(
+                    ClangNodeKind::RecordDecl {
+                        name: "Entity".to_string(),
+                        is_class: false,
+                        is_definition: true,
+                        fields: vec![],
+                    },
+                    vec![],
+                ),
+                make_node(
+                    ClangNodeKind::VarDecl {
+                        name: "entities".to_string(),
+                        ty: entities_ty,
+                        has_init: false,
+                        is_static: true,
+                        is_extern: false,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::Unknown("TypeRef:tinyxml2::Entity".to_string()),
+                        vec![],
+                    )],
+                ),
+            ],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("static mut __gv_entities:"),
+            "namespaced type reference should not be treated as out-of-class static member qualifier, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_forward_global_declref_uses_precollected_global_mapping() {
+        let utf_ty = CppType::Char { signed: false };
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![
+                make_node(
+                    ClangNodeKind::FunctionDecl {
+                        name: "lead_byte".to_string(),
+                        mangled_name: "lead_byte".to_string(),
+                        is_static: false,
+                        return_type: utf_ty.clone(),
+                        params: vec![],
+                        is_definition: true,
+                        is_variadic: false,
+                        is_noexcept: false,
+                        is_coroutine: false,
+                        coroutine_info: None,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![make_node(
+                            ClangNodeKind::ReturnStmt,
+                            vec![make_node(
+                                ClangNodeKind::DeclRefExpr {
+                                    name: "TIXML_UTF_LEAD_0".to_string(),
+                                    ty: utf_ty.clone(),
+                                    namespace_path: vec![],
+                                },
+                                vec![],
+                            )],
+                        )],
+                    )],
+                ),
+                make_node(
+                    ClangNodeKind::VarDecl {
+                        name: "TIXML_UTF_LEAD_0".to_string(),
+                        ty: utf_ty,
+                        has_init: true,
+                        is_static: true,
+                        is_extern: false,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::IntegerLiteral {
+                            value: 239,
+                            cpp_type: Some(CppType::Int { signed: true }),
+                        },
+                        vec![],
+                    )],
+                ),
+            ],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("__gv_TIXML_UTF_LEAD_0"),
+            "forward global references should lower to the internal __gv_ symbol, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("return TIXML_UTF_LEAD_0;"),
+            "forward global reference should not stay as unresolved raw identifier, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_namespace_only_static_member_declref_resolves_to_current_class_static_storage() {
+        let cchar_ptr = CppType::Pointer {
+            pointee: Box::new(CppType::Char { signed: true }),
+            is_const: true,
+        };
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![make_node(
+                ClangNodeKind::RecordDecl {
+                    name: "XMLUtil".to_string(),
+                    is_class: true,
+                    is_definition: true,
+                    fields: vec![],
+                },
+                vec![
+                    make_node(
+                        ClangNodeKind::FieldDecl {
+                            name: "writeBoolTrue".to_string(),
+                            ty: cchar_ptr.clone(),
+                            access: AccessSpecifier::Public,
+                            is_static: true,
+                            bit_field_width: None,
+                        },
+                        vec![],
+                    ),
+                    make_node(
+                        ClangNodeKind::CXXMethodDecl {
+                            class_name: "tinyxml2::XMLUtil".to_string(),
+                            name: "GetBoolTrue".to_string(),
+                            return_type: cchar_ptr.clone(),
+                            params: vec![],
+                            is_definition: true,
+                            is_static: true,
+                            is_virtual: false,
+                            is_pure_virtual: false,
+                            is_override: false,
+                            is_final: false,
+                            is_const: true,
+                            access: AccessSpecifier::Public,
+                        },
+                        vec![make_node(
+                            ClangNodeKind::CompoundStmt,
+                            vec![make_node(
+                                ClangNodeKind::ReturnStmt,
+                                vec![make_node(
+                                    ClangNodeKind::DeclRefExpr {
+                                        name: "writeBoolTrue".to_string(),
+                                        ty: cchar_ptr,
+                                        namespace_path: vec!["tinyxml2".to_string()],
+                                    },
+                                    vec![],
+                                )],
+                            )],
+                        )],
+                    ),
+                ],
+            )],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("XMLUTIL_WRITEBOOLTRUE"),
+            "namespace-only static member DeclRefExpr should resolve using current class static mapping, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_global_unit_typed_initializer_falls_back_to_unit_default() {
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![make_node(
+                ClangNodeKind::VarDecl {
+                    name: "value".to_string(),
+                    ty: CppType::Void,
+                    has_init: true,
+                    is_static: true,
+                    is_extern: false,
+                },
+                vec![make_node(
+                    ClangNodeKind::DeclRefExpr {
+                        name: "__v".to_string(),
+                        ty: CppType::Void,
+                        namespace_path: vec![],
+                    },
+                    vec![],
+                )],
+            )],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("static mut __gv_value: () = ();"),
+            "unit-typed global should use unit default initializer instead of unresolved placeholder, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("static mut __gv_value: () = __v;"),
+            "unit-typed global should not keep unresolved placeholder initializer, got:\n{}",
             code
         );
     }
