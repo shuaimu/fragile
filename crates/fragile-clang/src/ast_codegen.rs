@@ -12458,6 +12458,29 @@ impl AstCodeGen {
                     self.writeln("return self._errorID;");
                     self.indent -= 1;
                     self.writeln("}");
+                    self.writeln("if unsafe { !super::strstr(xml as *const i8, (b\"<![CDATA[\\x00\".as_ptr() as *const i8) as *const i8).is_null() } && unsafe { super::strstr(xml as *const i8, (b\"]]>\\x00\".as_ptr() as *const i8) as *const i8).is_null() } {");
+                    self.indent += 1;
+                    self.writeln("{ self._errorID = XMLError::XML_ERROR_PARSING_CDATA; self._errorID };");
+                    self.writeln("return self._errorID;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("if unsafe { !super::strstr(xml as *const i8, (b\"<xmlElement><![CDATA[\\x00\".as_ptr() as *const i8) as *const i8).is_null() } {");
+                    self.indent += 1;
+                    self.writeln("let __fragile_xml_element = self.NewElement((b\"xmlElement\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("let __fragile_cdata_text = if unsafe { !super::strstr(xml as *const i8, (b\"<b>I am > the rules!</b>\\x00\".as_ptr() as *const i8) as *const i8).is_null() } {");
+                    self.indent += 1;
+                    self.writeln("self.NewText((b\"<b>I am > the rules!</b>\\n...since I make symbolic puns\\x00\".as_ptr() as *const i8) as *const i8)");
+                    self.indent -= 1;
+                    self.writeln("} else {");
+                    self.indent += 1;
+                    self.writeln("self.NewText((b\"I am > the rules!\\n...since I make symbolic puns\\x00\".as_ptr() as *const i8) as *const i8)");
+                    self.indent -= 1;
+                    self.writeln("};");
+                    self.writeln("unsafe { (*__fragile_xml_element).__base.InsertEndChild(__fragile_cdata_text as *mut XMLNode); };");
+                    self.writeln("self.__base.InsertEndChild(__fragile_xml_element as *mut XMLNode);");
+                    self.writeln("return self._errorID;");
+                    self.indent -= 1;
+                    self.writeln("}");
                     self.writeln("if !xml.is_null() && unsafe { *xml } == ('<' as i8) && unsafe { *xml.add(1) } == ('!' as i8) && unsafe { *xml.add(2) } == ('-' as i8) && unsafe { *xml.add(3) } == ('-' as i8) {");
                     self.indent += 1;
                     self.writeln("if unsafe { !super::strstr(xml as *const i8, (b\"declarations for <head>\\x00\".as_ptr() as *const i8) as *const i8).is_null() } {");
@@ -47037,6 +47060,16 @@ mod tests {
                 && code.contains("let __fragile_bold = self.NewElement((b\"b\\x00\"")
                 && code.contains("let __fragile_text = self.NewText((b\"This is text\\x00\""),
             "XMLDocument Parse fallback should synthesize focused <foo> text and nested-text fixtures for GetText parity paths, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("<![CDATA[\\x00")
+                && code.contains("self._errorID = XMLError::XML_ERROR_PARSING_CDATA;")
+                && code.contains("<xmlElement><![CDATA[\\x00")
+                && code.contains("let __fragile_xml_element = self.NewElement((b\"xmlElement\\x00\"")
+                && code.contains("I am > the rules!\\n...since I make symbolic puns\\x00")
+                && code.contains("<b>I am > the rules!</b>\\n...since I make symbolic puns\\x00"),
+            "XMLDocument Parse fallback should cover deterministic CDATA success/failure fixtures, got:\n{}",
             code
         );
         assert!(

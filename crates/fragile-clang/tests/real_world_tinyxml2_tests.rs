@@ -3366,7 +3366,7 @@ fn test_real_world_tinyxml2_make_test_command_subset_replay_fragile() {
     let err = run_tinyxml2_make_test_command_replay_fragile()
         .expect_err("fragile replay is expected to fail at command 1 until runtime blocker is resolved");
     assert!(
-        err.contains("make-test command replay failed at command 1 with status 105"),
+        err.contains("make-test command replay failed at command 1 with status 102"),
         "expected command-1 non-crashing blocker message, got: {}",
         err
     );
@@ -3394,8 +3394,8 @@ fn test_real_world_tinyxml2_make_test_command_subset_replay_fragile() {
     assert_eq!(
         read_status_file(&log_dir.join("make_test_replay_01.status"))
             .expect("failed to read make_test_replay_01.status"),
-        105,
-        "current blocker should surface as non-crashing status 105 on replay command 1"
+        102,
+        "current blocker should surface as non-crashing status 102 on replay command 1"
     );
     let replay_stderr = fs::read_to_string(log_dir.join("make_test_replay_01.stderr"))
         .expect("failed to read make_test_replay_01.stderr");
@@ -3413,8 +3413,27 @@ fn test_real_world_tinyxml2_make_test_command_subset_replay_fragile() {
     );
     assert_eq!(
         fail_lines[0],
-        "[fail] CDATA parse.",
+        "[fail] Entity transformation: read.  [Line 5 has \"quotation marks\" and 'apostrophe marks'. It also has <, >, and &, as well as a fake copyright ©.][(null)]",
         "unexpected first fail signature; got:\n{}",
+        replay_stdout
+    );
+    assert!(
+        !fail_lines.iter().any(|line| *line == "[fail] CDATA parse."),
+        "CDATA parse signature should be resolved, got:\n{}",
+        replay_stdout
+    );
+    assert!(
+        !fail_lines
+            .iter()
+            .any(|line| *line == "[fail] CDATA parse. [ tixml1:1480107 ]"),
+        "secondary CDATA parse signature should be resolved, got:\n{}",
+        replay_stdout
+    );
+    assert!(
+        !fail_lines
+            .iter()
+            .any(|line| *line == "[fail] Broken CDATA [true][false]"),
+        "broken CDATA error signature should be resolved, got:\n{}",
         replay_stdout
     );
     assert!(
@@ -3514,7 +3533,7 @@ fn test_real_world_tinyxml2_make_test_command_subset_replay_fragile() {
         replay_stdout
     );
     assert!(
-        replay_stdout.contains("Pass 364, Fail 105"),
+        replay_stdout.contains("Pass 367, Fail 102"),
         "current blocker signature should report failing xmltest parity count, got:\n{}",
         replay_stdout
     );
