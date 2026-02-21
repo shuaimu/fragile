@@ -20139,6 +20139,26 @@ impl AstCodeGen {
         format!("({}) as *const _", expr)
     }
 
+    /// Check if expression is a mutating assignment-operator overload call.
+    /// These calls already return a mutable reference and must not be wrapped
+    /// in an additional `&mut` during reference-return lowering.
+    fn is_assignment_overload_call_expr(expr: &str) -> bool {
+        const ASSIGN_OVERLOAD_CALLS: &[&str] = &[
+            ".op_assign(",
+            ".op_add_assign(",
+            ".op_sub_assign(",
+            ".op_mul_assign(",
+            ".op_div_assign(",
+            ".op_rem_assign(",
+            ".op_and_assign(",
+            ".op_or_assign(",
+            ".op_xor_assign(",
+            ".op_shl_assign(",
+            ".op_shr_assign(",
+        ];
+        ASSIGN_OVERLOAD_CALLS.iter().any(|pattern| expr.contains(pattern))
+    }
+
     /// Check if a string expression contains an assignment (= but not == or !=)
     fn is_assignment_expr(expr: &str) -> bool {
         // Look for " = " that isn't part of "==" or "!=" or "+=" or "-=" etc.
@@ -20215,6 +20235,16 @@ impl AstCodeGen {
     /// Extract the LHS of an assignment expression
     /// For "*__a = expr", returns "__a" (the variable being assigned)
     fn extract_assignment_lhs(expr: &str) -> Option<String> {
+        let trimmed = expr.trim();
+        if let Some(inner) = trimmed
+            .strip_prefix("unsafe { ")
+            .and_then(|s| s.strip_suffix(" }"))
+        {
+            if let Some(lhs) = Self::extract_assignment_lhs(inner.trim()) {
+                return Some(lhs);
+            }
+        }
+
         // Find the first " = " that's a simple assignment
         if let Some(idx) = expr.find(" = ") {
             let lhs = expr[..idx].trim();
@@ -25071,13 +25101,7 @@ impl AstCodeGen {
                         // because Rust's &mut self already provides the reference
                         if expr == "self" || expr == "__self" {
                             expr
-                        } else if expr.contains(".op_assign(")
-                            || expr.contains(".op_add_assign(")
-                            || expr.contains(".op_sub_assign(")
-                            || expr.contains(".op_mul_assign(")
-                            || expr.contains(".op_div_assign(")
-                            || expr.contains(".op_rem_assign(")
-                        {
+                        } else if Self::is_assignment_overload_call_expr(&expr) {
                             // Assignment operator overloads already return &mut Self
                             // Don't add another &mut
                             expr
@@ -25086,7 +25110,14 @@ impl AstCodeGen {
                             // In Rust, assignment is a statement that returns ()
                             // Split into statement + return reference
                             // e.g., "*__a = expr" -> "*__a = expr; __a" (the mutable ref to __a)
-                            if let Some(lhs) = Self::extract_assignment_lhs(&expr) {
+                            if let Some(mut lhs) = Self::extract_assignment_lhs(&expr) {
+                                if let Some(ref_name) =
+                                    lhs.strip_prefix("&mut ").map(str::trim)
+                                {
+                                    if self.ref_vars.contains(ref_name) {
+                                        lhs = ref_name.to_string();
+                                    }
+                                }
                                 // Write the assignment as a statement first
                                 self.writeln(&format!("{};", expr));
                                 // Return the reference to LHS
@@ -46589,6 +46620,270 @@ mod tests {
         assert!(!AstCodeGen::has_unresolved_template_placeholder(
             "basic_string_char"
         ));
+    }
+
+    #[test]
+    fn test_reference_return_assignment_overload_call_does_not_wrap_extra_mut_ref() {
+        let flags_ptr = CppType::Pointer {
+            pointee: Box::new(CppType::Named("Flags".to_string())),
+            is_const: false,
+        };
+        let flags_ref = CppType::Reference {
+            referent: Box::new(CppType::Named("Flags".to_string())),
+            is_const: false,
+            is_rvalue: false,
+        };
+        let int_ty = CppType::Int { signed: true };
+
+        let make_operator_method = |name: &str| {
+            make_node(
+                ClangNodeKind::CXXMethodDecl {
+                    class_name: "Flags".to_string(),
+                    name: name.to_string(),
+                    return_type: flags_ref.clone(),
+                    params: vec![("rhs".to_string(), int_ty.clone())],
+                    is_definition: true,
+                    is_static: false,
+                    is_virtual: false,
+                    is_pure_virtual: false,
+                    is_override: false,
+                    is_final: false,
+                    is_const: false,
+                    access: AccessSpecifier::Public,
+                },
+                vec![make_node(
+                    ClangNodeKind::CompoundStmt,
+                    vec![make_node(
+                        ClangNodeKind::ReturnStmt,
+                        vec![make_node(
+                            ClangNodeKind::UnaryOperator {
+                                op: UnaryOp::Deref,
+                                ty: CppType::Named("Flags".to_string()),
+                            },
+                            vec![make_node(
+                                ClangNodeKind::CXXThisExpr {
+                                    ty: flags_ptr.clone(),
+                                },
+                                vec![],
+                            )],
+                        )],
+                    )],
+                )],
+            )
+        };
+
+        let make_call_fn = |fn_name: &str, op_name: &str| {
+            make_node(
+                ClangNodeKind::FunctionDecl {
+                    name: fn_name.to_string(),
+                    mangled_name: fn_name.to_string(),
+                    is_static: false,
+                    return_type: flags_ref.clone(),
+                    params: vec![
+                        ("target".to_string(), flags_ptr.clone()),
+                        ("rhs".to_string(), int_ty.clone()),
+                    ],
+                    is_definition: true,
+                    is_variadic: false,
+                    is_noexcept: false,
+                    is_coroutine: false,
+                    coroutine_info: None,
+                },
+                vec![make_node(
+                    ClangNodeKind::CompoundStmt,
+                    vec![make_node(
+                        ClangNodeKind::ReturnStmt,
+                        vec![make_node(
+                            ClangNodeKind::CallExpr {
+                                ty: flags_ref.clone(),
+                                template_instantiation: None,
+                            },
+                            vec![
+                                make_node(
+                                    ClangNodeKind::MemberExpr {
+                                        member_name: op_name.to_string(),
+                                        is_arrow: true,
+                                        ty: CppType::Function {
+                                            return_type: Box::new(flags_ref.clone()),
+                                            params: vec![int_ty.clone()],
+                                            is_variadic: false,
+                                        },
+                                        declaring_class: Some("Flags".to_string()),
+                                        is_static: false,
+                                    },
+                                    vec![make_node(
+                                        ClangNodeKind::DeclRefExpr {
+                                            name: "target".to_string(),
+                                            ty: flags_ptr.clone(),
+                                            namespace_path: vec![],
+                                        },
+                                        vec![],
+                                    )],
+                                ),
+                                make_node(
+                                    ClangNodeKind::DeclRefExpr {
+                                        name: "rhs".to_string(),
+                                        ty: int_ty.clone(),
+                                        namespace_path: vec![],
+                                    },
+                                    vec![],
+                                ),
+                            ],
+                        )],
+                    )],
+                )],
+            )
+        };
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![
+                make_node(
+                    ClangNodeKind::RecordDecl {
+                        name: "Flags".to_string(),
+                        is_class: true,
+                        is_definition: true,
+                        fields: vec![],
+                    },
+                    vec![
+                        make_operator_method("operator|="),
+                        make_operator_method("operator&="),
+                        make_operator_method("operator^="),
+                    ],
+                ),
+                make_call_fn("call_or_assign", "operator|="),
+                make_call_fn("call_and_assign", "operator&="),
+                make_call_fn("call_xor_assign", "operator^="),
+            ],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+
+        assert!(
+            code.contains("return unsafe { (*target).op_or_assign(rhs) };"),
+            "operator|= reference return should not add an extra mutable reference wrapper, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("return unsafe { (*target).op_and_assign(rhs) };"),
+            "operator&= reference return should not add an extra mutable reference wrapper, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("return unsafe { (*target).op_xor_assign(rhs) };"),
+            "operator^= reference return should not add an extra mutable reference wrapper, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("return unsafe { &mut (*target).op_or_assign(")
+                && !code.contains("return unsafe { &mut (*target).op_and_assign(")
+                && !code.contains("return unsafe { &mut (*target).op_xor_assign("),
+            "assignment-overload reference returns must not wrap call results with `&mut`, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_extract_assignment_lhs_from_unsafe_wrapped_assignment_expr() {
+        let lhs = AstCodeGen::extract_assignment_lhs("unsafe { *__lhs = *__lhs | __rhs; *__lhs }");
+        assert_eq!(lhs.as_deref(), Some("__lhs"));
+    }
+
+    #[test]
+    fn test_reference_return_unsafe_assignment_expr_returns_lhs_binding_not_temp_ref() {
+        let int_ty = CppType::Int { signed: true };
+        let int_ref_ty = CppType::Reference {
+            referent: Box::new(int_ty.clone()),
+            is_const: false,
+            is_rvalue: false,
+        };
+
+        let lhs_ref = || {
+            make_node(
+                ClangNodeKind::DeclRefExpr {
+                    name: "__lhs".to_string(),
+                    ty: int_ref_ty.clone(),
+                    namespace_path: vec![],
+                },
+                vec![],
+            )
+        };
+        let rhs_ref = || {
+            make_node(
+                ClangNodeKind::DeclRefExpr {
+                    name: "__rhs".to_string(),
+                    ty: int_ty.clone(),
+                    namespace_path: vec![],
+                },
+                vec![],
+            )
+        };
+        let lhs_deref = || {
+            make_node(
+                ClangNodeKind::UnaryOperator {
+                    op: UnaryOp::Deref,
+                    ty: int_ty.clone(),
+                },
+                vec![lhs_ref()],
+            )
+        };
+
+        let assign_expr = make_node(
+            ClangNodeKind::BinaryOperator {
+                op: BinaryOp::Assign,
+                ty: int_ty.clone(),
+            },
+            vec![
+                lhs_deref(),
+                make_node(
+                    ClangNodeKind::BinaryOperator {
+                        op: BinaryOp::Or,
+                        ty: int_ty.clone(),
+                    },
+                    vec![lhs_deref(), rhs_ref()],
+                ),
+            ],
+        );
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![make_node(
+                ClangNodeKind::FunctionDecl {
+                    name: "op_or_assign_like".to_string(),
+                    mangled_name: "op_or_assign_like".to_string(),
+                    is_static: false,
+                    return_type: int_ref_ty.clone(),
+                    params: vec![
+                        ("__lhs".to_string(), int_ref_ty.clone()),
+                        ("__rhs".to_string(), int_ty.clone()),
+                    ],
+                    is_definition: true,
+                    is_variadic: false,
+                    is_noexcept: false,
+                    is_coroutine: false,
+                    coroutine_info: None,
+                },
+                vec![make_node(
+                    ClangNodeKind::CompoundStmt,
+                    vec![make_node(
+                        ClangNodeKind::ReturnStmt,
+                        vec![assign_expr],
+                    )],
+                )],
+            )],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("return __lhs;"),
+            "unsafe assignment expression in reference-return context should return lhs binding, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("return &mut unsafe { *__lhs ="),
+            "unsafe assignment expression should not return reference-to-temporary form, got:\n{}",
+            code
+        );
     }
 
     #[test]
