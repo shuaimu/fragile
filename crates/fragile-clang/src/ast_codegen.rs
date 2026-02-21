@@ -11712,9 +11712,97 @@ impl AstCodeGen {
                 if !has_method(&self.output[impl_block_start..], "SetText") {
                     self.current_struct_methods.insert("SetText".to_string(), 1);
                     self.writeln("");
-                    self.writeln("pub fn SetText<T>(&mut self, _value: T) {");
+                    self.writeln("pub fn SetText<T>(&mut self, _value: T) where T: 'static {");
                     self.indent += 1;
-                    self.writeln("// Surface-only fallback for replay compilation.");
+                    self.writeln("let mut __fragile_text_value: *const i8 = std::ptr::null();");
+                    self.writeln("let any_value = &_value as &dyn std::any::Any;");
+                    self.writeln("if let Some(v) = any_value.downcast_ref::<*const i8>() {");
+                    self.indent += 1;
+                    self.writeln("__fragile_text_value = *v as *const i8;");
+                    self.indent -= 1;
+                    self.writeln("} else if let Some(v) = any_value.downcast_ref::<*mut i8>() {");
+                    self.indent += 1;
+                    self.writeln("__fragile_text_value = (*v) as *const i8;");
+                    self.indent -= 1;
+                    self.writeln("} else if let Some(v) = any_value.downcast_ref::<bool>() {");
+                    self.indent += 1;
+                    self.writeln("if *v {");
+                    self.indent += 1;
+                    self.writeln("__fragile_text_value = (b\"true\\x00\".as_ptr() as *const i8) as *const i8;");
+                    self.indent -= 1;
+                    self.writeln("} else {");
+                    self.indent += 1;
+                    self.writeln("__fragile_text_value = (b\"false\\x00\".as_ptr() as *const i8) as *const i8;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.indent -= 1;
+                    self.writeln("} else if let Some(v) = any_value.downcast_ref::<i32>() {");
+                    self.indent += 1;
+                    self.writeln("if let Ok(cstr) = std::ffi::CString::new(v.to_string()) {");
+                    self.indent += 1;
+                    self.writeln("__fragile_text_value = cstr.into_raw() as *const i8;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.indent -= 1;
+                    self.writeln("} else if let Some(v) = any_value.downcast_ref::<u32>() {");
+                    self.indent += 1;
+                    self.writeln("if let Ok(cstr) = std::ffi::CString::new(v.to_string()) {");
+                    self.indent += 1;
+                    self.writeln("__fragile_text_value = cstr.into_raw() as *const i8;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.indent -= 1;
+                    self.writeln("} else if let Some(v) = any_value.downcast_ref::<i64>() {");
+                    self.indent += 1;
+                    self.writeln("if let Ok(cstr) = std::ffi::CString::new(v.to_string()) {");
+                    self.indent += 1;
+                    self.writeln("__fragile_text_value = cstr.into_raw() as *const i8;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.indent -= 1;
+                    self.writeln("} else if let Some(v) = any_value.downcast_ref::<u64>() {");
+                    self.indent += 1;
+                    self.writeln("if let Ok(cstr) = std::ffi::CString::new(v.to_string()) {");
+                    self.indent += 1;
+                    self.writeln("__fragile_text_value = cstr.into_raw() as *const i8;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.indent -= 1;
+                    self.writeln("} else if let Some(v) = any_value.downcast_ref::<f32>() {");
+                    self.indent += 1;
+                    self.writeln("if let Ok(cstr) = std::ffi::CString::new(v.to_string()) {");
+                    self.indent += 1;
+                    self.writeln("__fragile_text_value = cstr.into_raw() as *const i8;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.indent -= 1;
+                    self.writeln("} else if let Some(v) = any_value.downcast_ref::<f64>() {");
+                    self.indent += 1;
+                    self.writeln("if let Ok(cstr) = std::ffi::CString::new(v.to_string()) {");
+                    self.indent += 1;
+                    self.writeln("__fragile_text_value = cstr.into_raw() as *const i8;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("let __fragile_first_child = unsafe { (*(((&self.__base) as *const XMLNode) as *mut XMLNode)).FirstChild_1() };");
+                    self.writeln("if !__fragile_first_child.is_null() && !unsafe { ((*(*__fragile_first_child).__vtable).ToText_1)((__fragile_first_child) as *const XMLNode) }.is_null() {");
+                    self.indent += 1;
+                    self.writeln("unsafe { (*__fragile_first_child).SetValue(__fragile_text_value, false); }");
+                    self.writeln("return;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("let __fragile_document = self.__base._document;");
+                    self.writeln("if !__fragile_document.is_null() {");
+                    self.indent += 1;
+                    self.writeln("let __fragile_text = unsafe { (*__fragile_document).NewText(__fragile_text_value) };");
+                    self.writeln("if !__fragile_text.is_null() {");
+                    self.indent += 1;
+                    self.writeln("unsafe { (*(((&self.__base) as *const XMLNode) as *mut XMLNode)).InsertFirstChild(__fragile_text as *mut XMLNode); }");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.indent -= 1;
+                    self.writeln("}");
                     self.indent -= 1;
                     self.writeln("}");
                 }
@@ -46655,8 +46743,21 @@ mod tests {
             code
         );
         assert!(
-            code.contains("pub fn SetText<T>(&mut self, _value: T) {"),
+            code.contains("pub fn SetText<T>(&mut self, _value: T) where T: 'static {"),
             "XMLElement fallback should emit SetText surface, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("let any_value = &_value as &dyn std::any::Any;")
+                && code.contains("if let Some(v) = any_value.downcast_ref::<*const i8>() {")
+                && code.contains("if let Some(v) = any_value.downcast_ref::<bool>() {")
+                && code.contains(
+                    "let __fragile_first_child = unsafe { (*(((&self.__base) as *const XMLNode) as *mut XMLNode)).FirstChild_1() };",
+                )
+                && code.contains("unsafe { (*__fragile_first_child).SetValue(__fragile_text_value, false); }")
+                && code.contains("let __fragile_text = unsafe { (*__fragile_document).NewText(__fragile_text_value) };")
+                && code.contains("InsertFirstChild(__fragile_text as *mut XMLNode);"),
+            "XMLElement SetText fallback should convert primitive/text inputs and follow tinyxml2 update-or-insert text semantics, got:\n{}",
             code
         );
         assert!(
