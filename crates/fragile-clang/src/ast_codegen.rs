@@ -4088,7 +4088,13 @@ impl AstCodeGen {
         for own_method in own_methods {
             // Check if this method overrides a base method
             let override_idx = entries.iter().position(|e| {
-                e.name == own_method.name && e.params.len() == own_method.params.len()
+                e.name == own_method.name
+                    && e.is_const == own_method.is_const
+                    && e.params.len() == own_method.params.len()
+                    && e.params
+                        .iter()
+                        .zip(own_method.params.iter())
+                        .all(|((_, lhs), (_, rhs))| lhs == rhs)
             });
 
             if let Some(idx) = override_idx {
@@ -8492,17 +8498,150 @@ impl AstCodeGen {
             return None;
         }
 
+        // Recover call-signature metadata when available so overload dispatch can pick
+        // the correct vtable slot for methods like XMLVisitor::Visit(...).
+        let member_signature: Option<(Vec<CppType>, CppType)> = match &member_expr.kind {
+            ClangNodeKind::MemberExpr {
+                ty:
+                    CppType::Function {
+                        params,
+                        return_type,
+                        ..
+                    },
+                ..
+            } => Some((params.clone(), (*return_type.clone()).clone())),
+            _ => None,
+        };
+
         // Check if the method is in the vtable (is virtual)
         let vtable_info = self.vtables.get(&class_name)?;
         let sanitized_member = sanitize_identifier(member_name);
-        let is_virtual = vtable_info
-            .entries
-            .iter()
-            .any(|e| sanitize_identifier(&e.name) == sanitized_member);
-
-        if !is_virtual {
+        let mut name_counts: HashMap<String, usize> = HashMap::new();
+        let mut matching_entries: Vec<(String, usize)> = Vec::new();
+        for (idx, entry) in vtable_info.entries.iter().enumerate() {
+            let base_name = sanitize_identifier(&entry.name);
+            let count = name_counts.entry(base_name.clone()).or_insert(0);
+            let field_name = if *count == 0 {
+                *count += 1;
+                base_name.clone()
+            } else {
+                *count += 1;
+                format!("{}_{}", base_name, *count - 1)
+            };
+            if base_name == sanitized_member {
+                matching_entries.push((field_name, idx));
+            }
+        }
+        if matching_entries.is_empty() {
             return None;
         }
+
+        let dispatch_args: Vec<(String, Option<CppType>)> = node.children[1..]
+            .iter()
+            .map(|child| {
+                let arg_expr = self.expr_to_string(child);
+                let arg_ty = self.infer_vtable_dispatch_arg_type(child, &arg_expr);
+                (arg_expr, arg_ty)
+            })
+            .collect();
+        let arg_count = dispatch_args.len();
+        let mut selected_entries: Vec<(String, usize)> = matching_entries
+            .iter()
+            .filter(|(_, idx)| vtable_info.entries[*idx].params.len() == arg_count)
+            .cloned()
+            .collect();
+        if selected_entries.is_empty() {
+            selected_entries = matching_entries.clone();
+        }
+
+        if let Some((signature_params, signature_return)) = member_signature.as_ref() {
+            let signature_matches_observed_args = signature_params.len() <= dispatch_args.len()
+                && signature_params
+                    .iter()
+                    .enumerate()
+                    .all(|(arg_idx, signature_param)| {
+                        dispatch_args[arg_idx]
+                            .1
+                            .as_ref()
+                            .map(|actual_ty| {
+                                Self::is_vtable_dispatch_arg_type_compatible(
+                                    actual_ty,
+                                    signature_param,
+                                )
+                            })
+                            .unwrap_or(true)
+                    });
+            if !signature_matches_observed_args {
+                // Ignore degraded/wrong call-site signature metadata when it conflicts
+                // with observed argument types (common in overloaded tinyxml2 visitor calls).
+            } else {
+            let exact_signature: Vec<(String, usize)> = selected_entries
+                .iter()
+                .filter(|(_, idx)| {
+                    let entry = &vtable_info.entries[*idx];
+                    entry.return_type == *signature_return
+                        && entry.params.len() == signature_params.len()
+                        && entry
+                            .params
+                            .iter()
+                            .zip(signature_params.iter())
+                            .all(|((_, expected), actual)| expected == actual)
+                })
+                .cloned()
+                .collect();
+            if !exact_signature.is_empty() {
+                selected_entries = exact_signature;
+            }
+            }
+        }
+        if selected_entries.len() > 1 {
+            let compatible_args: Vec<(String, usize)> = selected_entries
+                .iter()
+                .filter(|(_, idx)| {
+                    let entry = &vtable_info.entries[*idx];
+                    entry.params.len() <= dispatch_args.len()
+                        && entry.params.iter().enumerate().all(|(arg_idx, (_, expected_ty))| {
+                            dispatch_args[arg_idx]
+                                .1
+                                .as_ref()
+                                .map(|actual_ty| {
+                                    Self::is_vtable_dispatch_arg_type_compatible(
+                                        actual_ty,
+                                        expected_ty,
+                                    )
+                                })
+                                .unwrap_or(true)
+                        })
+                })
+                .cloned()
+                .collect();
+            if !compatible_args.is_empty() {
+                selected_entries = compatible_args;
+            }
+        }
+
+        let prefer_const = self.member_call_prefers_const(member_expr, &format!("{}.", base_expr));
+        let selected_idx = if selected_entries.len() > 1 {
+            selected_entries
+                .iter()
+                .find(|(_, idx)| {
+                    let entry = &vtable_info.entries[*idx];
+                    if prefer_const {
+                        entry.is_const
+                    } else {
+                        !entry.is_const
+                    }
+                })
+                .or_else(|| selected_entries.first())
+                .map(|(_, idx)| *idx)?
+        } else {
+            selected_entries.first().map(|(_, idx)| *idx)?
+        };
+        let selected_field_name = selected_entries
+            .iter()
+            .find(|(_, idx)| *idx == selected_idx)
+            .map(|(field, _)| field.clone())?;
+        let selected_entry = &vtable_info.entries[selected_idx];
 
         // Find the root polymorphic class (the one with the vtable type)
         let root_class = self.find_root_polymorphic_class(&class_name);
@@ -8510,7 +8649,18 @@ impl AstCodeGen {
         // Collect arguments (skip the first child which is the MemberExpr)
         let args: Vec<String> = node.children[1..]
             .iter()
-            .map(|c| self.expr_to_string(c))
+            .enumerate()
+            .map(|(idx, child)| {
+                let arg = dispatch_args
+                    .get(idx)
+                    .map(|(arg, _)| arg.clone())
+                    .unwrap_or_else(|| self.expr_to_string(child));
+                if let Some((_, expected_ty)) = selected_entry.params.get(idx) {
+                    self.normalize_vtable_dispatch_arg(child, arg, expected_ty)
+                } else {
+                    arg
+                }
+            })
             .collect();
 
         // Generate the vtable dispatch:
@@ -8526,14 +8676,14 @@ impl AstCodeGen {
             format!("(*{}){}.", base_ptr_expr, path)
         };
 
-        // The vtable function expects a pointer to the root polymorphic class.
-        // If we're calling through a derived class pointer, we need to cast it.
-        let self_arg = if class_name == root_class {
-            base_ptr_expr.clone()
+        // The vtable function expects a pointer to the root polymorphic class
+        // with mutability based on method constness.
+        let self_ptr_ty = if selected_entry.is_const {
+            format!("*const {}", root_class)
         } else {
-            // Cast derived pointer to root class pointer
-            format!("{} as *mut {}", base_ptr_expr, root_class)
+            format!("*mut {}", root_class)
         };
+        let self_arg = format!("({}) as {}", base_ptr_expr, self_ptr_ty);
 
         let all_args = if args.is_empty() {
             self_arg
@@ -8543,8 +8693,156 @@ impl AstCodeGen {
 
         Some(format!(
             "unsafe {{ ((*{}__vtable).{})({}) }}",
-            vtable_access, sanitized_member, all_args
+            vtable_access, selected_field_name, all_args
         ))
+    }
+
+    fn normalize_vtable_dispatch_arg(
+        &self,
+        arg_node: &ClangNode,
+        arg: String,
+        expected_ty: &CppType,
+    ) -> String {
+        if matches!(expected_ty, CppType::Bool) {
+            let stripped = strip_literal_suffix(arg.trim());
+            if stripped == "0" {
+                return "false".to_string();
+            }
+            if stripped == "1" {
+                return "true".to_string();
+            }
+        }
+
+        let CppType::Pointer { pointee, is_const } = expected_ty else {
+            return arg;
+        };
+        if Self::is_nullptr_literal(arg_node) || is_zero_integer_literal_str(&arg) {
+            if matches!(pointee.as_ref(), CppType::Function { .. }) {
+                return "None".to_string();
+            }
+            return if *is_const {
+                "std::ptr::null()".to_string()
+            } else {
+                "std::ptr::null_mut()".to_string()
+            };
+        }
+
+        let arg_type = Self::get_original_expr_type(arg_node).or_else(|| Self::get_expr_type(arg_node));
+        let arg_is_pointer = arg_type.as_ref().is_some_and(Self::is_pointer_like_type)
+            || self.is_ptr_var_expr(arg_node);
+        if !arg_is_pointer {
+            return arg;
+        }
+
+        let target_rust = expected_ty.to_rust_type_str();
+        let arg_rust = arg_type.as_ref().map(|t| t.to_rust_type_str());
+        if arg_rust.as_deref() == Some(target_rust.as_str()) {
+            return arg;
+        }
+        format!("({}) as {}", arg, target_rust)
+    }
+
+    fn infer_vtable_dispatch_arg_type(&self, arg_node: &ClangNode, arg_expr: &str) -> Option<CppType> {
+        if let Some(ty) = Self::get_original_expr_type(arg_node).or_else(|| Self::get_expr_type(arg_node))
+        {
+            return Some(ty);
+        }
+        if (arg_expr == "self" || arg_expr == "__self") && self.current_class.is_some() {
+            return Some(CppType::Reference {
+                referent: Box::new(CppType::Named(self.current_class.clone()?)),
+                is_const: self.current_method_is_const,
+                is_rvalue: false,
+            });
+        }
+        None
+    }
+
+    fn is_vtable_dispatch_arg_type_compatible(actual: &CppType, expected: &CppType) -> bool {
+        let same_named_record = |lhs: &str, rhs: &str| {
+            let lhs_norm = Self::normalize_cpp_record_type_name(lhs);
+            let rhs_norm = Self::normalize_cpp_record_type_name(rhs);
+            lhs_norm == rhs_norm
+                || Self::unqualified_cpp_name(&lhs_norm) == Self::unqualified_cpp_name(&rhs_norm)
+        };
+        if actual == expected {
+            return true;
+        }
+        if matches!(expected, CppType::Bool) {
+            return matches!(actual, CppType::Bool) || actual.is_integral() == Some(true);
+        }
+        if expected.is_integral() == Some(true) && matches!(actual, CppType::Bool) {
+            return true;
+        }
+        match (actual, expected) {
+            (
+                CppType::Named(actual_name),
+                CppType::Reference {
+                    referent: expected_referent,
+                    ..
+                },
+            ) => match expected_referent.as_ref() {
+                CppType::Named(expected_name) => same_named_record(actual_name, expected_name),
+                _ => false,
+            },
+            (
+                CppType::Named(actual_name),
+                CppType::Pointer {
+                    pointee: expected_pointee,
+                    ..
+                },
+            ) => match expected_pointee.as_ref() {
+                CppType::Named(expected_name) => same_named_record(actual_name, expected_name),
+                CppType::Void => true,
+                _ => false,
+            },
+            (
+                CppType::Pointer {
+                    pointee: actual_pointee,
+                    ..
+                },
+                CppType::Reference {
+                    referent: expected_referent,
+                    ..
+                },
+            ) => actual_pointee.as_ref() == expected_referent.as_ref(),
+            (
+                CppType::Reference {
+                    referent: actual_referent,
+                    ..
+                },
+                CppType::Reference {
+                    referent: expected_referent,
+                    ..
+                },
+            ) => actual_referent.as_ref() == expected_referent.as_ref(),
+            (
+                CppType::Reference {
+                    referent: actual_referent,
+                    ..
+                },
+                CppType::Pointer {
+                    pointee: expected_pointee,
+                    ..
+                },
+            ) => actual_referent.as_ref() == expected_pointee.as_ref(),
+            (
+                CppType::Pointer {
+                    pointee: actual_pointee,
+                    ..
+                },
+                CppType::Pointer {
+                    pointee: expected_pointee,
+                    ..
+                },
+            ) => {
+                actual_pointee.as_ref() == expected_pointee.as_ref()
+                    || matches!(expected_pointee.as_ref(), CppType::Void)
+            }
+            (_, CppType::Pointer { pointee, .. }) if matches!(pointee.as_ref(), CppType::Void) => {
+                matches!(actual, CppType::Pointer { .. } | CppType::Reference { .. })
+            }
+            _ => false,
+        }
     }
 
     /// Find MemberExpr node, looking through wrapper nodes like ImplicitCastExpr
@@ -36341,6 +36639,289 @@ mod tests {
         assert!(
             !code.contains("doc.NewText("),
             "auto-typed construct pointer receiver call should not emit raw dot call on pointer, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_vtable_dispatch_uses_overloaded_slot_from_member_signature() {
+        let xml_visitor_ptr = CppType::Pointer {
+            pointee: Box::new(CppType::Named("XMLVisitor".to_string())),
+            is_const: false,
+        };
+        let xml_unknown_ref = CppType::Reference {
+            referent: Box::new(CppType::Named("XMLUnknown".to_string())),
+            is_const: true,
+            is_rvalue: false,
+        };
+        let xml_text_ref = CppType::Reference {
+            referent: Box::new(CppType::Named("XMLText".to_string())),
+            is_const: true,
+            is_rvalue: false,
+        };
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![
+                make_node(
+                    ClangNodeKind::RecordDecl {
+                        name: "XMLUnknown".to_string(),
+                        is_class: true,
+                        is_definition: true,
+                        fields: vec![],
+                    },
+                    vec![],
+                ),
+                make_node(
+                    ClangNodeKind::RecordDecl {
+                        name: "XMLText".to_string(),
+                        is_class: true,
+                        is_definition: true,
+                        fields: vec![],
+                    },
+                    vec![],
+                ),
+                make_node(
+                    ClangNodeKind::RecordDecl {
+                        name: "XMLVisitor".to_string(),
+                        is_class: true,
+                        is_definition: true,
+                        fields: vec![],
+                    },
+                    vec![
+                        make_node(
+                            ClangNodeKind::CXXMethodDecl {
+                                class_name: "XMLVisitor".to_string(),
+                                name: "Visit".to_string(),
+                                return_type: CppType::Bool,
+                                params: vec![("unknown".to_string(), xml_unknown_ref.clone())],
+                                is_definition: false,
+                                is_static: false,
+                                is_virtual: true,
+                                is_pure_virtual: true,
+                                is_override: false,
+                                is_final: false,
+                                is_const: false,
+                                access: AccessSpecifier::Public,
+                            },
+                            vec![],
+                        ),
+                        make_node(
+                            ClangNodeKind::CXXMethodDecl {
+                                class_name: "XMLVisitor".to_string(),
+                                name: "Visit".to_string(),
+                                return_type: CppType::Bool,
+                                params: vec![("text".to_string(), xml_text_ref.clone())],
+                                is_definition: false,
+                                is_static: false,
+                                is_virtual: true,
+                                is_pure_virtual: true,
+                                is_override: false,
+                                is_final: false,
+                                is_const: false,
+                                access: AccessSpecifier::Public,
+                            },
+                            vec![],
+                        ),
+                    ],
+                ),
+                make_node(
+                    ClangNodeKind::FunctionDecl {
+                        name: "dispatch_visit_text".to_string(),
+                        mangled_name: "dispatch_visit_text".to_string(),
+                        is_static: false,
+                        return_type: CppType::Bool,
+                        params: vec![
+                            ("visitor".to_string(), xml_visitor_ptr.clone()),
+                            ("text".to_string(), xml_text_ref.clone()),
+                        ],
+                        is_definition: true,
+                        is_variadic: false,
+                        is_noexcept: false,
+                        is_coroutine: false,
+                        coroutine_info: None,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![make_node(
+                            ClangNodeKind::ReturnStmt,
+                            vec![make_node(
+                                ClangNodeKind::CallExpr {
+                                    ty: CppType::Bool,
+                                    template_instantiation: None,
+                                },
+                                vec![
+                                    make_node(
+                                        ClangNodeKind::MemberExpr {
+                                            member_name: "Visit".to_string(),
+                                            is_arrow: true,
+                                            ty: CppType::Function {
+                                                return_type: Box::new(CppType::Bool),
+                                                params: vec![xml_text_ref.clone()],
+                                                is_variadic: false,
+                                            },
+                                            declaring_class: Some("XMLVisitor".to_string()),
+                                            is_static: false,
+                                        },
+                                        vec![make_node(
+                                            ClangNodeKind::DeclRefExpr {
+                                                name: "visitor".to_string(),
+                                                ty: xml_visitor_ptr,
+                                                namespace_path: vec![],
+                                            },
+                                            vec![],
+                                        )],
+                                    ),
+                                    make_node(
+                                        ClangNodeKind::DeclRefExpr {
+                                            name: "text".to_string(),
+                                            ty: xml_text_ref,
+                                            namespace_path: vec![],
+                                        },
+                                        vec![],
+                                    ),
+                                ],
+                            )],
+                        )],
+                    )],
+                ),
+            ],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("__vtable).Visit_1"),
+            "virtual overload dispatch should select suffixed vtable slot from call signature, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("__vtable).Visit)((visitor)"),
+            "virtual overload dispatch should not fall back to the first unsuffixed slot, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_vtable_dispatch_casts_pointer_arg_to_expected_param_type() {
+        let mem_pool_ptr = CppType::Pointer {
+            pointee: Box::new(CppType::Named("MemPool".to_string())),
+            is_const: false,
+        };
+        let xml_node_ptr = CppType::Pointer {
+            pointee: Box::new(CppType::Named("XMLNode".to_string())),
+            is_const: false,
+        };
+        let void_ptr = CppType::Pointer {
+            pointee: Box::new(CppType::Void),
+            is_const: false,
+        };
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![
+                make_node(
+                    ClangNodeKind::RecordDecl {
+                        name: "XMLNode".to_string(),
+                        is_class: true,
+                        is_definition: true,
+                        fields: vec![],
+                    },
+                    vec![],
+                ),
+                make_node(
+                    ClangNodeKind::RecordDecl {
+                        name: "MemPool".to_string(),
+                        is_class: true,
+                        is_definition: true,
+                        fields: vec![],
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CXXMethodDecl {
+                            class_name: "MemPool".to_string(),
+                            name: "Free".to_string(),
+                            return_type: CppType::Void,
+                            params: vec![("ptr".to_string(), void_ptr)],
+                            is_definition: false,
+                            is_static: false,
+                            is_virtual: true,
+                            is_pure_virtual: true,
+                            is_override: false,
+                            is_final: false,
+                            is_const: false,
+                            access: AccessSpecifier::Public,
+                        },
+                        vec![],
+                    )],
+                ),
+                make_node(
+                    ClangNodeKind::FunctionDecl {
+                        name: "dispatch_free".to_string(),
+                        mangled_name: "dispatch_free".to_string(),
+                        is_static: false,
+                        return_type: CppType::Void,
+                        params: vec![
+                            ("pool".to_string(), mem_pool_ptr.clone()),
+                            ("node".to_string(), xml_node_ptr.clone()),
+                        ],
+                        is_definition: true,
+                        is_variadic: false,
+                        is_noexcept: false,
+                        is_coroutine: false,
+                        coroutine_info: None,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![make_node(
+                            ClangNodeKind::CallExpr {
+                                ty: CppType::Void,
+                                template_instantiation: None,
+                            },
+                            vec![
+                                make_node(
+                                    ClangNodeKind::MemberExpr {
+                                        member_name: "Free".to_string(),
+                                        is_arrow: true,
+                                        ty: CppType::Function {
+                                            return_type: Box::new(CppType::Void),
+                                            params: vec![xml_node_ptr.clone()],
+                                            is_variadic: false,
+                                        },
+                                        declaring_class: Some("MemPool".to_string()),
+                                        is_static: false,
+                                    },
+                                    vec![make_node(
+                                        ClangNodeKind::DeclRefExpr {
+                                            name: "pool".to_string(),
+                                            ty: mem_pool_ptr,
+                                            namespace_path: vec![],
+                                        },
+                                        vec![],
+                                    )],
+                                ),
+                                make_node(
+                                    ClangNodeKind::DeclRefExpr {
+                                        name: "node".to_string(),
+                                        ty: xml_node_ptr,
+                                        namespace_path: vec![],
+                                    },
+                                    vec![],
+                                ),
+                            ],
+                        )],
+                    )],
+                ),
+            ],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("__vtable).Free"),
+            "virtual pointer call should dispatch through MemPool vtable entry, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("as *mut ()"),
+            "virtual pointer argument should be cast to the selected vtable parameter type, got:\n{}",
             code
         );
     }
