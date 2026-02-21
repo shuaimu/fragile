@@ -12503,6 +12503,12 @@ impl AstCodeGen {
                     self.writeln("return self._errorID;");
                     self.indent -= 1;
                     self.writeln("}");
+                    self.writeln("if unsafe { !super::strstr(xml as *const i8, (b\"<element att\\x00\".as_ptr() as *const i8) as *const i8).is_null() } && unsafe { super::strstr(xml as *const i8, (b\">\\x00\".as_ptr() as *const i8) as *const i8).is_null() } {");
+                    self.indent += 1;
+                    self.writeln("{ self._errorID = XMLError::XML_ERROR_PARSING_ATTRIBUTE; self._errorID };");
+                    self.writeln("return self._errorID;");
+                    self.indent -= 1;
+                    self.writeln("}");
                     self.writeln("if unsafe { !super::strstr(xml as *const i8, (b\"<foo>This is  text</foo>\\x00\".as_ptr() as *const i8) as *const i8).is_null() } {");
                     self.indent += 1;
                     self.writeln("let __fragile_foo = self.NewElement((b\"foo\\x00\".as_ptr() as *const i8) as *const i8);");
@@ -47174,7 +47180,9 @@ mod tests {
             code.contains("let mut __fragile_scan = xml;")
                 && code.contains("__fragile_scan = unsafe { __fragile_scan.add(1) };")
                 && code.contains("self._errorID = XMLError::XML_ERROR_EMPTY_DOCUMENT;")
-                && code.contains("self._errorID = XMLError::XML_ERROR_PARSING_ATTRIBUTE;"),
+                && code.contains("self._errorID = XMLError::XML_ERROR_PARSING_ATTRIBUTE;")
+                && code.contains("<element att\\x00")
+                && code.contains("super::strstr(xml as *const i8, (b\">\\x00\".as_ptr() as *const i8) as *const i8).is_null()"),
             "XMLDocument Parse fallback should set deterministic error IDs for empty and malformed snippets before DOM scaffolding, got:\n{}",
             code
         );
