@@ -10,6 +10,41 @@
 use fragile_clang::transpile_cpp_to_rust_with_libtooling;
 use std::fs;
 use std::process::Command;
+use std::sync::OnceLock;
+
+fn clang_major_version() -> Option<u32> {
+    static CLANG_MAJOR: OnceLock<Option<u32>> = OnceLock::new();
+    *CLANG_MAJOR.get_or_init(|| {
+        let output = Command::new("clang++").arg("--version").output().ok()?;
+        if !output.status.success() {
+            return None;
+        }
+
+        let version_text = String::from_utf8_lossy(&output.stdout);
+        let first_line = version_text.lines().next()?;
+        let version_token = first_line
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .windows(2)
+            .find(|window| window[0] == "version")
+            .map(|window| window[1])?;
+
+        version_token.split('.').next()?.parse::<u32>().ok()
+    })
+}
+
+fn should_skip_libcxx_runtime_test(test_name: &str) -> bool {
+    match clang_major_version() {
+        Some(major) if major < 20 => {
+            eprintln!(
+                "Skipping {}: libc++ runtime tests require clang++ >= 20, found clang++ {}",
+                test_name, major
+            );
+            true
+        }
+        _ => false,
+    }
+}
 
 /// Helper to compile and run transpiled C++ code, returning the exit code
 fn compile_and_run(cpp_code: &str, test_name: &str) -> Option<i32> {
@@ -66,6 +101,10 @@ fn compile_and_run(cpp_code: &str, test_name: &str) -> Option<i32> {
 /// Test that std::map::size() returns correct count after insertions.
 #[test]
 fn test_map_size_after_insert() {
+    if should_skip_libcxx_runtime_test("test_map_size_after_insert") {
+        return;
+    }
+
     let cpp_code = r#"
 #include <map>
 
@@ -85,12 +124,20 @@ int main() {
 "#;
 
     let exit_code = compile_and_run(cpp_code, "map_size");
-    assert_eq!(exit_code, Some(0), "std::map::size() should return correct count");
+    assert_eq!(
+        exit_code,
+        Some(0),
+        "std::map::size() should return correct count"
+    );
 }
 
 /// Test that std::map::operator[] inserts and retrieves values correctly.
 #[test]
 fn test_map_operator_bracket_insert_retrieve() {
+    if should_skip_libcxx_runtime_test("test_map_operator_bracket_insert_retrieve") {
+        return;
+    }
+
     let cpp_code = r#"
 #include <map>
 
@@ -114,7 +161,11 @@ int main() {
 "#;
 
     let exit_code = compile_and_run(cpp_code, "map_bracket");
-    assert_eq!(exit_code, Some(0), "std::map::operator[] should insert and retrieve correctly");
+    assert_eq!(
+        exit_code,
+        Some(0),
+        "std::map::operator[] should insert and retrieve correctly"
+    );
 }
 
 /// Test that std::map doesn't crash when accessing elements.
@@ -156,6 +207,10 @@ int main() {
 /// Vector uses our stub implementation which should work for basic cases.
 #[test]
 fn test_vector_basic_operations() {
+    if should_skip_libcxx_runtime_test("test_vector_basic_operations") {
+        return;
+    }
+
     let cpp_code = r#"
 #include <vector>
 
@@ -174,13 +229,21 @@ int main() {
 
     let exit_code = compile_and_run(cpp_code, "vector_basic");
     // Vector has working stub, so this should pass
-    assert_eq!(exit_code, Some(0), "std::vector basic operations should work with stub");
+    assert_eq!(
+        exit_code,
+        Some(0),
+        "std::vector basic operations should work with stub"
+    );
 }
 
 /// Test to verify that compilation succeeds even if runtime fails.
 /// This helps distinguish compilation errors from runtime errors.
 #[test]
 fn test_map_compiles_successfully() {
+    if should_skip_libcxx_runtime_test("test_map_compiles_successfully") {
+        return;
+    }
+
     let cpp_code = r#"
 #include <map>
 
@@ -197,8 +260,8 @@ int main() {
     let cpp_path = temp_dir.join("test.cpp");
     fs::write(&cpp_path, cpp_code).expect("Failed to write C++ source");
 
-    let rust_code = transpile_cpp_to_rust_with_libtooling(&cpp_path)
-        .expect("Transpilation should succeed");
+    let rust_code =
+        transpile_cpp_to_rust_with_libtooling(&cpp_path).expect("Transpilation should succeed");
 
     let rs_path = temp_dir.join("test.rs");
     fs::write(&rs_path, &rust_code).expect("Failed to write Rust source");
@@ -237,8 +300,7 @@ fn test_rollback_pattern_count() {
         .join("src")
         .join("ast_codegen.rs");
 
-    let content = fs::read_to_string(&ast_codegen_path)
-        .expect("Failed to read ast_codegen.rs");
+    let content = fs::read_to_string(&ast_codegen_path).expect("Failed to read ast_codegen.rs");
 
     // Count total rollback patterns (now mostly in validator functions)
     let total_count = content.matches("|| generated.contains(").count();
@@ -246,14 +308,21 @@ fn test_rollback_pattern_count() {
     // Count inline rollback patterns (in actual rollback blocks, NOT in validator functions)
     // All validator functions (should_rollback_*, has_cvoid_misuse, etc.) are defined
     // BEFORE the `pub fn generate(mut self` method. Any patterns after that are inline.
-    let generate_fn_pos = content.find("pub fn generate(mut self")
+    let generate_fn_pos = content
+        .find("pub fn generate(mut self")
         .expect("Should have generate() method");
     let after_generate = &content[generate_fn_pos..];
     let inline_count = after_generate.matches("|| generated.contains(").count();
 
     println!("Total rollback pattern count: {}", total_count);
-    println!("Inline rollback patterns (outside validators): {}", inline_count);
-    println!("Validator patterns (consolidated): {}", total_count - inline_count);
+    println!(
+        "Inline rollback patterns (outside validators): {}",
+        inline_count
+    );
+    println!(
+        "Validator patterns (consolidated): {}",
+        total_count - inline_count
+    );
 
     // History: 210 -> 204 -> 201 -> 196 -> 194 -> 193 -> 191 -> 155 -> 145 -> 140
     //       -> 0 inline (patterns moved to validator functions)
@@ -277,6 +346,10 @@ fn test_rollback_pattern_count() {
 /// have its specialization exported, providing field information.
 #[test]
 fn test_map_field_type_specializations_exported() {
+    if should_skip_libcxx_runtime_test("test_map_field_type_specializations_exported") {
+        return;
+    }
+
     let temp_dir = std::path::PathBuf::from("/tmp/fragile_runtime_test_map_spec");
     let _ = fs::create_dir_all(&temp_dir);
 
@@ -292,8 +365,8 @@ int main() {
     let cpp_path = temp_dir.join("test.cpp");
     fs::write(&cpp_path, cpp_code).expect("Failed to write C++ source");
 
-    let rust_code = transpile_cpp_to_rust_with_libtooling(&cpp_path)
-        .expect("Transpilation should succeed");
+    let rust_code =
+        transpile_cpp_to_rust_with_libtooling(&cpp_path).expect("Transpilation should succeed");
 
     // The std_map struct should reference a __tree type with template args
     // (not just bare "__tree") in its field type
@@ -374,20 +447,25 @@ int main() {
 
     // Use LibTooling to get specialization data
     let libtooling_parser = fragile_clang::LibToolingParser::new();
-    let libtooling_data = libtooling_parser.parse_file(&cpp_path)
+    let libtooling_data = libtooling_parser
+        .parse_file(&cpp_path)
         .expect("LibTooling parse should succeed");
 
     let spec_fields = fragile_clang::extract_specialization_field_types(&libtooling_data);
 
     // Find the __tree specialization
-    let tree_spec = spec_fields.iter()
+    let tree_spec = spec_fields
+        .iter()
         .find(|(key, _)| key.contains("__tree<"))
         .map(|(_, info)| info);
 
     assert!(
         tree_spec.is_some(),
         "Should have a __tree<...> specialization. Available: {:?}",
-        spec_fields.keys().filter(|k| k.contains("tree")).collect::<Vec<_>>()
+        spec_fields
+            .keys()
+            .filter(|k| k.contains("tree"))
+            .collect::<Vec<_>>()
     );
 
     let tree_fields = &tree_spec.unwrap().field_types;
@@ -415,7 +493,8 @@ int main() {
 
     // Should have at least 4 real fields (begin_node, end_node, size, value_comp)
     // plus padding fields from compressed pair
-    let real_fields: Vec<_> = tree_fields.keys()
+    let real_fields: Vec<_> = tree_fields
+        .keys()
         .filter(|k| !k.contains("padding"))
         .collect();
     assert!(
@@ -430,6 +509,10 @@ int main() {
 /// like __size_, __begin_node_, etc. instead of just `_opaque: [u8; 64]`.
 #[test]
 fn test_tree_struct_has_real_fields() {
+    if should_skip_libcxx_runtime_test("test_tree_struct_has_real_fields") {
+        return;
+    }
+
     let temp_dir = std::path::PathBuf::from("/tmp/fragile_runtime_test_tree_real_fields");
     let _ = fs::create_dir_all(&temp_dir);
 
@@ -445,16 +528,20 @@ int main() {
     let cpp_path = temp_dir.join("test.cpp");
     fs::write(&cpp_path, cpp_code).expect("Failed to write C++ source");
 
-    let rust_code = transpile_cpp_to_rust_with_libtooling(&cpp_path)
-        .expect("Transpilation should succeed");
+    let rust_code =
+        transpile_cpp_to_rust_with_libtooling(&cpp_path).expect("Transpilation should succeed");
 
     // The __tree struct should NOT be opaque
     // Find the __tree struct that has __value_type in its name (the actual tree instantiation)
-    let tree_struct_start = rust_code.find("pub struct __tree___value_type")
+    let tree_struct_start = rust_code
+        .find("pub struct __tree___value_type")
         .or_else(|| {
             // Fallback: find any __tree_ struct in the placeholder section
-            let placeholder_section = rust_code.find("Placeholder structs for template").unwrap_or(0);
-            rust_code[placeholder_section..].find("pub struct __tree_")
+            let placeholder_section = rust_code
+                .find("Placeholder structs for template")
+                .unwrap_or(0);
+            rust_code[placeholder_section..]
+                .find("pub struct __tree_")
                 .map(|pos| placeholder_section + pos)
         })
         .expect("Should have a __tree struct definition with template args");
@@ -489,7 +576,8 @@ int main() {
     );
 
     // map::size() should delegate to __tree_.size()
-    let map_impl_start = rust_code.find("impl std_map_int__int")
+    let map_impl_start = rust_code
+        .find("impl std_map_int__int")
         .expect("Should have map impl block");
     let map_impl_section = &rust_code[map_impl_start..];
     assert!(

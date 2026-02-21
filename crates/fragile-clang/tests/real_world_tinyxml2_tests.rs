@@ -843,10 +843,48 @@ fn rustc_fragile_step_name(object_rel: &str) -> String {
 }
 
 fn append_c_main_export_shim_if_present(transpiled: &mut String) {
-    if transpiled.contains("\nfn main(") {
-        transpiled.push_str(
-            "\n#[export_name = \"main\"]\npub extern \"C\" fn fragile_exported_main() -> i32 {\n    main();\n    0\n}\n",
-        );
+    if transpiled.contains("export_name = \"main\"") {
+        return;
+    }
+
+    let mut main_params: Option<String> = None;
+    let mut main_returns_i32 = false;
+    for line in transpiled.lines() {
+        let Some(main_idx) = line.find("fn main(") else {
+            continue;
+        };
+        let sig_tail = &line[main_idx + "fn main(".len()..];
+        let Some(close_idx) = sig_tail.find(')') else {
+            continue;
+        };
+        main_params = Some(sig_tail[..close_idx].trim().to_string());
+        main_returns_i32 = sig_tail[close_idx + 1..].contains("-> i32");
+        break;
+    }
+
+    let Some(main_params) = main_params else {
+        return;
+    };
+
+    let param_count = main_params
+        .split(',')
+        .filter(|part| !part.trim().is_empty())
+        .count();
+    let call_expr = match param_count {
+        0 => "main()",
+        1 => "main(argc)",
+        _ => "main(argc, argv)",
+    };
+    if main_returns_i32 {
+        transpiled.push_str(&format!(
+            "\n#[export_name = \"main\"]\npub extern \"C\" fn fragile_exported_main(argc: i32, argv: *mut *const i8) -> i32 {{\n    {}\n}}\n",
+            call_expr
+        ));
+    } else {
+        transpiled.push_str(&format!(
+            "\n#[export_name = \"main\"]\npub extern \"C\" fn fragile_exported_main(argc: i32, argv: *mut *const i8) -> i32 {{\n    {};\n    0\n}}\n",
+            call_expr
+        ));
     }
 }
 
@@ -2435,6 +2473,41 @@ fn test_parse_make_test_commands_from_dry_run_reports_missing_required_binary_in
             || err.contains("missing required binary invocations"),
         "missing-coverage error should be explicit, got: {}",
         err
+    );
+}
+
+#[test]
+fn test_append_c_main_export_shim_handles_pub_main_with_argv() {
+    let mut transpiled = "\npub fn main(argc: i32, argv: *mut *const i8) -> i32 {\n    argc + if argv.is_null() { 0 } else { 1 }\n}\n".to_string();
+    append_c_main_export_shim_if_present(&mut transpiled);
+    assert!(
+        transpiled.contains("#[export_name = \"main\"]"),
+        "expected exported C main shim to be appended"
+    );
+    assert!(
+        transpiled.contains("fragile_exported_main(argc: i32, argv: *mut *const i8) -> i32"),
+        "expected shim signature with argc/argv, got:\n{}",
+        transpiled
+    );
+    assert!(
+        transpiled.contains("main(argc, argv)"),
+        "expected argv-aware shim to forward args to transpiled main, got:\n{}",
+        transpiled
+    );
+}
+
+#[test]
+fn test_append_c_main_export_shim_handles_zero_arg_main() {
+    let mut transpiled = "\nfn main() -> i32 {\n    7\n}\n".to_string();
+    append_c_main_export_shim_if_present(&mut transpiled);
+    assert!(
+        transpiled.contains("#[export_name = \"main\"]"),
+        "expected exported C main shim to be appended"
+    );
+    assert!(
+        transpiled.contains("main()"),
+        "expected zero-arg shim to call transpiled main() directly, got:\n{}",
+        transpiled
     );
 }
 
