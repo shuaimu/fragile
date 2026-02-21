@@ -763,6 +763,8 @@ pub struct AstCodeGen {
     out_of_line_method_defs: HashMap<String, Vec<ClangNode>>,
     /// Whether the currently-generated method is `const` in C++ terms.
     current_method_is_const: bool,
+    /// Whether the currently-generated method is `static` in C++ terms.
+    current_method_is_static: bool,
     /// Merged namespace contents: path -> list of child node indices from all occurrences
     /// Used for two-pass namespace merging (C++ can reopen namespaces, Rust cannot)
     merged_namespace_children: HashMap<String, Vec<usize>>,
@@ -919,6 +921,7 @@ impl AstCodeGen {
             class_method_decl_param_types: HashMap::new(),
             out_of_line_method_defs: HashMap::new(),
             current_method_is_const: false,
+            current_method_is_static: false,
             merged_namespace_children: HashMap::new(),
             collected_nodes: Vec::new(),
             template_definitions: HashMap::new(),
@@ -10217,6 +10220,23 @@ impl AstCodeGen {
         )
     }
 
+    fn qualify_unqualified_current_class_method_call(
+        &self,
+        overload: &MethodOverloadInfo,
+    ) -> Option<String> {
+        if overload.is_static {
+            return Some(format!("Self::{}", overload.rust_name));
+        }
+
+        if self.current_method_is_static {
+            // No implicit receiver in static contexts.
+            return None;
+        }
+
+        let receiver = if self.use_ctor_self { "__self" } else { "self" };
+        Some(format!("{}.{}", receiver, overload.rust_name))
+    }
+
     /// Resolve unqualified function calls inside class methods that refer to
     /// same-class static helpers.
     fn resolve_unqualified_current_class_method_call(
@@ -10308,14 +10328,17 @@ impl AstCodeGen {
             class_candidates.push(current_class_base.to_string());
         }
         for class_name in class_candidates {
-            if let Some(resolved) = self.select_method_overload_name(
+            if let Some(resolved) = self.select_method_overload_info(
                 &class_name,
                 &base_method_name,
                 arg_count,
                 signature,
                 false,
             ) {
-                return Some(format!("Self::{}", resolved));
+                if let Some(qualified) = self.qualify_unqualified_current_class_method_call(&resolved)
+                {
+                    return Some(qualified);
+                }
             }
         }
 
@@ -10362,14 +10385,17 @@ impl AstCodeGen {
             class_candidates.push(current_class_base.to_string());
         }
         for class_name in class_candidates {
-            if let Some(resolved) = self.select_method_overload_name(
+            if let Some(resolved) = self.select_method_overload_info(
                 &class_name,
                 &base_method_name,
                 arg_count,
                 None,
                 false,
             ) {
-                return Some(format!("Self::{}", resolved));
+                if let Some(qualified) = self.qualify_unqualified_current_class_method_call(&resolved)
+                {
+                    return Some(qualified);
+                }
             }
         }
 
@@ -19580,25 +19606,9 @@ impl AstCodeGen {
         }
     }
 
-    /// Cast a `this` expression (`self`/`__self`) to a raw pointer for
-    /// pointer-comparison contexts.
-    fn cast_this_expr_for_pointer_compare(
-        this_expr: &str,
-        this_ty: Option<&CppType>,
-        other_ty: Option<&CppType>,
-    ) -> String {
-        let prefer_const = other_ty
-            .map(|ty| ty.to_rust_type_str().starts_with("*const "))
-            .unwrap_or_else(|| {
-                this_ty
-                    .map(|ty| ty.to_rust_type_str().starts_with("*const "))
-                    .unwrap_or(false)
-            });
-        if prefer_const {
-            format!("({}) as *const _", this_expr)
-        } else {
-            format!("({}) as *mut _", this_expr)
-        }
+    /// Cast a pointer-typed expression to `*const _` for raw pointer comparisons.
+    fn cast_pointer_expr_for_pointer_compare(expr: &str) -> String {
+        format!("({}) as *const _", expr)
     }
 
     /// Check if a string expression contains an assignment (= but not == or !=)
@@ -23075,7 +23085,9 @@ impl AstCodeGen {
                 self.indent += 1;
 
                 let old_method_is_const = self.current_method_is_const;
+                let old_method_is_static = self.current_method_is_static;
                 self.current_method_is_const = *is_const && !*is_static;
+                self.current_method_is_static = *is_static;
 
                 // Track return type for reference return handling
                 let old_return_type = self.current_return_type.take();
@@ -23118,6 +23130,7 @@ impl AstCodeGen {
 
                 self.current_return_type = old_return_type;
                 self.current_method_is_const = old_method_is_const;
+                self.current_method_is_static = old_method_is_static;
                 self.indent -= 1;
                 self.writeln("}");
                 self.writeln("");
@@ -28088,8 +28101,6 @@ impl AstCodeGen {
                                         .as_ref()
                                         .is_some_and(Self::is_pointer_like_type)
                                     || self.is_ptr_var_expr(&node.children[1]);
-                            let left_type_ref = left_type.as_ref().or(left_orig_type.as_ref());
-                            let right_type_ref = right_type.as_ref().or(right_orig_type.as_ref());
                             let left_is_this = Self::expr_is_this(&node.children[0]);
                             let right_is_this = Self::expr_is_this(&node.children[1]);
 
@@ -28097,20 +28108,16 @@ impl AstCodeGen {
                                 let left = self.expr_to_string(&node.children[0]);
                                 let right = self.expr_to_string(&node.children[1]);
                                 let left = if left_is_this {
-                                    Self::cast_this_expr_for_pointer_compare(
-                                        &left,
-                                        left_type_ref,
-                                        right_type_ref,
-                                    )
+                                    Self::cast_pointer_expr_for_pointer_compare(&left)
+                                } else if right_is_this && left_is_ptr {
+                                    Self::cast_pointer_expr_for_pointer_compare(&left)
                                 } else {
                                     left
                                 };
                                 let right = if right_is_this {
-                                    Self::cast_this_expr_for_pointer_compare(
-                                        &right,
-                                        right_type_ref,
-                                        left_type_ref,
-                                    )
+                                    Self::cast_pointer_expr_for_pointer_compare(&right)
+                                } else if left_is_this && right_is_ptr {
+                                    Self::cast_pointer_expr_for_pointer_compare(&right)
                                 } else {
                                     right
                                 };
@@ -34513,15 +34520,97 @@ mod tests {
 
         let code = AstCodeGen::new().generate(&ast);
         assert!(
-            code.contains("(self as *mut _) == other")
-                || code.contains("(self) as *mut _ == other")
-                || code.contains("other == (self as *mut _)"),
+            code.contains("(self) as *const _ == (other) as *const _")
+                || code.contains("(self as *const _) == (other as *const _)")
+                || code.contains("((self) as *const _) == (other as *const _)")
+                || code.contains("(self as *const _) == other")
+                || code.contains("((self) as *const _) == other")
+                || code.contains("other == (self as *const _)")
+                || code.contains("other == ((self) as *const _)"),
             "this-pointer equality should cast self to raw pointer before comparison, got:\n{}",
             code
         );
         assert!(
             !code.contains("return self == other;"),
             "this-pointer equality must not compare &mut self directly with raw pointer, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_const_this_eq_mut_raw_pointer_casts_both_sides_to_const() {
+        let this_ptr_ty = CppType::Pointer {
+            pointee: Box::new(CppType::Named("XMLDocument".to_string())),
+            is_const: true,
+        };
+        let target_ptr_ty = CppType::Pointer {
+            pointee: Box::new(CppType::Named("XMLDocument".to_string())),
+            is_const: false,
+        };
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![make_node(
+                ClangNodeKind::RecordDecl {
+                    name: "XMLDocument".to_string(),
+                    is_class: true,
+                    is_definition: true,
+                    fields: vec![],
+                },
+                vec![make_node(
+                    ClangNodeKind::CXXMethodDecl {
+                        class_name: "XMLDocument".to_string(),
+                        name: "DeepCopy".to_string(),
+                        return_type: CppType::Bool,
+                        params: vec![("target".to_string(), target_ptr_ty.clone())],
+                        is_definition: true,
+                        is_static: false,
+                        is_virtual: false,
+                        is_pure_virtual: false,
+                        is_override: false,
+                        is_final: false,
+                        is_const: true,
+                        access: AccessSpecifier::Public,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![make_node(
+                            ClangNodeKind::ReturnStmt,
+                            vec![make_node(
+                                ClangNodeKind::BinaryOperator {
+                                    op: BinaryOp::Eq,
+                                    ty: CppType::Bool,
+                                },
+                                vec![
+                                    make_node(
+                                        ClangNodeKind::DeclRefExpr {
+                                            name: "target".to_string(),
+                                            ty: target_ptr_ty,
+                                            namespace_path: vec![],
+                                        },
+                                        vec![],
+                                    ),
+                                    make_node(
+                                        ClangNodeKind::CXXThisExpr {
+                                            ty: this_ptr_ty,
+                                        },
+                                        vec![],
+                                    ),
+                                ],
+                            )],
+                        )],
+                    )],
+                )],
+            )],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("(target) as *const _ == (self) as *const _")
+                || code.contains("(target as *const _) == (self as *const _)")
+                || code.contains("(target as *const _) == ((self) as *const _)")
+                || code.contains("((target) as *const _) == (self as *const _)")
+                || code.contains("((target) as *const _) == ((self) as *const _)"),
+            "const this/raw mut pointer equality should normalize both sides to *const, got:\n{}",
             code
         );
     }
@@ -36752,6 +36841,108 @@ mod tests {
             !code.contains("return ToInt(str, value);")
                 && !code.contains("return ToInt(str as *const i8, value as *mut i32);"),
             "unqualified helper call should not stay as unresolved free function call, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_unqualified_same_class_non_static_call_uses_self_receiver() {
+        let node_ptr = CppType::Pointer {
+            pointee: Box::new(CppType::Named("XMLNode".to_string())),
+            is_const: false,
+        };
+        let delete_node_fn_ty = CppType::Function {
+            return_type: Box::new(CppType::Void),
+            params: vec![node_ptr.clone()],
+            is_variadic: false,
+        };
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![make_node(
+                ClangNodeKind::RecordDecl {
+                    name: "XMLDocument".to_string(),
+                    is_class: true,
+                    is_definition: true,
+                    fields: vec![],
+                },
+                vec![
+                    make_node(
+                        ClangNodeKind::CXXMethodDecl {
+                            class_name: "XMLDocument".to_string(),
+                            name: "DeleteNode".to_string(),
+                            return_type: CppType::Void,
+                            params: vec![("node".to_string(), node_ptr.clone())],
+                            is_definition: true,
+                            is_static: false,
+                            is_virtual: false,
+                            is_pure_virtual: false,
+                            is_override: false,
+                            is_final: false,
+                            is_const: false,
+                            access: AccessSpecifier::Public,
+                        },
+                        vec![make_node(ClangNodeKind::CompoundStmt, vec![])],
+                    ),
+                    make_node(
+                        ClangNodeKind::CXXMethodDecl {
+                            class_name: "XMLDocument".to_string(),
+                            name: "DeleteNodeChain".to_string(),
+                            return_type: CppType::Void,
+                            params: vec![("node".to_string(), node_ptr.clone())],
+                            is_definition: true,
+                            is_static: false,
+                            is_virtual: false,
+                            is_pure_virtual: false,
+                            is_override: false,
+                            is_final: false,
+                            is_const: false,
+                            access: AccessSpecifier::Public,
+                        },
+                        vec![make_node(
+                            ClangNodeKind::CompoundStmt,
+                            vec![make_node(
+                                ClangNodeKind::ExprStmt,
+                                vec![make_node(
+                                    ClangNodeKind::CallExpr {
+                                        ty: CppType::Void,
+                                        template_instantiation: None,
+                                    },
+                                    vec![
+                                        make_node(
+                                            ClangNodeKind::DeclRefExpr {
+                                                name: "DeleteNode".to_string(),
+                                                ty: delete_node_fn_ty,
+                                                namespace_path: vec![],
+                                            },
+                                            vec![],
+                                        ),
+                                        make_node(
+                                            ClangNodeKind::DeclRefExpr {
+                                                name: "node".to_string(),
+                                                ty: node_ptr,
+                                                namespace_path: vec![],
+                                            },
+                                            vec![],
+                                        ),
+                                    ],
+                                )],
+                            )],
+                        )],
+                    ),
+                ],
+            )],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("self.DeleteNode(node);")
+                || code.contains("self.DeleteNode(node as *mut XMLNode);"),
+            "unqualified non-static same-class call should lower with implicit self receiver, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("Self::DeleteNode("),
+            "non-static same-class calls must not lower as static dispatch, got:\n{}",
             code
         );
     }
