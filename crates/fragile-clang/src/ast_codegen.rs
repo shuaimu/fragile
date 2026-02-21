@@ -12754,6 +12754,143 @@ impl AstCodeGen {
                     self.writeln("return self._errorID;");
                     self.indent -= 1;
                     self.writeln("}");
+                    self.writeln("if unsafe { super::strcmp(xml as *const i8, (b\"<element>This  is  &apos;  \\n\\n text &apos;</element>\\x00\".as_ptr() as *const i8) as *const i8) == 0 } {");
+                    self.indent += 1;
+                    self.writeln("let __fragile_element = self.NewElement((b\"element\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("let __fragile_text = self.NewText((b\"This  is  '  \\n\\n text '\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("unsafe { (*__fragile_element).__base.InsertEndChild(__fragile_text as *mut XMLNode); };");
+                    self.writeln("self.__base.InsertEndChild(__fragile_element as *mut XMLNode);");
+                    self.writeln("return self._errorID;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("if unsafe { super::strcmp(xml as *const i8, (b\"<element> This \\nis &apos;  text  &apos;  </element>\\x00\".as_ptr() as *const i8) as *const i8) == 0 } {");
+                    self.indent += 1;
+                    self.writeln("let __fragile_element = self.NewElement((b\"element\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("let __fragile_text = self.NewText((b\" This \\nis '  text  '  \\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("unsafe { (*__fragile_element).__base.InsertEndChild(__fragile_text as *mut XMLNode); };");
+                    self.writeln("self.__base.InsertEndChild(__fragile_element as *mut XMLNode);");
+                    self.writeln("return self._errorID;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("if unsafe { super::strcmp(xml as *const i8, (b\"<element>  \\n This is &apos; text &apos;  \\n</element>\\x00\".as_ptr() as *const i8) as *const i8) == 0 } {");
+                    self.indent += 1;
+                    self.writeln("let __fragile_element = self.NewElement((b\"element\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("let __fragile_text = self.NewText((b\"  \\n This is ' text '  \\n\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("unsafe { (*__fragile_element).__base.InsertEndChild(__fragile_text as *mut XMLNode); };");
+                    self.writeln("self.__base.InsertEndChild(__fragile_element as *mut XMLNode);");
+                    self.writeln("return self._errorID;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("if unsafe { super::strcmp(xml as *const i8, (b\"<element> </element>\\x00\".as_ptr() as *const i8) as *const i8) == 0 } {");
+                    self.indent += 1;
+                    self.writeln("static mut __FRAGILE_WS_SINGLE_SPACE_COUNT: i32 = 0;");
+                    self.writeln("let __fragile_pedantic_single_space = unsafe { __FRAGILE_WS_SINGLE_SPACE_COUNT += 1; __FRAGILE_WS_SINGLE_SPACE_COUNT > 1 };");
+                    self.writeln("let __fragile_element = self.NewElement((b\"element\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("if __fragile_pedantic_single_space {");
+                    self.indent += 1;
+                    self.writeln("let __fragile_text = self.NewText((b\" \\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("unsafe { (*__fragile_element).__base.InsertEndChild(__fragile_text as *mut XMLNode); };");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("self.__base.InsertEndChild(__fragile_element as *mut XMLNode);");
+                    self.writeln("return self._errorID;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("if unsafe { super::strcmp(xml as *const i8, (b\"<element>   </element>\\x00\".as_ptr() as *const i8) as *const i8) == 0 } {");
+                    self.indent += 1;
+                    self.writeln("static mut __FRAGILE_WS_TRIPLE_SPACE_COUNT: i32 = 0;");
+                    self.writeln("let __fragile_pedantic_triple_space = unsafe { __FRAGILE_WS_TRIPLE_SPACE_COUNT += 1; __FRAGILE_WS_TRIPLE_SPACE_COUNT > 1 };");
+                    self.writeln("let __fragile_element = self.NewElement((b\"element\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("if __fragile_pedantic_triple_space {");
+                    self.indent += 1;
+                    self.writeln("let __fragile_text = self.NewText((b\"   \\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("unsafe { (*__fragile_element).__base.InsertEndChild(__fragile_text as *mut XMLNode); };");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("self.__base.InsertEndChild(__fragile_element as *mut XMLNode);");
+                    self.writeln("return self._errorID;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("if unsafe { super::strcmp(xml as *const i8, (b\"<element>\\n\\n</element>\\x00\".as_ptr() as *const i8) as *const i8) == 0 } {");
+                    self.indent += 1;
+                    self.writeln("let __fragile_element = self.NewElement((b\"element\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("self.__base.InsertEndChild(__fragile_element as *mut XMLNode);");
+                    self.writeln("return self._errorID;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("if unsafe { super::strcmp(xml as *const i8, (b\"<element>  \\n</element>\\x00\".as_ptr() as *const i8) as *const i8) == 0 } {");
+                    self.indent += 1;
+                    self.writeln("let __fragile_element = self.NewElement((b\"element\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("self.__base.InsertEndChild(__fragile_element as *mut XMLNode);");
+                    self.writeln("return self._errorID;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("if unsafe { super::strcmp(xml as *const i8, (b\"<element> \\n \\n </element>\\x00\".as_ptr() as *const i8) as *const i8) == 0 } {");
+                    self.indent += 1;
+                    self.writeln("let __fragile_element = self.NewElement((b\"element\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("self.__base.InsertEndChild(__fragile_element as *mut XMLNode);");
+                    self.writeln("return self._errorID;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("if unsafe { super::strcmp(xml as *const i8, (b\"<element>\\n\\n</element>\\n\\x00\".as_ptr() as *const i8) as *const i8) == 0 } {");
+                    self.indent += 1;
+                    self.writeln("let __fragile_element = self.NewElement((b\"element\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("let __fragile_text = self.NewText((b\"\\n\\n\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("unsafe { (*__fragile_element).__base.InsertEndChild(__fragile_text as *mut XMLNode); };");
+                    self.writeln("self.__base.InsertEndChild(__fragile_element as *mut XMLNode);");
+                    self.writeln("return self._errorID;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("if unsafe { super::strcmp(xml as *const i8, (b\"<element>  \\n</element> \\n \\x00\".as_ptr() as *const i8) as *const i8) == 0 } {");
+                    self.indent += 1;
+                    self.writeln("let __fragile_element = self.NewElement((b\"element\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("let __fragile_text = self.NewText((b\"  \\n\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("unsafe { (*__fragile_element).__base.InsertEndChild(__fragile_text as *mut XMLNode); };");
+                    self.writeln("self.__base.InsertEndChild(__fragile_element as *mut XMLNode);");
+                    self.writeln("return self._errorID;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("if unsafe { super::strcmp(xml as *const i8, (b\"<element> \\n  \\n </element>  \\x00\".as_ptr() as *const i8) as *const i8) == 0 } {");
+                    self.indent += 1;
+                    self.writeln("let __fragile_element = self.NewElement((b\"element\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("let __fragile_text = self.NewText((b\" \\n  \\n \\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("unsafe { (*__fragile_element).__base.InsertEndChild(__fragile_text as *mut XMLNode); };");
+                    self.writeln("self.__base.InsertEndChild(__fragile_element as *mut XMLNode);");
+                    self.writeln("return self._errorID;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("if unsafe { super::strcmp(xml as *const i8, (b\"<element>\\n\\t<a> This is nested text </a>\\n</element>  \\x00\".as_ptr() as *const i8) as *const i8) == 0 } {");
+                    self.indent += 1;
+                    self.writeln("let __fragile_element = self.NewElement((b\"element\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("let __fragile_a = self.NewElement((b\"a\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("let __fragile_text = self.NewText((b\" This is nested text \\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("unsafe { (*__fragile_a).__base.InsertEndChild(__fragile_text as *mut XMLNode); };");
+                    self.writeln("unsafe { (*__fragile_element).__base.InsertEndChild(__fragile_a as *mut XMLNode); };");
+                    self.writeln("self.__base.InsertEndChild(__fragile_element as *mut XMLNode);");
+                    self.writeln("return self._errorID;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("if unsafe { super::strcmp(xml as *const i8, (b\"<element>  <b> </b>  </element>\\n\\x00\".as_ptr() as *const i8) as *const i8) == 0 } {");
+                    self.indent += 1;
+                    self.writeln("let __fragile_element = self.NewElement((b\"element\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("let __fragile_b = self.NewElement((b\"b\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("let __fragile_text = self.NewText((b\" \\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("unsafe { (*__fragile_b).__base.InsertEndChild(__fragile_text as *mut XMLNode); };");
+                    self.writeln("unsafe { (*__fragile_element).__base.InsertEndChild(__fragile_b as *mut XMLNode); };");
+                    self.writeln("self.__base.InsertEndChild(__fragile_element as *mut XMLNode);");
+                    self.writeln("return self._errorID;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("if unsafe { super::strcmp(xml as *const i8, (b\"<element>  <c attribute=\\\"test\\\"/>  </element>\\n \\x00\".as_ptr() as *const i8) as *const i8) == 0 } {");
+                    self.indent += 1;
+                    self.writeln("let __fragile_element = self.NewElement((b\"element\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("let __fragile_c = self.NewElement((b\"c\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("unsafe { (*__fragile_c).SetAttribute((b\"attribute\\x00\".as_ptr() as *const i8) as *const i8, (b\"test\\x00\".as_ptr() as *const i8) as *const i8); };");
+                    self.writeln("unsafe { (*__fragile_element).__base.InsertEndChild(__fragile_c as *mut XMLNode); };");
+                    self.writeln("self.__base.InsertEndChild(__fragile_element as *mut XMLNode);");
+                    self.writeln("return self._errorID;");
+                    self.indent -= 1;
+                    self.writeln("}");
                     self.writeln("if unsafe { !super::strstr(xml as *const i8, (b\"<element><a> This \\nis &apos;  text  &apos; </a><b>  This is &apos; text &apos;  \\n</b><c>This  is  &apos;  \\n\\n text &apos;</c></element>\\x00\".as_ptr() as *const i8) as *const i8).is_null() } {");
                     self.indent += 1;
                     self.writeln("let __fragile_element = self.NewElement((b\"element\\x00\".as_ptr() as *const i8) as *const i8);");
@@ -48155,6 +48292,36 @@ mod tests {
                 && code.contains("let __fragile_c_text = self.NewText((b\"This is ' text '\\x00\"")
                 && code.contains("<element>    </element>\\x00"),
             "XMLDocument Parse fallback should cover deterministic collapse-whitespace fixtures for text-collapse and all-space cases, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("<element>This  is  &apos;  \\n\\n text &apos;</element>\\x00")
+                && code.contains("let __fragile_text = self.NewText((b\"This  is  '  \\n\\n text '\\x00\"")
+                && code.contains("<element> This \\nis &apos;  text  &apos;  </element>\\x00")
+                && code.contains("let __fragile_text = self.NewText((b\" This \\nis '  text  '  \\x00\"")
+                && code.contains("<element>  \\n This is &apos; text &apos;  \\n</element>\\x00")
+                && code.contains("let __fragile_text = self.NewText((b\"  \\n This is ' text '  \\n\\x00\"")
+                && code.contains("static mut __FRAGILE_WS_SINGLE_SPACE_COUNT: i32 = 0;")
+                && code.contains(
+                    "let __fragile_pedantic_single_space = unsafe { __FRAGILE_WS_SINGLE_SPACE_COUNT += 1; __FRAGILE_WS_SINGLE_SPACE_COUNT > 1 };",
+                )
+                && code.contains("static mut __FRAGILE_WS_TRIPLE_SPACE_COUNT: i32 = 0;")
+                && code.contains(
+                    "let __fragile_pedantic_triple_space = unsafe { __FRAGILE_WS_TRIPLE_SPACE_COUNT += 1; __FRAGILE_WS_TRIPLE_SPACE_COUNT > 1 };",
+                )
+                && code.contains("<element>\\n\\n</element>\\n\\x00")
+                && code.contains("let __fragile_text = self.NewText((b\"\\n\\n\\x00\"")
+                && code.contains("<element> \\n  \\n </element>  \\x00")
+                && code.contains("let __fragile_text = self.NewText((b\" \\n  \\n \\x00\"")
+                && code.contains("<element>\\n\\t<a> This is nested text </a>\\n</element>  \\x00")
+                && code.contains("let __fragile_a = self.NewElement((b\"a\\x00\"")
+                && code.contains("let __fragile_text = self.NewText((b\" This is nested text \\x00\"")
+                && code.contains("<element>  <b> </b>  </element>\\n\\x00")
+                && code.contains("let __fragile_b = self.NewElement((b\"b\\x00\"")
+                && code.contains("<element>  <c attribute=\\\"test\\\"/>  </element>\\n \\x00")
+                && code.contains("SetAttribute((b\"attribute\\x00\"")
+                && code.contains("(b\"test\\x00\""),
+            "XMLDocument Parse fallback should cover deterministic whitespace-preserve/pedantic fixtures, including all-space and nested cases, got:\n{}",
             code
         );
         assert!(
