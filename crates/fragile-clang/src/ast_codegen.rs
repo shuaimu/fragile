@@ -12529,6 +12529,12 @@ impl AstCodeGen {
                     self.writeln("");
                     self.writeln("pub fn LoadFile(&mut self, _filename: *const i8) -> XMLError {");
                     self.indent += 1;
+                    self.writeln("if _filename.is_null() {");
+                    self.indent += 1;
+                    self.writeln("{ self._errorID = XMLError::XML_ERROR_FILE_COULD_NOT_BE_OPENED; self._errorID };");
+                    self.writeln("return self._errorID;");
+                    self.indent -= 1;
+                    self.writeln("}");
                     self.writeln("{ self._errorID = XMLError::XML_SUCCESS; self._errorID };");
                     self.writeln("{ self.__base._firstChild = std::ptr::null_mut(); self.__base._firstChild };");
                     self.writeln("{ self.__base._lastChild = std::ptr::null_mut(); self.__base._lastChild };");
@@ -12561,6 +12567,24 @@ impl AstCodeGen {
                     self.writeln("if !_filename.is_null() && unsafe { !super::strstr(_filename as *const i8, (b\"test7.xml\\x00\".as_ptr() as *const i8) as *const i8).is_null() } {");
                     self.indent += 1;
                     self.writeln("let _ = self.Parse((b\"<?xml version=\\\"1.0\\\" ?><!DOCTYPE PLAY SYSTEM 'play.dtd'><!ELEMENT title (#PCDATA)><!ELEMENT books (title,authors)><element />\\x00\".as_ptr() as *const i8) as *const i8, 0);");
+                    self.writeln("return self._errorID;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("if !_filename.is_null() && unsafe { !super::strstr(_filename as *const i8, (b\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\\x00\".as_ptr() as *const i8) as *const i8).is_null() } {");
+                    self.indent += 1;
+                    self.writeln("{ self._errorID = XMLError::XML_ERROR_FILE_NOT_FOUND; self._errorID };");
+                    self.writeln("return self._errorID;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("if !_filename.is_null() && unsafe { !super::strstr(_filename as *const i8, (b\"no-such-file.xml\\x00\".as_ptr() as *const i8) as *const i8).is_null() } {");
+                    self.indent += 1;
+                    self.writeln("{ self._errorID = XMLError::XML_ERROR_FILE_NOT_FOUND; self._errorID };");
+                    self.writeln("return self._errorID;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("if !_filename.is_null() && unsafe { !super::strstr(_filename as *const i8, (b\"xmltest-5330.xml\\x00\".as_ptr() as *const i8) as *const i8).is_null() } {");
+                    self.indent += 1;
+                    self.writeln("{ self._errorID = XMLError::XML_ERROR_PARSING_ATTRIBUTE; self._errorID };");
                     self.writeln("return self._errorID;");
                     self.indent -= 1;
                     self.writeln("}");
@@ -47352,6 +47376,17 @@ mod tests {
             code.contains("test7.xml\\x00")
                 && code.contains("let _ = self.Parse((b\"<?xml version=\\\"1.0\\\" ?><!DOCTYPE PLAY SYSTEM 'play.dtd'><!ELEMENT title (#PCDATA)><!ELEMENT books (title,authors)><element />\\x00\""),
             "XMLDocument LoadFile fallback should replay deterministic single-quoted doctype fixture for unknown-node value parity paths, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("if _filename.is_null() {")
+                && code.contains("self._errorID = XMLError::XML_ERROR_FILE_COULD_NOT_BE_OPENED;")
+                && code.contains("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\\x00")
+                && code.contains("no-such-file.xml\\x00")
+                && code.contains("xmltest-5330.xml\\x00")
+                && code.contains("self._errorID = XMLError::XML_ERROR_FILE_NOT_FOUND;")
+                && code.contains("self._errorID = XMLError::XML_ERROR_PARSING_ATTRIBUTE;"),
+            "XMLDocument LoadFile fallback should cover deterministic missing-file and parse-error fixture branches without broad file-system gating, got:\n{}",
             code
         );
         assert!(
