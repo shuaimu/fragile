@@ -2098,6 +2098,13 @@ fn read_status_file(path: &Path) -> Result<i32, String> {
     })
 }
 
+fn collect_fail_lines(output: &str) -> Vec<&str> {
+    output
+        .lines()
+        .filter(|line| line.starts_with("[fail] "))
+        .collect()
+}
+
 fn unique_temp_dir(prefix: &str) -> PathBuf {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -3062,6 +3069,17 @@ fn test_make_test_command_replay_local_fixture_reports_failing_command() {
 }
 
 #[test]
+fn test_collect_fail_lines_keeps_order() {
+    let sample = "\
+[pass] A\n\
+[fail] First problem\n\
+[pass] B\n\
+[fail] Second problem\n";
+    let fails = collect_fail_lines(sample);
+    assert_eq!(fails, vec!["[fail] First problem", "[fail] Second problem"]);
+}
+
+#[test]
 fn test_make_test_command_replay_local_fixture_fragile_runner_builds_and_replays_successfully() {
     let root = unique_temp_dir("tinyxml2_make_test_replay_fragile_success");
     fs::create_dir_all(&root).expect("failed to create test root");
@@ -3388,6 +3406,22 @@ fn test_real_world_tinyxml2_make_test_command_subset_replay_fragile() {
     );
     let replay_stdout = fs::read_to_string(log_dir.join("make_test_replay_01.stdout"))
         .expect("failed to read make_test_replay_01.stdout");
+    let fail_lines = collect_fail_lines(&replay_stdout);
+    assert!(
+        !fail_lines.is_empty(),
+        "expected deterministic fail signatures in replay stdout"
+    );
+    assert_eq!(
+        fail_lines[0],
+        "[fail] Programmatic DOM [][]",
+        "unexpected first fail signature; got:\n{}",
+        replay_stdout
+    );
+    assert!(
+        fail_lines.iter().any(|line| *line == "[fail] Compact mode"),
+        "expected compact-mode failure signature in replay stdout, got:\n{}",
+        replay_stdout
+    );
     assert!(
         replay_stdout.contains("Pass 285, Fail 184"),
         "current blocker signature should report failing xmltest parity count, got:\n{}",
