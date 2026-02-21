@@ -10357,12 +10357,22 @@ impl AstCodeGen {
                     self.writeln("");
                     self.writeln("pub fn ToInt(_str: *const i8, value: *mut i32) -> bool {");
                     self.indent += 1;
-                    self.writeln("if !value.is_null() {");
+                    self.writeln("if _str.is_null() || value.is_null() {");
                     self.indent += 1;
-                    self.writeln("unsafe { *value = 0; };");
+                    self.writeln("return false;");
                     self.indent -= 1;
                     self.writeln("}");
+                    self.writeln("let mut end_ptr: *mut i8 = std::ptr::null_mut();");
+                    self.writeln(
+                        "let parsed = unsafe { super::strtol(_str as *const i8, (&mut end_ptr as *mut *mut i8) as *mut *mut i8, 10) };",
+                    );
+                    self.writeln("if end_ptr == _str as *mut i8 {");
+                    self.indent += 1;
                     self.writeln("return false;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("unsafe { *value = parsed as i32; };");
+                    self.writeln("return true;");
                     self.indent -= 1;
                     self.writeln("}");
                 }
@@ -10421,9 +10431,28 @@ impl AstCodeGen {
                     self.writeln("");
                     self.writeln("pub fn ToBool(_str: *const i8, value: *mut bool) -> bool {");
                     self.indent += 1;
-                    self.writeln("if !value.is_null() {");
+                    self.writeln("if _str.is_null() || value.is_null() {");
+                    self.indent += 1;
+                    self.writeln("return false;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("if XMLUtil::StringEqual(_str as *const i8, (b\"true\\x00\".as_ptr() as *const i8) as *const i8, 2147483647) || XMLUtil::StringEqual(_str as *const i8, (b\"1\\x00\".as_ptr() as *const i8) as *const i8, 2147483647) {");
+                    self.indent += 1;
+                    self.writeln("unsafe { *value = true; };");
+                    self.writeln("return true;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("if XMLUtil::StringEqual(_str as *const i8, (b\"false\\x00\".as_ptr() as *const i8) as *const i8, 2147483647) || XMLUtil::StringEqual(_str as *const i8, (b\"0\\x00\".as_ptr() as *const i8) as *const i8, 2147483647) {");
                     self.indent += 1;
                     self.writeln("unsafe { *value = false; };");
+                    self.writeln("return true;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("let mut numeric: i32 = 0;");
+                    self.writeln("if XMLUtil::ToInt(_str as *const i8, (&mut numeric as *mut i32) as *mut i32) {");
+                    self.indent += 1;
+                    self.writeln("unsafe { *value = numeric != 0; };");
+                    self.writeln("return true;");
                     self.indent -= 1;
                     self.writeln("}");
                     self.writeln("return false;");
@@ -46056,6 +46085,21 @@ mod tests {
         assert!(
             code.contains("pub fn ToInt(_str: *const i8, value: *mut i32) -> bool {"),
             "XMLUtil fallback should emit ToInt helper surface, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("let parsed = unsafe { super::strtol")
+                && code.contains("unsafe { *value = parsed as i32; };")
+                && code.contains("return true;"),
+            "XMLUtil ToInt fallback should parse integer text via strtol, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("pub fn ToBool(_str: *const i8, value: *mut bool) -> bool {")
+                && code.contains("StringEqual(_str as *const i8, (b\"true\\x00\"")
+                && code.contains("StringEqual(_str as *const i8, (b\"false\\x00\"")
+                && code.contains("if XMLUtil::ToInt(_str as *const i8, (&mut numeric as *mut i32) as *mut i32) {"),
+            "XMLUtil ToBool fallback should handle true/false literals and numeric conversion, got:\n{}",
             code
         );
         assert!(
