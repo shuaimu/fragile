@@ -17311,6 +17311,10 @@ impl AstCodeGen {
         // Check if we have bit fields that need accessor methods
         let has_bit_fields = self.bit_field_groups.contains_key(name);
 
+        // Name of the generated Rust constructor function corresponding to an
+        // explicit C++ copy constructor for this record (if any).
+        let mut copy_ctor_fn_name: Option<String> = None;
+
         // Always generate impl block if we need new_0, have other methods, or have bit fields
         if !methods.is_empty() || !has_default_ctor || has_bit_fields {
             self.writeln("");
@@ -17377,6 +17381,29 @@ impl AstCodeGen {
                 let method_output_start = self.output.len();
                 self.generate_method(method, name);
                 self.fix_non_pointer_field_forced_deref_calls(name, method_output_start);
+                if copy_ctor_fn_name.is_none() {
+                    if let ClangNodeKind::ConstructorDecl {
+                        params,
+                        ctor_kind: ConstructorKind::Copy,
+                        ..
+                    } = &method.kind
+                    {
+                        let base_ctor_name = format!("new_{}", params.len());
+                        if let Some(overload_count) =
+                            self.current_struct_methods.get(&base_ctor_name).copied()
+                        {
+                            let candidate = if overload_count <= 1 {
+                                base_ctor_name
+                            } else {
+                                format!("{}_{}", base_ctor_name, overload_count - 1)
+                            };
+                            let generated = &self.output[method_output_start..];
+                            if generated.contains(&format!("pub fn {}(", candidate)) {
+                                copy_ctor_fn_name = Some(candidate);
+                            }
+                        }
+                    }
+                }
             }
 
             // tinyxml2: `XMLNode::CreateUnlinkedNode` is a templated helper
@@ -18312,8 +18339,10 @@ impl AstCodeGen {
             self.indent += 1;
             self.writeln("fn clone(&self) -> Self {");
             self.indent += 1;
-            // Copy constructor is always new_1 (takes one argument: const T&)
-            self.writeln("Self::new_1(self)");
+            // Use the emitted copy constructor overload (can be suffixed when
+            // one-arg constructors are overloaded, e.g., pointer + ref + copy).
+            let copy_ctor_name = copy_ctor_fn_name.as_deref().unwrap_or("new_1");
+            self.writeln(&format!("Self::{}(self)", copy_ctor_name));
             self.indent -= 1;
             self.writeln("}");
             self.indent -= 1;
@@ -23214,7 +23243,43 @@ impl AstCodeGen {
                     .collect();
                 let correct_ctor_initializer = |value: &str, ty: &CppType| -> String {
                     let raw = value.trim();
-                    if Self::is_function_pointer_type_or_typedef(ty)
+                    let collapse_ref_param_pointer_cast = || -> Option<String> {
+                        let addr_stripped = if let Some(rest) = raw.strip_prefix("&mut ") {
+                            rest.trim()
+                        } else if let Some(rest) = raw.strip_prefix('&') {
+                            rest.trim()
+                        } else {
+                            return None;
+                        };
+                        let (lhs, rhs) = addr_stripped.split_once(" as ")?;
+                        let lhs = lhs
+                            .trim()
+                            .trim_start_matches('(')
+                            .trim_end_matches(')')
+                            .trim();
+                        if lhs.is_empty()
+                            || !lhs
+                                .chars()
+                                .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+                        {
+                            return None;
+                        }
+                        let rhs = rhs.trim();
+                        if !rhs.starts_with("*const ") && !rhs.starts_with("*mut ") {
+                            return None;
+                        }
+                        if !ctor_param_type_by_name
+                            .get(lhs)
+                            .is_some_and(|param_ty| matches!(param_ty, CppType::Reference { .. }))
+                        {
+                            return None;
+                        }
+                        Some(format!("{} as {}", lhs, rhs))
+                    };
+
+                    if let Some(collapsed) = collapse_ref_param_pointer_cast() {
+                        collapsed
+                    } else if Self::is_function_pointer_type_or_typedef(ty)
                         && ctor_param_type_by_name
                             .get(raw)
                             .is_some_and(Self::is_function_pointer_type_or_typedef)
@@ -33841,6 +33906,247 @@ mod tests {
         assert!(
             code.contains("pub fn new_1(doc: *mut XMLDocument) -> Self"),
             "expected out-of-line constructor definition to be emitted in impl, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_clone_uses_copy_ctor_overload_suffix_when_one_arg_ctor_is_overloaded() {
+        let xml_node_ptr = CppType::Pointer {
+            pointee: Box::new(CppType::Named("XMLNode".to_string())),
+            is_const: false,
+        };
+        let handle_record = make_node(
+            ClangNodeKind::RecordDecl {
+                name: "XMLHandle".to_string(),
+                is_class: true,
+                is_definition: true,
+                fields: vec![("_node".to_string(), xml_node_ptr.clone())],
+            },
+            vec![
+                make_node(
+                    ClangNodeKind::ConstructorDecl {
+                        class_name: "XMLHandle".to_string(),
+                        params: vec![("node".to_string(), xml_node_ptr.clone())],
+                        is_definition: true,
+                        ctor_kind: ConstructorKind::Other,
+                        access: AccessSpecifier::Public,
+                    },
+                    vec![make_node(ClangNodeKind::CompoundStmt, vec![])],
+                ),
+                make_node(
+                    ClangNodeKind::ConstructorDecl {
+                        class_name: "XMLHandle".to_string(),
+                        params: vec![(
+                            "other".to_string(),
+                            CppType::Reference {
+                                referent: Box::new(CppType::Named("XMLHandle".to_string())),
+                                is_const: true,
+                                is_rvalue: false,
+                            },
+                        )],
+                        is_definition: true,
+                        ctor_kind: ConstructorKind::Copy,
+                        access: AccessSpecifier::Public,
+                    },
+                    vec![make_node(ClangNodeKind::CompoundStmt, vec![])],
+                ),
+            ],
+        );
+
+        let ast = make_node(ClangNodeKind::TranslationUnit, vec![handle_record]);
+        let code = AstCodeGen::new().generate(&ast);
+
+        assert!(
+            code.contains("pub fn new_1(node: *mut XMLNode) -> Self"),
+            "expected non-copy one-arg constructor to be emitted first, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("pub fn new_1_1(other: &XMLHandle) -> Self"),
+            "expected copy constructor overload suffix to be preserved, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("Self::new_1_1(self)"),
+            "Clone impl should target emitted copy constructor overload, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("Self::new_1(self)"),
+            "Clone impl should not call non-copy overload when copy ctor is suffixed, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_ctor_initializer_collapses_addr_of_reference_param_pointer_cast() {
+        let xml_node_ty = CppType::Named("XMLNode".to_string());
+        let xml_node_ptr = CppType::Pointer {
+            pointee: Box::new(xml_node_ty.clone()),
+            is_const: false,
+        };
+        let xml_node_const_ptr = CppType::Pointer {
+            pointee: Box::new(xml_node_ty.clone()),
+            is_const: true,
+        };
+
+        let handle_record = make_node(
+            ClangNodeKind::RecordDecl {
+                name: "XMLHandleRefCtor".to_string(),
+                is_class: true,
+                is_definition: true,
+                fields: vec![("_node".to_string(), xml_node_ptr.clone())],
+            },
+            vec![
+                make_node(
+                    ClangNodeKind::FieldDecl {
+                        name: "_node".to_string(),
+                        ty: xml_node_ptr.clone(),
+                        access: AccessSpecifier::Public,
+                        is_static: false,
+                        bit_field_width: None,
+                    },
+                    vec![],
+                ),
+                make_node(
+                    ClangNodeKind::ConstructorDecl {
+                        class_name: "XMLHandleRefCtor".to_string(),
+                        params: vec![(
+                            "node".to_string(),
+                            CppType::Reference {
+                                referent: Box::new(xml_node_ty.clone()),
+                                is_const: false,
+                                is_rvalue: false,
+                            },
+                        )],
+                        is_definition: true,
+                        ctor_kind: ConstructorKind::Other,
+                        access: AccessSpecifier::Public,
+                    },
+                    vec![
+                        make_node(
+                            ClangNodeKind::MemberRef {
+                                name: "_node".to_string(),
+                            },
+                            vec![],
+                        ),
+                        make_node(
+                            ClangNodeKind::CastExpr {
+                                ty: xml_node_ptr.clone(),
+                                cast_kind: CastKind::Other,
+                            },
+                            vec![make_node(
+                                ClangNodeKind::UnaryOperator {
+                                    op: UnaryOp::AddrOf,
+                                    ty: xml_node_ptr.clone(),
+                                },
+                                vec![make_node(
+                                    ClangNodeKind::DeclRefExpr {
+                                        name: "node".to_string(),
+                                        ty: xml_node_ty.clone(),
+                                        namespace_path: vec![],
+                                    },
+                                    vec![],
+                                )],
+                            )],
+                        ),
+                        make_node(ClangNodeKind::CompoundStmt, vec![]),
+                    ],
+                ),
+            ],
+        );
+
+        let const_handle_record = make_node(
+            ClangNodeKind::RecordDecl {
+                name: "XMLConstHandleRefCtor".to_string(),
+                is_class: true,
+                is_definition: true,
+                fields: vec![("_node".to_string(), xml_node_const_ptr.clone())],
+            },
+            vec![
+                make_node(
+                    ClangNodeKind::FieldDecl {
+                        name: "_node".to_string(),
+                        ty: xml_node_const_ptr.clone(),
+                        access: AccessSpecifier::Public,
+                        is_static: false,
+                        bit_field_width: None,
+                    },
+                    vec![],
+                ),
+                make_node(
+                    ClangNodeKind::ConstructorDecl {
+                        class_name: "XMLConstHandleRefCtor".to_string(),
+                        params: vec![(
+                            "node".to_string(),
+                            CppType::Reference {
+                                referent: Box::new(xml_node_ty.clone()),
+                                is_const: true,
+                                is_rvalue: false,
+                            },
+                        )],
+                        is_definition: true,
+                        ctor_kind: ConstructorKind::Other,
+                        access: AccessSpecifier::Public,
+                    },
+                    vec![
+                        make_node(
+                            ClangNodeKind::MemberRef {
+                                name: "_node".to_string(),
+                            },
+                            vec![],
+                        ),
+                        make_node(
+                            ClangNodeKind::CastExpr {
+                                ty: xml_node_const_ptr.clone(),
+                                cast_kind: CastKind::Other,
+                            },
+                            vec![make_node(
+                                ClangNodeKind::UnaryOperator {
+                                    op: UnaryOp::AddrOf,
+                                    ty: xml_node_const_ptr.clone(),
+                                },
+                                vec![make_node(
+                                    ClangNodeKind::DeclRefExpr {
+                                        name: "node".to_string(),
+                                        ty: xml_node_ty.clone(),
+                                        namespace_path: vec![],
+                                    },
+                                    vec![],
+                                )],
+                            )],
+                        ),
+                        make_node(ClangNodeKind::CompoundStmt, vec![]),
+                    ],
+                ),
+            ],
+        );
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![handle_record, const_handle_record],
+        );
+        let code = AstCodeGen::new().generate(&ast);
+
+        assert!(
+            code.contains("_node: node as *mut XMLNode"),
+            "expected mutable reference-param pointer cast to collapse to direct cast, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("_node: &mut node as *mut XMLNode"),
+            "unexpected double-reference mutable cast in constructor initializer:\n{}",
+            code
+        );
+        assert!(
+            code.contains("_node: node as *const XMLNode"),
+            "expected const reference-param pointer cast to collapse to direct cast, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("_node: &node as *const XMLNode"),
+            "unexpected double-reference const cast in constructor initializer:\n{}",
             code
         );
     }
