@@ -771,6 +771,11 @@ pub struct AstCodeGen {
     scoped_local_var_counts: HashMap<String, usize>,
     /// Stack of local names declared in each active lexical scope.
     scoped_local_scope_stack: Vec<Vec<String>>,
+    /// Per-identifier pointer-typed local declaration state stack.
+    /// The last entry is the currently visible pointer-ness for that local name.
+    scoped_local_ptr_state: HashMap<String, Vec<bool>>,
+    /// Stack of identifier names that had pointer-state hints declared in each scope.
+    scoped_local_ptr_scope_stack: Vec<Vec<String>>,
     /// Function-scope static local variables in current function: source name -> generated static name.
     /// These require `unsafe` access just like globals.
     function_static_var_mapping: HashMap<String, String>,
@@ -983,6 +988,8 @@ impl AstCodeGen {
             local_vars: HashSet::new(),
             scoped_local_var_counts: HashMap::new(),
             scoped_local_scope_stack: Vec::new(),
+            scoped_local_ptr_state: HashMap::new(),
+            scoped_local_ptr_scope_stack: Vec::new(),
             function_static_var_mapping: HashMap::new(),
             current_function_ident: None,
             function_static_counter: 0,
@@ -7621,6 +7628,8 @@ impl AstCodeGen {
             let saved_local_vars = self.local_vars.clone();
             let saved_scoped_local_var_counts = self.scoped_local_var_counts.clone();
             let saved_scoped_local_scope_stack = self.scoped_local_scope_stack.clone();
+            let saved_scoped_local_ptr_state = self.scoped_local_ptr_state.clone();
+            let saved_scoped_local_ptr_scope_stack = self.scoped_local_ptr_scope_stack.clone();
             let saved_ref_vars = self.ref_vars.clone();
             let saved_const_receiver_vars = self.const_receiver_vars.clone();
             let saved_ptr_vars = self.ptr_vars.clone();
@@ -7630,9 +7639,14 @@ impl AstCodeGen {
             self.local_vars.clear();
             self.scoped_local_var_counts.clear();
             self.scoped_local_scope_stack.clear();
+            self.scoped_local_ptr_state.clear();
+            self.scoped_local_ptr_scope_stack.clear();
             self.push_local_scope();
-            for (param_name, _) in &template_info.params {
-                self.declare_scoped_local_var(sanitize_identifier(param_name));
+            for (param_name, param_ty) in &template_info.params {
+                self.declare_scoped_local_var_with_ptr_hint(
+                    sanitize_identifier(param_name),
+                    Some(Self::is_pointer_decl_type(param_ty)),
+                );
             }
             for var_name in Self::extract_vardecl_names(body) {
                 self.local_vars.insert(sanitize_identifier(&var_name));
@@ -7668,6 +7682,8 @@ impl AstCodeGen {
             self.local_vars = saved_local_vars;
             self.scoped_local_var_counts = saved_scoped_local_var_counts;
             self.scoped_local_scope_stack = saved_scoped_local_scope_stack;
+            self.scoped_local_ptr_state = saved_scoped_local_ptr_state;
+            self.scoped_local_ptr_scope_stack = saved_scoped_local_ptr_scope_stack;
         } else {
             self.writeln("todo!(\"Function template body not available\")");
         }
@@ -7740,7 +7756,10 @@ impl AstCodeGen {
                         let var_name = sanitize_identifier(name);
 
                         // Track local variable to avoid using global prefixes
-                        self.declare_scoped_local_var(var_name.clone());
+                        self.declare_scoped_local_var_with_ptr_hint(
+                            var_name.clone(),
+                            Some(Self::is_pointer_decl_type(ty)),
+                        );
 
                         // Check if this is an array type
                         let is_array = rust_ty.starts_with('[') && rust_ty.contains(';');
@@ -17726,13 +17745,18 @@ impl AstCodeGen {
         self.local_vars.clear();
         self.scoped_local_var_counts.clear();
         self.scoped_local_scope_stack.clear();
+        self.scoped_local_ptr_state.clear();
+        self.scoped_local_ptr_scope_stack.clear();
         self.push_local_scope();
         self.function_static_var_mapping.clear();
         self.function_static_counter = 0;
         self.current_function_ident = Some(func_name.clone());
         for (param_name, param_type) in params {
             // Add parameter to local vars set
-            self.declare_scoped_local_var(sanitize_identifier(param_name));
+            self.declare_scoped_local_var_with_ptr_hint(
+                sanitize_identifier(param_name),
+                Some(Self::is_pointer_decl_type(param_type)),
+            );
             if matches!(param_type, CppType::Reference { .. }) {
                 self.ref_vars.insert(param_name.clone());
             }
@@ -17960,6 +17984,8 @@ impl AstCodeGen {
         self.pop_local_scope();
         self.scoped_local_var_counts.clear();
         self.scoped_local_scope_stack.clear();
+        self.scoped_local_ptr_state.clear();
+        self.scoped_local_ptr_scope_stack.clear();
         self.function_static_var_mapping.clear();
 
         // Generate Rust main wrapper for C++ main
@@ -21733,14 +21759,23 @@ impl AstCodeGen {
         expr
     }
 
+    fn is_pointer_decl_type(ty: &CppType) -> bool {
+        matches!(ty, CppType::Pointer { .. })
+            || matches!(ty, CppType::Array { size: None, .. })
+            || Self::is_pointer_like_type(ty)
+            || ty.to_rust_type_str().starts_with('*')
+    }
+
     /// Check if an expression is a pointer variable (parameter or local with pointer type).
     fn is_ptr_var_expr(&self, node: &ClangNode) -> bool {
         match &node.kind {
             ClangNodeKind::DeclRefExpr { name, ty, .. } => {
-                self.ptr_vars.contains(name)
+                if let Some(scoped_hint) = self.scoped_local_ptr_hint_for_name(name) {
+                    return scoped_hint;
+                }
+                Self::is_pointer_decl_type(ty)
+                    || self.ptr_vars.contains(name)
                     || self.ptr_vars.contains(&sanitize_identifier(name))
-                    || Self::is_pointer_like_type(ty)
-                    || ty.to_rust_type_str().starts_with('*')
             }
             ClangNodeKind::ImplicitCastExpr { .. }
             | ClangNodeKind::Unknown(_)
@@ -21897,6 +21932,9 @@ impl AstCodeGen {
                 .chars()
                 .all(|c| c == '_' || c.is_ascii_alphanumeric());
         if is_ident {
+            if let Some(scoped_hint) = self.scoped_local_ptr_hint_for_name(raw) {
+                return scoped_hint;
+            }
             return self.ptr_vars.contains(raw) || self.ptr_vars.contains(&sanitize_identifier(raw));
         }
 
@@ -22164,6 +22202,7 @@ impl AstCodeGen {
 
     fn push_local_scope(&mut self) {
         self.scoped_local_scope_stack.push(Vec::new());
+        self.scoped_local_ptr_scope_stack.push(Vec::new());
     }
 
     fn pop_local_scope(&mut self) {
@@ -22178,16 +22217,36 @@ impl AstCodeGen {
                 }
             }
         }
+        if let Some(ptr_scope) = self.scoped_local_ptr_scope_stack.pop() {
+            for ident in ptr_scope.into_iter().rev() {
+                if let Some(state_stack) = self.scoped_local_ptr_state.get_mut(&ident) {
+                    state_stack.pop();
+                    if state_stack.is_empty() {
+                        self.scoped_local_ptr_state.remove(&ident);
+                    }
+                }
+            }
+        }
     }
 
-    fn declare_scoped_local_var(&mut self, ident: String) {
+    fn declare_scoped_local_var_with_ptr_hint(&mut self, ident: String, is_ptr: Option<bool>) {
         self.local_vars.insert(ident.clone());
         if self.scoped_local_scope_stack.is_empty() {
             return;
         }
         *self.scoped_local_var_counts.entry(ident.clone()).or_insert(0) += 1;
         if let Some(scope) = self.scoped_local_scope_stack.last_mut() {
-            scope.push(ident);
+            scope.push(ident.clone());
+        }
+
+        if let Some(is_ptr) = is_ptr {
+            self.scoped_local_ptr_state
+                .entry(ident.clone())
+                .or_default()
+                .push(is_ptr);
+            if let Some(ptr_scope) = self.scoped_local_ptr_scope_stack.last_mut() {
+                ptr_scope.push(ident);
+            }
         }
     }
 
@@ -22195,6 +22254,17 @@ impl AstCodeGen {
         self.scoped_local_var_counts
             .get(ident)
             .is_some_and(|count| *count > 0)
+    }
+
+    fn scoped_local_ptr_hint_for_ident(&self, ident: &str) -> Option<bool> {
+        self.scoped_local_ptr_state
+            .get(ident)
+            .and_then(|stack| stack.last().copied())
+    }
+
+    fn scoped_local_ptr_hint_for_name(&self, name: &str) -> Option<bool> {
+        self.scoped_local_ptr_hint_for_ident(name)
+            .or_else(|| self.scoped_local_ptr_hint_for_ident(&sanitize_identifier(name)))
     }
 
     /// Check if an expression node refers to a global variable (needs unsafe access).
@@ -24831,12 +24901,19 @@ impl AstCodeGen {
                 let saved_local_vars = self.local_vars.clone();
                 let saved_scoped_local_var_counts = self.scoped_local_var_counts.clone();
                 let saved_scoped_local_scope_stack = self.scoped_local_scope_stack.clone();
+                let saved_scoped_local_ptr_state = self.scoped_local_ptr_state.clone();
+                let saved_scoped_local_ptr_scope_stack = self.scoped_local_ptr_scope_stack.clone();
                 self.local_vars.clear();
                 self.scoped_local_var_counts.clear();
                 self.scoped_local_scope_stack.clear();
+                self.scoped_local_ptr_state.clear();
+                self.scoped_local_ptr_scope_stack.clear();
                 self.push_local_scope();
-                for (param_name, _) in params {
-                    self.declare_scoped_local_var(sanitize_identifier(param_name));
+                for (param_name, param_type) in params {
+                    self.declare_scoped_local_var_with_ptr_hint(
+                        sanitize_identifier(param_name),
+                        Some(Self::is_pointer_decl_type(param_type)),
+                    );
                 }
                 for child in &node.children {
                     if matches!(child.kind, ClangNodeKind::CompoundStmt) {
@@ -24907,6 +24984,8 @@ impl AstCodeGen {
                 self.local_vars = saved_local_vars;
                 self.scoped_local_var_counts = saved_scoped_local_var_counts;
                 self.scoped_local_scope_stack = saved_scoped_local_scope_stack;
+                self.scoped_local_ptr_state = saved_scoped_local_ptr_state;
+                self.scoped_local_ptr_scope_stack = saved_scoped_local_ptr_scope_stack;
 
                 self.current_return_type = old_return_type;
                 self.current_method_is_const = old_method_is_const;
@@ -25718,7 +25797,10 @@ impl AstCodeGen {
                             }
                         } else {
                             // Track all local variables to avoid using global prefixes
-                            self.declare_scoped_local_var(var_ident.clone());
+                            self.declare_scoped_local_var_with_ptr_hint(
+                                var_ident.clone(),
+                                Some(Self::is_pointer_decl_type(ty)),
+                            );
                             String::new()
                         };
 
@@ -49511,6 +49593,150 @@ mod tests {
         assert!(
             !code.contains("consume(unsafe { __fsv_main_test_0 })"),
             "callsite should not resolve shadowed local variable through function-static symbol mapping, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_scoped_pointer_hint_prefers_innermost_shadow_for_receiver_hint() {
+        let mut gen = AstCodeGen::new();
+        gen.push_local_scope();
+        gen.declare_scoped_local_var_with_ptr_hint("doc".to_string(), Some(true));
+        assert!(
+            gen.is_pointer_receiver_expr_string_hint("doc"),
+            "outer pointer declaration should be tracked as pointer receiver"
+        );
+
+        let doc_declref = make_node(
+            ClangNodeKind::DeclRefExpr {
+                name: "doc".to_string(),
+                ty: CppType::Named("XMLDocument".to_string()),
+                namespace_path: vec![],
+            },
+            vec![],
+        );
+        gen.push_local_scope();
+        gen.declare_scoped_local_var_with_ptr_hint("doc".to_string(), Some(false));
+        assert!(
+            !gen.is_pointer_receiver_expr_string_hint("doc"),
+            "inner non-pointer shadow should override stale pointer receiver hints"
+        );
+        assert!(
+            !gen.is_ptr_var_expr(&doc_declref),
+            "DeclRefExpr lookup should use active shadowed local pointer hint"
+        );
+
+        gen.pop_local_scope();
+        assert!(
+            gen.is_pointer_receiver_expr_string_hint("doc"),
+            "after popping inner scope, outer pointer hint should be visible again"
+        );
+    }
+
+    #[test]
+    fn test_shadowed_non_pointer_local_does_not_emit_pointer_receiver_call_shape() {
+        let doc_ty = CppType::Named("XMLDocument".to_string());
+        let doc_ptr_ty = CppType::Pointer {
+            pointee: Box::new(doc_ty.clone()),
+            is_const: false,
+        };
+        let error_method_ty = CppType::Function {
+            return_type: Box::new(CppType::Bool),
+            params: vec![],
+            is_variadic: false,
+        };
+
+        let inner_error_call = make_node(
+            ClangNodeKind::ExprStmt,
+            vec![make_node(
+                ClangNodeKind::CallExpr {
+                    ty: CppType::Bool,
+                    template_instantiation: None,
+                },
+                vec![make_node(
+                    ClangNodeKind::MemberExpr {
+                        member_name: "Error".to_string(),
+                        is_arrow: false,
+                        ty: error_method_ty,
+                        declaring_class: Some("XMLDocument".to_string()),
+                        is_static: false,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::DeclRefExpr {
+                            name: "doc".to_string(),
+                            ty: doc_ty.clone(),
+                            namespace_path: vec![],
+                        },
+                        vec![],
+                    )],
+                )],
+            )],
+        );
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![make_node(
+                ClangNodeKind::FunctionDecl {
+                    name: "main".to_string(),
+                    mangled_name: "main".to_string(),
+                    is_static: false,
+                    return_type: CppType::Void,
+                    params: vec![],
+                    is_definition: true,
+                    is_variadic: false,
+                    is_noexcept: false,
+                    is_coroutine: false,
+                    coroutine_info: None,
+                },
+                vec![make_node(
+                    ClangNodeKind::CompoundStmt,
+                    vec![
+                        make_node(
+                            ClangNodeKind::DeclStmt,
+                            vec![make_node(
+                                ClangNodeKind::VarDecl {
+                                    name: "doc".to_string(),
+                                    ty: doc_ptr_ty,
+                                    has_init: false,
+                                    is_extern: false,
+                                    is_static: false,
+                                },
+                                vec![],
+                            )],
+                        ),
+                        make_node(
+                            ClangNodeKind::CompoundStmt,
+                            vec![
+                                make_node(
+                                    ClangNodeKind::DeclStmt,
+                                    vec![make_node(
+                                        ClangNodeKind::VarDecl {
+                                            name: "doc".to_string(),
+                                            ty: doc_ty,
+                                            has_init: false,
+                                            is_extern: false,
+                                            is_static: false,
+                                        },
+                                        vec![],
+                                    )],
+                                ),
+                                inner_error_call,
+                            ],
+                        ),
+                    ],
+                )],
+            )],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("doc.Error();"),
+            "shadowed non-pointer local should call method through value receiver, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("(*doc).Error();"),
+            "shadowed non-pointer local must not be lowered as pointer receiver, got:\n{}",
             code
         );
     }
