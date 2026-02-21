@@ -813,6 +813,9 @@ pub struct AstCodeGen {
     generated_enums: HashSet<String>,
     /// Map (enum_name, integer_value) → variant_name for switch-case generation
     enum_variant_map: HashMap<(String, i128), String>,
+    /// Map enum name spellings to emitted Rust repr type (e.g., `u32`).
+    /// Used for integral->enum cast lowering.
+    enum_repr_types: HashMap<String, String>,
     /// Track already generated type aliases to avoid duplicates
     generated_aliases: HashSet<String>,
     /// Constructor parameter types: (class_name, num_args) → param types
@@ -1017,6 +1020,7 @@ impl AstCodeGen {
             generated_structs: HashSet::new(),
             generated_enums: HashSet::new(),
             enum_variant_map: HashMap::new(),
+            enum_repr_types: HashMap::new(),
             generated_aliases: HashSet::new(),
             constructor_param_types: HashMap::new(),
             primitive_aliases: HashSet::new(),
@@ -1569,6 +1573,103 @@ impl AstCodeGen {
                 || enum_base == target_base
                 || CppType::Named(enum_name).to_rust_type_str() == target_rust
         })
+    }
+
+    fn register_enum_repr_type(&mut self, enum_name: &str, repr_type: &str) {
+        if enum_name.is_empty() || repr_type.is_empty() {
+            return;
+        }
+
+        let canonical = Self::canonical_enum_type_name(enum_name);
+        if !canonical.is_empty() {
+            self.enum_repr_types
+                .insert(canonical.clone(), repr_type.to_string());
+            let base = Self::strip_namespace_and_template(&canonical);
+            if !base.is_empty() {
+                self.enum_repr_types.insert(base, repr_type.to_string());
+            }
+            let rust_name = CppType::Named(canonical).to_rust_type_str();
+            if !rust_name.is_empty() {
+                self.enum_repr_types.insert(rust_name, repr_type.to_string());
+            }
+        }
+
+        let sanitized = sanitize_identifier(enum_name);
+        if !sanitized.is_empty() {
+            self.enum_repr_types
+                .entry(sanitized)
+                .or_insert_with(|| repr_type.to_string());
+        }
+    }
+
+    fn resolve_enum_repr_type(&self, target_ty: &CppType) -> Option<String> {
+        let CppType::Named(raw_name) = target_ty else {
+            return None;
+        };
+
+        let canonical = Self::canonical_enum_type_name(raw_name);
+        if canonical.is_empty() {
+            return None;
+        }
+
+        let base = Self::strip_namespace_and_template(&canonical);
+        let rust_name = CppType::Named(canonical.clone()).to_rust_type_str();
+        let sanitized_raw = sanitize_identifier(raw_name);
+        for key in [canonical, base, rust_name, sanitized_raw] {
+            if key.is_empty() {
+                continue;
+            }
+            if let Some(repr) = self.enum_repr_types.get(&key) {
+                return Some(repr.clone());
+            }
+        }
+        None
+    }
+
+    /// Cast integral/bool expressions to enum targets using repr-typed transmute.
+    /// This avoids invalid Rust forms like `i as SomeEnum`.
+    fn cast_integral_expr_to_enum_target(
+        &self,
+        expr: String,
+        expr_node: Option<&ClangNode>,
+        target_ty: &CppType,
+    ) -> Option<String> {
+        if !self.is_known_enum_named_type(target_ty) {
+            return None;
+        }
+        let target_rust = target_ty.to_rust_type_str();
+        if target_rust.is_empty() {
+            return None;
+        }
+
+        if let Some(node) = expr_node {
+            if let Some(variant) = self.resolve_enum_variant_from_literal_expr(target_ty, node) {
+                return Some(variant);
+            }
+
+            let expr_ty = Self::get_original_expr_type(node).or_else(|| Self::get_expr_type(node));
+            let integral_like = expr_ty
+                .as_ref()
+                .is_some_and(|t| t.is_integral() == Some(true) || matches!(t, CppType::Bool))
+                || is_integer_literal_str(&expr);
+            if !integral_like {
+                return None;
+            }
+        } else if !is_integer_literal_str(&expr) {
+            return None;
+        }
+
+        let repr_type = self
+            .resolve_enum_repr_type(target_ty)
+            .unwrap_or_else(|| "i32".to_string());
+        let fixed_expr = cast_negative_unsigned_literal_expr(&expr).unwrap_or(expr);
+        let fixed_expr = cast_negative_literal_to_unsigned(&fixed_expr, &repr_type)
+            .unwrap_or(fixed_expr);
+        let cast_input = wrap_for_as_cast(&fixed_expr);
+        Some(format!(
+            "unsafe {{ std::mem::transmute::<{}, {}>({} as {}) }}",
+            repr_type, target_rust, cast_input, repr_type
+        ))
     }
 
     /// Cast enum-typed expressions when initializing integral (non-bool) targets.
@@ -3196,6 +3297,9 @@ impl AstCodeGen {
         // Byte string literals are immutable; `.as_mut_ptr()` on them is invalid in Rust.
         // Normalize casts to const char* to use `.as_ptr()`.
         output = output.replace(".as_mut_ptr() as *const i8", ".as_ptr() as *const i8");
+        // Some degraded call-shape paths can emit `&b\"...\".as_ptr() as *const i8`,
+        // which is invalid (`&*const u8 as *const i8`). Drop the redundant borrow.
+        output = Self::strip_redundant_borrow_on_byte_string_ptr_casts(&output);
         // xxHash inline headers can produce duplicate inline-prefixed typedef variants.
         // Normalize to canonical xxHash type names so mixed TU builds type-check.
         for (from, to) in [
@@ -3208,6 +3312,28 @@ impl AstCodeGen {
             output = output.replace(from, to);
         }
         output
+    }
+
+    fn strip_redundant_borrow_on_byte_string_ptr_casts(code: &str) -> String {
+        let mut out = String::with_capacity(code.len());
+        let mut idx = 0usize;
+        while let Some(rel) = code[idx..].find("&b\"") {
+            let start = idx + rel;
+            out.push_str(&code[idx..start]);
+            let after_amp = start + 1;
+            if let Some(suffix_rel) = code[after_amp..].find(".as_ptr() as *const i8") {
+                let suffix_start = after_amp + suffix_rel;
+                if !code[after_amp..suffix_start].contains('\n') {
+                    // Drop only the redundant `&` before byte-string pointer casts.
+                    idx = after_amp;
+                    continue;
+                }
+            }
+            out.push('&');
+            idx = after_amp;
+        }
+        out.push_str(&code[idx..]);
+        out
     }
 
     /// Generate opaque type stubs for unresolved template parameters.
@@ -18232,6 +18358,7 @@ impl AstCodeGen {
             | "u128" | "usize" => underlying_type.to_rust_type_str(),
             _ => "i32".to_string(),
         };
+        self.register_enum_repr_type(name, &repr_type);
         self.writeln(&format!("#[repr({})]", repr_type));
         self.writeln("#[derive(Clone, Copy, PartialEq, Eq, Debug)]");
         self.writeln(&format!("pub enum {} {{", name));
@@ -21369,6 +21496,8 @@ impl AstCodeGen {
             | "u128" | "usize" => underlying_type.to_rust_type_str(),
             _ => "i32".to_string(), // Default to i32 for non-primitive underlying types
         };
+        self.register_enum_repr_type(name, &repr_type);
+        self.register_enum_repr_type(&safe_name, &repr_type);
 
         // Check if this is an empty enum (no variants)
         let has_variants = children
@@ -23345,6 +23474,19 @@ impl AstCodeGen {
             Self::strip_outer_unsafe_block(expr).unwrap_or(expr),
         )
         .trim();
+        if let Some(stripped_ref) = raw
+            .strip_prefix("&mut ")
+            .or_else(|| raw.strip_prefix('&'))
+        {
+            let candidate = Self::strip_outer_parens_expr(stripped_ref).trim();
+            let definitely_pointer_valued = candidate.contains(".as_ptr()")
+                || candidate.contains(".as_mut_ptr()")
+                || candidate.starts_with("std::ptr::null()")
+                || candidate.starts_with("std::ptr::null_mut()");
+            if definitely_pointer_valued {
+                return candidate.to_string();
+            }
+        }
         let Some(stripped) = raw.strip_prefix('*') else {
             return expr.to_string();
         };
@@ -29370,21 +29512,23 @@ impl AstCodeGen {
                             let child_type = Self::get_expr_type(&node.children[0]);
                             let child_returns_ref =
                                 matches!(child_type, Some(CppType::Reference { .. }));
+                            let child_is_pointer_value =
+                                Self::expr_string_is_pointer_value(&operand);
 
                             if rust_ty.starts_with("*mut ") {
-                                if child_returns_ref {
+                                if child_returns_ref || child_is_pointer_value {
                                     format!("{} as {}", operand, rust_ty)
                                 } else {
                                     format!("&mut {} as {}", operand, rust_ty)
                                 }
                             } else if rust_ty.starts_with("*const ") {
-                                if child_returns_ref {
+                                if child_returns_ref || child_is_pointer_value {
                                     format!("{} as {}", operand, rust_ty)
                                 } else {
                                     format!("&{} as {}", operand, rust_ty)
                                 }
                             } else {
-                                if child_returns_ref {
+                                if child_returns_ref || child_is_pointer_value {
                                     operand // Already a reference
                                 } else {
                                     format!("&{}", operand)
@@ -29513,6 +29657,11 @@ impl AstCodeGen {
                         CastKind::IntegralCast => {
                             // Need explicit cast for integral conversions
                             let rust_type = ty.to_rust_type_str();
+                            if let Some(enum_casted) =
+                                self.cast_integral_expr_to_enum_target(inner.clone(), Some(child), ty)
+                            {
+                                return enum_casted;
+                            }
                             // Check if this is a cast to a non-primitive type (struct)
                             // Non-primitive types can't use `as` for conversion
                             let is_primitive = matches!(
@@ -32873,9 +33022,17 @@ impl AstCodeGen {
                             let rust_ty = ty.to_rust_type_str();
                             // Preserve `unsafe` around global/static lvalues before taking address.
                             if let Some(inner) = unwrap_outer_unsafe_expr(&operand) {
+                                let inner_is_pointer_value =
+                                    Self::expr_string_is_pointer_value(&inner);
                                 if rust_ty.starts_with("*mut ") {
+                                    if inner_is_pointer_value {
+                                        return format!("unsafe {{ {} as {} }}", inner, rust_ty);
+                                    }
                                     return format!("unsafe {{ &mut {} as {} }}", inner, rust_ty);
                                 } else if rust_ty.starts_with("*const ") {
+                                    if inner_is_pointer_value {
+                                        return format!("unsafe {{ {} as {} }}", inner, rust_ty);
+                                    }
                                     return format!("unsafe {{ &{} as {} }}", inner, rust_ty);
                                 } else {
                                     return format!("unsafe {{ &{} }}", inner);
@@ -32887,21 +33044,23 @@ impl AstCodeGen {
                             let child_type = Self::get_expr_type(&node.children[0]);
                             let child_returns_ref =
                                 matches!(child_type, Some(CppType::Reference { .. }));
+                            let child_is_pointer_value =
+                                Self::expr_string_is_pointer_value(&operand);
 
                             if rust_ty.starts_with("*mut ") {
-                                if child_returns_ref {
+                                if child_returns_ref || child_is_pointer_value {
                                     format!("{} as {}", operand, rust_ty)
                                 } else {
                                     format!("&mut {} as {}", operand, rust_ty)
                                 }
                             } else if rust_ty.starts_with("*const ") {
-                                if child_returns_ref {
+                                if child_returns_ref || child_is_pointer_value {
                                     format!("{} as {}", operand, rust_ty)
                                 } else {
                                     format!("&{} as {}", operand, rust_ty)
                                 }
                             } else {
-                                if child_returns_ref {
+                                if child_returns_ref || child_is_pointer_value {
                                     operand // Already a reference
                                 } else {
                                     format!("&{}", operand)
@@ -33718,6 +33877,9 @@ impl AstCodeGen {
                                     if i < types.len() {
                                         if let CppType::Reference { is_const, .. } = &types[i] {
                                             let arg = self.expr_to_string(c);
+                                            if Self::expr_string_is_pointer_value(&arg) {
+                                                return arg;
+                                            }
                                             return borrow_expr_for_reference(&arg, *is_const);
                                         }
 
@@ -33902,7 +34064,8 @@ impl AstCodeGen {
                                                 return format!("{} as {}", decayed, target_rust);
                                             }
 
-                                            let arg = self.expr_to_string(c);
+                                            let arg =
+                                                Self::normalize_pointer_value_expr(&self.expr_to_string(c));
                                             let arg = if arg.starts_with("unsafe { ")
                                                 || arg.contains(" as ")
                                                 || arg.contains(' ')
@@ -34113,6 +34276,9 @@ impl AstCodeGen {
                                             if let CppType::Reference { is_const, .. } = &params[i]
                                             {
                                                 let arg_str = self.expr_to_string(c);
+                                                if Self::expr_string_is_pointer_value(&arg_str) {
+                                                    return arg_str;
+                                                }
                                                 return borrow_expr_for_reference(
                                                     &arg_str,
                                                     *is_const,
@@ -34383,6 +34549,9 @@ impl AstCodeGen {
                                         } else {
                                             // Add borrow for non-reference-variable arguments
                                             let arg_str = self.expr_to_string(c);
+                                            if Self::expr_string_is_pointer_value(&arg_str) {
+                                                return arg_str;
+                                            }
                                             return borrow_expr_for_reference(
                                                 &arg_str,
                                                 *is_const,
@@ -35070,6 +35239,9 @@ impl AstCodeGen {
                                     if i < params.len() {
                                         if let CppType::Reference { is_const, .. } = &params[i] {
                                             let arg_str = self.expr_to_string(c);
+                                            if Self::expr_string_is_pointer_value(&arg_str) {
+                                                return arg_str;
+                                            }
                                             return borrow_expr_for_reference(
                                                 &arg_str,
                                                 *is_const,
@@ -36057,6 +36229,11 @@ impl AstCodeGen {
                     let rust_type = ty.to_rust_type_str();
                     if let Some(casted) = cast_negative_literal_to_unsigned(&inner, &rust_type) {
                         return casted;
+                    }
+                    if let Some(enum_casted) =
+                        self.cast_integral_expr_to_enum_target(inner.clone(), inner_node, ty)
+                    {
+                        return enum_casted;
                     }
 
                     // Function pointers are represented as Option<fn(...)> in Rust.
@@ -46686,6 +46863,48 @@ mod tests {
     }
 
     #[test]
+    fn test_pointer_value_normalization_strips_redundant_addr_of_pointer_value() {
+        let expr = "&b\"Element1\\x00\".as_ptr() as *const i8";
+        let normalized = AstCodeGen::normalize_pointer_value_expr(expr);
+        assert_eq!(
+            normalized,
+            "b\"Element1\\x00\".as_ptr() as *const i8",
+            "pointer-value normalization should strip redundant borrow over pointer-valued expressions"
+        );
+    }
+
+    #[test]
+    fn test_pointer_value_normalization_keeps_addr_of_non_pointer_value_cast() {
+        let expr = "&stream as *mut XMLPrinter";
+        let normalized = AstCodeGen::normalize_pointer_value_expr(expr);
+        assert_eq!(
+            normalized, expr,
+            "pointer-value normalization must not drop required borrow for non-pointer value pointer casts"
+        );
+    }
+
+    #[test]
+    fn test_strip_redundant_borrow_on_byte_string_ptr_casts_removes_invalid_form() {
+        let input = "doc.NewElement(&b\"Element1\\x00\".as_ptr() as *const i8);";
+        let output = AstCodeGen::strip_redundant_borrow_on_byte_string_ptr_casts(input);
+        assert_eq!(
+            output,
+            "doc.NewElement(b\"Element1\\x00\".as_ptr() as *const i8);",
+            "byte-string pointer casts should not keep redundant leading borrow"
+        );
+    }
+
+    #[test]
+    fn test_strip_redundant_borrow_on_byte_string_ptr_casts_keeps_other_borrows() {
+        let input = "let p = &stream as *mut XMLPrinter;";
+        let output = AstCodeGen::strip_redundant_borrow_on_byte_string_ptr_casts(input);
+        assert_eq!(
+            output, input,
+            "non byte-string pointer casts must remain unchanged"
+        );
+    }
+
+    #[test]
     fn test_pointer_condition_normalizes_redundant_deref_from_pointer_return_call_chain() {
         let xml_node_ptr = CppType::Pointer {
             pointee: Box::new(CppType::Named("XMLNode".to_string())),
@@ -51765,6 +51984,114 @@ mod tests {
     }
 
     #[test]
+    fn test_integral_cast_to_enum_target_uses_repr_typed_transmute() {
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![
+                make_node(
+                    ClangNodeKind::EnumDecl {
+                        name: "XMLError".to_string(),
+                        is_scoped: false,
+                        underlying_type: CppType::Int { signed: false },
+                    },
+                    vec![
+                        make_node(
+                            ClangNodeKind::EnumConstantDecl {
+                                name: "XML_SUCCESS".to_string(),
+                                value: Some(0),
+                            },
+                            vec![],
+                        ),
+                        make_node(
+                            ClangNodeKind::EnumConstantDecl {
+                                name: "XML_ERROR_PARSING".to_string(),
+                                value: Some(1),
+                            },
+                            vec![],
+                        ),
+                    ],
+                ),
+                make_node(
+                    ClangNodeKind::FunctionDecl {
+                        name: "cast_error".to_string(),
+                        mangled_name: "cast_error".to_string(),
+                        is_static: false,
+                        return_type: CppType::Void,
+                        params: vec![],
+                        is_definition: true,
+                        is_variadic: false,
+                        is_noexcept: false,
+                        is_coroutine: false,
+                        coroutine_info: None,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![
+                            make_node(
+                                ClangNodeKind::DeclStmt,
+                                vec![make_node(
+                                    ClangNodeKind::VarDecl {
+                                        name: "i".to_string(),
+                                        ty: CppType::Int { signed: true },
+                                        has_init: true,
+                                        is_static: false,
+                                        is_extern: false,
+                                    },
+                                    vec![make_node(
+                                        ClangNodeKind::IntegerLiteral {
+                                            value: 1,
+                                            cpp_type: Some(CppType::Int { signed: true }),
+                                        },
+                                        vec![],
+                                    )],
+                                )],
+                            ),
+                            make_node(
+                                ClangNodeKind::DeclStmt,
+                                vec![make_node(
+                                    ClangNodeKind::VarDecl {
+                                        name: "error".to_string(),
+                                        ty: CppType::Named("XMLError".to_string()),
+                                        has_init: true,
+                                        is_static: false,
+                                        is_extern: false,
+                                    },
+                                    vec![make_node(
+                                        ClangNodeKind::CastExpr {
+                                            ty: CppType::Named("XMLError".to_string()),
+                                            cast_kind: CastKind::Static,
+                                        },
+                                        vec![make_node(
+                                            ClangNodeKind::DeclRefExpr {
+                                                name: "i".to_string(),
+                                                ty: CppType::Int { signed: true },
+                                                namespace_path: vec![],
+                                            },
+                                            vec![],
+                                        )],
+                                    )],
+                                )],
+                            ),
+                        ],
+                    )],
+                ),
+            ],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("std::mem::transmute::<u32, XMLError>("),
+            "integral->enum casts should use repr-typed transmute, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("i as XMLError"),
+            "integral->enum casts must not emit invalid `as Enum` forms, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
     fn test_async_coroutine_with_task_return() {
         use crate::ast::CoroutineInfo;
         // Test that a coroutine with Task<int> return type generates async fn -> i32
@@ -53124,6 +53451,356 @@ mod tests {
             !lowered.contains("\\u{"),
             "byte-string lowering must not emit unicode escapes, got:\n{}",
             lowered
+        );
+    }
+
+    #[test]
+    fn test_expr_to_string_raw_addr_of_pointer_valued_expr_avoids_extra_borrow() {
+        let cstr_ty = CppType::Pointer {
+            pointee: Box::new(CppType::Char { signed: true }),
+            is_const: true,
+        };
+        let expr = make_node(
+            ClangNodeKind::UnaryOperator {
+                op: UnaryOp::AddrOf,
+                ty: cstr_ty,
+            },
+            vec![make_node(
+                ClangNodeKind::StringLiteral("raw".to_string()),
+                vec![],
+            )],
+        );
+
+        let lowered = AstCodeGen::new().expr_to_string_raw(&expr);
+        assert!(
+            lowered.contains(".as_ptr() as *const i8"),
+            "pointer-valued address-of should still lower to pointer cast, got:\n{}",
+            lowered
+        );
+        assert!(
+            !lowered.contains("&b\""),
+            "pointer-valued address-of must not introduce extra borrow before cast, got:\n{}",
+            lowered
+        );
+    }
+
+    #[test]
+    fn test_unary_addr_of_pointer_valued_expr_avoids_extra_borrow_in_generated_return() {
+        let cstr_ty = CppType::Pointer {
+            pointee: Box::new(CppType::Char { signed: true }),
+            is_const: true,
+        };
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![make_node(
+                ClangNodeKind::FunctionDecl {
+                    name: "cstr".to_string(),
+                    mangled_name: "cstr".to_string(),
+                    is_static: false,
+                    return_type: cstr_ty.clone(),
+                    params: vec![],
+                    is_definition: true,
+                    is_variadic: false,
+                    is_noexcept: false,
+                    is_coroutine: false,
+                    coroutine_info: None,
+                },
+                vec![make_node(
+                    ClangNodeKind::CompoundStmt,
+                    vec![make_node(
+                        ClangNodeKind::ReturnStmt,
+                        vec![make_node(
+                            ClangNodeKind::UnaryOperator {
+                                op: UnaryOp::AddrOf,
+                                ty: cstr_ty.clone(),
+                            },
+                            vec![make_node(
+                                ClangNodeKind::StringLiteral("cast".to_string()),
+                                vec![],
+                            )],
+                        )],
+                    )],
+                )],
+            )],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        let return_line = code
+            .lines()
+            .find(|line| line.contains("return") && line.contains(".as_ptr() as *const i8"))
+            .unwrap_or_default();
+        assert!(
+            !return_line.contains("return &"),
+            "generated pointer-valued address-of return should cast directly, got line:\n{}\nfull code:\n{}",
+            return_line,
+            code
+        );
+        assert!(
+            return_line.contains("as_ptr() as *const i8"),
+            "generated return should keep direct pointer cast form, got line:\n{}\nfull code:\n{}",
+            return_line,
+            code
+        );
+    }
+
+    #[test]
+    fn test_unary_addr_of_reference_typed_pointer_value_avoids_extra_borrow() {
+        let cstr_ty = CppType::Pointer {
+            pointee: Box::new(CppType::Char { signed: true }),
+            is_const: true,
+        };
+        let ref_to_cstr_ty = CppType::Reference {
+            referent: Box::new(cstr_ty),
+            is_const: true,
+            is_rvalue: false,
+        };
+        let expr = make_node(
+            ClangNodeKind::UnaryOperator {
+                op: UnaryOp::AddrOf,
+                ty: ref_to_cstr_ty,
+            },
+            vec![make_node(
+                ClangNodeKind::StringLiteral("refptr".to_string()),
+                vec![],
+            )],
+        );
+
+        let lowered = AstCodeGen::new().expr_to_string(&expr);
+        assert!(
+            lowered.contains(".as_ptr() as *const i8"),
+            "reference-typed address-of over pointer-valued operand should preserve pointer value form, got:\n{}",
+            lowered
+        );
+        assert!(
+            !lowered.contains("&b\""),
+            "reference-typed address-of should not add redundant borrow over pointer-valued operand, got:\n{}",
+            lowered
+        );
+    }
+
+    #[test]
+    fn test_pointer_param_call_normalizes_addr_of_pointer_valued_argument() {
+        let cstr_ty = CppType::Pointer {
+            pointee: Box::new(CppType::Char { signed: true }),
+            is_const: true,
+        };
+        let xml_elem_ptr = CppType::Pointer {
+            pointee: Box::new(CppType::Named("XMLElement".to_string())),
+            is_const: false,
+        };
+
+        let new_element_call = make_node(
+            ClangNodeKind::CallExpr {
+                ty: xml_elem_ptr.clone(),
+                template_instantiation: None,
+            },
+            vec![
+                make_node(
+                    ClangNodeKind::MemberExpr {
+                        member_name: "NewElement".to_string(),
+                        is_arrow: false,
+                        ty: CppType::Function {
+                            return_type: Box::new(xml_elem_ptr.clone()),
+                            params: vec![cstr_ty.clone()],
+                            is_variadic: false,
+                        },
+                        declaring_class: Some("XMLDocument".to_string()),
+                        is_static: false,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::DeclRefExpr {
+                            name: "doc".to_string(),
+                            ty: CppType::Named("XMLDocument".to_string()),
+                            namespace_path: vec![],
+                        },
+                        vec![],
+                    )],
+                ),
+                make_node(
+                    ClangNodeKind::UnaryOperator {
+                        op: UnaryOp::AddrOf,
+                        ty: cstr_ty.clone(),
+                    },
+                    vec![make_node(
+                        ClangNodeKind::StringLiteral("Element1".to_string()),
+                        vec![],
+                    )],
+                ),
+            ],
+        );
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![
+                make_node(
+                    ClangNodeKind::RecordDecl {
+                        name: "XMLElement".to_string(),
+                        is_class: true,
+                        is_definition: true,
+                        fields: vec![],
+                    },
+                    vec![],
+                ),
+                make_node(
+                    ClangNodeKind::RecordDecl {
+                        name: "XMLDocument".to_string(),
+                        is_class: true,
+                        is_definition: true,
+                        fields: vec![],
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CXXMethodDecl {
+                            class_name: "XMLDocument".to_string(),
+                            name: "NewElement".to_string(),
+                            return_type: xml_elem_ptr.clone(),
+                            params: vec![("name".to_string(), cstr_ty.clone())],
+                            is_definition: true,
+                            is_static: false,
+                            is_virtual: false,
+                            is_pure_virtual: false,
+                            is_override: false,
+                            is_final: false,
+                            is_const: false,
+                            access: AccessSpecifier::Public,
+                        },
+                        vec![make_node(
+                            ClangNodeKind::CompoundStmt,
+                            vec![make_node(
+                                ClangNodeKind::ReturnStmt,
+                                vec![make_node(ClangNodeKind::NullPtrLiteral, vec![])],
+                            )],
+                        )],
+                    )],
+                ),
+                make_node(
+                    ClangNodeKind::FunctionDecl {
+                        name: "call_new_element".to_string(),
+                        mangled_name: "call_new_element".to_string(),
+                        is_static: false,
+                        return_type: xml_elem_ptr.clone(),
+                        params: vec![("doc".to_string(), CppType::Named("XMLDocument".to_string()))],
+                        is_definition: true,
+                        is_variadic: false,
+                        is_noexcept: false,
+                        is_coroutine: false,
+                        coroutine_info: None,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![make_node(ClangNodeKind::ReturnStmt, vec![new_element_call])],
+                    )],
+                ),
+            ],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("NewElement(") && code.contains(".as_ptr() as *const i8"),
+            "expected pointer-valued string literal argument in NewElement call, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("NewElement(&b\"Element1"),
+            "pointer-parameter call normalization should not keep redundant borrow on pointer-valued args, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_reference_to_pointer_param_avoids_borrow_for_pointer_valued_argument() {
+        let cstr_ty = CppType::Pointer {
+            pointee: Box::new(CppType::Char { signed: true }),
+            is_const: true,
+        };
+        let cstr_ref_ty = CppType::Reference {
+            referent: Box::new(cstr_ty.clone()),
+            is_const: true,
+            is_rvalue: false,
+        };
+        let consume_fn_ty = CppType::Function {
+            return_type: Box::new(CppType::Void),
+            params: vec![cstr_ref_ty.clone()],
+            is_variadic: false,
+        };
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![
+                make_node(
+                    ClangNodeKind::FunctionDecl {
+                        name: "consume".to_string(),
+                        mangled_name: "consume".to_string(),
+                        is_static: false,
+                        return_type: CppType::Void,
+                        params: vec![("p".to_string(), cstr_ref_ty)],
+                        is_definition: true,
+                        is_variadic: false,
+                        is_noexcept: false,
+                        is_coroutine: false,
+                        coroutine_info: None,
+                    },
+                    vec![make_node(ClangNodeKind::CompoundStmt, vec![])],
+                ),
+                make_node(
+                    ClangNodeKind::FunctionDecl {
+                        name: "main".to_string(),
+                        mangled_name: "main".to_string(),
+                        is_static: false,
+                        return_type: CppType::Void,
+                        params: vec![],
+                        is_definition: true,
+                        is_variadic: false,
+                        is_noexcept: false,
+                        is_coroutine: false,
+                        coroutine_info: None,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![make_node(
+                            ClangNodeKind::ExprStmt,
+                            vec![make_node(
+                                ClangNodeKind::CallExpr {
+                                    ty: CppType::Void,
+                                    template_instantiation: None,
+                                },
+                                vec![
+                                    make_node(
+                                        ClangNodeKind::DeclRefExpr {
+                                            name: "consume".to_string(),
+                                            ty: consume_fn_ty,
+                                            namespace_path: vec![],
+                                        },
+                                        vec![],
+                                    ),
+                                    make_node(
+                                        ClangNodeKind::UnaryOperator {
+                                            op: UnaryOp::AddrOf,
+                                            ty: cstr_ty.clone(),
+                                        },
+                                        vec![make_node(
+                                            ClangNodeKind::StringLiteral("ptr".to_string()),
+                                            vec![],
+                                        )],
+                                    ),
+                                ],
+                            )],
+                        )],
+                    )],
+                ),
+            ],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("consume(") && code.contains(".as_ptr() as *const i8"),
+            "expected pointer-valued string argument in consume call, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("consume(&b\"ptr"),
+            "reference-to-pointer parameter lowering should not add redundant borrow for pointer-valued args, got:\n{}",
+            code
         );
     }
 
