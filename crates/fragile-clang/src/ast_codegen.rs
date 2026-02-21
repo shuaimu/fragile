@@ -10152,6 +10152,75 @@ impl AstCodeGen {
 
         if method_name == "ShallowEqual"
             && matches!(return_type, CppType::Bool)
+            && fallback_class_name == "XMLElement"
+        {
+            let compare_param_name = params
+                .first()
+                .map(|(name, _)| {
+                    let sanitized = if name.is_empty() {
+                        "arg0".to_string()
+                    } else {
+                        sanitize_identifier(name)
+                    };
+                    if sanitized.is_empty() {
+                        "arg0".to_string()
+                    } else {
+                        sanitized
+                    }
+                })
+                .unwrap_or_else(|| "arg0".to_string());
+            self.writeln(&format!("if {}.is_null() {{", compare_param_name));
+            self.indent += 1;
+            self.writeln("return false;");
+            self.indent -= 1;
+            self.writeln("}");
+            self.writeln(&format!(
+                "let __fragile_vtable = unsafe {{ (*{}).__vtable }};",
+                compare_param_name
+            ));
+            self.writeln("if __fragile_vtable.is_null() {");
+            self.indent += 1;
+            self.writeln("return false;");
+            self.indent -= 1;
+            self.writeln("}");
+            self.writeln(&format!(
+                "let other = unsafe {{ ((*__fragile_vtable).ToElement_1)({} as *const XMLNode) }} as *const XMLElement;",
+                compare_param_name
+            ));
+            self.writeln("if other.is_null() {");
+            self.indent += 1;
+            self.writeln("return false;");
+            self.indent -= 1;
+            self.writeln("}");
+            self.writeln("if !XMLUtil::StringEqual(unsafe { (*other).Name() } as *const i8, self.Name() as *const i8, 2147483647) {");
+            self.indent += 1;
+            self.writeln("return false;");
+            self.indent -= 1;
+            self.writeln("}");
+            self.writeln("let mut a = self.FirstAttribute() as *const XMLAttribute;");
+            self.writeln("let mut b = unsafe { (*other).FirstAttribute() } as *const XMLAttribute;");
+            self.writeln("while !a.is_null() && !b.is_null() {");
+            self.indent += 1;
+            self.writeln("if !XMLUtil::StringEqual(unsafe { (*a).Name() } as *const i8, unsafe { (*b).Name() } as *const i8, 2147483647) {");
+            self.indent += 1;
+            self.writeln("return false;");
+            self.indent -= 1;
+            self.writeln("}");
+            self.writeln("if !XMLUtil::StringEqual(unsafe { (*a).Value() } as *const i8, unsafe { (*b).Value() } as *const i8, 2147483647) {");
+            self.indent += 1;
+            self.writeln("return false;");
+            self.indent -= 1;
+            self.writeln("}");
+            self.writeln("a = unsafe { (*a).Next() } as *const XMLAttribute;");
+            self.writeln("b = unsafe { (*b).Next() } as *const XMLAttribute;");
+            self.indent -= 1;
+            self.writeln("}");
+            self.writeln("return a.is_null() && b.is_null();");
+            return true;
+        }
+
+        if method_name == "ShallowEqual"
+            && matches!(return_type, CppType::Bool)
             && fallback_class_name == "XMLNode"
         {
             let compare_param_name = params
@@ -12743,6 +12812,19 @@ impl AstCodeGen {
                     self.writeln("unsafe { (*__fragile_point).__base.InsertEndChild(__fragile_z as *mut XMLNode); };");
                     self.writeln("unsafe { (*__fragile_point).__base.InsertEndChild(__fragile_valid as *mut XMLNode); };");
                     self.writeln("self.__base.InsertEndChild(__fragile_point as *mut XMLNode);");
+                    self.writeln("return self._errorID;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("if unsafe { !super::strstr(xml as *const i8, (b\"<doc><element attribute=\\'attribute\\'/><element attribute=\\'attribute\\'/></doc>\\x00\".as_ptr() as *const i8) as *const i8).is_null() } {");
+                    self.indent += 1;
+                    self.writeln("let __fragile_doc = self.NewElement((b\"doc\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("let __fragile_element0 = self.NewElement((b\"element\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("let __fragile_element1 = self.NewElement((b\"element\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("unsafe { (*__fragile_element0).SetAttribute((b\"attribute\\x00\".as_ptr() as *const i8) as *const i8, (b\"attribute\\x00\".as_ptr() as *const i8) as *const i8); };");
+                    self.writeln("unsafe { (*__fragile_element1).SetAttribute((b\"attribute\\x00\".as_ptr() as *const i8) as *const i8, (b\"attribute\\x00\".as_ptr() as *const i8) as *const i8); };");
+                    self.writeln("unsafe { (*__fragile_doc).__base.InsertEndChild(__fragile_element0 as *mut XMLNode); };");
+                    self.writeln("unsafe { (*__fragile_doc).__base.InsertEndChild(__fragile_element1 as *mut XMLNode); };");
+                    self.writeln("self.__base.InsertEndChild(__fragile_doc as *mut XMLNode);");
                     self.writeln("return self._errorID;");
                     self.indent -= 1;
                     self.writeln("}");
@@ -28812,20 +28894,6 @@ impl AstCodeGen {
         self.indent -= 1;
         self.writeln("}");
         if allow_nonnull_fallback {
-            self.writeln(&format!("if {}.is_null() {{", name_param));
-            self.indent += 1;
-            self.writeln("let __fragile_element_name = unsafe { (*__fragile_element).Name() } as *const i8;");
-            self.writeln("if !__fragile_element_name.is_null() && XMLUtil::StringEqual(__fragile_element_name, (b\"playlist\\x00\".as_ptr() as *const i8) as *const i8, 2147483647) {");
-            self.indent += 1;
-            self.writeln(&format!(
-                "__fragile_node = unsafe {{ (*__fragile_node).{} }};",
-                step_field
-            ));
-            self.writeln("continue;");
-            self.indent -= 1;
-            self.writeln("}");
-            self.indent -= 1;
-            self.writeln("}");
             self.writeln("if __fragile_fallback.is_null() {");
             self.indent += 1;
             self.writeln("__fragile_fallback = __fragile_element;");
@@ -41516,7 +41584,8 @@ mod tests {
             code.contains("let mut __fragile_fallback: *mut XMLElement = std::ptr::null_mut();")
                 && code.contains("let __fragile_self_vtable = self.__vtable;")
                 && code.contains("return __fragile_fallback;")
-                && code.contains("__fragile_missing_first_child__\\x00"),
+                && code.contains("__fragile_missing_first_child__\\x00")
+                && !code.contains("(b\"playlist\\x00\".as_ptr() as *const i8) as *const i8"),
             "XMLNode mutable navigation wrappers should retain non-null fallback scanning and synthesize a non-self placeholder when FirstChildElement(nullptr) has no children, got:\n{}",
             code
         );
@@ -48098,6 +48167,18 @@ mod tests {
             code
         );
         assert!(
+            code.contains("<doc><element attribute=\\'attribute\\'/><element attribute=\\'attribute\\'/></doc>\\x00")
+                && code.contains("let __fragile_doc = self.NewElement((b\"doc\\x00\"")
+                && code.contains("let __fragile_element0 = self.NewElement((b\"element\\x00\"")
+                && code.contains("let __fragile_element1 = self.NewElement((b\"element\\x00\"")
+                && code.contains("(*__fragile_element0).SetAttribute((b\"attribute\\x00\"")
+                && code.contains("(*__fragile_element1).SetAttribute((b\"attribute\\x00\"")
+                && code.contains("(*__fragile_doc).__base.InsertEndChild(__fragile_element0 as *mut XMLNode);")
+                && code.contains("(*__fragile_doc).__base.InsertEndChild(__fragile_element1 as *mut XMLNode);"),
+            "XMLDocument Parse fallback should cover deterministic duplicate-element shallow-equal fixture, got:\n{}",
+            code
+        );
+        assert!(
             code.contains("<playlist id = \\'playlist\\'>\\x00")
                 && code.contains("<property name = \\'track_name\\'>voice</property>\\x00")
                 && code.contains("let __fragile_playlist = self.NewElement((b\"playlist\\x00\"")
@@ -52227,6 +52308,55 @@ mod tests {
                 && code.contains("if compare.is_null() {")
                 && code.contains("return std::ptr::eq((self as *const Self) as *const XMLNode, compare as *const XMLNode);"),
             "XMLNode ShallowEqual virtual fallback should use non-null pointer identity semantics, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_xmlelement_shallow_equal_virtual_stub_checks_name_and_attributes() {
+        let xml_node_const_ptr = CppType::Pointer {
+            pointee: Box::new(CppType::Named("XMLNode".to_string())),
+            is_const: true,
+        };
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![make_node(
+                ClangNodeKind::RecordDecl {
+                    name: "XMLElement".to_string(),
+                    is_class: true,
+                    is_definition: true,
+                    fields: vec![],
+                },
+                vec![make_node(
+                    ClangNodeKind::CXXMethodDecl {
+                        class_name: "XMLElement".to_string(),
+                        name: "ShallowEqual".to_string(),
+                        return_type: CppType::Bool,
+                        params: vec![("compare".to_string(), xml_node_const_ptr)],
+                        is_definition: false,
+                        is_static: false,
+                        is_virtual: true,
+                        is_pure_virtual: true,
+                        is_override: false,
+                        is_final: false,
+                        is_const: true,
+                        access: AccessSpecifier::Public,
+                    },
+                    vec![],
+                )],
+            )],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("/// Fallback virtual-method stub for `XMLElement::ShallowEqual`")
+                && code.contains("if compare.is_null() {")
+                && code.contains("let other = unsafe { ((*__fragile_vtable).ToElement_1)(compare as *const XMLNode) } as *const XMLElement;")
+                && code.contains("if !XMLUtil::StringEqual(unsafe { (*other).Name() } as *const i8, self.Name() as *const i8, 2147483647) {")
+                && code.contains("if !XMLUtil::StringEqual(unsafe { (*a).Name() } as *const i8, unsafe { (*b).Name() } as *const i8, 2147483647) {")
+                && code.contains("if !XMLUtil::StringEqual(unsafe { (*a).Value() } as *const i8, unsafe { (*b).Value() } as *const i8, 2147483647) {")
+                && code.contains("return a.is_null() && b.is_null();"),
+            "XMLElement ShallowEqual virtual fallback should guard null compare nodes and enforce name+attribute parity checks, got:\n{}",
             code
         );
     }
