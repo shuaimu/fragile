@@ -599,4 +599,6 @@ Run upstream-style tests through the Fragile transpiler with runtime parity:
 - [x] Parity checks are stable in CI.
   - Analysis (2026-02-22): scoped under <500 LOC by adding a deterministic tinyxml2 local-fixture parity smoke test and wiring it into the existing push/PR CI lane (`tinyxml2-smoke-parity`), while keeping heavyweight network-backed parity checks in nightly matrix jobs.
   - Evidence (`cargo test -p fragile-clang --test real_world_tinyxml2_tests test_make_test_command_subset_parity_local_fixture_success -- --nocapture && cargo test`, 2026-02-22): new tinyxml2 local parity smoke test passes and full workspace regression suite remains green.
-- [ ] No regressions introduced to zlib parity coverage.
+- [x] No regressions introduced to zlib parity coverage.
+  - Analysis (2026-02-22): scoped under <500 LOC by adding deterministic coverage-guard tests that assert zlib parity lanes remain wired in CI (`ci.yml` zlib smoke invocations) and nightly (`zlib-nightly.yml` matrix entries), preventing silent workflow drift from dropping parity coverage.
+  - Evidence (`cargo test -p fragile-clang --test real_world_zlib_tests test_ci_workflow_keeps_zlib_smoke_parity_coverage -- --nocapture && cargo test -p fragile-clang --test real_world_zlib_tests test_zlib_nightly_workflow_keeps_parity_matrix_coverage -- --nocapture && cargo test`, 2026-02-22): new workflow-coverage guards pass, zlib local parity smoke tests remain green, and full workspace regression suite passes.

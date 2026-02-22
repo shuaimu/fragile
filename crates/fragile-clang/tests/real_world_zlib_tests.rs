@@ -205,6 +205,37 @@ const ZLIB_MAKE_TEST_COMMAND_PLAN_LOG_FILES: &[&str] = &[
     "make_test_commands_manifest.txt",
 ];
 const ZLIB_MAKE_TEST_REPLAY_COMMAND_TIMEOUT_SECONDS: u64 = 15;
+const ZLIB_CI_SMOKE_REQUIRED_TEST_INVOCATIONS: &[&str] = &[
+    "test_make_test_exit_status_parity_local_fixture",
+    "test_make_test_stdout_stderr_parity_local_fixture",
+    "test_make_test_artifact_behavior_parity_local_fixture",
+];
+const ZLIB_NIGHTLY_REQUIRED_TEST_NAMES: &[&str] = &[
+    "test_real_world_zlib_required_artifacts_for_make_all_scope",
+    "test_real_world_zlib_fragile_required_link_binaries_replay",
+    "test_real_world_zlib_make_test_command_plan_generation",
+    "test_real_world_zlib_make_test_command_subset_replay",
+    "test_real_world_zlib_make_test_exit_status_parity",
+    "test_real_world_zlib_make_test_stdout_stderr_parity",
+    "test_real_world_zlib_make_test_artifact_behavior_parity",
+];
+
+fn workspace_root_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .canonicalize()
+        .expect("failed to resolve workspace root")
+}
+
+fn read_workflow_file(file_name: &str) -> Result<String, String> {
+    let workflow_path = workspace_root_dir()
+        .join(".github")
+        .join("workflows")
+        .join(file_name);
+    fs::read_to_string(&workflow_path)
+        .map_err(|e| format!("failed to read workflow {}: {}", workflow_path.display(), e))
+}
+
 fn run_git(args: &[&str], cwd: Option<&Path>) -> Result<Output, String> {
     let mut cmd = Command::new("git");
     cmd.args(args);
@@ -4366,6 +4397,40 @@ fi
         "missing 64-bit command coverage should be reported: {}",
         err
     );
+}
+
+#[test]
+fn test_ci_workflow_keeps_zlib_smoke_parity_coverage() {
+    let ci_workflow =
+        read_workflow_file("ci.yml").expect("failed to read CI workflow for zlib smoke coverage");
+    assert!(
+        ci_workflow.contains("zlib-smoke-parity"),
+        "CI workflow should keep zlib smoke parity lane"
+    );
+    for invocation in ZLIB_CI_SMOKE_REQUIRED_TEST_INVOCATIONS {
+        assert!(
+            ci_workflow.contains(invocation),
+            "CI workflow should keep zlib smoke parity invocation `{}`",
+            invocation
+        );
+    }
+}
+
+#[test]
+fn test_zlib_nightly_workflow_keeps_parity_matrix_coverage() {
+    let nightly_workflow = read_workflow_file("zlib-nightly.yml")
+        .expect("failed to read zlib nightly workflow for parity coverage");
+    assert!(
+        nightly_workflow.contains("zlib-nightly-matrix"),
+        "zlib nightly workflow should keep parity matrix job"
+    );
+    for test_name in ZLIB_NIGHTLY_REQUIRED_TEST_NAMES {
+        assert!(
+            nightly_workflow.contains(test_name),
+            "zlib nightly workflow should keep matrix entry `{}`",
+            test_name
+        );
+    }
 }
 
 #[test]
