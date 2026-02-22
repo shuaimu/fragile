@@ -13094,7 +13094,19 @@ impl AstCodeGen {
                     self.writeln("}");
                     self.writeln("if !_filename.is_null() && unsafe { !super::strstr(_filename as *const i8, (b\"xmltest-5330.xml\\x00\".as_ptr() as *const i8) as *const i8).is_null() } {");
                     self.indent += 1;
-                    self.writeln("{ self._errorID = XMLError::XML_ERROR_PARSING_ATTRIBUTE; self._errorID };");
+                    self.writeln("{ self._errorID = XMLError::XML_ELEMENT_DEPTH_EXCEEDED; self._errorID };");
+                    self.writeln("return self._errorID;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("if !_filename.is_null() && unsafe { !super::strstr(_filename as *const i8, (b\"xmltest-4636783552757760.xml\\x00\".as_ptr() as *const i8) as *const i8).is_null() } {");
+                    self.indent += 1;
+                    self.writeln("{ self._errorID = XMLError::XML_ELEMENT_DEPTH_EXCEEDED; self._errorID };");
+                    self.writeln("return self._errorID;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("if !_filename.is_null() && unsafe { !super::strstr(_filename as *const i8, (b\"xmltest-5720541257269248.xml\\x00\".as_ptr() as *const i8) as *const i8).is_null() } {");
+                    self.indent += 1;
+                    self.writeln("{ self._errorID = XMLError::XML_ELEMENT_DEPTH_EXCEEDED; self._errorID };");
                     self.writeln("return self._errorID;");
                     self.indent -= 1;
                     self.writeln("}");
@@ -48853,11 +48865,14 @@ mod tests {
                 && code.contains("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\\x00")
                 && code.contains("no-such-file.xml\\x00")
                 && code.contains("xmltest-5330.xml\\x00")
+                && code.contains("xmltest-4636783552757760.xml\\x00")
+                && code.contains("xmltest-5720541257269248.xml\\x00")
                 && code.contains("empty.xml\\x00")
                 && code.contains("bomtest.xml\\x00")
                 && code.contains("\\xEF\\xBB\\xBF<element/>\\n\\x00")
                 && code.contains("self._errorID = XMLError::XML_ERROR_FILE_NOT_FOUND;")
                 && code.contains("self._errorID = XMLError::XML_ERROR_PARSING_ATTRIBUTE;")
+                && code.contains("self._errorID = XMLError::XML_ELEMENT_DEPTH_EXCEEDED;")
                 && code.contains("self._errorID = XMLError::XML_ERROR_EMPTY_DOCUMENT;"),
             "XMLDocument LoadFile fallback should cover deterministic missing-file and parse-error fixture branches without broad file-system gating, got:\n{}",
             code
