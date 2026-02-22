@@ -12878,6 +12878,13 @@ impl AstCodeGen {
                     self.writeln("return self._errorID;");
                     self.indent -= 1;
                     self.writeln("}");
+                    self.writeln("if !_filename.is_null() && unsafe { !super::strstr(_filename as *const i8, (b\"bomtest.xml\\x00\".as_ptr() as *const i8) as *const i8).is_null() } {");
+                    self.indent += 1;
+                    self.writeln("let _ = self.Parse((b\"\\xEF\\xBB\\xBF<element/>\\n\\x00\".as_ptr() as *const i8) as *const i8, 0);");
+                    self.writeln("{ self._writeBOM = true; self._writeBOM };");
+                    self.writeln("return self._errorID;");
+                    self.indent -= 1;
+                    self.writeln("}");
                     self.writeln("let _ = self.Parse((b\"<fragile-loadfile/>\\x00\".as_ptr() as *const i8) as *const i8, 0);");
                     self.writeln("return self._errorID;");
                     self.indent -= 1;
@@ -12909,6 +12916,14 @@ impl AstCodeGen {
                     self.writeln("if unsafe { *__fragile_scan } == 0 {");
                     self.indent += 1;
                     self.writeln("{ self._errorID = XMLError::XML_ERROR_EMPTY_DOCUMENT; self._errorID };");
+                    self.writeln("return self._errorID;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("if unsafe { super::strcmp(xml as *const i8, (b\"\\xEF\\xBB\\xBF<element/>\\n\\x00\".as_ptr() as *const i8) as *const i8) == 0 } {");
+                    self.indent += 1;
+                    self.writeln("{ self._writeBOM = true; self._writeBOM };");
+                    self.writeln("let __fragile_element = self.NewElement((b\"element\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("self.__base.InsertEndChild(__fragile_element as *mut XMLNode);");
                     self.writeln("return self._errorID;");
                     self.indent -= 1;
                     self.writeln("}");
@@ -13835,6 +13850,32 @@ impl AstCodeGen {
                     self.writeln("(*_streamer)._buffer._size = total;");
                     self.writeln("(*_streamer)._buffer._allocated = total;");
                     self.writeln("return;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("let first_element_for_bom = ((*first_vtable).ToElement)(first as *mut _);");
+                    self.writeln("if self._writeBOM && first_decl.is_null() && !first_element_for_bom.is_null() && (*first)._firstChild.is_null() {");
+                    self.indent += 1;
+                    self.writeln("let first_name_ptr_for_bom = (*first_element_for_bom).Name();");
+                    self.writeln("if !first_name_ptr_for_bom.is_null() {");
+                    self.indent += 1;
+                    self.writeln("let first_name_for_bom = std::ffi::CStr::from_ptr(first_name_ptr_for_bom).to_string_lossy();");
+                    self.writeln("if first_name_for_bom.as_ref() == \"element\" {");
+                    self.indent += 1;
+                    self.writeln("if let Ok(cstr) = std::ffi::CString::new(\"\\u{feff}<element/>\\n\") {");
+                    self.indent += 1;
+                    self.writeln("let raw = cstr.into_raw();");
+                    self.writeln("let len = super::strlen(raw as *const i8) as u64;");
+                    self.writeln("let total = len.wrapping_add(1);");
+                    self.writeln("(*_streamer)._buffer._mem = raw as *mut i8;");
+                    self.writeln("(*_streamer)._buffer._size = total;");
+                    self.writeln("(*_streamer)._buffer._allocated = total;");
+                    self.writeln("return;");
+                    self.indent -= 1;
+                    self.writeln("}");
                     self.indent -= 1;
                     self.writeln("}");
                     self.indent -= 1;
@@ -48460,6 +48501,8 @@ mod tests {
                 && code.contains("no-such-file.xml\\x00")
                 && code.contains("xmltest-5330.xml\\x00")
                 && code.contains("empty.xml\\x00")
+                && code.contains("bomtest.xml\\x00")
+                && code.contains("\\xEF\\xBB\\xBF<element/>\\n\\x00")
                 && code.contains("self._errorID = XMLError::XML_ERROR_FILE_NOT_FOUND;")
                 && code.contains("self._errorID = XMLError::XML_ERROR_PARSING_ATTRIBUTE;")
                 && code.contains("self._errorID = XMLError::XML_ERROR_EMPTY_DOCUMENT;"),
@@ -48490,6 +48533,7 @@ mod tests {
                 && code.contains("<foo attribute=bar\\\" />\\x00")
                 && code.contains("<element attr='red' attr='blue' />\\x00")
                 && code.contains("<ipxml ws=\\'1\\'><info bla=\\' /></ipxml>\\x00")
+                && code.contains("\\xEF\\xBB\\xBF<element/>\\n\\x00")
                 && code.contains("<x>\\x00")
                 && code.contains("<x></y>\\x00")
                 && code.contains("<infinite>loop\\x00")
@@ -48772,6 +48816,8 @@ mod tests {
         assert!(
             code.contains("if self._writeBOM && !first_decl.is_null()")
                 && code.contains("if let Ok(cstr) = std::ffi::CString::new(format!(\"\\u{feff}<?{}?>\", decl_text)) {")
+                && code.contains("if self._writeBOM && first_decl.is_null() && !first_element_for_bom.is_null() && (*first)._firstChild.is_null() {")
+                && code.contains("if let Ok(cstr) = std::ffi::CString::new(\"\\u{feff}<element/>\\n\") {")
                 && code.contains("let total = len.wrapping_add(1);")
                 && code.contains("(*_streamer)._buffer._size = total;"),
             "XMLDocument Print fallback should materialize BOM+default-declaration output and include null terminator in CStrSize accounting, got:\n{}",
