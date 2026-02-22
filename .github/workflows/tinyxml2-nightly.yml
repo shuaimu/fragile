@@ -1,0 +1,42 @@
+name: Tinyxml2 Nightly Matrix
+
+on:
+  schedule:
+    - cron: "30 7 * * *"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  LIBCLANG_PATH: /usr/lib/x86_64-linux-gnu
+
+jobs:
+  tinyxml2-nightly-matrix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        test_name:
+          - test_real_world_tinyxml2_fixture_checkout_is_pinned
+          - test_real_world_tinyxml2_make_test_command_plan_generation
+          - test_real_world_tinyxml2_cxx_driver_xmltest_compile_manifest
+          - test_real_world_tinyxml2_fragile_xmltest_build_from_cxx_driver_plan
+          - test_real_world_tinyxml2_make_test_command_subset_replay_native
+          - test_real_world_tinyxml2_make_test_command_subset_replay_fragile
+          - test_real_world_tinyxml2_make_test_command_subset_parity
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libclang-dev llvm-dev
+
+      - name: Setup Rust stable
+        uses: dtolnay/rust-action@stable
+
+      - name: Run ignored tinyxml2 real-world matrix test
+        run: |
+          cargo test -p fragile-clang --test real_world_tinyxml2_tests ${{ matrix.test_name }} -- --ignored --nocapture

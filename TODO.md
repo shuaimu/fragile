@@ -590,7 +590,9 @@ Run upstream-style tests through the Fragile transpiler with runtime parity:
 - [x] Add parity assertions (exit code + output + generated files).
   - Analysis (2026-02-22): scoped under <500 LOC by extending `real_world_tinyxml2_tests` only. Added replay-parity helpers that compare native-vs-fragile replay exit status, normalized output parity at fail-signature/summary level (`Fail` count + stderr stream), and generated replay artifacts/manifests (`make_test_commands_manifest.txt`, `make_test_replay_manifest.txt`, and per-step replay status/stdout/stderr presence + status parity).
   - Evidence (`cargo test -p fragile-clang --test real_world_tinyxml2_tests test_real_world_tinyxml2_make_test_command_subset_parity -- --ignored --nocapture --test-threads=1 && cargo test -p fragile-clang --test real_world_tinyxml2_tests test_real_world_tinyxml2_make_test_command_subset_replay_fragile -- --ignored --nocapture --test-threads=1`, 2026-02-22): new parity test and existing fragile replay test both pass; parity assertions now cover exit code, output, and generated-file artifacts.
-- [ ] Add CI coverage (smoke or nightly based on runtime cost).
+- [x] Add CI coverage (smoke or nightly based on runtime cost).
+  - Analysis (2026-02-22): scoped under <500 LOC by adding a dedicated nightly-only tinyxml2 matrix workflow (instead of per-PR smoke) because the real-world replay/parity tests are network and toolchain heavy, while existing `ci.yml` already protects fast paths.
+  - Evidence (`cargo test` and targeted matrix command replay, 2026-02-22): full workspace suite passed; all nightly-matrix tinyxml2 ignored tests pass when run individually via `cargo test -p fragile-clang --test real_world_tinyxml2_tests <test_name> -- --ignored --nocapture --test-threads=1`.
 
 ### Phase 2 Exit Criteria
 - [x] `tinyxml2` transpiled pipeline passes target upstream test scope.
