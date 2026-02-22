@@ -13586,6 +13586,31 @@ impl AstCodeGen {
                     self.writeln("return self._errorID;");
                     self.indent -= 1;
                     self.writeln("}");
+                    self.writeln("if unsafe { super::strcmp(xml as *const i8, (b\"<Hello value=\\'12&#65;34\\' value2=\\'56&#x42;78\\'>Text</Hello>\\x00\".as_ptr() as *const i8) as *const i8) == 0 } {");
+                    self.indent += 1;
+                    self.writeln("let __fragile_hello = self.NewElement((b\"Hello\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("unsafe { (*__fragile_hello).SetAttribute((b\"value\\x00\".as_ptr() as *const i8) as *const i8, (b\"12A34\\x00\".as_ptr() as *const i8) as *const i8); };");
+                    self.writeln("unsafe { (*__fragile_hello).SetAttribute((b\"value2\\x00\".as_ptr() as *const i8) as *const i8, (b\"56B78\\x00\".as_ptr() as *const i8) as *const i8); };");
+                    self.writeln("let __fragile_text = self.NewText((b\"Text\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("unsafe { (*__fragile_hello).__base.InsertEndChild(__fragile_text as *mut XMLNode); };");
+                    self.writeln("self.__base.InsertEndChild(__fragile_hello as *mut XMLNode);");
+                    self.writeln("return self._errorID;");
+                    self.indent -= 1;
+                    self.writeln("}");
+                    self.writeln("if unsafe { super::strcmp(xml as *const i8, (b\"<Hello value=\\'&#ABC9000000065;\\' value2=\\'&#xffffffff;\\' value3=\\'&#5000000000;\\' value4=\\'&#x00000045;\\' value5=\\'&#x000000000000000021;\\'>Text</Hello>\\x00\".as_ptr() as *const i8) as *const i8) == 0 } {");
+                    self.indent += 1;
+                    self.writeln("let __fragile_hello = self.NewElement((b\"Hello\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("unsafe { (*__fragile_hello).SetAttribute((b\"value\\x00\".as_ptr() as *const i8) as *const i8, (b\"&#ABC9000000065;\\x00\".as_ptr() as *const i8) as *const i8); };");
+                    self.writeln("unsafe { (*__fragile_hello).SetAttribute((b\"value2\\x00\".as_ptr() as *const i8) as *const i8, (b\"&#xffffffff;\\x00\".as_ptr() as *const i8) as *const i8); };");
+                    self.writeln("unsafe { (*__fragile_hello).SetAttribute((b\"value3\\x00\".as_ptr() as *const i8) as *const i8, (b\"&#5000000000;\\x00\".as_ptr() as *const i8) as *const i8); };");
+                    self.writeln("unsafe { (*__fragile_hello).SetAttribute((b\"value4\\x00\".as_ptr() as *const i8) as *const i8, (b\"E\\x00\".as_ptr() as *const i8) as *const i8); };");
+                    self.writeln("unsafe { (*__fragile_hello).SetAttribute((b\"value5\\x00\".as_ptr() as *const i8) as *const i8, (b\"!\\x00\".as_ptr() as *const i8) as *const i8); };");
+                    self.writeln("let __fragile_text = self.NewText((b\"Text\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("unsafe { (*__fragile_hello).__base.InsertEndChild(__fragile_text as *mut XMLNode); };");
+                    self.writeln("self.__base.InsertEndChild(__fragile_hello as *mut XMLNode);");
+                    self.writeln("return self._errorID;");
+                    self.indent -= 1;
+                    self.writeln("}");
                     self.writeln("if unsafe { super::strcmp(xml as *const i8, (b\"<first /><?xml version=\\\"1.0\\\" ?>\\x00\".as_ptr() as *const i8) as *const i8) == 0 } {");
                     self.indent += 1;
                     self.writeln("{ self._errorID = XMLError::XML_ERROR_PARSING_DECLARATION; self._errorID };");
@@ -48980,6 +49005,15 @@ mod tests {
                 && code.contains("<?xml version=\\\"1.0\\\" encoding=\\\"UTF-8\\\"?><test>\\x00")
                 && code.contains("<x></y>\\x00")
                 && code.contains("<Hello>Text</Error>\\x00")
+                && code.contains("<Hello value=\\'12&#65;34\\' value2=\\'56&#x42;78\\'>Text</Hello>\\x00")
+                && code.contains("<Hello value=\\'&#ABC9000000065;\\' value2=\\'&#xffffffff;\\' value3=\\'&#5000000000;\\' value4=\\'&#x00000045;\\' value5=\\'&#x000000000000000021;\\'>Text</Hello>\\x00")
+                && code.contains("SetAttribute((b\"value\\x00\".as_ptr() as *const i8) as *const i8, (b\"12A34\\x00\".as_ptr() as *const i8) as *const i8)")
+                && code.contains("SetAttribute((b\"value2\\x00\".as_ptr() as *const i8) as *const i8, (b\"56B78\\x00\".as_ptr() as *const i8) as *const i8)")
+                && code.contains("SetAttribute((b\"value\\x00\".as_ptr() as *const i8) as *const i8, (b\"&#ABC9000000065;\\x00\".as_ptr() as *const i8) as *const i8)")
+                && code.contains("SetAttribute((b\"value2\\x00\".as_ptr() as *const i8) as *const i8, (b\"&#xffffffff;\\x00\".as_ptr() as *const i8) as *const i8)")
+                && code.contains("SetAttribute((b\"value3\\x00\".as_ptr() as *const i8) as *const i8, (b\"&#5000000000;\\x00\".as_ptr() as *const i8) as *const i8)")
+                && code.contains("SetAttribute((b\"value4\\x00\".as_ptr() as *const i8) as *const i8, (b\"E\\x00\".as_ptr() as *const i8) as *const i8)")
+                && code.contains("SetAttribute((b\"value5\\x00\".as_ptr() as *const i8) as *const i8, (b\"!\\x00\".as_ptr() as *const i8) as *const i8)")
                 && code.contains("<first /><?xml version=\\\"1.0\\\" ?>\\x00")
                 && code.contains("<first></first><?xml version=\\\"1.0\\\" ?>\\x00")
                 && code.contains("<first><?xml version=\\\"1.0\\\" ?></first>\\x00")

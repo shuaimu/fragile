@@ -3361,16 +3361,10 @@ fn test_real_world_tinyxml2_make_test_command_subset_replay_native() {
 }
 
 #[test]
-#[ignore = "real-world external project test (captures current tinyxml2 fragile replay runtime blocker)"]
+#[ignore = "real-world external project test (replays tinyxml2 make-test command subset in fragile flow)"]
 fn test_real_world_tinyxml2_make_test_command_subset_replay_fragile() {
-    let err = run_tinyxml2_make_test_command_replay_fragile()
-        .expect_err("fragile replay is expected to fail at command 1 until runtime blocker is resolved");
-    assert!(
-        err.contains("make-test command replay failed at command 1 with status 7"),
-        "expected command-1 non-crashing blocker message, got: {}",
-        err
-    );
-    let log_dir = PathBuf::from(TINYXML2_MAKE_TEST_REPLAY_FRAGILE_DIR).join("replay_logs");
+    let log_dir = run_tinyxml2_make_test_command_replay_fragile()
+        .expect("fragile replay should succeed for command subset");
     for rel in TINYXML2_MAKE_TEST_COMMAND_PLAN_LOG_FILES {
         assert!(
             log_dir.join(rel).exists(),
@@ -3394,26 +3388,22 @@ fn test_real_world_tinyxml2_make_test_command_subset_replay_fragile() {
     assert_eq!(
         read_status_file(&log_dir.join("make_test_replay_01.status"))
             .expect("failed to read make_test_replay_01.status"),
-        7,
-        "current blocker should surface as non-crashing status 7 on replay command 1"
+        0,
+        "replay command 1 should succeed"
     );
     let replay_stderr = fs::read_to_string(log_dir.join("make_test_replay_01.stderr"))
         .expect("failed to read make_test_replay_01.stderr");
     assert!(
-        !replay_stderr.contains("Segmentation fault"),
-        "command-1 blocker should be non-crashing; got stderr:\n{}",
+        replay_stderr.trim().is_empty(),
+        "replay stderr should be empty after parity fix; got:\n{}",
         replay_stderr
     );
     let replay_stdout = fs::read_to_string(log_dir.join("make_test_replay_01.stdout"))
         .expect("failed to read make_test_replay_01.stdout");
     let fail_lines = collect_fail_lines(&replay_stdout);
     assert!(
-        !fail_lines.is_empty(),
-        "expected deterministic fail signatures in replay stdout"
-    );
-    assert!(
-        fail_lines[0].starts_with("[fail] Test decimal value [(null)][12A34]"),
-        "unexpected first fail signature; got:\n{}",
+        fail_lines.is_empty(),
+        "expected no failing signatures in replay stdout, got:\n{}",
         replay_stdout
     );
     assert!(
@@ -4002,7 +3992,7 @@ fn test_real_world_tinyxml2_make_test_command_subset_replay_fragile() {
         replay_stdout
     );
     assert!(
-        replay_stdout.contains("Pass 457, Fail 7"),
+        replay_stdout.contains("Pass 464, Fail 0"),
         "current blocker signature should report failing xmltest parity count, got:\n{}",
         replay_stdout
     );
