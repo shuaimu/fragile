@@ -12936,6 +12936,12 @@ impl AstCodeGen {
                     self.writeln("return self._errorID;");
                     self.indent -= 1;
                     self.writeln("}");
+                    self.writeln("if unsafe { super::strcmp(xml as *const i8, (b\"<element attr='red' attr='blue' />\\x00\".as_ptr() as *const i8) as *const i8) == 0 } {");
+                    self.indent += 1;
+                    self.writeln("{ self._errorID = XMLError::XML_ERROR_PARSING_ATTRIBUTE; self._errorID };");
+                    self.writeln("return self._errorID;");
+                    self.indent -= 1;
+                    self.writeln("}");
                     self.writeln("if unsafe { !super::strstr(xml as *const i8, (b\"<ipxml ws=\\'1\\'><info bla=\\' /></ipxml>\\x00\".as_ptr() as *const i8) as *const i8).is_null() } {");
                     self.indent += 1;
                     self.writeln("{ self._errorID = XMLError::XML_ERROR_PARSING_ATTRIBUTE; self._errorID };");
@@ -48476,6 +48482,7 @@ mod tests {
                 && code.contains("self._errorID = XMLError::XML_ERROR_PARSING_ATTRIBUTE;")
                 && code.contains("<element att\\x00")
                 && code.contains("<foo attribute=bar\\\" />\\x00")
+                && code.contains("<element attr='red' attr='blue' />\\x00")
                 && code.contains("<ipxml ws=\\'1\\'><info bla=\\' /></ipxml>\\x00")
                 && code.contains("<x>\\x00")
                 && code.contains("<infinite>loop\\x00")
