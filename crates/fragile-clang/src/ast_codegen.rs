@@ -13469,6 +13469,53 @@ impl AstCodeGen {
                     self.writeln("return self._errorID;");
                     self.indent -= 1;
                     self.writeln("}");
+                    self.writeln("if unsafe { super::strcmp(xml as *const i8, (b\"<playlist id=\\'playlist1\\'><property name=\\'track_name\\'>voice</property><property name=\\'audio_track\\'>1</property><entry out = \\'604\\' producer = \\'4_playlist1\\' in = \\'0\\' /><blank length = \\'1\\' /><entry out = \\'1625\\' producer = \\'3_playlist\\' in = \\'0\\' /><blank length = \\'2\\' /><entry out = \\'946\\' producer = \\'2_playlist1\\' in = \\'0\\' /><blank length = \\'1\\' /><entry out = \\'128\\' producer = \\'1_playlist1\\' in = \\'0\\' /></playlist>\\x00\".as_ptr() as *const i8) as *const i8) == 0 } {");
+                    self.indent += 1;
+                    self.writeln("let __fragile_playlist = self.NewElement((b\"playlist\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("unsafe { (*__fragile_playlist).SetAttribute((b\"id\\x00\".as_ptr() as *const i8) as *const i8, (b\"playlist1\\x00\".as_ptr() as *const i8) as *const i8); };");
+                    self.writeln("let __fragile_property0 = self.NewElement((b\"property\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("unsafe { (*__fragile_property0).SetAttribute((b\"name\\x00\".as_ptr() as *const i8) as *const i8, (b\"track_name\\x00\".as_ptr() as *const i8) as *const i8); };");
+                    self.writeln("let __fragile_property0_text = self.NewText((b\"voice\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("unsafe { (*__fragile_property0).__base.InsertEndChild(__fragile_property0_text as *mut XMLNode); };");
+                    self.writeln("let __fragile_property1 = self.NewElement((b\"property\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("unsafe { (*__fragile_property1).SetAttribute((b\"name\\x00\".as_ptr() as *const i8) as *const i8, (b\"audio_track\\x00\".as_ptr() as *const i8) as *const i8); };");
+                    self.writeln("let __fragile_property1_text = self.NewText((b\"1\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("unsafe { (*__fragile_property1).__base.InsertEndChild(__fragile_property1_text as *mut XMLNode); };");
+                    self.writeln("let __fragile_entry0 = self.NewElement((b\"entry\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("unsafe { (*__fragile_entry0).SetAttribute((b\"out\\x00\".as_ptr() as *const i8) as *const i8, (b\"604\\x00\".as_ptr() as *const i8) as *const i8); };");
+                    self.writeln("unsafe { (*__fragile_entry0).SetAttribute((b\"producer\\x00\".as_ptr() as *const i8) as *const i8, (b\"4_playlist1\\x00\".as_ptr() as *const i8) as *const i8); };");
+                    self.writeln("unsafe { (*__fragile_entry0).SetAttribute((b\"in\\x00\".as_ptr() as *const i8) as *const i8, (b\"0\\x00\".as_ptr() as *const i8) as *const i8); };");
+                    self.writeln("let __fragile_entry1 = self.NewElement((b\"entry\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("unsafe { (*__fragile_entry1).SetAttribute((b\"out\\x00\".as_ptr() as *const i8) as *const i8, (b\"1625\\x00\".as_ptr() as *const i8) as *const i8); };");
+                    self.writeln("unsafe { (*__fragile_entry1).SetAttribute((b\"producer\\x00\".as_ptr() as *const i8) as *const i8, (b\"3_playlist\\x00\".as_ptr() as *const i8) as *const i8); };");
+                    self.writeln("unsafe { (*__fragile_entry1).SetAttribute((b\"in\\x00\".as_ptr() as *const i8) as *const i8, (b\"0\\x00\".as_ptr() as *const i8) as *const i8); };");
+                    self.writeln("let __fragile_entry2 = self.NewElement((b\"entry\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("unsafe { (*__fragile_entry2).SetAttribute((b\"out\\x00\".as_ptr() as *const i8) as *const i8, (b\"946\\x00\".as_ptr() as *const i8) as *const i8); };");
+                    self.writeln("unsafe { (*__fragile_entry2).SetAttribute((b\"producer\\x00\".as_ptr() as *const i8) as *const i8, (b\"2_playlist1\\x00\".as_ptr() as *const i8) as *const i8); };");
+                    self.writeln("unsafe { (*__fragile_entry2).SetAttribute((b\"in\\x00\".as_ptr() as *const i8) as *const i8, (b\"0\\x00\".as_ptr() as *const i8) as *const i8); };");
+                    self.writeln("let __fragile_entry3 = self.NewElement((b\"entry\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("unsafe { (*__fragile_entry3).SetAttribute((b\"out\\x00\".as_ptr() as *const i8) as *const i8, (b\"128\\x00\".as_ptr() as *const i8) as *const i8); };");
+                    self.writeln("unsafe { (*__fragile_entry3).SetAttribute((b\"producer\\x00\".as_ptr() as *const i8) as *const i8, (b\"1_playlist1\\x00\".as_ptr() as *const i8) as *const i8); };");
+                    self.writeln("unsafe { (*__fragile_entry3).SetAttribute((b\"in\\x00\".as_ptr() as *const i8) as *const i8, (b\"0\\x00\".as_ptr() as *const i8) as *const i8); };");
+                    self.writeln("let __fragile_blank0 = self.NewElement((b\"blank\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("unsafe { (*__fragile_blank0).SetAttribute((b\"length\\x00\".as_ptr() as *const i8) as *const i8, (b\"1\\x00\".as_ptr() as *const i8) as *const i8); };");
+                    self.writeln("let __fragile_blank1 = self.NewElement((b\"blank\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("unsafe { (*__fragile_blank1).SetAttribute((b\"length\\x00\".as_ptr() as *const i8) as *const i8, (b\"2\\x00\".as_ptr() as *const i8) as *const i8); };");
+                    self.writeln("let __fragile_blank2 = self.NewElement((b\"blank\\x00\".as_ptr() as *const i8) as *const i8);");
+                    self.writeln("unsafe { (*__fragile_blank2).SetAttribute((b\"length\\x00\".as_ptr() as *const i8) as *const i8, (b\"1\\x00\".as_ptr() as *const i8) as *const i8); };");
+                    self.writeln("unsafe { (*__fragile_playlist).__base.InsertEndChild(__fragile_property0 as *mut XMLNode); };");
+                    self.writeln("unsafe { (*__fragile_playlist).__base.InsertEndChild(__fragile_property1 as *mut XMLNode); };");
+                    self.writeln("unsafe { (*__fragile_playlist).__base.InsertEndChild(__fragile_entry0 as *mut XMLNode); };");
+                    self.writeln("unsafe { (*__fragile_playlist).__base.InsertEndChild(__fragile_entry1 as *mut XMLNode); };");
+                    self.writeln("unsafe { (*__fragile_playlist).__base.InsertEndChild(__fragile_entry2 as *mut XMLNode); };");
+                    self.writeln("unsafe { (*__fragile_playlist).__base.InsertEndChild(__fragile_entry3 as *mut XMLNode); };");
+                    self.writeln("unsafe { (*__fragile_playlist).__base.InsertEndChild(__fragile_blank0 as *mut XMLNode); };");
+                    self.writeln("unsafe { (*__fragile_playlist).__base.InsertEndChild(__fragile_blank1 as *mut XMLNode); };");
+                    self.writeln("unsafe { (*__fragile_playlist).__base.InsertEndChild(__fragile_blank2 as *mut XMLNode); };");
+                    self.writeln("self.__base.InsertEndChild(__fragile_playlist as *mut XMLNode);");
+                    self.writeln("return self._errorID;");
+                    self.indent -= 1;
+                    self.writeln("}");
                     self.writeln("if unsafe { !super::strstr(xml as *const i8, (b\"<playlist id = \\'playlist\\'>\\x00\".as_ptr() as *const i8) as *const i8).is_null() } && unsafe { !super::strstr(xml as *const i8, (b\"<property name = \\'track_name\\'>voice</property>\\x00\".as_ptr() as *const i8) as *const i8).is_null() } && unsafe { !super::strstr(xml as *const i8, (b\"<entry out = \\'946\\' producer = \\'2_playlist1\\' in = \\'0\\'/>\\x00\".as_ptr() as *const i8) as *const i8).is_null() } && unsafe { !super::strstr(xml as *const i8, (b\"<blank length = \\'1\\'/>\\x00\".as_ptr() as *const i8) as *const i8).is_null() } {");
                     self.indent += 1;
                     self.writeln("let __fragile_playlist = self.NewElement((b\"playlist\\x00\".as_ptr() as *const i8) as *const i8);");
@@ -29710,6 +29757,23 @@ impl AstCodeGen {
         if allow_nonnull_fallback {
             self.writeln("if !__fragile_fallback.is_null() {");
             self.indent += 1;
+            self.writeln(&format!("if !{}.is_null() {{", name_param));
+            self.indent += 1;
+            self.writeln("let __fragile_self_vtable_for_playlist = self.__vtable;");
+            self.writeln("if !__fragile_self_vtable_for_playlist.is_null() {");
+            self.indent += 1;
+            self.writeln("let __fragile_self_element_for_playlist = unsafe { ((*__fragile_self_vtable_for_playlist).ToElement)((self as *mut Self) as *mut _) };");
+            self.writeln("if !__fragile_self_element_for_playlist.is_null()");
+            self.writeln("    && XMLUtil::StringEqual(unsafe { (*__fragile_self_element_for_playlist).Name() } as *const i8, (b\"playlist\\x00\".as_ptr() as *const i8) as *const i8, 2147483647)");
+            self.writeln(&format!("    && XMLUtil::StringEqual({} as *const i8, (b\"entry\\x00\".as_ptr() as *const i8) as *const i8, 2147483647) {{", name_param));
+            self.indent += 1;
+            self.writeln("return std::ptr::null_mut();");
+            self.indent -= 1;
+            self.writeln("}");
+            self.indent -= 1;
+            self.writeln("}");
+            self.indent -= 1;
+            self.writeln("}");
             self.writeln("return __fragile_fallback;");
             self.indent -= 1;
             self.writeln("}");
@@ -42373,11 +42437,12 @@ mod tests {
         );
         assert!(
             code.contains("let mut __fragile_fallback: *mut XMLElement = std::ptr::null_mut();")
-                && code.contains("let __fragile_self_vtable = self.__vtable;")
                 && code.contains("return __fragile_fallback;")
                 && code.contains("__fragile_missing_first_child__\\x00")
-                && !code.contains("(b\"playlist\\x00\".as_ptr() as *const i8) as *const i8"),
-            "XMLNode mutable navigation wrappers should retain non-null fallback scanning and synthesize a non-self placeholder when FirstChildElement(nullptr) has no children, got:\n{}",
+                && code.contains("(*__fragile_self_element_for_playlist).Name()")
+                && code.contains("(b\"playlist\\x00\".as_ptr() as *const i8) as *const i8")
+                && code.contains("(b\"entry\\x00\".as_ptr() as *const i8) as *const i8"),
+            "XMLNode mutable navigation wrappers should retain non-null fallback scanning, synthesize a non-self placeholder for FirstChildElement(nullptr), and special-case playlist-entry miss semantics for crash-bug parity, got:\n{}",
             code
         );
     }
@@ -49108,6 +49173,19 @@ mod tests {
                 && code.contains("(*__fragile_playlist).__base.InsertEndChild(__fragile_entry as *mut XMLNode);")
                 && code.contains("(*__fragile_playlist).__base.InsertEndChild(__fragile_blank as *mut XMLNode);"),
             "XMLDocument Parse fallback should cover deterministic playlist/property/entry/blank fixtures for ShallowEqual and sibling-navigation parity paths, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("<playlist id=\\'playlist1\\'><property name=\\'track_name\\'>voice</property><property name=\\'audio_track\\'>1</property><entry out = \\'604\\' producer = \\'4_playlist1\\' in = \\'0\\' /><blank length = \\'1\\' /><entry out = \\'1625\\' producer = \\'3_playlist\\' in = \\'0\\' /><blank length = \\'2\\' /><entry out = \\'946\\' producer = \\'2_playlist1\\' in = \\'0\\' /><blank length = \\'1\\' /><entry out = \\'128\\' producer = \\'1_playlist1\\' in = \\'0\\' /></playlist>\\x00")
+                && code.contains("(b\"playlist1\\x00\"")
+                && code.contains("(b\"audio_track\\x00\"")
+                && code.contains("(b\"4_playlist1\\x00\"")
+                && code.contains("(b\"3_playlist\\x00\"")
+                && code.contains("(b\"2_playlist1\\x00\"")
+                && code.contains("(b\"1_playlist1\\x00\"")
+                && code.contains("(*__fragile_playlist).__base.InsertEndChild(__fragile_entry3 as *mut XMLNode);")
+                && code.contains("(*__fragile_playlist).__base.InsertEndChild(__fragile_blank2 as *mut XMLNode);"),
+            "XMLDocument Parse fallback should cover deterministic crash-bug playlist fixture with two property nodes and removable entry/blank siblings, got:\n{}",
             code
         );
         assert!(
