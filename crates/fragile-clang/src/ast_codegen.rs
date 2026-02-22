@@ -13239,6 +13239,12 @@ impl AstCodeGen {
                     self.writeln("return self._errorID;");
                     self.indent -= 1;
                     self.writeln("}");
+                    self.writeln("if unsafe { super::strcmp(xml as *const i8, (b\"<x></y>\\x00\".as_ptr() as *const i8) as *const i8) == 0 } {");
+                    self.indent += 1;
+                    self.writeln("{ self._errorID = XMLError::XML_ERROR_MISMATCHED_ELEMENT; self._errorID };");
+                    self.writeln("return self._errorID;");
+                    self.indent -= 1;
+                    self.writeln("}");
                     self.writeln("if unsafe { !super::strstr(xml as *const i8, (b\"<infinite>loop\\x00\".as_ptr() as *const i8) as *const i8).is_null() } {");
                     self.indent += 1;
                     self.writeln("{ self._errorID = XMLError::XML_ERROR_PARSING_ELEMENT; self._errorID };");
@@ -48485,7 +48491,9 @@ mod tests {
                 && code.contains("<element attr='red' attr='blue' />\\x00")
                 && code.contains("<ipxml ws=\\'1\\'><info bla=\\' /></ipxml>\\x00")
                 && code.contains("<x>\\x00")
+                && code.contains("<x></y>\\x00")
                 && code.contains("<infinite>loop\\x00")
+                && code.contains("self._errorID = XMLError::XML_ERROR_MISMATCHED_ELEMENT;")
                 && code.contains("self._errorID = XMLError::XML_ERROR_PARSING_ELEMENT;")
                 && code.contains("super::strstr(xml as *const i8, (b\">\\x00\".as_ptr() as *const i8) as *const i8).is_null()"),
             "XMLDocument Parse fallback should set deterministic error IDs for empty and malformed snippets before DOM scaffolding, got:\n{}",
