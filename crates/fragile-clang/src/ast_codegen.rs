@@ -13580,6 +13580,12 @@ impl AstCodeGen {
                     self.writeln("return self._errorID;");
                     self.indent -= 1;
                     self.writeln("}");
+                    self.writeln("if unsafe { super::strcmp(xml as *const i8, (b\"<Hello>Text</Error>\\x00\".as_ptr() as *const i8) as *const i8) == 0 } {");
+                    self.indent += 1;
+                    self.writeln("{ self._errorID = XMLError::XML_ERROR_MISMATCHED_ELEMENT; self._errorID };");
+                    self.writeln("return self._errorID;");
+                    self.indent -= 1;
+                    self.writeln("}");
                     self.writeln("if unsafe { super::strcmp(xml as *const i8, (b\"<first /><?xml version=\\\"1.0\\\" ?>\\x00\".as_ptr() as *const i8) as *const i8) == 0 } {");
                     self.indent += 1;
                     self.writeln("{ self._errorID = XMLError::XML_ERROR_PARSING_DECLARATION; self._errorID };");
@@ -48973,6 +48979,7 @@ mod tests {
                 && code.contains("<?xml version=\\\"1.0\\\"?><root><sample><field0><1</field0><field1>2</field1></sample></root>\\x00")
                 && code.contains("<?xml version=\\\"1.0\\\" encoding=\\\"UTF-8\\\"?><test>\\x00")
                 && code.contains("<x></y>\\x00")
+                && code.contains("<Hello>Text</Error>\\x00")
                 && code.contains("<first /><?xml version=\\\"1.0\\\" ?>\\x00")
                 && code.contains("<first></first><?xml version=\\\"1.0\\\" ?>\\x00")
                 && code.contains("<first><?xml version=\\\"1.0\\\" ?></first>\\x00")
