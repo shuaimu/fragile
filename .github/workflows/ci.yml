@@ -91,3 +91,23 @@ jobs:
         cargo test -p fragile-clang --test real_world_zlib_tests test_make_test_exit_status_parity_local_fixture -- --nocapture
         cargo test -p fragile-clang --test real_world_zlib_tests test_make_test_stdout_stderr_parity_local_fixture -- --nocapture
         cargo test -p fragile-clang --test real_world_zlib_tests test_make_test_artifact_behavior_parity_local_fixture -- --nocapture
+
+  # Deterministic tinyxml2 parity smoke lane (local fixture only)
+  tinyxml2-smoke-parity:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: recursive
+
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libclang-dev llvm-dev
+
+    - name: Setup Rust stable
+      uses: dtolnay/rust-action@stable
+
+    - name: Run tinyxml2 parity smoke test (local fixture)
+      run: |
+        cargo test -p fragile-clang --test real_world_tinyxml2_tests test_make_test_command_subset_parity_local_fixture_success -- --nocapture

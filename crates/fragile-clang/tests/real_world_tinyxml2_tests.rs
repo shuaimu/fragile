@@ -2378,6 +2378,67 @@ fn assert_make_test_stdout_stderr_parity(
     Ok(())
 }
 
+fn assert_make_test_stream_output_parity_without_summary(
+    native_log_dir: &Path,
+    replay_log_dir: &Path,
+) -> Result<(), String> {
+    let native_manifest_path = native_log_dir.join("make_test_commands_manifest.txt");
+    let native_manifest = fs::read_to_string(&native_manifest_path)
+        .map_err(|e| format!("failed to read {}: {}", native_manifest_path.display(), e))?;
+    let native_commands = parse_make_test_commands_manifest_entries(&native_manifest)?;
+
+    let replay_manifest_path = replay_log_dir.join("make_test_commands_manifest.txt");
+    let replay_manifest = fs::read_to_string(&replay_manifest_path)
+        .map_err(|e| format!("failed to read {}: {}", replay_manifest_path.display(), e))?;
+    let replay_commands = parse_make_test_commands_manifest_entries(&replay_manifest)?;
+
+    if native_commands != replay_commands {
+        return Err(format!(
+            "stream parity command-plan mismatch: native command_count={} fragile command_count={} (native logs: {}, replay logs: {})",
+            native_commands.len(),
+            replay_commands.len(),
+            native_log_dir.display(),
+            replay_log_dir.display()
+        ));
+    }
+
+    let path_filters = collect_make_test_output_path_filters(native_log_dir, replay_log_dir)?;
+
+    let native_stdout = normalize_output_text_for_parity(
+        &read_make_test_replay_stream_output(native_log_dir, "stdout")?,
+        &path_filters,
+    );
+    let replay_stdout = normalize_output_text_for_parity(
+        &read_make_test_replay_stream_output(replay_log_dir, "stdout")?,
+        &path_filters,
+    );
+    let native_stderr = normalize_output_text_for_parity(
+        &read_make_test_replay_stream_output(native_log_dir, "stderr")?,
+        &path_filters,
+    );
+    let replay_stderr = normalize_output_text_for_parity(
+        &read_make_test_replay_stream_output(replay_log_dir, "stderr")?,
+        &path_filters,
+    );
+
+    if native_stdout != replay_stdout {
+        return Err(format!(
+            "stream parity mismatch: stdout streams differ after normalization (native logs: {}, replay logs: {})",
+            native_log_dir.display(),
+            replay_log_dir.display()
+        ));
+    }
+    if native_stderr != replay_stderr {
+        return Err(format!(
+            "stream parity mismatch: stderr streams differ after normalization (native logs: {}, replay logs: {})",
+            native_log_dir.display(),
+            replay_log_dir.display()
+        ));
+    }
+
+    Ok(())
+}
+
 fn normalize_manifest_text_for_parity(manifest: &str, path_filters: &[String]) -> String {
     let mut normalized = normalize_slashes(manifest);
     for filter in path_filters {
@@ -3471,6 +3532,32 @@ fn test_make_test_command_replay_local_fixture_fragile_runner_builds_and_replays
         0,
         "fragile replay command should succeed after automatic fragile build/stage"
     );
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn test_make_test_command_subset_parity_local_fixture_success() {
+    let root = unique_temp_dir("tinyxml2_make_test_replay_parity_local_fixture");
+    fs::create_dir_all(&root).expect("failed to create test root");
+
+    let project_dir = create_local_tinyxml2_cxx_driver_project(&root)
+        .expect("failed to create local tinyxml2 CXX-driver project fixture");
+
+    let native_log_dir = root.join("replay_logs_native");
+    run_tinyxml2_native_make_test_command_replay_in_tree(&project_dir, &native_log_dir)
+        .expect("native replay runner should succeed for local fixture parity check");
+
+    let fragile_log_dir = root.join("replay_logs_fragile");
+    run_tinyxml2_fragile_make_test_command_replay_in_tree(&project_dir, &fragile_log_dir)
+        .expect("fragile replay runner should succeed for local fixture parity check");
+
+    assert_make_test_exit_status_parity(&native_log_dir, &fragile_log_dir)
+        .expect("expected local fixture native-vs-fragile replay exit statuses to match");
+    assert_make_test_stream_output_parity_without_summary(&native_log_dir, &fragile_log_dir)
+        .expect("expected local fixture native-vs-fragile replay stdout/stderr to match");
+    assert_make_test_generated_file_parity(&native_log_dir, &fragile_log_dir)
+        .expect("expected local fixture native-vs-fragile replay artifacts to match");
 
     let _ = fs::remove_dir_all(&root);
 }
