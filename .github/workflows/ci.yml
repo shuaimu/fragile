@@ -132,6 +132,7 @@ jobs:
       run: |
         cargo test -p fragile-clang --test real_world_pugixml_tests test_make_test_no_stl_local_fixture_success -- --nocapture
         cargo test -p fragile-clang --test real_world_pugixml_tests test_make_test_command_plan_local_fixture_success -- --nocapture
+        cargo test -p fragile-clang --test real_world_pugixml_tests test_fragile_pugixml_single_tu_replay_local_fixture_success -- --nocapture
 
   # Deterministic rapidjson baseline smoke lane (local fixture only)
   rapidjson-smoke-baseline:
@@ -153,3 +154,4 @@ jobs:
       run: |
         cargo test -p fragile-clang --test real_world_rapidjson_tests test_rapidjson_native_no_stl_examples_local_fixture_success -- --nocapture
         cargo test -p fragile-clang --test real_world_rapidjson_tests test_rapidjson_no_stl_command_plan_local_fixture_success -- --nocapture
+        cargo test -p fragile-clang --test real_world_rapidjson_tests test_rapidjson_fragile_condense_single_tu_replay_local_fixture_success -- --nocapture

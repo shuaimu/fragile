@@ -3,6 +3,7 @@
 //! This target focuses on no-STL runtime examples (`condense`, `pretty`) to
 //! provide deterministic next-stage development coverage.
 
+use fragile_clang::{AstCodeGen, ClangParser};
 use std::fs;
 use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
@@ -15,6 +16,8 @@ const RAPIDJSON_PINNED_COMMIT: &str = "f54b0e47a08782a6131cc3d60f94d038fa6e0a51"
 const RAPIDJSON_CACHE_DIR: &str = "/tmp/fragile_real_world_rapidjson";
 const RAPIDJSON_NATIVE_BASELINE_DIR: &str = "/tmp/fragile_real_world_rapidjson_native_baseline";
 const RAPIDJSON_COMMAND_PLAN_DIR: &str = "/tmp/fragile_real_world_rapidjson_no_stl_command_plan";
+const RAPIDJSON_FRAGILE_CONDENSE_REPLAY_DIR: &str =
+    "/tmp/fragile_real_world_rapidjson_fragile_condense_replay";
 const RAPIDJSON_REQUIRED_PATHS: &[&str] = &[
     "include/rapidjson/document.h",
     "example/condense/condense.cpp",
@@ -43,9 +46,16 @@ const RAPIDJSON_NATIVE_LOG_FILES: &[&str] = &[
     "native_baseline_manifest.txt",
 ];
 const RAPIDJSON_COMMAND_PLAN_LOG_FILES: &[&str] = &["no_stl_examples_manifest.txt"];
+const RAPIDJSON_FRAGILE_CONDENSE_REPLAY_LOG_FILES: &[&str] = &[
+    "rustc_fragile_condense.status",
+    "rustc_fragile_condense.stdout",
+    "rustc_fragile_condense.stderr",
+    "fragile_condense_replay_manifest.txt",
+];
 const RAPIDJSON_CI_SMOKE_REQUIRED_TEST_INVOCATIONS: &[&str] = &[
     "test_rapidjson_native_no_stl_examples_local_fixture_success",
     "test_rapidjson_no_stl_command_plan_local_fixture_success",
+    "test_rapidjson_fragile_condense_single_tu_replay_local_fixture_success",
 ];
 const RAPIDJSON_NIGHTLY_REQUIRED_TEST_NAMES: &[&str] = &[
     "test_real_world_rapidjson_fixture_checkout_is_pinned",
@@ -240,6 +250,14 @@ fn status_code(output: &Output) -> i32 {
     output.status.code().unwrap_or(-1)
 }
 
+fn read_status_file(path: &Path) -> Result<i32, String> {
+    let raw =
+        fs::read_to_string(path).map_err(|e| format!("failed to read {}: {}", path.display(), e))?;
+    raw.trim()
+        .parse::<i32>()
+        .map_err(|e| format!("failed to parse status file {}: {}", path.display(), e))
+}
+
 fn write_command_capture(log_dir: &Path, step: &str, output: &Output) -> Result<(), String> {
     fs::create_dir_all(log_dir)
         .map_err(|e| format!("failed to create log dir {}: {}", log_dir.display(), e))?;
@@ -295,6 +313,46 @@ fn compile_example(
     }
 
     Ok(())
+}
+
+fn compile_transpiled_rust_lib(
+    transpiled_rs: &Path,
+    output_rlib: &Path,
+    log_dir: &Path,
+    step_name: &str,
+) -> Result<(), String> {
+    let output = Command::new("rustc")
+        .arg("--edition")
+        .arg("2021")
+        .arg("-A")
+        .arg("warnings")
+        .arg("--crate-type")
+        .arg("lib")
+        .arg(transpiled_rs)
+        .arg("-o")
+        .arg(output_rlib)
+        .output()
+        .map_err(|e| format!("failed to run rustc for {}: {}", transpiled_rs.display(), e))?;
+    write_command_capture(log_dir, step_name, &output)?;
+    if !output.status.success() {
+        return Err(format!(
+            "fragile rustc single-tu compile failed with status {} (logs: {})\nstderr:\n{}",
+            status_code(&output),
+            log_dir.display(),
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    Ok(())
+}
+
+fn transpile_rapidjson_condense_source(source_dir: &Path, source_path: &Path) -> Result<String, String> {
+    let include_paths = vec![source_dir.join("include").to_string_lossy().to_string()];
+    let parser = ClangParser::with_paths_and_defines(include_paths, Vec::new())
+        .map_err(|e| format!("failed to create parser for {}: {}", source_path.display(), e))?;
+    let ast = parser
+        .parse_file(source_path)
+        .map_err(|e| format!("failed to parse {}: {}", source_path.display(), e))?;
+    Ok(AstCodeGen::new().generate(&ast.translation_unit))
 }
 
 fn run_example_with_stdin(
@@ -428,6 +486,60 @@ fn run_no_stl_command_plan_in_tree(source_dir: &Path, log_dir: &Path) -> Result<
     })
 }
 
+fn run_fragile_condense_single_tu_replay_in_tree(source_dir: &Path, log_dir: &Path) -> Result<(), String> {
+    fs::create_dir_all(log_dir)
+        .map_err(|e| format!("failed to create log dir {}: {}", log_dir.display(), e))?;
+
+    let source_path = source_dir.join("example/condense/condense.cpp");
+    if !source_path.exists() {
+        return Err(format!(
+            "rapidjson condense source is missing at {}",
+            source_path.display()
+        ));
+    }
+
+    let transpiled = transpile_rapidjson_condense_source(source_dir, &source_path)?;
+    let transpiled_rs = log_dir.join("fragile_condense_transpiled.rs");
+    fs::write(&transpiled_rs, transpiled)
+        .map_err(|e| format!("failed to write {}: {}", transpiled_rs.display(), e))?;
+
+    let rlib_path = log_dir.join("fragile_condense.rlib");
+    compile_transpiled_rust_lib(
+        &transpiled_rs,
+        &rlib_path,
+        log_dir,
+        "rustc_fragile_condense",
+    )?;
+
+    let object_size = fs::metadata(&rlib_path)
+        .map_err(|e| format!("failed to stat {}: {}", rlib_path.display(), e))?
+        .len();
+    if object_size == 0 {
+        return Err(format!(
+            "fragile replay output {} is empty",
+            rlib_path.display()
+        ));
+    }
+
+    let manifest = format!(
+        "source_dir={}\npinned_commit={}\nsource=example/condense/condense.cpp\ntranspiled={}\noutput={}\noutput_size={}\n",
+        source_dir.display(),
+        RAPIDJSON_PINNED_COMMIT,
+        transpiled_rs.display(),
+        rlib_path.display(),
+        object_size
+    );
+    fs::write(log_dir.join("fragile_condense_replay_manifest.txt"), manifest).map_err(|e| {
+        format!(
+            "failed to write fragile_condense_replay_manifest.txt in {}: {}",
+            log_dir.display(),
+            e
+        )
+    })?;
+
+    Ok(())
+}
+
 fn run_rapidjson_native_baseline() -> Result<PathBuf, String> {
     let checkout_dir = ensure_rapidjson_checkout()?;
     let baseline_root = PathBuf::from(RAPIDJSON_NATIVE_BASELINE_DIR);
@@ -499,6 +611,43 @@ fn run_rapidjson_no_stl_command_plan() -> Result<PathBuf, String> {
 
     let log_dir = baseline_root.join("command_plan_logs");
     run_no_stl_command_plan_in_tree(&worktree_dir, &log_dir)?;
+    Ok(log_dir)
+}
+
+fn run_rapidjson_fragile_condense_single_tu_replay() -> Result<PathBuf, String> {
+    let checkout_dir = ensure_rapidjson_checkout()?;
+    let baseline_root = PathBuf::from(RAPIDJSON_FRAGILE_CONDENSE_REPLAY_DIR);
+    reset_dir(&baseline_root)?;
+
+    let worktree_dir = baseline_root.join("worktree");
+    let checkout_dir_str = checkout_dir.to_string_lossy().to_string();
+    let worktree_dir_str = worktree_dir.to_string_lossy().to_string();
+    run_git(
+        &[
+            "clone",
+            "--no-tags",
+            "--local",
+            checkout_dir_str.as_str(),
+            worktree_dir_str.as_str(),
+        ],
+        None,
+    )?;
+    run_git(
+        &["checkout", "--detach", RAPIDJSON_PINNED_COMMIT],
+        Some(&worktree_dir),
+    )?;
+
+    let actual_head = read_head(&worktree_dir)
+        .ok_or_else(|| format!("failed to read HEAD in {}", worktree_dir.display()))?;
+    if actual_head != RAPIDJSON_PINNED_COMMIT {
+        return Err(format!(
+            "fragile replay worktree expected commit {} but got {}",
+            RAPIDJSON_PINNED_COMMIT, actual_head
+        ));
+    }
+
+    let log_dir = baseline_root.join("replay_logs");
+    run_fragile_condense_single_tu_replay_in_tree(&worktree_dir, &log_dir)?;
     Ok(log_dir)
 }
 
@@ -675,6 +824,43 @@ fn test_rapidjson_no_stl_command_plan_local_fixture_success() {
 }
 
 #[test]
+fn test_rapidjson_fragile_condense_single_tu_replay_local_fixture_success() {
+    let root = unique_temp_dir("rapidjson_fragile_single_tu_local_success");
+    fs::create_dir_all(&root).expect("failed to create test root");
+
+    let (repo_url, pinned_commit, _newer_commit) = create_local_rapidjson_like_repo(&root)
+        .expect("failed to create local rapidjson-like repo");
+    let checkout_dir = root.join("checkout");
+    ensure_pinned_checkout(
+        repo_url.as_str(),
+        &checkout_dir,
+        pinned_commit.as_str(),
+        RAPIDJSON_REQUIRED_PATHS,
+    )
+    .expect("checkout should be prepared");
+
+    let log_dir = root.join("replay_logs");
+    run_fragile_condense_single_tu_replay_in_tree(&checkout_dir, &log_dir)
+        .expect("local fragile condense single-tu replay should succeed");
+
+    for rel in RAPIDJSON_FRAGILE_CONDENSE_REPLAY_LOG_FILES {
+        assert!(
+            log_dir.join(rel).exists(),
+            "expected replay log file {}",
+            log_dir.join(rel).display()
+        );
+    }
+    assert_eq!(
+        read_status_file(&log_dir.join("rustc_fragile_condense.status"))
+            .expect("failed to read rustc_fragile_condense.status"),
+        0,
+        "local single-tu replay rustc status should be zero"
+    );
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
 fn test_ci_workflow_keeps_rapidjson_smoke_coverage() {
     let ci_workflow = read_workflow_file("ci.yml")
         .expect("failed to read CI workflow for rapidjson smoke coverage");
@@ -790,4 +976,38 @@ fn test_real_world_rapidjson_no_stl_command_plan_generation() {
         "manifest should include no-stl command-plan coverage, got:\n{}",
         manifest
     );
+}
+
+#[test]
+#[ignore = "real-world external project test (replays rapidjson condense single TU through fragile)"]
+fn test_real_world_rapidjson_fragile_condense_single_tu_replay() {
+    match run_rapidjson_fragile_condense_single_tu_replay() {
+        Ok(log_dir) => {
+            for rel in RAPIDJSON_FRAGILE_CONDENSE_REPLAY_LOG_FILES {
+                assert!(
+                    log_dir.join(rel).exists(),
+                    "expected replay log file {}",
+                    log_dir.join(rel).display()
+                );
+            }
+            assert_eq!(
+                read_status_file(&log_dir.join("rustc_fragile_condense.status"))
+                    .expect("failed to read rustc_fragile_condense.status"),
+                0,
+                "real-world fragile condense single-tu replay should compile when replay is unblocked"
+            );
+        }
+        Err(err) => {
+            let known_blockers = [
+                "typename Encoding::Ch",
+                "StaticAssertTypedef",
+                "failed to parse",
+            ];
+            assert!(
+                known_blockers.iter().any(|sig| err.contains(sig)),
+                "unexpected rapidjson condense replay failure signature:\n{}",
+                err
+            );
+        }
+    }
 }

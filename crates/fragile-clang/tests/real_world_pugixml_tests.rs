@@ -15,6 +15,8 @@ const PUGIXML_PINNED_COMMIT: &str = "ee86beb30e4973f5feffe3ce63bfa4fbadf72f38"; 
 const PUGIXML_CACHE_DIR: &str = "/tmp/fragile_real_world_pugixml";
 const PUGIXML_NATIVE_BASELINE_DIR: &str = "/tmp/fragile_real_world_pugixml_native_baseline";
 const PUGIXML_COMMAND_PLAN_DIR: &str = "/tmp/fragile_real_world_pugixml_make_test_command_plan";
+const PUGIXML_FRAGILE_SINGLE_TU_REPLAY_DIR: &str =
+    "/tmp/fragile_real_world_pugixml_fragile_single_tu_replay";
 const PUGIXML_REQUIRED_PATHS: &[&str] = &["src/pugixml.cpp", "src/pugixml.hpp", "tests/main.cpp", "Makefile"];
 const PUGIXML_NATIVE_LOG_FILES: &[&str] = &[
     "make_clean.status",
@@ -31,9 +33,19 @@ const PUGIXML_COMMAND_PLAN_LOG_FILES: &[&str] = &[
     "make_test_dryrun.stderr",
     "make_test_commands_manifest.txt",
 ];
+const PUGIXML_FRAGILE_SINGLE_TU_LOG_FILES: &[&str] = &[
+    "fragile_transpile_pugixml_single_tu.status",
+    "fragile_transpile_pugixml_single_tu.stdout",
+    "fragile_transpile_pugixml_single_tu.stderr",
+    "rustc_fragile_pugixml_single_tu.status",
+    "rustc_fragile_pugixml_single_tu.stdout",
+    "rustc_fragile_pugixml_single_tu.stderr",
+    "fragile_single_tu_replay_manifest.txt",
+];
 const PUGIXML_CI_SMOKE_REQUIRED_TEST_INVOCATIONS: &[&str] = &[
     "test_make_test_no_stl_local_fixture_success",
     "test_make_test_command_plan_local_fixture_success",
+    "test_fragile_pugixml_single_tu_replay_local_fixture_success",
 ];
 const PUGIXML_NIGHTLY_REQUIRED_TEST_NAMES: &[&str] = &[
     "test_real_world_pugixml_fixture_checkout_is_pinned",
@@ -228,6 +240,14 @@ fn status_code(output: &Output) -> i32 {
     output.status.code().unwrap_or(-1)
 }
 
+fn read_status_file(path: &Path) -> Result<i32, String> {
+    let raw =
+        fs::read_to_string(path).map_err(|e| format!("failed to read {}: {}", path.display(), e))?;
+    raw.trim()
+        .parse::<i32>()
+        .map_err(|e| format!("failed to parse status file {}: {}", path.display(), e))
+}
+
 fn write_command_capture(log_dir: &Path, step: &str, output: &Output) -> Result<(), String> {
     fs::create_dir_all(log_dir)
         .map_err(|e| format!("failed to create log dir {}: {}", log_dir.display(), e))?;
@@ -409,6 +429,118 @@ fn run_make_test_command_plan_in_tree(source_dir: &Path, log_dir: &Path) -> Resu
     Ok(())
 }
 
+fn compile_transpiled_rust_lib(
+    transpiled_rs: &Path,
+    output_rlib: &Path,
+    log_dir: &Path,
+    step_name: &str,
+) -> Result<(), String> {
+    let output = Command::new("rustc")
+        .arg("--edition")
+        .arg("2021")
+        .arg("-A")
+        .arg("warnings")
+        .arg("--crate-type")
+        .arg("lib")
+        .arg(transpiled_rs)
+        .arg("-o")
+        .arg(output_rlib)
+        .output()
+        .map_err(|e| format!("failed to run rustc for {}: {}", transpiled_rs.display(), e))?;
+    write_command_capture(log_dir, step_name, &output)?;
+    if !output.status.success() {
+        return Err(format!(
+            "fragile rustc single-tu compile failed with status {} (logs: {})\nstderr:\n{}",
+            status_code(&output),
+            log_dir.display(),
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    Ok(())
+}
+
+fn transpile_pugixml_single_tu_with_cli(
+    source_path: &Path,
+    transpiled_rs: &Path,
+    log_dir: &Path,
+) -> Result<(), String> {
+    let output = Command::new("cargo")
+        .arg("run")
+        .arg("-p")
+        .arg("fragile-cli")
+        .arg("--")
+        .arg("transpile")
+        .arg(source_path)
+        .arg("--output")
+        .arg(transpiled_rs)
+        .current_dir(workspace_root_dir())
+        .output()
+        .map_err(|e| format!("failed to run fragile-cli transpile for {}: {}", source_path.display(), e))?;
+    write_command_capture(log_dir, "fragile_transpile_pugixml_single_tu", &output)?;
+    if !output.status.success() {
+        return Err(format!(
+            "fragile-cli transpile failed with status {} (logs: {})\nstdout:\n{}\nstderr:\n{}",
+            status_code(&output),
+            log_dir.display(),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    Ok(())
+}
+
+fn run_fragile_single_tu_replay_in_tree(source_dir: &Path, log_dir: &Path) -> Result<(), String> {
+    fs::create_dir_all(log_dir)
+        .map_err(|e| format!("failed to create log dir {}: {}", log_dir.display(), e))?;
+
+    let source_path = source_dir.join("src/pugixml.cpp");
+    if !source_path.exists() {
+        return Err(format!(
+            "pugixml source is missing at {}",
+            source_path.display()
+        ));
+    }
+
+    let transpiled_rs = log_dir.join("fragile_pugixml_single_tu_transpiled.rs");
+    transpile_pugixml_single_tu_with_cli(&source_path, &transpiled_rs, log_dir)?;
+
+    let rlib_path = log_dir.join("fragile_pugixml_single_tu.rlib");
+    compile_transpiled_rust_lib(
+        &transpiled_rs,
+        &rlib_path,
+        log_dir,
+        "rustc_fragile_pugixml_single_tu",
+    )?;
+
+    let object_size = fs::metadata(&rlib_path)
+        .map_err(|e| format!("failed to stat {}: {}", rlib_path.display(), e))?
+        .len();
+    if object_size == 0 {
+        return Err(format!(
+            "fragile replay output {} is empty",
+            rlib_path.display()
+        ));
+    }
+
+    let manifest = format!(
+        "source_dir={}\npinned_commit={}\nsource=src/pugixml.cpp\ntranspiled={}\noutput={}\noutput_size={}\n",
+        source_dir.display(),
+        PUGIXML_PINNED_COMMIT,
+        transpiled_rs.display(),
+        rlib_path.display(),
+        object_size
+    );
+    fs::write(log_dir.join("fragile_single_tu_replay_manifest.txt"), manifest).map_err(|e| {
+        format!(
+            "failed to write fragile_single_tu_replay_manifest.txt in {}: {}",
+            log_dir.display(),
+            e
+        )
+    })?;
+
+    Ok(())
+}
+
 fn run_pugixml_native_baseline() -> Result<PathBuf, String> {
     let checkout_dir = ensure_pugixml_checkout()?;
     let baseline_root = PathBuf::from(PUGIXML_NATIVE_BASELINE_DIR);
@@ -480,6 +612,43 @@ fn run_pugixml_make_test_command_plan() -> Result<PathBuf, String> {
 
     let log_dir = baseline_root.join("command_plan_logs");
     run_make_test_command_plan_in_tree(&worktree_dir, &log_dir)?;
+    Ok(log_dir)
+}
+
+fn run_pugixml_fragile_single_tu_replay() -> Result<PathBuf, String> {
+    let checkout_dir = ensure_pugixml_checkout()?;
+    let baseline_root = PathBuf::from(PUGIXML_FRAGILE_SINGLE_TU_REPLAY_DIR);
+    reset_dir(&baseline_root)?;
+
+    let worktree_dir = baseline_root.join("worktree");
+    let checkout_dir_str = checkout_dir.to_string_lossy().to_string();
+    let worktree_dir_str = worktree_dir.to_string_lossy().to_string();
+    run_git(
+        &[
+            "clone",
+            "--no-tags",
+            "--local",
+            checkout_dir_str.as_str(),
+            worktree_dir_str.as_str(),
+        ],
+        None,
+    )?;
+    run_git(
+        &["checkout", "--detach", PUGIXML_PINNED_COMMIT],
+        Some(&worktree_dir),
+    )?;
+
+    let actual_head = read_head(&worktree_dir)
+        .ok_or_else(|| format!("failed to read HEAD in {}", worktree_dir.display()))?;
+    if actual_head != PUGIXML_PINNED_COMMIT {
+        return Err(format!(
+            "fragile replay worktree expected commit {} but got {}",
+            PUGIXML_PINNED_COMMIT, actual_head
+        ));
+    }
+
+    let log_dir = baseline_root.join("replay_logs");
+    run_fragile_single_tu_replay_in_tree(&worktree_dir, &log_dir)?;
     Ok(log_dir)
 }
 
@@ -683,6 +852,43 @@ fn test_make_test_command_plan_local_fixture_success() {
 }
 
 #[test]
+fn test_fragile_pugixml_single_tu_replay_local_fixture_success() {
+    let root = unique_temp_dir("pugixml_fragile_single_tu_local_success");
+    fs::create_dir_all(&root).expect("failed to create test root");
+
+    let (repo_url, pinned_commit, _newer_commit) =
+        create_local_pugixml_like_repo(&root).expect("failed to create local fixture repo");
+    let checkout_dir = root.join("checkout");
+    ensure_pinned_checkout(
+        repo_url.as_str(),
+        &checkout_dir,
+        pinned_commit.as_str(),
+        PUGIXML_REQUIRED_PATHS,
+    )
+    .expect("checkout should be prepared");
+
+    let log_dir = root.join("replay_logs");
+    run_fragile_single_tu_replay_in_tree(&checkout_dir, &log_dir)
+        .expect("local pugixml single-tu fragile replay should succeed");
+
+    for rel in PUGIXML_FRAGILE_SINGLE_TU_LOG_FILES {
+        assert!(
+            log_dir.join(rel).exists(),
+            "expected replay log file {}",
+            log_dir.join(rel).display()
+        );
+    }
+    assert_eq!(
+        read_status_file(&log_dir.join("rustc_fragile_pugixml_single_tu.status"))
+            .expect("failed to read rustc_fragile_pugixml_single_tu.status"),
+        0,
+        "local single-tu replay rustc status should be zero"
+    );
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
 fn test_ci_workflow_keeps_pugixml_smoke_coverage() {
     let ci_workflow =
         read_workflow_file("ci.yml").expect("failed to read CI workflow for pugixml smoke coverage");
@@ -803,4 +1009,38 @@ fn test_real_world_pugixml_make_test_command_plan_generation() {
         "command manifest should include test binary runtime command, got:\n{}",
         manifest
     );
+}
+
+#[test]
+#[ignore = "real-world external project test (replays pugixml single TU through fragile)"]
+fn test_real_world_pugixml_fragile_single_tu_replay() {
+    match run_pugixml_fragile_single_tu_replay() {
+        Ok(log_dir) => {
+            for rel in PUGIXML_FRAGILE_SINGLE_TU_LOG_FILES {
+                assert!(
+                    log_dir.join(rel).exists(),
+                    "expected replay log file {}",
+                    log_dir.join(rel).display()
+                );
+            }
+            assert_eq!(
+                read_status_file(&log_dir.join("rustc_fragile_pugixml_single_tu.status"))
+                    .expect("failed to read rustc_fragile_pugixml_single_tu.status"),
+                0,
+                "real-world pugixml single-tu replay should compile when replay is unblocked"
+            );
+        }
+        Err(err) => {
+            let known_blockers = [
+                "cast cannot be followed by a method call",
+                "expected identifier, found keyword `extern`",
+                "failed to transpile",
+            ];
+            assert!(
+                known_blockers.iter().any(|sig| err.contains(sig)),
+                "unexpected pugixml single-tu replay failure signature:\n{}",
+                err
+            );
+        }
+    }
 }
