@@ -32,7 +32,7 @@ jobs:
           sudo apt-get install -y libclang-dev llvm-dev
 
       - name: Setup Rust stable
-        uses: dtolnay/rust-action@stable
+        uses: dtolnay/rust-toolchain@stable
 
       - name: Run ignored pugixml real-world matrix test
         run: |
