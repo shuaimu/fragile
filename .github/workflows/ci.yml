@@ -16,9 +16,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
-        submodules: recursive
 
     - name: Install system dependencies
       run: |
@@ -39,9 +36,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
-        submodules: recursive
 
     - name: Install system dependencies
       run: |
@@ -62,9 +56,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
-        submodules: recursive
 
     - name: Setup Rust stable
       uses: dtolnay/rust-toolchain@stable
@@ -80,9 +71,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
-        submodules: recursive
 
     - name: Install system dependencies
       run: |
@@ -103,9 +91,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
-        submodules: recursive
 
     - name: Install system dependencies
       run: |
@@ -124,9 +109,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
-        submodules: recursive
 
     - name: Install system dependencies
       run: |
@@ -148,9 +130,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
-        submodules: recursive
 
     - name: Install system dependencies
       run: |
