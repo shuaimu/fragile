@@ -7,6 +7,7 @@ use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use std::sync::OnceLock;
 use std::thread::sleep;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -17,6 +18,8 @@ const PUGIXML_NATIVE_BASELINE_DIR: &str = "/tmp/fragile_real_world_pugixml_nativ
 const PUGIXML_COMMAND_PLAN_DIR: &str = "/tmp/fragile_real_world_pugixml_make_test_command_plan";
 const PUGIXML_FRAGILE_SINGLE_TU_REPLAY_DIR: &str =
     "/tmp/fragile_real_world_pugixml_fragile_single_tu_replay";
+const PUGIXML_FRAGILEC_DRIVER_BASELINE_DIR: &str =
+    "/tmp/fragile_real_world_pugixml_fragilec_driver_baseline";
 const PUGIXML_REQUIRED_PATHS: &[&str] = &["src/pugixml.cpp", "src/pugixml.hpp", "tests/main.cpp", "Makefile"];
 const PUGIXML_NATIVE_LOG_FILES: &[&str] = &[
     "make_clean.status",
@@ -42,15 +45,27 @@ const PUGIXML_FRAGILE_SINGLE_TU_LOG_FILES: &[&str] = &[
     "rustc_fragile_pugixml_single_tu.stderr",
     "fragile_single_tu_replay_manifest.txt",
 ];
+const PUGIXML_FRAGILEC_DRIVER_LOG_FILES: &[&str] = &[
+    "make_clean_driver.status",
+    "make_clean_driver.stdout",
+    "make_clean_driver.stderr",
+    "make_test_driver.status",
+    "make_test_driver.stdout",
+    "make_test_driver.stderr",
+    "fragilec_driver.log",
+    "fragilec_driver_manifest.txt",
+];
 const PUGIXML_CI_SMOKE_REQUIRED_TEST_INVOCATIONS: &[&str] = &[
     "test_make_test_no_stl_local_fixture_success",
     "test_make_test_command_plan_local_fixture_success",
     "test_fragile_pugixml_single_tu_replay_local_fixture_success",
+    "test_fragilec_driver_make_test_no_stl_local_fixture_success",
 ];
 const PUGIXML_NIGHTLY_REQUIRED_TEST_NAMES: &[&str] = &[
     "test_real_world_pugixml_fixture_checkout_is_pinned",
     "test_real_world_pugixml_make_test_command_plan_generation",
     "test_real_world_pugixml_native_make_test_no_stl",
+    "test_real_world_pugixml_fragilec_make_test_no_stl",
 ];
 
 fn workspace_root_dir() -> PathBuf {
@@ -58,6 +73,37 @@ fn workspace_root_dir() -> PathBuf {
         .join("../..")
         .canonicalize()
         .expect("failed to resolve workspace root")
+}
+
+fn ensure_fragilec_binary() -> Result<PathBuf, String> {
+    static BIN: OnceLock<PathBuf> = OnceLock::new();
+    if let Some(path) = BIN.get() {
+        return Ok(path.clone());
+    }
+
+    let workspace_root = workspace_root_dir();
+    let fragilec = workspace_root.join("target/debug/fragilec");
+    if !fragilec.exists() {
+        let output = Command::new("cargo")
+            .arg("build")
+            .arg("-p")
+            .arg("fragile-cli")
+            .arg("--bin")
+            .arg("fragilec")
+            .current_dir(&workspace_root)
+            .output()
+            .map_err(|e| format!("failed to build fragilec binary: {}", e))?;
+        if !output.status.success() {
+            return Err(format!(
+                "failed to build fragilec binary\nstdout:\n{}\nstderr:\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+    }
+
+    let _ = BIN.set(fragilec.clone());
+    Ok(fragilec)
 }
 
 fn read_workflow_file(file_name: &str) -> Result<String, String> {
@@ -390,6 +436,104 @@ fn run_native_baseline_in_tree(source_dir: &Path, log_dir: &Path) -> Result<(), 
     Ok(())
 }
 
+fn run_fragilec_driver_baseline_in_tree(source_dir: &Path, log_dir: &Path) -> Result<(), String> {
+    fs::create_dir_all(log_dir)
+        .map_err(|e| format!("failed to create log dir {}: {}", log_dir.display(), e))?;
+
+    let fragilec = ensure_fragilec_binary()?;
+    let fragilec_str = fragilec.to_string_lossy().to_string();
+    let driver_log = log_dir.join("fragilec_driver.log");
+    fs::write(&driver_log, "")
+        .map_err(|e| format!("failed to initialize fragilec driver log {}: {}", driver_log.display(), e))?;
+    let driver_log_str = driver_log.to_string_lossy().to_string();
+
+    let mut make_clean = Command::new("make");
+    make_clean.arg("clean").current_dir(source_dir);
+    make_clean
+        .env("CXX", fragilec_str.as_str())
+        .env("CXXLD", fragilec_str.as_str())
+        .env("LINK", fragilec_str.as_str())
+        .env("FRAGILEC_MODE", "pass")
+        .env("FRAGILEC_NATIVE_COMPILER", "c++")
+        .env("FRAGILEC_LOG", driver_log_str.as_str())
+        .env("LC_ALL", "C")
+        .env("LANG", "C")
+        .env("MAKEFLAGS", "-j1");
+    let clean_output = make_clean.output().map_err(|e| {
+        format!(
+            "failed to run fragilec-driver make clean at {}: {}",
+            source_dir.display(),
+            e
+        )
+    })?;
+    write_command_capture(log_dir, "make_clean_driver", &clean_output)?;
+    if !clean_output.status.success() {
+        return Err(format!(
+            "fragilec-driver make clean failed with status {} (logs: {})",
+            status_code(&clean_output),
+            log_dir.display()
+        ));
+    }
+
+    let mut make_test = Command::new("make");
+    make_test
+        .arg("test")
+        .arg("config=release")
+        .arg("defines=PUGIXML_NO_STL")
+        .arg("cxxstd=c++11")
+        .current_dir(source_dir);
+    make_test
+        .env("CXX", fragilec_str.as_str())
+        .env("CXXLD", fragilec_str.as_str())
+        .env("LINK", fragilec_str.as_str())
+        .env("FRAGILEC_MODE", "pass")
+        .env("FRAGILEC_NATIVE_COMPILER", "c++")
+        .env("FRAGILEC_LOG", driver_log_str.as_str())
+        .env("LC_ALL", "C")
+        .env("LANG", "C")
+        .env("MAKEFLAGS", "-j1");
+    let make_test_output = make_test.output().map_err(|e| {
+        format!(
+            "failed to run fragilec-driver make test at {}: {}",
+            source_dir.display(),
+            e
+        )
+    })?;
+    write_command_capture(log_dir, "make_test_driver", &make_test_output)?;
+    if !make_test_output.status.success() {
+        return Err(format!(
+            "fragilec-driver make test failed with status {} (logs: {})",
+            status_code(&make_test_output),
+            log_dir.display()
+        ));
+    }
+
+    let log_content = fs::read_to_string(&driver_log)
+        .map_err(|e| format!("failed to read fragilec driver log {}: {}", driver_log.display(), e))?;
+    if log_content.trim().is_empty() {
+        return Err(format!(
+            "fragilec driver log {} is empty; expected compiler invocations",
+            driver_log.display()
+        ));
+    }
+
+    let manifest = format!(
+        "source_dir={}\npinned_commit={}\nfragilec={}\nmode=pass\n",
+        source_dir.display(),
+        PUGIXML_PINNED_COMMIT,
+        fragilec.display()
+    );
+    fs::write(log_dir.join("fragilec_driver_manifest.txt"), manifest).map_err(|e| {
+        format!(
+            "failed to write fragilec_driver_manifest.txt in {}: {}",
+            log_dir.display(),
+            e
+        )
+    })?;
+
+    Ok(())
+}
+
 fn run_make_test_command_plan_in_tree(source_dir: &Path, log_dir: &Path) -> Result<(), String> {
     fs::create_dir_all(log_dir)
         .map_err(|e| format!("failed to create log dir {}: {}", log_dir.display(), e))?;
@@ -578,6 +722,43 @@ fn run_pugixml_native_baseline() -> Result<PathBuf, String> {
     Ok(log_dir)
 }
 
+fn run_pugixml_fragilec_driver_baseline() -> Result<PathBuf, String> {
+    let checkout_dir = ensure_pugixml_checkout()?;
+    let baseline_root = PathBuf::from(PUGIXML_FRAGILEC_DRIVER_BASELINE_DIR);
+    reset_dir(&baseline_root)?;
+
+    let worktree_dir = baseline_root.join("worktree");
+    let checkout_dir_str = checkout_dir.to_string_lossy().to_string();
+    let worktree_dir_str = worktree_dir.to_string_lossy().to_string();
+    run_git(
+        &[
+            "clone",
+            "--no-tags",
+            "--local",
+            checkout_dir_str.as_str(),
+            worktree_dir_str.as_str(),
+        ],
+        None,
+    )?;
+    run_git(
+        &["checkout", "--detach", PUGIXML_PINNED_COMMIT],
+        Some(&worktree_dir),
+    )?;
+
+    let actual_head = read_head(&worktree_dir)
+        .ok_or_else(|| format!("failed to read HEAD in {}", worktree_dir.display()))?;
+    if actual_head != PUGIXML_PINNED_COMMIT {
+        return Err(format!(
+            "fragilec-driver worktree expected commit {} but got {}",
+            PUGIXML_PINNED_COMMIT, actual_head
+        ));
+    }
+
+    let log_dir = baseline_root.join("driver_logs");
+    run_fragilec_driver_baseline_in_tree(&worktree_dir, &log_dir)?;
+    Ok(log_dir)
+}
+
 fn run_pugixml_make_test_command_plan() -> Result<PathBuf, String> {
     let checkout_dir = ensure_pugixml_checkout()?;
     let baseline_root = PathBuf::from(PUGIXML_COMMAND_PLAN_DIR);
@@ -681,7 +862,7 @@ fn create_local_pugixml_like_repo(base_dir: &Path) -> Result<(String, String, St
     .map_err(|e| format!("failed to write tests/main.cpp: {}", e))?;
     fs::write(
         remote_dir.join("Makefile"),
-        "test:\n\t@mkdir -p build/make-g++-release-PUGIXML_NO_STL-c++11\n\t@printf '%s\\n' '#!/bin/sh' 'echo \"Success: 7 tests passed.\"' > build/make-g++-release-PUGIXML_NO_STL-c++11/test\n\t@chmod +x build/make-g++-release-PUGIXML_NO_STL-c++11/test\n\t@./build/make-g++-release-PUGIXML_NO_STL-c++11/test\n\nclean:\n\t@rm -rf build\n",
+        "test:\n\t@mkdir -p build/make-g++-release-PUGIXML_NO_STL-c++11\n\t@printf '%s\\n' '#!/bin/sh' 'echo \"Success: 7 tests passed.\"' > build/make-g++-release-PUGIXML_NO_STL-c++11/test\n\t@chmod +x build/make-g++-release-PUGIXML_NO_STL-c++11/test\n\t@printf '%s\\n' 'int main(void) { return 0; }' > build/fragilec_driver_smoke.cpp\n\t@$(CXX) -std=c++11 build/fragilec_driver_smoke.cpp -o build/fragilec_driver_smoke\n\t@./build/make-g++-release-PUGIXML_NO_STL-c++11/test\n\nclean:\n\t@rm -rf build\n",
     )
     .map_err(|e| format!("failed to write Makefile: {}", e))?;
 
@@ -807,6 +988,50 @@ fn test_make_test_no_stl_local_fixture_success() {
             .trim(),
         "0",
         "make-test status should be zero"
+    );
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn test_fragilec_driver_make_test_no_stl_local_fixture_success() {
+    let root = unique_temp_dir("pugixml_fragilec_driver_local_success");
+    fs::create_dir_all(&root).expect("failed to create test root");
+
+    let (repo_url, pinned_commit, _newer_commit) =
+        create_local_pugixml_like_repo(&root).expect("failed to create local fixture repo");
+    let checkout_dir = root.join("checkout");
+    ensure_pinned_checkout(
+        repo_url.as_str(),
+        &checkout_dir,
+        pinned_commit.as_str(),
+        PUGIXML_REQUIRED_PATHS,
+    )
+    .expect("checkout should be prepared");
+
+    let log_dir = root.join("fragilec_driver_logs");
+    run_fragilec_driver_baseline_in_tree(&checkout_dir, &log_dir)
+        .expect("local fragilec-driver pugixml baseline should succeed");
+
+    for rel in PUGIXML_FRAGILEC_DRIVER_LOG_FILES {
+        assert!(
+            log_dir.join(rel).exists(),
+            "expected fragilec-driver log file {}",
+            log_dir.join(rel).display()
+        );
+    }
+    assert_eq!(
+        read_status_file(&log_dir.join("make_test_driver.status"))
+            .expect("failed to read make_test_driver.status"),
+        0,
+        "fragilec-driver make test status should be zero"
+    );
+    let driver_log = fs::read_to_string(log_dir.join("fragilec_driver.log"))
+        .expect("failed to read fragilec_driver.log");
+    assert!(
+        driver_log.contains("cwd=") && driver_log.contains("args="),
+        "fragilec driver log should capture compiler invocations, got:\n{}",
+        driver_log
     );
 
     let _ = fs::remove_dir_all(&root);
@@ -977,6 +1202,35 @@ fn test_real_world_pugixml_native_make_test_no_stl() {
         "manifest should record pinned commit {}, got:\n{}",
         PUGIXML_PINNED_COMMIT,
         manifest
+    );
+}
+
+#[test]
+#[ignore = "real-world external project test (builds pugixml with CXX=fragilec passthrough driver)"]
+fn test_real_world_pugixml_fragilec_make_test_no_stl() {
+    let log_dir =
+        run_pugixml_fragilec_driver_baseline().expect("failed to run pugixml fragilec-driver baseline");
+
+    for rel in PUGIXML_FRAGILEC_DRIVER_LOG_FILES {
+        assert!(
+            log_dir.join(rel).exists(),
+            "expected fragilec-driver log file {}",
+            log_dir.join(rel).display()
+        );
+    }
+
+    assert_eq!(
+        read_status_file(&log_dir.join("make_test_driver.status"))
+            .expect("failed to read make_test_driver.status"),
+        0,
+        "pugixml fragilec-driver make test should succeed"
+    );
+    let stdout = fs::read_to_string(log_dir.join("make_test_driver.stdout"))
+        .expect("failed to read make_test_driver.stdout");
+    assert!(
+        stdout.contains("Success:"),
+        "fragilec-driver make test stdout should include success summary, got:\n{}",
+        stdout
     );
 }
 

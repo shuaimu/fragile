@@ -8,6 +8,7 @@ use std::fs;
 use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
+use std::sync::OnceLock;
 use std::thread::sleep;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -18,6 +19,8 @@ const RAPIDJSON_NATIVE_BASELINE_DIR: &str = "/tmp/fragile_real_world_rapidjson_n
 const RAPIDJSON_COMMAND_PLAN_DIR: &str = "/tmp/fragile_real_world_rapidjson_no_stl_command_plan";
 const RAPIDJSON_FRAGILE_CONDENSE_REPLAY_DIR: &str =
     "/tmp/fragile_real_world_rapidjson_fragile_condense_replay";
+const RAPIDJSON_FRAGILEC_DRIVER_BASELINE_DIR: &str =
+    "/tmp/fragile_real_world_rapidjson_fragilec_driver_baseline";
 const RAPIDJSON_REQUIRED_PATHS: &[&str] = &[
     "include/rapidjson/document.h",
     "example/condense/condense.cpp",
@@ -52,15 +55,33 @@ const RAPIDJSON_FRAGILE_CONDENSE_REPLAY_LOG_FILES: &[&str] = &[
     "rustc_fragile_condense.stderr",
     "fragile_condense_replay_manifest.txt",
 ];
+const RAPIDJSON_FRAGILEC_DRIVER_LOG_FILES: &[&str] = &[
+    "compile_condense_driver.status",
+    "compile_condense_driver.stdout",
+    "compile_condense_driver.stderr",
+    "run_condense_driver.status",
+    "run_condense_driver.stdout",
+    "run_condense_driver.stderr",
+    "compile_pretty_driver.status",
+    "compile_pretty_driver.stdout",
+    "compile_pretty_driver.stderr",
+    "run_pretty_driver.status",
+    "run_pretty_driver.stdout",
+    "run_pretty_driver.stderr",
+    "fragilec_driver.log",
+    "fragilec_driver_manifest.txt",
+];
 const RAPIDJSON_CI_SMOKE_REQUIRED_TEST_INVOCATIONS: &[&str] = &[
     "test_rapidjson_native_no_stl_examples_local_fixture_success",
     "test_rapidjson_no_stl_command_plan_local_fixture_success",
     "test_rapidjson_fragile_condense_single_tu_replay_local_fixture_success",
+    "test_rapidjson_fragilec_driver_no_stl_examples_local_fixture_success",
 ];
 const RAPIDJSON_NIGHTLY_REQUIRED_TEST_NAMES: &[&str] = &[
     "test_real_world_rapidjson_fixture_checkout_is_pinned",
     "test_real_world_rapidjson_no_stl_command_plan_generation",
     "test_real_world_rapidjson_native_no_stl_examples_baseline",
+    "test_real_world_rapidjson_fragilec_native_no_stl_examples_baseline",
 ];
 
 fn workspace_root_dir() -> PathBuf {
@@ -68,6 +89,37 @@ fn workspace_root_dir() -> PathBuf {
         .join("../..")
         .canonicalize()
         .expect("failed to resolve workspace root")
+}
+
+fn ensure_fragilec_binary() -> Result<PathBuf, String> {
+    static BIN: OnceLock<PathBuf> = OnceLock::new();
+    if let Some(path) = BIN.get() {
+        return Ok(path.clone());
+    }
+
+    let workspace_root = workspace_root_dir();
+    let fragilec = workspace_root.join("target/debug/fragilec");
+    if !fragilec.exists() {
+        let output = Command::new("cargo")
+            .arg("build")
+            .arg("-p")
+            .arg("fragile-cli")
+            .arg("--bin")
+            .arg("fragilec")
+            .current_dir(&workspace_root)
+            .output()
+            .map_err(|e| format!("failed to build fragilec binary: {}", e))?;
+        if !output.status.success() {
+            return Err(format!(
+                "failed to build fragilec binary\nstdout:\n{}\nstderr:\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+    }
+
+    let _ = BIN.set(fragilec.clone());
+    Ok(fragilec)
 }
 
 fn read_workflow_file(file_name: &str) -> Result<String, String> {
@@ -458,6 +510,146 @@ fn run_native_no_stl_examples_in_tree(source_dir: &Path, log_dir: &Path) -> Resu
     Ok(())
 }
 
+fn compile_example_with_cxx_env(
+    source_dir: &Path,
+    source_rel: &str,
+    output_path: &Path,
+    log_dir: &Path,
+    step_name: &str,
+    cxx: &Path,
+    driver_log: &Path,
+) -> Result<(), String> {
+    let source_arg = source_dir.join(source_rel);
+    let output = Command::new("sh")
+        .arg("-c")
+        .arg("\"$CXX\" -std=c++11 -O2 -DNDEBUG -DRAPIDJSON_HAS_STDSTRING=0 -Iinclude \"$SRC\" -o \"$OUT\"")
+        .current_dir(source_dir)
+        .env("CXX", cxx.to_string_lossy().to_string())
+        .env("SRC", source_arg.to_string_lossy().to_string())
+        .env("OUT", output_path.to_string_lossy().to_string())
+        .env("FRAGILEC_MODE", "pass")
+        .env("FRAGILEC_NATIVE_COMPILER", "c++")
+        .env("FRAGILEC_LOG", driver_log.to_string_lossy().to_string())
+        .output()
+        .map_err(|e| {
+            format!(
+                "failed to run fragilec-driver compile for {}: {}",
+                source_arg.display(),
+                e
+            )
+        })?;
+    write_command_capture(log_dir, step_name, &output)?;
+    if !output.status.success() {
+        return Err(format!(
+            "fragilec-driver compile failed for {} with status {} (logs: {})",
+            source_rel,
+            status_code(&output),
+            log_dir.display()
+        ));
+    }
+    Ok(())
+}
+
+fn run_fragilec_driver_no_stl_examples_in_tree(source_dir: &Path, log_dir: &Path) -> Result<(), String> {
+    fs::create_dir_all(log_dir)
+        .map_err(|e| format!("failed to create log dir {}: {}", log_dir.display(), e))?;
+
+    let fragilec = ensure_fragilec_binary()?;
+    let driver_log = log_dir.join("fragilec_driver.log");
+    fs::write(&driver_log, "")
+        .map_err(|e| format!("failed to initialize fragilec driver log {}: {}", driver_log.display(), e))?;
+
+    let condense_bin = source_dir.join("condense_fragilec_driver");
+    compile_example_with_cxx_env(
+        source_dir,
+        "example/condense/condense.cpp",
+        &condense_bin,
+        log_dir,
+        "compile_condense_driver",
+        &fragilec,
+        &driver_log,
+    )?;
+    let condense_output = run_example_with_stdin(
+        &condense_bin,
+        RAPIDJSON_SAMPLE_JSON,
+        log_dir,
+        "run_condense_driver",
+    )?;
+    if !condense_output.status.success() {
+        return Err(format!(
+            "fragilec-driver condense example failed with status {} (logs: {})",
+            status_code(&condense_output),
+            log_dir.display()
+        ));
+    }
+
+    let condense_stdout = String::from_utf8_lossy(&condense_output.stdout);
+    if condense_stdout.trim() != RAPIDJSON_EXPECTED_CONDENSE_OUTPUT {
+        return Err(format!(
+            "fragilec-driver condense output mismatch: expected `{}` got `{}`",
+            RAPIDJSON_EXPECTED_CONDENSE_OUTPUT,
+            condense_stdout.trim()
+        ));
+    }
+
+    let pretty_bin = source_dir.join("pretty_fragilec_driver");
+    compile_example_with_cxx_env(
+        source_dir,
+        "example/pretty/pretty.cpp",
+        &pretty_bin,
+        log_dir,
+        "compile_pretty_driver",
+        &fragilec,
+        &driver_log,
+    )?;
+    let pretty_output =
+        run_example_with_stdin(&pretty_bin, RAPIDJSON_SAMPLE_JSON, log_dir, "run_pretty_driver")?;
+    if !pretty_output.status.success() {
+        return Err(format!(
+            "fragilec-driver pretty example failed with status {} (logs: {})",
+            status_code(&pretty_output),
+            log_dir.display()
+        ));
+    }
+
+    let pretty_stdout = String::from_utf8_lossy(&pretty_output.stdout);
+    if !(pretty_stdout.contains("\n")
+        && pretty_stdout.contains("\"msg\": \"hi\"")
+        && pretty_stdout.contains("    \"a\": 1"))
+    {
+        return Err(format!(
+            "fragilec-driver pretty output did not look pretty-formatted, got:\n{}",
+            pretty_stdout
+        ));
+    }
+
+    let driver_log_content = fs::read_to_string(&driver_log)
+        .map_err(|e| format!("failed to read fragilec driver log {}: {}", driver_log.display(), e))?;
+    if driver_log_content.trim().is_empty() {
+        return Err(format!(
+            "fragilec driver log {} is empty; expected compiler invocations",
+            driver_log.display()
+        ));
+    }
+
+    let manifest = format!(
+        "source_dir={}\npinned_commit={}\nfragilec={}\nmode=pass\nexamples_count={}\n",
+        source_dir.display(),
+        RAPIDJSON_PINNED_COMMIT,
+        fragilec.display(),
+        RAPIDJSON_NO_STL_EXAMPLES.len()
+    );
+    fs::write(log_dir.join("fragilec_driver_manifest.txt"), manifest).map_err(|e| {
+        format!(
+            "failed to write fragilec_driver_manifest.txt in {}: {}",
+            log_dir.display(),
+            e
+        )
+    })?;
+
+    Ok(())
+}
+
 fn run_no_stl_command_plan_in_tree(source_dir: &Path, log_dir: &Path) -> Result<(), String> {
     fs::create_dir_all(log_dir)
         .map_err(|e| format!("failed to create log dir {}: {}", log_dir.display(), e))?;
@@ -574,6 +766,43 @@ fn run_rapidjson_native_baseline() -> Result<PathBuf, String> {
 
     let log_dir = baseline_root.join("native_logs");
     run_native_no_stl_examples_in_tree(&worktree_dir, &log_dir)?;
+    Ok(log_dir)
+}
+
+fn run_rapidjson_fragilec_driver_baseline() -> Result<PathBuf, String> {
+    let checkout_dir = ensure_rapidjson_checkout()?;
+    let baseline_root = PathBuf::from(RAPIDJSON_FRAGILEC_DRIVER_BASELINE_DIR);
+    reset_dir(&baseline_root)?;
+
+    let worktree_dir = baseline_root.join("worktree");
+    let checkout_dir_str = checkout_dir.to_string_lossy().to_string();
+    let worktree_dir_str = worktree_dir.to_string_lossy().to_string();
+    run_git(
+        &[
+            "clone",
+            "--no-tags",
+            "--local",
+            checkout_dir_str.as_str(),
+            worktree_dir_str.as_str(),
+        ],
+        None,
+    )?;
+    run_git(
+        &["checkout", "--detach", RAPIDJSON_PINNED_COMMIT],
+        Some(&worktree_dir),
+    )?;
+
+    let actual_head = read_head(&worktree_dir)
+        .ok_or_else(|| format!("failed to read HEAD in {}", worktree_dir.display()))?;
+    if actual_head != RAPIDJSON_PINNED_COMMIT {
+        return Err(format!(
+            "fragilec-driver worktree expected commit {} but got {}",
+            RAPIDJSON_PINNED_COMMIT, actual_head
+        ));
+    }
+
+    let log_dir = baseline_root.join("driver_logs");
+    run_fragilec_driver_no_stl_examples_in_tree(&worktree_dir, &log_dir)?;
     Ok(log_dir)
 }
 
@@ -784,6 +1013,49 @@ fn test_rapidjson_native_no_stl_examples_local_fixture_success() {
 }
 
 #[test]
+fn test_rapidjson_fragilec_driver_no_stl_examples_local_fixture_success() {
+    let root = unique_temp_dir("rapidjson_fragilec_driver_local_success");
+    fs::create_dir_all(&root).expect("failed to create test root");
+
+    let (repo_url, pinned_commit, _newer_commit) = create_local_rapidjson_like_repo(&root)
+        .expect("failed to create local rapidjson-like repo");
+    let checkout_dir = root.join("checkout");
+    ensure_pinned_checkout(
+        repo_url.as_str(),
+        &checkout_dir,
+        pinned_commit.as_str(),
+        RAPIDJSON_REQUIRED_PATHS,
+    )
+    .expect("checkout should be prepared");
+
+    let log_dir = root.join("fragilec_driver_logs");
+    run_fragilec_driver_no_stl_examples_in_tree(&checkout_dir, &log_dir)
+        .expect("local rapidjson fragilec-driver baseline should succeed");
+
+    for rel in RAPIDJSON_FRAGILEC_DRIVER_LOG_FILES {
+        assert!(
+            log_dir.join(rel).exists(),
+            "expected fragilec-driver log file {}",
+            log_dir.join(rel).display()
+        );
+    }
+    assert_eq!(
+        read_status_file(&log_dir.join("compile_condense_driver.status"))
+            .expect("failed to read compile_condense_driver.status"),
+        0,
+        "fragilec-driver condense compile status should be zero"
+    );
+    assert_eq!(
+        read_status_file(&log_dir.join("compile_pretty_driver.status"))
+            .expect("failed to read compile_pretty_driver.status"),
+        0,
+        "fragilec-driver pretty compile status should be zero"
+    );
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
 fn test_rapidjson_no_stl_command_plan_local_fixture_success() {
     let root = unique_temp_dir("rapidjson_plan_local_success");
     fs::create_dir_all(&root).expect("failed to create test root");
@@ -949,6 +1221,37 @@ fn test_real_world_rapidjson_native_no_stl_examples_baseline() {
     assert!(
         pretty_stdout.contains("\"msg\": \"hi\""),
         "pretty output should preserve JSON fields, got:\n{}",
+        pretty_stdout
+    );
+}
+
+#[test]
+#[ignore = "real-world external project test (builds/runs rapidjson examples with CXX=fragilec passthrough driver)"]
+fn test_real_world_rapidjson_fragilec_native_no_stl_examples_baseline() {
+    let log_dir = run_rapidjson_fragilec_driver_baseline()
+        .expect("failed to run rapidjson fragilec-driver no-stl baseline");
+
+    for rel in RAPIDJSON_FRAGILEC_DRIVER_LOG_FILES {
+        assert!(
+            log_dir.join(rel).exists(),
+            "expected fragilec-driver log file {}",
+            log_dir.join(rel).display()
+        );
+    }
+
+    let condense_stdout = fs::read_to_string(log_dir.join("run_condense_driver.stdout"))
+        .expect("failed to read run_condense_driver.stdout");
+    assert_eq!(
+        condense_stdout.trim(),
+        RAPIDJSON_EXPECTED_CONDENSE_OUTPUT,
+        "fragilec-driver condense output should match expected compact JSON"
+    );
+
+    let pretty_stdout = fs::read_to_string(log_dir.join("run_pretty_driver.stdout"))
+        .expect("failed to read run_pretty_driver.stdout");
+    assert!(
+        pretty_stdout.contains("\"msg\": \"hi\""),
+        "fragilec-driver pretty output should preserve JSON fields, got:\n{}",
         pretty_stdout
     );
 }

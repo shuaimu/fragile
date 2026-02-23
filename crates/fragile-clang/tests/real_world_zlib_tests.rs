@@ -11,6 +11,7 @@ use std::io::ErrorKind;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Output};
+use std::sync::OnceLock;
 use std::thread::sleep;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -496,6 +497,37 @@ fn make_executable(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
+fn ensure_fragilec_binary() -> Result<PathBuf, String> {
+    static BIN: OnceLock<PathBuf> = OnceLock::new();
+    if let Some(path) = BIN.get() {
+        return Ok(path.clone());
+    }
+
+    let workspace_root = workspace_root_dir();
+    let fragilec = workspace_root.join("target/debug/fragilec");
+    if !fragilec.exists() {
+        let output = Command::new("cargo")
+            .arg("build")
+            .arg("-p")
+            .arg("fragile-cli")
+            .arg("--bin")
+            .arg("fragilec")
+            .current_dir(&workspace_root)
+            .output()
+            .map_err(|e| format!("failed to build fragilec binary: {}", e))?;
+        if !output.status.success() {
+            return Err(format!(
+                "failed to build fragilec binary\nstdout:\n{}\nstderr:\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+    }
+
+    let _ = BIN.set(fragilec.clone());
+    Ok(fragilec)
+}
+
 fn create_logging_cc_driver(driver_dir: &Path, log_path: &Path) -> Result<PathBuf, String> {
     fs::create_dir_all(driver_dir).map_err(|e| {
         format!(
@@ -504,6 +536,9 @@ fn create_logging_cc_driver(driver_dir: &Path, log_path: &Path) -> Result<PathBu
             e
         )
     })?;
+
+    let fragilec = ensure_fragilec_binary()?;
+    let fragilec_str = fragilec.to_string_lossy().to_string();
 
     let driver_path = driver_dir.join("fragile_cc_driver.sh");
     let script = r#"#!/bin/sh
@@ -519,8 +554,11 @@ fi
   printf '%s ' "$@"
   printf '\n'
 } >> "$log_file"
-exec cc "$@"
-"#;
+export FRAGILEC_MODE=pass
+export FRAGILEC_NATIVE_COMPILER=cc
+exec "__FRAGILEC__" "$@"
+"#
+    .replace("__FRAGILEC__", fragilec_str.as_str());
 
     fs::write(&driver_path, script)
         .map_err(|e| format!("failed to write cc driver {}: {}", driver_path.display(), e))?;

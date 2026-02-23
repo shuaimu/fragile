@@ -20,6 +20,7 @@ jobs:
           - test_real_world_pugixml_fixture_checkout_is_pinned
           - test_real_world_pugixml_make_test_command_plan_generation
           - test_real_world_pugixml_native_make_test_no_stl
+          - test_real_world_pugixml_fragilec_make_test_no_stl
     steps:
       - uses: actions/checkout@v4
         with:

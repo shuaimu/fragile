@@ -7,6 +7,10 @@ edition.workspace = true
 name = "fragile"
 path = "src/main.rs"
 
+[[bin]]
+name = "fragilec"
+path = "src/bin/fragilec.rs"
+
 [dependencies]
 fragile-common.workspace = true
 fragile-build.workspace = true

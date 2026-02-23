@@ -9,6 +9,7 @@ use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
+use std::sync::OnceLock;
 use std::thread::sleep;
 use std::time::Duration;
 
@@ -51,6 +52,13 @@ const XXHASH_CLI_FILES: &[&str] = &[
     "cli/xsum_os_specific.c",
     "cli/xxhsum.c",
 ];
+
+fn workspace_root_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .canonicalize()
+        .expect("failed to resolve workspace root")
+}
 
 fn run_git(args: &[&str], cwd: Option<&Path>) -> Result<(), String> {
     let mut cmd = Command::new("git");
@@ -159,6 +167,37 @@ fn ensure_xxhash_checkout() -> Result<PathBuf, String> {
     Ok(repo_dir)
 }
 
+fn ensure_fragilec_binary() -> Result<PathBuf, String> {
+    static BIN: OnceLock<PathBuf> = OnceLock::new();
+    if let Some(path) = BIN.get() {
+        return Ok(path.clone());
+    }
+
+    let workspace_root = workspace_root_dir();
+    let fragilec = workspace_root.join("target/debug/fragilec");
+    if !fragilec.exists() {
+        let output = Command::new("cargo")
+            .arg("build")
+            .arg("-p")
+            .arg("fragile-cli")
+            .arg("--bin")
+            .arg("fragilec")
+            .current_dir(&workspace_root)
+            .output()
+            .map_err(|e| format!("failed to build fragilec binary: {}", e))?;
+        if !output.status.success() {
+            return Err(format!(
+                "failed to build fragilec binary\nstdout:\n{}\nstderr:\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+    }
+
+    let _ = BIN.set(fragilec.clone());
+    Ok(fragilec)
+}
+
 fn compile_rust_file(path: &Path, out: &Path, crate_type: &str) -> Result<(), String> {
     let output = Command::new("rustc")
         .arg("--edition")
@@ -188,11 +227,9 @@ fn compile_rust_file(path: &Path, out: &Path, crate_type: &str) -> Result<(), St
 
 fn transpile_xxhash_cli(repo_dir: &Path) -> Result<String, String> {
     // Force scalar XXH3 path for transpilation parity until SIMD vector lowering is complete.
-    let parser = ClangParser::with_paths_and_defines(
-        Vec::new(),
-        vec!["XXH_VECTOR=XXH_SCALAR".to_string()],
-    )
-    .map_err(|e| format!("failed to create parser: {}", e))?;
+    let parser =
+        ClangParser::with_paths_and_defines(Vec::new(), vec!["XXH_VECTOR=XXH_SCALAR".to_string()])
+            .map_err(|e| format!("failed to create parser: {}", e))?;
     let mut combined_children = Vec::new();
     for rel in XXHASH_CLI_FILES {
         let src = repo_dir.join(rel);
@@ -202,7 +239,8 @@ fn transpile_xxhash_cli(repo_dir: &Path) -> Result<String, String> {
         combined_children.extend(ast.translation_unit.children);
     }
 
-    let combined_tu = ClangNode::new(ClangNodeKind::TranslationUnit).with_children(combined_children);
+    let combined_tu =
+        ClangNode::new(ClangNodeKind::TranslationUnit).with_children(combined_children);
     Ok(AstCodeGen::new().generate(&combined_tu))
 }
 
@@ -211,11 +249,22 @@ fn transpile_with_defines(path: &Path, defines: &[&str]) -> Result<String, Strin
         Vec::new(),
         defines.iter().map(|d| d.to_string()).collect(),
     )
-    .map_err(|e| format!("failed to create parser with defines for {}: {}", path.display(), e))?;
+    .map_err(|e| {
+        format!(
+            "failed to create parser with defines for {}: {}",
+            path.display(),
+            e
+        )
+    })?;
 
-    let ast = parser
-        .parse_file(path)
-        .map_err(|e| format!("failed to parse {} with defines {:?}: {}", path.display(), defines, e))?;
+    let ast = parser.parse_file(path).map_err(|e| {
+        format!(
+            "failed to parse {} with defines {:?}: {}",
+            path.display(),
+            defines,
+            e
+        )
+    })?;
     Ok(AstCodeGen::new().generate(&ast.translation_unit))
 }
 
@@ -355,10 +404,22 @@ fn run_make(repo_dir: &Path, args: &[&str]) -> Result<Output, String> {
         .stderr(Stdio::piped())
         .current_dir(repo_dir)
         .output()
-        .map_err(|e| format!("failed to run make {:?} in {}: {}", args, repo_dir.display(), e))
+        .map_err(|e| {
+            format!(
+                "failed to run make {:?} in {}: {}",
+                args,
+                repo_dir.display(),
+                e
+            )
+        })
 }
 
-fn run_with_stdin(bin: &Path, cwd: Option<&Path>, args: &[&str], input: &[u8]) -> Result<Output, String> {
+fn run_with_stdin(
+    bin: &Path,
+    cwd: Option<&Path>,
+    args: &[&str],
+    input: &[u8],
+) -> Result<Output, String> {
     let mut child = Command::new(bin)
         .args(args)
         .stdin(Stdio::piped())
@@ -593,8 +654,8 @@ fn test_real_world_xxhash_scalar_impl_transpile_and_compile_as_lib() {
         scalar_impl_c.display()
     );
 
-    let rust_code =
-        transpile_cpp_to_rust(&scalar_impl_c).expect("xxhash_scalar_impl.c should transpile to Rust");
+    let rust_code = transpile_cpp_to_rust(&scalar_impl_c)
+        .expect("xxhash_scalar_impl.c should transpile to Rust");
     assert!(
         rust_code.contains("XXH32") && rust_code.contains("XXH3"),
         "expected xxhash scalar implementation symbols in generated code"
@@ -615,12 +676,12 @@ fn test_real_world_xxhash_scalar_impl_transpile_and_compile_as_lib() {
 fn test_real_world_xxhash_cli_runtime_stdin_matches_native() {
     let repo_dir = ensure_xxhash_checkout().expect("failed to prepare xxHash checkout");
     let temp_dir = std::env::temp_dir().join("fragile_real_world_xxhash_runtime_stdin");
-    let (native_bin, wrapper_bin) =
-        build_xxhsum_pair(&repo_dir, &temp_dir).expect("failed to build xxhsum native/transpiled pair");
+    let (native_bin, wrapper_bin) = build_xxhsum_pair(&repo_dir, &temp_dir)
+        .expect("failed to build xxhsum native/transpiled pair");
 
     let input = b"hello world\n";
-    let native =
-        run_with_stdin(&native_bin, Some(&repo_dir), &["-"], input).expect("failed to run native xxhsum");
+    let native = run_with_stdin(&native_bin, Some(&repo_dir), &["-"], input)
+        .expect("failed to run native xxhsum");
     let transpiled = run_with_stdin(&wrapper_bin, Some(&repo_dir), &["-"], input)
         .expect("failed to run transpiled xxhsum");
 
@@ -640,8 +701,8 @@ fn test_real_world_xxhash_cli_runtime_stdin_matches_native() {
 fn test_real_world_xxhash_cli_runtime_file_matches_native() {
     let repo_dir = ensure_xxhash_checkout().expect("failed to prepare xxHash checkout");
     let temp_dir = std::env::temp_dir().join("fragile_real_world_xxhash_runtime_file");
-    let (native_bin, wrapper_bin) =
-        build_xxhsum_pair(&repo_dir, &temp_dir).expect("failed to build xxhsum native/transpiled pair");
+    let (native_bin, wrapper_bin) = build_xxhsum_pair(&repo_dir, &temp_dir)
+        .expect("failed to build xxhsum native/transpiled pair");
 
     let input_file = temp_dir.join("runtime_input.txt");
     fs::write(&input_file, b"hello world\n").expect("failed to write runtime input file");
@@ -667,8 +728,8 @@ fn test_real_world_xxhash_cli_runtime_file_matches_native() {
 fn test_real_world_xxhash_cli_default_modes_and_formats_match_native() {
     let repo_dir = ensure_xxhash_checkout().expect("failed to prepare xxHash checkout");
     let temp_dir = std::env::temp_dir().join("fragile_real_world_xxhash_runtime_hash_modes");
-    let (native_bin, transpiled_bin) =
-        build_xxhsum_pair(&repo_dir, &temp_dir).expect("failed to build xxhsum native/transpiled pair");
+    let (native_bin, transpiled_bin) = build_xxhsum_pair(&repo_dir, &temp_dir)
+        .expect("failed to build xxhsum native/transpiled pair");
 
     let input_file = temp_dir.join("hash_modes_input.txt");
     fs::write(&input_file, b"hello world\n").expect("failed to write hash mode input file");
@@ -678,14 +739,19 @@ fn test_real_world_xxhash_cli_default_modes_and_formats_match_native() {
         vec![input_file_str.clone()],
         vec!["--tag".to_string(), input_file_str.clone()],
         vec!["--little-endian".to_string(), input_file_str.clone()],
-        vec!["--tag".to_string(), "--little-endian".to_string(), input_file_str.clone()],
+        vec![
+            "--tag".to_string(),
+            "--little-endian".to_string(),
+            input_file_str.clone(),
+        ],
     ];
 
     for args in cases {
         let arg_refs = to_arg_refs(&args);
-        let native = run_cmd(&native_bin, Some(&repo_dir), &arg_refs).expect("failed to run native xxhsum");
-        let transpiled =
-            run_cmd(&transpiled_bin, Some(&repo_dir), &arg_refs).expect("failed to run transpiled xxhsum");
+        let native =
+            run_cmd(&native_bin, Some(&repo_dir), &arg_refs).expect("failed to run native xxhsum");
+        let transpiled = run_cmd(&transpiled_bin, Some(&repo_dir), &arg_refs)
+            .expect("failed to run transpiled xxhsum");
         let context = format!("args {:?}", args);
 
         assert_status_matches(&native, &transpiled, &context);
@@ -705,8 +771,8 @@ fn test_real_world_xxhash_cli_default_modes_and_formats_match_native() {
 fn test_real_world_xxhash_cli_make_check_command_status_matches_native() {
     let repo_dir = ensure_xxhash_checkout().expect("failed to prepare xxHash checkout");
     let temp_dir = std::env::temp_dir().join("fragile_real_world_xxhash_runtime_make_check");
-    let (native_bin, transpiled_bin) =
-        build_xxhsum_pair(&repo_dir, &temp_dir).expect("failed to build xxhsum native/transpiled pair");
+    let (native_bin, transpiled_bin) = build_xxhsum_pair(&repo_dir, &temp_dir)
+        .expect("failed to build xxhsum native/transpiled pair");
 
     let xxhash_c = repo_dir.join("xxhash.c");
     let xxhash_h = repo_dir.join("xxhash.h");
@@ -714,8 +780,8 @@ fn test_real_world_xxhash_cli_make_check_command_status_matches_native() {
     let xxhash_h_str = xxhash_h.to_string_lossy().to_string();
 
     let stdin_input = fs::read(&xxhash_c).expect("failed to read xxhash.c");
-    let native_stdin =
-        run_with_stdin(&native_bin, Some(&repo_dir), &["-"], &stdin_input).expect("failed to run native stdin");
+    let native_stdin = run_with_stdin(&native_bin, Some(&repo_dir), &["-"], &stdin_input)
+        .expect("failed to run native stdin");
     let transpiled_stdin = run_with_stdin(&transpiled_bin, Some(&repo_dir), &["-"], &stdin_input)
         .expect("failed to run transpiled stdin");
     assert_status_matches(&native_stdin, &transpiled_stdin, "make check stdin");
@@ -728,11 +794,15 @@ fn test_real_world_xxhash_cli_make_check_command_status_matches_native() {
     );
 
     let multi_file_args = [xxhash_c_str.as_str(), xxhash_h_str.as_str()];
-    let native_multi =
-        run_cmd(&native_bin, Some(&repo_dir), &multi_file_args).expect("failed to run native multi-file");
-    let transpiled_multi =
-        run_cmd(&transpiled_bin, Some(&repo_dir), &multi_file_args).expect("failed to run transpiled multi-file");
-    assert_status_matches(&native_multi, &transpiled_multi, "make check multiple files");
+    let native_multi = run_cmd(&native_bin, Some(&repo_dir), &multi_file_args)
+        .expect("failed to run native multi-file");
+    let transpiled_multi = run_cmd(&transpiled_bin, Some(&repo_dir), &multi_file_args)
+        .expect("failed to run transpiled multi-file");
+    assert_status_matches(
+        &native_multi,
+        &transpiled_multi,
+        "make check multiple files",
+    );
     assert_success(&native_multi, "native make check multiple files");
     assert_success(&transpiled_multi, "transpiled make check multiple files");
     assert_eq!(
@@ -741,15 +811,15 @@ fn test_real_world_xxhash_cli_make_check_command_status_matches_native() {
         "multiple file hash output should match native"
     );
 
-    let status_only_cases: Vec<(Vec<String>, bool)> = vec![
-        (vec!["--definitely-invalid-option".to_string()], false),
-    ];
+    let status_only_cases: Vec<(Vec<String>, bool)> =
+        vec![(vec!["--definitely-invalid-option".to_string()], false)];
 
     for (args, expect_success) in status_only_cases {
         let arg_refs = to_arg_refs(&args);
-        let native = run_cmd(&native_bin, Some(&repo_dir), &arg_refs).expect("failed to run native status-only case");
-        let transpiled =
-            run_cmd(&transpiled_bin, Some(&repo_dir), &arg_refs).expect("failed to run transpiled status-only case");
+        let native = run_cmd(&native_bin, Some(&repo_dir), &arg_refs)
+            .expect("failed to run native status-only case");
+        let transpiled = run_cmd(&transpiled_bin, Some(&repo_dir), &arg_refs)
+            .expect("failed to run transpiled status-only case");
         let context = format!("status-only args {:?}", args);
 
         assert_status_matches(&native, &transpiled, &context);
@@ -768,8 +838,8 @@ fn test_real_world_xxhash_cli_make_check_command_status_matches_native() {
 fn test_real_world_xxhash_cli_make_check_and_test_xxhsum_c_matrix_matches_native() {
     let repo_dir = ensure_xxhash_checkout().expect("failed to prepare xxHash checkout");
     let temp_dir = std::env::temp_dir().join("fragile_real_world_xxhash_make_check_matrix");
-    let (native_bin, transpiled_bin) =
-        build_xxhsum_pair(&repo_dir, &temp_dir).expect("failed to build xxhsum native/transpiled pair");
+    let (native_bin, transpiled_bin) = build_xxhsum_pair(&repo_dir, &temp_dir)
+        .expect("failed to build xxhsum native/transpiled pair");
 
     let xxhash_c = repo_dir.join("xxhash.c");
     let xxhash_h = repo_dir.join("xxhash.h");
@@ -781,8 +851,13 @@ fn test_real_world_xxhash_cli_make_check_and_test_xxhsum_c_matrix_matches_native
 
     // make check parity core: stdin, benchmark commands, and hash variants.
     let stdin_input = fs::read(&xxhash_c).expect("failed to read xxhash.c");
-    let (native_stdin, transpiled_stdin) =
-        run_pair_with_stdin(&native_bin, &transpiled_bin, &repo_dir, &["-"], &stdin_input);
+    let (native_stdin, transpiled_stdin) = run_pair_with_stdin(
+        &native_bin,
+        &transpiled_bin,
+        &repo_dir,
+        &["-"],
+        &stdin_input,
+    );
     assert_status_matches(&native_stdin, &transpiled_stdin, "make check stdin");
     assert_success(&native_stdin, "native make check stdin");
     assert_success(&transpiled_stdin, "transpiled make check stdin");
@@ -817,7 +892,8 @@ fn test_real_world_xxhash_cli_make_check_and_test_xxhsum_c_matrix_matches_native
     }
 
     // test-xxhsum-c parity: checksum generation and self-check commands.
-    let (native_sum, transpiled_sum) = run_pair_cmd(&native_bin, &transpiled_bin, &repo_dir, &file_refs);
+    let (native_sum, transpiled_sum) =
+        run_pair_cmd(&native_bin, &transpiled_bin, &repo_dir, &file_refs);
     assert_status_matches(&native_sum, &transpiled_sum, "checksum generation");
     assert_success(&native_sum, "native checksum generation");
     assert_success(&transpiled_sum, "transpiled checksum generation");
@@ -827,25 +903,46 @@ fn test_real_world_xxhash_cli_make_check_and_test_xxhsum_c_matrix_matches_native
         "checksum generation output should match native"
     );
 
-    let (native_sum_h0, transpiled_sum_h0) =
-        run_pair_cmd(&native_bin, &transpiled_bin, &repo_dir, &["-H0", file_refs[0], file_refs[1]]);
+    let (native_sum_h0, transpiled_sum_h0) = run_pair_cmd(
+        &native_bin,
+        &transpiled_bin,
+        &repo_dir,
+        &["-H0", file_refs[0], file_refs[1]],
+    );
     assert_status_matches(&native_sum_h0, &transpiled_sum_h0, "checksum generation H0");
     assert_success(&native_sum_h0, "native checksum generation H0");
     assert_success(&transpiled_sum_h0, "transpiled checksum generation H0");
 
-    let native_check_from_native_sum = run_with_stdin(&native_bin, Some(&repo_dir), &["-c", "-"], &native_sum.stdout)
-        .expect("failed to run native -c with stdin");
-    let transpiled_check_from_transpiled_sum =
-        run_with_stdin(&transpiled_bin, Some(&repo_dir), &["-c", "-"], &transpiled_sum.stdout)
-            .expect("failed to run transpiled -c with stdin");
-    assert_success(&native_check_from_native_sum, "native -c with native generated checksums");
+    let native_check_from_native_sum = run_with_stdin(
+        &native_bin,
+        Some(&repo_dir),
+        &["-c", "-"],
+        &native_sum.stdout,
+    )
+    .expect("failed to run native -c with stdin");
+    let transpiled_check_from_transpiled_sum = run_with_stdin(
+        &transpiled_bin,
+        Some(&repo_dir),
+        &["-c", "-"],
+        &transpiled_sum.stdout,
+    )
+    .expect("failed to run transpiled -c with stdin");
+    assert_success(
+        &native_check_from_native_sum,
+        "native -c with native generated checksums",
+    );
     assert_success(
         &transpiled_check_from_transpiled_sum,
         "transpiled -c with transpiled generated checksums",
     );
 
     // Additional behavior checks used by make target.
-    let (native_q, transpiled_q) = run_pair_cmd(&native_bin, &transpiled_bin, &repo_dir, &["-q", file_refs[0], file_refs[1]]);
+    let (native_q, transpiled_q) = run_pair_cmd(
+        &native_bin,
+        &transpiled_bin,
+        &repo_dir,
+        &["-q", file_refs[0], file_refs[1]],
+    );
     assert_status_matches(&native_q, &transpiled_q, "-q loading message behavior");
     assert_success(&native_q, "native -q");
     assert_success(&transpiled_q, "transpiled -q");
@@ -857,7 +954,11 @@ fn test_real_world_xxhash_cli_make_check_and_test_xxhsum_c_matrix_matches_native
 
     let (native_nonexistent, transpiled_nonexistent) =
         run_pair_cmd(&native_bin, &transpiled_bin, &repo_dir, &["nonexistent"]);
-    assert_status_matches(&native_nonexistent, &transpiled_nonexistent, "nonexistent file error");
+    assert_status_matches(
+        &native_nonexistent,
+        &transpiled_nonexistent,
+        "nonexistent file error",
+    );
     assert_failure(&native_nonexistent, "native nonexistent");
     assert_failure(&transpiled_nonexistent, "transpiled nonexistent");
     assert_output_contains(
@@ -880,7 +981,6 @@ fn test_real_world_xxhash_cli_make_check_and_test_xxhsum_c_matrix_matches_native
     assert_status_matches(&native_filelist, &transpiled_filelist, "--filelist");
     assert_success(&native_filelist, "native --filelist");
     assert_success(&transpiled_filelist, "transpiled --filelist");
-
 }
 
 #[test]
@@ -890,8 +990,8 @@ fn test_real_world_xxhash_make_test_passes_with_transpiled_xxhsum_dropin() {
     let temp_dir = std::env::temp_dir().join("fragile_real_world_xxhash_make_test_dropin");
     fs::create_dir_all(&temp_dir).expect("failed to create temp dir");
 
-    let (_native_bin, transpiled_bin) =
-        build_xxhsum_pair(&repo_dir, &temp_dir).expect("failed to build xxhsum native/transpiled pair");
+    let (_native_bin, transpiled_bin) = build_xxhsum_pair(&repo_dir, &temp_dir)
+        .expect("failed to build xxhsum native/transpiled pair");
 
     let xxhsum_path = repo_dir.join("xxhsum");
     let backup_path = temp_dir.join("xxhsum.native.backup");
@@ -954,12 +1054,75 @@ fn test_real_world_xxhash_make_test_passes_with_transpiled_xxhsum_dropin() {
 }
 
 #[test]
+#[ignore = "real-world external project test (builds xxhsum with CC=fragilec passthrough driver)"]
+fn test_real_world_xxhash_make_xxhsum_with_fragilec_driver_passthrough() {
+    let repo_dir = ensure_xxhash_checkout().expect("failed to prepare xxHash checkout");
+    let fragilec = ensure_fragilec_binary().expect("failed to resolve fragilec binary");
+    let temp_dir = std::env::temp_dir().join("fragile_real_world_xxhash_fragilec_driver");
+    fs::create_dir_all(&temp_dir).expect("failed to create temp dir");
+    let driver_log = temp_dir.join("fragilec_driver.log");
+    fs::write(&driver_log, "").expect("failed to initialize fragilec driver log");
+
+    let clean_output = Command::new("make")
+        .arg("clean")
+        .current_dir(&repo_dir)
+        .env("CC", fragilec.to_string_lossy().to_string())
+        .env("FRAGILEC_MODE", "pass")
+        .env("FRAGILEC_NATIVE_COMPILER", "cc")
+        .env("FRAGILEC_LOG", driver_log.to_string_lossy().to_string())
+        .output()
+        .expect("failed to run make clean with fragilec driver");
+    assert!(
+        clean_output.status.success(),
+        "make clean with fragilec driver failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&clean_output.stdout),
+        String::from_utf8_lossy(&clean_output.stderr)
+    );
+
+    let make_output = Command::new("make")
+        .arg("xxhsum")
+        .current_dir(&repo_dir)
+        .env("CC", fragilec.to_string_lossy().to_string())
+        .env("FRAGILEC_MODE", "pass")
+        .env("FRAGILEC_NATIVE_COMPILER", "cc")
+        .env("FRAGILEC_LOG", driver_log.to_string_lossy().to_string())
+        .output()
+        .expect("failed to run make xxhsum with fragilec driver");
+    assert!(
+        make_output.status.success(),
+        "make xxhsum with fragilec driver failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&make_output.stdout),
+        String::from_utf8_lossy(&make_output.stderr)
+    );
+
+    let xxhsum = repo_dir.join("xxhsum");
+    assert!(xxhsum.exists(), "expected built xxhsum at {}", xxhsum.display());
+    let run_output = run_cmd(&xxhsum, Some(&repo_dir), &["--version"])
+        .expect("failed to run xxhsum built through fragilec driver");
+    assert!(
+        run_output.status.success(),
+        "xxhsum --version should succeed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&run_output.stdout),
+        String::from_utf8_lossy(&run_output.stderr)
+    );
+
+    let driver_log_content =
+        fs::read_to_string(&driver_log).expect("failed to read fragilec driver log");
+    assert!(
+        driver_log_content.contains("cwd=") && driver_log_content.contains("args="),
+        "fragilec driver log should capture compiler invocations, got:\n{}",
+        driver_log_content
+    );
+}
+
+#[test]
 #[ignore = "runtime parity WIP for make test-xxhsum-c checksum generation subset"]
 fn test_real_world_xxhash_cli_checksum_generation_matches_native() {
     let repo_dir = ensure_xxhash_checkout().expect("failed to prepare xxHash checkout");
-    let temp_dir = std::env::temp_dir().join("fragile_real_world_xxhash_runtime_checksum_generation");
-    let (native_bin, transpiled_bin) =
-        build_xxhsum_pair(&repo_dir, &temp_dir).expect("failed to build xxhsum native/transpiled pair");
+    let temp_dir =
+        std::env::temp_dir().join("fragile_real_world_xxhash_runtime_checksum_generation");
+    let (native_bin, transpiled_bin) = build_xxhsum_pair(&repo_dir, &temp_dir)
+        .expect("failed to build xxhsum native/transpiled pair");
 
     let file_a = temp_dir.join("sum_file_a.txt");
     let file_b = temp_dir.join("sum_file_b.txt");
@@ -969,9 +1132,10 @@ fn test_real_world_xxhash_cli_checksum_generation_matches_native() {
     let file_b_str = file_b.to_string_lossy().to_string();
 
     let files_args = [file_a_str.as_str(), file_b_str.as_str()];
-    let native_sums = run_cmd(&native_bin, Some(&repo_dir), &files_args).expect("failed to run native sums");
-    let transpiled_sums =
-        run_cmd(&transpiled_bin, Some(&repo_dir), &files_args).expect("failed to run transpiled sums");
+    let native_sums =
+        run_cmd(&native_bin, Some(&repo_dir), &files_args).expect("failed to run native sums");
+    let transpiled_sums = run_cmd(&transpiled_bin, Some(&repo_dir), &files_args)
+        .expect("failed to run transpiled sums");
     assert_status_matches(&native_sums, &transpiled_sums, "xxhsum output generation");
     assert_success(&native_sums, "native xxhsum output generation");
     assert_success(&transpiled_sums, "transpiled xxhsum output generation");
@@ -996,7 +1160,11 @@ fn test_real_world_xxhash_make_define_variants_transpile_and_compile() {
             vec!["XXH_NO_XXH3"],
             vec!["pub fn XXH3_64bits", "pub fn XXH3_128bits"],
         ),
-        ("xxh_nolonglong", vec!["XXH_NO_LONG_LONG"], vec!["pub fn XXH64"]),
+        (
+            "xxh_nolonglong",
+            vec!["XXH_NO_LONG_LONG"],
+            vec!["pub fn XXH64"],
+        ),
         ("xxh_nostdlib", vec!["XXH_NO_STDLIB"], vec![]),
     ];
 

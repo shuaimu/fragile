@@ -10,6 +10,7 @@ use std::io::ErrorKind;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Output};
+use std::sync::OnceLock;
 use std::thread::sleep;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -78,6 +79,13 @@ const TINYXML2_FRAGILE_XMLTEST_LOG_FILES: &[&str] = &[
     "rustc_fragile_runtime_support.stderr",
 ];
 const TINYXML2_MAKE_TEST_REPLAY_COMMAND_TIMEOUT_SECONDS: u64 = 15;
+
+fn workspace_root_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .canonicalize()
+        .expect("failed to resolve workspace root")
+}
 
 fn run_git(args: &[&str], cwd: Option<&Path>) -> Result<Output, String> {
     let mut cmd = Command::new("git");
@@ -286,6 +294,37 @@ fn make_executable(path: &Path) -> Result<(), String> {
             .map_err(|e| format!("failed to chmod {}: {}", path.display(), e))?;
     }
     Ok(())
+}
+
+fn ensure_fragilec_binary() -> Result<PathBuf, String> {
+    static BIN: OnceLock<PathBuf> = OnceLock::new();
+    if let Some(path) = BIN.get() {
+        return Ok(path.clone());
+    }
+
+    let workspace_root = workspace_root_dir();
+    let fragilec = workspace_root.join("target/debug/fragilec");
+    if !fragilec.exists() {
+        let output = Command::new("cargo")
+            .arg("build")
+            .arg("-p")
+            .arg("fragile-cli")
+            .arg("--bin")
+            .arg("fragilec")
+            .current_dir(&workspace_root)
+            .output()
+            .map_err(|e| format!("failed to build fragilec binary: {}", e))?;
+        if !output.status.success() {
+            return Err(format!(
+                "failed to build fragilec binary\nstdout:\n{}\nstderr:\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+    }
+
+    let _ = BIN.set(fragilec.clone());
+    Ok(fragilec)
 }
 
 fn normalize_slashes(path: &str) -> String {
@@ -1321,6 +1360,9 @@ fn create_logging_cxx_driver(driver_dir: &Path, log_path: &Path) -> Result<PathB
         )
     })?;
 
+    let fragilec = ensure_fragilec_binary()?;
+    let fragilec_str = fragilec.to_string_lossy().to_string();
+
     let driver_path = driver_dir.join("fragile_tinyxml2_cxx_driver.sh");
     let script = r#"#!/bin/sh
 set -eu
@@ -1335,8 +1377,11 @@ fi
   printf '%s ' "$@"
   printf '\n'
 } >> "$log_file"
-exec c++ "$@"
-"#;
+export FRAGILEC_MODE=pass
+export FRAGILEC_NATIVE_COMPILER=c++
+exec "__FRAGILEC__" "$@"
+"#
+    .replace("__FRAGILEC__", fragilec_str.as_str());
 
     fs::write(&driver_path, script).map_err(|e| {
         format!(
