@@ -421,9 +421,16 @@ fn run_example_with_stdin(
         .map_err(|e| format!("failed to execute {}: {}", binary_path.display(), e))?;
 
     if let Some(mut stdin) = child.stdin.take() {
-        stdin
-            .write_all(stdin_payload.as_bytes())
-            .map_err(|e| format!("failed to write stdin for {}: {}", binary_path.display(), e))?;
+        if let Err(e) = stdin.write_all(stdin_payload.as_bytes()) {
+            // Some fixture binaries emit fixed output and may exit before reading stdin.
+            if e.kind() != ErrorKind::BrokenPipe {
+                return Err(format!(
+                    "failed to write stdin for {}: {}",
+                    binary_path.display(),
+                    e
+                ));
+            }
+        }
     }
 
     let output = child
