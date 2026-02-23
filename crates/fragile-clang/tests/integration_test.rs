@@ -231,26 +231,27 @@ fn find_fragile_runtime_link_info() -> Option<FragileRuntimeLinkInfo> {
                         });
                     }
 
-                    let deps_entries = fs::read_dir(&deps_dir).ok()?;
-                    let mut hashed_rlibs: Vec<PathBuf> = deps_entries
-                        .filter_map(|entry| entry.ok())
-                        .map(|entry| entry.path())
-                        .filter(|path| {
-                            path.file_name()
-                                .and_then(|name| name.to_str())
-                                .is_some_and(|name| {
-                                    name.starts_with("libfragile_runtime-")
-                                        && name.ends_with(".rlib")
-                                })
-                        })
-                        .collect();
-                    hashed_rlibs.sort();
-                    if let Some(rlib_path) = hashed_rlibs.pop() {
-                        return Some(FragileRuntimeLinkInfo {
-                            profile_dir,
-                            deps_dir,
-                            rlib_path,
-                        });
+                    if let Ok(deps_entries) = fs::read_dir(&deps_dir) {
+                        let mut hashed_rlibs: Vec<PathBuf> = deps_entries
+                            .filter_map(|entry| entry.ok())
+                            .map(|entry| entry.path())
+                            .filter(|path| {
+                                path.file_name()
+                                    .and_then(|name| name.to_str())
+                                    .is_some_and(|name| {
+                                        name.starts_with("libfragile_runtime-")
+                                            && name.ends_with(".rlib")
+                                    })
+                            })
+                            .collect();
+                        hashed_rlibs.sort();
+                        if let Some(rlib_path) = hashed_rlibs.pop() {
+                            return Some(FragileRuntimeLinkInfo {
+                                profile_dir,
+                                deps_dir,
+                                rlib_path,
+                            });
+                        }
                     }
                 }
             }
