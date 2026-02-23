@@ -23,8 +23,20 @@ jobs:
 
     - name: Install system dependencies
       run: |
-        sudo apt-get update
-        sudo apt-get install -y libclang-dev libclang-cpp-dev llvm-dev
+        set -euo pipefail
+        for attempt in 1 2 3; do
+          echo "APT install attempt ${attempt}/3"
+          if timeout 300s sudo apt-get update -o Acquire::Retries=3 \
+            && timeout 300s sudo apt-get install -y --no-install-recommends libclang-dev libclang-cpp-dev llvm-dev; then
+            exit 0
+          fi
+          if [ "${attempt}" -lt 3 ]; then
+            echo "Retrying apt install after transient failure..."
+            sleep 10
+          fi
+        done
+        echo "APT install failed after 3 attempts" >&2
+        exit 1
 
     - name: Setup Rust stable
       uses: dtolnay/rust-toolchain@stable
@@ -48,8 +60,20 @@ jobs:
 
     - name: Install system dependencies
       run: |
-        sudo apt-get update
-        sudo apt-get install -y libclang-dev libclang-cpp-dev llvm-dev
+        set -euo pipefail
+        for attempt in 1 2 3; do
+          echo "APT install attempt ${attempt}/3"
+          if timeout 300s sudo apt-get update -o Acquire::Retries=3 \
+            && timeout 300s sudo apt-get install -y --no-install-recommends libclang-dev libclang-cpp-dev llvm-dev; then
+            exit 0
+          fi
+          if [ "${attempt}" -lt 3 ]; then
+            echo "Retrying apt install after transient failure..."
+            sleep 10
+          fi
+        done
+        echo "APT install failed after 3 attempts" >&2
+        exit 1
 
     - name: Setup Rust stable
       uses: dtolnay/rust-toolchain@stable
@@ -86,8 +110,20 @@ jobs:
 
     - name: Install system dependencies
       run: |
-        sudo apt-get update
-        sudo apt-get install -y libclang-dev libclang-cpp-dev llvm-dev
+        set -euo pipefail
+        for attempt in 1 2 3; do
+          echo "APT install attempt ${attempt}/3"
+          if timeout 300s sudo apt-get update -o Acquire::Retries=3 \
+            && timeout 300s sudo apt-get install -y --no-install-recommends libclang-dev libclang-cpp-dev llvm-dev; then
+            exit 0
+          fi
+          if [ "${attempt}" -lt 3 ]; then
+            echo "Retrying apt install after transient failure..."
+            sleep 10
+          fi
+        done
+        echo "APT install failed after 3 attempts" >&2
+        exit 1
 
     - name: Setup Rust stable
       uses: dtolnay/rust-toolchain@stable
@@ -109,8 +145,20 @@ jobs:
 
     - name: Install system dependencies
       run: |
-        sudo apt-get update
-        sudo apt-get install -y libclang-dev libclang-cpp-dev llvm-dev
+        set -euo pipefail
+        for attempt in 1 2 3; do
+          echo "APT install attempt ${attempt}/3"
+          if timeout 300s sudo apt-get update -o Acquire::Retries=3 \
+            && timeout 300s sudo apt-get install -y --no-install-recommends libclang-dev libclang-cpp-dev llvm-dev; then
+            exit 0
+          fi
+          if [ "${attempt}" -lt 3 ]; then
+            echo "Retrying apt install after transient failure..."
+            sleep 10
+          fi
+        done
+        echo "APT install failed after 3 attempts" >&2
+        exit 1
 
     - name: Setup Rust stable
       uses: dtolnay/rust-toolchain@stable
@@ -130,8 +178,20 @@ jobs:
 
     - name: Install system dependencies
       run: |
-        sudo apt-get update
-        sudo apt-get install -y libclang-dev libclang-cpp-dev llvm-dev
+        set -euo pipefail
+        for attempt in 1 2 3; do
+          echo "APT install attempt ${attempt}/3"
+          if timeout 300s sudo apt-get update -o Acquire::Retries=3 \
+            && timeout 300s sudo apt-get install -y --no-install-recommends libclang-dev libclang-cpp-dev llvm-dev; then
+            exit 0
+          fi
+          if [ "${attempt}" -lt 3 ]; then
+            echo "Retrying apt install after transient failure..."
+            sleep 10
+          fi
+        done
+        echo "APT install failed after 3 attempts" >&2
+        exit 1
 
     - name: Setup Rust stable
       uses: dtolnay/rust-toolchain@stable
@@ -154,8 +214,20 @@ jobs:
 
     - name: Install system dependencies
       run: |
-        sudo apt-get update
-        sudo apt-get install -y libclang-dev libclang-cpp-dev llvm-dev
+        set -euo pipefail
+        for attempt in 1 2 3; do
+          echo "APT install attempt ${attempt}/3"
+          if timeout 300s sudo apt-get update -o Acquire::Retries=3 \
+            && timeout 300s sudo apt-get install -y --no-install-recommends libclang-dev libclang-cpp-dev llvm-dev; then
+            exit 0
+          fi
+          if [ "${attempt}" -lt 3 ]; then
+            echo "Retrying apt install after transient failure..."
+            sleep 10
+          fi
+        done
+        echo "APT install failed after 3 attempts" >&2
+        exit 1
 
     - name: Setup Rust stable
       uses: dtolnay/rust-toolchain@stable
