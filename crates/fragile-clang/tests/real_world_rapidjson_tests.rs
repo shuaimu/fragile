@@ -373,7 +373,7 @@ fn compile_transpiled_rust_lib(
     log_dir: &Path,
     step_name: &str,
 ) -> Result<(), String> {
-    let output = Command::new("rustc")
+    let output = Command::new("rustc").env("RUSTC_BOOTSTRAP", "1")
         .arg("--edition")
         .arg("2021")
         .arg("-A")

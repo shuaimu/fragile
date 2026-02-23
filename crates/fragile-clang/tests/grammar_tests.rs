@@ -61,7 +61,7 @@ fn main() {{
         .map_err(|e| format!("Failed to write file: {}", e))?;
 
     // Compile with rustc
-    let output = Command::new("rustc")
+    let output = Command::new("rustc").env("RUSTC_BOOTSTRAP", "1")
         .arg(&rs_path)
         .arg("-o")
         .arg(&exe_path)

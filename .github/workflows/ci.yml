@@ -9,6 +9,7 @@ on:
 env:
   CARGO_TERM_COLOR: always
   LIBCLANG_PATH: /usr/lib/x86_64-linux-gnu
+  FRAGILE_ROOT: ${{ github.workspace }}
 
 jobs:
   # Basic build and test with stable Rust
@@ -16,6 +17,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
+
+    - name: Initialize vendored libc++ headers
+      run: git submodule update --init --depth 1 vendor/llvm-project
 
     - name: Install system dependencies
       run: |
@@ -27,6 +31,11 @@ jobs:
 
     - name: Build
       run: cargo build --verbose
+
+    - name: Create legacy workspace symlink for exporter tests
+      run: |
+        sudo mkdir -p /home/shuai/workspace
+        sudo ln -sfn "${GITHUB_WORKSPACE}" /home/shuai/workspace/fragile
 
     - name: Run tests
       run: cargo test --verbose
@@ -72,6 +81,9 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
+    - name: Initialize vendored libc++ headers
+      run: git submodule update --init --depth 1 vendor/llvm-project
+
     - name: Install system dependencies
       run: |
         sudo apt-get update
@@ -92,6 +104,9 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
+    - name: Initialize vendored libc++ headers
+      run: git submodule update --init --depth 1 vendor/llvm-project
+
     - name: Install system dependencies
       run: |
         sudo apt-get update
@@ -109,6 +124,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
+
+    - name: Initialize vendored libc++ headers
+      run: git submodule update --init --depth 1 vendor/llvm-project
 
     - name: Install system dependencies
       run: |
@@ -130,6 +148,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
+
+    - name: Initialize vendored libc++ headers
+      run: git submodule update --init --depth 1 vendor/llvm-project
 
     - name: Install system dependencies
       run: |

@@ -1992,7 +1992,7 @@ fn build_rust_runtime_support_inputs(log_dir: &Path) -> Result<RustRuntimeSuppor
     })?;
 
     let archive_path = log_dir.join("libfragile_runtime_support.a");
-    let rustc_output = Command::new("rustc")
+    let rustc_output = Command::new("rustc").env("RUSTC_BOOTSTRAP", "1")
         .arg("--edition")
         .arg("2021")
         .arg("--crate-type")
@@ -3001,7 +3001,7 @@ fn compile_rust_source_to_object(
             )
         })?;
     }
-    Command::new("rustc")
+    Command::new("rustc").env("RUSTC_BOOTSTRAP", "1")
         .arg("--edition")
         .arg("2021")
         .arg("--crate-type")
