@@ -698,6 +698,7 @@ impl CppType {
                             .replace("==", "_eq_") // C++ SFINAE template expressions
                             .replace("!=", "_ne_") // C++ SFINAE template expressions
                             .replace("!", "_not_") // C++ SFINAE negation
+                            .replace("=", "_") // Assignment/equality leftovers in dependent type spellings
                             .replace("?", "_cond_") // C++ ternary/conditional in template expressions
                             .replace("{", "_") // C++ initializer list / pack expansion
                             .replace("}", "_"); // C++ initializer list / pack expansion
@@ -1581,6 +1582,20 @@ mod tests {
         assert_eq!(
             CppType::Named("tinyxml2_StrPair_Mode".to_string()).to_rust_type_str(),
             "Mode"
+        );
+    }
+
+    #[test]
+    fn test_named_type_conversion_strips_equals_from_identifier() {
+        let converted = CppType::Named(
+            "StaticAssertTest<sizeof(rapidjson::STATIC_ASSERTION_FAILURE<bool(sizeof(Ch)==2)>)>"
+                .to_string(),
+        )
+        .to_rust_type_str();
+        assert!(
+            !converted.contains('='),
+            "converted type name should not contain '=', got: {}",
+            converted
         );
     }
 

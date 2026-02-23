@@ -1819,6 +1819,7 @@ impl AstCodeGen {
             || s.contains("type-parameter-")
             // Unresolved dependent type names
             || s.contains("typename_")
+            || s.contains("typename ")
             // Template parameter names embedded with double underscores (e.g., vector__Tp___Alloc)
             // These appear in rust_name when primary template types are converted to identifiers
             || s.contains("__Tp")
@@ -3698,7 +3699,7 @@ impl AstCodeGen {
                 continue;
             }
             // Skip invalid Rust identifiers
-            if rust_name == "_" || rust_name.is_empty() || rust_name.starts_with('[') {
+            if !Self::is_valid_rust_item_identifier(rust_name) || rust_name.starts_with('[') {
                 continue;
             }
             // Skip types that are just template parameter placeholders like _T1, _T2
@@ -3776,13 +3777,7 @@ impl AstCodeGen {
                 continue;
             }
             // Skip empty or invalid identifiers
-            if rust_name.is_empty()
-                || !rust_name
-                    .chars()
-                    .next()
-                    .map(|c| c.is_alphabetic() || c == '_')
-                    .unwrap_or(false)
-            {
+            if !Self::is_valid_rust_item_identifier(rust_name) {
                 continue;
             }
             // Skip types that are defined in the preamble
@@ -7762,6 +7757,8 @@ impl AstCodeGen {
                 || param_str.contains("void (")  // Skip C-style function pointer: void (*)(...)
                 || param_str.contains("T[")  // Skip unresolved template array param like T[N]
                 || param_str.contains(" N]")
+                || param_str.contains("typename ")
+                || Self::has_unresolved_template_placeholder(&param_str)
             // Skip unresolved array size
             {
                 // C-style function pointer syntax like void (*)(void *) can't be parsed by Rust
@@ -7780,6 +7777,7 @@ impl AstCodeGen {
             || ret_type.contains("__gnu_cxx::")  // Skip GCC extension types
             || ret_type.contains("__enable_if")  // Skip SFINAE return types
             || ret_type.contains("typename ")
+            || Self::has_unresolved_template_placeholder(&ret_type)
         // Skip C++ dependent types with typename keyword
         {
             return;
@@ -58200,6 +58198,9 @@ mod tests {
         assert!(AstCodeGen::has_unresolved_template_placeholder(
             "basic_ios__CharT___Traits"
         ));
+        assert!(AstCodeGen::has_unresolved_template_placeholder(
+            "typename Encoding::Ch"
+        ));
     }
 
     #[test]
@@ -58222,6 +58223,16 @@ mod tests {
         ));
         assert!(!AstCodeGen::has_unresolved_template_placeholder(
             "basic_string_char"
+        ));
+    }
+
+    #[test]
+    fn test_is_valid_rust_item_identifier_rejects_fn_signature_like_names() {
+        assert!(!AstCodeGen::is_valid_rust_item_identifier(
+            "extern \"C\" fn(&mut (), ()) -> ()"
+        ));
+        assert!(AstCodeGen::is_valid_rust_item_identifier(
+            "StaticAssertTest_sizeof__rapidjson_STATIC_ASSERTION_FAILURE_bool_sizeof_Ch____2__"
         ));
     }
 
