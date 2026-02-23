@@ -492,7 +492,7 @@ fn run_fragilec_driver_baseline_in_tree(source_dir: &Path, log_dir: &Path) -> Re
         )
     })?;
     let strict_probe_bin = source_dir.join("build/fragilec_strict_probe");
-    let make_test_output = Command::new(&fragilec)
+    let strict_probe_output = Command::new(&fragilec)
         .arg(strict_probe_src.to_string_lossy().to_string())
         .arg("-std=c++11")
         .arg("-o")
@@ -510,20 +510,20 @@ fn run_fragilec_driver_baseline_in_tree(source_dir: &Path, log_dir: &Path) -> Re
                 e
             )
         })?;
-    write_command_capture(log_dir, "make_test_driver", &make_test_output)?;
-    if make_test_output.status.success() {
+    write_command_capture(log_dir, "make_test_driver", &strict_probe_output)?;
+    if !strict_probe_output.status.success() {
+        let stderr = String::from_utf8_lossy(&strict_probe_output.stderr);
         return Err(format!(
-            "fragilec strict probe unexpectedly succeeded (logs: {})",
-            log_dir.display()
+            "fragilec strict probe failed with status {} (logs: {})\nstderr:\n{}",
+            status_code(&strict_probe_output),
+            log_dir.display(),
+            stderr
         ));
     }
-    let make_test_stderr = String::from_utf8_lossy(&make_test_output.stderr);
-    if !make_test_stderr.contains("single-source compile-only (-c) invocations")
-        && !make_test_stderr.contains("failed to parse")
-    {
+    if !strict_probe_bin.exists() {
         return Err(format!(
-            "fragilec-driver strict failure did not report expected diagnostics\nstderr:\n{}",
-            make_test_stderr
+            "fragilec strict probe did not emit expected output binary {}",
+            strict_probe_bin.display()
         ));
     }
 
@@ -1044,16 +1044,8 @@ fn test_fragilec_driver_make_test_no_stl_local_fixture_success() {
     assert_eq!(
         read_status_file(&log_dir.join("make_test_driver.status"))
             .expect("failed to read make_test_driver.status"),
-        2,
-        "strict fragilec-driver make test should fail with strict-mode status"
-    );
-    let make_stderr = fs::read_to_string(log_dir.join("make_test_driver.stderr"))
-        .expect("failed to read make_test_driver.stderr");
-    assert!(
-        make_stderr.contains("single-source compile-only (-c) invocations")
-            || make_stderr.contains("failed to parse"),
-        "strict fragilec driver stderr should explain unsupported compile shape, got:\n{}",
-        make_stderr
+        0,
+        "strict fragilec-driver probe compile+link should succeed"
     );
     let driver_log = fs::read_to_string(log_dir.join("fragilec_driver.log"))
         .expect("failed to read fragilec_driver.log");
@@ -1251,16 +1243,8 @@ fn test_real_world_pugixml_fragilec_make_test_no_stl() {
     assert_eq!(
         read_status_file(&log_dir.join("make_test_driver.status"))
             .expect("failed to read make_test_driver.status"),
-        2,
-        "pugixml fragilec-driver strict run should fail until full strict build parity exists"
-    );
-    let stdout = fs::read_to_string(log_dir.join("make_test_driver.stderr"))
-        .expect("failed to read make_test_driver.stderr");
-    assert!(
-        stdout.contains("single-source compile-only (-c) invocations")
-            || stdout.contains("failed to parse"),
-        "fragilec-driver strict failure should report unsupported shape/parsing diagnostics, got:\n{}",
-        stdout
+        0,
+        "pugixml fragilec-driver strict probe should succeed"
     );
 }
 

@@ -561,19 +561,19 @@ fn run_fragilec_driver_no_stl_examples_in_tree(source_dir: &Path, log_dir: &Path
         &fragilec,
         &driver_log,
     )?;
-    if condense_compile.status.success() {
+    if !condense_compile.status.success() {
+        let stderr = String::from_utf8_lossy(&condense_compile.stderr);
         return Err(format!(
-            "fragilec-driver condense compile unexpectedly succeeded in strict mode (logs: {})",
-            log_dir.display()
+            "fragilec-driver condense compile failed with status {} (logs: {})\nstderr:\n{}",
+            status_code(&condense_compile),
+            log_dir.display(),
+            stderr
         ));
     }
-    let condense_stderr = String::from_utf8_lossy(&condense_compile.stderr);
-    if !condense_stderr.contains("single-source compile-only (-c) invocations")
-        && !condense_stderr.contains("failed to parse")
-    {
+    if !condense_bin.exists() {
         return Err(format!(
-            "fragilec-driver condense strict failure did not report expected diagnostics\nstderr:\n{}",
-            condense_stderr
+            "fragilec-driver condense compile did not emit output binary {}",
+            condense_bin.display()
         ));
     }
 
@@ -587,19 +587,19 @@ fn run_fragilec_driver_no_stl_examples_in_tree(source_dir: &Path, log_dir: &Path
         &fragilec,
         &driver_log,
     )?;
-    if pretty_compile.status.success() {
+    if !pretty_compile.status.success() {
+        let stderr = String::from_utf8_lossy(&pretty_compile.stderr);
         return Err(format!(
-            "fragilec-driver pretty compile unexpectedly succeeded in strict mode (logs: {})",
-            log_dir.display()
+            "fragilec-driver pretty compile failed with status {} (logs: {})\nstderr:\n{}",
+            status_code(&pretty_compile),
+            log_dir.display(),
+            stderr
         ));
     }
-    let pretty_stderr = String::from_utf8_lossy(&pretty_compile.stderr);
-    if !pretty_stderr.contains("single-source compile-only (-c) invocations")
-        && !pretty_stderr.contains("failed to parse")
-    {
+    if !pretty_bin.exists() {
         return Err(format!(
-            "fragilec-driver pretty strict failure did not report expected diagnostics\nstderr:\n{}",
-            pretty_stderr
+            "fragilec-driver pretty compile did not emit output binary {}",
+            pretty_bin.display()
         ));
     }
 
@@ -1022,22 +1022,14 @@ fn test_rapidjson_fragilec_driver_no_stl_examples_local_fixture_success() {
     assert_eq!(
         read_status_file(&log_dir.join("compile_condense_driver.status"))
             .expect("failed to read compile_condense_driver.status"),
-        2,
-        "strict fragilec-driver condense compile should fail with strict-mode status"
+        0,
+        "strict fragilec-driver condense compile should succeed"
     );
     assert_eq!(
         read_status_file(&log_dir.join("compile_pretty_driver.status"))
             .expect("failed to read compile_pretty_driver.status"),
-        2,
-        "strict fragilec-driver pretty compile should fail with strict-mode status"
-    );
-    let condense_stderr = fs::read_to_string(log_dir.join("compile_condense_driver.stderr"))
-        .expect("failed to read compile_condense_driver.stderr");
-    assert!(
-        condense_stderr.contains("single-source compile-only (-c) invocations")
-            || condense_stderr.contains("failed to parse"),
-        "strict condense compile stderr should report unsupported shape/parsing diagnostics, got:\n{}",
-        condense_stderr
+        0,
+        "strict fragilec-driver pretty compile should succeed"
     );
 
     let _ = fs::remove_dir_all(&root);
@@ -1230,25 +1222,14 @@ fn test_real_world_rapidjson_fragilec_native_no_stl_examples_baseline() {
     assert_eq!(
         read_status_file(&log_dir.join("compile_condense_driver.status"))
             .expect("failed to read compile_condense_driver.status"),
-        2,
-        "real-world strict condense compile should fail until full strict compile+link support exists"
+        0,
+        "real-world strict condense compile should succeed"
     );
-    let condense_stderr = fs::read_to_string(log_dir.join("compile_condense_driver.stderr"))
-        .expect("failed to read compile_condense_driver.stderr");
-    assert!(
-        condense_stderr.contains("single-source compile-only (-c) invocations")
-            || condense_stderr.contains("failed to parse"),
-        "strict condense compile should report unsupported shape/parsing diagnostics, got:\n{}",
-        condense_stderr
-    );
-
-    let pretty_stderr = fs::read_to_string(log_dir.join("compile_pretty_driver.stderr"))
-        .expect("failed to read compile_pretty_driver.stderr");
-    assert!(
-        pretty_stderr.contains("single-source compile-only (-c) invocations")
-            || pretty_stderr.contains("failed to parse"),
-        "strict pretty compile should report unsupported shape/parsing diagnostics, got:\n{}",
-        pretty_stderr
+    assert_eq!(
+        read_status_file(&log_dir.join("compile_pretty_driver.status"))
+            .expect("failed to read compile_pretty_driver.status"),
+        0,
+        "real-world strict pretty compile should succeed"
     );
 }
 

@@ -21385,10 +21385,12 @@ impl AstCodeGen {
         params: &[(String, CppType)],
         is_variadic: bool,
     ) {
-        // Restrict to C-style declarations to avoid C++ overload collisions.
-        let looks_c_decl = mangled_name.is_empty() || mangled_name == name;
-        if !looks_c_decl
-            || !self.current_namespace.is_empty()
+        let link_symbol = if mangled_name.is_empty() {
+            name
+        } else {
+            mangled_name
+        };
+        if !self.current_namespace.is_empty()
             || self.defined_function_names.contains(name)
         {
             return;
@@ -21435,8 +21437,8 @@ impl AstCodeGen {
             variadic_params.push("...".to_string());
             self.writeln("unsafe extern \"C\" {");
             self.indent += 1;
-            if rust_name != name {
-                self.writeln(&format!("#[link_name = \"{}\"]", name));
+            if rust_name != link_symbol {
+                self.writeln(&format!("#[link_name = \"{}\"]", link_symbol));
             }
             self.writeln(&format!(
                 "pub fn {}({}){};",
@@ -21453,7 +21455,7 @@ impl AstCodeGen {
 
         self.writeln("unsafe extern \"C\" {");
         self.indent += 1;
-        self.writeln(&format!("#[link_name = \"{}\"]", name));
+        self.writeln(&format!("#[link_name = \"{}\"]", link_symbol));
         self.writeln(&format!(
             "fn {}({}){};",
             raw_rust_name,
@@ -22195,9 +22197,11 @@ impl AstCodeGen {
         let is_c_linkage_name = !name.is_empty() && mangled_name == name;
         let should_export_c_abi = !is_static
             && is_c_linkage_name
-            && !is_main
-            && !is_generator
-            && self.declared_function_names.contains(name);
+            && !is_generator;
+        let should_export_cpp_abi = !is_static
+            && !is_c_linkage_name
+            && !mangled_name.is_empty()
+            && !is_generator;
 
         // Handle generators with state machine
         if is_generator {
@@ -22247,15 +22251,17 @@ impl AstCodeGen {
 
             if should_export_c_abi {
                 self.writeln("#[no_mangle]");
+            } else if should_export_cpp_abi {
+                self.writeln(&format!("#[export_name = \"{}\"]", mangled_name));
             }
             // Variadic functions require extern "C" linkage and unsafe keyword.
             // For non-variadic non-async functions, only emit C ABI when the
-            // original symbol uses C linkage and external visibility.
+            // original symbol uses C/C++ external visibility.
             let (async_keyword, extern_c) = if is_variadic {
                 ("", "unsafe extern \"C\" ")
             } else if is_async {
                 ("async ", "")
-            } else if should_export_c_abi {
+            } else if should_export_c_abi || should_export_cpp_abi {
                 ("", "extern \"C\" ")
             } else {
                 ("", "")
@@ -46930,6 +46936,41 @@ mod tests {
     }
 
     #[test]
+    fn test_non_definition_cpp_function_decl_emits_mangled_extern_declaration() {
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![make_node(
+                ClangNodeKind::FunctionDecl {
+                    name: "value".to_string(),
+                    mangled_name: "_Z5valuev".to_string(),
+                    is_static: false,
+                    return_type: CppType::Int { signed: true },
+                    params: vec![],
+                    is_definition: false,
+                    is_variadic: false,
+                    is_noexcept: false,
+                    is_coroutine: false,
+                    coroutine_info: None,
+                },
+                vec![],
+            )],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("#[link_name = \"_Z5valuev\"]"),
+            "expected C++ declaration to link against mangled symbol, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("pub fn value() -> i32 {")
+                && code.contains("unsafe { __fragile_extern_value() }"),
+            "expected safe wrapper around unresolved extern C++ function, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
     fn test_extern_decl_suppressed_when_definition_exists_in_tu() {
         let ast = make_node(
             ClangNodeKind::TranslationUnit,
@@ -47041,6 +47082,52 @@ mod tests {
         assert!(
             !code.contains("pub extern \"C\" fn adler32_local("),
             "static definition should not export a C ABI symbol, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_non_static_cpp_definition_exports_mangled_symbol_with_c_abi() {
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![make_node(
+                ClangNodeKind::FunctionDecl {
+                    name: "value".to_string(),
+                    mangled_name: "_Z5valuev".to_string(),
+                    is_static: false,
+                    return_type: CppType::Int { signed: true },
+                    params: vec![],
+                    is_definition: true,
+                    is_variadic: false,
+                    is_noexcept: false,
+                    is_coroutine: false,
+                    coroutine_info: None,
+                },
+                vec![make_node(
+                    ClangNodeKind::CompoundStmt,
+                    vec![make_node(
+                        ClangNodeKind::ReturnStmt,
+                        vec![make_node(
+                            ClangNodeKind::IntegerLiteral {
+                                value: 7,
+                                cpp_type: Some(CppType::Int { signed: true }),
+                            },
+                            vec![],
+                        )],
+                    )],
+                )],
+            )],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("#[export_name = \"_Z5valuev\"]"),
+            "non-static C++ definition should export mangled symbol, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("pub extern \"C\" fn value() -> i32 {"),
+            "non-static C++ definition should use C ABI when exported, got:\n{}",
             code
         );
     }

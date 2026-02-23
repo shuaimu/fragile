@@ -14,6 +14,7 @@ const FRAGILEC_BUILD_ID_ENV: &str = "FRAGILEC_BUILD_ID";
 const FRAGILEC_ENFORCE_BUILD_ID_ENV: &str = "FRAGILEC_ENFORCE_BUILD_ID";
 const FRAGILEC_REQUIRE_META_ENV: &str = "FRAGILEC_REQUIRE_META";
 const FRAGILEC_KEEP_RS_ENV: &str = "FRAGILEC_KEEP_RS";
+const FRAGILEC_LINKER_ENV: &str = "FRAGILEC_LINKER";
 
 fn validate_strict_mode_value(mode: &str) -> Result<(), String> {
     match mode.to_ascii_lowercase().as_str() {
@@ -42,6 +43,7 @@ struct ParsedInvocation {
     compile_only: bool,
     output: Option<PathBuf>,
     sources: Vec<PathBuf>,
+    source_indices: Vec<usize>,
     includes: Vec<String>,
     defines: Vec<String>,
 }
@@ -51,6 +53,7 @@ impl ParsedInvocation {
         let mut compile_only = false;
         let mut output = None;
         let mut sources = Vec::new();
+        let mut source_indices = Vec::new();
         let mut includes = Vec::new();
         let mut defines = Vec::new();
 
@@ -114,6 +117,7 @@ impl ParsedInvocation {
             }
             if !cur.starts_with('-') && is_source_file_token(cur) {
                 sources.push(PathBuf::from(cur));
+                source_indices.push(i);
             }
             i += 1;
         }
@@ -123,6 +127,7 @@ impl ParsedInvocation {
             compile_only,
             output,
             sources,
+            source_indices,
             includes,
             defines,
         }
@@ -344,28 +349,28 @@ fn enforce_build_id_for_link_inputs(args: &[OsString]) -> Result<(), String> {
     Ok(())
 }
 
-fn run_fragile_compile(parsed: &ParsedInvocation) -> Result<(), String> {
-    if !parsed.compile_only {
-        return Err("fragile compile mode only supports `-c` invocations for now".to_string());
-    }
-    if parsed.sources.len() != 1 {
-        return Err(format!(
-            "fragile compile mode currently requires exactly one source (found {})",
-            parsed.sources.len()
-        ));
-    }
+fn crate_name_for_unit(source: &Path, out_obj: &Path) -> String {
+    let base = crate_name_for_source(source);
+    let mut hasher = DefaultHasher::new();
+    source.display().to_string().hash(&mut hasher);
+    out_obj.display().to_string().hash(&mut hasher);
+    let suffix = hasher.finish() as u32;
+    format!("{}_{}", base, format!("{suffix:08x}"))
+}
 
+fn strict_compile_source_to_object(
+    source_arg: &Path,
+    out_obj: &Path,
+    includes: &[String],
+    defines: &[String],
+    args_for_meta: &[OsString],
+) -> Result<(), String> {
     let cwd = std::env::current_dir().map_err(|e| format!("failed to read cwd: {}", e))?;
-    let source_arg = &parsed.sources[0];
     let source = resolve_path(source_arg, &cwd);
     if !source.exists() {
         return Err(format!("source file does not exist: {}", source.display()));
     }
 
-    let out_obj = match &parsed.output {
-        Some(out) => resolve_path(out, &cwd),
-        None => default_object_output(source_arg, &cwd)?,
-    };
     if let Some(parent) = out_obj.parent() {
         fs::create_dir_all(parent).map_err(|e| {
             format!(
@@ -376,16 +381,13 @@ fn run_fragile_compile(parsed: &ParsedInvocation) -> Result<(), String> {
         })?;
     }
 
-    let parser = ClangParser::with_paths_defines_and_language(
-        parsed.includes.clone(),
-        parsed.defines.clone(),
-        source_language(&source),
-    )
-    .map_err(|e| format!("failed to create fragile parser for {}: {}", source.display(), e))?;
+    let parser =
+        ClangParser::with_paths_defines_and_language(includes.to_vec(), defines.to_vec(), source_language(&source))
+            .map_err(|e| format!("failed to create fragile parser for {}: {}", source.display(), e))?;
     let ast = parser
         .parse_file(&source)
         .map_err(|e| format!("failed to parse {}: {}", source.display(), e))?;
-    let transpiled = AstCodeGen::new().generate(&ast.translation_unit);
+    let transpiled = normalize_transpiled_main_entry(AstCodeGen::new().generate(&ast.translation_unit));
 
     let keep_rs = std::env::var(FRAGILEC_KEEP_RS_ENV)
         .map(|v| v == "1")
@@ -421,10 +423,10 @@ fn run_fragile_compile(parsed: &ParsedInvocation) -> Result<(), String> {
         .arg("lib")
         .arg("--emit=obj")
         .arg("--crate-name")
-        .arg(crate_name_for_source(&source))
+        .arg(crate_name_for_unit(&source, out_obj))
         .arg(&transpiled_rs)
         .arg("-o")
-        .arg(&out_obj)
+        .arg(out_obj)
         .output()
         .map_err(|e| format!("failed to run rustc for {}: {}", source.display(), e))?;
 
@@ -441,7 +443,200 @@ fn run_fragile_compile(parsed: &ParsedInvocation) -> Result<(), String> {
         let _ = fs::remove_file(&transpiled_rs);
     }
 
-    write_meta_file(&source, &out_obj, &parsed.args)?;
+    write_meta_file(&source, out_obj, args_for_meta)?;
+    Ok(())
+}
+
+fn normalize_transpiled_main_entry(transpiled: String) -> String {
+    if !transpiled.contains("cpp_main(") {
+        return transpiled;
+    }
+    let promoted = if transpiled.contains("pub extern \"C\" fn cpp_main(") {
+        transpiled.replacen("pub extern \"C\" fn cpp_main(", "pub extern \"C\" fn main(", 1)
+    } else if transpiled.contains("pub unsafe extern \"C\" fn cpp_main(") {
+        transpiled.replacen(
+            "pub unsafe extern \"C\" fn cpp_main(",
+            "pub unsafe extern \"C\" fn main(",
+            1,
+        )
+    } else {
+        transpiled.replacen(
+            "pub fn cpp_main(",
+            "#[no_mangle]\npub extern \"C\" fn main(",
+            1,
+        )
+    };
+    promoted.replace(
+        "\nfn main() {\n    std::process::exit(cpp_main());\n}\n",
+        "\n",
+    )
+}
+
+fn run_fragile_compile(parsed: &ParsedInvocation) -> Result<(), String> {
+    if !parsed.compile_only {
+        return Err("fragile compile mode only supports `-c` invocations".to_string());
+    }
+    if parsed.sources.is_empty() {
+        return Err("fragile compile mode requires at least one source input".to_string());
+    }
+    if parsed.sources.len() > 1 && parsed.output.is_some() {
+        return Err(
+            "fragile strict compile does not support `-c` with multiple sources and a single `-o` output"
+                .to_string(),
+        );
+    }
+
+    let cwd = std::env::current_dir().map_err(|e| format!("failed to read cwd: {}", e))?;
+    for source_arg in &parsed.sources {
+        let out_obj = if parsed.sources.len() == 1 {
+            match &parsed.output {
+                Some(out) => resolve_path(out, &cwd),
+                None => default_object_output(source_arg, &cwd)?,
+            }
+        } else {
+            default_object_output(source_arg, &cwd)?
+        };
+
+        strict_compile_source_to_object(
+            source_arg,
+            &out_obj,
+            &parsed.includes,
+            &parsed.defines,
+            &parsed.args,
+        )?;
+    }
+
+    Ok(())
+}
+
+fn link_driver() -> String {
+    match std::env::var(FRAGILEC_LINKER_ENV) {
+        Ok(v) if !v.trim().is_empty() => v,
+        _ => "c++".to_string(),
+    }
+}
+
+fn build_rust_runtime_link_support(temp_root: &Path) -> Result<(PathBuf, Vec<OsString>), String> {
+    let runtime_rs = temp_root.join("fragile_runtime_support.rs");
+    let runtime_archive = temp_root.join("libfragile_runtime_support.a");
+    fs::write(
+        &runtime_rs,
+        "#[no_mangle]\npub extern \"C\" fn __fragile_runtime_support_anchor() {}\n",
+    )
+    .map_err(|e| format!("failed to write runtime support source {}: {}", runtime_rs.display(), e))?;
+
+    let output = Command::new("rustc")
+        .arg("--edition")
+        .arg("2021")
+        .arg("-A")
+        .arg("warnings")
+        .arg("--crate-type")
+        .arg("staticlib")
+        .arg("--print")
+        .arg("native-static-libs")
+        .arg(&runtime_rs)
+        .arg("-o")
+        .arg(&runtime_archive)
+        .output()
+        .map_err(|e| format!("failed to build rust runtime support archive: {}", e))?;
+    if !output.status.success() {
+        return Err(format!(
+            "rust runtime support build failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+
+    let mut native_libs: Vec<OsString> = Vec::new();
+    for stream in [&output.stdout, &output.stderr] {
+        let text = String::from_utf8_lossy(stream);
+        for line in text.lines() {
+            if let Some(rest) = line.split("native-static-libs:").nth(1) {
+                for token in rest.split_whitespace() {
+                    native_libs.push(OsString::from(token));
+                }
+            }
+        }
+    }
+
+    Ok((runtime_archive, native_libs))
+}
+
+fn run_fragile_link(parsed: &ParsedInvocation) -> Result<(), String> {
+    if parsed.compile_only {
+        return Err("internal error: run_fragile_link called for compile-only command".to_string());
+    }
+
+    let cwd = std::env::current_dir().map_err(|e| format!("failed to read cwd: {}", e))?;
+    let keep_rs = std::env::var(FRAGILEC_KEEP_RS_ENV)
+        .map(|v| v == "1")
+        .unwrap_or(false);
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|e| format!("failed to read wall clock: {}", e))?
+        .as_nanos();
+    let temp_root = std::env::temp_dir().join(format!("fragilec_link_{}_{}", std::process::id(), stamp));
+    fs::create_dir_all(&temp_root).map_err(|e| {
+        format!(
+            "failed to create strict-link temp dir {}: {}",
+            temp_root.display(),
+            e
+        )
+    })?;
+
+    let mut compiled_positions: Vec<(usize, PathBuf)> = Vec::with_capacity(parsed.sources.len());
+    for (idx, source_arg) in parsed.sources.iter().enumerate() {
+        let stem = source_arg
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("unit");
+        let out_obj = temp_root.join(format!("{idx}_{stem}.o"));
+        strict_compile_source_to_object(
+            source_arg,
+            &out_obj,
+            &parsed.includes,
+            &parsed.defines,
+            &parsed.args,
+        )?;
+        let source_pos = parsed
+            .source_indices
+            .get(idx)
+            .copied()
+            .ok_or_else(|| "internal parse error: missing source index".to_string())?;
+        compiled_positions.push((source_pos, out_obj));
+    }
+
+    let mut link_args = parsed.args.clone();
+    for (source_pos, out_obj) in &compiled_positions {
+        if *source_pos >= link_args.len() {
+            return Err("internal parse error: source index out of bounds".to_string());
+        }
+        let replaced = out_obj.strip_prefix(&cwd).unwrap_or(out_obj.as_path());
+        link_args[*source_pos] = OsString::from(replaced.to_string_lossy().to_string());
+    }
+
+    let (runtime_archive, native_libs) = build_rust_runtime_link_support(&temp_root)?;
+    link_args.push(OsString::from(runtime_archive.to_string_lossy().to_string()));
+    link_args.extend(native_libs);
+
+    let driver = link_driver();
+    let link_output = Command::new(&driver)
+        .args(&link_args)
+        .output()
+        .map_err(|e| format!("failed to run strict link driver `{}`: {}", driver, e))?;
+    if !link_output.status.success() {
+        return Err(format!(
+            "strict link failed via `{}`\nstdout:\n{}\nstderr:\n{}",
+            driver,
+            String::from_utf8_lossy(&link_output.stdout),
+            String::from_utf8_lossy(&link_output.stderr)
+        ));
+    }
+
+    if !keep_rs {
+        let _ = fs::remove_dir_all(&temp_root);
+    }
+
     Ok(())
 }
 
@@ -460,6 +655,7 @@ Environment:
   FRAGILEC_ENFORCE_BUILD_ID=1        Enforce build-id on .o/.a inputs during link
   FRAGILEC_REQUIRE_META=1            Require metadata sidecars for link inputs
   FRAGILEC_KEEP_RS=1                 Keep transpiled Rust sidecar next to output object
+  FRAGILEC_LINKER=<path>             Link-driver executable for strict link (default: c++)
 "
     );
 }
@@ -489,16 +685,12 @@ fn main() -> ExitCode {
         }
     }
 
-    let compile_candidate = parsed.compile_only && parsed.sources.len() == 1;
-
-    if !compile_candidate {
-        eprintln!(
-            "[fragilec] strict mode currently supports only single-source compile-only (-c) invocations"
-        );
-        return ExitCode::from(2);
-    }
-
-    match run_fragile_compile(&parsed) {
+    let run_result = if parsed.compile_only {
+        run_fragile_compile(&parsed)
+    } else {
+        run_fragile_link(&parsed)
+    };
+    match run_result {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
             eprintln!("[fragilec] {}", err);
@@ -529,6 +721,7 @@ mod tests {
         ]));
         assert!(parsed.compile_only);
         assert_eq!(parsed.sources, vec![PathBuf::from("src/main.cpp")]);
+        assert_eq!(parsed.source_indices, vec![5usize]);
         assert_eq!(parsed.includes, vec!["include".to_string()]);
         assert_eq!(parsed.defines, vec!["FOO=1".to_string()]);
         assert_eq!(parsed.output, Some(PathBuf::from("main.o")));
@@ -540,6 +733,14 @@ mod tests {
         assert_eq!(parsed.includes, vec!["inc".to_string()]);
         assert_eq!(parsed.defines, vec!["BAR=1".to_string()]);
         assert_eq!(parsed.output, Some(PathBuf::from("main.o")));
+        assert_eq!(parsed.source_indices, vec![3usize]);
+    }
+
+    #[test]
+    fn parse_tracks_multiple_source_positions() {
+        let parsed = ParsedInvocation::parse(args(&["-O2", "a.cpp", "-DMODE=1", "b.cc"]));
+        assert_eq!(parsed.sources, vec![PathBuf::from("a.cpp"), PathBuf::from("b.cc")]);
+        assert_eq!(parsed.source_indices, vec![1usize, 3usize]);
     }
 
     #[test]
@@ -581,5 +782,16 @@ mod tests {
     fn crate_name_sanitizes_non_identifier_chars() {
         assert_eq!(crate_name_for_source(Path::new("hello-world.cpp")), "hello_world");
         assert_eq!(crate_name_for_source(Path::new("1x.c")), "fragile_1x");
+    }
+
+    #[test]
+    fn strict_compile_rejects_multi_source_single_output() {
+        let parsed = ParsedInvocation::parse(args(&["-c", "a.cpp", "b.cpp", "-o", "out.o"]));
+        let err = run_fragile_compile(&parsed).expect_err("multi-source single -o must be rejected");
+        assert!(
+            err.contains("multiple sources") && err.contains("single `-o`"),
+            "unexpected error: {}",
+            err
+        );
     }
 }
