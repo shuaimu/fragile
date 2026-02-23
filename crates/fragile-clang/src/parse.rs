@@ -18,7 +18,8 @@ pub enum ParserLanguage {
 
 /// Parser that uses libclang to parse C++ source files.
 ///
-/// Always uses vendored libc++ from `vendor/llvm-project/libcxx/include/`.
+/// Prefers vendored libc++ from `vendor/llvm-project/libcxx/include/` and
+/// falls back to system C++ headers when vendored headers are unavailable.
 pub struct ClangParser {
     index: clang_sys::CXIndex,
     /// Additional include paths for header files (searched with -I)
@@ -31,6 +32,8 @@ pub struct ClangParser {
     ignored_error_patterns: Vec<String>,
     /// Parser language mode (`-x` / `-std`)
     language: ParserLanguage,
+    /// Whether to force vendored libc++ include setup (`-stdlib=libc++ -nostdinc++`).
+    use_vendored_libcxx: bool,
 }
 
 impl ClangParser {
@@ -88,6 +91,7 @@ impl ClangParser {
         defines: Vec<String>,
         ignored_error_patterns: Vec<String>,
         language: ParserLanguage,
+        use_vendored_libcxx: bool,
     ) -> Result<Self> {
         unsafe {
             let index = clang_sys::clang_createIndex(0, 0);
@@ -101,6 +105,7 @@ impl ClangParser {
                 defines,
                 ignored_error_patterns,
                 language,
+                use_vendored_libcxx,
             })
         }
     }
@@ -207,25 +212,26 @@ impl ClangParser {
         ignored_error_patterns: Vec<String>,
         language: ParserLanguage,
     ) -> Result<Self> {
-        let vendored_path = Self::detect_vendored_libcxx_path().ok_or_else(|| {
-            miette!(
-                "Vendored libc++ not found. Expected at vendor/llvm-project/libcxx/include/\n\
-                 Set FRAGILE_ROOT environment variable or run from the fragile project root."
-            )
-        })?;
+        let mut system_paths = Vec::new();
+        let mut use_vendored_libcxx = false;
 
-        // Config path contains __config_site and __assertion_handler
-        let config_path = Self::detect_vendored_libcxx_config_path().ok_or_else(|| {
-            miette!(
-                "Vendored libc++ config not found. Expected at vendor/libcxx-config/\n\
-                 This directory should contain __config_site and __assertion_handler."
-            )
-        })?;
+        if language == ParserLanguage::Cpp {
+            if let Some(vendored_path) = Self::detect_vendored_libcxx_path() {
+                // Config path contains __config_site and __assertion_handler
+                let config_path = Self::detect_vendored_libcxx_config_path().ok_or_else(|| {
+                    miette!(
+                        "Vendored libc++ config not found. Expected at vendor/libcxx-config/\n\
+                         This directory should contain __config_site and __assertion_handler."
+                    )
+                })?;
 
-        // Config path must come first so __config_site is found before including libc++ headers
-        let system_paths = vec![config_path, vendored_path];
-        // Add defines for libc++ compatibility
-        defines.push("_LIBCPP_HAS_NO_PRAGMA_SYSTEM_HEADER".to_string());
+                // Config path must come first so __config_site is found before including libc++ headers
+                system_paths = vec![config_path, vendored_path];
+                // Add defines for libc++ compatibility
+                defines.push("_LIBCPP_HAS_NO_PRAGMA_SYSTEM_HEADER".to_string());
+                use_vendored_libcxx = true;
+            }
+        }
 
         Self::with_full_options(
             include_paths,
@@ -233,23 +239,30 @@ impl ClangParser {
             defines,
             ignored_error_patterns,
             language,
+            use_vendored_libcxx,
         )
     }
 
     /// Build compiler arguments including include paths.
     fn build_compiler_args(&self) -> Vec<CString> {
         let mut args = match self.language {
-            ParserLanguage::Cpp => vec![
+            ParserLanguage::Cpp => {
+                let mut cpp_args = vec![
                 CString::new("-x").unwrap(),
                 CString::new("c++").unwrap(),
                 CString::new("-std=c++20").unwrap(),
-                // Always use libc++ (LLVM's C++ standard library)
-                CString::new("-stdlib=libc++").unwrap(),
-                // Disable default C++ includes so vendored libc++ is used
-                CString::new("-nostdinc++").unwrap(),
                 // Disable builtin limits on stack depth for templates
                 CString::new("-ftemplate-depth=1024").unwrap(),
-            ],
+                ];
+
+                if self.use_vendored_libcxx {
+                    // Force libc++ only when vendored headers/config are available.
+                    cpp_args.push(CString::new("-stdlib=libc++").unwrap());
+                    cpp_args.push(CString::new("-nostdinc++").unwrap());
+                }
+
+                cpp_args
+            }
             ParserLanguage::C => vec![
                 CString::new("-x").unwrap(),
                 CString::new("c").unwrap(),

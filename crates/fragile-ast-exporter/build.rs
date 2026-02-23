@@ -1,5 +1,6 @@
 use cmake::Config;
 use std::env;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -22,8 +23,15 @@ fn build_native(llvm_info: &LLVMInfo) {
     let llvm_lib_dir = &llvm_info.lib_dir;
     let llvm_include_dir = &llvm_info.include_dir;
 
-    eprintln!("cargo:warning=Using LLVM {} at {}", llvm_info.version, llvm_lib_dir.display());
-    eprintln!("cargo:warning=LLVM include dir: {}", llvm_include_dir.display());
+    eprintln!(
+        "cargo:warning=Using LLVM {} at {}",
+        llvm_info.version,
+        llvm_lib_dir.display()
+    );
+    eprintln!(
+        "cargo:warning=LLVM include dir: {}",
+        llvm_include_dir.display()
+    );
 
     // Check for pre-built library
     if let Ok(libdir) = env::var("FRAGILE_AST_EXPORTER_LIB_DIR") {
@@ -40,9 +48,7 @@ fn build_native(llvm_info: &LLVMInfo) {
         cmake_config.cflag(&include_flag);
         cmake_config.cxxflag(&include_flag);
 
-        let dst = cmake_config
-            .build_target("fragileAstExporter")
-            .build();
+        let dst = cmake_config.build_target("fragileAstExporter").build();
 
         let out_dir = dst.display();
         println!("cargo:rustc-link-search=native={}/build/lib", out_dir);
@@ -58,27 +64,21 @@ fn build_native(llvm_info: &LLVMInfo) {
     // Link LLVM/Clang libraries
     println!("cargo:rustc-link-search=native={}", llvm_lib_dir.display());
 
-    // On Debian/Ubuntu, libclang-cpp.so is located in /usr/lib/x86_64-linux-gnu/
-    // and may be versioned (libclang-cpp.so.19.1)
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
     let lib_dir = out_dir.join("lib");
     std::fs::create_dir_all(&lib_dir).ok();
 
-    // Create symlinks for versioned libraries
-    let clang_cpp_src = Path::new("/usr/lib/x86_64-linux-gnu/libclang-cpp.so.19.1");
-    let clang_cpp_dst = lib_dir.join("libclang-cpp.so");
-    if clang_cpp_src.exists() && !clang_cpp_dst.exists() {
-        std::os::unix::fs::symlink(clang_cpp_src, &clang_cpp_dst).ok();
-    }
-
-    let llvm_src = Path::new("/usr/lib/x86_64-linux-gnu/libLLVM-19.so");
-    let llvm_src_alt = Path::new("/usr/lib/llvm-19/lib/libLLVM-19.so");
-    let llvm_dst = lib_dir.join("libLLVM.so");
-    if llvm_src.exists() && !llvm_dst.exists() {
-        std::os::unix::fs::symlink(llvm_src, &llvm_dst).ok();
-    } else if llvm_src_alt.exists() && !llvm_dst.exists() {
-        std::os::unix::fs::symlink(llvm_src_alt, &llvm_dst).ok();
-    }
+    let search_dirs = library_search_dirs(llvm_lib_dir, &llvm_info.version);
+    maybe_create_library_alias(
+        &lib_dir,
+        "libclang-cpp.so",
+        find_library_target(&search_dirs, "libclang-cpp.so", &["libclang-cpp.so."]),
+    );
+    maybe_create_library_alias(
+        &lib_dir,
+        "libLLVM.so",
+        find_library_target(&search_dirs, "libLLVM.so", &["libLLVM.so.", "libLLVM-"]),
+    );
 
     println!("cargo:rustc-link-search=native={}", lib_dir.display());
 
@@ -148,19 +148,32 @@ impl LLVMInfo {
 
         let lib_dir = {
             let path_str = env::var_os("LLVM_LIB_DIR")
-                .or_else(|| invoke_llvm_config(&Some(llvm_config.clone()), &["--libdir"]).map(Into::into))
+                .or_else(|| {
+                    invoke_llvm_config(&Some(llvm_config.clone()), &["--libdir"]).map(Into::into)
+                })
                 .expect("Could not find LLVM lib dir");
-            Path::new(&path_str).canonicalize().unwrap_or_else(|_| PathBuf::from(&path_str))
+            Path::new(&path_str)
+                .canonicalize()
+                .unwrap_or_else(|_| PathBuf::from(&path_str))
         };
 
         let include_dir = {
             let path_str = env::var_os("LLVM_INCLUDE_DIR")
-                .or_else(|| invoke_llvm_config(&Some(llvm_config.clone()), &["--includedir"]).map(Into::into))
+                .or_else(|| {
+                    invoke_llvm_config(&Some(llvm_config.clone()), &["--includedir"])
+                        .map(Into::into)
+                })
                 .unwrap_or_else(|| lib_dir.parent().unwrap().join("include").into());
-            Path::new(&path_str).canonicalize().unwrap_or_else(|_| PathBuf::from(&path_str))
+            Path::new(&path_str)
+                .canonicalize()
+                .unwrap_or_else(|_| PathBuf::from(&path_str))
         };
 
-        Self { lib_dir, include_dir, version }
+        Self {
+            lib_dir,
+            include_dir,
+            version,
+        }
     }
 }
 
@@ -242,4 +255,73 @@ fn invoke_llvm_config(llvm_config: &Option<PathBuf>, args: &[&str]) -> Option<St
                 }
             })
     })
+}
+
+fn library_search_dirs(llvm_lib_dir: &Path, llvm_version: &str) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    dirs.push(llvm_lib_dir.to_path_buf());
+
+    if let Some(major) = llvm_version.split('.').next() {
+        dirs.push(PathBuf::from(format!("/usr/lib/llvm-{}/lib", major)));
+    }
+
+    dirs.push(PathBuf::from("/usr/lib/x86_64-linux-gnu"));
+
+    dirs
+}
+
+fn find_library_target(search_dirs: &[PathBuf], exact_name: &str, versioned_prefixes: &[&str]) -> Option<PathBuf> {
+    for dir in search_dirs {
+        let candidate = dir.join(exact_name);
+        if candidate.exists() {
+            return Some(candidate);
+        }
+    }
+
+    for dir in search_dirs {
+        if let Some(candidate) = find_versioned_library_in_dir(dir, versioned_prefixes) {
+            return Some(candidate);
+        }
+    }
+
+    None
+}
+
+fn find_versioned_library_in_dir(dir: &Path, prefixes: &[&str]) -> Option<PathBuf> {
+    let mut candidates: Vec<PathBuf> = fs::read_dir(dir)
+        .ok()?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.is_file() || path.is_symlink())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .map(|name| prefixes.iter().any(|prefix| name.starts_with(prefix)))
+                .unwrap_or(false)
+        })
+        .collect();
+
+    candidates.sort_by(|a, b| {
+        let a_name = a.file_name().and_then(|name| name.to_str()).unwrap_or("");
+        let b_name = b.file_name().and_then(|name| name.to_str()).unwrap_or("");
+        b_name.cmp(a_name)
+    });
+
+    candidates.into_iter().next()
+}
+
+fn maybe_create_library_alias(alias_dir: &Path, alias_name: &str, target: Option<PathBuf>) {
+    let alias_path = alias_dir.join(alias_name);
+    if alias_path.exists() {
+        return;
+    }
+
+    if let Some(target) = target {
+        std::os::unix::fs::symlink(&target, &alias_path).ok();
+    } else {
+        eprintln!(
+            "cargo:warning=Could not locate {} for linker alias generation",
+            alias_name
+        );
+    }
 }
