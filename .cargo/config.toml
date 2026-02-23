@@ -1,0 +1,4 @@
+[env]
+# Use libclang 19 to match libclang-cpp version from fragile-ast-exporter
+LIBCLANG_PATH = "/usr/lib/x86_64-linux-gnu"
+LLVM_CONFIG_PATH = "/usr/bin/llvm-config-19"

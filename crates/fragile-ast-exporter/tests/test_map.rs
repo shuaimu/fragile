@@ -7,7 +7,11 @@ fn test_map_template_instantiation() {
     let test_file = test_dir.join("test_map.cpp");
 
     // Ensure the test file exists
-    assert!(test_file.exists(), "Test file should exist: {:?}", test_file);
+    assert!(
+        test_file.exists(),
+        "Test file should exist: {:?}",
+        test_file
+    );
 
     // Export the AST with debug mode to see more info
     let result = export_ast(&test_file, &test_dir, &[], true);
@@ -42,34 +46,54 @@ fn test_map_template_instantiation() {
                 println!("  {:x}: {}", id, name);
             }
 
-            println!("\n=== Method Declarations ({} total) ===", method_decls.len());
+            println!(
+                "\n=== Method Declarations ({} total) ===",
+                method_decls.len()
+            );
             // Filter for interesting map methods
-            let interesting_methods: Vec<_> = method_decls.iter()
+            let interesting_methods: Vec<_> = method_decls
+                .iter()
                 .filter(|(_, name, _)| {
-                    name == "find" || name == "operator[]" || name == "insert" ||
-                    name == "size" || name == "empty" || name == "clear" ||
-                    name == "begin" || name == "end" || name == "at"
+                    name == "find"
+                        || name == "operator[]"
+                        || name == "insert"
+                        || name == "size"
+                        || name == "empty"
+                        || name == "clear"
+                        || name == "begin"
+                        || name == "end"
+                        || name == "at"
                 })
                 .collect();
 
             for (id, name, children_count) in &interesting_methods {
                 let node = ctx.ast_nodes.get(id).unwrap();
-                let has_body = node.children.first()
+                let has_body = node
+                    .children
+                    .first()
                     .and_then(|c| *c)
                     .and_then(|body_id| ctx.ast_nodes.get(&body_id))
                     .is_some();
-                println!("  {:x}: {} (children: {}, has_body: {})", id, name, children_count, has_body);
+                println!(
+                    "  {:x}: {} (children: {}, has_body: {})",
+                    id, name, children_count, has_body
+                );
             }
 
             // Check that we found some map methods
-            assert!(!interesting_methods.is_empty(),
-                "Should find some map methods (found {} total method decls)", method_decls.len());
+            assert!(
+                !interesting_methods.is_empty(),
+                "Should find some map methods (found {} total method decls)",
+                method_decls.len()
+            );
 
             // Check that some methods have bodies
-            let methods_with_bodies: Vec<_> = interesting_methods.iter()
+            let methods_with_bodies: Vec<_> = interesting_methods
+                .iter()
                 .filter(|(id, _, _)| {
                     let node = ctx.ast_nodes.get(id).unwrap();
-                    node.children.first()
+                    node.children
+                        .first()
                         .and_then(|c| *c)
                         .and_then(|body_id| ctx.ast_nodes.get(&body_id))
                         .map(|body| body.tag == ASTEntryTag::TagCompoundStmt)
@@ -77,14 +101,20 @@ fn test_map_template_instantiation() {
                 })
                 .collect();
 
-            println!("\n=== Methods with CompoundStmt bodies: {} ===", methods_with_bodies.len());
+            println!(
+                "\n=== Methods with CompoundStmt bodies: {} ===",
+                methods_with_bodies.len()
+            );
             for (id, name, _) in &methods_with_bodies {
                 println!("  {:x}: {}", id, name);
             }
 
             // We should have at least some methods with bodies from template instantiation
             // Note: Some methods may be inlined or have different body types
-            println!("\nTotal methods with actual bodies: {}", methods_with_bodies.len());
+            println!(
+                "\nTotal methods with actual bodies: {}",
+                methods_with_bodies.len()
+            );
         }
         Err(e) => {
             panic!("AST export failed: {}", e);

@@ -7,7 +7,11 @@ fn test_map_method_body_details() {
     let test_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests");
     let test_file = test_dir.join("test_map.cpp");
 
-    assert!(test_file.exists(), "Test file should exist: {:?}", test_file);
+    assert!(
+        test_file.exists(),
+        "Test file should exist: {:?}",
+        test_file
+    );
 
     let result = export_ast(&test_file, &test_dir, &[], false);
 
@@ -115,7 +119,7 @@ fn print_node_tree(
                 // The operator kind is usually in extras
                 format!(" op={:?}", node.extras.first())
             }
-            _ => String::new()
+            _ => String::new(),
         };
 
         println!("{}{:?}{}", indent, node.tag, extra_info);

@@ -68,8 +68,12 @@ pub fn export_ast(
     let items: Value = serde_cbor::from_slice(&cbor_data)
         .map_err(|e| Error::new(ErrorKind::InvalidData, format!("CBOR parse error: {}", e)))?;
 
-    clang_ast::process(items)
-        .map_err(|e| Error::new(ErrorKind::InvalidData, format!("AST processing error: {}", e)))
+    clang_ast::process(items).map_err(|e| {
+        Error::new(
+            ErrorKind::InvalidData,
+            format!("AST processing error: {}", e),
+        )
+    })
 }
 
 /// Export C++ AST as raw CBOR bytes
@@ -96,18 +100,21 @@ fn get_ast_cbors(
     let mut result_code: c_int = 0;
 
     // Build arguments for the AST exporter
-    let mut args_owned = vec![
-        CString::new("fragile-ast-exporter").unwrap(),
-        CString::new(file_path.to_str().ok_or_else(|| {
-            Error::new(ErrorKind::InvalidInput, "Invalid file path")
-        })?)
-        .unwrap(),
-        CString::new("-p").unwrap(),
-        CString::new(compile_commands_dir.to_str().ok_or_else(|| {
-            Error::new(ErrorKind::InvalidInput, "Invalid compile commands path")
-        })?)
-        .unwrap(),
-    ];
+    let mut args_owned =
+        vec![
+            CString::new("fragile-ast-exporter").unwrap(),
+            CString::new(
+                file_path
+                    .to_str()
+                    .ok_or_else(|| Error::new(ErrorKind::InvalidInput, "Invalid file path"))?,
+            )
+            .unwrap(),
+            CString::new("-p").unwrap(),
+            CString::new(compile_commands_dir.to_str().ok_or_else(|| {
+                Error::new(ErrorKind::InvalidInput, "Invalid compile commands path")
+            })?)
+            .unwrap(),
+        ];
 
     // Add extra arguments
     for &arg in extra_args {

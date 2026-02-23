@@ -1,0 +1,7 @@
+[
+  {
+    "directory": "experiments/template_instantiation_test",
+    "command": "clang++ -std=c++17 -c experiments/template_instantiation_test/test_template.cpp -o /dev/null",
+    "file": "experiments/template_instantiation_test/test_template.cpp"
+  }
+]

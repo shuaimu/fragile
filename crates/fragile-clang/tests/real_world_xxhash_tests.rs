@@ -1054,8 +1054,8 @@ fn test_real_world_xxhash_make_test_passes_with_transpiled_xxhsum_dropin() {
 }
 
 #[test]
-#[ignore = "real-world external project test (builds xxhsum with CC=fragilec passthrough driver)"]
-fn test_real_world_xxhash_make_xxhsum_with_fragilec_driver_passthrough() {
+#[ignore = "real-world external project test (builds xxhsum with CC=fragilec strict-mode driver)"]
+fn test_real_world_xxhash_make_xxhsum_with_fragilec_driver_strict() {
     let repo_dir = ensure_xxhash_checkout().expect("failed to prepare xxHash checkout");
     let fragilec = ensure_fragilec_binary().expect("failed to resolve fragilec binary");
     let temp_dir = std::env::temp_dir().join("fragile_real_world_xxhash_fragilec_driver");
@@ -1067,8 +1067,7 @@ fn test_real_world_xxhash_make_xxhsum_with_fragilec_driver_passthrough() {
         .arg("clean")
         .current_dir(&repo_dir)
         .env("CC", fragilec.to_string_lossy().to_string())
-        .env("FRAGILEC_MODE", "pass")
-        .env("FRAGILEC_NATIVE_COMPILER", "cc")
+        .env("FRAGILEC_MODE", "strict")
         .env("FRAGILEC_LOG", driver_log.to_string_lossy().to_string())
         .output()
         .expect("failed to run make clean with fragilec driver");
@@ -1083,27 +1082,22 @@ fn test_real_world_xxhash_make_xxhsum_with_fragilec_driver_passthrough() {
         .arg("xxhsum")
         .current_dir(&repo_dir)
         .env("CC", fragilec.to_string_lossy().to_string())
-        .env("FRAGILEC_MODE", "pass")
-        .env("FRAGILEC_NATIVE_COMPILER", "cc")
+        .env("FRAGILEC_MODE", "strict")
         .env("FRAGILEC_LOG", driver_log.to_string_lossy().to_string())
         .output()
         .expect("failed to run make xxhsum with fragilec driver");
     assert!(
-        make_output.status.success(),
-        "make xxhsum with fragilec driver failed\nstdout:\n{}\nstderr:\n{}",
+        !make_output.status.success(),
+        "make xxhsum should fail in strict mode until full strict build parity exists\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&make_output.stdout),
         String::from_utf8_lossy(&make_output.stderr)
     );
-
-    let xxhsum = repo_dir.join("xxhsum");
-    assert!(xxhsum.exists(), "expected built xxhsum at {}", xxhsum.display());
-    let run_output = run_cmd(&xxhsum, Some(&repo_dir), &["--version"])
-        .expect("failed to run xxhsum built through fragilec driver");
+    let strict_err = String::from_utf8_lossy(&make_output.stderr);
     assert!(
-        run_output.status.success(),
-        "xxhsum --version should succeed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&run_output.stdout),
-        String::from_utf8_lossy(&run_output.stderr)
+        strict_err.contains("single-source compile-only (-c) invocations")
+            || strict_err.contains("failed to parse"),
+        "strict xxhsum build failure should report unsupported shape/parsing diagnostics, got:\n{}",
+        strict_err
     );
 
     let driver_log_content =

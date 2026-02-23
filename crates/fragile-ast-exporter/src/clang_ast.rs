@@ -266,7 +266,10 @@ fn expect_opt_u64(val: &Value) -> Result<Option<u64>, Error> {
     match val {
         Value::Null => Ok(None),
         Value::Integer(n) => Ok(Some(*n as u64)),
-        _ => Err(Error::new(ErrorKind::InvalidData, "Expected integer or null")),
+        _ => Err(Error::new(
+            ErrorKind::InvalidData,
+            "Expected integer or null",
+        )),
     }
 }
 
@@ -414,7 +417,12 @@ pub fn process(items: Value) -> Result<AstContext, Error> {
     // The top-level value should be an array of all nodes
     let all_nodes = match items {
         Value::Array(arr) => arr,
-        _ => return Err(Error::new(ErrorKind::InvalidData, "Expected array at top level")),
+        _ => {
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                "Expected array at top level",
+            ))
+        }
     };
 
     for entry in all_nodes {

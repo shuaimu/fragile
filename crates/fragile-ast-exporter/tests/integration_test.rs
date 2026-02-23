@@ -16,7 +16,11 @@ fn test_template_instantiation_export() {
     let test_file = test_dir.join("test_template.cpp");
 
     // Ensure the test file exists
-    assert!(test_file.exists(), "Test file should exist: {:?}", test_file);
+    assert!(
+        test_file.exists(),
+        "Test file should exist: {:?}",
+        test_file
+    );
 
     // Export the AST
     let result = export_ast(&test_file, &test_dir, &[], false);
@@ -58,15 +62,20 @@ fn test_template_instantiation_export() {
                 }
             }
 
-            println!("\nFound {} double_value methods", double_value_methods.len());
+            println!(
+                "\nFound {} double_value methods",
+                double_value_methods.len()
+            );
             println!("Found {} get methods", get_methods.len());
             println!("Found {} set methods", set_methods.len());
 
             // We should have at least 2 instantiations of each method
             // (one for Container<int>, one for Container<double>, plus the template definition)
-            assert!(double_value_methods.len() >= 2,
+            assert!(
+                double_value_methods.len() >= 2,
                 "Should have at least 2 double_value methods, found {}",
-                double_value_methods.len());
+                double_value_methods.len()
+            );
 
             // Check that instantiated methods have body children
             // The key difference from libclang is that LibTooling gives us actual method bodies
@@ -84,10 +93,15 @@ fn test_template_instantiation_export() {
                             println!("  Body has {} children", body.children.len());
 
                             // The body should be a CompoundStmt and have children (the return statement)
-                            assert_eq!(body.tag, ASTEntryTag::TagCompoundStmt,
-                                "Method body should be a CompoundStmt");
-                            assert!(!body.children.is_empty(),
-                                "Method body should have statements");
+                            assert_eq!(
+                                body.tag,
+                                ASTEntryTag::TagCompoundStmt,
+                                "Method body should be a CompoundStmt"
+                            );
+                            assert!(
+                                !body.children.is_empty(),
+                                "Method body should have statements"
+                            );
                         }
                     }
                 }

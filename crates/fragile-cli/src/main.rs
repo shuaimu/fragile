@@ -110,10 +110,15 @@ fn main() -> Result<()> {
                     eprintln!("  LibTooling parsing: {}", file.display());
                     match libtooling_parser.parse_file(file) {
                         Ok(libtooling_ctx) => {
-                            let method_bodies = fragile_clang::extract_method_bodies_with_params(&libtooling_ctx);
-                            let field_types = fragile_clang::extract_specialization_field_types(&libtooling_ctx);
-                            eprintln!("    Found {} method body entries, {} specialization field types",
-                                method_bodies.len(), field_types.len());
+                            let method_bodies =
+                                fragile_clang::extract_method_bodies_with_params(&libtooling_ctx);
+                            let field_types =
+                                fragile_clang::extract_specialization_field_types(&libtooling_ctx);
+                            eprintln!(
+                                "    Found {} method body entries, {} specialization field types",
+                                method_bodies.len(),
+                                field_types.len()
+                            );
                             libtooling_results.insert(file.clone(), method_bodies);
                             libtooling_field_types.insert(file.clone(), field_types);
                         }
@@ -125,8 +130,9 @@ fn main() -> Result<()> {
             }
 
             // Create parser with vendored libc++
-            let parser = fragile_clang::ClangParser::with_paths_and_defines(include_paths, define.clone())
-                .map_err(|e| miette::miette!("Failed to create parser: {}", e))?;
+            let parser =
+                fragile_clang::ClangParser::with_paths_and_defines(include_paths, define.clone())
+                    .map_err(|e| miette::miette!("Failed to create parser: {}", e))?;
 
             // Parse all files first, then generate a single combined output.
             // This avoids duplicate crate preambles and allows cross-file symbol references.
@@ -159,7 +165,10 @@ fn main() -> Result<()> {
                 for file in &files {
                     if let Some(methods) = libtooling_results.remove(file) {
                         for (key, mut infos) in methods {
-                            merged_method_bodies.entry(key).or_default().append(&mut infos);
+                            merged_method_bodies
+                                .entry(key)
+                                .or_default()
+                                .append(&mut infos);
                         }
                     }
                     if let Some(field_types) = libtooling_field_types.remove(file) {
@@ -211,8 +220,9 @@ fn main() -> Result<()> {
                 .map(|p| p.to_string_lossy().to_string())
                 .collect();
 
-            let parser = fragile_clang::ClangParser::with_paths_and_defines(include_paths, define.clone())
-            .map_err(|e| miette::miette!("Failed to create parser: {}", e))?;
+            let parser =
+                fragile_clang::ClangParser::with_paths_and_defines(include_paths, define.clone())
+                    .map_err(|e| miette::miette!("Failed to create parser: {}", e))?;
 
             let mut all_output = String::new();
 

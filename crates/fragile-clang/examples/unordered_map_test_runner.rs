@@ -39,10 +39,13 @@ fn main() {
 
     // Compile as library
     let lib_output = Command::new("rustc")
-        .arg("--edition").arg("2021")
-        .arg("--crate-type").arg("lib")
+        .arg("--edition")
+        .arg("2021")
+        .arg("--crate-type")
+        .arg("lib")
         .arg(&rs_path)
-        .arg("-o").arg(temp_dir.join("libtest_unordered_map.rlib"))
+        .arg("-o")
+        .arg(temp_dir.join("libtest_unordered_map.rlib"))
         .output()
         .expect("Failed to run rustc");
 
@@ -58,11 +61,15 @@ fn main() {
 
     // Compile as binary
     let bin_output = Command::new("rustc")
-        .arg("--edition").arg("2021")
-        .arg("-A").arg("unconditional_panic")
-        .arg("-A").arg("overflowing_literals")
+        .arg("--edition")
+        .arg("2021")
+        .arg("-A")
+        .arg("unconditional_panic")
+        .arg("-A")
+        .arg("overflowing_literals")
         .arg(&rs_path)
-        .arg("-o").arg(temp_dir.join("test_unordered_map"))
+        .arg("-o")
+        .arg(temp_dir.join("test_unordered_map"))
         .output()
         .expect("Failed to run rustc");
 

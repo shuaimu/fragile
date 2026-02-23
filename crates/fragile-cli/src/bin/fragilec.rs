@@ -10,35 +10,30 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 const FRAGILEC_LOG_ENV: &str = "FRAGILEC_LOG";
 const FRAGILEC_MODE_ENV: &str = "FRAGILEC_MODE";
-const FRAGILEC_NATIVE_ENV: &str = "FRAGILEC_NATIVE_COMPILER";
 const FRAGILEC_BUILD_ID_ENV: &str = "FRAGILEC_BUILD_ID";
 const FRAGILEC_ENFORCE_BUILD_ID_ENV: &str = "FRAGILEC_ENFORCE_BUILD_ID";
 const FRAGILEC_REQUIRE_META_ENV: &str = "FRAGILEC_REQUIRE_META";
 const FRAGILEC_KEEP_RS_ENV: &str = "FRAGILEC_KEEP_RS";
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum DriverMode {
-    /// Always pass through to the native compiler.
-    Pass,
-    /// Try fragile compile path first for compile-only single-source invocations,
-    /// then fall back to native compiler on failure.
-    Auto,
-    /// Require fragile compile path for compile-only single-source invocations.
-    Strict,
+fn validate_strict_mode_value(mode: &str) -> Result<(), String> {
+    match mode.to_ascii_lowercase().as_str() {
+        "strict" => Ok(()),
+        "auto" => Err(
+            "FRAGILEC_MODE=auto has been removed; fragilec is strict-only now".to_string(),
+        ),
+        "pass" => Err(
+            "FRAGILEC_MODE=pass has been removed; fragilec is strict-only now".to_string(),
+        ),
+        other => Err(format!(
+            "unsupported FRAGILEC_MODE value `{}`; fragilec is strict-only",
+            other
+        )),
+    }
 }
 
-impl DriverMode {
-    fn from_env() -> Self {
-        match std::env::var(FRAGILEC_MODE_ENV)
-            .unwrap_or_else(|_| "pass".to_string())
-            .to_ascii_lowercase()
-            .as_str()
-        {
-            "auto" => Self::Auto,
-            "strict" => Self::Strict,
-            _ => Self::Pass,
-        }
-    }
+fn validate_strict_mode_env() -> Result<(), String> {
+    let mode = std::env::var(FRAGILEC_MODE_ENV).unwrap_or_else(|_| "strict".to_string());
+    validate_strict_mode_value(mode.as_str())
 }
 
 #[derive(Debug, Clone)]
@@ -147,20 +142,6 @@ fn is_source_file_token(token: &str) -> bool {
         path.extension().and_then(|e| e.to_str()),
         Some("c") | Some("cc") | Some("cpp") | Some("cxx") | Some("C") | Some("cp") | Some("c++")
     )
-}
-
-fn choose_native_compiler(parsed: &ParsedInvocation) -> String {
-    if let Ok(native) = std::env::var(FRAGILEC_NATIVE_ENV) {
-        if !native.trim().is_empty() {
-            return native;
-        }
-    }
-
-    if !parsed.sources.is_empty() && parsed.sources.iter().all(|s| is_c_file(s)) {
-        "cc".to_string()
-    } else {
-        "c++".to_string()
-    }
 }
 
 fn append_invocation_log(args: &[OsString]) -> Result<(), String> {
@@ -363,14 +344,6 @@ fn enforce_build_id_for_link_inputs(args: &[OsString]) -> Result<(), String> {
     Ok(())
 }
 
-fn run_native(compiler: &str, args: &[OsString]) -> Result<i32, String> {
-    let status = Command::new(compiler)
-        .args(args)
-        .status()
-        .map_err(|e| format!("failed to run native compiler `{}`: {}", compiler, e))?;
-    Ok(status.code().unwrap_or(1))
-}
-
 fn run_fragile_compile(parsed: &ParsedInvocation) -> Result<(), String> {
     if !parsed.compile_only {
         return Err("fragile compile mode only supports `-c` invocations for now".to_string());
@@ -481,8 +454,7 @@ Usage:
   fragilec [compiler args...]
 
 Environment:
-  FRAGILEC_MODE=pass|auto|strict     Driver mode (default: pass)
-  FRAGILEC_NATIVE_COMPILER=<bin>     Native fallback compiler (default: cc/c++)
+  FRAGILEC_MODE=strict               Optional; strict-only mode (default: strict)
   FRAGILEC_LOG=<path>                Append invocation log (cwd/args records)
   FRAGILEC_BUILD_ID=<id>             Build-id used for metadata writes/checks
   FRAGILEC_ENFORCE_BUILD_ID=1        Enforce build-id on .o/.a inputs during link
@@ -504,8 +476,10 @@ fn main() -> ExitCode {
     }
 
     let parsed = ParsedInvocation::parse(args.clone());
-    let mode = DriverMode::from_env();
-    let native = choose_native_compiler(&parsed);
+    if let Err(err) = validate_strict_mode_env() {
+        eprintln!("[fragilec] {}", err);
+        return ExitCode::from(2);
+    }
 
     // Enforce link-input metadata only when we are delegating a link command.
     if !parsed.compile_only {
@@ -518,52 +492,18 @@ fn main() -> ExitCode {
     let compile_candidate = parsed.compile_only && parsed.sources.len() == 1;
 
     if !compile_candidate {
-        if mode == DriverMode::Strict {
-            eprintln!(
-                "[fragilec] strict mode currently supports only single-source compile-only (-c) invocations"
-            );
-            return ExitCode::from(2);
-        }
-        return match run_native(&native, &parsed.args) {
-            Ok(code) => ExitCode::from(code as u8),
-            Err(err) => {
-                eprintln!("[fragilec] {}", err);
-                ExitCode::from(1)
-            }
-        };
+        eprintln!(
+            "[fragilec] strict mode currently supports only single-source compile-only (-c) invocations"
+        );
+        return ExitCode::from(2);
     }
 
-    match mode {
-        DriverMode::Pass => match run_native(&native, &parsed.args) {
-            Ok(code) => ExitCode::from(code as u8),
-            Err(err) => {
-                eprintln!("[fragilec] {}", err);
-                ExitCode::from(1)
-            }
-        },
-        DriverMode::Strict => match run_fragile_compile(&parsed) {
-            Ok(()) => ExitCode::SUCCESS,
-            Err(err) => {
-                eprintln!("[fragilec] {}", err);
-                ExitCode::from(1)
-            }
-        },
-        DriverMode::Auto => match run_fragile_compile(&parsed) {
-            Ok(()) => ExitCode::SUCCESS,
-            Err(err) => {
-                eprintln!(
-                    "[fragilec] fragile compile failed; falling back to native compiler `{}`: {}",
-                    native, err
-                );
-                match run_native(&native, &parsed.args) {
-                    Ok(code) => ExitCode::from(code as u8),
-                    Err(native_err) => {
-                        eprintln!("[fragilec] {}", native_err);
-                        ExitCode::from(1)
-                    }
-                }
-            }
-        },
+    match run_fragile_compile(&parsed) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(err) => {
+            eprintln!("[fragilec] {}", err);
+            ExitCode::from(1)
+        }
     }
 }
 
@@ -616,6 +556,25 @@ mod tests {
         assert!(is_source_file_token("x.cxx"));
         assert!(!is_source_file_token("x.o"));
         assert!(!is_source_file_token("-Wl,--as-needed"));
+    }
+
+    #[test]
+    fn strict_mode_validation_accepts_strict() {
+        assert!(
+            validate_strict_mode_value("strict").is_ok(),
+            "strict mode should be accepted"
+        );
+    }
+
+    #[test]
+    fn strict_mode_validation_rejects_auto_and_pass() {
+        let auto_err =
+            validate_strict_mode_value("auto").expect_err("auto mode must be rejected");
+        assert!(auto_err.contains("removed"), "unexpected error: {}", auto_err);
+
+        let pass_err =
+            validate_strict_mode_value("pass").expect_err("pass mode must be rejected");
+        assert!(pass_err.contains("removed"), "unexpected error: {}", pass_err);
     }
 
     #[test]

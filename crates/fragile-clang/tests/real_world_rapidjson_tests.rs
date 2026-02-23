@@ -59,15 +59,9 @@ const RAPIDJSON_FRAGILEC_DRIVER_LOG_FILES: &[&str] = &[
     "compile_condense_driver.status",
     "compile_condense_driver.stdout",
     "compile_condense_driver.stderr",
-    "run_condense_driver.status",
-    "run_condense_driver.stdout",
-    "run_condense_driver.stderr",
     "compile_pretty_driver.status",
     "compile_pretty_driver.stdout",
     "compile_pretty_driver.stderr",
-    "run_pretty_driver.status",
-    "run_pretty_driver.stdout",
-    "run_pretty_driver.stderr",
     "fragilec_driver.log",
     "fragilec_driver_manifest.txt",
 ];
@@ -525,7 +519,7 @@ fn compile_example_with_cxx_env(
     step_name: &str,
     cxx: &Path,
     driver_log: &Path,
-) -> Result<(), String> {
+) -> Result<Output, String> {
     let source_arg = source_dir.join(source_rel);
     let output = Command::new("sh")
         .arg("-c")
@@ -534,8 +528,7 @@ fn compile_example_with_cxx_env(
         .env("CXX", cxx.to_string_lossy().to_string())
         .env("SRC", source_arg.to_string_lossy().to_string())
         .env("OUT", output_path.to_string_lossy().to_string())
-        .env("FRAGILEC_MODE", "pass")
-        .env("FRAGILEC_NATIVE_COMPILER", "c++")
+        .env("FRAGILEC_MODE", "strict")
         .env("FRAGILEC_LOG", driver_log.to_string_lossy().to_string())
         .output()
         .map_err(|e| {
@@ -546,15 +539,7 @@ fn compile_example_with_cxx_env(
             )
         })?;
     write_command_capture(log_dir, step_name, &output)?;
-    if !output.status.success() {
-        return Err(format!(
-            "fragilec-driver compile failed for {} with status {} (logs: {})",
-            source_rel,
-            status_code(&output),
-            log_dir.display()
-        ));
-    }
-    Ok(())
+    Ok(output)
 }
 
 fn run_fragilec_driver_no_stl_examples_in_tree(source_dir: &Path, log_dir: &Path) -> Result<(), String> {
@@ -567,7 +552,7 @@ fn run_fragilec_driver_no_stl_examples_in_tree(source_dir: &Path, log_dir: &Path
         .map_err(|e| format!("failed to initialize fragilec driver log {}: {}", driver_log.display(), e))?;
 
     let condense_bin = source_dir.join("condense_fragilec_driver");
-    compile_example_with_cxx_env(
+    let condense_compile = compile_example_with_cxx_env(
         source_dir,
         "example/condense/condense.cpp",
         &condense_bin,
@@ -576,31 +561,24 @@ fn run_fragilec_driver_no_stl_examples_in_tree(source_dir: &Path, log_dir: &Path
         &fragilec,
         &driver_log,
     )?;
-    let condense_output = run_example_with_stdin(
-        &condense_bin,
-        RAPIDJSON_SAMPLE_JSON,
-        log_dir,
-        "run_condense_driver",
-    )?;
-    if !condense_output.status.success() {
+    if condense_compile.status.success() {
         return Err(format!(
-            "fragilec-driver condense example failed with status {} (logs: {})",
-            status_code(&condense_output),
+            "fragilec-driver condense compile unexpectedly succeeded in strict mode (logs: {})",
             log_dir.display()
         ));
     }
-
-    let condense_stdout = String::from_utf8_lossy(&condense_output.stdout);
-    if condense_stdout.trim() != RAPIDJSON_EXPECTED_CONDENSE_OUTPUT {
+    let condense_stderr = String::from_utf8_lossy(&condense_compile.stderr);
+    if !condense_stderr.contains("single-source compile-only (-c) invocations")
+        && !condense_stderr.contains("failed to parse")
+    {
         return Err(format!(
-            "fragilec-driver condense output mismatch: expected `{}` got `{}`",
-            RAPIDJSON_EXPECTED_CONDENSE_OUTPUT,
-            condense_stdout.trim()
+            "fragilec-driver condense strict failure did not report expected diagnostics\nstderr:\n{}",
+            condense_stderr
         ));
     }
 
     let pretty_bin = source_dir.join("pretty_fragilec_driver");
-    compile_example_with_cxx_env(
+    let pretty_compile = compile_example_with_cxx_env(
         source_dir,
         "example/pretty/pretty.cpp",
         &pretty_bin,
@@ -609,24 +587,19 @@ fn run_fragilec_driver_no_stl_examples_in_tree(source_dir: &Path, log_dir: &Path
         &fragilec,
         &driver_log,
     )?;
-    let pretty_output =
-        run_example_with_stdin(&pretty_bin, RAPIDJSON_SAMPLE_JSON, log_dir, "run_pretty_driver")?;
-    if !pretty_output.status.success() {
+    if pretty_compile.status.success() {
         return Err(format!(
-            "fragilec-driver pretty example failed with status {} (logs: {})",
-            status_code(&pretty_output),
+            "fragilec-driver pretty compile unexpectedly succeeded in strict mode (logs: {})",
             log_dir.display()
         ));
     }
-
-    let pretty_stdout = String::from_utf8_lossy(&pretty_output.stdout);
-    if !(pretty_stdout.contains("\n")
-        && pretty_stdout.contains("\"msg\": \"hi\"")
-        && pretty_stdout.contains("    \"a\": 1"))
+    let pretty_stderr = String::from_utf8_lossy(&pretty_compile.stderr);
+    if !pretty_stderr.contains("single-source compile-only (-c) invocations")
+        && !pretty_stderr.contains("failed to parse")
     {
         return Err(format!(
-            "fragilec-driver pretty output did not look pretty-formatted, got:\n{}",
-            pretty_stdout
+            "fragilec-driver pretty strict failure did not report expected diagnostics\nstderr:\n{}",
+            pretty_stderr
         ));
     }
 
@@ -640,7 +613,7 @@ fn run_fragilec_driver_no_stl_examples_in_tree(source_dir: &Path, log_dir: &Path
     }
 
     let manifest = format!(
-        "source_dir={}\npinned_commit={}\nfragilec={}\nmode=pass\nexamples_count={}\n",
+        "source_dir={}\npinned_commit={}\nfragilec={}\nmode=strict\nexamples_count={}\n",
         source_dir.display(),
         RAPIDJSON_PINNED_COMMIT,
         fragilec.display(),
@@ -1049,14 +1022,22 @@ fn test_rapidjson_fragilec_driver_no_stl_examples_local_fixture_success() {
     assert_eq!(
         read_status_file(&log_dir.join("compile_condense_driver.status"))
             .expect("failed to read compile_condense_driver.status"),
-        0,
-        "fragilec-driver condense compile status should be zero"
+        2,
+        "strict fragilec-driver condense compile should fail with strict-mode status"
     );
     assert_eq!(
         read_status_file(&log_dir.join("compile_pretty_driver.status"))
             .expect("failed to read compile_pretty_driver.status"),
-        0,
-        "fragilec-driver pretty compile status should be zero"
+        2,
+        "strict fragilec-driver pretty compile should fail with strict-mode status"
+    );
+    let condense_stderr = fs::read_to_string(log_dir.join("compile_condense_driver.stderr"))
+        .expect("failed to read compile_condense_driver.stderr");
+    assert!(
+        condense_stderr.contains("single-source compile-only (-c) invocations")
+            || condense_stderr.contains("failed to parse"),
+        "strict condense compile stderr should report unsupported shape/parsing diagnostics, got:\n{}",
+        condense_stderr
     );
 
     let _ = fs::remove_dir_all(&root);
@@ -1233,7 +1214,7 @@ fn test_real_world_rapidjson_native_no_stl_examples_baseline() {
 }
 
 #[test]
-#[ignore = "real-world external project test (builds/runs rapidjson examples with CXX=fragilec passthrough driver)"]
+#[ignore = "real-world external project test (builds/runs rapidjson examples with CXX=fragilec strict-mode driver)"]
 fn test_real_world_rapidjson_fragilec_native_no_stl_examples_baseline() {
     let log_dir = run_rapidjson_fragilec_driver_baseline()
         .expect("failed to run rapidjson fragilec-driver no-stl baseline");
@@ -1246,20 +1227,28 @@ fn test_real_world_rapidjson_fragilec_native_no_stl_examples_baseline() {
         );
     }
 
-    let condense_stdout = fs::read_to_string(log_dir.join("run_condense_driver.stdout"))
-        .expect("failed to read run_condense_driver.stdout");
     assert_eq!(
-        condense_stdout.trim(),
-        RAPIDJSON_EXPECTED_CONDENSE_OUTPUT,
-        "fragilec-driver condense output should match expected compact JSON"
+        read_status_file(&log_dir.join("compile_condense_driver.status"))
+            .expect("failed to read compile_condense_driver.status"),
+        2,
+        "real-world strict condense compile should fail until full strict compile+link support exists"
+    );
+    let condense_stderr = fs::read_to_string(log_dir.join("compile_condense_driver.stderr"))
+        .expect("failed to read compile_condense_driver.stderr");
+    assert!(
+        condense_stderr.contains("single-source compile-only (-c) invocations")
+            || condense_stderr.contains("failed to parse"),
+        "strict condense compile should report unsupported shape/parsing diagnostics, got:\n{}",
+        condense_stderr
     );
 
-    let pretty_stdout = fs::read_to_string(log_dir.join("run_pretty_driver.stdout"))
-        .expect("failed to read run_pretty_driver.stdout");
+    let pretty_stderr = fs::read_to_string(log_dir.join("compile_pretty_driver.stderr"))
+        .expect("failed to read compile_pretty_driver.stderr");
     assert!(
-        pretty_stdout.contains("\"msg\": \"hi\""),
-        "fragilec-driver pretty output should preserve JSON fields, got:\n{}",
-        pretty_stdout
+        pretty_stderr.contains("single-source compile-only (-c) invocations")
+            || pretty_stderr.contains("failed to parse"),
+        "strict pretty compile should report unsupported shape/parsing diagnostics, got:\n{}",
+        pretty_stderr
     );
 }
 

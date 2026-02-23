@@ -7,7 +7,11 @@ fn test_analyze_method_children_structure() {
     let test_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests");
     let test_file = test_dir.join("test_map.cpp");
 
-    assert!(test_file.exists(), "Test file should exist: {:?}", test_file);
+    assert!(
+        test_file.exists(),
+        "Test file should exist: {:?}",
+        test_file
+    );
 
     let result = export_ast(&test_file, &test_dir, &[], false);
 
@@ -16,10 +20,21 @@ fn test_analyze_method_children_structure() {
             println!("\n=== Analyzing method children structure ===\n");
 
             // Focus on interesting map methods
-            let interesting = ["find", "operator[]", "insert", "at", "erase", "size", "empty", "clear"];
+            let interesting = [
+                "find",
+                "operator[]",
+                "insert",
+                "at",
+                "erase",
+                "size",
+                "empty",
+                "clear",
+            ];
 
             for method_name in &interesting {
-                let methods: Vec<_> = ctx.ast_nodes.iter()
+                let methods: Vec<_> = ctx
+                    .ast_nodes
+                    .iter()
                     .filter(|(_, n)| n.tag == ASTEntryTag::TagCXXMethodDecl)
                     .filter(|(_, n)| n.get_string(0).unwrap_or("") == *method_name)
                     .collect();
@@ -31,7 +46,8 @@ fn test_analyze_method_children_structure() {
                 println!("\n=== {} ({} instances) ===", method_name, methods.len());
 
                 // Check if ANY child is a CompoundStmt
-                let with_body: Vec<_> = methods.iter()
+                let with_body: Vec<_> = methods
+                    .iter()
                     .filter(|(_, n)| {
                         n.children.iter().any(|c| {
                             c.and_then(|id| ctx.ast_nodes.get(&id))
@@ -41,7 +57,8 @@ fn test_analyze_method_children_structure() {
                     })
                     .collect();
 
-                let without_body: Vec<_> = methods.iter()
+                let without_body: Vec<_> = methods
+                    .iter()
                     .filter(|(_, n)| {
                         !n.children.iter().any(|c| {
                             c.and_then(|id| ctx.ast_nodes.get(&id))
@@ -64,12 +81,18 @@ fn test_analyze_method_children_structure() {
                             if let Some(child_node) = ctx.ast_nodes.get(child_id) {
                                 let extra = match child_node.tag {
                                     ASTEntryTag::TagParmVarDecl => {
-                                        format!(" name=\"{}\"", child_node.get_string(0).unwrap_or("?"))
+                                        format!(
+                                            " name=\"{}\"",
+                                            child_node.get_string(0).unwrap_or("?")
+                                        )
                                     }
                                     ASTEntryTag::TagCompoundStmt => {
-                                        format!(" (THIS IS THE BODY, {} statements)", child_node.children.len())
+                                        format!(
+                                            " (THIS IS THE BODY, {} statements)",
+                                            child_node.children.len()
+                                        )
                                     }
-                                    _ => String::new()
+                                    _ => String::new(),
                                 };
                                 println!("      [{}] {:?}{}", i, child_node.tag, extra);
                             }
@@ -89,9 +112,12 @@ fn test_analyze_method_children_structure() {
                             if let Some(child_node) = ctx.ast_nodes.get(child_id) {
                                 let extra = match child_node.tag {
                                     ASTEntryTag::TagParmVarDecl => {
-                                        format!(" name=\"{}\"", child_node.get_string(0).unwrap_or("?"))
+                                        format!(
+                                            " name=\"{}\"",
+                                            child_node.get_string(0).unwrap_or("?")
+                                        )
                                     }
-                                    _ => String::new()
+                                    _ => String::new(),
                                 };
                                 println!("      [{}] {:?}{}", i, child_node.tag, extra);
                             }
@@ -104,11 +130,15 @@ fn test_analyze_method_children_structure() {
 
             // Overall statistics
             println!("\n\n=== Overall Summary ===");
-            let total_methods = ctx.ast_nodes.values()
+            let total_methods = ctx
+                .ast_nodes
+                .values()
                 .filter(|n| n.tag == ASTEntryTag::TagCXXMethodDecl)
                 .count();
 
-            let methods_with_body = ctx.ast_nodes.values()
+            let methods_with_body = ctx
+                .ast_nodes
+                .values()
                 .filter(|n| n.tag == ASTEntryTag::TagCXXMethodDecl)
                 .filter(|n| {
                     n.children.iter().any(|c| {
@@ -120,9 +150,18 @@ fn test_analyze_method_children_structure() {
                 .count();
 
             println!("Total method declarations: {}", total_methods);
-            println!("Methods with CompoundStmt body (anywhere in children): {}", methods_with_body);
-            println!("Methods without body (declarations only): {}", total_methods - methods_with_body);
-            println!("Percentage with body: {:.1}%", 100.0 * methods_with_body as f64 / total_methods as f64);
+            println!(
+                "Methods with CompoundStmt body (anywhere in children): {}",
+                methods_with_body
+            );
+            println!(
+                "Methods without body (declarations only): {}",
+                total_methods - methods_with_body
+            );
+            println!(
+                "Percentage with body: {:.1}%",
+                100.0 * methods_with_body as f64 / total_methods as f64
+            );
         }
         Err(e) => {
             panic!("AST export failed: {}", e);

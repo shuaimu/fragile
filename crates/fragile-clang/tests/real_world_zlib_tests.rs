@@ -537,9 +537,6 @@ fn create_logging_cc_driver(driver_dir: &Path, log_path: &Path) -> Result<PathBu
         )
     })?;
 
-    let fragilec = ensure_fragilec_binary()?;
-    let fragilec_str = fragilec.to_string_lossy().to_string();
-
     let driver_path = driver_dir.join("fragile_cc_driver.sh");
     let script = r#"#!/bin/sh
 set -eu
@@ -554,11 +551,8 @@ fi
   printf '%s ' "$@"
   printf '\n'
 } >> "$log_file"
-export FRAGILEC_MODE=pass
-export FRAGILEC_NATIVE_COMPILER=cc
-exec "__FRAGILEC__" "$@"
-"#
-    .replace("__FRAGILEC__", fragilec_str.as_str());
+exec cc "$@"
+"#;
 
     fs::write(&driver_path, script)
         .map_err(|e| format!("failed to write cc driver {}: {}", driver_path.display(), e))?;

@@ -17,7 +17,7 @@ jobs:
       fail-fast: false
       matrix:
         test_name:
-          - test_real_world_xxhash_make_xxhsum_with_fragilec_driver_passthrough
+          - test_real_world_xxhash_make_xxhsum_with_fragilec_driver_strict
     steps:
       - uses: actions/checkout@v4
         with:

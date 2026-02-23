@@ -1360,9 +1360,6 @@ fn create_logging_cxx_driver(driver_dir: &Path, log_path: &Path) -> Result<PathB
         )
     })?;
 
-    let fragilec = ensure_fragilec_binary()?;
-    let fragilec_str = fragilec.to_string_lossy().to_string();
-
     let driver_path = driver_dir.join("fragile_tinyxml2_cxx_driver.sh");
     let script = r#"#!/bin/sh
 set -eu
@@ -1377,11 +1374,8 @@ fi
   printf '%s ' "$@"
   printf '\n'
 } >> "$log_file"
-export FRAGILEC_MODE=pass
-export FRAGILEC_NATIVE_COMPILER=c++
-exec "__FRAGILEC__" "$@"
-"#
-    .replace("__FRAGILEC__", fragilec_str.as_str());
+exec c++ "$@"
+"#;
 
     fs::write(&driver_path, script).map_err(|e| {
         format!(
