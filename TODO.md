@@ -7,6 +7,8 @@ Previous backlog items are deprecated and intentionally removed.
 Run upstream-style tests through the Fragile transpiler with runtime parity:
 1. `zlib`
 2. `tinyxml2` (only after `zlib` success)
+3. `pugixml` (no-STL baseline + command-plan bootstrap)
+4. `rapidjson` (no-STL example baseline + command-plan bootstrap)
 
 ## Global Constraints
 - No manual Rust stubs for missing transpilation in target code paths.
@@ -605,3 +607,29 @@ Run upstream-style tests through the Fragile transpiler with runtime parity:
 - [x] No regressions introduced to zlib parity coverage.
   - Analysis (2026-02-22): scoped under <500 LOC by adding deterministic coverage-guard tests that assert zlib parity lanes remain wired in CI (`ci.yml` zlib smoke invocations) and nightly (`zlib-nightly.yml` matrix entries), preventing silent workflow drift from dropping parity coverage.
   - Evidence (`cargo test -p fragile-clang --test real_world_zlib_tests test_ci_workflow_keeps_zlib_smoke_parity_coverage -- --nocapture && cargo test -p fragile-clang --test real_world_zlib_tests test_zlib_nightly_workflow_keeps_parity_matrix_coverage -- --nocapture && cargo test`, 2026-02-22): new workflow-coverage guards pass, zlib local parity smoke tests remain green, and full workspace regression suite passes.
+
+## Phase 3: pugixml (Bootstrap)
+- [x] Add pinned `pugixml` fixture checkout in the real-world harness (`zeux/pugixml` pinned to `ee86beb30e4973f5feffe3ce63bfa4fbadf72f38`, v1.15).
+- [x] Capture native no-STL baseline via upstream flow (`make test config=release defines=PUGIXML_NO_STL cxxstd=c++11`) through `real_world_pugixml_tests`.
+- [x] Add deterministic no-STL command-plan capture for upstream `make -n test` runtime invocation (`make_test_commands_manifest.txt`).
+- [x] Add local-fixture smoke coverage and workflow guards for harness wiring (`ci.yml` + `pugixml-nightly.yml`).
+- [x] Add nightly real-world matrix coverage for pinned checkout + command-plan + native baseline.
+  - Analysis (2026-02-23): scoped under <500 LOC per change by adding a dedicated bootstrap harness (`real_world_pugixml_tests.rs`), a lightweight CI smoke lane (`pugixml-smoke-baseline`), and a nightly matrix workflow (`pugixml-nightly.yml`) without attempting transpiled replay/parity in the same slice.
+  - Evidence (`cargo test -p fragile-clang --test real_world_pugixml_tests -- --nocapture && cargo test -p fragile-clang --test real_world_pugixml_tests -- --ignored --nocapture --test-threads=1`, 2026-02-23): passes; local fixture tests and real-world ignored baseline/plan checks are green (`7 passed + 3 ignored` in normal lane; `3 passed` in ignored lane).
+
+### Phase 3 Exit Criteria
+- [x] Pinned checkout + native no-STL baseline + command-plan generation are deterministic and passing.
+- [x] CI/nightly coverage is wired and guarded by tests.
+
+## Phase 4: rapidjson (Bootstrap)
+- [x] Add pinned `rapidjson` fixture checkout in the real-world harness (`Tencent/rapidjson` pinned to `f54b0e47a08782a6131cc3d60f94d038fa6e0a51`, v1.1.0).
+- [x] Capture native no-STL baseline using upstream no-STL examples (`condense`, `pretty`) through `real_world_rapidjson_tests`.
+- [x] Add deterministic no-STL example command-plan manifest coverage (`no_stl_examples_manifest.txt`).
+- [x] Add local-fixture smoke coverage and workflow guards for harness wiring (`ci.yml` + `rapidjson-nightly.yml`).
+- [x] Add nightly real-world matrix coverage for pinned checkout + command-plan + native baseline.
+  - Analysis (2026-02-23): scoped under <500 LOC per change by adding a focused bootstrap harness (`real_world_rapidjson_tests.rs`) around no-STL examples (`example/condense`, `example/pretty`) and wiring smoke/nightly coverage before introducing transpiled replay leaves.
+  - Evidence (`cargo test -p fragile-clang --test real_world_rapidjson_tests -- --nocapture && cargo test -p fragile-clang --test real_world_rapidjson_tests -- --ignored --nocapture --test-threads=1`, 2026-02-23): passes; local fixture tests and real-world ignored baseline/plan checks are green (`5 passed + 3 ignored` in normal lane; `3 passed` in ignored lane).
+
+### Phase 4 Exit Criteria
+- [x] Pinned checkout + native no-STL baseline + command-plan generation are deterministic and passing.
+- [x] CI/nightly coverage is wired and guarded by tests.

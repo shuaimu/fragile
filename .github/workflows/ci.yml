@@ -111,3 +111,45 @@ jobs:
     - name: Run tinyxml2 parity smoke test (local fixture)
       run: |
         cargo test -p fragile-clang --test real_world_tinyxml2_tests test_make_test_command_subset_parity_local_fixture_success -- --nocapture
+
+  # Deterministic pugixml baseline smoke lane (local fixture only)
+  pugixml-smoke-baseline:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: recursive
+
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libclang-dev llvm-dev
+
+    - name: Setup Rust stable
+      uses: dtolnay/rust-action@stable
+
+    - name: Run pugixml baseline smoke tests (local fixture)
+      run: |
+        cargo test -p fragile-clang --test real_world_pugixml_tests test_make_test_no_stl_local_fixture_success -- --nocapture
+        cargo test -p fragile-clang --test real_world_pugixml_tests test_make_test_command_plan_local_fixture_success -- --nocapture
+
+  # Deterministic rapidjson baseline smoke lane (local fixture only)
+  rapidjson-smoke-baseline:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: recursive
+
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libclang-dev llvm-dev
+
+    - name: Setup Rust stable
+      uses: dtolnay/rust-action@stable
+
+    - name: Run rapidjson baseline smoke tests (local fixture)
+      run: |
+        cargo test -p fragile-clang --test real_world_rapidjson_tests test_rapidjson_native_no_stl_examples_local_fixture_success -- --nocapture
+        cargo test -p fragile-clang --test real_world_rapidjson_tests test_rapidjson_no_stl_command_plan_local_fixture_success -- --nocapture

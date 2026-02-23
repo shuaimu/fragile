@@ -1,0 +1,793 @@
+//! Real-world RapidJSON fixture bootstrap tests.
+//!
+//! This target focuses on no-STL runtime examples (`condense`, `pretty`) to
+//! provide deterministic next-stage development coverage.
+
+use std::fs;
+use std::io::{ErrorKind, Write};
+use std::path::{Path, PathBuf};
+use std::process::{Command, Output, Stdio};
+use std::thread::sleep;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+const RAPIDJSON_REPO_URL: &str = "https://github.com/Tencent/rapidjson.git";
+const RAPIDJSON_PINNED_COMMIT: &str = "f54b0e47a08782a6131cc3d60f94d038fa6e0a51"; // v1.1.0
+const RAPIDJSON_CACHE_DIR: &str = "/tmp/fragile_real_world_rapidjson";
+const RAPIDJSON_NATIVE_BASELINE_DIR: &str = "/tmp/fragile_real_world_rapidjson_native_baseline";
+const RAPIDJSON_COMMAND_PLAN_DIR: &str = "/tmp/fragile_real_world_rapidjson_no_stl_command_plan";
+const RAPIDJSON_REQUIRED_PATHS: &[&str] = &[
+    "include/rapidjson/document.h",
+    "example/condense/condense.cpp",
+    "example/pretty/pretty.cpp",
+    "CMakeLists.txt",
+];
+const RAPIDJSON_NO_STL_EXAMPLES: &[(&str, &str)] = &[
+    ("condense", "example/condense/condense.cpp"),
+    ("pretty", "example/pretty/pretty.cpp"),
+];
+const RAPIDJSON_SAMPLE_JSON: &str = "{\"a\":1,\"b\":[true,false],\"msg\":\"hi\"}\n";
+const RAPIDJSON_EXPECTED_CONDENSE_OUTPUT: &str = "{\"a\":1,\"b\":[true,false],\"msg\":\"hi\"}";
+const RAPIDJSON_NATIVE_LOG_FILES: &[&str] = &[
+    "compile_condense.status",
+    "compile_condense.stdout",
+    "compile_condense.stderr",
+    "run_condense.status",
+    "run_condense.stdout",
+    "run_condense.stderr",
+    "compile_pretty.status",
+    "compile_pretty.stdout",
+    "compile_pretty.stderr",
+    "run_pretty.status",
+    "run_pretty.stdout",
+    "run_pretty.stderr",
+    "native_baseline_manifest.txt",
+];
+const RAPIDJSON_COMMAND_PLAN_LOG_FILES: &[&str] = &["no_stl_examples_manifest.txt"];
+const RAPIDJSON_CI_SMOKE_REQUIRED_TEST_INVOCATIONS: &[&str] = &[
+    "test_rapidjson_native_no_stl_examples_local_fixture_success",
+    "test_rapidjson_no_stl_command_plan_local_fixture_success",
+];
+const RAPIDJSON_NIGHTLY_REQUIRED_TEST_NAMES: &[&str] = &[
+    "test_real_world_rapidjson_fixture_checkout_is_pinned",
+    "test_real_world_rapidjson_no_stl_command_plan_generation",
+    "test_real_world_rapidjson_native_no_stl_examples_baseline",
+];
+
+fn workspace_root_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .canonicalize()
+        .expect("failed to resolve workspace root")
+}
+
+fn read_workflow_file(file_name: &str) -> Result<String, String> {
+    let workflow_path = workspace_root_dir()
+        .join(".github")
+        .join("workflows")
+        .join(file_name);
+    fs::read_to_string(&workflow_path)
+        .map_err(|e| format!("failed to read workflow {}: {}", workflow_path.display(), e))
+}
+
+fn run_git(args: &[&str], cwd: Option<&Path>) -> Result<Output, String> {
+    let mut cmd = Command::new("git");
+    cmd.args(args);
+    if let Some(dir) = cwd {
+        cmd.current_dir(dir);
+    }
+
+    let output = cmd
+        .output()
+        .map_err(|e| format!("failed to run git {:?}: {}", args, e))?;
+    if output.status.success() {
+        Ok(output)
+    } else {
+        Err(format!(
+            "git {:?} failed:\nstdout:\n{}\nstderr:\n{}",
+            args,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        ))
+    }
+}
+
+fn git_stdout(args: &[&str], cwd: Option<&Path>) -> Result<String, String> {
+    let output = run_git(args, cwd)?;
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+fn checkout_has_required_files(repo_dir: &Path, required_paths: &[&str]) -> bool {
+    repo_dir.join(".git").exists() && required_paths.iter().all(|rel| repo_dir.join(rel).exists())
+}
+
+fn read_head(repo_dir: &Path) -> Option<String> {
+    git_stdout(&["rev-parse", "HEAD"], Some(repo_dir)).ok()
+}
+
+fn synchronize_pinned_checkout(
+    repo_url: &str,
+    repo_dir: &Path,
+    pinned_commit: &str,
+) -> Result<(), String> {
+    if !repo_dir.join(".git").exists() {
+        if repo_dir.exists() {
+            fs::remove_dir_all(repo_dir).map_err(|e| {
+                format!(
+                    "failed to remove partial checkout {}: {}",
+                    repo_dir.display(),
+                    e
+                )
+            })?;
+        }
+
+        let repo_dir_str = repo_dir.to_string_lossy().to_string();
+        run_git(&["clone", "--no-tags", repo_url, repo_dir_str.as_str()], None)?;
+    }
+
+    run_git(
+        &["fetch", "--depth", "1", "origin", pinned_commit],
+        Some(repo_dir),
+    )?;
+    run_git(&["checkout", "--detach", pinned_commit], Some(repo_dir))?;
+    Ok(())
+}
+
+fn ensure_pinned_checkout(
+    repo_url: &str,
+    repo_dir: &Path,
+    pinned_commit: &str,
+    required_paths: &[&str],
+) -> Result<PathBuf, String> {
+    let repo_dir = repo_dir.to_path_buf();
+    if checkout_has_required_files(&repo_dir, required_paths)
+        && read_head(&repo_dir).as_deref() == Some(pinned_commit)
+    {
+        return Ok(repo_dir);
+    }
+
+    if let Some(parent) = repo_dir.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|e| format!("failed to create parent dir {}: {}", parent.display(), e))?;
+    }
+
+    let lock_path = repo_dir.with_extension("clone.lock");
+    let mut have_lock = false;
+    match fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&lock_path)
+    {
+        Ok(_) => have_lock = true,
+        Err(e) if e.kind() == ErrorKind::AlreadyExists => {}
+        Err(e) => {
+            return Err(format!(
+                "failed to create clone lock {}: {}",
+                lock_path.display(),
+                e
+            ));
+        }
+    }
+
+    if have_lock {
+        let result = (|| -> Result<(), String> {
+            if repo_dir.exists() && !repo_dir.join(".git").exists() {
+                fs::remove_dir_all(&repo_dir).map_err(|e| {
+                    format!(
+                        "failed to remove stale checkout {}: {}",
+                        repo_dir.display(),
+                        e
+                    )
+                })?;
+            }
+
+            synchronize_pinned_checkout(repo_url, &repo_dir, pinned_commit)?;
+
+            if !checkout_has_required_files(&repo_dir, required_paths) {
+                return Err(format!(
+                    "checkout missing required files at {}",
+                    repo_dir.display()
+                ));
+            }
+
+            let head = read_head(&repo_dir).ok_or_else(|| {
+                format!(
+                    "failed to query HEAD after checkout at {}",
+                    repo_dir.display()
+                )
+            })?;
+            if head != pinned_commit {
+                return Err(format!(
+                    "expected HEAD {} but found {} at {}",
+                    pinned_commit,
+                    head,
+                    repo_dir.display()
+                ));
+            }
+            Ok(())
+        })();
+        let _ = fs::remove_file(&lock_path);
+        result?;
+        return Ok(repo_dir);
+    }
+
+    for _ in 0..200 {
+        if checkout_has_required_files(&repo_dir, required_paths)
+            && read_head(&repo_dir).as_deref() == Some(pinned_commit)
+        {
+            return Ok(repo_dir);
+        }
+        sleep(Duration::from_millis(100));
+    }
+
+    Err(format!(
+        "checkout for {} is not ready at {} (lock: {})",
+        repo_url,
+        repo_dir.display(),
+        lock_path.display()
+    ))
+}
+
+fn ensure_rapidjson_checkout() -> Result<PathBuf, String> {
+    ensure_pinned_checkout(
+        RAPIDJSON_REPO_URL,
+        Path::new(RAPIDJSON_CACHE_DIR),
+        RAPIDJSON_PINNED_COMMIT,
+        RAPIDJSON_REQUIRED_PATHS,
+    )
+}
+
+fn status_code(output: &Output) -> i32 {
+    output.status.code().unwrap_or(-1)
+}
+
+fn write_command_capture(log_dir: &Path, step: &str, output: &Output) -> Result<(), String> {
+    fs::create_dir_all(log_dir)
+        .map_err(|e| format!("failed to create log dir {}: {}", log_dir.display(), e))?;
+    fs::write(
+        log_dir.join(format!("{}.status", step)),
+        format!("{}\n", status_code(output)),
+    )
+    .map_err(|e| format!("failed to write {}.status: {}", step, e))?;
+    fs::write(log_dir.join(format!("{}.stdout", step)), &output.stdout)
+        .map_err(|e| format!("failed to write {}.stdout: {}", step, e))?;
+    fs::write(log_dir.join(format!("{}.stderr", step)), &output.stderr)
+        .map_err(|e| format!("failed to write {}.stderr: {}", step, e))?;
+    Ok(())
+}
+
+fn reset_dir(path: &Path) -> Result<(), String> {
+    if path.exists() {
+        fs::remove_dir_all(path)
+            .map_err(|e| format!("failed to remove {}: {}", path.display(), e))?;
+    }
+    fs::create_dir_all(path).map_err(|e| format!("failed to create {}: {}", path.display(), e))
+}
+
+fn compile_example(
+    source_dir: &Path,
+    source_rel: &str,
+    output_path: &Path,
+    log_dir: &Path,
+    step_name: &str,
+) -> Result<(), String> {
+    let mut cmd = Command::new("c++");
+    cmd.arg("-std=c++11")
+        .arg("-O2")
+        .arg("-DNDEBUG")
+        .arg("-DRAPIDJSON_HAS_STDSTRING=0")
+        .arg("-I")
+        .arg(source_dir.join("include"))
+        .arg(source_dir.join(source_rel))
+        .arg("-o")
+        .arg(output_path);
+
+    let output = cmd
+        .output()
+        .map_err(|e| format!("failed to run C++ compiler for {}: {}", source_rel, e))?;
+    write_command_capture(log_dir, step_name, &output)?;
+    if !output.status.success() {
+        return Err(format!(
+            "C++ compile failed for {} with status {} (logs: {})",
+            source_rel,
+            status_code(&output),
+            log_dir.display()
+        ));
+    }
+
+    Ok(())
+}
+
+fn run_example_with_stdin(
+    binary_path: &Path,
+    stdin_payload: &str,
+    log_dir: &Path,
+    step_name: &str,
+) -> Result<Output, String> {
+    let mut child = Command::new(binary_path)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("failed to execute {}: {}", binary_path.display(), e))?;
+
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin
+            .write_all(stdin_payload.as_bytes())
+            .map_err(|e| format!("failed to write stdin for {}: {}", binary_path.display(), e))?;
+    }
+
+    let output = child
+        .wait_with_output()
+        .map_err(|e| format!("failed to wait for {}: {}", binary_path.display(), e))?;
+    write_command_capture(log_dir, step_name, &output)?;
+    Ok(output)
+}
+
+fn run_native_no_stl_examples_in_tree(source_dir: &Path, log_dir: &Path) -> Result<(), String> {
+    fs::create_dir_all(log_dir)
+        .map_err(|e| format!("failed to create log dir {}: {}", log_dir.display(), e))?;
+
+    let condense_bin = source_dir.join("condense_fragile_baseline");
+    compile_example(
+        source_dir,
+        "example/condense/condense.cpp",
+        &condense_bin,
+        log_dir,
+        "compile_condense",
+    )?;
+
+    let condense_output = run_example_with_stdin(&condense_bin, RAPIDJSON_SAMPLE_JSON, log_dir, "run_condense")?;
+    if !condense_output.status.success() {
+        return Err(format!(
+            "condense example failed with status {} (logs: {})",
+            status_code(&condense_output),
+            log_dir.display()
+        ));
+    }
+
+    let condense_stdout = String::from_utf8_lossy(&condense_output.stdout);
+    if condense_stdout.trim() != RAPIDJSON_EXPECTED_CONDENSE_OUTPUT {
+        return Err(format!(
+            "condense output mismatch: expected `{}` got `{}`",
+            RAPIDJSON_EXPECTED_CONDENSE_OUTPUT,
+            condense_stdout.trim()
+        ));
+    }
+
+    let pretty_bin = source_dir.join("pretty_fragile_baseline");
+    compile_example(
+        source_dir,
+        "example/pretty/pretty.cpp",
+        &pretty_bin,
+        log_dir,
+        "compile_pretty",
+    )?;
+
+    let pretty_output = run_example_with_stdin(&pretty_bin, RAPIDJSON_SAMPLE_JSON, log_dir, "run_pretty")?;
+    if !pretty_output.status.success() {
+        return Err(format!(
+            "pretty example failed with status {} (logs: {})",
+            status_code(&pretty_output),
+            log_dir.display()
+        ));
+    }
+
+    let pretty_stdout = String::from_utf8_lossy(&pretty_output.stdout);
+    if !(pretty_stdout.contains("\n")
+        && pretty_stdout.contains("\"msg\": \"hi\"")
+        && pretty_stdout.contains("    \"a\": 1"))
+    {
+        return Err(format!(
+            "pretty output did not look pretty-formatted, got:\n{}",
+            pretty_stdout
+        ));
+    }
+
+    let manifest = format!(
+        "source_dir={}\npinned_commit={}\nexamples_count={}\nexample=condense compile_status=0 run_status=0\nexample=pretty compile_status=0 run_status=0\n",
+        source_dir.display(),
+        RAPIDJSON_PINNED_COMMIT,
+        RAPIDJSON_NO_STL_EXAMPLES.len()
+    );
+    fs::write(log_dir.join("native_baseline_manifest.txt"), manifest).map_err(|e| {
+        format!(
+            "failed to write native_baseline_manifest.txt in {}: {}",
+            log_dir.display(),
+            e
+        )
+    })?;
+
+    Ok(())
+}
+
+fn run_no_stl_command_plan_in_tree(source_dir: &Path, log_dir: &Path) -> Result<(), String> {
+    fs::create_dir_all(log_dir)
+        .map_err(|e| format!("failed to create log dir {}: {}", log_dir.display(), e))?;
+
+    let mut manifest = String::new();
+    manifest.push_str(&format!(
+        "source_dir={}\npinned_commit={}\nexample_count={}\n",
+        source_dir.display(),
+        RAPIDJSON_PINNED_COMMIT,
+        RAPIDJSON_NO_STL_EXAMPLES.len()
+    ));
+
+    for (idx, (name, source_rel)) in RAPIDJSON_NO_STL_EXAMPLES.iter().enumerate() {
+        manifest.push_str(&format!(
+            "compile[{idx}]=c++ -std=c++11 -O2 -DNDEBUG -DRAPIDJSON_HAS_STDSTRING=0 -Iinclude {source_rel} -o {name}\n"
+        ));
+        manifest.push_str(&format!("run[{idx}]=echo '<sample json>' | ./{name}\n"));
+    }
+
+    fs::write(log_dir.join("no_stl_examples_manifest.txt"), manifest).map_err(|e| {
+        format!(
+            "failed to write no_stl_examples_manifest.txt in {}: {}",
+            log_dir.display(),
+            e
+        )
+    })
+}
+
+fn run_rapidjson_native_baseline() -> Result<PathBuf, String> {
+    let checkout_dir = ensure_rapidjson_checkout()?;
+    let baseline_root = PathBuf::from(RAPIDJSON_NATIVE_BASELINE_DIR);
+    reset_dir(&baseline_root)?;
+
+    let worktree_dir = baseline_root.join("worktree");
+    let checkout_dir_str = checkout_dir.to_string_lossy().to_string();
+    let worktree_dir_str = worktree_dir.to_string_lossy().to_string();
+    run_git(
+        &[
+            "clone",
+            "--no-tags",
+            "--local",
+            checkout_dir_str.as_str(),
+            worktree_dir_str.as_str(),
+        ],
+        None,
+    )?;
+    run_git(
+        &["checkout", "--detach", RAPIDJSON_PINNED_COMMIT],
+        Some(&worktree_dir),
+    )?;
+
+    let actual_head = read_head(&worktree_dir)
+        .ok_or_else(|| format!("failed to read HEAD in {}", worktree_dir.display()))?;
+    if actual_head != RAPIDJSON_PINNED_COMMIT {
+        return Err(format!(
+            "native baseline worktree expected commit {} but got {}",
+            RAPIDJSON_PINNED_COMMIT, actual_head
+        ));
+    }
+
+    let log_dir = baseline_root.join("native_logs");
+    run_native_no_stl_examples_in_tree(&worktree_dir, &log_dir)?;
+    Ok(log_dir)
+}
+
+fn run_rapidjson_no_stl_command_plan() -> Result<PathBuf, String> {
+    let checkout_dir = ensure_rapidjson_checkout()?;
+    let baseline_root = PathBuf::from(RAPIDJSON_COMMAND_PLAN_DIR);
+    reset_dir(&baseline_root)?;
+
+    let worktree_dir = baseline_root.join("worktree");
+    let checkout_dir_str = checkout_dir.to_string_lossy().to_string();
+    let worktree_dir_str = worktree_dir.to_string_lossy().to_string();
+    run_git(
+        &[
+            "clone",
+            "--no-tags",
+            "--local",
+            checkout_dir_str.as_str(),
+            worktree_dir_str.as_str(),
+        ],
+        None,
+    )?;
+    run_git(
+        &["checkout", "--detach", RAPIDJSON_PINNED_COMMIT],
+        Some(&worktree_dir),
+    )?;
+
+    let actual_head = read_head(&worktree_dir)
+        .ok_or_else(|| format!("failed to read HEAD in {}", worktree_dir.display()))?;
+    if actual_head != RAPIDJSON_PINNED_COMMIT {
+        return Err(format!(
+            "command-plan worktree expected commit {} but got {}",
+            RAPIDJSON_PINNED_COMMIT, actual_head
+        ));
+    }
+
+    let log_dir = baseline_root.join("command_plan_logs");
+    run_no_stl_command_plan_in_tree(&worktree_dir, &log_dir)?;
+    Ok(log_dir)
+}
+
+fn unique_temp_dir(prefix: &str) -> PathBuf {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time should be after UNIX_EPOCH")
+        .as_nanos();
+    std::env::temp_dir().join(format!("fragile_{prefix}_{}_{}", std::process::id(), now))
+}
+
+fn create_local_rapidjson_like_repo(base_dir: &Path) -> Result<(String, String, String), String> {
+    let remote_dir = base_dir.join("remote");
+    fs::create_dir_all(remote_dir.join("include/rapidjson"))
+        .map_err(|e| format!("failed to create include dir: {}", e))?;
+    fs::create_dir_all(remote_dir.join("example/condense"))
+        .map_err(|e| format!("failed to create condense dir: {}", e))?;
+    fs::create_dir_all(remote_dir.join("example/pretty"))
+        .map_err(|e| format!("failed to create pretty dir: {}", e))?;
+
+    fs::write(remote_dir.join("include/rapidjson/document.h"), "#pragma once\n")
+        .map_err(|e| format!("failed to write document.h: {}", e))?;
+    fs::write(
+        remote_dir.join("example/condense/condense.cpp"),
+        "#include <cstdio>\nint main(){std::fputs(\"{\\\"a\\\":1,\\\"b\\\":[true,false],\\\"msg\\\":\\\"hi\\\"}\", stdout); return 0;}\n",
+    )
+    .map_err(|e| format!("failed to write condense.cpp: {}", e))?;
+    fs::write(
+        remote_dir.join("example/pretty/pretty.cpp"),
+        "#include <cstdio>\nint main(){std::fputs(\"{\\n    \\\"a\\\": 1,\\n    \\\"b\\\": [\\n        true,\\n        false\\n    ],\\n    \\\"msg\\\": \\\"hi\\\"\\n}\\n\", stdout); return 0;}\n",
+    )
+    .map_err(|e| format!("failed to write pretty.cpp: {}", e))?;
+    fs::write(remote_dir.join("CMakeLists.txt"), "cmake_minimum_required(VERSION 3.5)\n")
+        .map_err(|e| format!("failed to write CMakeLists.txt: {}", e))?;
+
+    run_git(&["init"], Some(&remote_dir))?;
+    run_git(&["config", "user.name", "Fragile Test"], Some(&remote_dir))?;
+    run_git(
+        &["config", "user.email", "fragile-test@example.invalid"],
+        Some(&remote_dir),
+    )?;
+    run_git(
+        &[
+            "add",
+            "include/rapidjson/document.h",
+            "example/condense/condense.cpp",
+            "example/pretty/pretty.cpp",
+            "CMakeLists.txt",
+        ],
+        Some(&remote_dir),
+    )?;
+    run_git(&["commit", "-m", "initial fixture"], Some(&remote_dir))?;
+
+    let pinned_commit = git_stdout(&["rev-parse", "HEAD"], Some(&remote_dir))?;
+
+    fs::write(
+        remote_dir.join("example/condense/condense.cpp"),
+        "#include <cstdio>\nint main(){std::fputs(\"{\\\"fixture\\\":2}\", stdout); return 0;}\n",
+    )
+    .map_err(|e| format!("failed to update condense.cpp: {}", e))?;
+    run_git(&["add", "example/condense/condense.cpp"], Some(&remote_dir))?;
+    run_git(&["commit", "-m", "update fixture"], Some(&remote_dir))?;
+
+    let newer_commit = git_stdout(&["rev-parse", "HEAD"], Some(&remote_dir))?;
+    let repo_url = remote_dir.to_string_lossy().to_string();
+    Ok((repo_url, pinned_commit, newer_commit))
+}
+
+#[test]
+fn test_ensure_pinned_checkout_clones_and_rewinds_local_rapidjson_fixture() {
+    let root = unique_temp_dir("rapidjson_checkout_pin");
+    fs::create_dir_all(&root).expect("failed to create test root");
+
+    let (repo_url, pinned_commit, newer_commit) = create_local_rapidjson_like_repo(&root)
+        .expect("failed to create local rapidjson-like repo");
+    let checkout_dir = root.join("checkout");
+
+    ensure_pinned_checkout(
+        repo_url.as_str(),
+        &checkout_dir,
+        pinned_commit.as_str(),
+        RAPIDJSON_REQUIRED_PATHS,
+    )
+    .expect("initial checkout should succeed");
+
+    run_git(&["checkout", "--detach", newer_commit.as_str()], Some(&checkout_dir))
+        .expect("failed to move checkout to newer commit");
+    let moved_head = read_head(&checkout_dir).expect("failed to read moved HEAD");
+    assert_eq!(moved_head, newer_commit, "checkout should move before rewind");
+
+    ensure_pinned_checkout(
+        repo_url.as_str(),
+        &checkout_dir,
+        pinned_commit.as_str(),
+        RAPIDJSON_REQUIRED_PATHS,
+    )
+    .expect("rewind checkout should succeed");
+
+    let head = read_head(&checkout_dir).expect("failed to read pinned HEAD");
+    assert_eq!(head, pinned_commit, "checkout should rewind to pinned commit");
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn test_rapidjson_native_no_stl_examples_local_fixture_success() {
+    let root = unique_temp_dir("rapidjson_native_local_success");
+    fs::create_dir_all(&root).expect("failed to create test root");
+
+    let (repo_url, pinned_commit, _newer_commit) = create_local_rapidjson_like_repo(&root)
+        .expect("failed to create local rapidjson-like repo");
+    let checkout_dir = root.join("checkout");
+    ensure_pinned_checkout(
+        repo_url.as_str(),
+        &checkout_dir,
+        pinned_commit.as_str(),
+        RAPIDJSON_REQUIRED_PATHS,
+    )
+    .expect("checkout should be prepared");
+
+    let log_dir = root.join("native_logs");
+    run_native_no_stl_examples_in_tree(&checkout_dir, &log_dir)
+        .expect("local rapidjson fixture baseline should succeed");
+
+    for rel in RAPIDJSON_NATIVE_LOG_FILES {
+        assert!(
+            log_dir.join(rel).exists(),
+            "expected baseline log file {}",
+            log_dir.join(rel).display()
+        );
+    }
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn test_rapidjson_no_stl_command_plan_local_fixture_success() {
+    let root = unique_temp_dir("rapidjson_plan_local_success");
+    fs::create_dir_all(&root).expect("failed to create test root");
+
+    let (repo_url, pinned_commit, _newer_commit) = create_local_rapidjson_like_repo(&root)
+        .expect("failed to create local rapidjson-like repo");
+    let checkout_dir = root.join("checkout");
+    ensure_pinned_checkout(
+        repo_url.as_str(),
+        &checkout_dir,
+        pinned_commit.as_str(),
+        RAPIDJSON_REQUIRED_PATHS,
+    )
+    .expect("checkout should be prepared");
+
+    let log_dir = root.join("command_plan_logs");
+    run_no_stl_command_plan_in_tree(&checkout_dir, &log_dir)
+        .expect("local command-plan generation should succeed");
+
+    for rel in RAPIDJSON_COMMAND_PLAN_LOG_FILES {
+        assert!(
+            log_dir.join(rel).exists(),
+            "expected command-plan log file {}",
+            log_dir.join(rel).display()
+        );
+    }
+
+    let manifest = fs::read_to_string(log_dir.join("no_stl_examples_manifest.txt"))
+        .expect("failed to read no_stl_examples_manifest.txt");
+    assert!(
+        manifest.contains("example/condense/condense.cpp")
+            && manifest.contains("example/pretty/pretty.cpp"),
+        "manifest should include no-stl example sources, got:\n{}",
+        manifest
+    );
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn test_ci_workflow_keeps_rapidjson_smoke_coverage() {
+    let ci_workflow = read_workflow_file("ci.yml")
+        .expect("failed to read CI workflow for rapidjson smoke coverage");
+    assert!(
+        ci_workflow.contains("rapidjson-smoke-baseline"),
+        "CI workflow should keep rapidjson smoke lane"
+    );
+    for invocation in RAPIDJSON_CI_SMOKE_REQUIRED_TEST_INVOCATIONS {
+        assert!(
+            ci_workflow.contains(invocation),
+            "CI workflow should keep rapidjson smoke invocation `{}`",
+            invocation
+        );
+    }
+}
+
+#[test]
+fn test_rapidjson_nightly_workflow_keeps_matrix_coverage() {
+    let nightly_workflow = read_workflow_file("rapidjson-nightly.yml")
+        .expect("failed to read rapidjson nightly workflow for coverage");
+    assert!(
+        nightly_workflow.contains("rapidjson-nightly-matrix"),
+        "rapidjson nightly workflow should keep matrix job"
+    );
+    for test_name in RAPIDJSON_NIGHTLY_REQUIRED_TEST_NAMES {
+        assert!(
+            nightly_workflow.contains(test_name),
+            "rapidjson nightly workflow should keep matrix entry `{}`",
+            test_name
+        );
+    }
+}
+
+#[test]
+#[ignore = "real-world external project test (downloads rapidjson fixture)"]
+fn test_real_world_rapidjson_fixture_checkout_is_pinned() {
+    let repo_dir = ensure_rapidjson_checkout().expect("failed to prepare rapidjson checkout");
+    for rel in RAPIDJSON_REQUIRED_PATHS {
+        assert!(
+            repo_dir.join(rel).exists(),
+            "expected checkout path {}",
+            repo_dir.join(rel).display()
+        );
+    }
+
+    let head = read_head(&repo_dir).expect("failed to query rapidjson checkout HEAD");
+    assert_eq!(
+        head, RAPIDJSON_PINNED_COMMIT,
+        "rapidjson checkout must stay pinned for deterministic runs"
+    );
+}
+
+#[test]
+#[ignore = "real-world external project test (builds/runs rapidjson no-stl examples baseline)"]
+fn test_real_world_rapidjson_native_no_stl_examples_baseline() {
+    let log_dir =
+        run_rapidjson_native_baseline().expect("failed to run rapidjson native no-stl baseline");
+
+    for rel in RAPIDJSON_NATIVE_LOG_FILES {
+        assert!(
+            log_dir.join(rel).exists(),
+            "expected baseline log file {}",
+            log_dir.join(rel).display()
+        );
+    }
+
+    let manifest = fs::read_to_string(log_dir.join("native_baseline_manifest.txt"))
+        .expect("failed to read native_baseline_manifest.txt");
+    assert!(
+        manifest.contains(RAPIDJSON_PINNED_COMMIT),
+        "manifest should record pinned commit {}, got:\n{}",
+        RAPIDJSON_PINNED_COMMIT,
+        manifest
+    );
+
+    let condense_stdout = fs::read_to_string(log_dir.join("run_condense.stdout"))
+        .expect("failed to read run_condense.stdout");
+    assert_eq!(
+        condense_stdout.trim(),
+        RAPIDJSON_EXPECTED_CONDENSE_OUTPUT,
+        "condense output should match expected compact JSON"
+    );
+
+    let pretty_stdout = fs::read_to_string(log_dir.join("run_pretty.stdout"))
+        .expect("failed to read run_pretty.stdout");
+    assert!(
+        pretty_stdout.contains("\"msg\": \"hi\""),
+        "pretty output should preserve JSON fields, got:\n{}",
+        pretty_stdout
+    );
+}
+
+#[test]
+#[ignore = "real-world external project test (derives rapidjson no-stl command plan)"]
+fn test_real_world_rapidjson_no_stl_command_plan_generation() {
+    let log_dir = run_rapidjson_no_stl_command_plan()
+        .expect("failed to run rapidjson no-stl command-plan baseline");
+
+    for rel in RAPIDJSON_COMMAND_PLAN_LOG_FILES {
+        assert!(
+            log_dir.join(rel).exists(),
+            "expected command-plan log file {}",
+            log_dir.join(rel).display()
+        );
+    }
+
+    let manifest = fs::read_to_string(log_dir.join("no_stl_examples_manifest.txt"))
+        .expect("failed to read no_stl_examples_manifest.txt");
+    assert!(
+        manifest.contains("compile[0]=")
+            && manifest.contains("example/condense/condense.cpp")
+            && manifest.contains("example/pretty/pretty.cpp"),
+        "manifest should include no-stl command-plan coverage, got:\n{}",
+        manifest
+    );
+}
