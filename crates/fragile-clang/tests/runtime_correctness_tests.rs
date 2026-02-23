@@ -429,6 +429,10 @@ int main() {
 /// to be flattened into the parent CTSD's field list.
 #[test]
 fn test_compressed_pair_fields_exported() {
+    if should_skip_libcxx_runtime_test("test_compressed_pair_fields_exported") {
+        return;
+    }
+
     let temp_dir = std::path::PathBuf::from("/tmp/fragile_runtime_test_compressed_pair");
     let _ = fs::create_dir_all(&temp_dir);
 
