@@ -612,6 +612,8 @@ fn transpile_pugixml_single_tu_with_cli(
         .arg("run")
         .arg("-p")
         .arg("fragile-cli")
+        .arg("--bin")
+        .arg("fragile")
         .arg("--")
         .arg("transpile")
         .arg(source_path)

@@ -20,7 +20,7 @@ jobs:
     - name: Install system dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y libclang-dev llvm-dev
+        sudo apt-get install -y libclang-dev libclang-cpp-dev llvm-dev
 
     - name: Setup Rust stable
       uses: dtolnay/rust-toolchain@stable
@@ -40,7 +40,7 @@ jobs:
     - name: Install system dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y libclang-dev llvm-dev
+        sudo apt-get install -y libclang-dev libclang-cpp-dev llvm-dev
 
     - name: Setup Rust stable
       uses: dtolnay/rust-toolchain@stable
@@ -75,7 +75,7 @@ jobs:
     - name: Install system dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y libclang-dev llvm-dev
+        sudo apt-get install -y libclang-dev libclang-cpp-dev llvm-dev
 
     - name: Setup Rust stable
       uses: dtolnay/rust-toolchain@stable
@@ -95,7 +95,7 @@ jobs:
     - name: Install system dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y libclang-dev llvm-dev
+        sudo apt-get install -y libclang-dev libclang-cpp-dev llvm-dev
 
     - name: Setup Rust stable
       uses: dtolnay/rust-toolchain@stable
@@ -113,7 +113,7 @@ jobs:
     - name: Install system dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y libclang-dev llvm-dev
+        sudo apt-get install -y libclang-dev libclang-cpp-dev llvm-dev
 
     - name: Setup Rust stable
       uses: dtolnay/rust-toolchain@stable
@@ -134,7 +134,7 @@ jobs:
     - name: Install system dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y libclang-dev llvm-dev
+        sudo apt-get install -y libclang-dev libclang-cpp-dev llvm-dev
 
     - name: Setup Rust stable
       uses: dtolnay/rust-toolchain@stable
