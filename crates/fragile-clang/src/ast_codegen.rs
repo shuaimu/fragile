@@ -14902,7 +14902,9 @@ impl AstCodeGen {
 
         let needs_default_ctor_surface = matches!(
             rust_name,
-            "FilterKeyReader_FileReadStream" | "Writer_FileWriteStream"
+            "FilterKeyReader_FileReadStream"
+                | "Writer_FileWriteStream"
+                | "PrettyWriter_FileWriteStream"
         );
         if needs_default_ctor_surface && !has_method(&self.output[impl_block_start..], "new_0") {
             self.current_struct_methods.insert("new_0".to_string(), 1);
@@ -51848,7 +51850,7 @@ mod tests {
     }
 
     #[test]
-    fn test_rapidjson_filterkeyreader_and_writer_emit_new_0_surface_fallbacks() {
+    fn test_rapidjson_reader_writer_surfaces_emit_new_0_fallbacks() {
         let mut codegen = AstCodeGen::new();
 
         codegen.writeln("impl FilterKeyReader_FileReadStream {");
@@ -51875,12 +51877,28 @@ mod tests {
         codegen.writeln("}");
         codegen.writeln("");
 
+        codegen.writeln("impl PrettyWriter_FileWriteStream {");
+        codegen.indent += 1;
+        let pretty_writer_impl_start = codegen.output.len();
+        codegen.emit_missing_rapidjson_method_surface_stubs(
+            "PrettyWriter<FileWriteStream>",
+            "PrettyWriter_FileWriteStream",
+            pretty_writer_impl_start,
+        );
+        codegen.indent -= 1;
+        codegen.writeln("}");
+        codegen.writeln("");
+
         let code = codegen.output;
         let filter_impl = code
             .split("impl FilterKeyReader_FileReadStream {")
             .nth(1)
             .unwrap_or("");
         let writer_impl = code.split("impl Writer_FileWriteStream {").nth(1).unwrap_or("");
+        let pretty_writer_impl = code
+            .split("impl PrettyWriter_FileWriteStream {")
+            .nth(1)
+            .unwrap_or("");
         assert!(
             filter_impl.contains("pub fn new_0() -> Self {")
                 && filter_impl.contains("std::mem::MaybeUninit::<Self>::zeroed().assume_init()"),
@@ -51893,10 +51911,17 @@ mod tests {
             "Writer<FileWriteStream> should expose fallback new_0 surface, got:\n{}",
             code
         );
+        assert!(
+            pretty_writer_impl.contains("pub fn new_0() -> Self {")
+                && pretty_writer_impl
+                    .contains("std::mem::MaybeUninit::<Self>::zeroed().assume_init()"),
+            "PrettyWriter<FileWriteStream> should expose fallback new_0 surface, got:\n{}",
+            code
+        );
     }
 
     #[test]
-    fn test_rapidjson_template_impl_path_emits_new_0_surface_fallbacks() {
+    fn test_rapidjson_template_impl_path_emits_new_0_ctor_surface_fallbacks() {
         let dummy_method = make_node(
             ClangNodeKind::CXXMethodDecl {
                 class_name: "FilterKeyReader<FileReadStream>".to_string(),
@@ -51927,6 +51952,11 @@ mod tests {
             "Writer_FileWriteStream",
             &children,
         );
+        codegen.generate_template_impl(
+            "PrettyWriter<FileWriteStream>",
+            "PrettyWriter_FileWriteStream",
+            &children,
+        );
 
         let code = codegen.output;
         let filter_impl = code
@@ -51934,6 +51964,10 @@ mod tests {
             .nth(1)
             .unwrap_or("");
         let writer_impl = code.split("impl Writer_FileWriteStream {").nth(1).unwrap_or("");
+        let pretty_writer_impl = code
+            .split("impl PrettyWriter_FileWriteStream {")
+            .nth(1)
+            .unwrap_or("");
         assert!(
             filter_impl.contains("pub fn new_0() -> Self {")
                 && filter_impl.contains("std::mem::MaybeUninit::<Self>::zeroed().assume_init()"),
@@ -51944,6 +51978,13 @@ mod tests {
             writer_impl.contains("pub fn new_0() -> Self {")
                 && writer_impl.contains("std::mem::MaybeUninit::<Self>::zeroed().assume_init()"),
             "template impl path should inject Writer<FileWriteStream>::new_0 fallback, got:\n{}",
+            code
+        );
+        assert!(
+            pretty_writer_impl.contains("pub fn new_0() -> Self {")
+                && pretty_writer_impl
+                    .contains("std::mem::MaybeUninit::<Self>::zeroed().assume_init()"),
+            "template impl path should inject PrettyWriter<FileWriteStream>::new_0 fallback, got:\n{}",
             code
         );
     }
