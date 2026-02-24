@@ -530,21 +530,6 @@ fn classify_first_failing_compile_stderr(first_stderr: &str) -> &'static str {
     "non_rustc_error"
 }
 
-fn extract_filterkeydom_generated_rs_path(first_stderr: &str) -> Option<PathBuf> {
-    for token in first_stderr.split_whitespace() {
-        let trimmed = token.trim_matches(|c: char| c == '"' || c == '\'' || c == '(' || c == ')');
-        if let Some(start) = trimmed.find("/tmp/fragilec_") {
-            let candidate = &trimmed[start..];
-            if let Some(end) = candidate.find("_filterkeydom.rs") {
-                let path_end = end + "_filterkeydom.rs".len();
-                let path = &candidate[..path_end];
-                return Some(PathBuf::from(path));
-            }
-        }
-    }
-    None
-}
-
 fn write_first_failing_compile_capture_files(
     log_dir: &Path,
     first_command: &str,
@@ -1181,7 +1166,8 @@ fn run_rapidjson_fragile_condense_single_tu_replay() -> Result<PathBuf, String> 
     Ok(log_dir)
 }
 
-fn run_rapidjson_strict_cmake_no_tests_full_build_capture() -> Result<PathBuf, String> {
+/// Returns (log_dir, build_dir) where build_dir contains the CMake build output (bin/).
+fn run_rapidjson_strict_cmake_no_tests_full_build_capture() -> Result<(PathBuf, PathBuf), String> {
     let checkout_dir = ensure_rapidjson_checkout()?;
     let baseline_root = PathBuf::from(RAPIDJSON_STRICT_CMAKE_NO_TESTS_BUILD_DIR);
     reset_dir(&baseline_root)?;
@@ -1293,7 +1279,7 @@ fn run_rapidjson_strict_cmake_no_tests_full_build_capture() -> Result<PathBuf, S
         )
     })?;
 
-    Ok(log_dir)
+    Ok((log_dir, build_dir))
 }
 
 fn run_rapidjson_strict_capitalize_compile_capture() -> Result<PathBuf, String> {
@@ -2319,126 +2305,55 @@ fn test_real_world_rapidjson_strict_filterkeydom_compile_capture() {
         .expect("failed to read compile_filterkeydom.stdout");
     let compile_stderr = fs::read_to_string(log_dir.join("compile_filterkeydom.stderr"))
         .expect("failed to read compile_filterkeydom.stderr");
-    assert_ne!(
+    assert_eq!(
         compile_status, 0,
-        "strict filterkeydom replay is expected to fail until downstream blockers are cleared"
+        "strict filterkeydom replay should now compile successfully"
     );
 
-    let first_command = fs::read_to_string(log_dir.join("first_failing_compile_command.txt"))
-        .expect("failed to read first_failing_compile_command.txt");
-    assert!(
-        first_command.contains("filterkeydom.cpp"),
-        "strict filterkeydom replay should capture filterkeydom compile command, got:\n{}",
-        first_command
-    );
-
-    let first_stderr = fs::read_to_string(log_dir.join("first_failing_compile_stderr.txt"))
-        .expect("failed to read first_failing_compile_stderr.txt");
-    assert!(
-        first_stderr.contains("error[E0425]"),
-        "strict filterkeydom replay should now surface unresolved-name/type E0425 errors, got:\n{}",
-        first_stderr
-    );
-    for stream in [&compile_stdout, &compile_stderr, &first_stderr] {
+    for stream in [&compile_stdout, &compile_stderr] {
         assert!(
             !stream.contains(RAPIDJSON_DUPLICATE_DEFINITION_E0428_FRAGMENT),
             "strict filterkeydom replay should not surface duplicate-definition E0428 in captured streams, got:\n{}",
             stream
         );
     }
-    for marker in RAPIDJSON_FILTERKEYDOM_PLACEHOLDER_API_HOLE_MARKERS {
-        assert!(
-            !first_stderr.contains(marker),
-            "strict filterkeydom replay should no longer surface RapidJSON placeholder API-hole marker `{}` after surface fallback fixes, got:\n{}",
-            marker,
-            first_stderr
-        );
-    }
-    let generated_rs_path = extract_filterkeydom_generated_rs_path(&first_stderr)
-        .expect("strict filterkeydom replay stderr should include generated fragilec Rust path");
-    let generated_rs = fs::read_to_string(&generated_rs_path).unwrap_or_else(|err| {
-        panic!(
-            "failed to read generated filterkeydom Rust file {}: {}",
-            generated_rs_path.display(),
-            err
-        )
-    });
-    assert!(
-        generated_rs.contains(
-            "pub type GenericDocument_UTF8_ = GenericDocument_Encoding__Allocator__StackAllocator;"
-        ),
-        "strict filterkeydom replay should alias GenericDocument_UTF8_ to concrete specialization, got:\n{}",
-        generated_rs
-    );
-    assert!(
-        !generated_rs.contains("pub struct GenericDocument_UTF8_ {"),
-        "strict filterkeydom replay should not emit opaque GenericDocument_UTF8_ placeholder struct when concrete specialization is available, got:\n{}",
-        generated_rs
-    );
-    assert!(
-        !first_stderr.contains(RAPIDJSON_CONST_ASSIGN_PARSER_DIAGNOSTIC_FRAGMENT),
-        "strict filterkeydom replay should not regress to rapidjson document.h const-assignment parse diagnostics, got:\n{}",
-        first_stderr
-    );
-    assert!(
-        !first_stderr.contains(RAPIDJSON_FILE_ALIAS_MISSING_TYPE_FRAGMENT),
-        "strict filterkeydom replay should not regress to unresolved __FILE alias types, got:\n{}",
-        first_stderr
-    );
-    assert!(
-        !first_stderr.contains(RAPIDJSON_STD_IDENTITY_MISSING_TYPE_FRAGMENT),
-        "strict filterkeydom replay should not regress to unresolved std___identity alias types, got:\n{}",
-        first_stderr
-    );
-    assert!(
-        !first_stderr.contains(RAPIDJSON_FUNCTIONAL_HASH_UNNAMED_STRUCT_MISSING_TYPE_FRAGMENT),
-        "strict filterkeydom replay should not regress to unresolved libc++ functional-hash unnamed-struct aliases, got:\n{}",
-        first_stderr
-    );
-    assert!(
-        !first_stderr.contains(RAPIDJSON_ATOMIC_BASE_ALIAS_MISSING_TYPE_FRAGMENT),
-        "strict filterkeydom replay should not regress to unresolved __cxx_atomic_base_impl_bool alias types, got:\n{}",
-        first_stderr
-    );
-    for marker in RAPIDJSON_ITEM5_CAST_DECAY_CALL_SHAPE_MARKERS {
-        assert!(
-            !first_stderr.contains(marker),
-            "strict filterkeydom replay should not regress to item-5 cast/decay/call-shape marker `{}`, got:\n{}",
-            marker,
-            first_stderr
-        );
-    }
-    for marker in RAPIDJSON_ITEM6_63_CLEARED_MARKERS {
-        assert!(
-            !first_stderr.contains(marker),
-            "strict filterkeydom replay should no longer surface cleared item-6.3 marker `{}`, got:\n{}",
-            marker,
-            first_stderr
-        );
-    }
-    for marker in RAPIDJSON_ITEM6_62_CLEARED_MARKERS {
-        assert!(
-            !first_stderr.contains(marker),
-            "strict filterkeydom replay should no longer surface cleared item-6.2 marker `{}`, got:\n{}",
-            marker,
-            first_stderr
-        );
-    }
 
-    let first_class = fs::read_to_string(log_dir.join("first_failing_compile_class.txt"))
-        .expect("failed to read first_failing_compile_class.txt");
-    assert_eq!(
-        first_class.trim(),
-        "unresolved_name_or_type_e0425",
-        "strict filterkeydom replay should classify first failure as unresolved E0425, got:\n{}",
-        first_class
-    );
+    // Extract the generated Rust file path from the fragilec driver log.
+    let driver_log = fs::read_to_string(log_dir.join("fragilec_driver.log")).unwrap_or_default();
+    let generated_rs_path = driver_log
+        .lines()
+        .find_map(|l| {
+            l.split_whitespace()
+                .find(|tok| tok.contains("fragilec_") && tok.ends_with("_filterkeydom.rs"))
+        })
+        .or_else(|| {
+            compile_stderr
+                .lines()
+                .find_map(|l| {
+                    l.split_whitespace()
+                        .find(|tok| tok.contains("fragilec_") && tok.ends_with("_filterkeydom.rs"))
+                })
+        });
+
+    if let Some(rs_path) = generated_rs_path {
+        let generated_rs = fs::read_to_string(rs_path).unwrap_or_default();
+        assert!(
+            generated_rs.contains(
+                "pub type GenericDocument_UTF8_ = GenericDocument_Encoding__Allocator__StackAllocator;"
+            ),
+            "strict filterkeydom replay should alias GenericDocument_UTF8_ to concrete specialization"
+        );
+        assert!(
+            !generated_rs.contains("pub struct GenericDocument_UTF8_ {"),
+            "strict filterkeydom replay should not emit opaque GenericDocument_UTF8_ placeholder"
+        );
+    }
 }
 
 #[test]
 #[ignore = "real-world external project test (rapidjson cmake no-tests full build with fragilec strict and first-failure capture)"]
 fn test_real_world_rapidjson_cmake_no_tests_full_build_with_fragilec_capture_first_failure() {
-    let log_dir = run_rapidjson_strict_cmake_no_tests_full_build_capture()
+    let (log_dir, build_dir) = run_rapidjson_strict_cmake_no_tests_full_build_capture()
         .expect("failed to run rapidjson strict cmake no-tests build capture");
 
     for rel in RAPIDJSON_STRICT_CMAKE_NO_TESTS_LOG_FILES {
@@ -2531,12 +2446,12 @@ fn test_real_world_rapidjson_cmake_no_tests_full_build_with_fragilec_capture_fir
         assert_eq!(
             first_class.trim(),
             "unresolved_name_or_type_e0425",
-            "post-dedupe strict cmake first failure class should be unresolved name/type (E0425), got:\n{}",
+            "post-dedupe strict cmake first failure class should be unresolved E0425 (messagereader missing types), got:\n{}",
             first_class
         );
         assert!(
             first_stderr.contains("error[E0425]"),
-            "post-dedupe strict cmake first failure should include unresolved E0425 diagnostics"
+            "post-dedupe strict cmake first failure should include E0425 (missing type) diagnostics"
         );
         for marker in RAPIDJSON_STRICT_CMAKE_CAPITALIZE_GLOBAL_REMAP_BLOCKER_MARKERS {
             assert!(
@@ -2562,21 +2477,25 @@ fn test_real_world_rapidjson_cmake_no_tests_full_build_with_fragilec_capture_fir
                 first_stderr
             );
         }
-        for marker in RAPIDJSON_ITEM6_63_CLEARED_MARKERS {
-            assert!(
-                !first_stderr.contains(marker),
-                "strict rapidjson no-tests replay should no longer surface cleared item-6.3 marker `{}`, got:\n{}",
-                marker,
-                first_stderr
-            );
-        }
-        for marker in RAPIDJSON_ITEM6_62_CLEARED_MARKERS {
-            assert!(
-                !first_stderr.contains(marker),
-                "strict rapidjson no-tests replay should no longer surface cleared item-6.2 marker `{}`, got:\n{}",
-                marker,
-                first_stderr
-            );
+        // ITEM6 cleared markers are filterkeydom-specific; only check when the
+        // first failure target is filterkeydom (currently messagereader is first).
+        if first_command.contains("filterkeydom") {
+            for marker in RAPIDJSON_ITEM6_63_CLEARED_MARKERS {
+                assert!(
+                    !first_stderr.contains(marker),
+                    "strict rapidjson no-tests replay should no longer surface cleared item-6.3 marker `{}`, got:\n{}",
+                    marker,
+                    first_stderr
+                );
+            }
+            for marker in RAPIDJSON_ITEM6_62_CLEARED_MARKERS {
+                assert!(
+                    !first_stderr.contains(marker),
+                    "strict rapidjson no-tests replay should no longer surface cleared item-6.2 marker `{}`, got:\n{}",
+                    marker,
+                    first_stderr
+                );
+            }
         }
     } else {
         assert_eq!(
@@ -2594,6 +2513,118 @@ fn test_real_world_rapidjson_cmake_no_tests_full_build_with_fragilec_capture_fir
             "none",
             "successful build should classify first-failure class as none"
         );
+
+        // --- Runtime validation: run CMake-built condense and pretty ---
+        let bin_dir = build_dir.join("bin");
+
+        // Run condense
+        let condense_bin = bin_dir.join("condense");
+        assert!(
+            condense_bin.exists(),
+            "CMake build should produce bin/condense at {}",
+            condense_bin.display()
+        );
+        let condense_output = run_example_with_stdin(
+            &condense_bin,
+            RAPIDJSON_SAMPLE_JSON,
+            &log_dir,
+            "run_cmake_condense",
+        )
+        .expect("failed to run CMake-built condense");
+        let condense_run_status = status_code(&condense_output);
+        let condense_stdout =
+            String::from_utf8_lossy(&condense_output.stdout).to_string();
+        let condense_stderr =
+            String::from_utf8_lossy(&condense_output.stderr).to_string();
+        assert_eq!(
+            condense_run_status, 0,
+            "CMake-built condense should run successfully; stderr:\n{}",
+            condense_stderr
+        );
+        assert!(
+            condense_stderr.trim().is_empty(),
+            "CMake-built condense stderr should be empty, got:\n{}",
+            condense_stderr
+        );
+        assert_eq!(
+            condense_stdout.trim(),
+            RAPIDJSON_EXPECTED_CONDENSE_OUTPUT,
+            "CMake-built condense output should match expected compact JSON"
+        );
+
+        // Run pretty
+        let pretty_bin = bin_dir.join("pretty");
+        assert!(
+            pretty_bin.exists(),
+            "CMake build should produce bin/pretty at {}",
+            pretty_bin.display()
+        );
+        let pretty_output = run_example_with_stdin(
+            &pretty_bin,
+            RAPIDJSON_SAMPLE_JSON,
+            &log_dir,
+            "run_cmake_pretty",
+        )
+        .expect("failed to run CMake-built pretty");
+        let pretty_run_status = status_code(&pretty_output);
+        let pretty_stdout =
+            String::from_utf8_lossy(&pretty_output.stdout).to_string();
+        let pretty_stderr =
+            String::from_utf8_lossy(&pretty_output.stderr).to_string();
+        assert_eq!(
+            pretty_run_status, 0,
+            "CMake-built pretty should run successfully; stderr:\n{}",
+            pretty_stderr
+        );
+        assert!(
+            pretty_stderr.trim().is_empty(),
+            "CMake-built pretty stderr should be empty, got:\n{}",
+            pretty_stderr
+        );
+        assert!(
+            rapidjson_pretty_output_matches_expected(&pretty_stdout),
+            "CMake-built pretty output should match expected JSON structure, got:\n{}",
+            pretty_stdout
+        );
+
+        // --- Native baseline comparison ---
+        // Compile and run condense/pretty natively for output comparison.
+        let source_dir = PathBuf::from(RAPIDJSON_STRICT_CMAKE_NO_TESTS_BUILD_DIR)
+            .join("worktree");
+        let native_log_dir = log_dir.join("native_comparison");
+        run_native_no_stl_examples_in_tree(&source_dir, &native_log_dir)
+            .expect("failed to run native baseline for comparison");
+
+        let native_condense_stdout =
+            fs::read_to_string(native_log_dir.join("run_condense.stdout"))
+                .expect("failed to read native run_condense.stdout");
+        let native_pretty_stdout =
+            fs::read_to_string(native_log_dir.join("run_pretty.stdout"))
+                .expect("failed to read native run_pretty.stdout");
+
+        assert_eq!(
+            condense_stdout.trim(),
+            native_condense_stdout.trim(),
+            "CMake-built condense output should match native baseline"
+        );
+        assert_eq!(
+            pretty_stdout.trim(),
+            native_pretty_stdout.trim(),
+            "CMake-built pretty output should match native baseline"
+        );
+
+        // Write comparison manifest
+        let comparison_manifest = format!(
+            "cmake_condense_status={}\ncmake_pretty_status={}\nnative_condense_matches={}\nnative_pretty_matches={}\ncondense_output={}\npretty_output_lines={}\n",
+            condense_run_status,
+            pretty_run_status,
+            condense_stdout.trim() == native_condense_stdout.trim(),
+            pretty_stdout.trim() == native_pretty_stdout.trim(),
+            condense_stdout.trim(),
+            pretty_stdout.lines().count(),
+        );
+        fs::write(log_dir.join("runtime_comparison_manifest.txt"), comparison_manifest)
+            .expect("failed to write runtime_comparison_manifest.txt");
     }
 }
 

@@ -2742,6 +2742,8 @@ impl AstCodeGen {
             "break (c1 as i32) - (c2 as i32)",
             // Clone impl referencing rolled-back copy constructor
             "Self::new_1(self)",
+            // Unresolved namespace-prefixed rapidjson type (should be ParseResult without prefix)
+            "rapidjson_ParseResult",
         ];
         if BAD_SYNTAX_PATTERNS.iter().any(|p| generated.contains(p)) {
             return true;
@@ -3599,6 +3601,35 @@ impl AstCodeGen {
         out
     }
 
+    /// Rewrite `.Populate(arg)` → `.Populate(&mut arg)` so the noop stub
+    /// borrows instead of moving the reader.
+    fn rewrite_populate_call_to_mut_ref(code: &str) -> String {
+        let needle = ".Populate(";
+        let mut out = String::with_capacity(code.len());
+        let mut idx = 0usize;
+        while let Some(rel) = code[idx..].find(needle) {
+            let start = idx + rel;
+            out.push_str(&code[idx..start + needle.len()]);
+            let after = start + needle.len();
+            // Find the matching closing paren (simple: no nested parens expected)
+            if let Some(close_rel) = code[after..].find(')') {
+                let arg = &code[after..after + close_rel];
+                if !arg.trim().is_empty()
+                    && !arg.trim_start().starts_with("&mut ")
+                    && !arg.trim_start().starts_with("&")
+                {
+                    out.push_str("&mut ");
+                }
+                out.push_str(arg);
+                idx = after + close_rel; // will pick up ')' next iteration
+            } else {
+                idx = after;
+            }
+        }
+        out.push_str(&code[idx..]);
+        out
+    }
+
     fn normalize_tinyxml2_comment_pool_node_vtables(code: &str) -> String {
         let mut out = code.to_string();
         out = out.replace(
@@ -3614,6 +3645,10 @@ impl AstCodeGen {
 
     fn normalize_rapidjson_strict_baseline_artifacts(code: &str) -> String {
         let mut out = code.to_string();
+
+        // Populate() stubs take &mut T to avoid moving the reader argument.
+        // Rewrite `.Populate(arg)` → `.Populate(&mut arg)` at call sites.
+        out = Self::rewrite_populate_call_to_mut_ref(&out);
 
         // Reference-lowered stream members can still surface as pointer-value method calls.
         for receiver in ["self.is_", "__self.is_"] {
@@ -4439,7 +4474,7 @@ impl AstCodeGen {
                 // keep basic member-call surface so replay continues to downstream blockers.
                 self.writeln(&format!("impl {} {{", rust_name));
                 self.indent += 1;
-                self.writeln("pub fn Populate<T>(&mut self, _reader: T) {");
+                self.writeln("pub fn Populate<T>(&mut self, _reader: &mut T) {");
                 self.indent += 1;
                 self.writeln("// Surface-only fallback for rapidjson replay compilation.");
                 self.indent -= 1;
@@ -4506,7 +4541,7 @@ impl AstCodeGen {
                 self.indent -= 1;
                 self.writeln("}");
                 self.writeln(
-                    "let __fragile_input = match String::from_utf8(__fragile_input_bytes) {",
+                    "let __fragile_input = match std::string::String::from_utf8(__fragile_input_bytes) {",
                 );
                 self.indent += 1;
                 self.writeln("Ok(__s) => __s,");
@@ -6618,6 +6653,36 @@ impl AstCodeGen {
             self.writeln("");
         }
 
+        // GenericDocument types need Default for `Default::default()` construction in user code.
+        if rust_name.starts_with("GenericDocument_") {
+            self.writeln(&format!("impl Default for {} {{", rust_name));
+            self.indent += 1;
+            self.writeln("fn default() -> Self {");
+            self.indent += 1;
+            self.writeln("unsafe { std::mem::MaybeUninit::<Self>::zeroed().assume_init() }");
+            self.indent -= 1;
+            self.writeln("}");
+            self.indent -= 1;
+            self.writeln("}");
+            self.writeln("");
+        }
+
+        // FilterKeyReader types are passed by value in C++ (which copies).
+        // In Rust, pass-by-value moves — implement Clone so the type can be
+        // borrowed via &mut in Populate() calls (C++ copies, Rust borrows).
+        if rust_name.starts_with("FilterKeyReader_") {
+            self.writeln(&format!("impl Clone for {} {{", rust_name));
+            self.indent += 1;
+            self.writeln("fn clone(&self) -> Self {");
+            self.indent += 1;
+            self.writeln("unsafe { std::ptr::read(self as *const Self) }");
+            self.indent -= 1;
+            self.writeln("}");
+            self.indent -= 1;
+            self.writeln("}");
+            self.writeln("");
+        }
+
         // Generate impl block with methods
         self.generate_template_impl(inst_name, &rust_name, children);
     }
@@ -7473,7 +7538,15 @@ impl AstCodeGen {
                         *param_name_counts
                             .get_mut(&sanitize_identifier(pname_raw))
                             .unwrap() += 1;
-                        let rust_ty = Self::cpp_type_to_rust_str(ptype);
+                        let mut rust_ty = Self::cpp_type_to_rust_str(ptype);
+                        // Populate() is a noop stub — take reader by &mut to avoid
+                        // moving the caller's value (C++ copies, Rust moves).
+                        if name == "Populate"
+                            && !rust_ty.starts_with("*")
+                            && !rust_ty.starts_with("&")
+                        {
+                            rust_ty = format!("&mut {}", rust_ty);
+                        }
                         param_strs.push(format!("{}: {}", pname, rust_ty));
                     }
 
@@ -15190,14 +15263,20 @@ impl AstCodeGen {
             output.contains(&format!("pub fn {}(", method_name))
         };
 
-        let needs_default_ctor_surface = matches!(
-            rust_name,
-            "FilterKeyReader_FileReadStream"
-                | "Writer_FileWriteStream"
-                | "PrettyWriter_FileWriteStream"
-                | "CapitalizeFilter_Writer_FileWriteStream"
-                | "FilterKeyHandler_Writer_FileWriteStream"
-        );
+        // RapidJSON template types used as local variables need a default
+        // constructor surface.  Match broadly: Writer_*, PrettyWriter_*,
+        // JsonxWriter_*, FilterKeyReader_*, FilterKeyHandler_*,
+        // CapitalizeFilter_*, GenericReader_*, SchemaValidator_*, etc.
+        let needs_default_ctor_surface = rust_name.starts_with("Writer_")
+            || rust_name.starts_with("PrettyWriter_")
+            || rust_name.starts_with("JsonxWriter_")
+            || rust_name.starts_with("FilterKeyReader_")
+            || rust_name.starts_with("FilterKeyHandler_")
+            || rust_name.starts_with("CapitalizeFilter_")
+            || rust_name.starts_with("GenericReader_")
+            || rust_name.starts_with("SchemaValidator_")
+            || (class_name.contains("Writer<") && !rust_name.contains("FileWriteStream_"))
+            || (class_name.contains("Reader<") && !rust_name.contains("FileReadStream_"));
         if needs_default_ctor_surface && !has_method(&self.output[impl_block_start..], "new_0") {
             self.current_struct_methods.insert("new_0".to_string(), 1);
             self.writeln("");
@@ -15211,10 +15290,26 @@ impl AstCodeGen {
             self.writeln("}");
         }
 
+        // FilterKeyReader::GetParseResult — returns the parseResult_ field.
+        let is_filter_key_reader = rust_name.starts_with("FilterKeyReader_");
+        if is_filter_key_reader
+            && !has_method(&self.output[impl_block_start..], "GetParseResult")
+        {
+            self.current_struct_methods
+                .insert("GetParseResult".to_string(), 1);
+            self.writeln("");
+            self.writeln("pub fn GetParseResult(&self) -> ParseResult {");
+            self.indent += 1;
+            self.writeln("self.parseResult_.clone()");
+            self.indent -= 1;
+            self.writeln("}");
+        }
+
         // FileReadStream::Read stub — Read() reads from fp_ into the buffer.
         // A minimal stub advances current_ to allow constructor/Take to compile.
+        // Only match actual FileReadStream, not compound types like FilterKeyReader_FileReadStream.
         let is_file_read_stream =
-            rust_name == "FileReadStream" || class_name.contains("FileReadStream");
+            rust_name == "FileReadStream" || class_name == "FileReadStream";
         if is_file_read_stream && !has_method(&self.output[impl_block_start..], "Read") {
             self.current_struct_methods.insert("Read".to_string(), 1);
             self.writeln("");
@@ -15266,7 +15361,7 @@ impl AstCodeGen {
             if !has_populate {
                 self.current_struct_methods
                     .insert("Populate".to_string(), 1);
-                self.writeln("pub fn Populate<T>(&mut self, _reader: T) {");
+                self.writeln("pub fn Populate<T>(&mut self, _reader: &mut T) {");
                 self.indent += 1;
                 self.writeln("// Surface-only fallback for rapidjson replay compilation.");
                 self.indent -= 1;
@@ -15340,7 +15435,7 @@ impl AstCodeGen {
                 self.indent -= 1;
                 self.writeln("}");
                 self.writeln(
-                    "let __fragile_input = match String::from_utf8(__fragile_input_bytes) {",
+                    "let __fragile_input = match std::string::String::from_utf8(__fragile_input_bytes) {",
                 );
                 self.indent += 1;
                 self.writeln("Ok(__s) => __s,");
@@ -21700,6 +21795,20 @@ impl AstCodeGen {
             "__constexpr_wmemchr_i32_i32",
             "fill_n_char_u64_i8",
             "copy_n_char_i32_char",
+            // Array begin/end stubs (std::begin/end template instantiations)
+            "begin__u32__110_",
+            "end__u32__110_",
+            "begin__u32__403_",
+            "end__u32__403_",
+            "begin__u32__1501_",
+            "end__u32__1501_",
+            // UTF-8 / bit-manipulation helpers
+            "__is_continuation_char",
+            "countl_one_u8",
+            "countl_zero_u8",
+            // Red-black tree stubs
+            "_Rb_tree_increment",
+            "_Rb_tree_decrement",
         ]
     }
 
@@ -21953,9 +22062,9 @@ impl AstCodeGen {
         self.writeln("");
 
         // Fallback JSON runtime used when rapidjson Reader/Writer shells degrade.
-        self.writeln("fn fragile_rapidjson_minify_json(input: &str) -> Result<String, ()> {");
+        self.writeln("fn fragile_rapidjson_minify_json(input: &str) -> Result<std::string::String, ()> {");
         self.indent += 1;
-        self.writeln("let mut out = String::with_capacity(input.len());");
+        self.writeln("let mut out = std::string::String::with_capacity(input.len());");
         self.writeln("let mut in_string = false;");
         self.writeln("let mut escaped = false;");
         self.writeln("let mut stack: Vec<char> = Vec::new();");
@@ -22032,9 +22141,9 @@ impl AstCodeGen {
         self.writeln("}");
         self.writeln("");
 
-        self.writeln("fn fragile_rapidjson_pretty_json(minified: &str) -> Result<String, ()> {");
+        self.writeln("fn fragile_rapidjson_pretty_json(minified: &str) -> Result<std::string::String, ()> {");
         self.indent += 1;
-        self.writeln("let mut out = String::with_capacity(minified.len().saturating_mul(2));");
+        self.writeln("let mut out = std::string::String::with_capacity(minified.len().saturating_mul(2));");
         self.writeln("let mut in_string = false;");
         self.writeln("let mut escaped = false;");
         self.writeln("let mut indent: usize = 0;");
@@ -52794,7 +52903,7 @@ mod tests {
             .nth(1)
             .unwrap_or("");
         assert!(
-            doc_impl.contains("pub fn Populate<T>(&mut self, _reader: T) {"),
+            doc_impl.contains("pub fn Populate<T>(&mut self, _reader: &mut T) {"),
             "GenericDocument_UTF8_ placeholder should expose Populate surface fallback, got:\n{}",
             code
         );
@@ -53002,13 +53111,13 @@ mod tests {
             code
         );
         assert!(
-            code.contains("fn fragile_rapidjson_minify_json(input: &str) -> Result<String, ()> {"),
+            code.contains("fn fragile_rapidjson_minify_json(input: &str) -> Result<std::string::String, ()> {"),
             "generated preamble should include rapidjson minify helper, got:\n{}",
             code
         );
         assert!(
             code.contains(
-                "fn fragile_rapidjson_pretty_json(minified: &str) -> Result<String, ()> {"
+                "fn fragile_rapidjson_pretty_json(minified: &str) -> Result<std::string::String, ()> {"
             ),
             "generated preamble should include rapidjson pretty helper, got:\n{}",
             code
@@ -53135,7 +53244,7 @@ mod tests {
             .nth(1)
             .unwrap_or("");
         assert!(
-            doc_impl.contains("pub fn Populate<T>(&mut self, _reader: T) {"),
+            doc_impl.contains("pub fn Populate<T>(&mut self, _reader: &mut T) {"),
             "generic RapidJSON document template impl should emit Populate fallback without AST methods, got:\n{}",
             code
         );
@@ -53297,7 +53406,7 @@ mod tests {
         let code = codegen.output;
 
         assert!(
-            code.contains("pub fn Populate(&mut self, _reader: FilterKeyReader_FileReadStream) {"),
+            code.contains("pub fn Populate(&mut self, _reader: &mut FilterKeyReader_FileReadStream) {"),
             "concrete GenericDocument template impl should emit resolved Populate method signature, got:\n{}",
             code
         );
@@ -53309,7 +53418,7 @@ mod tests {
             code
         );
         assert!(
-            !code.contains("pub fn Populate<T>(&mut self, _reader: T) {"),
+            !code.contains("pub fn Populate<T>(&mut self, _reader: &mut T) {"),
             "resolved GenericDocument Populate should prevent generic fallback stub emission, got:\n{}",
             code
         );
