@@ -2039,12 +2039,28 @@ fn test_real_world_rapidjson_cmake_no_tests_full_build_with_fragilec_capture_fir
 
     let build_status = read_status_file(&log_dir.join("cmake_build.status"))
         .expect("failed to read cmake_build.status");
+    let cmake_build_stdout = fs::read_to_string(log_dir.join("cmake_build.stdout"))
+        .expect("failed to read cmake_build.stdout");
+    let cmake_build_stderr = fs::read_to_string(log_dir.join("cmake_build.stderr"))
+        .expect("failed to read cmake_build.stderr");
     let first_command = fs::read_to_string(log_dir.join("first_failing_compile_command.txt"))
         .expect("failed to read first_failing_compile_command.txt");
     let first_stderr = fs::read_to_string(log_dir.join("first_failing_compile_stderr.txt"))
         .expect("failed to read first_failing_compile_stderr.txt");
     let first_class = fs::read_to_string(log_dir.join("first_failing_compile_class.txt"))
         .expect("failed to read first_failing_compile_class.txt");
+    for stream in [&cmake_build_stdout, &cmake_build_stderr, &first_stderr] {
+        assert!(
+            !stream.contains("strict link requires a real `main` symbol for executable outputs"),
+            "strict rapidjson no-tests replay should not regress to shim-only missing-main diagnostics, got:\n{}",
+            stream
+        );
+        assert!(
+            !stream.contains("main symbol diagnostic:\n  defining objects: <none>"),
+            "strict rapidjson no-tests replay should not report shim-only missing-main symbol diagnostics, got:\n{}",
+            stream
+        );
+    }
     if build_status != 0 {
         assert!(
             first_command.contains("args=") && !first_command.trim().is_empty(),

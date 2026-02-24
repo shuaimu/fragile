@@ -104,7 +104,7 @@ Use this as the authoritative clear order after Phase 0 guardrails. Update each 
 ### Entrypoint residual breakdown (phase 2 item 1)
 - [x] 7.1) Preserve externally visible `main` definitions even when function rollback heuristics match (keep rollback behavior unchanged for non-`main` functions). Done 2026-02-24. Evidence: `AstCodeGen::generate_function` now bypasses `should_rollback_function` for non-static non-generator `main`; added/passing regressions `test_main_function_is_preserved_when_rollback_patterns_match` and `test_non_main_function_still_rolls_back_on_unmapped_call_pattern`.
 - [x] 7.2) Add strict compile regression that replays a degraded real-world `main` body shape and verifies emitted object still exports `main`. Done 2026-02-24. Evidence: added/passing `fragilec` test `strict_compile_degraded_main_shape_still_exports_main_symbol` (Probe `.fail()` call-shape in `main(argc, argv)`), asserting strict-compiled object still defines `main` symbol.
-- [ ] 7.3) Re-run strict RapidJSON no-tests full build and confirm no shim-only main fallback diagnostics remain in link failures.
+- [x] 7.3) Re-run strict RapidJSON no-tests full build and confirm no shim-only main fallback diagnostics remain in link failures. Done 2026-02-24. Evidence: reran ignored test `test_real_world_rapidjson_cmake_no_tests_full_build_with_fragilec_capture_first_failure` (build status `2`, first class `unresolved_name_or_type_e0425`) and added assertions that strict-cmake build/capture logs do not contain shim-only missing-main diagnostics (`strict link requires a real `main` symbol...`, `main symbol diagnostic: ... <none>`).
 
 ## Phase 3: Build-level validation
 - [ ] Re-run full `cmake --build . -j4` with tests disabled; require all example targets to compile/link.
