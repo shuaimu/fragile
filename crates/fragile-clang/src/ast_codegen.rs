@@ -38266,153 +38266,12 @@ impl AstCodeGen {
                                         }
 
                                         if Self::is_pointer_like_type(&types[i]) {
-                                            let target_rust = types[i].to_rust_type_str();
-                                            let target_is_const =
-                                                target_rust.starts_with("*const ");
                                             let arg_str = self.expr_to_string(c);
-                                            if Self::is_nullptr_literal(c)
-                                                || is_zero_integer_literal_str(&arg_str)
-                                            {
-                                                return if target_is_const {
-                                                    "std::ptr::null()".to_string()
-                                                } else {
-                                                    "std::ptr::null_mut()".to_string()
-                                                };
-                                            }
-
-                                            let arg_type = Self::get_expr_type(c);
-                                            let arg_orig_type = Self::get_original_expr_type(c);
-                                            let child_is_array =
-                                                c.children.first().is_some_and(|ch| {
-                                                    matches!(
-                                                        Self::get_expr_type(ch),
-                                                        Some(CppType::Array { .. })
-                                                    ) || matches!(
-                                                        Self::get_original_expr_type(ch),
-                                                        Some(CppType::Array { .. })
-                                                    )
-                                                });
-                                            let arg_is_array =
-                                                (matches!(arg_type, Some(CppType::Array { .. }))
-                                                    || matches!(
-                                                        arg_orig_type,
-                                                        Some(CppType::Array { .. })
-                                                    )
-                                                    || matches!(
-                                                        &c.kind,
-                                                        ClangNodeKind::ImplicitCastExpr {
-                                                            cast_kind:
-                                                                CastKind::ArrayToPointerDecay,
-                                                            ..
-                                                        }
-                                                    )
-                                                    || child_is_array)
-                                                    && !self.is_ptr_var_expr(c)
-                                                    && !Self::is_pointer_arithmetic_expr(c);
-                                            if arg_is_array {
-                                                let Some(base_raw) = self.get_raw_var_name(c)
-                                                else {
-                                                    let arg_expr = self.expr_to_string(c);
-                                                    if Self::expr_string_is_pointer_value(&arg_expr)
-                                                    {
-                                                        let arg_expr = if arg_expr
-                                                            .starts_with("unsafe { ")
-                                                            || arg_expr.contains(" as ")
-                                                            || arg_expr.contains(' ')
-                                                        {
-                                                            format!("({})", arg_expr)
-                                                        } else {
-                                                            arg_expr
-                                                        };
-                                                        return format!(
-                                                            "{} as {}",
-                                                            arg_expr, target_rust
-                                                        );
-                                                    }
-                                                    let ptr_expr = if let Some(inner) =
-                                                        unwrap_outer_unsafe_expr(&arg_expr)
-                                                    {
-                                                        let prefer_const_decay = target_is_const
-                                                            || inner.contains("b\"");
-                                                        if prefer_const_decay {
-                                                            format!(
-                                                                "unsafe {{ ({}).as_ptr() }}",
-                                                                inner
-                                                            )
-                                                        } else {
-                                                            format!(
-                                                                "unsafe {{ ({}).as_mut_ptr() }}",
-                                                                inner
-                                                            )
-                                                        }
-                                                    } else {
-                                                        let arg_expr = if arg_expr.contains(" as ")
-                                                            || arg_expr.contains(' ')
-                                                        {
-                                                            format!("({})", arg_expr)
-                                                        } else {
-                                                            arg_expr
-                                                        };
-                                                        let prefer_const_decay = target_is_const
-                                                            || arg_expr.contains("b\"");
-                                                        if prefer_const_decay {
-                                                            format!("{}.as_ptr()", arg_expr)
-                                                        } else {
-                                                            format!("{}.as_mut_ptr()", arg_expr)
-                                                        }
-                                                    };
-                                                    return format!(
-                                                        "{} as {}",
-                                                        ptr_expr, target_rust
-                                                    );
-                                                };
-                                                if base_raw.contains(".as_ptr()")
-                                                    || base_raw.contains(".as_mut_ptr()")
-                                                {
-                                                    let base = if base_raw.starts_with("unsafe { ")
-                                                        || base_raw.contains(" as ")
-                                                        || base_raw.contains(' ')
-                                                    {
-                                                        format!("({})", base_raw)
-                                                    } else {
-                                                        base_raw
-                                                    };
-                                                    return format!("{} as {}", base, target_rust);
-                                                }
-                                                let base = if base_raw.starts_with("unsafe { ")
-                                                    || base_raw.contains(" as ")
-                                                    || base_raw.contains(' ')
-                                                {
-                                                    format!("({})", base_raw)
-                                                } else {
-                                                    base_raw
-                                                };
-                                                let is_global_base = base.contains("__gv_")
-                                                    || base.contains("__fsv_");
-                                                let decayed_inner = if target_is_const {
-                                                    format!("{}.as_ptr()", base)
-                                                } else {
-                                                    format!("{}.as_mut_ptr()", base)
-                                                };
-                                                let decayed = if is_global_base {
-                                                    format!("unsafe {{ {} }}", decayed_inner)
-                                                } else {
-                                                    decayed_inner
-                                                };
-                                                return format!("{} as {}", decayed, target_rust);
-                                            }
-
-                                            let arg =
-                                                Self::normalize_pointer_value_expr(&self.expr_to_string(c));
-                                            let arg = if arg.starts_with("unsafe { ")
-                                                || arg.contains(" as ")
-                                                || arg.contains(' ')
-                                            {
-                                                format!("({})", arg)
-                                            } else {
-                                                arg
-                                            };
-                                            return format!("{} as {}", arg, target_rust);
+                                            return self.normalize_pointer_arg_for_target(
+                                                c,
+                                                &types[i],
+                                                &arg_str,
+                                            );
                                         }
 
                                         // Scalar integral coercions for parameter type.
@@ -38969,140 +38828,13 @@ impl AstCodeGen {
                                         return arg;
                                     }
 
-                                    // Handle pointer-like parameters and array-to-pointer decay.
                                     if Self::is_pointer_like_type(&types[i]) {
-                                        let target_rust = types[i].to_rust_type_str();
-                                        let target_is_const = target_rust.starts_with("*const ");
-
-                                        // Null pointer constants.
                                         let arg_str = self.expr_to_string(c);
-                                        if Self::is_nullptr_literal(c)
-                                            || is_zero_integer_literal_str(&arg_str)
-                                            || Self::integer_literal_value_from_expr(c) == Some(0)
-                                        {
-                                            return if target_is_const {
-                                                "std::ptr::null()".to_string()
-                                            } else {
-                                                "std::ptr::null_mut()".to_string()
-                                            };
-                                        }
-
-                                        let arg_type = Self::get_expr_type(c);
-                                        let arg_orig_type = Self::get_original_expr_type(c);
-                                        let child_is_array = c.children.first().is_some_and(|ch| {
-                                            matches!(Self::get_expr_type(ch), Some(CppType::Array { .. }))
-                                                || matches!(
-                                                    Self::get_original_expr_type(ch),
-                                                    Some(CppType::Array { .. })
-                                                )
-                                        });
-                                        let arg_is_array = (matches!(
-                                            arg_type,
-                                            Some(CppType::Array { .. })
-                                        ) || matches!(
-                                            arg_orig_type,
-                                            Some(CppType::Array { .. })
-                                        ) || matches!(
-                                            &c.kind,
-                                            ClangNodeKind::ImplicitCastExpr {
-                                                cast_kind: CastKind::ArrayToPointerDecay,
-                                                ..
-                                            }
-                                        ) || child_is_array)
-                                            && !self.is_ptr_var_expr(c)
-                                            && !Self::is_pointer_arithmetic_expr(c);
-
-                                        if arg_is_array {
-                                            // Prefer raw identifier for globals/locals so we can call .as_ptr()/as_mut_ptr().
-                                            let Some(base_raw) = self.get_raw_var_name(c) else {
-                                                let arg_expr = self.expr_to_string(c);
-                                                if Self::expr_string_is_pointer_value(&arg_expr) {
-                                                    let arg_expr = if arg_expr.starts_with("unsafe { ")
-                                                        || arg_expr.contains(" as ")
-                                                        || arg_expr.contains(' ')
-                                                    {
-                                                        format!("({})", arg_expr)
-                                                    } else {
-                                                        arg_expr
-                                                    };
-                                                    return format!("{} as {}", arg_expr, target_rust);
-                                                }
-                                                let ptr_expr = if let Some(inner) =
-                                                    unwrap_outer_unsafe_expr(&arg_expr)
-                                                {
-                                                    let prefer_const_decay =
-                                                        target_is_const || inner.contains("b\"");
-                                                    if prefer_const_decay {
-                                                        format!("unsafe {{ ({}).as_ptr() }}", inner)
-                                                    } else {
-                                                        format!("unsafe {{ ({}).as_mut_ptr() }}", inner)
-                                                    }
-                                                } else {
-                                                    let arg_expr = if arg_expr.contains(" as ")
-                                                        || arg_expr.contains(' ')
-                                                    {
-                                                        format!("({})", arg_expr)
-                                                    } else {
-                                                        arg_expr
-                                                    };
-                                                    let prefer_const_decay =
-                                                        target_is_const || arg_expr.contains("b\"");
-                                                    if prefer_const_decay {
-                                                        format!("{}.as_ptr()", arg_expr)
-                                                    } else {
-                                                        format!("{}.as_mut_ptr()", arg_expr)
-                                                    }
-                                                };
-                                                return format!("{} as {}", ptr_expr, target_rust);
-                                            };
-                                            if base_raw.contains(".as_ptr()")
-                                                || base_raw.contains(".as_mut_ptr()")
-                                            {
-                                                let base = if base_raw.starts_with("unsafe { ")
-                                                    || base_raw.contains(" as ")
-                                                    || base_raw.contains(' ')
-                                                {
-                                                    format!("({})", base_raw)
-                                                } else {
-                                                    base_raw
-                                                };
-                                                return format!("{} as {}", base, target_rust);
-                                            }
-                                            let base = if base_raw.starts_with("unsafe { ")
-                                                || base_raw.contains(" as ")
-                                                || base_raw.contains(' ')
-                                            {
-                                                format!("({})", base_raw)
-                                            } else {
-                                                base_raw
-                                            };
-                                            let is_global_base = base.contains("__gv_")
-                                                || base.contains("__fsv_");
-                                            let decayed_inner = if target_is_const {
-                                                format!("{}.as_ptr()", base)
-                                            } else {
-                                                format!("{}.as_mut_ptr()", base)
-                                            };
-                                            let decayed = if is_global_base {
-                                                format!("unsafe {{ {} }}", decayed_inner)
-                                            } else {
-                                                decayed_inner
-                                            };
-                                            return format!("{} as {}", decayed, target_rust);
-                                        }
-
-                                        // General pointer argument normalization (`*const T` ↔ `*const ()`, etc.).
-                                        let arg_str =
-                                            Self::normalize_pointer_value_expr(&self.expr_to_string(c));
-                                        let arg_wrapped = if arg_str.starts_with("unsafe { ")
-                                            || arg_str.contains(" as ")
-                                            || arg_str.contains(' ')
-                                        {
-                                            format!("({})", arg_str)
-                                        } else {
-                                            arg_str
-                                        };
-                                        return format!("{} as {}", arg_wrapped, target_rust);
+                                        return self.normalize_pointer_arg_for_target(
+                                            c,
+                                            &types[i],
+                                            &arg_str,
+                                        );
                                     }
 
                                     // Scalar integral coercions for parameter type.
@@ -45872,6 +45604,309 @@ mod tests {
         assert!(
             !call_line.contains("readBuffer.as_ptr()"),
             "degraded callExpr array decay should not force const pointer decay for mutable pointer targets, got line:\n{}\nfull code:\n{}",
+            call_line,
+            code
+        );
+    }
+
+    #[test]
+    fn test_call_pointer_param_borrows_value_lvalue_before_base_pointer_cast() {
+        let int_ty = CppType::Int { signed: true };
+        let xml_node_ptr = CppType::Pointer {
+            pointee: Box::new(CppType::Named("XMLNode".to_string())),
+            is_const: false,
+        };
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![
+                make_node(
+                    ClangNodeKind::RecordDecl {
+                        name: "XMLNode".to_string(),
+                        is_class: true,
+                        is_definition: true,
+                        fields: vec![],
+                    },
+                    vec![],
+                ),
+                make_node(
+                    ClangNodeKind::RecordDecl {
+                        name: "XMLDocument".to_string(),
+                        is_class: true,
+                        is_definition: true,
+                        fields: vec![],
+                    },
+                    vec![],
+                ),
+                make_node(
+                    ClangNodeKind::FunctionDecl {
+                        name: "consume".to_string(),
+                        mangled_name: "consume".to_string(),
+                        is_static: false,
+                        return_type: int_ty.clone(),
+                        params: vec![("node".to_string(), xml_node_ptr.clone())],
+                        is_definition: true,
+                        is_variadic: false,
+                        is_noexcept: false,
+                        is_coroutine: false,
+                        coroutine_info: None,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![make_node(
+                            ClangNodeKind::ReturnStmt,
+                            vec![make_node(
+                                ClangNodeKind::IntegerLiteral {
+                                    value: 0,
+                                    cpp_type: Some(int_ty.clone()),
+                                },
+                                vec![],
+                            )],
+                        )],
+                    )],
+                ),
+                make_node(
+                    ClangNodeKind::FunctionDecl {
+                        name: "call_consume".to_string(),
+                        mangled_name: "call_consume".to_string(),
+                        is_static: false,
+                        return_type: int_ty.clone(),
+                        params: vec![("doc".to_string(), CppType::Named("XMLDocument".to_string()))],
+                        is_definition: true,
+                        is_variadic: false,
+                        is_noexcept: false,
+                        is_coroutine: false,
+                        coroutine_info: None,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![
+                            make_node(
+                                ClangNodeKind::ExprStmt,
+                                vec![make_node(
+                                    ClangNodeKind::CallExpr {
+                                        ty: int_ty.clone(),
+                                        template_instantiation: None,
+                                    },
+                                    vec![
+                                        make_node(
+                                            ClangNodeKind::DeclRefExpr {
+                                                name: "consume".to_string(),
+                                                ty: CppType::Function {
+                                                    return_type: Box::new(int_ty.clone()),
+                                                    params: vec![xml_node_ptr.clone()],
+                                                    is_variadic: false,
+                                                },
+                                                namespace_path: vec![],
+                                            },
+                                            vec![],
+                                        ),
+                                        make_node(
+                                            ClangNodeKind::DeclRefExpr {
+                                                name: "doc".to_string(),
+                                                ty: CppType::Named("XMLDocument".to_string()),
+                                                namespace_path: vec![],
+                                            },
+                                            vec![],
+                                        ),
+                                    ],
+                                )],
+                            ),
+                            make_node(
+                                ClangNodeKind::ReturnStmt,
+                                vec![make_node(
+                                    ClangNodeKind::IntegerLiteral {
+                                        value: 0,
+                                        cpp_type: Some(int_ty),
+                                    },
+                                    vec![],
+                                )],
+                            ),
+                        ],
+                    )],
+                ),
+            ],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        let call_line = code
+            .lines()
+            .find(|line| line.contains("consume(") && line.contains("doc as"))
+            .unwrap_or_default();
+        assert!(
+            call_line.contains("(&doc as *const XMLDocument) as *mut XMLDocument")
+                && call_line.contains("as *mut XMLNode"),
+            "pointer function-call argument should borrow value lvalue before base-pointer cast, got line:\n{}\nfull code:\n{}",
+            call_line,
+            code
+        );
+        assert!(
+            !call_line.contains("consume(doc as *mut XMLNode)"),
+            "pointer function-call argument should not emit invalid direct value-to-pointer cast, got line:\n{}\nfull code:\n{}",
+            call_line,
+            code
+        );
+    }
+
+    #[test]
+    fn test_struct_return_call_pointer_param_borrows_value_lvalue_before_base_pointer_cast() {
+        let int_ty = CppType::Int { signed: true };
+        let xml_node_ptr = CppType::Pointer {
+            pointee: Box::new(CppType::Named("XMLNode".to_string())),
+            is_const: false,
+        };
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![
+                make_node(
+                    ClangNodeKind::RecordDecl {
+                        name: "XMLNode".to_string(),
+                        is_class: true,
+                        is_definition: true,
+                        fields: vec![],
+                    },
+                    vec![],
+                ),
+                make_node(
+                    ClangNodeKind::RecordDecl {
+                        name: "XMLDocument".to_string(),
+                        is_class: true,
+                        is_definition: true,
+                        fields: vec![],
+                    },
+                    vec![],
+                ),
+                make_node(
+                    ClangNodeKind::RecordDecl {
+                        name: "XMLHandle".to_string(),
+                        is_class: true,
+                        is_definition: true,
+                        fields: vec![],
+                    },
+                    vec![],
+                ),
+                make_node(
+                    ClangNodeKind::FunctionDecl {
+                        name: "make_handle".to_string(),
+                        mangled_name: "make_handle".to_string(),
+                        is_static: false,
+                        return_type: CppType::Named("XMLHandle".to_string()),
+                        params: vec![("node".to_string(), xml_node_ptr.clone())],
+                        is_definition: true,
+                        is_variadic: false,
+                        is_noexcept: false,
+                        is_coroutine: false,
+                        coroutine_info: None,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![make_node(
+                            ClangNodeKind::ReturnStmt,
+                            vec![make_node(
+                                ClangNodeKind::CXXConstructExpr {
+                                    ty: CppType::Named("XMLHandle".to_string()),
+                                },
+                                vec![],
+                            )],
+                        )],
+                    )],
+                ),
+                make_node(
+                    ClangNodeKind::FunctionDecl {
+                        name: "build_handle".to_string(),
+                        mangled_name: "build_handle".to_string(),
+                        is_static: false,
+                        return_type: CppType::Named("XMLHandle".to_string()),
+                        params: vec![("doc".to_string(), CppType::Named("XMLDocument".to_string()))],
+                        is_definition: true,
+                        is_variadic: false,
+                        is_noexcept: false,
+                        is_coroutine: false,
+                        coroutine_info: None,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![make_node(
+                            ClangNodeKind::ReturnStmt,
+                            vec![make_node(
+                                ClangNodeKind::CallExpr {
+                                    ty: CppType::Named("XMLHandle".to_string()),
+                                    template_instantiation: None,
+                                },
+                                vec![
+                                    make_node(
+                                        ClangNodeKind::DeclRefExpr {
+                                            name: "make_handle".to_string(),
+                                            ty: CppType::Function {
+                                                return_type: Box::new(CppType::Named(
+                                                    "XMLHandle".to_string(),
+                                                )),
+                                                params: vec![xml_node_ptr],
+                                                is_variadic: false,
+                                            },
+                                            namespace_path: vec![],
+                                        },
+                                        vec![],
+                                    ),
+                                    make_node(
+                                        ClangNodeKind::DeclRefExpr {
+                                            name: "doc".to_string(),
+                                            ty: CppType::Named("XMLDocument".to_string()),
+                                            namespace_path: vec![],
+                                        },
+                                        vec![],
+                                    ),
+                                ],
+                            )],
+                        )],
+                    )],
+                ),
+                make_node(
+                    ClangNodeKind::FunctionDecl {
+                        name: "main".to_string(),
+                        mangled_name: "main".to_string(),
+                        is_static: false,
+                        return_type: int_ty.clone(),
+                        params: vec![],
+                        is_definition: true,
+                        is_variadic: false,
+                        is_noexcept: false,
+                        is_coroutine: false,
+                        coroutine_info: None,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![make_node(
+                            ClangNodeKind::ReturnStmt,
+                            vec![make_node(
+                                ClangNodeKind::IntegerLiteral {
+                                    value: 0,
+                                    cpp_type: Some(int_ty),
+                                },
+                                vec![],
+                            )],
+                        )],
+                    )],
+                ),
+            ],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        let call_line = code
+            .lines()
+            .find(|line| line.contains("return make_handle(") && line.contains("doc as"))
+            .unwrap_or_default();
+        assert!(
+            call_line.contains("(&doc as *const XMLDocument) as *mut XMLDocument")
+                && call_line.contains("as *mut XMLNode"),
+            "struct-return call argument should borrow value lvalue before base-pointer cast, got line:\n{}\nfull code:\n{}",
+            call_line,
+            code
+        );
+        assert!(
+            !call_line.contains("return make_handle(doc as *mut XMLNode)"),
+            "struct-return call argument should not emit invalid direct value-to-pointer cast, got line:\n{}\nfull code:\n{}",
             call_line,
             code
         );
