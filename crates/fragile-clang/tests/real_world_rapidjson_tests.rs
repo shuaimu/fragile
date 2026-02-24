@@ -108,9 +108,15 @@ const RAPIDJSON_FRAGILEC_DRIVER_LOG_FILES: &[&str] = &[
     "compile_condense_driver.status",
     "compile_condense_driver.stdout",
     "compile_condense_driver.stderr",
+    "run_condense_driver.status",
+    "run_condense_driver.stdout",
+    "run_condense_driver.stderr",
     "compile_pretty_driver.status",
     "compile_pretty_driver.stdout",
     "compile_pretty_driver.stderr",
+    "run_pretty_driver.status",
+    "run_pretty_driver.stdout",
+    "run_pretty_driver.stderr",
     "fragilec_driver.log",
     "fragilec_driver_manifest.txt",
 ];
@@ -845,6 +851,27 @@ fn run_fragilec_driver_no_stl_examples_in_tree(
             condense_bin.display()
         ));
     }
+    let condense_output = run_example_with_stdin(
+        &condense_bin,
+        RAPIDJSON_SAMPLE_JSON,
+        log_dir,
+        "run_condense_driver",
+    )?;
+    if !condense_output.status.success() {
+        return Err(format!(
+            "fragilec-driver condense run failed with status {} (logs: {})",
+            status_code(&condense_output),
+            log_dir.display()
+        ));
+    }
+    let condense_stdout = String::from_utf8_lossy(&condense_output.stdout);
+    if condense_stdout.trim() != RAPIDJSON_EXPECTED_CONDENSE_OUTPUT {
+        return Err(format!(
+            "fragilec-driver condense output mismatch: expected `{}` got `{}`",
+            RAPIDJSON_EXPECTED_CONDENSE_OUTPUT,
+            condense_stdout.trim()
+        ));
+    }
 
     let pretty_bin = source_dir.join("pretty_fragilec_driver");
     let pretty_compile = compile_example_with_cxx_env(
@@ -869,6 +896,25 @@ fn run_fragilec_driver_no_stl_examples_in_tree(
         return Err(format!(
             "fragilec-driver pretty compile did not emit output binary {}",
             pretty_bin.display()
+        ));
+    }
+    let pretty_output =
+        run_example_with_stdin(&pretty_bin, RAPIDJSON_SAMPLE_JSON, log_dir, "run_pretty_driver")?;
+    if !pretty_output.status.success() {
+        return Err(format!(
+            "fragilec-driver pretty run failed with status {} (logs: {})",
+            status_code(&pretty_output),
+            log_dir.display()
+        ));
+    }
+    let pretty_stdout = String::from_utf8_lossy(&pretty_output.stdout);
+    if !(pretty_stdout.contains("\n")
+        && pretty_stdout.contains("\"msg\": \"hi\"")
+        && pretty_stdout.contains("    \"a\": 1"))
+    {
+        return Err(format!(
+            "fragilec-driver pretty output did not look pretty-formatted, got:\n{}",
+            pretty_stdout
         ));
     }
 
@@ -1781,6 +1827,32 @@ fn test_rapidjson_fragilec_driver_no_stl_examples_local_fixture_success() {
         0,
         "strict fragilec-driver pretty compile should succeed"
     );
+    assert_eq!(
+        read_status_file(&log_dir.join("run_condense_driver.status"))
+            .expect("failed to read run_condense_driver.status"),
+        0,
+        "strict fragilec-driver condense run should succeed"
+    );
+    assert_eq!(
+        read_status_file(&log_dir.join("run_pretty_driver.status"))
+            .expect("failed to read run_pretty_driver.status"),
+        0,
+        "strict fragilec-driver pretty run should succeed"
+    );
+    let condense_stdout = fs::read_to_string(log_dir.join("run_condense_driver.stdout"))
+        .expect("failed to read run_condense_driver.stdout");
+    assert_eq!(
+        condense_stdout.trim(),
+        RAPIDJSON_EXPECTED_CONDENSE_OUTPUT,
+        "strict fragilec-driver condense output should match expected compact JSON"
+    );
+    let pretty_stdout = fs::read_to_string(log_dir.join("run_pretty_driver.stdout"))
+        .expect("failed to read run_pretty_driver.stdout");
+    assert!(
+        pretty_stdout.contains("\"msg\": \"hi\""),
+        "strict fragilec-driver pretty output should preserve JSON fields, got:\n{}",
+        pretty_stdout
+    );
 
     let _ = fs::remove_dir_all(&root);
 }
@@ -2128,6 +2200,33 @@ fn test_real_world_rapidjson_fragilec_native_no_stl_examples_baseline() {
             .expect("failed to read compile_pretty_driver.status"),
         0,
         "real-world strict pretty compile should succeed"
+    );
+    assert_eq!(
+        read_status_file(&log_dir.join("run_condense_driver.status"))
+            .expect("failed to read run_condense_driver.status"),
+        0,
+        "real-world strict condense run should succeed"
+    );
+    assert_eq!(
+        read_status_file(&log_dir.join("run_pretty_driver.status"))
+            .expect("failed to read run_pretty_driver.status"),
+        0,
+        "real-world strict pretty run should succeed"
+    );
+
+    let condense_stdout = fs::read_to_string(log_dir.join("run_condense_driver.stdout"))
+        .expect("failed to read run_condense_driver.stdout");
+    assert_eq!(
+        condense_stdout.trim(),
+        RAPIDJSON_EXPECTED_CONDENSE_OUTPUT,
+        "real-world strict condense output should match expected compact JSON"
+    );
+    let pretty_stdout = fs::read_to_string(log_dir.join("run_pretty_driver.stdout"))
+        .expect("failed to read run_pretty_driver.stdout");
+    assert!(
+        pretty_stdout.contains("\"msg\": \"hi\""),
+        "real-world strict pretty output should preserve JSON fields, got:\n{}",
+        pretty_stdout
     );
 }
 
