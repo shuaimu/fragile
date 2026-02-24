@@ -79,6 +79,18 @@ const RAPIDJSON_STRICT_CMAKE_NO_TESTS_LOG_FILES: &[&str] = &[
     "first_failing_compile_stderr.txt",
     "strict_cmake_no_tests_manifest.txt",
 ];
+const RAPIDJSON_STRICT_CMAKE_LOCAL_FIXTURE_LOG_FILES: &[&str] = &[
+    "cmake_configure.status",
+    "cmake_configure.stdout",
+    "cmake_configure.stderr",
+    "cmake_build.status",
+    "cmake_build.stdout",
+    "cmake_build.stderr",
+    "fragilec_driver.log",
+    "first_failing_compile_command.txt",
+    "first_failing_compile_stderr.txt",
+    "strict_cmake_local_fixture_manifest.txt",
+];
 const RAPIDJSON_CI_SMOKE_REQUIRED_TEST_INVOCATIONS: &[&str] = &[
     "test_rapidjson_native_no_stl_examples_local_fixture_success",
     "test_rapidjson_no_stl_command_plan_local_fixture_success",
@@ -1111,6 +1123,150 @@ fn run_rapidjson_strict_cmake_no_tests_full_build_capture() -> Result<PathBuf, S
     Ok(log_dir)
 }
 
+fn create_local_cmake_first_failure_fixture(base_dir: &Path) -> Result<(PathBuf, PathBuf), String> {
+    let project_dir = base_dir.join("local_first_failure_project");
+    fs::create_dir_all(project_dir.join("src"))
+        .map_err(|e| format!("failed to create local fixture source dir: {}", e))?;
+
+    fs::write(
+        project_dir.join("src/ok.cpp"),
+        "int ok_function() { return 0; }\n",
+    )
+    .map_err(|e| format!("failed to write ok.cpp for local fixture: {}", e))?;
+    fs::write(
+        project_dir.join("src/fail.cpp"),
+        "int fail_function() { return 1; }\n",
+    )
+    .map_err(|e| format!("failed to write fail.cpp for local fixture: {}", e))?;
+    fs::write(
+        project_dir.join("CMakeLists.txt"),
+        "cmake_minimum_required(VERSION 3.16)\nproject(LocalFirstFailureFixture CXX)\nadd_library(local_first_failure STATIC src/ok.cpp src/fail.cpp)\n",
+    )
+    .map_err(|e| format!("failed to write CMakeLists.txt for local fixture: {}", e))?;
+
+    let fake_fragilec = base_dir.join("fake_fragilec.sh");
+    fs::write(
+        &fake_fragilec,
+        "#!/usr/bin/env bash\nset -euo pipefail\nlog=\"${FRAGILEC_LOG:-}\"\nif [[ -n \"$log\" ]]; then\n  printf 'cwd=%s\\n' \"$(pwd)\" >> \"$log\"\n  printf 'args=%s\\n' \"$*\" >> \"$log\"\nfi\nfor arg in \"$@\"; do\n  if [[ \"$arg\" == *\"fail.cpp\"* ]]; then\n    echo \"forced local fixture compile failure for fail.cpp\" >&2\n    exit 42\n  fi\ndone\nexec c++ \"$@\"\n",
+    )
+    .map_err(|e| format!("failed to write fake fragilec wrapper script: {}", e))?;
+    let chmod_output = Command::new("chmod")
+        .arg("+x")
+        .arg(&fake_fragilec)
+        .output()
+        .map_err(|e| format!("failed to run chmod on fake fragilec wrapper script: {}", e))?;
+    if !chmod_output.status.success() {
+        return Err(format!(
+            "chmod failed for fake fragilec wrapper script {}\nstdout:\n{}\nstderr:\n{}",
+            fake_fragilec.display(),
+            String::from_utf8_lossy(&chmod_output.stdout),
+            String::from_utf8_lossy(&chmod_output.stderr)
+        ));
+    }
+
+    Ok((project_dir, fake_fragilec))
+}
+
+fn run_local_strict_cmake_no_tests_first_failure_capture_fixture(
+    root: &Path,
+) -> Result<PathBuf, String> {
+    let (project_dir, fake_fragilec) = create_local_cmake_first_failure_fixture(root)?;
+    let log_dir = root.join("strict_cmake_local_fixture_logs");
+    fs::create_dir_all(&log_dir).map_err(|e| {
+        format!(
+            "failed to create local fixture log dir {}: {}",
+            log_dir.display(),
+            e
+        )
+    })?;
+    let driver_log = log_dir.join("fragilec_driver.log");
+    fs::write(&driver_log, "").map_err(|e| {
+        format!(
+            "failed to initialize local fixture fragilec driver log: {}",
+            e
+        )
+    })?;
+
+    let build_dir = project_dir.join("build");
+    fs::create_dir_all(&build_dir).map_err(|e| {
+        format!(
+            "failed to create local fixture build dir {}: {}",
+            build_dir.display(),
+            e
+        )
+    })?;
+
+    let configure_output = Command::new("cmake")
+        .arg("-DRAPIDJSON_BUILD_TESTS=OFF")
+        .arg("..")
+        .current_dir(&build_dir)
+        .env("CXX", fake_fragilec.to_string_lossy().to_string())
+        .env("FRAGILEC_MODE", "strict")
+        .env("FRAGILEC_LOG", driver_log.to_string_lossy().to_string())
+        .output()
+        .map_err(|e| format!("failed to run local fixture strict cmake configure: {}", e))?;
+    write_command_capture(&log_dir, "cmake_configure", &configure_output)?;
+    if !configure_output.status.success() {
+        return Err(format!(
+            "local fixture strict cmake configure failed with status {} (logs: {})",
+            status_code(&configure_output),
+            log_dir.display()
+        ));
+    }
+
+    let build_output = Command::new("cmake")
+        .arg("--build")
+        .arg(".")
+        .arg("--verbose")
+        .arg("--")
+        .arg("-j1")
+        .current_dir(&build_dir)
+        .env("CXX", fake_fragilec.to_string_lossy().to_string())
+        .env("FRAGILEC_MODE", "strict")
+        .env("FRAGILEC_LOG", driver_log.to_string_lossy().to_string())
+        .output()
+        .map_err(|e| format!("failed to run local fixture strict cmake build: {}", e))?;
+    write_command_capture(&log_dir, "cmake_build", &build_output)?;
+
+    let driver_log_content = fs::read_to_string(&driver_log).map_err(|e| {
+        format!(
+            "failed to read local fixture fragilec driver log {}: {}",
+            driver_log.display(),
+            e
+        )
+    })?;
+    let build_stdout = String::from_utf8_lossy(&build_output.stdout);
+    let build_stderr = String::from_utf8_lossy(&build_output.stderr);
+    let (first_command, first_stderr) = select_first_failing_compile_capture(
+        &driver_log_content,
+        !build_output.status.success(),
+        &build_stdout,
+        &build_stderr,
+    );
+    write_first_failing_compile_capture_files(&log_dir, &first_command, &first_stderr)?;
+
+    let manifest = format!(
+        "fixture=local_strict_cmake_first_failure\nsource_dir={}\nfake_fragilec={}\nconfigure_status={}\nbuild_status={}\nfirst_failing_compile_command_file=first_failing_compile_command.txt\nfirst_failing_compile_stderr_file=first_failing_compile_stderr.txt\n",
+        project_dir.display(),
+        fake_fragilec.display(),
+        status_code(&configure_output),
+        status_code(&build_output)
+    );
+    fs::write(
+        log_dir.join("strict_cmake_local_fixture_manifest.txt"),
+        manifest,
+    )
+    .map_err(|e| {
+        format!(
+            "failed to write strict_cmake_local_fixture_manifest.txt in {}: {}",
+            log_dir.display(),
+            e
+        )
+    })?;
+
+    Ok(log_dir)
+}
+
 fn unique_temp_dir(prefix: &str) -> PathBuf {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1424,6 +1580,50 @@ fn test_select_first_failing_compile_capture_returns_none_when_build_succeeds() 
         select_first_failing_compile_capture("cwd=/tmp\nargs=-c ok.cpp -o ok.o\n", false, "", "");
     assert_eq!(command, "<none>");
     assert_eq!(stderr, "<none>");
+}
+
+#[test]
+fn test_rapidjson_strict_cmake_local_fixture_replays_first_failure_capture() {
+    let root = unique_temp_dir("rapidjson_strict_cmake_local_fixture_first_failure");
+    fs::create_dir_all(&root).expect("failed to create local fixture root");
+
+    let log_dir = run_local_strict_cmake_no_tests_first_failure_capture_fixture(&root)
+        .expect("failed to run local strict cmake first-failure fixture");
+    for rel in RAPIDJSON_STRICT_CMAKE_LOCAL_FIXTURE_LOG_FILES {
+        assert!(
+            log_dir.join(rel).exists(),
+            "expected strict local fixture capture log file {}",
+            log_dir.join(rel).display()
+        );
+    }
+    assert_eq!(
+        read_status_file(&log_dir.join("cmake_configure.status"))
+            .expect("failed to read local fixture cmake_configure.status"),
+        0,
+        "local fixture strict cmake configure should succeed"
+    );
+    let build_status = read_status_file(&log_dir.join("cmake_build.status"))
+        .expect("failed to read local fixture cmake_build.status");
+    assert_ne!(
+        build_status, 0,
+        "local fixture strict cmake build should fail to replay first-failure capture"
+    );
+    let first_command = fs::read_to_string(log_dir.join("first_failing_compile_command.txt"))
+        .expect("failed to read local fixture first_failing_compile_command.txt");
+    assert!(
+        first_command.contains("fail.cpp"),
+        "local fixture should capture fail.cpp compile command, got:\n{}",
+        first_command
+    );
+    let first_stderr = fs::read_to_string(log_dir.join("first_failing_compile_stderr.txt"))
+        .expect("failed to read local fixture first_failing_compile_stderr.txt");
+    assert!(
+        first_stderr.contains("forced local fixture compile failure for fail.cpp"),
+        "local fixture should capture forced failing stderr, got:\n{}",
+        first_stderr
+    );
+
+    let _ = fs::remove_dir_all(&root);
 }
 
 #[test]

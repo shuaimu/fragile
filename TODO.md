@@ -66,7 +66,7 @@ Success criteria:
 
 ## Phase 1: Repro harness and deterministic triage
 - [x] Add a dedicated ignored real-world test: `rapidjson cmake no-tests full build with fragilec` that captures first failing compile command and stderr to stable logs. (Done 2026-02-24: added strict cmake no-tests real-world ignored test plus stable `first_failing_compile_command.txt` / `first_failing_compile_stderr.txt` capture logs and manifest.)
-- [ ] Add a local fixture variant that replays first-failure class for quick iteration.
+- [x] Add a local fixture variant that replays first-failure class for quick iteration. (Done 2026-02-24: added a deterministic local strict-cmake fixture test that forces one compile failure via a fake `fragilec` wrapper and verifies first failing command/stderr capture artifacts.)
 - [ ] Record and maintain ordered failure classes in this file as each class is cleared.
 
 ## Phase 2: Must-fix compiler correctness blockers
