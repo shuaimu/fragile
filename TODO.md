@@ -62,7 +62,7 @@ Success criteria:
 ## Phase 0: Guardrails (prevent misleading green builds)
 - [x] Remove/disable strict-link fallback shim `main` for RapidJSON example builds; fail link when no real `main` is defined. (Done 2026-02-24: strict link now errors for executable-style links that lack a real `main` in inspected objects.)
 - [x] Add link-time diagnostic that prints which input objects define `main`. (Done 2026-02-24: strict link errors now include `main` symbol diagnostics listing defining and inspected object sets.)
-- [ ] Add regression test: if source contains `main`, generated object must export `main`.
+- [x] Add regression test: if source contains `main`, generated object must export `main`. (Done 2026-02-24: added strict compile regression test that emits an object from a source TU containing `main` and asserts symbol export via `nm` inspection.)
 
 ## Phase 1: Repro harness and deterministic triage
 - [ ] Add a dedicated ignored real-world test: `rapidjson cmake no-tests full build with fragilec` that captures first failing compile command and stderr to stable logs.

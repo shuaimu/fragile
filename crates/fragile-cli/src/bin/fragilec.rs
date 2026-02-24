@@ -1158,4 +1158,36 @@ mod tests {
             diag
         );
     }
+
+    #[test]
+    fn strict_compile_source_with_main_exports_main_symbol() {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock must be monotonic")
+            .as_nanos();
+        let temp_dir = std::env::temp_dir().join(format!("fragilec_main_export_test_{}", stamp));
+        fs::create_dir_all(&temp_dir).expect("failed to create temp dir");
+        let source = temp_dir.join("program.cpp");
+        let out_obj = temp_dir.join("program.o");
+        fs::write(
+            &source,
+            "int helper() { return 1; }\nint main() { return helper() - 1; }\n",
+        )
+        .expect("failed to write source");
+
+        strict_compile_source_to_object(&source, &out_obj, &[], &[], &[])
+            .expect("strict compile should succeed");
+        assert!(
+            out_obj.exists(),
+            "expected object output at {}",
+            out_obj.display()
+        );
+        assert!(
+            object_defines_main_symbol(&out_obj).expect("failed to inspect object symbols"),
+            "strict-compiled object should define main symbol: {}",
+            out_obj.display()
+        );
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
 }
