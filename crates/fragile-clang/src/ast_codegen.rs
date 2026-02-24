@@ -20649,6 +20649,10 @@ impl AstCodeGen {
         self.writeln("}");
         self.writeln("");
 
+        // Register all preamble-emitted aliases/record names so later AST traversal
+        // can deterministically suppress duplicate struct/typedef emission.
+        self.register_emitted_preamble_type_items();
+
         // Reserve selected preamble-owned symbol names so AST traversal does not
         // emit duplicate helpers/types with the same identifiers in one TU.
         self.register_preamble_owned_symbols();
@@ -20857,6 +20861,33 @@ impl AstCodeGen {
         for name in Self::preamble_owned_alias_names() {
             self.generated_aliases.insert((*name).to_string());
         }
+    }
+
+    fn register_emitted_preamble_type_items(&mut self) {
+        for line in self.output.lines() {
+            if let Some(alias_name) = Self::extract_emitted_item_name(line, "pub type ") {
+                self.generated_aliases.insert(alias_name);
+            }
+            if let Some(struct_name) = Self::extract_emitted_item_name(line, "pub struct ") {
+                self.generated_structs.insert(struct_name);
+            }
+            if let Some(union_name) = Self::extract_emitted_item_name(line, "pub union ") {
+                self.generated_structs.insert(union_name);
+            }
+        }
+    }
+
+    fn extract_emitted_item_name(line: &str, marker: &str) -> Option<String> {
+        let idx = line.find(marker)?;
+        let rest = line[idx + marker.len()..].trim_start();
+        let ident: String = rest
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '#')
+            .collect();
+        if ident.is_empty() {
+            return None;
+        }
+        Some(ident)
     }
 
     /// True when a lowered Rust array type uses an unresolved non-type template
@@ -41889,6 +41920,68 @@ mod tests {
             code.matches("pub struct __cxx_atomic_impl___cxx_contention_t").count(),
             1,
             "__cxx_atomic_impl___cxx_contention_t should be emitted once from preamble only, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_preamble_placeholder_alias_collisions_are_deduplicated_for_structs_and_typedefs() {
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![
+                make_node(
+                    ClangNodeKind::RecordDecl {
+                        name: "__prev".to_string(),
+                        is_class: false,
+                        is_definition: true,
+                        fields: vec![],
+                    },
+                    vec![],
+                ),
+                make_node(
+                    ClangNodeKind::TypedefDecl {
+                        name: "__short".to_string(),
+                        underlying_type: CppType::Int { signed: true },
+                    },
+                    vec![],
+                ),
+                make_node(
+                    ClangNodeKind::RecordDecl {
+                        name: "user_visible_probe".to_string(),
+                        is_class: false,
+                        is_definition: true,
+                        fields: vec![],
+                    },
+                    vec![],
+                ),
+            ],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("pub type __prev = std::ffi::c_void;"),
+            "expected preamble __prev alias to exist, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("pub struct __prev"),
+            "preamble placeholder alias __prev must suppress colliding struct emission, got:\n{}",
+            code
+        );
+        assert_eq!(
+            code.matches("pub type __short =").count(),
+            1,
+            "preamble placeholder alias __short must not be re-emitted by typedef traversal, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("/// C++ typedef/using `__short`"),
+            "typedef traversal must skip colliding preamble placeholder alias __short, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("pub struct user_visible_probe"),
+            "non-colliding records should still emit concrete structs, got:\n{}",
             code
         );
     }
