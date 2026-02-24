@@ -19,12 +19,12 @@ const FRAGILEC_LINKER_ENV: &str = "FRAGILEC_LINKER";
 fn validate_strict_mode_value(mode: &str) -> Result<(), String> {
     match mode.to_ascii_lowercase().as_str() {
         "strict" => Ok(()),
-        "auto" => Err(
-            "FRAGILEC_MODE=auto has been removed; fragilec is strict-only now".to_string(),
-        ),
-        "pass" => Err(
-            "FRAGILEC_MODE=pass has been removed; fragilec is strict-only now".to_string(),
-        ),
+        "auto" => {
+            Err("FRAGILEC_MODE=auto has been removed; fragilec is strict-only now".to_string())
+        }
+        "pass" => {
+            Err("FRAGILEC_MODE=pass has been removed; fragilec is strict-only now".to_string())
+        }
         other => Err(format!(
             "unsupported FRAGILEC_MODE value `{}`; fragilec is strict-only",
             other
@@ -170,10 +170,20 @@ fn append_invocation_log(args: &[OsString]) -> Result<(), String> {
         .append(true)
         .open(&log_path)
         .map_err(|e| format!("failed to open fragilec log {}: {}", log_path.display(), e))?;
-    writeln!(file, "cwd={}", cwd.display())
-        .map_err(|e| format!("failed to append cwd record to {}: {}", log_path.display(), e))?;
-    write!(file, "args=")
-        .map_err(|e| format!("failed to append args prefix to {}: {}", log_path.display(), e))?;
+    writeln!(file, "cwd={}", cwd.display()).map_err(|e| {
+        format!(
+            "failed to append cwd record to {}: {}",
+            log_path.display(),
+            e
+        )
+    })?;
+    write!(file, "args=").map_err(|e| {
+        format!(
+            "failed to append args prefix to {}: {}",
+            log_path.display(),
+            e
+        )
+    })?;
     for arg in args {
         write!(file, "{} ", arg.to_string_lossy())
             .map_err(|e| format!("failed to append args to {}: {}", log_path.display(), e))?;
@@ -193,7 +203,12 @@ fn default_object_output(source_arg: &Path, cwd: &Path) -> Result<PathBuf, Strin
     let stem = source_arg
         .file_stem()
         .and_then(|s| s.to_str())
-        .ok_or_else(|| format!("cannot derive object output for source {}", source_arg.display()))?;
+        .ok_or_else(|| {
+            format!(
+                "cannot derive object output for source {}",
+                source_arg.display()
+            )
+        })?;
     Ok(cwd.join(format!("{stem}.o")))
 }
 
@@ -220,7 +235,12 @@ fn crate_name_for_source(source: &Path) -> String {
     }
     if out.is_empty() {
         "fragile_unit".to_string()
-    } else if out.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) {
+    } else if out
+        .chars()
+        .next()
+        .map(|c| c.is_ascii_digit())
+        .unwrap_or(false)
+    {
         format!("fragile_{out}")
     } else {
         out
@@ -381,13 +401,23 @@ fn strict_compile_source_to_object(
         })?;
     }
 
-    let parser =
-        ClangParser::with_paths_defines_and_language(includes.to_vec(), defines.to_vec(), source_language(&source))
-            .map_err(|e| format!("failed to create fragile parser for {}: {}", source.display(), e))?;
+    let parser = ClangParser::with_paths_defines_and_language(
+        includes.to_vec(),
+        defines.to_vec(),
+        source_language(&source),
+    )
+    .map_err(|e| {
+        format!(
+            "failed to create fragile parser for {}: {}",
+            source.display(),
+            e
+        )
+    })?;
     let ast = parser
         .parse_file(&source)
         .map_err(|e| format!("failed to parse {}: {}", source.display(), e))?;
-    let transpiled = normalize_transpiled_main_entry(AstCodeGen::new().generate(&ast.translation_unit));
+    let transpiled =
+        normalize_transpiled_main_entry(AstCodeGen::new().generate(&ast.translation_unit));
 
     let keep_rs = std::env::var(FRAGILEC_KEEP_RS_ENV)
         .map(|v| v == "1")
@@ -452,7 +482,11 @@ fn normalize_transpiled_main_entry(transpiled: String) -> String {
         return transpiled;
     }
     let promoted = if transpiled.contains("pub extern \"C\" fn cpp_main(") {
-        transpiled.replacen("pub extern \"C\" fn cpp_main(", "pub extern \"C\" fn main(", 1)
+        transpiled.replacen(
+            "pub extern \"C\" fn cpp_main(",
+            "pub extern \"C\" fn main(",
+            1,
+        )
     } else if transpiled.contains("pub unsafe extern \"C\" fn cpp_main(") {
         transpiled.replacen(
             "pub unsafe extern \"C\" fn cpp_main(",
@@ -523,7 +557,13 @@ fn build_rust_runtime_link_support(temp_root: &Path) -> Result<(PathBuf, Vec<OsS
         &runtime_rs,
         "#[no_mangle]\npub extern \"C\" fn __fragile_runtime_support_anchor() {}\n",
     )
-    .map_err(|e| format!("failed to write runtime support source {}: {}", runtime_rs.display(), e))?;
+    .map_err(|e| {
+        format!(
+            "failed to write runtime support source {}: {}",
+            runtime_rs.display(),
+            e
+        )
+    })?;
 
     let output = Command::new("rustc")
         .arg("--edition")
@@ -598,6 +638,67 @@ fn object_defines_main_symbol(obj: &Path) -> Result<bool, String> {
         return Ok(true);
     }
     Ok(false)
+}
+
+fn push_unique_object_path(paths: &mut Vec<PathBuf>, path: PathBuf) {
+    if paths.iter().all(|existing| existing != &path) {
+        paths.push(path);
+    }
+}
+
+fn collect_link_input_objects_for_main_scan(
+    parsed: &ParsedInvocation,
+    compiled_positions: &[(usize, PathBuf)],
+    cwd: &Path,
+) -> Vec<PathBuf> {
+    let mut objects = Vec::new();
+    for (_, out_obj) in compiled_positions {
+        push_unique_object_path(&mut objects, out_obj.clone());
+    }
+    for arg in &parsed.args {
+        let arg_str = arg.to_string_lossy();
+        if !arg_str.ends_with(".o") {
+            continue;
+        }
+        let obj = resolve_path(Path::new(arg_str.as_ref()), cwd);
+        if !obj.exists() {
+            continue;
+        }
+        push_unique_object_path(&mut objects, obj);
+    }
+    objects
+}
+
+fn scan_main_defining_objects(objects: &[PathBuf]) -> Result<Vec<PathBuf>, String> {
+    let mut defining = Vec::new();
+    for obj in objects {
+        if object_defines_main_symbol(obj)? {
+            defining.push(obj.clone());
+        }
+    }
+    Ok(defining)
+}
+
+fn format_main_symbol_diagnostic(
+    inspected_objects: &[PathBuf],
+    defining_objects: &[PathBuf],
+) -> String {
+    fn format_paths(paths: &[PathBuf]) -> String {
+        if paths.is_empty() {
+            return "<none>".to_string();
+        }
+        paths
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
+    format!(
+        "main symbol diagnostic:\n  defining objects: {}\n  inspected objects: {}",
+        format_paths(defining_objects),
+        format_paths(inspected_objects)
+    )
 }
 
 fn output_is_non_executable_artifact(output: Option<&Path>) -> bool {
@@ -692,7 +793,8 @@ fn run_fragile_link(parsed: &ParsedInvocation) -> Result<(), String> {
         .duration_since(UNIX_EPOCH)
         .map_err(|e| format!("failed to read wall clock: {}", e))?
         .as_nanos();
-    let temp_root = std::env::temp_dir().join(format!("fragilec_link_{}_{}", std::process::id(), stamp));
+    let temp_root =
+        std::env::temp_dir().join(format!("fragilec_link_{}_{}", std::process::id(), stamp));
     fs::create_dir_all(&temp_root).map_err(|e| {
         format!(
             "failed to create strict-link temp dir {}: {}",
@@ -732,52 +834,22 @@ fn run_fragile_link(parsed: &ParsedInvocation) -> Result<(), String> {
         link_args[*source_pos] = OsString::from(replaced.to_string_lossy().to_string());
     }
 
-    let mut has_main_symbol = false;
-    let mut inspected_objects: Vec<PathBuf> = Vec::new();
-    for (_, out_obj) in &compiled_positions {
-        inspected_objects.push(out_obj.clone());
-        if object_defines_main_symbol(out_obj)? {
-            has_main_symbol = true;
-            break;
-        }
-    }
-    if !has_main_symbol {
-        for arg in &parsed.args {
-            let arg_str = arg.to_string_lossy();
-            if !arg_str.ends_with(".o") {
-                continue;
-            }
-            let obj = resolve_path(Path::new(arg_str.as_ref()), &cwd);
-            if !obj.exists() {
-                continue;
-            }
-            if inspected_objects.iter().all(|existing| existing != &obj) {
-                inspected_objects.push(obj.clone());
-            }
-            if object_defines_main_symbol(&obj)? {
-                has_main_symbol = true;
-                break;
-            }
-        }
-    }
-    if !has_main_symbol && link_requires_program_main(parsed) {
-        let inspected = if inspected_objects.is_empty() {
-            "<none>".to_string()
-        } else {
-            inspected_objects
-                .iter()
-                .map(|p| p.display().to_string())
-                .collect::<Vec<_>>()
-                .join(", ")
-        };
+    let inspected_objects =
+        collect_link_input_objects_for_main_scan(parsed, &compiled_positions, &cwd);
+    let defining_objects = scan_main_defining_objects(&inspected_objects)?;
+    let main_symbol_diag = format_main_symbol_diagnostic(&inspected_objects, &defining_objects);
+
+    if defining_objects.is_empty() && link_requires_program_main(parsed) {
         return Err(format!(
-            "strict link requires a real `main` symbol for executable outputs; none found in inspected objects: {}",
-            inspected
+            "strict link requires a real `main` symbol for executable outputs\n{}",
+            main_symbol_diag
         ));
     }
 
     let (runtime_archive, native_libs) = build_rust_runtime_link_support(&temp_root)?;
-    link_args.push(OsString::from(runtime_archive.to_string_lossy().to_string()));
+    link_args.push(OsString::from(
+        runtime_archive.to_string_lossy().to_string(),
+    ));
     link_args.extend(native_libs);
 
     let driver = link_driver();
@@ -787,10 +859,11 @@ fn run_fragile_link(parsed: &ParsedInvocation) -> Result<(), String> {
         .map_err(|e| format!("failed to run strict link driver `{}`: {}", driver, e))?;
     if !link_output.status.success() {
         return Err(format!(
-            "strict link failed via `{}`\nstdout:\n{}\nstderr:\n{}",
+            "strict link failed via `{}`\nstdout:\n{}\nstderr:\n{}\n{}",
             driver,
             String::from_utf8_lossy(&link_output.stdout),
-            String::from_utf8_lossy(&link_output.stderr)
+            String::from_utf8_lossy(&link_output.stderr),
+            main_symbol_diag
         ));
     }
 
@@ -890,7 +963,8 @@ mod tests {
 
     #[test]
     fn parse_handles_combined_flag_forms() {
-        let parsed = ParsedInvocation::parse(args(&["-Iinc", "-DBAR=1", "-c", "unit.c", "-omain.o"]));
+        let parsed =
+            ParsedInvocation::parse(args(&["-Iinc", "-DBAR=1", "-c", "unit.c", "-omain.o"]));
         assert_eq!(parsed.includes, vec!["inc".to_string()]);
         assert_eq!(parsed.defines, vec!["BAR=1".to_string()]);
         assert_eq!(parsed.output, Some(PathBuf::from("main.o")));
@@ -900,7 +974,10 @@ mod tests {
     #[test]
     fn parse_tracks_multiple_source_positions() {
         let parsed = ParsedInvocation::parse(args(&["-O2", "a.cpp", "-DMODE=1", "b.cc"]));
-        assert_eq!(parsed.sources, vec![PathBuf::from("a.cpp"), PathBuf::from("b.cc")]);
+        assert_eq!(
+            parsed.sources,
+            vec![PathBuf::from("a.cpp"), PathBuf::from("b.cc")]
+        );
         assert_eq!(parsed.source_indices, vec![1usize, 3usize]);
     }
 
@@ -930,25 +1007,35 @@ mod tests {
 
     #[test]
     fn strict_mode_validation_rejects_auto_and_pass() {
-        let auto_err =
-            validate_strict_mode_value("auto").expect_err("auto mode must be rejected");
-        assert!(auto_err.contains("removed"), "unexpected error: {}", auto_err);
+        let auto_err = validate_strict_mode_value("auto").expect_err("auto mode must be rejected");
+        assert!(
+            auto_err.contains("removed"),
+            "unexpected error: {}",
+            auto_err
+        );
 
-        let pass_err =
-            validate_strict_mode_value("pass").expect_err("pass mode must be rejected");
-        assert!(pass_err.contains("removed"), "unexpected error: {}", pass_err);
+        let pass_err = validate_strict_mode_value("pass").expect_err("pass mode must be rejected");
+        assert!(
+            pass_err.contains("removed"),
+            "unexpected error: {}",
+            pass_err
+        );
     }
 
     #[test]
     fn crate_name_sanitizes_non_identifier_chars() {
-        assert_eq!(crate_name_for_source(Path::new("hello-world.cpp")), "hello_world");
+        assert_eq!(
+            crate_name_for_source(Path::new("hello-world.cpp")),
+            "hello_world"
+        );
         assert_eq!(crate_name_for_source(Path::new("1x.c")), "fragile_1x");
     }
 
     #[test]
     fn strict_compile_rejects_multi_source_single_output() {
         let parsed = ParsedInvocation::parse(args(&["-c", "a.cpp", "b.cpp", "-o", "out.o"]));
-        let err = run_fragile_compile(&parsed).expect_err("multi-source single -o must be rejected");
+        let err =
+            run_fragile_compile(&parsed).expect_err("multi-source single -o must be rejected");
         assert!(
             err.contains("multiple sources") && err.contains("single `-o`"),
             "unexpected error: {}",
@@ -1000,6 +1087,75 @@ mod tests {
         assert!(
             !link_requires_program_main(&parsed),
             "custom linker entrypoint should disable default main requirement"
+        );
+    }
+
+    #[test]
+    fn collect_link_input_objects_for_main_scan_dedupes_and_filters_missing_files() {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock must be monotonic")
+            .as_nanos();
+        let temp_dir = std::env::temp_dir().join(format!("fragilec_main_scan_test_{}", stamp));
+        fs::create_dir_all(&temp_dir).expect("failed to create temp dir");
+        let compiled_obj = temp_dir.join("compiled.o");
+        let arg_obj = temp_dir.join("arg.o");
+        let missing_obj = temp_dir.join("missing.o");
+        fs::write(&compiled_obj, b"").expect("failed to create compiled object marker");
+        fs::write(&arg_obj, b"").expect("failed to create arg object marker");
+
+        let parsed = ParsedInvocation::parse(vec![
+            OsString::from(arg_obj.to_string_lossy().to_string()),
+            OsString::from(arg_obj.to_string_lossy().to_string()),
+            OsString::from(missing_obj.to_string_lossy().to_string()),
+            OsString::from("-o"),
+            OsString::from(temp_dir.join("out_bin").to_string_lossy().to_string()),
+        ]);
+        let compiled_positions = vec![
+            (0usize, compiled_obj.clone()),
+            (1usize, compiled_obj.clone()),
+        ];
+        let objects =
+            collect_link_input_objects_for_main_scan(&parsed, &compiled_positions, Path::new("/"));
+
+        assert_eq!(
+            objects,
+            vec![compiled_obj, arg_obj],
+            "main scan should keep unique existing object inputs in stable order"
+        );
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn format_main_symbol_diagnostic_reports_defining_and_inspected_sets() {
+        let inspected = vec![PathBuf::from("a.o"), PathBuf::from("b.o")];
+        let defining = vec![PathBuf::from("b.o")];
+        let diag = format_main_symbol_diagnostic(&inspected, &defining);
+        assert!(
+            diag.contains("defining objects: b.o"),
+            "diagnostic should report defining objects, got:\n{}",
+            diag
+        );
+        assert!(
+            diag.contains("inspected objects: a.o, b.o"),
+            "diagnostic should report inspected objects, got:\n{}",
+            diag
+        );
+    }
+
+    #[test]
+    fn format_main_symbol_diagnostic_reports_none_for_empty_sets() {
+        let diag = format_main_symbol_diagnostic(&[], &[]);
+        assert!(
+            diag.contains("defining objects: <none>"),
+            "diagnostic should include explicit empty defining set, got:\n{}",
+            diag
+        );
+        assert!(
+            diag.contains("inspected objects: <none>"),
+            "diagnostic should include explicit empty inspected set, got:\n{}",
+            diag
         );
     }
 }

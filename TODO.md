@@ -61,7 +61,7 @@ Success criteria:
 
 ## Phase 0: Guardrails (prevent misleading green builds)
 - [x] Remove/disable strict-link fallback shim `main` for RapidJSON example builds; fail link when no real `main` is defined. (Done 2026-02-24: strict link now errors for executable-style links that lack a real `main` in inspected objects.)
-- [ ] Add link-time diagnostic that prints which input objects define `main`.
+- [x] Add link-time diagnostic that prints which input objects define `main`. (Done 2026-02-24: strict link errors now include `main` symbol diagnostics listing defining and inspected object sets.)
 - [ ] Add regression test: if source contains `main`, generated object must export `main`.
 
 ## Phase 1: Repro harness and deterministic triage
