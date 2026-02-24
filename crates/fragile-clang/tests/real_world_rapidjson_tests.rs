@@ -21,6 +21,8 @@ const RAPIDJSON_FRAGILE_CONDENSE_REPLAY_DIR: &str =
     "/tmp/fragile_real_world_rapidjson_fragile_condense_replay";
 const RAPIDJSON_FRAGILEC_DRIVER_BASELINE_DIR: &str =
     "/tmp/fragile_real_world_rapidjson_fragilec_driver_baseline";
+const RAPIDJSON_STRICT_CAPITALIZE_CAPTURE_DIR: &str =
+    "/tmp/fragile_real_world_rapidjson_strict_capitalize_capture";
 const RAPIDJSON_STRICT_FILTERKEYDOM_CAPTURE_DIR: &str =
     "/tmp/fragile_real_world_rapidjson_strict_filterkeydom_capture";
 const RAPIDJSON_STRICT_CMAKE_NO_TESTS_BUILD_DIR: &str =
@@ -39,6 +41,7 @@ const RAPIDJSON_SAMPLE_JSON: &str = "{\"a\":1,\"b\":[true,false],\"msg\":\"hi\"}
 const RAPIDJSON_EXPECTED_CONDENSE_OUTPUT: &str = "{\"a\":1,\"b\":[true,false],\"msg\":\"hi\"}";
 const RAPIDJSON_CONST_ASSIGN_PARSER_DIAGNOSTIC_FRAGMENT: &str =
     "cannot assign to non-static data member 'length' with const-qualified type 'const SizeType'";
+const RAPIDJSON_DUPLICATE_DEFINITION_E0428_FRAGMENT: &str = "error[E0428]";
 const RAPIDJSON_NATIVE_LOG_FILES: &[&str] = &[
     "compile_condense.status",
     "compile_condense.stdout",
@@ -96,6 +99,16 @@ const RAPIDJSON_STRICT_CMAKE_LOCAL_FIXTURE_LOG_FILES: &[&str] = &[
     "first_failing_compile_stderr.txt",
     "first_failing_compile_class.txt",
     "strict_cmake_local_fixture_manifest.txt",
+];
+const RAPIDJSON_STRICT_CAPITALIZE_CAPTURE_LOG_FILES: &[&str] = &[
+    "compile_capitalize.status",
+    "compile_capitalize.stdout",
+    "compile_capitalize.stderr",
+    "fragilec_driver.log",
+    "first_failing_compile_command.txt",
+    "first_failing_compile_stderr.txt",
+    "first_failing_compile_class.txt",
+    "strict_capitalize_manifest.txt",
 ];
 const RAPIDJSON_STRICT_FILTERKEYDOM_CAPTURE_LOG_FILES: &[&str] = &[
     "compile_filterkeydom.status",
@@ -1188,6 +1201,102 @@ fn run_rapidjson_strict_cmake_no_tests_full_build_capture() -> Result<PathBuf, S
     Ok(log_dir)
 }
 
+fn run_rapidjson_strict_capitalize_compile_capture() -> Result<PathBuf, String> {
+    let checkout_dir = ensure_rapidjson_checkout()?;
+    let baseline_root = PathBuf::from(RAPIDJSON_STRICT_CAPITALIZE_CAPTURE_DIR);
+    reset_dir(&baseline_root)?;
+
+    let worktree_dir = baseline_root.join("worktree");
+    let checkout_dir_str = checkout_dir.to_string_lossy().to_string();
+    let worktree_dir_str = worktree_dir.to_string_lossy().to_string();
+    run_git(
+        &[
+            "clone",
+            "--no-tags",
+            "--local",
+            checkout_dir_str.as_str(),
+            worktree_dir_str.as_str(),
+        ],
+        None,
+    )?;
+    run_git(
+        &["checkout", "--detach", RAPIDJSON_PINNED_COMMIT],
+        Some(&worktree_dir),
+    )?;
+
+    let actual_head = read_head(&worktree_dir)
+        .ok_or_else(|| format!("failed to read HEAD in {}", worktree_dir.display()))?;
+    if actual_head != RAPIDJSON_PINNED_COMMIT {
+        return Err(format!(
+            "strict capitalize worktree expected commit {} but got {}",
+            RAPIDJSON_PINNED_COMMIT, actual_head
+        ));
+    }
+
+    let log_dir = baseline_root.join("strict_capitalize_logs");
+    fs::create_dir_all(&log_dir)
+        .map_err(|e| format!("failed to create log dir {}: {}", log_dir.display(), e))?;
+    let fragilec = ensure_fragilec_binary()?;
+    let driver_log = log_dir.join("fragilec_driver.log");
+    fs::write(&driver_log, "")
+        .map_err(|e| format!("failed to initialize fragilec driver log: {}", e))?;
+
+    let source = worktree_dir.join("example/capitalize/capitalize.cpp");
+    let include_dir = worktree_dir.join("include");
+    let output_obj = log_dir.join("capitalize.o");
+    let compile_output = Command::new(&fragilec)
+        .arg("-std=c++11")
+        .arg("-I")
+        .arg(include_dir.to_string_lossy().to_string())
+        .arg("-c")
+        .arg(source.to_string_lossy().to_string())
+        .arg("-o")
+        .arg(output_obj.to_string_lossy().to_string())
+        .current_dir(&worktree_dir)
+        .env("FRAGILEC_MODE", "strict")
+        .env("FRAGILEC_LOG", driver_log.to_string_lossy().to_string())
+        .output()
+        .map_err(|e| format!("failed to run strict capitalize compile replay: {}", e))?;
+    write_command_capture(&log_dir, "compile_capitalize", &compile_output)?;
+
+    let driver_log_content = fs::read_to_string(&driver_log).map_err(|e| {
+        format!(
+            "failed to read fragilec driver log {}: {}",
+            driver_log.display(),
+            e
+        )
+    })?;
+    let compile_stdout = String::from_utf8_lossy(&compile_output.stdout);
+    let compile_stderr = String::from_utf8_lossy(&compile_output.stderr);
+    let (first_command, first_stderr) = select_first_failing_compile_capture(
+        &driver_log_content,
+        !compile_output.status.success(),
+        &compile_stdout,
+        &compile_stderr,
+    );
+    write_first_failing_compile_capture_files(&log_dir, &first_command, &first_stderr)?;
+    let first_failure_class = classify_first_failing_compile_stderr(&first_stderr);
+    write_first_failing_compile_class_file(&log_dir, first_failure_class)?;
+
+    let manifest = format!(
+        "source_dir={}\npinned_commit={}\nfragilec={}\nmode=strict\ncompile_status={}\nfirst_failing_compile_command_file=first_failing_compile_command.txt\nfirst_failing_compile_stderr_file=first_failing_compile_stderr.txt\nfirst_failing_compile_class_file=first_failing_compile_class.txt\nfirst_failing_compile_class={}\n",
+        worktree_dir.display(),
+        RAPIDJSON_PINNED_COMMIT,
+        fragilec.display(),
+        status_code(&compile_output),
+        first_failure_class
+    );
+    fs::write(log_dir.join("strict_capitalize_manifest.txt"), manifest).map_err(|e| {
+        format!(
+            "failed to write strict_capitalize_manifest.txt in {}: {}",
+            log_dir.display(),
+            e
+        )
+    })?;
+
+    Ok(log_dir)
+}
+
 fn run_rapidjson_strict_filterkeydom_compile_capture() -> Result<PathBuf, String> {
     let checkout_dir = ensure_rapidjson_checkout()?;
     let baseline_root = PathBuf::from(RAPIDJSON_STRICT_FILTERKEYDOM_CAPTURE_DIR);
@@ -1968,6 +2077,64 @@ fn test_real_world_rapidjson_fragilec_native_no_stl_examples_baseline() {
 }
 
 #[test]
+#[ignore = "real-world external project test (strict capitalize compile replay with fragilec first-failure capture)"]
+fn test_real_world_rapidjson_strict_capitalize_compile_capture() {
+    let log_dir = run_rapidjson_strict_capitalize_compile_capture()
+        .expect("failed to run strict capitalize compile capture");
+
+    for rel in RAPIDJSON_STRICT_CAPITALIZE_CAPTURE_LOG_FILES {
+        assert!(
+            log_dir.join(rel).exists(),
+            "expected strict capitalize capture log file {}",
+            log_dir.join(rel).display()
+        );
+    }
+
+    let compile_status = read_status_file(&log_dir.join("compile_capitalize.status"))
+        .expect("failed to read compile_capitalize.status");
+    let compile_stdout = fs::read_to_string(log_dir.join("compile_capitalize.stdout"))
+        .expect("failed to read compile_capitalize.stdout");
+    let compile_stderr = fs::read_to_string(log_dir.join("compile_capitalize.stderr"))
+        .expect("failed to read compile_capitalize.stderr");
+    assert_ne!(
+        compile_status, 0,
+        "strict capitalize replay is expected to fail until downstream blockers are cleared"
+    );
+
+    let first_command = fs::read_to_string(log_dir.join("first_failing_compile_command.txt"))
+        .expect("failed to read first_failing_compile_command.txt");
+    assert!(
+        first_command.contains("capitalize.cpp"),
+        "strict capitalize replay should capture capitalize compile command, got:\n{}",
+        first_command
+    );
+
+    let first_stderr = fs::read_to_string(log_dir.join("first_failing_compile_stderr.txt"))
+        .expect("failed to read first_failing_compile_stderr.txt");
+    assert!(
+        first_stderr.contains("error[E0425]"),
+        "strict capitalize replay should now surface unresolved-name/type E0425 errors, got:\n{}",
+        first_stderr
+    );
+    for stream in [&compile_stdout, &compile_stderr, &first_stderr] {
+        assert!(
+            !stream.contains(RAPIDJSON_DUPLICATE_DEFINITION_E0428_FRAGMENT),
+            "strict capitalize replay should not surface duplicate-definition E0428 in captured streams, got:\n{}",
+            stream
+        );
+    }
+
+    let first_class = fs::read_to_string(log_dir.join("first_failing_compile_class.txt"))
+        .expect("failed to read first_failing_compile_class.txt");
+    assert_eq!(
+        first_class.trim(),
+        "unresolved_name_or_type_e0425",
+        "strict capitalize replay should classify first failure as unresolved E0425, got:\n{}",
+        first_class
+    );
+}
+
+#[test]
 #[ignore = "real-world external project test (strict filterkeydom compile replay with fragilec first-failure capture)"]
 fn test_real_world_rapidjson_strict_filterkeydom_compile_capture() {
     let log_dir = run_rapidjson_strict_filterkeydom_compile_capture()
@@ -1983,6 +2150,10 @@ fn test_real_world_rapidjson_strict_filterkeydom_compile_capture() {
 
     let compile_status = read_status_file(&log_dir.join("compile_filterkeydom.status"))
         .expect("failed to read compile_filterkeydom.status");
+    let compile_stdout = fs::read_to_string(log_dir.join("compile_filterkeydom.stdout"))
+        .expect("failed to read compile_filterkeydom.stdout");
+    let compile_stderr = fs::read_to_string(log_dir.join("compile_filterkeydom.stderr"))
+        .expect("failed to read compile_filterkeydom.stderr");
     assert_ne!(
         compile_status, 0,
         "strict filterkeydom replay is expected to fail until downstream blockers are cleared"
@@ -2003,10 +2174,13 @@ fn test_real_world_rapidjson_strict_filterkeydom_compile_capture() {
         "strict filterkeydom replay should now surface unresolved-name/type E0425 errors, got:\n{}",
         first_stderr
     );
-    assert!(
-        !first_stderr.contains("error[E0428]"),
-        "strict filterkeydom replay should no longer surface duplicate-definition E0428 as first failure"
-    );
+    for stream in [&compile_stdout, &compile_stderr, &first_stderr] {
+        assert!(
+            !stream.contains(RAPIDJSON_DUPLICATE_DEFINITION_E0428_FRAGMENT),
+            "strict filterkeydom replay should not surface duplicate-definition E0428 in captured streams, got:\n{}",
+            stream
+        );
+    }
     assert!(
         !first_stderr.contains(RAPIDJSON_CONST_ASSIGN_PARSER_DIAGNOSTIC_FRAGMENT),
         "strict filterkeydom replay should not regress to rapidjson document.h const-assignment parse diagnostics, got:\n{}",
@@ -2072,6 +2246,11 @@ fn test_real_world_rapidjson_cmake_no_tests_full_build_with_fragilec_capture_fir
             "strict rapidjson no-tests replay should not regress to rapidjson document.h const-assignment parse diagnostics, got:\n{}",
             stream
         );
+        assert!(
+            !stream.contains(RAPIDJSON_DUPLICATE_DEFINITION_E0428_FRAGMENT),
+            "strict rapidjson no-tests replay should not surface duplicate-definition E0428 in captured streams, got:\n{}",
+            stream
+        );
     }
     if build_status != 0 {
         assert!(
@@ -2088,10 +2267,6 @@ fn test_real_world_rapidjson_cmake_no_tests_full_build_with_fragilec_capture_fir
             "unresolved_name_or_type_e0425",
             "post-dedupe strict cmake first failure class should be unresolved name/type (E0425), got:\n{}",
             first_class
-        );
-        assert!(
-            !first_stderr.contains("error[E0428]"),
-            "post-dedupe strict cmake first failure should no longer include duplicate-definition E0428"
         );
         assert!(
             first_stderr.contains("error[E0425]"),
