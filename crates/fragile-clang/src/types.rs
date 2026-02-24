@@ -322,7 +322,7 @@ impl CppType {
             CppType::Float => "f32".to_string(),
             CppType::Double => "f64".to_string(),
             CppType::Pointer { pointee, is_const } => {
-                // Special case: function pointers use Option<fn(...)> syntax in Rust
+                // Special case: C/C++ function pointers are nullable and use C ABI.
                 if let CppType::Function {
                     return_type,
                     params,
@@ -335,10 +335,9 @@ impl CppType {
                     } else {
                         params_str.join(", ")
                     };
-                    // Use Option to handle nullable function pointers
-                    // Note: We don't use extern "C" since transpiled functions use Rust calling convention
+                    // Use Option to handle nullable function pointers.
                     format!(
-                        "Option<fn({}) -> {}>",
+                        "Option<extern \"C\" fn({}) -> {}>",
                         params_joined,
                         return_type.to_rust_type_str()
                     )
@@ -481,6 +480,12 @@ impl CppType {
                     // libc++ internal proxy and impl types
                     "__proxy" | "__value_type" => "std::ffi::c_void".to_string(),
                     "std___libcpp_refstring" => "std::ffi::c_void".to_string(),
+                    // libc++ identity projection helper can appear both namespaced and pre-sanitized.
+                    "std___identity"
+                    | "std::__identity"
+                    | "std::__1::__identity"
+                    | "std::__2::__identity"
+                    | "std::__ndk1::__identity" => "__identity".to_string(),
                     // Stream types
                     "__stream_type" | "ostream_type" | "istream_type" => {
                         "std::ffi::c_void".to_string()
@@ -627,6 +632,17 @@ impl CppType {
                             || normalized_name.starts_with("__add_lvalue_reference")
                         {
                             return "()".to_string();
+                        }
+                        // libc++ functional hash internals use anonymous helper structs
+                        // in union fields. Treat them as opaque 64-bit payloads.
+                        let functional_hash_helper_name = normalized_name
+                            .trim_start_matches("struct ")
+                            .trim_start_matches("class ")
+                            .trim();
+                        if functional_hash_helper_name.starts_with(
+                            "_unnamed_struct_at__home_shuai_workspace_fragile_vendor_llvm_project_libcxx_include___functional_hash_h_",
+                        ) {
+                            return "u64".to_string();
                         }
                         // Strip C++ qualifiers that aren't valid in Rust type names
                         let cleaned = name
@@ -1658,6 +1674,60 @@ mod tests {
             }
             .to_rust_type_str(),
             "*const std::ffi::c_void"
+        );
+    }
+
+    #[test]
+    fn test_std_identity_aliases_lower_to_generated_identity_type() {
+        assert_eq!(
+            CppType::Named("std___identity".to_string()).to_rust_type_str(),
+            "__identity"
+        );
+        assert_eq!(
+            CppType::Named("std::__1::__identity".to_string()).to_rust_type_str(),
+            "__identity"
+        );
+    }
+
+    #[test]
+    fn test_functional_hash_unnamed_struct_aliases_lower_to_u64() {
+        let helper =
+            "_unnamed_struct_at__home_shuai_workspace_fragile_vendor_llvm_project_libcxx_include___functional_hash_h_285_7_";
+        assert_eq!(CppType::Named(helper.to_string()).to_rust_type_str(), "u64");
+        assert_eq!(
+            CppType::Named(format!("struct {}", helper)).to_rust_type_str(),
+            "u64"
+        );
+        assert_eq!(
+            CppType::Named(format!("class {}", helper)).to_rust_type_str(),
+            "u64"
+        );
+        assert_eq!(
+            CppType::Pointer {
+                pointee: Box::new(CppType::Named(helper.to_string())),
+                is_const: false,
+            }
+            .to_rust_type_str(),
+            "*mut u64"
+        );
+    }
+
+    #[test]
+    fn test_function_pointer_type_uses_option_extern_c_fn() {
+        let ty = CppType::Pointer {
+            pointee: Box::new(CppType::Function {
+                return_type: Box::new(CppType::Int { signed: true }),
+                params: vec![
+                    CppType::Int { signed: true },
+                    CppType::Int { signed: true },
+                ],
+                is_variadic: false,
+            }),
+            is_const: false,
+        };
+        assert_eq!(
+            ty.to_rust_type_str(),
+            "Option<extern \"C\" fn(i32, i32) -> i32>"
         );
     }
 

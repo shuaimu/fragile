@@ -104,8 +104,8 @@ fn test_end_to_end() {
     let code = AstCodeGen::new().generate(&ast.translation_unit);
 
     // Verify both functions are generated
-    assert!(code.contains("pub fn add"));
-    assert!(code.contains("pub fn multiply"));
+    assert!(code.contains("pub extern \"C\" fn add"));
+    assert!(code.contains("pub extern \"C\" fn multiply"));
     assert!(code.contains("return a + b"));
     assert!(code.contains("return x * y"));
 }
@@ -223,16 +223,8 @@ fn find_fragile_runtime_link_info() -> Option<FragileRuntimeLinkInfo> {
                     let direct_rlib = profile_dir.join("libfragile_runtime.rlib");
                     let deps_dir = profile_dir.join("deps");
 
-                    if direct_rlib.exists() {
-                        return Some(FragileRuntimeLinkInfo {
-                            profile_dir,
-                            deps_dir,
-                            rlib_path: direct_rlib,
-                        });
-                    }
-
                     if let Ok(deps_entries) = fs::read_dir(&deps_dir) {
-                        let mut hashed_rlibs: Vec<PathBuf> = deps_entries
+                        let mut hashed_rlibs: Vec<(std::time::SystemTime, PathBuf)> = deps_entries
                             .filter_map(|entry| entry.ok())
                             .map(|entry| entry.path())
                             .filter(|path| {
@@ -243,15 +235,29 @@ fn find_fragile_runtime_link_info() -> Option<FragileRuntimeLinkInfo> {
                                             && name.ends_with(".rlib")
                                     })
                             })
+                            .map(|path| {
+                                let modified = fs::metadata(&path)
+                                    .and_then(|m| m.modified())
+                                    .unwrap_or(std::time::UNIX_EPOCH);
+                                (modified, path)
+                            })
                             .collect();
-                        hashed_rlibs.sort();
-                        if let Some(rlib_path) = hashed_rlibs.pop() {
+                        hashed_rlibs.sort_by_key(|(modified, _)| *modified);
+                        if let Some((_, rlib_path)) = hashed_rlibs.pop() {
                             return Some(FragileRuntimeLinkInfo {
                                 profile_dir,
                                 deps_dir,
                                 rlib_path,
                             });
                         }
+                    }
+
+                    if direct_rlib.exists() {
+                        return Some(FragileRuntimeLinkInfo {
+                            profile_dir,
+                            deps_dir,
+                            rlib_path: direct_rlib,
+                        });
                     }
                 }
             }
@@ -10915,14 +10921,14 @@ fn test_long_double_type_mapping() {
 
     // long double should map to f64, not to a Named type
     assert!(
-        code.contains("pub fn sinl(__x: f64) -> f64"),
+        code.contains("pub extern \"C\" fn sinl(__x: f64) -> f64"),
         "sinl should have f64 params and return type, got:\n{}",
         code.lines()
-            .find(|l| l.contains("pub fn sinl"))
+            .find(|l| l.contains("fn sinl"))
             .unwrap_or("NOT FOUND")
     );
     assert!(
-        code.contains("pub fn cosl(__x: f64) -> f64"),
+        code.contains("pub extern \"C\" fn cosl(__x: f64) -> f64"),
         "cosl should have f64 params and return type"
     );
 

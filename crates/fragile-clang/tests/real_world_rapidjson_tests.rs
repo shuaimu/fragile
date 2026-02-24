@@ -43,6 +43,10 @@ const RAPIDJSON_CONST_ASSIGN_PARSER_DIAGNOSTIC_FRAGMENT: &str =
     "cannot assign to non-static data member 'length' with const-qualified type 'const SizeType'";
 const RAPIDJSON_DUPLICATE_DEFINITION_E0428_FRAGMENT: &str = "error[E0428]";
 const RAPIDJSON_FILE_ALIAS_MISSING_TYPE_FRAGMENT: &str = "cannot find type `__FILE` in this scope";
+const RAPIDJSON_STD_IDENTITY_MISSING_TYPE_FRAGMENT: &str =
+    "cannot find type `std___identity` in this scope";
+const RAPIDJSON_FUNCTIONAL_HASH_UNNAMED_STRUCT_MISSING_TYPE_FRAGMENT: &str =
+    "cannot find type `_unnamed_struct_at__home_shuai_workspace_fragile_vendor_llvm_project_libcxx_include___functional_hash_h_";
 const RAPIDJSON_FILTERKEYDOM_PLACEHOLDER_API_HOLE_MARKERS: &[&str] = &[
     "no function or associated item named `new_0` found for struct `FilterKeyReader_FileReadStream`",
     "no method named `Populate` found for struct `GenericDocument_UTF8_`",
@@ -2241,6 +2245,16 @@ fn test_real_world_rapidjson_strict_filterkeydom_compile_capture() {
         "strict filterkeydom replay should not regress to unresolved __FILE alias types, got:\n{}",
         first_stderr
     );
+    assert!(
+        !first_stderr.contains(RAPIDJSON_STD_IDENTITY_MISSING_TYPE_FRAGMENT),
+        "strict filterkeydom replay should not regress to unresolved std___identity alias types, got:\n{}",
+        first_stderr
+    );
+    assert!(
+        !first_stderr.contains(RAPIDJSON_FUNCTIONAL_HASH_UNNAMED_STRUCT_MISSING_TYPE_FRAGMENT),
+        "strict filterkeydom replay should not regress to unresolved libc++ functional-hash unnamed-struct aliases, got:\n{}",
+        first_stderr
+    );
 
     let first_class = fs::read_to_string(log_dir.join("first_failing_compile_class.txt"))
         .expect("failed to read first_failing_compile_class.txt");
@@ -2309,6 +2323,16 @@ fn test_real_world_rapidjson_cmake_no_tests_full_build_with_fragilec_capture_fir
         assert!(
             !stream.contains(RAPIDJSON_FILE_ALIAS_MISSING_TYPE_FRAGMENT),
             "strict rapidjson no-tests replay should not regress to unresolved __FILE alias types, got:\n{}",
+            stream
+        );
+        assert!(
+            !stream.contains(RAPIDJSON_STD_IDENTITY_MISSING_TYPE_FRAGMENT),
+            "strict rapidjson no-tests replay should not regress to unresolved std___identity alias types, got:\n{}",
+            stream
+        );
+        assert!(
+            !stream.contains(RAPIDJSON_FUNCTIONAL_HASH_UNNAMED_STRUCT_MISSING_TYPE_FRAGMENT),
+            "strict rapidjson no-tests replay should not regress to unresolved libc++ functional-hash unnamed-struct aliases, got:\n{}",
             stream
         );
     }

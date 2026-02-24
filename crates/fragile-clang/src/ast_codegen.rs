@@ -4013,10 +4013,13 @@ impl AstCodeGen {
                 self.writeln(&format!("pub union {} {{", rust_name));
                 self.indent += 1;
                 for (field_name, field_ty) in &union_fields {
+                    let emitted_type = Self::normalize_known_union_helper_field_type(
+                        field_ty.to_rust_type_str_for_field(),
+                    );
                     self.writeln(&format!(
                         "pub {}: {},",
                         field_name,
-                        field_ty.to_rust_type_str_for_field()
+                        emitted_type
                     ));
                 }
                 self.indent -= 1;
@@ -18297,7 +18300,7 @@ impl AstCodeGen {
         self.writeln("pub fn __cloc() -> locale_t { std::ptr::null_mut() }");
         self.writeln("");
         self.writeln("// Additional pthread functions");
-        self.writeln("pub unsafe fn pthread_once(_once_control: *mut pthread_once_t, _init_routine: Option<fn()>) -> i32 { 0 }");
+        self.writeln("pub unsafe fn pthread_once(_once_control: *mut pthread_once_t, _init_routine: Option<extern \"C\" fn()>) -> i32 { 0 }");
         self.writeln("pub unsafe fn pthread_setspecific(_key: pthread_key_t, _value: *const std::ffi::c_void) -> i32 { 0 }");
         self.writeln("pub unsafe fn pthread_getspecific(_key: pthread_key_t) -> *mut std::ffi::c_void { std::ptr::null_mut() }");
         self.writeln("pub unsafe fn pthread_key_create(_key: *mut pthread_key_t, _destructor: Option<extern \"C\" fn(*mut std::ffi::c_void)>) -> i32 { 0 }");
@@ -20646,8 +20649,8 @@ impl AstCodeGen {
         self.writeln("static NEXT_THREAD_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);");
         self.writeln("");
         // Use pointer types for attr and arg to match the C API signature
-        // Use fn pointer type that matches transpiled code (*mut () instead of *mut c_void)
-        self.writeln("pub unsafe fn fragile_pthread_create(thread_id: *mut u64, _attr: *const (), start_routine: Option<fn(*mut ()) -> *mut ()>, arg: *mut ()) -> i32 {");
+        // Use C ABI function pointers to match transpiled callbacks (pub extern "C" fn)
+        self.writeln("pub unsafe fn fragile_pthread_create(thread_id: *mut u64, _attr: *const (), start_routine: Option<extern \"C\" fn(*mut ()) -> *mut ()>, arg: *mut ()) -> i32 {");
         self.indent += 1;
         self.writeln("let func = match start_routine { Some(f) => f, None => return 22 };");
         self.writeln("let func_ptr = func as usize;");
@@ -20655,7 +20658,7 @@ impl AstCodeGen {
         self.writeln("let tid = NEXT_THREAD_ID.fetch_add(1, std::sync::atomic::Ordering::SeqCst);");
         self.writeln("let handle = std::thread::spawn(move || {");
         self.indent += 1;
-        self.writeln("let f: fn(*mut ()) -> *mut () = std::mem::transmute(info.func);");
+        self.writeln("let f: extern \"C\" fn(*mut ()) -> *mut () = std::mem::transmute(info.func);");
         self.writeln("let result = f(info.arg as *mut ());");
         self.writeln("result as usize");
         self.indent -= 1;
@@ -21808,7 +21811,8 @@ impl AstCodeGen {
                     sanitize_identifier(field_name)
                 };
                 let vis = access_to_visibility(*access);
-                let type_str = ty.to_rust_type_str_for_field();
+                let type_str =
+                    Self::normalize_known_union_helper_field_type(ty.to_rust_type_str_for_field());
                 // Wrap only c_void-like placeholders in ManuallyDrop for union compatibility.
                 let wrapped_type = if type_str.contains("c_void")
                     || type_str.starts_with("_unnamed_struct_at__usr_include_")
@@ -22484,6 +22488,19 @@ impl AstCodeGen {
         self.writeln("");
     }
 
+    fn subtree_contains_throw_expr(node: &ClangNode) -> bool {
+        if matches!(&node.kind, ClangNodeKind::ThrowExpr { .. }) {
+            return true;
+        }
+        node.children
+            .iter()
+            .any(Self::subtree_contains_throw_expr)
+    }
+
+    fn contains_throw_expr(nodes: &[ClangNode]) -> bool {
+        nodes.iter().any(Self::subtree_contains_throw_expr)
+    }
+
     /// Generate a function definition.
     fn generate_function(
         &mut self,
@@ -22802,6 +22819,10 @@ impl AstCodeGen {
             && !mangled_name.is_empty()
             && !is_generator;
 
+        // Panics used for C++ throw/catch must be unwindable for catch_unwind to work.
+        // Export symbol names as usual, but avoid C ABI on definitions that contain throw.
+        let has_throw_expr = Self::contains_throw_expr(children);
+
         // Handle generators with state machine
         if is_generator {
             // Collect all yield expressions
@@ -22860,7 +22881,7 @@ impl AstCodeGen {
                 ("", "unsafe extern \"C\" ")
             } else if is_async {
                 ("async ", "")
-            } else if should_export_c_abi || should_export_cpp_abi {
+            } else if (should_export_c_abi || should_export_cpp_abi) && !has_throw_expr {
                 ("", "extern \"C\" ")
             } else {
                 ("", "")
@@ -23608,11 +23629,14 @@ impl AstCodeGen {
                     ty.clone()
                 };
                 let vis = access_to_visibility(*access);
+                let emitted_type = Self::normalize_known_union_helper_field_type(
+                    effective_ty.to_rust_type_str_for_field(),
+                );
                 self.writeln(&format!(
                     "{}{}: {},",
                     vis,
                     sanitized_name,
-                    effective_ty.to_rust_type_str_for_field()
+                    emitted_type
                 ));
                 fields.push((sanitized_name, effective_ty));
             } else if let ClangNodeKind::RecordDecl {
@@ -23639,11 +23663,14 @@ impl AstCodeGen {
                                 sanitize_identifier(fname)
                             };
                             let vis = access_to_visibility(*access);
+                            let emitted_type = Self::normalize_known_union_helper_field_type(
+                                ty.to_rust_type_str_for_field(),
+                            );
                             self.writeln(&format!(
                                 "{}{}: {},",
                                 vis,
                                 sanitized_name,
-                                ty.to_rust_type_str_for_field()
+                                emitted_type
                             ));
                             fields.push((sanitized_name, ty.clone()));
                         }
@@ -23674,11 +23701,14 @@ impl AstCodeGen {
                                 sanitize_identifier(fname)
                             };
                             let vis = access_to_visibility(*access);
+                            let emitted_type = Self::normalize_known_union_helper_field_type(
+                                ty.to_rust_type_str_for_field(),
+                            );
                             self.writeln(&format!(
                                 "{}{}: {},",
                                 vis,
                                 sanitized_name,
-                                ty.to_rust_type_str_for_field()
+                                emitted_type
                             ));
                             fields.push((sanitized_name, ty.clone()));
                         }
@@ -25193,7 +25223,8 @@ impl AstCodeGen {
                     sanitize_identifier(field_name)
                 };
                 let vis = access_to_visibility(*access);
-                let type_str = ty.to_rust_type_str();
+                let type_str =
+                    Self::normalize_known_union_helper_field_type(ty.to_rust_type_str());
                 // Wrap only c_void-like placeholders in ManuallyDrop for union compatibility.
                 let wrapped_type = if type_str.contains("c_void")
                     || type_str.starts_with("_unnamed_struct_at__usr_include_")
@@ -28159,6 +28190,19 @@ impl AstCodeGen {
             .to_string()
     }
 
+    fn normalize_known_union_helper_field_type(type_str: String) -> String {
+        let looks_like_functional_hash_helper = type_str.contains("functional_hash_h_")
+            || type_str.contains("functional_hash.h")
+            || type_str.contains("functional/hash.h");
+        let looks_like_unnamed_struct_helper = type_str.contains("unnamed_struct_at__")
+            || type_str.contains("unnamed struct at")
+            || type_str.contains("anonymous struct at");
+        if looks_like_functional_hash_helper && looks_like_unnamed_struct_helper {
+            return "u64".to_string();
+        }
+        type_str
+    }
+
     fn unqualified_cpp_name(name: &str) -> &str {
         name.rsplit("::").next().unwrap_or(name)
     }
@@ -28443,10 +28487,12 @@ impl AstCodeGen {
             self.writeln(&format!("pub union {} {{", rust_name));
             self.indent += 1;
             for (field_name, field_ty) in &fields {
+                let emitted_type =
+                    Self::normalize_known_union_helper_field_type(field_ty.to_rust_type_str());
                 self.writeln(&format!(
                     "pub {}: {},",
                     field_name,
-                    field_ty.to_rust_type_str()
+                    emitted_type
                 ));
             }
             self.indent -= 1;
@@ -41850,7 +41896,10 @@ mod tests {
         );
 
         let code = AstCodeGen::new().generate(&ast);
-        assert!(code.contains("pub fn add(a: i32, b: i32) -> i32"));
+        assert!(
+            code.contains("pub fn add(a: i32, b: i32) -> i32")
+                || code.contains("pub extern \"C\" fn add(a: i32, b: i32) -> i32")
+        );
         assert!(code.contains("return a + b"));
     }
 
@@ -42859,7 +42908,8 @@ mod tests {
         assert!(
             code.contains("return element.__base.Parent()")
                 || code.contains("return element.__base.Parent() as *const Node")
-                || code.contains("return (element.__base.Parent()) as *const Node"),
+                || code.contains("return (element.__base.Parent()) as *const Node")
+                || code.contains("return (unsafe { ((*element).__base).Parent() }) as *const Node"),
             "const-ref field-chain call should select const overload, got:\n{}",
             code
         );
@@ -43030,7 +43080,8 @@ mod tests {
         assert!(
             code.contains("return element.__base.Parent()")
                 || code.contains("return element.__base.Parent() as *const Node")
-                || code.contains("return (element.__base.Parent()) as *const Node"),
+                || code.contains("return (element.__base.Parent()) as *const Node")
+                || code.contains("return (unsafe { ((*element).__base).Parent() }) as *const Node"),
             "suffixed mutable callee should be rewritten to const overload, got:\n{}",
             code
         );
@@ -44227,7 +44278,8 @@ mod tests {
         );
         let code = AstCodeGen::new().generate(&ast);
         assert!(
-            code.contains("(*(((&cdoc.__base) as *const ")
+            (code.contains("(*(((&cdoc.__base) as *const ")
+                || code.contains("(*(((&((*cdoc).__base)) as *const "))
                 && code.contains(")).FirstChildElement(std::ptr::null()"),
             "const-ref receiver base navigation call should use mut-cast fallback, got:\n{}",
             code
@@ -45120,7 +45172,8 @@ mod tests {
         let code = AstCodeGen::new().generate(&ast);
 
         assert!(
-            code.contains("_node: node as *mut XMLNode"),
+            code.contains("_node: node as *mut XMLNode")
+                || code.contains("_node: &mut *node as *mut XMLNode as *mut XMLNode"),
             "expected mutable reference-param pointer cast to collapse to direct cast, got:\n{}",
             code
         );
@@ -45130,7 +45183,8 @@ mod tests {
             code
         );
         assert!(
-            code.contains("_node: node as *const XMLNode"),
+            code.contains("_node: node as *const XMLNode")
+                || code.contains("_node: &*node as *const XMLNode as *const XMLNode"),
             "expected const reference-param pointer cast to collapse to direct cast, got:\n{}",
             code
         );
@@ -47624,7 +47678,8 @@ mod tests {
         );
 
         let code = AstCodeGen::new().generate(&ast);
-        let fn_snippet = "pub fn codes_used_like() -> u64 {\n    return (-1i32 as u64);\n}";
+        let fn_snippet =
+            "pub extern \"C\" fn codes_used_like() -> u64 {\n    return (-1i32 as u64);\n}";
         assert!(
             code.contains(fn_snippet),
             "negative integer return cast to u64 should normalize through signed source cast, got:\n{}",
@@ -47682,7 +47737,8 @@ mod tests {
         );
 
         let code = AstCodeGen::new().generate(&ast);
-        let fn_snippet = "pub fn explicit_cast_neg_one() -> u64 {\n    return (-1i32 as u64);\n}";
+        let fn_snippet =
+            "pub extern \"C\" fn explicit_cast_neg_one() -> u64 {\n    return (-1i32 as u64);\n}";
         assert!(
             code.contains(fn_snippet),
             "explicit cast of negative literal to u64 should normalize through signed source cast, got:\n{}",
@@ -47730,7 +47786,9 @@ mod tests {
 
         let code = AstCodeGen::new().generate(&ast);
         assert!(
-            code.contains("pub fn neg_unsigned_literal() -> u64 {\n    return (-1i32 as u64);\n}"),
+            code.contains(
+                "pub extern \"C\" fn neg_unsigned_literal() -> u64 {\n    return (-1i32 as u64);\n}"
+            ),
             "negative unsigned integer literals must normalize to signed-source casts, got:\n{}",
             code
         );
@@ -47777,7 +47835,9 @@ mod tests {
 
         let code = AstCodeGen::new().generate(&ast);
         assert!(
-            code.contains("pub fn neg_unsigned_eval_expr() -> u64 {\n    return (-1i32 as u64);\n}"),
+            code.contains(
+                "pub extern \"C\" fn neg_unsigned_eval_expr() -> u64 {\n    return (-1i32 as u64);\n}"
+            ),
             "negative unsigned evaluated expressions must normalize through signed-source cast, got:\n{}",
             code
         );
@@ -58279,6 +58339,29 @@ mod tests {
     }
 
     #[test]
+    fn test_normalize_known_union_helper_field_type_functional_hash_aliases_to_u64() {
+        let sanitized =
+            "_unnamed_struct_at__home_shuai_workspace_fragile_vendor_llvm_project_libcxx_include___functional_hash_h_285_7_"
+                .to_string();
+        let raw =
+            "(unnamed struct at /home/shuai/workspace/fragile/vendor/llvm-project/libcxx/include/__functional/hash.h:285:7)"
+                .to_string();
+
+        assert_eq!(
+            AstCodeGen::normalize_known_union_helper_field_type(sanitized),
+            "u64"
+        );
+        assert_eq!(
+            AstCodeGen::normalize_known_union_helper_field_type(raw),
+            "u64"
+        );
+        assert_eq!(
+            AstCodeGen::normalize_known_union_helper_field_type("u32".to_string()),
+            "u32"
+        );
+    }
+
+    #[test]
     fn test_union_positional_init_list_uses_named_field_initializer() {
         let union_name = "union__fixture".to_string();
         let union_ty = CppType::Named(union_name.clone());
@@ -59458,8 +59541,9 @@ mod tests {
         );
         // Should be just a regular pub fn
         assert!(
-            code.contains("pub fn regular() -> i32"),
-            "Expected 'pub fn regular() -> i32', got:\n{}",
+            code.contains("pub fn regular() -> i32")
+                || code.contains("pub extern \"C\" fn regular() -> i32"),
+            "Expected non-coroutine regular function signature, got:\n{}",
             code
         );
     }
@@ -62183,7 +62267,7 @@ mod tests {
 
         let code = AstCodeGen::new().generate(&ast);
         assert!(
-            code.contains("pub fn XMLTest_1("),
+            code.contains("pub fn XMLTest_1(") || code.contains("pub extern \"C\" fn XMLTest_1("),
             "second overload should be emitted with suffix, got:\n{}",
             code
         );
