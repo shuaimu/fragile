@@ -2188,8 +2188,8 @@ fn test_real_world_rapidjson_strict_filterkeydom_compile_capture() {
     }
     for marker in RAPIDJSON_FILTERKEYDOM_PLACEHOLDER_API_HOLE_MARKERS {
         assert!(
-            first_stderr.contains(marker),
-            "strict filterkeydom replay should currently surface RapidJSON placeholder API-hole marker `{}` while ledger item 3 remains open, got:\n{}",
+            !first_stderr.contains(marker),
+            "strict filterkeydom replay should no longer surface RapidJSON placeholder API-hole marker `{}` after surface fallback fixes, got:\n{}",
             marker,
             first_stderr
         );

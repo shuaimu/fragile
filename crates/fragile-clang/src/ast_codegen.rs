@@ -4177,6 +4177,27 @@ impl AstCodeGen {
                 self.writeln("");
             }
 
+            if rust_name == "GenericDocument_UTF8_" {
+                // rapidjson filterkeydom replay can degrade Document to an opaque placeholder;
+                // keep basic member-call surface so replay continues to downstream blockers.
+                self.writeln(&format!("impl {} {{", rust_name));
+                self.indent += 1;
+                self.writeln("pub fn Populate<T>(&mut self, _reader: T) {");
+                self.indent += 1;
+                self.writeln("// Surface-only fallback for rapidjson replay compilation.");
+                self.indent -= 1;
+                self.writeln("}");
+                self.writeln("");
+                self.writeln("pub fn Accept<T>(&self, _writer: &T) -> bool {");
+                self.indent += 1;
+                self.writeln("true");
+                self.indent -= 1;
+                self.writeln("}");
+                self.indent -= 1;
+                self.writeln("}");
+                self.writeln("");
+            }
+
             if rust_name.starts_with("MemPoolT_sizeof_") {
                 // tinyxml2 MemPoolT<...> placeholders need basic method surface
                 // (`Alloc`/`Clear`) so member calls type-check when template
@@ -6963,6 +6984,7 @@ impl AstCodeGen {
             return;
         }
 
+        let impl_block_start = self.output.len();
         self.writeln(&format!("impl {} {{", rust_name));
         self.indent += 1;
 
@@ -7357,6 +7379,7 @@ impl AstCodeGen {
             }
         }
 
+        self.emit_missing_rapidjson_method_surface_stubs(inst_name, rust_name, impl_block_start);
         self.emit_tinyxml2_dynarray_fallback_methods(inst_name, rust_name);
 
         self.indent -= 1;
@@ -14604,6 +14627,50 @@ impl AstCodeGen {
                 }
             }
             _ => {}
+        }
+    }
+
+    fn emit_missing_rapidjson_method_surface_stubs(
+        &mut self,
+        class_name: &str,
+        rust_name: &str,
+        impl_block_start: usize,
+    ) {
+        let has_method = |output: &str, method_name: &str| -> bool {
+            output.contains(&format!("pub fn {}(", method_name))
+        };
+
+        let needs_default_ctor_surface = matches!(
+            rust_name,
+            "FilterKeyReader_FileReadStream" | "Writer_FileWriteStream"
+        );
+        if needs_default_ctor_surface && !has_method(&self.output[impl_block_start..], "new_0") {
+            self.current_struct_methods.insert("new_0".to_string(), 1);
+            self.writeln("");
+            self.writeln("pub fn new_0() -> Self { Default::default() }");
+        }
+
+        let is_generic_document_utf8 = rust_name == "GenericDocument_UTF8_"
+            || class_name.contains("GenericDocument<UTF8")
+            || class_name.contains("GenericDocument::UTF8");
+        if is_generic_document_utf8
+            && !has_method(&self.output[impl_block_start..], "Populate")
+            && !has_method(&self.output[impl_block_start..], "Accept")
+        {
+            self.current_struct_methods.insert("Populate".to_string(), 1);
+            self.current_struct_methods.insert("Accept".to_string(), 1);
+            self.writeln("");
+            self.writeln("pub fn Populate<T>(&mut self, _reader: T) {");
+            self.indent += 1;
+            self.writeln("// Surface-only fallback for rapidjson replay compilation.");
+            self.indent -= 1;
+            self.writeln("}");
+            self.writeln("");
+            self.writeln("pub fn Accept<T>(&self, _writer: &T) -> bool {");
+            self.indent += 1;
+            self.writeln("true");
+            self.indent -= 1;
+            self.writeln("}");
         }
     }
 
@@ -23730,6 +23797,7 @@ impl AstCodeGen {
 
             self.emit_missing_tinyxml2_virtual_method_stubs(name, impl_block_start);
             self.emit_missing_tinyxml2_method_surface_stubs(name, impl_block_start);
+            self.emit_missing_rapidjson_method_surface_stubs(name, &rust_name, impl_block_start);
 
             // tinyxml2: `XMLNode::CreateUnlinkedNode` is a templated helper
             // (`template<class NodeType, size_t PoolElementSize> ...`) that can be
@@ -50795,6 +50863,125 @@ mod tests {
         assert!(
             test_util_impl.contains("pub fn TestFileLines(&mut self, _name: *const i8, _filename: *const i8, _expected: *const i8) {"),
             "TestUtil placeholder should expose TestFileLines surface, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_rapidjson_placeholder_struct_emits_populate_and_accept_surface_fallbacks() {
+        let mut codegen = AstCodeGen::new();
+        codegen.used_types.insert(
+            "GenericDocument_UTF8_".to_string(),
+            "GenericDocument<UTF8<>, MemoryPoolAllocator<CrtAllocator>, CrtAllocator>".to_string(),
+        );
+        codegen.generate_missing_type_stubs();
+        let code = codegen.output;
+        let doc_impl = code.split("impl GenericDocument_UTF8_ {").nth(1).unwrap_or("");
+        assert!(
+            doc_impl.contains("pub fn Populate<T>(&mut self, _reader: T) {"),
+            "GenericDocument_UTF8_ placeholder should expose Populate surface fallback, got:\n{}",
+            code
+        );
+        assert!(
+            doc_impl.contains("pub fn Accept<T>(&self, _writer: &T) -> bool {"),
+            "GenericDocument_UTF8_ placeholder should expose Accept surface fallback, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_rapidjson_filterkeyreader_and_writer_emit_new_0_surface_fallbacks() {
+        let mut codegen = AstCodeGen::new();
+
+        codegen.writeln("impl FilterKeyReader_FileReadStream {");
+        codegen.indent += 1;
+        let filter_impl_start = codegen.output.len();
+        codegen.emit_missing_rapidjson_method_surface_stubs(
+            "FilterKeyReader<FileReadStream>",
+            "FilterKeyReader_FileReadStream",
+            filter_impl_start,
+        );
+        codegen.indent -= 1;
+        codegen.writeln("}");
+        codegen.writeln("");
+
+        codegen.writeln("impl Writer_FileWriteStream {");
+        codegen.indent += 1;
+        let writer_impl_start = codegen.output.len();
+        codegen.emit_missing_rapidjson_method_surface_stubs(
+            "Writer<FileWriteStream>",
+            "Writer_FileWriteStream",
+            writer_impl_start,
+        );
+        codegen.indent -= 1;
+        codegen.writeln("}");
+        codegen.writeln("");
+
+        let code = codegen.output;
+        let filter_impl = code
+            .split("impl FilterKeyReader_FileReadStream {")
+            .nth(1)
+            .unwrap_or("");
+        let writer_impl = code.split("impl Writer_FileWriteStream {").nth(1).unwrap_or("");
+        assert!(
+            filter_impl.contains("pub fn new_0() -> Self { Default::default() }"),
+            "FilterKeyReader<FileReadStream> should expose fallback new_0 surface, got:\n{}",
+            code
+        );
+        assert!(
+            writer_impl.contains("pub fn new_0() -> Self { Default::default() }"),
+            "Writer<FileWriteStream> should expose fallback new_0 surface, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_rapidjson_template_impl_path_emits_new_0_surface_fallbacks() {
+        let dummy_method = make_node(
+            ClangNodeKind::CXXMethodDecl {
+                class_name: "FilterKeyReader<FileReadStream>".to_string(),
+                name: "dummy".to_string(),
+                return_type: CppType::Void,
+                params: vec![],
+                is_definition: true,
+                is_static: false,
+                is_virtual: false,
+                is_pure_virtual: false,
+                is_override: false,
+                is_final: false,
+                is_const: false,
+                access: AccessSpecifier::Public,
+            },
+            vec![],
+        );
+        let children = vec![dummy_method];
+
+        let mut codegen = AstCodeGen::new();
+        codegen.generate_template_impl(
+            "FilterKeyReader<FileReadStream>",
+            "FilterKeyReader_FileReadStream",
+            &children,
+        );
+        codegen.generate_template_impl(
+            "Writer<FileWriteStream>",
+            "Writer_FileWriteStream",
+            &children,
+        );
+
+        let code = codegen.output;
+        let filter_impl = code
+            .split("impl FilterKeyReader_FileReadStream {")
+            .nth(1)
+            .unwrap_or("");
+        let writer_impl = code.split("impl Writer_FileWriteStream {").nth(1).unwrap_or("");
+        assert!(
+            filter_impl.contains("pub fn new_0() -> Self { Default::default() }"),
+            "template impl path should inject FilterKeyReader<FileReadStream>::new_0 fallback, got:\n{}",
+            code
+        );
+        assert!(
+            writer_impl.contains("pub fn new_0() -> Self { Default::default() }"),
+            "template impl path should inject Writer<FileWriteStream>::new_0 fallback, got:\n{}",
             code
         );
     }
