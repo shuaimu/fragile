@@ -51151,6 +51151,136 @@ mod tests {
     }
 
     #[test]
+    fn test_rapidjson_concrete_document_template_impl_emits_resolved_methods_without_generic_surface_fallbacks(
+    ) {
+        let mut codegen = AstCodeGen::new();
+        let inst_name = "GenericDocument<UTF8<>, MemoryPoolAllocator<CrtAllocator>, CrtAllocator>";
+        let rust_name = "GenericDocument_UTF8_";
+
+        codegen
+            .generated_structs
+            .insert("FilterKeyReader_FileReadStream".to_string());
+        codegen
+            .generated_structs
+            .insert("Writer_FileWriteStream".to_string());
+        codegen.specialization_methods.insert(
+            inst_name.to_string(),
+            vec![
+                crate::libtooling::MethodSignature {
+                    name: "Populate".to_string(),
+                    return_type: Some(CppType::Void),
+                    param_names: vec!["_reader".to_string()],
+                    param_types: vec![CppType::Named(
+                        "FilterKeyReader_FileReadStream".to_string(),
+                    )],
+                    is_static: false,
+                },
+                crate::libtooling::MethodSignature {
+                    name: "Accept".to_string(),
+                    return_type: Some(CppType::Bool),
+                    param_names: vec!["_writer".to_string()],
+                    param_types: vec![CppType::Pointer {
+                        pointee: Box::new(CppType::Named("Writer_FileWriteStream".to_string())),
+                        is_const: true,
+                    }],
+                    is_static: false,
+                },
+            ],
+        );
+        codegen.libtooling_method_bodies.insert(
+            (rust_name.to_string(), "Populate".to_string()),
+            vec![crate::libtooling::MethodInfo {
+                param_names: vec!["_reader".to_string()],
+                body: make_node(ClangNodeKind::CompoundStmt, vec![]),
+            }],
+        );
+        codegen.libtooling_method_bodies.insert(
+            (rust_name.to_string(), "Accept".to_string()),
+            vec![crate::libtooling::MethodInfo {
+                param_names: vec!["_writer".to_string()],
+                body: make_node(
+                    ClangNodeKind::CompoundStmt,
+                    vec![make_node(
+                        ClangNodeKind::ReturnStmt,
+                        vec![make_node(ClangNodeKind::BoolLiteral(true), vec![])],
+                    )],
+                ),
+            }],
+        );
+
+        let children = vec![
+            make_node(
+                ClangNodeKind::CXXMethodDecl {
+                    class_name: inst_name.to_string(),
+                    name: "Populate".to_string(),
+                    return_type: CppType::Void,
+                    params: vec![(
+                        "_reader".to_string(),
+                        CppType::Named("FilterKeyReader_FileReadStream".to_string()),
+                    )],
+                    is_definition: true,
+                    is_static: false,
+                    is_virtual: false,
+                    is_pure_virtual: false,
+                    is_override: false,
+                    is_final: false,
+                    is_const: false,
+                    access: AccessSpecifier::Public,
+                },
+                vec![],
+            ),
+            make_node(
+                ClangNodeKind::CXXMethodDecl {
+                    class_name: inst_name.to_string(),
+                    name: "Accept".to_string(),
+                    return_type: CppType::Bool,
+                    params: vec![(
+                        "_writer".to_string(),
+                        CppType::Pointer {
+                            pointee: Box::new(CppType::Named("Writer_FileWriteStream".to_string())),
+                            is_const: true,
+                        },
+                    )],
+                    is_definition: true,
+                    is_static: false,
+                    is_virtual: false,
+                    is_pure_virtual: false,
+                    is_override: false,
+                    is_final: false,
+                    is_const: true,
+                    access: AccessSpecifier::Public,
+                },
+                vec![],
+            ),
+        ];
+        codegen.generate_template_impl(inst_name, rust_name, &children);
+        let code = codegen.output;
+
+        assert!(
+            code.contains("pub fn Populate(&mut self, _reader: FilterKeyReader_FileReadStream) {"),
+            "concrete GenericDocument template impl should emit resolved Populate method signature, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains(
+                "pub fn Accept(&mut self, _writer: *const Writer_FileWriteStream) -> bool {"
+            ),
+            "concrete GenericDocument template impl should emit resolved Accept method signature, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("pub fn Populate<T>(&mut self, _reader: T) {"),
+            "resolved GenericDocument Populate should prevent generic fallback stub emission, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("pub fn Accept<T>(&self, _writer: &T) -> bool {"),
+            "resolved GenericDocument Accept should prevent generic fallback stub emission, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
     fn test_non_pointer_member_receiver_does_not_force_pointer_deref_call_lowering() {
         let mut codegen = AstCodeGen::new();
         codegen.class_fields.insert(
