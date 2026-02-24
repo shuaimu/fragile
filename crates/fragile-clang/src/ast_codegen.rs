@@ -28467,6 +28467,19 @@ impl AstCodeGen {
             .is_some_and(|count| *count > 0)
     }
 
+    /// Resolve local-variable activity for DeclRef lookups.
+    ///
+    /// Normal AST-driven function/method generation uses scoped counters to
+    /// respect lexical shadowing. Template/libtooling-only paths may not have
+    /// scoped counters populated, so fall back to the coarse local-vars set.
+    fn is_declref_local_name_active(&self, ident: &str) -> bool {
+        if !self.scoped_local_scope_stack.is_empty() {
+            self.is_scoped_local_var_active(ident)
+        } else {
+            self.local_vars.contains(ident)
+        }
+    }
+
     fn scoped_local_ptr_hint_for_ident(&self, ident: &str) -> Option<bool> {
         self.scoped_local_ptr_state
             .get(ident)
@@ -28478,13 +28491,93 @@ impl AstCodeGen {
             .or_else(|| self.scoped_local_ptr_hint_for_ident(&sanitize_identifier(name)))
     }
 
+    /// Degraded DeclRefExpr nodes can lose function typing metadata and appear
+    /// as non-function references. When the identifier matches a known function
+    /// symbol in this translation unit, avoid remapping through global storage.
+    fn is_known_function_declref_name(&self, name: &str) -> bool {
+        if name.is_empty() {
+            return false;
+        }
+
+        let stripped = Self::strip_namespace_and_template(name);
+        if matches!(
+            stripped.as_str(),
+            "fill_n" | "copy_n" | "__fill_n" | "__copy_n"
+        ) {
+            return true;
+        }
+        let mut candidates = vec![
+            name.to_string(),
+            stripped.clone(),
+            sanitize_identifier(name),
+            sanitize_identifier(&stripped),
+            sanitize_identifier_for_composite(name),
+            sanitize_identifier_for_composite(&stripped),
+        ];
+        candidates.sort();
+        candidates.dedup();
+        candidates.into_iter().any(|candidate| {
+            self.defined_function_names.contains(&candidate)
+                || self.declared_function_names.contains(&candidate)
+        })
+    }
+
+    /// Whether a pre-collected `__gv_*` mapping can be resolved against an
+    /// emitted/defined global symbol in this translation unit.
+    fn global_storage_mapping_is_resolvable(
+        &self,
+        original_name: &str,
+        prefixed_name: &str,
+    ) -> bool {
+        if self.global_vars.contains(prefixed_name) {
+            return true;
+        }
+
+        let stripped = Self::strip_namespace_and_template(original_name);
+        let candidates = [
+            original_name.to_string(),
+            stripped.clone(),
+            sanitize_identifier(original_name),
+            sanitize_identifier_for_composite(original_name),
+            sanitize_identifier(&stripped),
+            sanitize_identifier_for_composite(&stripped),
+        ];
+        candidates
+            .iter()
+            .any(|candidate| self.defined_global_var_names.contains(candidate))
+    }
+
+    /// Resolve a declref global mapping only when the mapped symbol is known to
+    /// be emitted/defined in this translation unit.
+    fn lookup_resolvable_global_var_mapping(
+        &self,
+        original_name: &str,
+        sanitized: &str,
+        composite: &str,
+    ) -> Option<String> {
+        if let Some(prefixed) = self.global_var_mapping.get(sanitized) {
+            if self.global_storage_mapping_is_resolvable(original_name, prefixed) {
+                return Some(prefixed.clone());
+            }
+        }
+        if let Some(prefixed) = self.global_var_mapping.get(composite) {
+            if self.global_storage_mapping_is_resolvable(original_name, prefixed) {
+                return Some(prefixed.clone());
+            }
+        }
+        None
+    }
+
     /// Check if an expression node refers to a global variable (needs unsafe access).
     fn is_global_var_expr(&self, node: &ClangNode) -> bool {
         match &node.kind {
             ClangNodeKind::DeclRefExpr { name, .. } => {
+                if self.is_known_function_declref_name(name) {
+                    return false;
+                }
                 let sanitized = sanitize_identifier(name);
                 let composite = sanitize_identifier_for_composite(name);
-                if self.is_scoped_local_var_active(&sanitized) {
+                if self.is_declref_local_name_active(&sanitized) {
                     return false;
                 }
                 if self.function_static_var_mapping.contains_key(&sanitized)
@@ -28492,8 +28585,8 @@ impl AstCodeGen {
                 {
                     return true;
                 }
-                self.global_var_mapping.contains_key(&sanitized)
-                    || self.global_var_mapping.contains_key(&composite)
+                self.lookup_resolvable_global_var_mapping(name, &sanitized, &composite)
+                    .is_some()
             }
             ClangNodeKind::ImplicitCastExpr { .. } | ClangNodeKind::Unknown(_) => {
                 // Look through casts and unknown wrappers
@@ -28512,7 +28605,7 @@ impl AstCodeGen {
                 let sanitized = sanitize_identifier(name);
                 let composite = sanitize_identifier_for_composite(name);
                 // Local variables shadow function-static and global names.
-                if self.is_scoped_local_var_active(&sanitized) {
+                if self.is_declref_local_name_active(&sanitized) {
                     return Some(sanitized);
                 }
                 if let Some(mapped) = self
@@ -28522,11 +28615,12 @@ impl AstCodeGen {
                 {
                     return Some(mapped.clone());
                 }
+                if self.is_known_function_declref_name(name) {
+                    return Some(sanitized);
+                }
                 // Check if this is a global variable and return the prefixed name
-                if let Some(prefixed) = self
-                    .global_var_mapping
-                    .get(&sanitized)
-                    .or_else(|| self.global_var_mapping.get(&composite))
+                if let Some(prefixed) =
+                    self.lookup_resolvable_global_var_mapping(name, &sanitized, &composite)
                 {
                     Some(prefixed.clone())
                 } else {
@@ -29016,12 +29110,11 @@ impl AstCodeGen {
         if !in_function_scope {
             if let ClangNodeKind::VarDecl {
                 name,
-                is_static,
                 is_extern,
                 ..
             } = &node.kind
             {
-                if !*is_static && !*is_extern {
+                if !*is_extern {
                     self.defined_global_var_names.insert(name.clone());
                 }
             }
@@ -29198,8 +29291,16 @@ impl AstCodeGen {
                 name, ty, has_init, ..
             } = &node.kind
             {
+                let rust_type = ty.to_rust_type_str();
+                let skip_unresolvable_placeholder_type = matches!(ty, CppType::TemplateParam { .. })
+                    || rust_type == "_dependent_type"
+                    || rust_type == "integral_constant__Tp____v"
+                    || rust_type.starts_with("type_parameter_")
+                    || rust_type.contains("_parameter_")
+                    || rust_type.contains("sizeof___(");
                 if !Self::is_header_decl_without_initializer(node, *has_init)
                     && !self.is_out_of_class_static_member_definition(name, ty, &node.children)
+                    && !skip_unresolvable_placeholder_type
                 {
                     let base_name = sanitize_identifier_for_composite(name);
                     let safe_name = format!("__gv_{}", base_name);
@@ -29935,6 +30036,81 @@ impl AstCodeGen {
         }
 
         false
+    }
+
+    fn rewrite_degraded_algorithm_functor_call(
+        &self,
+        callee: &ClangNode,
+        func_expr: &str,
+        arg_nodes: &[ClangNode],
+    ) -> Option<String> {
+        if arg_nodes.len() != 3 {
+            return None;
+        }
+
+        let mut symbol_candidates: Vec<String> = Vec::new();
+        if let Some(symbol) = Self::symbol_like_identifier(func_expr) {
+            symbol_candidates.push(symbol);
+        }
+        if let Some(declref_name) = Self::get_declref_name(callee) {
+            symbol_candidates.push(declref_name);
+        }
+
+        for symbol in symbol_candidates {
+            let leaf = symbol.rsplit("::").next().unwrap_or(symbol.as_str());
+            let stripped = leaf
+                .strip_prefix("__gv_")
+                .or_else(|| leaf.strip_prefix("__fsv_"))
+                .unwrap_or(leaf);
+            let normalized = stripped.strip_prefix("r#").unwrap_or(stripped);
+            match normalized {
+                "fill_n" | "__fill_n" => {
+                    let dest_ty = CppType::Pointer {
+                        pointee: Box::new(CppType::Char { signed: true }),
+                        is_const: false,
+                    };
+                    let dest_arg = self.normalize_pointer_arg_for_target(
+                        &arg_nodes[0],
+                        &dest_ty,
+                        &self.expr_to_string(&arg_nodes[0]),
+                    );
+                    let count_arg = self.expr_to_string(&arg_nodes[1]);
+                    let value_arg = self.expr_to_string(&arg_nodes[2]);
+                    return Some(format!(
+                        "fill_n_char_u64_i8({}, ({}) as u64, ({}) as i8)",
+                        dest_arg, count_arg, value_arg
+                    ));
+                }
+                "copy_n" | "__copy_n" => {
+                    let src_ty = CppType::Pointer {
+                        pointee: Box::new(CppType::Char { signed: true }),
+                        is_const: true,
+                    };
+                    let dst_ty = CppType::Pointer {
+                        pointee: Box::new(CppType::Char { signed: true }),
+                        is_const: false,
+                    };
+                    let src_arg = self.normalize_pointer_arg_for_target(
+                        &arg_nodes[0],
+                        &src_ty,
+                        &self.expr_to_string(&arg_nodes[0]),
+                    );
+                    let count_arg = self.expr_to_string(&arg_nodes[1]);
+                    let dst_arg = self.normalize_pointer_arg_for_target(
+                        &arg_nodes[2],
+                        &dst_ty,
+                        &self.expr_to_string(&arg_nodes[2]),
+                    );
+                    return Some(format!(
+                        "copy_n_char_i32_char(({}) as *const i8, ({}) as i32, ({}) as *mut i8)",
+                        src_arg, count_arg, dst_arg
+                    ));
+                }
+                _ => {}
+            }
+        }
+
+        None
     }
 
     /// Get the base access path for a member declared in a specific base class.
@@ -33939,6 +34115,11 @@ impl AstCodeGen {
                 } else {
                     "Default::default()".to_string()
                 };
+                self.push_local_scope();
+                self.declare_scoped_local_var_with_ptr_hint(
+                    var_name.clone(),
+                    Some(Self::is_pointer_decl_type(ty)),
+                );
 
                 // Generate loop with declaration and break check
                 self.writeln("loop {");
@@ -33962,6 +34143,7 @@ impl AstCodeGen {
                 self.loop_depth -= 1;
                 self.indent -= 1;
                 self.writeln("}");
+                self.pop_local_scope();
                 return;
             }
 
@@ -33978,6 +34160,11 @@ impl AstCodeGen {
                         } else {
                             "Default::default()".to_string()
                         };
+                        self.push_local_scope();
+                        self.declare_scoped_local_var_with_ptr_hint(
+                            var_name.clone(),
+                            Some(Self::is_pointer_decl_type(ty)),
+                        );
 
                         // Generate loop with declaration and break check
                         self.writeln("loop {");
@@ -34006,6 +34193,7 @@ impl AstCodeGen {
                         self.loop_depth -= 1;
                         self.indent -= 1;
                         self.writeln("}");
+                        self.pop_local_scope();
                         return;
                     }
                 }
@@ -35054,6 +35242,9 @@ impl AstCodeGen {
                     }
 
                     let ident = sanitize_identifier(name);
+                    let preserve_known_function_symbol =
+                        !matches!(ty, CppType::Function { .. })
+                            && self.is_known_function_declref_name(name);
 
                     // Map C++ math functions to their internal stub implementations
                     // These stubs exist in the preamble with __ prefix
@@ -35065,7 +35256,10 @@ impl AstCodeGen {
                     };
                     // For static member access (class name in namespace path, non-function type),
                     // convert to global variable name (no unsafe wrapper since we're already in unsafe)
-                    if !namespace_path.is_empty() && !matches!(ty, CppType::Function { .. }) {
+                    if !namespace_path.is_empty()
+                        && !matches!(ty, CppType::Function { .. })
+                        && !preserve_known_function_symbol
+                    {
                         let class_name = &namespace_path[namespace_path.len() - 1];
                         // Try to find the global name from static_members
                         if let Some(global_name) =
@@ -35089,7 +35283,8 @@ impl AstCodeGen {
                     // Check if this is a static member of the current class.
                     // Clang can report namespace-only qualification for static members,
                     // so don't require `namespace_path` to be empty.
-                    if !matches!(ty, CppType::Function { .. }) {
+                    if !matches!(ty, CppType::Function { .. }) && !preserve_known_function_symbol
+                    {
                         if let Some(ref current_class) = self.current_class {
                             if let Some(global_name) = self
                                 .static_members
@@ -35103,26 +35298,36 @@ impl AstCodeGen {
                     // Check if this is a global variable (already in unsafe context, no wrapper needed)
                     // Global variables are prefixed with __gv_ to avoid parameter shadowing.
                     // Never remap function references through value-storage symbols.
-                    if self.is_scoped_local_var_active(&ident) {
+                    if self.is_declref_local_name_active(&ident) {
                         if self.is_tracked_ref_var_name(name) {
                             return format!("*{}", ident);
                         }
                         return ident;
                     }
-                    if !matches!(ty, CppType::Function { .. }) {
+                    if !matches!(ty, CppType::Function { .. }) && !preserve_known_function_symbol
+                    {
                         if let Some(static_name) = self.function_static_var_mapping.get(&ident) {
                             return static_name.clone();
                         }
-                        if !self.is_scoped_local_var_active(&ident) {
+                        if !self.is_declref_local_name_active(&ident) {
                             let composite_ident = sanitize_identifier_for_composite(name);
                             if let Some(prefixed_name) = self
-                                .global_var_mapping
-                                .get(&ident)
-                                .or_else(|| self.global_var_mapping.get(&composite_ident))
+                                .lookup_resolvable_global_var_mapping(
+                                    name,
+                                    &ident,
+                                    &composite_ident,
+                                )
                             {
                                 return prefixed_name.clone();
                             }
                         }
+                    }
+
+                    if preserve_known_function_symbol {
+                        if namespace_path.is_empty() {
+                            return ident;
+                        }
+                        return self.compute_relative_path(namespace_path, &ident);
                     }
 
                     ident
@@ -36181,6 +36386,9 @@ impl AstCodeGen {
                     }
 
                     let ident = sanitize_identifier(name);
+                    let preserve_known_function_symbol =
+                        !matches!(ty, CppType::Function { .. })
+                            && self.is_known_function_declref_name(name);
                     let resolved_ns_for_fn =
                         self.resolve_declref_function_namespace_path(name, ty, namespace_path);
                     if self.va_list_mapping.as_ref().is_some_and(|v| v == name) {
@@ -36195,7 +36403,10 @@ impl AstCodeGen {
                     }
                     // Check if this is a static member access (class name in namespace path)
                     // For static member variables (not functions), convert to global with unsafe
-                    if !namespace_path.is_empty() && !matches!(ty, CppType::Function { .. }) {
+                    if !namespace_path.is_empty()
+                        && !matches!(ty, CppType::Function { .. })
+                        && !preserve_known_function_symbol
+                    {
                         // Check if the last component is a class name with a static member
                         let class_name = &namespace_path[namespace_path.len() - 1];
                         if let Some(global_name) =
@@ -36222,7 +36433,8 @@ impl AstCodeGen {
                     // Check if this is a static member of the current class.
                     // Clang can report namespace-only qualification for static members,
                     // so don't require `namespace_path` to be empty.
-                    if !matches!(ty, CppType::Function { .. }) {
+                    if !matches!(ty, CppType::Function { .. }) && !preserve_known_function_symbol
+                    {
                         if let Some(ref current_class) = self.current_class {
                             if let Some(global_name) = self
                                 .static_members
@@ -36236,23 +36448,27 @@ impl AstCodeGen {
                     // Check if this is a global variable (needs unsafe access)
                     // Global variables are prefixed with __gv_ to avoid parameter shadowing
                     // But only if it's not a local variable (local vars shadow globals)
-                    if self.is_scoped_local_var_active(&ident) {
+                    if self.is_declref_local_name_active(&ident) {
                         if self.is_tracked_ref_var_name(name) {
                             return format!("*{}", ident);
                         }
                         return ident;
                     }
-                    if let Some(static_name) = self.function_static_var_mapping.get(&ident) {
-                        return format!("unsafe {{ {} }}", static_name);
-                    }
-                    if !self.is_scoped_local_var_active(&ident) {
-                        let composite_ident = sanitize_identifier_for_composite(name);
-                        if let Some(prefixed_name) = self
-                            .global_var_mapping
-                            .get(&ident)
-                            .or_else(|| self.global_var_mapping.get(&composite_ident))
-                        {
-                            return format!("unsafe {{ {} }}", prefixed_name);
+                    if !preserve_known_function_symbol {
+                        if let Some(static_name) = self.function_static_var_mapping.get(&ident) {
+                            return format!("unsafe {{ {} }}", static_name);
+                        }
+                        if !self.is_declref_local_name_active(&ident) {
+                            let composite_ident = sanitize_identifier_for_composite(name);
+                            if let Some(prefixed_name) = self
+                                .lookup_resolvable_global_var_mapping(
+                                    name,
+                                    &ident,
+                                    &composite_ident,
+                                )
+                            {
+                                return format!("unsafe {{ {} }}", prefixed_name);
+                            }
                         }
                     }
 
@@ -36288,7 +36504,9 @@ impl AstCodeGen {
                     // Compute relative path based on current namespace context
                     // Only apply to functions (not local variables or parameters)
                     // For functions, even if namespace_path is empty, we may need super:: to reach global scope
-                    let full_path = if matches!(ty, CppType::Function { .. }) {
+                    let full_path = if matches!(ty, CppType::Function { .. })
+                        || preserve_known_function_symbol
+                    {
                         self.compute_relative_path(&resolved_ns_for_fn, &ident)
                     } else if namespace_path.is_empty() {
                         // Local variable or parameter - just use the identifier
@@ -39317,6 +39535,14 @@ impl AstCodeGen {
                                 }
                             }
                         }
+                        if let Some(rewritten_call) = self.rewrite_degraded_algorithm_functor_call(
+                            callee,
+                            &func,
+                            &node.children[1..],
+                        )
+                        {
+                            return rewritten_call;
+                        }
                         if !is_fn_ptr_call && self.is_non_callable_callee_value_expr(callee, &func)
                         {
                             return func;
@@ -39973,6 +40199,13 @@ impl AstCodeGen {
                                 args.truncate(types.len());
                             }
                         }
+                    }
+                    if let Some(rewritten_call) = self.rewrite_degraded_algorithm_functor_call(
+                        &node.children[0],
+                        &func,
+                        &call_arg_nodes,
+                    ) {
+                        return rewritten_call;
                     }
                     if !is_fn_ptr_call
                         && self.is_non_callable_callee_value_expr(&node.children[0], &func)
@@ -53818,6 +54051,185 @@ mod tests {
     }
 
     #[test]
+    fn test_declref_known_function_name_with_degraded_type_not_remapped_to_global_storage() {
+        let int_ty = CppType::Int { signed: true };
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![
+                make_node(
+                    ClangNodeKind::VarDecl {
+                        name: "fill_n".to_string(),
+                        ty: int_ty.clone(),
+                        has_init: true,
+                        is_extern: false,
+                        is_static: false,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::IntegerLiteral {
+                            value: 1,
+                            cpp_type: Some(int_ty.clone()),
+                        },
+                        vec![],
+                    )],
+                ),
+                make_node(
+                    ClangNodeKind::FunctionDecl {
+                        name: "fill_n".to_string(),
+                        mangled_name: "fill_n".to_string(),
+                        is_static: false,
+                        return_type: int_ty.clone(),
+                        params: vec![],
+                        is_definition: true,
+                        is_variadic: false,
+                        is_noexcept: false,
+                        is_coroutine: false,
+                        coroutine_info: None,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![make_node(
+                            ClangNodeKind::ReturnStmt,
+                            vec![make_node(
+                                ClangNodeKind::IntegerLiteral {
+                                    value: 7,
+                                    cpp_type: Some(int_ty.clone()),
+                                },
+                                vec![],
+                            )],
+                        )],
+                    )],
+                ),
+                make_node(
+                    ClangNodeKind::FunctionDecl {
+                        name: "probe_fill_n".to_string(),
+                        mangled_name: "probe_fill_n".to_string(),
+                        is_static: false,
+                        return_type: int_ty.clone(),
+                        params: vec![],
+                        is_definition: true,
+                        is_variadic: false,
+                        is_noexcept: false,
+                        is_coroutine: false,
+                        coroutine_info: None,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![make_node(
+                            ClangNodeKind::ReturnStmt,
+                            vec![make_node(
+                                ClangNodeKind::DeclRefExpr {
+                                    name: "fill_n".to_string(),
+                                    ty: int_ty.clone(),
+                                    namespace_path: vec![],
+                                },
+                                vec![],
+                            )],
+                        )],
+                    )],
+                ),
+            ],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("return fill_n;"),
+            "degraded function-like declref should preserve function symbol text, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("return unsafe { __gv_fill_n };")
+                && !code.contains("return __gv_fill_n;"),
+            "known function identifiers must not be remapped through global storage aliases at use sites, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_declref_skips_unresolvable_precollected_global_mapping() {
+        let int_ty = CppType::Int { signed: true };
+        let mut gen = AstCodeGen::new();
+        gen.global_var_mapping
+            .insert("fill_n".to_string(), "__gv_fill_n".to_string());
+
+        let decl_ref = make_node(
+            ClangNodeKind::DeclRefExpr {
+                name: "fill_n".to_string(),
+                ty: int_ty,
+                namespace_path: vec![],
+            },
+            vec![],
+        );
+
+        let lowered = gen.expr_to_string(&decl_ref);
+        assert_eq!(
+            lowered, "fill_n",
+            "declref should not remap to unresolved pre-collected global storage symbol"
+        );
+    }
+
+    #[test]
+    fn test_declref_keeps_resolvable_defined_global_mapping() {
+        let int_ty = CppType::Int { signed: true };
+        let mut gen = AstCodeGen::new();
+        gen.global_var_mapping
+            .insert("counter".to_string(), "__gv_counter".to_string());
+        gen.defined_global_var_names.insert("counter".to_string());
+
+        let decl_ref = make_node(
+            ClangNodeKind::DeclRefExpr {
+                name: "counter".to_string(),
+                ty: int_ty,
+                namespace_path: vec![],
+            },
+            vec![],
+        );
+
+        let lowered = gen.expr_to_string(&decl_ref);
+        assert_eq!(
+            lowered, "unsafe { __gv_counter }",
+            "declref should keep remap for resolvable defined globals"
+        );
+    }
+
+    #[test]
+    fn test_collect_global_var_lookup_skips_placeholder_typed_globals() {
+        let templ_ty = CppType::TemplateParam {
+            name: "T".to_string(),
+            depth: 0,
+            index: 0,
+        };
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![make_node(
+                ClangNodeKind::VarDecl {
+                    name: "fill_n".to_string(),
+                    ty: templ_ty,
+                    has_init: true,
+                    is_static: false,
+                    is_extern: false,
+                },
+                vec![make_node(
+                    ClangNodeKind::IntegerLiteral {
+                        value: 0,
+                        cpp_type: Some(CppType::Int { signed: true }),
+                    },
+                    vec![],
+                )],
+            )],
+        );
+
+        let mut gen = AstCodeGen::new();
+        gen.collect_defined_global_var_names(&ast, false);
+        gen.collect_global_var_lookup_mappings(&ast, false);
+
+        assert!(
+            !gen.global_var_mapping.contains_key("fill_n"),
+            "placeholder-typed globals should not be pre-collected into __gv_ lookup mapping"
+        );
+    }
+
+    #[test]
     fn test_call_expr_non_callable_global_value_is_not_invoked() {
         let int_ty = CppType::Int { signed: true };
 
@@ -53883,6 +54295,249 @@ mod tests {
                 && !code.contains("__gv_counter()")
                 && !code.contains("unsafe { __gv_counter }()"),
             "non-callable global values should not lower to call syntax, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_degraded_fill_n_functor_call_rewrites_from_global_storage_symbol() {
+        let int_ty = CppType::Int { signed: true };
+        let char_ty = CppType::Char { signed: true };
+        let char_ptr_ty = CppType::Pointer {
+            pointee: Box::new(char_ty.clone()),
+            is_const: false,
+        };
+
+        let call_expr = make_node(
+            ClangNodeKind::CallExpr {
+                ty: char_ptr_ty.clone(),
+                template_instantiation: None,
+            },
+            vec![
+                make_node(
+                    ClangNodeKind::DeclRefExpr {
+                        name: "fill_n".to_string(),
+                        ty: int_ty.clone(),
+                        namespace_path: vec![],
+                    },
+                    vec![],
+                ),
+                make_node(
+                    ClangNodeKind::DeclRefExpr {
+                        name: "dst".to_string(),
+                        ty: char_ptr_ty.clone(),
+                        namespace_path: vec![],
+                    },
+                    vec![],
+                ),
+                make_node(
+                    ClangNodeKind::IntegerLiteral {
+                        value: 4,
+                        cpp_type: Some(int_ty.clone()),
+                    },
+                    vec![],
+                ),
+                make_node(
+                    ClangNodeKind::IntegerLiteral {
+                        value: 65,
+                        cpp_type: Some(int_ty.clone()),
+                    },
+                    vec![],
+                ),
+            ],
+        );
+
+        let mut gen = AstCodeGen::new();
+        gen.local_vars.insert("dst".to_string());
+        gen.global_var_mapping
+            .insert("fill_n".to_string(), "__gv_fill_n".to_string());
+        gen.defined_global_var_names.insert("fill_n".to_string());
+        gen.global_var_types
+            .insert("__gv_fill_n".to_string(), int_ty.clone());
+
+        let lowered = gen.expr_to_string(&call_expr);
+        assert!(
+            lowered.contains("fill_n_char_u64_i8("),
+            "degraded fill_n callee should rewrite to concrete helper call, got:\n{}",
+            lowered
+        );
+        assert!(
+            !lowered.contains("__gv_fill_n"),
+            "fill_n helper call should not keep unresolved global-storage symbol, got:\n{}",
+            lowered
+        );
+    }
+
+    #[test]
+    fn test_degraded_copy_n_functor_call_rewrites_from_global_storage_symbol() {
+        let int_ty = CppType::Int { signed: true };
+        let char_ty = CppType::Char { signed: true };
+        let char_ptr_ty = CppType::Pointer {
+            pointee: Box::new(char_ty.clone()),
+            is_const: false,
+        };
+        let const_char_ptr_ty = CppType::Pointer {
+            pointee: Box::new(char_ty),
+            is_const: true,
+        };
+
+        let call_expr = make_node(
+            ClangNodeKind::CallExpr {
+                ty: char_ptr_ty.clone(),
+                template_instantiation: None,
+            },
+            vec![
+                make_node(
+                    ClangNodeKind::DeclRefExpr {
+                        name: "copy_n".to_string(),
+                        ty: int_ty.clone(),
+                        namespace_path: vec![],
+                    },
+                    vec![],
+                ),
+                make_node(
+                    ClangNodeKind::DeclRefExpr {
+                        name: "src".to_string(),
+                        ty: const_char_ptr_ty,
+                        namespace_path: vec![],
+                    },
+                    vec![],
+                ),
+                make_node(
+                    ClangNodeKind::IntegerLiteral {
+                        value: 2,
+                        cpp_type: Some(int_ty.clone()),
+                    },
+                    vec![],
+                ),
+                make_node(
+                    ClangNodeKind::DeclRefExpr {
+                        name: "dst".to_string(),
+                        ty: char_ptr_ty.clone(),
+                        namespace_path: vec![],
+                    },
+                    vec![],
+                ),
+            ],
+        );
+
+        let mut gen = AstCodeGen::new();
+        gen.local_vars.insert("src".to_string());
+        gen.local_vars.insert("dst".to_string());
+        gen.global_var_mapping
+            .insert("copy_n".to_string(), "__gv_copy_n".to_string());
+        gen.defined_global_var_names.insert("copy_n".to_string());
+        gen.global_var_types
+            .insert("__gv_copy_n".to_string(), int_ty);
+
+        let lowered = gen.expr_to_string(&call_expr);
+        assert!(
+            lowered.contains("copy_n_char_i32_char("),
+            "degraded copy_n callee should rewrite to concrete helper call, got:\n{}",
+            lowered
+        );
+        assert!(
+            !lowered.contains("__gv_copy_n"),
+            "copy_n helper call should not keep unresolved global-storage symbol, got:\n{}",
+            lowered
+        );
+    }
+
+    #[test]
+    fn test_while_condition_decl_local_shadow_not_remapped_to_global_storage() {
+        let int_ty = CppType::Int { signed: true };
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![
+                make_node(
+                    ClangNodeKind::VarDecl {
+                        name: "__c".to_string(),
+                        ty: int_ty.clone(),
+                        has_init: true,
+                        is_extern: false,
+                        is_static: false,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::IntegerLiteral {
+                            value: 99,
+                            cpp_type: Some(int_ty.clone()),
+                        },
+                        vec![],
+                    )],
+                ),
+                make_node(
+                    ClangNodeKind::FunctionDecl {
+                        name: "probe_while_decl".to_string(),
+                        mangled_name: "probe_while_decl".to_string(),
+                        is_static: false,
+                        return_type: CppType::Void,
+                        params: vec![],
+                        is_definition: true,
+                        is_variadic: false,
+                        is_noexcept: false,
+                        is_coroutine: false,
+                        coroutine_info: None,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![make_node(
+                            ClangNodeKind::WhileStmt,
+                            vec![
+                                make_node(
+                                    ClangNodeKind::DeclStmt,
+                                    vec![make_node(
+                                        ClangNodeKind::VarDecl {
+                                            name: "__c".to_string(),
+                                            ty: int_ty.clone(),
+                                            has_init: true,
+                                            is_extern: false,
+                                            is_static: false,
+                                        },
+                                        vec![make_node(
+                                            ClangNodeKind::IntegerLiteral {
+                                                value: 1,
+                                                cpp_type: Some(int_ty.clone()),
+                                            },
+                                            vec![],
+                                        )],
+                                    )],
+                                ),
+                                make_node(
+                                    ClangNodeKind::CompoundStmt,
+                                    vec![make_node(
+                                        ClangNodeKind::ExprStmt,
+                                        vec![make_node(
+                                            ClangNodeKind::DeclRefExpr {
+                                                name: "__c".to_string(),
+                                                ty: int_ty.clone(),
+                                                namespace_path: vec![],
+                                            },
+                                            vec![],
+                                        )],
+                                    )],
+                                ),
+                            ],
+                        )],
+                    )],
+                ),
+            ],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("let __c: i32 ="),
+            "while-condition declaration should lower to local variable declaration, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("if __c == 0 { break; }"),
+            "while loop should apply break condition using local declaration variable, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("unsafe { __gv___c }"),
+            "while-condition local variable must not resolve through global __gv_ mapping at use sites, got:\n{}",
             code
         );
     }
