@@ -42,6 +42,11 @@ const RAPIDJSON_EXPECTED_CONDENSE_OUTPUT: &str = "{\"a\":1,\"b\":[true,false],\"
 const RAPIDJSON_CONST_ASSIGN_PARSER_DIAGNOSTIC_FRAGMENT: &str =
     "cannot assign to non-static data member 'length' with const-qualified type 'const SizeType'";
 const RAPIDJSON_DUPLICATE_DEFINITION_E0428_FRAGMENT: &str = "error[E0428]";
+const RAPIDJSON_FILTERKEYDOM_PLACEHOLDER_API_HOLE_MARKERS: &[&str] = &[
+    "no function or associated item named `new_0` found for struct `FilterKeyReader_FileReadStream`",
+    "no method named `Populate` found for struct `GenericDocument_UTF8_`",
+    "no method named `Accept` found for struct `GenericDocument_UTF8_`",
+];
 const RAPIDJSON_NATIVE_LOG_FILES: &[&str] = &[
     "compile_condense.status",
     "compile_condense.stdout",
@@ -2179,6 +2184,14 @@ fn test_real_world_rapidjson_strict_filterkeydom_compile_capture() {
             !stream.contains(RAPIDJSON_DUPLICATE_DEFINITION_E0428_FRAGMENT),
             "strict filterkeydom replay should not surface duplicate-definition E0428 in captured streams, got:\n{}",
             stream
+        );
+    }
+    for marker in RAPIDJSON_FILTERKEYDOM_PLACEHOLDER_API_HOLE_MARKERS {
+        assert!(
+            first_stderr.contains(marker),
+            "strict filterkeydom replay should currently surface RapidJSON placeholder API-hole marker `{}` while ledger item 3 remains open, got:\n{}",
+            marker,
+            first_stderr
         );
     }
     assert!(
