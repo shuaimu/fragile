@@ -486,6 +486,14 @@ impl CppType {
                     | "std::__1::__identity"
                     | "std::__2::__identity"
                     | "std::__ndk1::__identity" => "__identity".to_string(),
+                    // libc++ internal bool atomic base alias can be referenced by generated call-shapes.
+                    "__cxx_atomic_base_impl_bool"
+                    | "std::__cxx_atomic_base_impl_bool"
+                    | "std::__1::__cxx_atomic_base_impl_bool"
+                    | "std::__2::__cxx_atomic_base_impl_bool"
+                    | "std::__ndk1::__cxx_atomic_base_impl_bool" => {
+                        "__cxx_atomic_impl_bool".to_string()
+                    }
                     // Stream types
                     "__stream_type" | "ostream_type" | "istream_type" => {
                         "std::ffi::c_void".to_string()
@@ -1709,6 +1717,26 @@ mod tests {
             }
             .to_rust_type_str(),
             "*mut u64"
+        );
+    }
+
+    #[test]
+    fn test_cxx_atomic_base_impl_bool_alias_normalizes_to_impl_bool() {
+        assert_eq!(
+            CppType::Named("__cxx_atomic_base_impl_bool".to_string()).to_rust_type_str(),
+            "__cxx_atomic_impl_bool"
+        );
+        assert_eq!(
+            CppType::Named("std::__1::__cxx_atomic_base_impl_bool".to_string()).to_rust_type_str(),
+            "__cxx_atomic_impl_bool"
+        );
+        assert_eq!(
+            CppType::Pointer {
+                pointee: Box::new(CppType::Named("__cxx_atomic_base_impl_bool".to_string())),
+                is_const: true,
+            }
+            .to_rust_type_str(),
+            "*const __cxx_atomic_impl_bool"
         );
     }
 

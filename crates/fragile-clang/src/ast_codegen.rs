@@ -19179,6 +19179,9 @@ impl AstCodeGen {
         self.writeln("    pub fn new_0() -> Self { Default::default() }");
         self.writeln("    pub fn new_1(_val: bool) -> Self { Self { __a_value: _val } }");
         self.writeln("}");
+        self.writeln("pub type __cxx_atomic_base_impl_bool = __cxx_atomic_impl_bool;");
+        self.generated_aliases
+            .insert("__cxx_atomic_base_impl_bool".to_string());
         self.generated_structs
             .insert("__cxx_atomic_impl_bool".to_string());
         self.writeln("");
@@ -19187,21 +19190,21 @@ impl AstCodeGen {
         // Use generic type parameter for memory_order since the enum is generated later
         self.writeln("// Atomic operation stubs for libc++ atomics");
         self.writeln("#[inline]");
-        self.writeln("pub fn __cxx_atomic_load___cxx_atomic_base_impl_bool<M>(_ptr: *const __cxx_atomic_impl_bool, _order: M) -> bool {");
+        self.writeln("pub fn __cxx_atomic_load___cxx_atomic_base_impl_bool<M>(_ptr: *const __cxx_atomic_base_impl_bool, _order: M) -> bool {");
         self.indent += 1;
         self.writeln("let _ = _order;");
         self.writeln("unsafe { (*_ptr).__a_value }");
         self.indent -= 1;
         self.writeln("}");
         self.writeln("#[inline]");
-        self.writeln("pub fn __cxx_atomic_store___cxx_atomic_base_impl_bool<M>(_ptr: *mut __cxx_atomic_impl_bool, _val: bool, _order: M) {");
+        self.writeln("pub fn __cxx_atomic_store___cxx_atomic_base_impl_bool<M>(_ptr: *mut __cxx_atomic_base_impl_bool, _val: bool, _order: M) {");
         self.indent += 1;
         self.writeln("let _ = _order;");
         self.writeln("unsafe { (*_ptr).__a_value = _val; }");
         self.indent -= 1;
         self.writeln("}");
         self.writeln("#[inline]");
-        self.writeln("pub fn __cxx_atomic_exchange___cxx_atomic_base_impl_bool<M>(_ptr: *mut __cxx_atomic_impl_bool, _val: bool, _order: M) -> bool {");
+        self.writeln("pub fn __cxx_atomic_exchange___cxx_atomic_base_impl_bool<M>(_ptr: *mut __cxx_atomic_base_impl_bool, _val: bool, _order: M) -> bool {");
         self.indent += 1;
         self.writeln("let _ = _order;");
         self.writeln("unsafe { let old = (*_ptr).__a_value; (*_ptr).__a_value = _val; old }");
@@ -42140,6 +42143,18 @@ mod tests {
             code.matches("pub struct __cxx_atomic_impl___cxx_contention_t").count(),
             1,
             "__cxx_atomic_impl___cxx_contention_t should be emitted once from preamble only, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("pub type __cxx_atomic_base_impl_bool = __cxx_atomic_impl_bool;"),
+            "__cxx atomic bool base alias should be emitted in preamble, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains(
+                "pub fn __cxx_atomic_load___cxx_atomic_base_impl_bool<M>(_ptr: *const __cxx_atomic_base_impl_bool, _order: M) -> bool"
+            ),
+            "atomic load helper signature should use normalized __cxx_atomic_base_impl_bool alias, got:\n{}",
             code
         );
     }
