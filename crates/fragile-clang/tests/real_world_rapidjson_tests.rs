@@ -51,6 +51,13 @@ const RAPIDJSON_ATOMIC_BASE_ALIAS_MISSING_TYPE_FRAGMENT: &str =
     "cannot find type `__cxx_atomic_base_impl_bool` in this scope";
 const RAPIDJSON_ARRAY_MUT_PTR_CAST_ERROR_FRAGMENT: &str =
     "non-primitive cast: `[i8; 65536]` as `*mut i8`";
+const RAPIDJSON_NON_PRIMITIVE_CAST_ERROR_FRAGMENT: &str = "non-primitive cast:";
+const RAPIDJSON_NON_PRIMITIVE_CAST_E0605_FRAGMENT: &str = "error[E0605]";
+const RAPIDJSON_ITEM5_CAST_DECAY_CALL_SHAPE_MARKERS: &[&str] = &[
+    RAPIDJSON_ARRAY_MUT_PTR_CAST_ERROR_FRAGMENT,
+    RAPIDJSON_NON_PRIMITIVE_CAST_ERROR_FRAGMENT,
+    RAPIDJSON_NON_PRIMITIVE_CAST_E0605_FRAGMENT,
+];
 const RAPIDJSON_FILTERKEYDOM_PLACEHOLDER_API_HOLE_MARKERS: &[&str] = &[
     "no function or associated item named `new_0` found for struct `FilterKeyReader_FileReadStream`",
     "no method named `Populate` found for struct `GenericDocument_UTF8_`",
@@ -2264,11 +2271,14 @@ fn test_real_world_rapidjson_strict_filterkeydom_compile_capture() {
         "strict filterkeydom replay should not regress to unresolved __cxx_atomic_base_impl_bool alias types, got:\n{}",
         first_stderr
     );
-    assert!(
-        !first_stderr.contains(RAPIDJSON_ARRAY_MUT_PTR_CAST_ERROR_FRAGMENT),
-        "strict filterkeydom replay should not regress to non-primitive array-to-pointer cast diagnostics for readBuffer/writeBuffer, got:\n{}",
-        first_stderr
-    );
+    for marker in RAPIDJSON_ITEM5_CAST_DECAY_CALL_SHAPE_MARKERS {
+        assert!(
+            !first_stderr.contains(marker),
+            "strict filterkeydom replay should not regress to item-5 cast/decay/call-shape marker `{}`, got:\n{}",
+            marker,
+            first_stderr
+        );
+    }
 
     let first_class = fs::read_to_string(log_dir.join("first_failing_compile_class.txt"))
         .expect("failed to read first_failing_compile_class.txt");
@@ -2354,11 +2364,14 @@ fn test_real_world_rapidjson_cmake_no_tests_full_build_with_fragilec_capture_fir
             "strict rapidjson no-tests replay should not regress to unresolved __cxx_atomic_base_impl_bool alias types, got:\n{}",
             stream
         );
-        assert!(
-            !stream.contains(RAPIDJSON_ARRAY_MUT_PTR_CAST_ERROR_FRAGMENT),
-            "strict rapidjson no-tests replay should not regress to non-primitive array-to-pointer cast diagnostics for readBuffer/writeBuffer, got:\n{}",
-            stream
-        );
+        for marker in RAPIDJSON_ITEM5_CAST_DECAY_CALL_SHAPE_MARKERS {
+            assert!(
+                !stream.contains(marker),
+                "strict rapidjson no-tests replay should not regress to item-5 cast/decay/call-shape marker `{}`, got:\n{}",
+                marker,
+                stream
+            );
+        }
     }
     if build_status != 0 {
         assert!(
