@@ -70,6 +70,21 @@ impl ClangParser {
         Self::with_vendored_libcxx_paths_defines_and_language(include_paths, defines, language)
     }
 
+    /// Create a new Clang parser with custom include paths, defines, language mode, and ignored errors.
+    pub fn with_paths_defines_language_and_ignored_errors(
+        include_paths: Vec<String>,
+        defines: Vec<String>,
+        language: ParserLanguage,
+        ignored_error_patterns: Vec<String>,
+    ) -> Result<Self> {
+        Self::with_vendored_libcxx_full_options(
+            include_paths,
+            defines,
+            ignored_error_patterns,
+            language,
+        )
+    }
+
     /// Create a new Clang parser with custom include paths, defines, and ignored errors (and vendored libc++).
     pub fn with_paths_defines_and_ignored_errors(
         include_paths: Vec<String>,
@@ -248,11 +263,11 @@ impl ClangParser {
         let mut args = match self.language {
             ParserLanguage::Cpp => {
                 let mut cpp_args = vec![
-                CString::new("-x").unwrap(),
-                CString::new("c++").unwrap(),
-                CString::new("-std=c++20").unwrap(),
-                // Disable builtin limits on stack depth for templates
-                CString::new("-ftemplate-depth=1024").unwrap(),
+                    CString::new("-x").unwrap(),
+                    CString::new("c++").unwrap(),
+                    CString::new("-std=c++20").unwrap(),
+                    // Disable builtin limits on stack depth for templates
+                    CString::new("-ftemplate-depth=1024").unwrap(),
                 ];
 
                 if self.use_vendored_libcxx {
@@ -4415,6 +4430,95 @@ mod tests {
             ClangNodeKind::TranslationUnit => {}
             _ => panic!("Expected TranslationUnit"),
         }
+    }
+
+    #[test]
+    fn test_parse_file_reports_const_member_assignment_without_ignore_pattern() {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock must be monotonic")
+            .as_nanos();
+        let temp_dir =
+            std::env::temp_dir().join(format!("fragile_parse_const_assign_fail_{}", stamp));
+        std::fs::create_dir_all(&temp_dir).expect("failed to create temp dir");
+        let source = temp_dir.join("rapidjson_like.cpp");
+        std::fs::write(
+            &source,
+            r#"
+typedef unsigned int SizeType;
+template<typename CharType>
+struct GenericStringRef {
+    const CharType* const s;
+    const SizeType length;
+    GenericStringRef(const CharType* str, SizeType len) : s(str), length(len) {}
+    GenericStringRef& operator=(const GenericStringRef& rhs) { length = rhs.length; return *this; }
+};
+int main() { return 0; }
+"#,
+        )
+        .expect("failed to write source");
+
+        let parser = ClangParser::with_paths_defines_and_language(
+            Vec::new(),
+            Vec::new(),
+            ParserLanguage::Cpp,
+        )
+        .expect("failed to create parser");
+        let err = parser
+            .parse_file(&source)
+            .expect_err("parse should fail without ignored diagnostic pattern");
+        let err_text = err.to_string();
+        assert!(
+            err_text.contains("cannot assign to non-static data member 'length'"),
+            "expected const-member assignment diagnostic, got:\n{}",
+            err_text
+        );
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_parse_file_accepts_const_member_assignment_with_ignore_pattern() {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock must be monotonic")
+            .as_nanos();
+        let temp_dir =
+            std::env::temp_dir().join(format!("fragile_parse_const_assign_ignore_{}", stamp));
+        std::fs::create_dir_all(&temp_dir).expect("failed to create temp dir");
+        let source = temp_dir.join("rapidjson_like.cpp");
+        std::fs::write(
+            &source,
+            r#"
+typedef unsigned int SizeType;
+template<typename CharType>
+struct GenericStringRef {
+    const CharType* const s;
+    const SizeType length;
+    GenericStringRef(const CharType* str, SizeType len) : s(str), length(len) {}
+    GenericStringRef& operator=(const GenericStringRef& rhs) { length = rhs.length; return *this; }
+};
+int main() { return 0; }
+"#,
+        )
+        .expect("failed to write source");
+
+        let parser = ClangParser::with_paths_defines_language_and_ignored_errors(
+            Vec::new(),
+            Vec::new(),
+            ParserLanguage::Cpp,
+            vec!["cannot assign to non-static data member 'length'".to_string()],
+        )
+        .expect("failed to create parser");
+        let ast = parser
+            .parse_file(&source)
+            .expect("parse should succeed when diagnostic pattern is ignored");
+        assert!(
+            matches!(ast.translation_unit.kind, ClangNodeKind::TranslationUnit),
+            "expected translation unit root"
+        );
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 
     #[test]

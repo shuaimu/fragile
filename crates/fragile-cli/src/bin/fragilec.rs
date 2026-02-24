@@ -15,6 +15,8 @@ const FRAGILEC_ENFORCE_BUILD_ID_ENV: &str = "FRAGILEC_ENFORCE_BUILD_ID";
 const FRAGILEC_REQUIRE_META_ENV: &str = "FRAGILEC_REQUIRE_META";
 const FRAGILEC_KEEP_RS_ENV: &str = "FRAGILEC_KEEP_RS";
 const FRAGILEC_LINKER_ENV: &str = "FRAGILEC_LINKER";
+const RAPIDJSON_GENERIC_STRING_REF_CONST_ASSIGN_DIAGNOSTIC: &str =
+    "cannot assign to non-static data member 'length' with const-qualified type 'const SizeType'";
 
 fn validate_strict_mode_value(mode: &str) -> Result<(), String> {
     match mode.to_ascii_lowercase().as_str() {
@@ -220,6 +222,14 @@ fn source_language(source: &Path) -> ParserLanguage {
     }
 }
 
+fn strict_parser_ignored_error_patterns(language: ParserLanguage) -> Vec<String> {
+    if language == ParserLanguage::Cpp {
+        vec![RAPIDJSON_GENERIC_STRING_REF_CONST_ASSIGN_DIAGNOSTIC.to_string()]
+    } else {
+        Vec::new()
+    }
+}
+
 fn crate_name_for_source(source: &Path) -> String {
     let raw = source
         .file_stem()
@@ -401,10 +411,12 @@ fn strict_compile_source_to_object(
         })?;
     }
 
-    let parser = ClangParser::with_paths_defines_and_language(
+    let language = source_language(&source);
+    let parser = ClangParser::with_paths_defines_language_and_ignored_errors(
         includes.to_vec(),
         defines.to_vec(),
-        source_language(&source),
+        language,
+        strict_parser_ignored_error_patterns(language),
     )
     .map_err(|e| {
         format!(
@@ -998,6 +1010,19 @@ mod tests {
     }
 
     #[test]
+    fn strict_parser_ignored_patterns_are_cpp_only() {
+        let cpp = strict_parser_ignored_error_patterns(ParserLanguage::Cpp);
+        assert!(
+            cpp.iter()
+                .any(|p| p.contains("const-qualified type 'const SizeType'")),
+            "cpp strict parser should ignore rapidjson const-assignment diagnostic"
+        );
+
+        let c = strict_parser_ignored_error_patterns(ParserLanguage::C);
+        assert!(c.is_empty(), "c strict parser should not add c++ patterns");
+    }
+
+    #[test]
     fn strict_mode_validation_accepts_strict() {
         assert!(
             validate_strict_mode_value("strict").is_ok(),
@@ -1185,6 +1210,47 @@ mod tests {
         assert!(
             object_defines_main_symbol(&out_obj).expect("failed to inspect object symbols"),
             "strict-compiled object should define main symbol: {}",
+            out_obj.display()
+        );
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn strict_compile_ignores_rapidjson_const_assignment_parser_diagnostic() {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock must be monotonic")
+            .as_nanos();
+        let temp_dir = std::env::temp_dir().join(format!(
+            "fragilec_rapidjson_const_assign_diag_test_{}",
+            stamp
+        ));
+        fs::create_dir_all(&temp_dir).expect("failed to create temp dir");
+        let source = temp_dir.join("rapidjson_like.cpp");
+        let out_obj = temp_dir.join("rapidjson_like.o");
+        fs::write(
+            &source,
+            r#"
+typedef unsigned int SizeType;
+template<typename CharType>
+struct GenericStringRef {
+    const CharType* const s;
+    const SizeType length;
+    GenericStringRef(const CharType* str, SizeType len) : s(str), length(len) {}
+    GenericStringRef& operator=(const GenericStringRef& rhs) { length = rhs.length; return *this; }
+};
+int main() { return 0; }
+"#,
+        )
+        .expect("failed to write source");
+
+        strict_compile_source_to_object(&source, &out_obj, &[], &[], &[]).expect(
+            "strict compile should tolerate known rapidjson const-member assignment parse diagnostic",
+        );
+        assert!(
+            out_obj.exists(),
+            "expected object output at {}",
             out_obj.display()
         );
 
