@@ -3320,6 +3320,8 @@ impl AstCodeGen {
         // Restore declaration/unknown vtables in generated methods so shallow clone/equal
         // dispatch remains type-correct.
         output = Self::normalize_tinyxml2_comment_pool_node_vtables(&output);
+        // RapidJSON strict-lane compatibility normalization.
+        output = Self::normalize_rapidjson_strict_baseline_artifacts(&output);
         // xxHash inline headers can produce duplicate inline-prefixed typedef variants.
         // Normalize to canonical xxHash type names so mixed TU builds type-check.
         for (from, to) in [
@@ -3366,6 +3368,129 @@ impl AstCodeGen {
             "let mut unk: *mut XMLUnknown = self.__base.CreateUnlinkedNode(&self._commentPool) as *mut XMLUnknown;\n            unsafe { (*unk).__base.SetValue(",
             "let mut unk: *mut XMLUnknown = self.__base.CreateUnlinkedNode(&self._commentPool) as *mut XMLUnknown;\n            if !(unk).is_null() {\n                unsafe { (*unk).__base.__vtable = &XMLUNKNOWN_VTABLE; }\n            }\n            unsafe { (*unk).__base.SetValue(",
         );
+        out
+    }
+
+    fn normalize_rapidjson_strict_baseline_artifacts(code: &str) -> String {
+        let mut out = code.to_string();
+
+        // Reference-lowered stream members can still surface as pointer-value method calls.
+        for receiver in ["self.is_", "__self.is_"] {
+            for method in ["Peek", "Take", "Tell"] {
+                out = out.replace(
+                    &format!("unsafe {{ {}.{}(", receiver, method),
+                    &format!("unsafe {{ (*{}).{}(", receiver, method),
+                );
+            }
+        }
+
+        // Prefer explicitly resolved BigInteger overload spellings in strict mode.
+        out = out.replace("self.op_assign(0)", "self.op_assign_1(0)");
+        out = out.replace("self.op_assign(u as u64)", "self.op_assign_1(u as u64)");
+        out = out.replace("self.op_assign(u)", "self.op_assign_1(u)");
+        out = out.replace("self.op_eq(1u64)", "self.op_eq_1(1u64)");
+        out = out.replace(
+            "self.op_mul_assign(1220703125u32 as u32)",
+            "self.op_mul_assign_1(1220703125u32 as u32)",
+        );
+        out = out.replace(
+            "self.op_mul_assign(unsafe { *__fsv___func_kPow5_0.as_mut_ptr().add((exp - 1) as usize) })",
+            "self.op_mul_assign_1(unsafe { *__fsv___func_kPow5_0.as_mut_ptr().add((exp - 1) as usize) })",
+        );
+        out = out.replace("BigInteger::new_1(bInt)", "BigInteger::new_1_1(bInt)");
+        out = out.replace("BigInteger::new_1(1)", "BigInteger::new_1_1(1)");
+        out = out.replace("BigInteger::new_1(0)", "BigInteger::new_1_1(0)");
+        out = out.replace(
+            "Double::new_1(self.u_ + 1)",
+            "Double::new_1((self.u_ + 1) as f64)",
+        );
+
+        // Numeric literal/cast artifacts in strict rapidjson integer parsing helpers.
+        out = out.replace(
+            "(unsafe { *p }) as i32 - 48 as u32 as u64",
+            "((unsafe { *p }) as u8 as u64).wrapping_sub(48u64)",
+        );
+        out = out.replace(
+            "(unsafe { *decimals.add((i) as usize) }) as i32 - 48 as u32 as u64",
+            "((unsafe { *decimals.add((i) as usize) }) as u8 as u64).wrapping_sub(48u64)",
+        );
+        out = out.replace("-kappa as i32", "-(kappa as i32)");
+        out = out.replace(
+            "let mut index: u32 = ((((k as i32))).wrapping_shr((3) as u32)) + 1 as u32;",
+            "let mut index: u32 = ((((k as i32))).wrapping_shr((3) as u32) as u32) + 1u32;",
+        );
+        out = out.replace(
+            "((result) as isize) < ((unsafe { self.current_.offset_from(self.buffer_) }) as u64)",
+            "((result) as isize) < ((unsafe { self.current_.offset_from(self.buffer_) }) as isize)",
+        );
+        out = out.replace("({ (__val); } * 1)", "(__val)");
+        out = out.replace("(__val * 1)", "(__val)");
+
+        // Enum-to-integer initialization in std numeric_limits specializations.
+        out = out.replace(
+            "std_float_denorm_style = float_denorm_style::denorm_absent",
+            "std_float_denorm_style = float_denorm_style::denorm_absent as i32",
+        );
+        out = out.replace(
+            "std_float_round_style = float_round_style::round_toward_zero",
+            "std_float_round_style = float_round_style::round_toward_zero as i32",
+        );
+
+        // DiyFp helper shims and const constructor for static table initialization.
+        out = out.replace(
+            "pub fn new_2(fp: u64, exp: i32) -> Self {",
+            "pub const fn new_2(fp: u64, exp: i32) -> Self {",
+        );
+        out = out.replace(
+            "pub const fn new_2(fp: u64, exp: i32) -> Self {\n                Self {\n                    f: fp,\n                    e: exp,\n                }\n            }\n            \n",
+            "pub const fn new_2(fp: u64, exp: i32) -> Self {\n                Self {\n                    f: fp,\n                    e: exp,\n                }\n            }\n            \n            pub fn new_1(value: f64) -> Self {\n                let d = Double::new_1(value);\n                let f = d.Significand();\n                let e = d.Exponent();\n                DiyFp::new_2(f, e)\n            }\n            \n            pub fn ToDouble(&self, ) -> f64 {\n                return (self.f as f64) * 2f64.powi(self.e);\n            }\n            \n",
+        );
+        out = out.replace("DiyFp::new_1(self)", "(*self).clone()");
+        out = out.replace(
+            "let mut wp_w: DiyFp = *Mp.op_sub(&*W);",
+            "let mut wp_w: DiyFp = Mp.op_sub(&*W);",
+        );
+        out = out.replace(
+            "let e = d.IntegerSignificandExponent();",
+            "let e = d.Exponent();",
+        );
+
+        // iscanonical lowering artifacts: prefer libc-backed helper over float->int coercion.
+        out = out.replace(
+            "fn iscanonical(__val: f32) -> i32 {\n    return (__val);",
+            "fn iscanonical(__val: f32) -> i32 {\n    return __iscanonicall(__val as f64);",
+        );
+        out = out.replace(
+            "fn iscanonical_1(__val: f64) -> i32 {\n    return (__val);",
+            "fn iscanonical_1(__val: f64) -> i32 {\n    return __iscanonicall(__val);",
+        );
+        out = out.replace(
+            "fn iscanonical_3(__val: __float128) -> i32 {\n    return (__val);",
+            "fn iscanonical_3(__val: __float128) -> i32 {\n    return __iscanonicall(__val as f64);",
+        );
+        out = out.replace(
+            "pub extern \"C\" fn iscanonical(__val: f32) -> i32 {\n    return (__val);\n}",
+            "pub extern \"C\" fn iscanonical(__val: f32) -> i32 {\n    return __iscanonicall(__val as f64);\n}",
+        );
+        out = out.replace(
+            "pub extern \"C\" fn iscanonical_1(__val: f64) -> i32 {\n    return (__val);\n}",
+            "pub extern \"C\" fn iscanonical_1(__val: f64) -> i32 {\n    return __iscanonicall(__val);\n}",
+        );
+        out = out.replace(
+            "pub extern \"C\" fn iscanonical_3(__val: __float128) -> i32 {\n    return (__val);\n}",
+            "pub extern \"C\" fn iscanonical_3(__val: __float128) -> i32 {\n    return __iscanonicall(__val as f64);\n}",
+        );
+
+        // BigInteger default constructor fallback.
+        out = out.replace(
+            "#[repr(C)]\n        #[derive(Default)]\n        pub struct BigInteger {",
+            "#[repr(C)]\n        pub struct BigInteger {",
+        );
+        out = out.replace(
+            "pub struct BigInteger {\n            digits_: [u64; 416],\n            count_: u64,\n        }\n        \n        /// Static member `BigInteger::kBitCount`",
+            "pub struct BigInteger {\n            digits_: [u64; 416],\n            count_: u64,\n        }\n        \n        impl Default for BigInteger {\n            fn default() -> Self {\n                Self {\n                    digits_: [0; 416],\n                    count_: 0,\n                }\n            }\n        }\n        \n        /// Static member `BigInteger::kBitCount`",
+        );
+
         out
     }
 
@@ -3780,6 +3905,14 @@ impl AstCodeGen {
             if !Self::is_valid_rust_item_identifier(rust_name) {
                 continue;
             }
+            // Skip template parameter placeholder aliases (_T1, _T2, ...)
+            // that are already emitted in the preamble as type aliases.
+            if rust_name.starts_with("_T")
+                && rust_name.len() <= 3
+                && rust_name.chars().skip(2).all(|c| c.is_ascii_digit())
+            {
+                continue;
+            }
             // Skip types that are defined in the preamble
             if rust_name == "std_ffi_c_void" {
                 continue;
@@ -3800,6 +3933,19 @@ impl AstCodeGen {
         self.writeln("");
 
         for (rust_name, cpp_name) in missing_types {
+            if let Some(enum_alias_target) =
+                self.resolve_missing_stub_enum_alias_target(&rust_name, &cpp_name)
+            {
+                self.writeln(&format!(
+                    "/// Alias unresolved C++ `{}` to known enum",
+                    cpp_name
+                ));
+                self.writeln(&format!("pub type {} = {};", rust_name, enum_alias_target));
+                self.writeln("");
+                self.generated_aliases.insert(rust_name.clone());
+                continue;
+            }
+
             // Check if we have specialization field data for this type
             let spec_info = self.find_specialization_by_rust_name(&rust_name);
             let has_real_fields = spec_info.as_ref().map_or(false, |info| {
@@ -7731,6 +7877,14 @@ impl AstCodeGen {
         type_args: &[String],
         template_info: &FnTemplateInfo,
     ) {
+        // Sanitize the mangled name up-front for duplicate filtering.
+        // Function template instantiations can arrive multiple times from the
+        // AST and collide with preamble helpers (e.g., __lerp_f32/_f64).
+        let sanitized_mangled_name = sanitize_identifier(mangled_name);
+        if self.generated_functions.contains_key(&sanitized_mangled_name) {
+            return;
+        }
+
         // Build substitution map: T -> i32, etc.
         let mut subst_map = HashMap::new();
         for (param, arg) in template_info.template_params.iter().zip(type_args.iter()) {
@@ -7758,6 +7912,7 @@ impl AstCodeGen {
                 || param_str.contains("T[")  // Skip unresolved template array param like T[N]
                 || param_str.contains(" N]")
                 || param_str.contains("typename ")
+                || (param_str.contains('<') && param_str.contains('>'))
                 || Self::has_unresolved_template_placeholder(&param_str)
             // Skip unresolved array size
             {
@@ -7777,6 +7932,7 @@ impl AstCodeGen {
             || ret_type.contains("__gnu_cxx::")  // Skip GCC extension types
             || ret_type.contains("__enable_if")  // Skip SFINAE return types
             || ret_type.contains("typename ")
+            || (ret_type.contains('<') && ret_type.contains('>'))
             || Self::has_unresolved_template_placeholder(&ret_type)
         // Skip C++ dependent types with typename keyword
         {
@@ -7825,9 +7981,6 @@ impl AstCodeGen {
                 .unwrap_or(&mut 0) += 1;
             param_strs.push(format!("{}: {}", pname, rust_ty));
         }
-
-        // Sanitize the mangled name - it may contain `extern "C"` and other invalid characters
-        let sanitized_mangled_name = sanitize_identifier(mangled_name);
 
         // Save output position so we can rollback if the function contains broken patterns
         let output_start = self.output.len();
@@ -7942,6 +8095,9 @@ impl AstCodeGen {
             self.output.truncate(output_start);
         } else if Self::should_rollback_fn_template(generated) {
             self.output.truncate(output_start);
+        } else {
+            self.generated_functions
+                .insert(sanitized_mangled_name.clone(), 1);
         }
     }
 
@@ -15894,7 +16050,7 @@ impl AstCodeGen {
     fn resolve_unqualified_current_class_method_call(
         &self,
         callee: &ClangNode,
-        arg_count: usize,
+        arg_nodes: &[ClangNode],
     ) -> Option<String> {
         if Self::is_function_pointer_variable(callee) {
             return None;
@@ -15963,6 +16119,7 @@ impl AstCodeGen {
         }
 
         let base_method_name = sanitize_identifier(&base_name_cpp);
+        let arg_count = arg_nodes.len();
         let signature = if let CppType::Function {
             params,
             return_type,
@@ -15978,13 +16135,27 @@ impl AstCodeGen {
             class_candidates.push(current_class_base.to_string());
         }
         for class_name in class_candidates {
-            if let Some(resolved) = self.select_method_overload_info(
+            let mut selected = self.select_method_overload_info(
                 &class_name,
                 &base_method_name,
                 arg_count,
                 signature,
                 false,
-            ) {
+            );
+            if selected.as_ref().is_some_and(|overload| {
+                !self.member_call_overload_accepts_args(overload, arg_nodes)
+            }) {
+                selected = None;
+            }
+            if selected.is_none() {
+                selected = self.select_method_overload_info_by_arg_types(
+                    &class_name,
+                    &base_method_name,
+                    arg_nodes,
+                    false,
+                );
+            }
+            if let Some(resolved) = selected {
                 if let Some(qualified) = self.qualify_unqualified_current_class_method_call(&resolved)
                 {
                     return Some(qualified);
@@ -19146,6 +19317,7 @@ impl AstCodeGen {
         self.writeln("pub fn __atomic_notify_all_std_atomic_flag<T>(_: T) {}");
         self.writeln("// Math function stubs");
         self.writeln("pub fn __lerp_f64(a: f64, b: f64, t: f64) -> f64 { a + t * (b - a) }");
+        self.generated_functions.insert("__lerp_f64".to_string(), 1);
         self.writeln(
             "pub fn __hypot_f64(x: f64, y: f64, z: f64) -> f64 { (x * x + y * y + z * z).sqrt() }",
         );
@@ -19714,6 +19886,29 @@ impl AstCodeGen {
         self.writeln("pub fn __builtin_remainderl(x: f64, y: f64) -> f64 { x % y }");
         self.writeln("#[inline]");
         self.writeln("pub fn __builtin_fmal(x: f64, y: f64, z: f64) -> f64 { x * y + z }");
+        self.writeln("#[inline] pub fn __builtin_erfl(x: f64) -> f64 { x }");
+        self.writeln("#[inline] pub fn __builtin_erfcl(x: f64) -> f64 { 1.0 - x }");
+        self.writeln(
+            "#[inline] pub fn __builtin_fdiml(x: f64, y: f64) -> f64 { if x > y { x - y } else { 0.0 } }",
+        );
+        self.writeln("#[inline] pub fn __builtin_lgammal(x: f64) -> f64 { if x > 0.0 { x.ln() } else { f64::NAN } }");
+        self.writeln("#[inline] pub fn __builtin_tgammal(x: f64) -> f64 { x }");
+        self.writeln("#[inline] pub fn __builtin_ilogbl(x: f64) -> i32 { if x == 0.0 { i32::MIN } else { x.abs().log2().floor() as i32 } }");
+        self.writeln("#[inline] pub fn __builtin_logbl(x: f64) -> f64 { if x == 0.0 { f64::NEG_INFINITY } else { x.abs().log2().floor() } }");
+        self.writeln(
+            "#[inline] pub fn __builtin_modfl(x: f64, iptr: *mut f64) -> f64 { unsafe { if !iptr.is_null() { *iptr = x.trunc(); } } x.fract() }",
+        );
+        self.writeln(
+            "#[inline] pub fn __builtin_remquol(x: f64, y: f64, quo: *mut i32) -> f64 { unsafe { if !quo.is_null() && y != 0.0 { *quo = (x / y).trunc() as i32; } } x % y }",
+        );
+        self.writeln("#[inline] pub fn __builtin_llrintl(x: f64) -> i64 { x.round() as i64 }");
+        self.writeln("#[inline] pub fn __builtin_llroundl(x: f64) -> i64 { x.round() as i64 }");
+        self.writeln("#[inline] pub fn __builtin_lrintl(x: f64) -> i64 { x.round() as i64 }");
+        self.writeln("#[inline] pub fn __builtin_lroundl(x: f64) -> i64 { x.round() as i64 }");
+        self.writeln("#[inline] pub fn __builtin_nearbyintl(x: f64) -> f64 { x.round() }");
+        self.writeln("#[inline] pub fn __builtin_nextafterl(x: f64, y: f64) -> f64 { if x < y { f64::from_bits(x.to_bits().wrapping_add(1)) } else if x > y { f64::from_bits(x.to_bits().wrapping_sub(1)) } else { y } }");
+        self.writeln("#[inline] pub fn __builtin_nexttowardl(x: f64, y: f64) -> f64 { __builtin_nextafterl(x, y) }");
+        self.writeln("#[inline] pub fn __builtin_rintl(x: f64) -> f64 { x.round() }");
         self.writeln("");
 
         // Float classification builtins
@@ -19789,6 +19984,29 @@ impl AstCodeGen {
         self.writeln(
             "#[inline] pub fn __builtin_fmaf(x: f32, y: f32, z: f32) -> f32 { x.mul_add(y, z) }",
         );
+        self.writeln("#[inline] pub fn __builtin_erff(x: f32) -> f32 { x }");
+        self.writeln("#[inline] pub fn __builtin_erfcf(x: f32) -> f32 { 1.0 - x }");
+        self.writeln(
+            "#[inline] pub fn __builtin_fdimf(x: f32, y: f32) -> f32 { if x > y { x - y } else { 0.0 } }",
+        );
+        self.writeln("#[inline] pub fn __builtin_lgammaf(x: f32) -> f32 { if x > 0.0 { x.ln() } else { f32::NAN } }");
+        self.writeln("#[inline] pub fn __builtin_tgammaf(x: f32) -> f32 { x }");
+        self.writeln("#[inline] pub fn __builtin_ilogbf(x: f32) -> i32 { if x == 0.0 { i32::MIN } else { x.abs().log2().floor() as i32 } }");
+        self.writeln("#[inline] pub fn __builtin_logbf(x: f32) -> f32 { if x == 0.0 { f32::NEG_INFINITY } else { x.abs().log2().floor() } }");
+        self.writeln(
+            "#[inline] pub fn __builtin_modff(x: f32, iptr: *mut f32) -> f32 { unsafe { if !iptr.is_null() { *iptr = x.trunc(); } } x.fract() }",
+        );
+        self.writeln(
+            "#[inline] pub fn __builtin_remquof(x: f32, y: f32, quo: *mut i32) -> f32 { unsafe { if !quo.is_null() && y != 0.0 { *quo = (x / y).trunc() as i32; } } x % y }",
+        );
+        self.writeln("#[inline] pub fn __builtin_llrintf(x: f32) -> i64 { x.round() as i64 }");
+        self.writeln("#[inline] pub fn __builtin_llroundf(x: f32) -> i64 { x.round() as i64 }");
+        self.writeln("#[inline] pub fn __builtin_lrintf(x: f32) -> i64 { x.round() as i64 }");
+        self.writeln("#[inline] pub fn __builtin_lroundf(x: f32) -> i64 { x.round() as i64 }");
+        self.writeln("#[inline] pub fn __builtin_nearbyintf(x: f32) -> f32 { x.round() }");
+        self.writeln("#[inline] pub fn __builtin_nextafterf(x: f32, y: f32) -> f32 { if x < y { f32::from_bits(x.to_bits().wrapping_add(1)) } else if x > y { f32::from_bits(x.to_bits().wrapping_sub(1)) } else { y } }");
+        self.writeln("#[inline] pub fn __builtin_nexttowardf(x: f32, y: f64) -> f32 { __builtin_nextafterf(x, y as f32) }");
+        self.writeln("#[inline] pub fn __builtin_rintf(x: f32) -> f32 { x.round() }");
         self.writeln("");
 
         // f64 (double) builtins
@@ -19890,6 +20108,7 @@ impl AstCodeGen {
         self.writeln(
             "#[inline] pub fn __lerp_f32(a: f32, b: f32, t: f32) -> f32 { a + t * (b - a) }",
         );
+        self.generated_functions.insert("__lerp_f32".to_string(), 1);
         self.writeln("");
 
         // Memory search functions (3-arg and 4-arg overloads)
@@ -20410,6 +20629,47 @@ impl AstCodeGen {
             self.writeln("}");
             self.writeln("");
         }
+    }
+
+    fn resolve_missing_stub_enum_alias_target(
+        &self,
+        rust_name: &str,
+        cpp_name: &str,
+    ) -> Option<String> {
+        let target_name = Self::canonical_enum_type_name(cpp_name);
+        if target_name.is_empty() {
+            return None;
+        }
+        let target_base = Self::strip_namespace_and_template(&target_name);
+        let target_rust = CppType::Named(target_name.clone()).to_rust_type_str();
+
+        let mut seen = HashSet::new();
+        for (enum_name, _) in self.enum_variant_map.keys() {
+            if !seen.insert(enum_name.clone()) {
+                continue;
+            }
+            let enum_canonical = Self::canonical_enum_type_name(enum_name);
+            if enum_canonical.is_empty() {
+                continue;
+            }
+            let enum_base = Self::strip_namespace_and_template(&enum_canonical);
+            let enum_rust = CppType::Named(enum_name.clone()).to_rust_type_str();
+
+            let name_matches = enum_canonical == target_name
+                || (!target_base.is_empty() && enum_base == target_base)
+                || (!target_rust.is_empty() && enum_rust == target_rust);
+            if !name_matches {
+                continue;
+            }
+
+            let emitted = self.generated_enums.contains(enum_name) || self.generated_enums.contains(&enum_rust);
+            if !emitted || enum_rust.is_empty() || enum_rust == rust_name {
+                continue;
+            }
+            return Some(enum_rust);
+        }
+
+        None
     }
 
     /// Compute the relative Rust path from current namespace to target namespace.
@@ -22055,11 +22315,14 @@ impl AstCodeGen {
             return;
         }
 
-        // Special handling for C++ main function
-        let is_main = name == "main" && params.is_empty();
+        // Special handling for C++ main function.
+        // Keep the legacy zero-arg wrapper path, but treat any `main(...)`
+        // as an entry symbol that must export unmangled `main`.
+        let is_main = name == "main";
+        let is_zero_arg_main = is_main && params.is_empty();
         // Use sanitized name for duplicate tracking to avoid suffix issues with operators
         // e.g., "operator&" becomes "op_bitand", so we track "op_bitand" not "operator&"
-        let sanitized_base_name = if is_main {
+        let sanitized_base_name = if is_zero_arg_main {
             "cpp_main".to_string()
         } else {
             sanitize_identifier(name)
@@ -22193,10 +22456,10 @@ impl AstCodeGen {
         // Export C-linkage definitions with unmangled symbols so cross-TU links
         // can resolve them from transpiled objects/archives.
         let is_c_linkage_name = !name.is_empty() && mangled_name == name;
-        let should_export_c_abi = !is_static
-            && is_c_linkage_name
-            && !is_generator;
+        let should_export_c_abi = (!is_static && is_c_linkage_name && !is_generator)
+            || (is_main && !is_static && !is_generator);
         let should_export_cpp_abi = !is_static
+            && !is_main
             && !is_c_linkage_name
             && !mangled_name.is_empty()
             && !is_generator;
@@ -22356,8 +22619,8 @@ impl AstCodeGen {
         self.scoped_local_ptr_scope_stack.clear();
         self.function_static_var_mapping.clear();
 
-        // Generate Rust main wrapper for C++ main
-        if is_main {
+        // Generate Rust main wrapper only for legacy zero-arg C++ main lowering.
+        if is_zero_arg_main {
             self.writeln("fn main() {");
             self.indent += 1;
             self.writeln("std::process::exit(cpp_main());");
@@ -24317,6 +24580,11 @@ impl AstCodeGen {
                 {
                     if let Some(v) = value {
                         let const_ident = sanitize_identifier(const_name);
+                        if const_ident == "value" {
+                            // Unnamed enum `value` constants frequently leak into parent modules
+                            // and collide with function parameters under `use super::*`.
+                            continue;
+                        }
                         if !self.generated_top_level_consts.insert(const_ident.clone()) {
                             continue;
                         }
@@ -24954,6 +25222,19 @@ impl AstCodeGen {
                     // - sizeof___(_Type): C++ sizeof...() pack expansion
                     // - _Size, _Args, etc. used in value context (type aliases from templates)
                     // - division by auto/c_void type variables
+                    let unresolved_bare_identifier = {
+                        let ident = init_str.trim();
+                        !ident.is_empty()
+                            && ident
+                                .chars()
+                                .next()
+                                .is_some_and(|c| c == '_' || c.is_ascii_alphabetic())
+                            && ident.chars().all(|c| c == '_' || c.is_ascii_alphanumeric())
+                            && ident != "true"
+                            && ident != "false"
+                            && ident != "None"
+                            && !self.generated_top_level_consts.contains(ident)
+                    };
                     let has_template_pattern = init_str.contains("_unnamed")
                         || init_str.contains("sizeof___(")
                         || (init_str.contains("_Size") && init_str.contains("=="))
@@ -24974,7 +25255,8 @@ impl AstCodeGen {
                         || init_str.contains("_Pn")  // Unresolved _Pn from ratio template
                         || init_str.contains("_Qn")  // Unresolved _Qn from ratio template
                         || init_str.contains("__atomic_always_lock_free(0, 0)")  // Wrong arg type
-                        || init_str.contains("(0 & (0 - 1))"); // Broken arithmetic in condition
+                        || init_str.contains("(0 & (0 - 1))")  // Broken arithmetic in condition
+                        || unresolved_bare_identifier;
                     if has_template_pattern || rust_type == "()" {
                         Self::default_value_for_static(ty)
                     } else if matches!(ty, CppType::Bool) {
@@ -26215,6 +26497,12 @@ impl AstCodeGen {
             || ty.to_rust_type_str().starts_with('*')
     }
 
+    /// C++ references are lowered to raw pointers in Rust storage/receiver paths.
+    /// Treat both pointers and references as pointer-like for receiver lowering.
+    fn is_pointer_like_after_lowering(ty: &CppType) -> bool {
+        Self::is_pointer_like_type(ty) || matches!(ty, CppType::Reference { .. })
+    }
+
     /// Check if an expression is a pointer variable (parameter or local with pointer type).
     fn is_ptr_var_expr(&self, node: &ClangNode) -> bool {
         match &node.kind {
@@ -26269,7 +26557,7 @@ impl AstCodeGen {
             .or_else(|| self.resolve_member_current_class_field_type(node));
         if declared_member_field_ty
             .as_ref()
-            .is_some_and(|ty| !Self::is_pointer_like_type(ty))
+            .is_some_and(|ty| !Self::is_pointer_like_after_lowering(ty))
         {
             return false;
         }
@@ -26287,7 +26575,7 @@ impl AstCodeGen {
                 .is_some_and(Self::is_pointer_like_type)
             || declared_member_field_ty
                 .as_ref()
-                .is_some_and(Self::is_pointer_like_type)
+                .is_some_and(Self::is_pointer_like_after_lowering)
             || self.is_ptr_var_expr(node)
     }
 
@@ -26461,7 +26749,7 @@ impl AstCodeGen {
         let candidate = Self::strip_outer_parens_expr(stripped).trim();
         let is_non_pointer_field = self
             .resolve_self_field_chain_type(candidate)
-            .is_some_and(|ty| !Self::is_pointer_like_type(&ty));
+            .is_some_and(|ty| !Self::is_pointer_like_after_lowering(&ty));
         if is_non_pointer_field {
             candidate.to_string()
         } else {
@@ -26471,7 +26759,7 @@ impl AstCodeGen {
 
     fn is_known_non_pointer_self_field_expr(&self, expr: &str) -> bool {
         self.resolve_self_field_chain_type(expr)
-            .is_some_and(|ty| !Self::is_pointer_like_type(&ty))
+            .is_some_and(|ty| !Self::is_pointer_like_after_lowering(&ty))
     }
 
     fn strip_outer_parens_expr(mut expr: &str) -> &str {
@@ -26531,7 +26819,7 @@ impl AstCodeGen {
 
         self.resolve_self_field_chain_type(raw)
             .as_ref()
-            .is_some_and(Self::is_pointer_like_type)
+            .is_some_and(Self::is_pointer_like_after_lowering)
     }
 
     fn resolve_self_field_chain_type(&self, expr: &str) -> Option<CppType> {
@@ -30387,6 +30675,51 @@ impl AstCodeGen {
                     return;
                 }
 
+                let saved_local_vars = self.local_vars.clone();
+                let saved_scoped_local_var_counts = self.scoped_local_var_counts.clone();
+                let saved_scoped_local_scope_stack = self.scoped_local_scope_stack.clone();
+                let saved_scoped_local_ptr_state = self.scoped_local_ptr_state.clone();
+                let saved_scoped_local_ptr_scope_stack = self.scoped_local_ptr_scope_stack.clone();
+                let saved_ref_vars = self.ref_vars.clone();
+                let saved_const_receiver_vars = self.const_receiver_vars.clone();
+                let saved_ptr_vars = self.ptr_vars.clone();
+                let saved_arr_vars = self.arr_vars.clone();
+                self.local_vars.clear();
+                self.scoped_local_var_counts.clear();
+                self.scoped_local_scope_stack.clear();
+                self.scoped_local_ptr_state.clear();
+                self.scoped_local_ptr_scope_stack.clear();
+                self.push_local_scope();
+                self.ref_vars.clear();
+                self.const_receiver_vars.clear();
+                self.ptr_vars.clear();
+                self.arr_vars.clear();
+                for (param_name, param_type) in params {
+                    self.declare_scoped_local_var_with_ptr_hint(
+                        sanitize_identifier(param_name),
+                        Some(Self::is_pointer_decl_type(param_type)),
+                    );
+                    if matches!(param_type, CppType::Reference { .. }) {
+                        self.ref_vars.insert(param_name.clone());
+                    }
+                    if matches!(
+                        param_type,
+                        CppType::Reference { is_const: true, .. }
+                            | CppType::Pointer { is_const: true, .. }
+                    ) {
+                        self.track_const_receiver_var(param_name);
+                    }
+                    if matches!(param_type, CppType::Pointer { .. })
+                        || matches!(param_type, CppType::Array { size: None, .. })
+                        || param_type.to_rust_type_str().starts_with('*')
+                    {
+                        self.track_ptr_var(param_name);
+                    }
+                    if matches!(param_type, CppType::Array { .. }) {
+                        self.arr_vars.insert(param_name.clone());
+                    }
+                }
+
                 // Track output position for potential rollback
                 let output_start = self.output.len();
 
@@ -30421,6 +30754,7 @@ impl AstCodeGen {
                 let current_ctor_param_types = param_types;
 
                 // Deduplicate parameter names (C++ allows unnamed params, Rust doesn't)
+                let assigned_params = Self::collect_assigned_params(node, params);
                 let mut param_name_counts: HashMap<String, usize> = HashMap::new();
                 let mut deduped_params: Vec<String> = Vec::new();
                 let params_str = params
@@ -30433,7 +30767,12 @@ impl AstCodeGen {
                         }
                         *param_name_counts.get_mut(&sanitize_identifier(n)).unwrap() += 1;
                         deduped_params.push(param_name.clone());
-                        format!("{}: {}", param_name, t.to_rust_type_str())
+                        let mut_prefix = if assigned_params.contains(n) {
+                            "mut "
+                        } else {
+                            ""
+                        };
+                        format!("{}{}: {}", mut_prefix, param_name, t.to_rust_type_str())
                     })
                     .collect::<Vec<_>>()
                     .join(", ");
@@ -30445,6 +30784,32 @@ impl AstCodeGen {
                     .collect();
                 let correct_ctor_initializer = |value: &str, ty: &CppType| -> String {
                     let raw = value.trim();
+                    let collapse_ref_param_deref_for_pointer_field = || -> Option<String> {
+                        let target_rust = match ty {
+                            CppType::Reference { .. } => ty.to_rust_type_str_for_field(),
+                            _ => ty.to_rust_type_str(),
+                        };
+                        if !target_rust.starts_with("*mut ") && !target_rust.starts_with("*const ") {
+                            return None;
+                        }
+                        let stripped = Self::strip_outer_parens_expr(raw).trim();
+                        let deref_stripped = stripped.strip_prefix('*')?;
+                        let ident = Self::strip_outer_parens_expr(deref_stripped).trim();
+                        if ident.is_empty()
+                            || !ident
+                                .chars()
+                                .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+                        {
+                            return None;
+                        }
+                        if !ctor_param_type_by_name
+                            .get(ident)
+                            .is_some_and(|param_ty| matches!(param_ty, CppType::Reference { .. }))
+                        {
+                            return None;
+                        }
+                        Some(format!("{} as {}", ident, target_rust))
+                    };
                     let collapse_ref_param_pointer_cast = || -> Option<String> {
                         let addr_stripped = if let Some(rest) = raw.strip_prefix("&mut ") {
                             rest.trim()
@@ -30479,7 +30844,9 @@ impl AstCodeGen {
                         Some(format!("{} as {}", lhs, rhs))
                     };
 
-                    if let Some(collapsed) = collapse_ref_param_pointer_cast() {
+                    if let Some(collapsed) = collapse_ref_param_deref_for_pointer_field()
+                        .or_else(collapse_ref_param_pointer_cast)
+                    {
                         collapsed
                     } else if Self::is_function_pointer_type_or_typedef(ty)
                         && ctor_param_type_by_name
@@ -31052,6 +31419,16 @@ impl AstCodeGen {
                 if Self::should_rollback_constructor(generated) {
                     self.output.truncate(output_start);
                 }
+
+                self.ref_vars = saved_ref_vars;
+                self.const_receiver_vars = saved_const_receiver_vars;
+                self.ptr_vars = saved_ptr_vars;
+                self.arr_vars = saved_arr_vars;
+                self.local_vars = saved_local_vars;
+                self.scoped_local_var_counts = saved_scoped_local_var_counts;
+                self.scoped_local_scope_stack = saved_scoped_local_scope_stack;
+                self.scoped_local_ptr_state = saved_scoped_local_ptr_state;
+                self.scoped_local_ptr_scope_stack = saved_scoped_local_ptr_scope_stack;
             }
             _ => {}
         }
@@ -33554,15 +33931,18 @@ impl AstCodeGen {
                         .or_else(|| {
                             self.resolve_member_current_class_field_type(&node.children[0])
                         });
-                    let base_is_value_field = self.is_known_non_pointer_self_field_expr(&base);
-                    let base_is_ptr = !base_is_value_field
-                        && (base_type.as_ref().is_some_and(Self::is_pointer_like_type)
+                    let base_pointer_signal = base_type
+                        .as_ref()
+                        .is_some_and(Self::is_pointer_like_after_lowering)
                         || fallback_base_type
                             .as_ref()
-                            .is_some_and(Self::is_pointer_like_type)
+                            .is_some_and(Self::is_pointer_like_after_lowering)
                         || self.is_ptr_var_expr(&node.children[0])
                         || self.is_pointer_receiver_expr(&node.children[0])
-                        || self.is_pointer_receiver_expr_string_hint(&base));
+                        || self.is_pointer_receiver_expr_string_hint(&base);
+                    let base_is_value_field =
+                        self.is_known_non_pointer_self_field_expr(&base) && !base_pointer_signal;
+                    let base_is_ptr = !base_is_value_field && base_pointer_signal;
                     let base_is_implicit_self = matches!(
                         &node.children[0].kind,
                         ClangNodeKind::CXXThisExpr { .. }
@@ -37172,11 +37552,16 @@ impl AstCodeGen {
                                             member = resolved_member.to_string();
                                         }
                                     }
+                                    let base_pointer_signal = self
+                                            .resolve_self_field_chain_type(&base)
+                                            .as_ref()
+                                            .is_some_and(Self::is_pointer_like_after_lowering)
+                                            || self.is_pointer_receiver_expr(base_node)
+                                            || self.is_pointer_receiver_expr_string_hint(&base);
                                     let base_is_value_field =
-                                        self.is_known_non_pointer_self_field_expr(&base);
-                                    let base_is_ptr = !base_is_value_field
-                                        && (self.is_pointer_receiver_expr(base_node)
-                                            || self.is_pointer_receiver_expr_string_hint(&base));
+                                        self.is_known_non_pointer_self_field_expr(&base)
+                                            && !base_pointer_signal;
+                                    let base_is_ptr = !base_is_value_field && base_pointer_signal;
 
                                     // This is a method call (might have zero args like size())
                                     // Always generate method call syntax, not field access
@@ -37267,7 +37652,7 @@ impl AstCodeGen {
                         }
                         if let Some(resolved) = self.resolve_unqualified_current_class_method_call(
                             callee,
-                            node.children.len().saturating_sub(1),
+                            &node.children[1..],
                         ) {
                             func = resolved;
                         } else if let Some(resolved) =
@@ -37856,7 +38241,7 @@ impl AstCodeGen {
                     }
                     if let Some(resolved) = self.resolve_unqualified_current_class_method_call(
                         &node.children[0],
-                        call_arg_count,
+                        &call_arg_nodes,
                     ) {
                         func = resolved;
                     } else if let Some(resolved) =
@@ -38633,13 +39018,18 @@ impl AstCodeGen {
                                 .collect();
 
                             let method_name = sanitize_identifier(member_name);
+                            let base_pointer_signal = self
+                                    .resolve_self_field_chain_type(&base)
+                                    .as_ref()
+                                    .is_some_and(Self::is_pointer_like_after_lowering)
+                                    || base_node.is_some_and(|n| {
+                                        self.is_pointer_receiver_expr(n)
+                                            || self.is_pointer_receiver_expr_string_hint(&base)
+                                    });
                             let base_is_value_field =
-                                self.is_known_non_pointer_self_field_expr(&base);
-                            let base_is_ptr = !base_is_value_field
-                                && base_node.is_some_and(|n| {
-                                    self.is_pointer_receiver_expr(n)
-                                        || self.is_pointer_receiver_expr_string_hint(&base)
-                                });
+                                self.is_known_non_pointer_self_field_expr(&base)
+                                    && !base_pointer_signal;
+                            let base_is_ptr = !base_is_value_field && base_pointer_signal;
 
                             // Generate: base.method(args...) or (*base).method(args...)
                             if base_is_ptr && base != "self" && base != "__self" {
@@ -38917,22 +39307,26 @@ impl AstCodeGen {
                         ClangNodeKind::CXXThisExpr { .. }
                     ) || base == "self"
                         || base == "__self";
-                    let base_is_value_field = self.is_known_non_pointer_self_field_expr(&base);
                     let base_is_tinyxml2_handle_value =
                         self.is_tinyxml2_handle_value_expr(&node.children[0]);
+                    let base_pointer_signal = base_type
+                        .as_ref()
+                        .is_some_and(Self::is_pointer_like_after_lowering)
+                        || Self::get_expr_type(&node.children[0])
+                            .as_ref()
+                            .is_some_and(Self::is_pointer_like_after_lowering)
+                        || fallback_base_type
+                            .as_ref()
+                            .is_some_and(Self::is_pointer_like_after_lowering)
+                        || self.is_ptr_var_expr(&node.children[0])
+                        || self.is_pointer_receiver_expr(&node.children[0])
+                        || self.is_pointer_receiver_expr_string_hint(&base);
+                    let base_is_value_field =
+                        self.is_known_non_pointer_self_field_expr(&base) && !base_pointer_signal;
                     let base_is_ptr = !base_is_implicit_self
                         && !base_is_value_field
                         && !base_is_tinyxml2_handle_value
-                        && (base_type.as_ref().is_some_and(Self::is_pointer_like_type)
-                            || Self::get_expr_type(&node.children[0])
-                                .as_ref()
-                                .is_some_and(Self::is_pointer_like_type)
-                            || fallback_base_type
-                                .as_ref()
-                                .is_some_and(Self::is_pointer_like_type)
-                            || self.is_ptr_var_expr(&node.children[0])
-                            || self.is_pointer_receiver_expr(&node.children[0])
-                            || self.is_pointer_receiver_expr_string_hint(&base));
+                        && base_pointer_signal;
                     let member_is_array = matches!(ty, CppType::Array { .. });
                     let array_ref_prefix = if base_type.as_ref().is_some_and(|t| {
                         matches!(

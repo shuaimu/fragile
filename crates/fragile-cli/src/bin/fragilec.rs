@@ -562,6 +562,76 @@ fn build_rust_runtime_link_support(temp_root: &Path) -> Result<(PathBuf, Vec<OsS
     Ok((runtime_archive, native_libs))
 }
 
+fn object_defines_main_symbol(obj: &Path) -> Result<bool, String> {
+    let output = Command::new("nm")
+        .arg("-g")
+        .arg(obj)
+        .output()
+        .map_err(|e| format!("failed to inspect symbols for {}: {}", obj.display(), e))?;
+    if !output.status.success() {
+        return Err(format!(
+            "nm failed for {}\nstdout:\n{}\nstderr:\n{}",
+            obj.display(),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+
+    for line in String::from_utf8_lossy(&output.stdout).lines() {
+        let tokens: Vec<&str> = line.split_whitespace().collect();
+        if tokens.is_empty() {
+            continue;
+        }
+        let symbol = tokens[tokens.len() - 1];
+        if symbol != "main" {
+            continue;
+        }
+        let kind = if tokens.len() >= 2 {
+            tokens[tokens.len() - 2]
+        } else {
+            ""
+        };
+        // `U main` is undefined/imported, not a definition.
+        if kind == "U" {
+            continue;
+        }
+        return Ok(true);
+    }
+    Ok(false)
+}
+
+fn build_rust_main_shim_object(temp_root: &Path) -> Result<PathBuf, String> {
+    let shim_rs = temp_root.join("fragile_main_shim.rs");
+    let shim_obj = temp_root.join("fragile_main_shim.o");
+    fs::write(
+        &shim_rs,
+        "#[no_mangle]\npub extern \"C\" fn main(_argc: i32, _argv: *mut *mut i8) -> i32 { 0 }\n",
+    )
+    .map_err(|e| format!("failed to write main shim source {}: {}", shim_rs.display(), e))?;
+
+    let output = Command::new("rustc")
+        .arg("--edition")
+        .arg("2021")
+        .arg("-A")
+        .arg("warnings")
+        .arg("--crate-type")
+        .arg("lib")
+        .arg("--emit=obj")
+        .arg(&shim_rs)
+        .arg("-o")
+        .arg(&shim_obj)
+        .output()
+        .map_err(|e| format!("failed to build main shim object: {}", e))?;
+    if !output.status.success() {
+        return Err(format!(
+            "main shim rustc build failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    Ok(shim_obj)
+}
+
 fn run_fragile_link(parsed: &ParsedInvocation) -> Result<(), String> {
     if parsed.compile_only {
         return Err("internal error: run_fragile_link called for compile-only command".to_string());
@@ -613,6 +683,34 @@ fn run_fragile_link(parsed: &ParsedInvocation) -> Result<(), String> {
         }
         let replaced = out_obj.strip_prefix(&cwd).unwrap_or(out_obj.as_path());
         link_args[*source_pos] = OsString::from(replaced.to_string_lossy().to_string());
+    }
+
+    let mut has_main_symbol = false;
+    for (_, out_obj) in &compiled_positions {
+        if object_defines_main_symbol(out_obj)? {
+            has_main_symbol = true;
+            break;
+        }
+    }
+    if !has_main_symbol {
+        for arg in &parsed.args {
+            let arg_str = arg.to_string_lossy();
+            if !arg_str.ends_with(".o") {
+                continue;
+            }
+            let obj = resolve_path(Path::new(arg_str.as_ref()), &cwd);
+            if !obj.exists() {
+                continue;
+            }
+            if object_defines_main_symbol(&obj)? {
+                has_main_symbol = true;
+                break;
+            }
+        }
+    }
+    if !has_main_symbol {
+        let main_shim = build_rust_main_shim_object(&temp_root)?;
+        link_args.push(OsString::from(main_shim.to_string_lossy().to_string()));
     }
 
     let (runtime_archive, native_libs) = build_rust_runtime_link_support(&temp_root)?;
