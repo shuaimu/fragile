@@ -3963,6 +3963,27 @@ impl AstCodeGen {
                 continue;
             }
 
+            if let Some(concrete_alias_target) =
+                self.resolve_missing_stub_concrete_alias_target(&rust_name, &cpp_name)
+            {
+                self.writeln(&format!(
+                    "/// Alias unresolved C++ `{}` to concrete specialization",
+                    cpp_name
+                ));
+                self.writeln(&format!(
+                    "pub type {} = {};",
+                    rust_name, concrete_alias_target
+                ));
+                self.writeln("");
+                self.generated_aliases.insert(rust_name.clone());
+                self.type_alias_targets
+                    .insert(rust_name.clone(), concrete_alias_target.clone());
+                if let Some(fields) = self.class_fields.get(&concrete_alias_target).cloned() {
+                    self.class_fields.insert(rust_name.clone(), fields);
+                }
+                continue;
+            }
+
             // Check if we have specialization field data for this type
             let spec_info = self.find_specialization_by_rust_name(&rust_name);
             let has_real_fields = spec_info.as_ref().map_or(false, |info| {
@@ -6972,15 +6993,18 @@ impl AstCodeGen {
             || rust_name.starts_with("std_unordered_set_")
             || rust_name.starts_with("std_unordered_multimap_")
             || rust_name.starts_with("std_unordered_multiset_");
+        let is_rapidjson_document_surface_type = rust_name.starts_with("GenericDocument_")
+            || inst_name.starts_with("GenericDocument<")
+            || inst_name.contains("rapidjson::GenericDocument<");
 
-        if !has_methods && !is_container_type {
+        if !has_methods && !is_container_type && !is_rapidjson_document_surface_type {
             return;
         }
 
         // Skip impl block for primary template types - their methods reference
         // internal fields that don't exist in the generated struct. Container types
         // are exempt because they need stub methods for compilation.
-        if is_primary_template && !is_container_type {
+        if is_primary_template && !is_container_type && !is_rapidjson_document_surface_type {
             return;
         }
 
@@ -14650,27 +14674,37 @@ impl AstCodeGen {
             self.writeln("pub fn new_0() -> Self { Default::default() }");
         }
 
-        let is_generic_document_utf8 = rust_name == "GenericDocument_UTF8_"
+        let is_generic_document_surface_type = rust_name == "GenericDocument_UTF8_"
+            || rust_name.starts_with("GenericDocument_")
             || class_name.contains("GenericDocument<UTF8")
-            || class_name.contains("GenericDocument::UTF8");
-        if is_generic_document_utf8
-            && !has_method(&self.output[impl_block_start..], "Populate")
-            && !has_method(&self.output[impl_block_start..], "Accept")
-        {
-            self.current_struct_methods.insert("Populate".to_string(), 1);
-            self.current_struct_methods.insert("Accept".to_string(), 1);
-            self.writeln("");
-            self.writeln("pub fn Populate<T>(&mut self, _reader: T) {");
-            self.indent += 1;
-            self.writeln("// Surface-only fallback for rapidjson replay compilation.");
-            self.indent -= 1;
-            self.writeln("}");
-            self.writeln("");
-            self.writeln("pub fn Accept<T>(&self, _writer: &T) -> bool {");
-            self.indent += 1;
-            self.writeln("true");
-            self.indent -= 1;
-            self.writeln("}");
+            || class_name.contains("GenericDocument::UTF8")
+            || class_name.starts_with("GenericDocument<")
+            || class_name.contains("rapidjson::GenericDocument<");
+        if is_generic_document_surface_type {
+            let has_populate = has_method(&self.output[impl_block_start..], "Populate");
+            let has_accept = has_method(&self.output[impl_block_start..], "Accept");
+            if !has_populate || !has_accept {
+                self.writeln("");
+            }
+            if !has_populate {
+                self.current_struct_methods.insert("Populate".to_string(), 1);
+                self.writeln("pub fn Populate<T>(&mut self, _reader: T) {");
+                self.indent += 1;
+                self.writeln("// Surface-only fallback for rapidjson replay compilation.");
+                self.indent -= 1;
+                self.writeln("}");
+                if !has_accept {
+                    self.writeln("");
+                }
+            }
+            if !has_accept {
+                self.current_struct_methods.insert("Accept".to_string(), 1);
+                self.writeln("pub fn Accept<T>(&self, _writer: &T) -> bool {");
+                self.indent += 1;
+                self.writeln("true");
+                self.indent -= 1;
+                self.writeln("}");
+            }
         }
     }
 
@@ -20794,6 +20828,68 @@ impl AstCodeGen {
         }
 
         None
+    }
+
+    fn resolve_missing_stub_concrete_alias_target(
+        &self,
+        rust_name: &str,
+        cpp_name: &str,
+    ) -> Option<String> {
+        if rust_name != "GenericDocument_UTF8_" {
+            return None;
+        }
+        if !cpp_name.contains("GenericDocument::UTF8")
+            && !cpp_name.contains("GenericDocument<UTF8")
+        {
+            return None;
+        }
+
+        let mut candidate_names = HashSet::new();
+        for name in &self.generated_structs {
+            if name.starts_with("GenericDocument_") && name.as_str() != rust_name {
+                candidate_names.insert(name.clone());
+            }
+        }
+        for name in self.class_fields.keys() {
+            if name.starts_with("GenericDocument_") && name.as_str() != rust_name {
+                candidate_names.insert(name.clone());
+            }
+        }
+        if self
+            .output
+            .contains("pub struct GenericDocument_Encoding__Allocator__StackAllocator {")
+        {
+            candidate_names.insert("GenericDocument_Encoding__Allocator__StackAllocator".to_string());
+        }
+        let mut candidates: Vec<_> = candidate_names.into_iter().collect();
+        candidates.sort();
+
+        let has_complete_document_fields = |name: &str| -> bool {
+            let by_class_fields = self.class_fields.get(name).is_some_and(|fields| {
+                let mut field_names = HashSet::new();
+                for (field_name, _) in fields {
+                    field_names.insert(field_name.as_str());
+                }
+                field_names.contains("allocator_")
+                    && field_names.contains("ownAllocator_")
+                    && field_names.contains("stack_")
+                    && field_names.contains("parseResult_")
+            });
+            if by_class_fields {
+                return true;
+            }
+
+            let struct_header = format!("pub struct {} {{", name);
+            self.output.contains(&struct_header)
+                && self.output.contains("allocator_:")
+                && self.output.contains("ownAllocator_:")
+                && self.output.contains("stack_:")
+                && self.output.contains("parseResult_:")
+        };
+
+        candidates
+            .into_iter()
+            .find(|candidate| has_complete_document_fields(candidate))
     }
 
     /// Compute the relative Rust path from current namespace to target namespace.
@@ -50982,6 +51078,74 @@ mod tests {
         assert!(
             writer_impl.contains("pub fn new_0() -> Self { Default::default() }"),
             "template impl path should inject Writer<FileWriteStream>::new_0 fallback, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_rapidjson_generic_document_template_impl_without_ast_methods_emits_surface_fallbacks() {
+        let mut codegen = AstCodeGen::new();
+        codegen.generate_template_impl(
+            "GenericDocument<Encoding, Allocator, StackAllocator>",
+            "GenericDocument_Encoding__Allocator__StackAllocator",
+            &[],
+        );
+
+        let code = codegen.output;
+        let doc_impl = code
+            .split("impl GenericDocument_Encoding__Allocator__StackAllocator {")
+            .nth(1)
+            .unwrap_or("");
+        assert!(
+            doc_impl.contains("pub fn Populate<T>(&mut self, _reader: T) {"),
+            "generic RapidJSON document template impl should emit Populate fallback without AST methods, got:\n{}",
+            code
+        );
+        assert!(
+            doc_impl.contains("pub fn Accept<T>(&self, _writer: &T) -> bool {"),
+            "generic RapidJSON document template impl should emit Accept fallback without AST methods, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_missing_stub_prefers_concrete_rapidjson_document_alias_target() {
+        let mut codegen = AstCodeGen::new();
+        let concrete = "GenericDocument_Encoding__Allocator__StackAllocator".to_string();
+        codegen.generated_structs.insert(concrete.clone());
+        codegen.class_fields.insert(
+            concrete.clone(),
+            vec![
+                ("allocator_".to_string(), CppType::Named("Allocator".to_string())),
+                (
+                    "ownAllocator_".to_string(),
+                    CppType::Named("Allocator".to_string()),
+                ),
+                (
+                    "stack_".to_string(),
+                    CppType::Named("Stack_StackAllocator".to_string()),
+                ),
+                (
+                    "parseResult_".to_string(),
+                    CppType::Named("ParseResult".to_string()),
+                ),
+            ],
+        );
+        codegen
+            .used_types
+            .insert("GenericDocument_UTF8_".to_string(), "GenericDocument::UTF8::".to_string());
+
+        codegen.generate_missing_type_stubs();
+        let code = codegen.output;
+
+        assert!(
+            code.contains("pub type GenericDocument_UTF8_ = GenericDocument_Encoding__Allocator__StackAllocator;"),
+            "missing-stub generation should alias GenericDocument_UTF8_ to concrete specialization when complete field data exists, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("pub struct GenericDocument_UTF8_ {"),
+            "missing-stub generation should avoid opaque GenericDocument_UTF8_ placeholder when concrete specialization is available, got:\n{}",
             code
         );
     }

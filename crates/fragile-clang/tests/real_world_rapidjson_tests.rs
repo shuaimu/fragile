@@ -471,6 +471,21 @@ fn classify_first_failing_compile_stderr(first_stderr: &str) -> &'static str {
     "non_rustc_error"
 }
 
+fn extract_filterkeydom_generated_rs_path(first_stderr: &str) -> Option<PathBuf> {
+    for token in first_stderr.split_whitespace() {
+        let trimmed = token.trim_matches(|c: char| c == '"' || c == '\'' || c == '(' || c == ')');
+        if let Some(start) = trimmed.find("/tmp/fragilec_") {
+            let candidate = &trimmed[start..];
+            if let Some(end) = candidate.find("_filterkeydom.rs") {
+                let path_end = end + "_filterkeydom.rs".len();
+                let path = &candidate[..path_end];
+                return Some(PathBuf::from(path));
+            }
+        }
+    }
+    None
+}
+
 fn write_first_failing_compile_capture_files(
     log_dir: &Path,
     first_command: &str,
@@ -2194,6 +2209,27 @@ fn test_real_world_rapidjson_strict_filterkeydom_compile_capture() {
             first_stderr
         );
     }
+    let generated_rs_path = extract_filterkeydom_generated_rs_path(&first_stderr)
+        .expect("strict filterkeydom replay stderr should include generated fragilec Rust path");
+    let generated_rs = fs::read_to_string(&generated_rs_path).unwrap_or_else(|err| {
+        panic!(
+            "failed to read generated filterkeydom Rust file {}: {}",
+            generated_rs_path.display(),
+            err
+        )
+    });
+    assert!(
+        generated_rs.contains(
+            "pub type GenericDocument_UTF8_ = GenericDocument_Encoding__Allocator__StackAllocator;"
+        ),
+        "strict filterkeydom replay should alias GenericDocument_UTF8_ to concrete specialization, got:\n{}",
+        generated_rs
+    );
+    assert!(
+        !generated_rs.contains("pub struct GenericDocument_UTF8_ {"),
+        "strict filterkeydom replay should not emit opaque GenericDocument_UTF8_ placeholder struct when concrete specialization is available, got:\n{}",
+        generated_rs
+    );
     assert!(
         !first_stderr.contains(RAPIDJSON_CONST_ASSIGN_PARSER_DIAGNOSTIC_FRAGMENT),
         "strict filterkeydom replay should not regress to rapidjson document.h const-assignment parse diagnostics, got:\n{}",
