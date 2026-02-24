@@ -60,7 +60,7 @@ Success criteria:
 ## Execution plan
 
 ## Phase 0: Guardrails (prevent misleading green builds)
-- [ ] Remove/disable strict-link fallback shim `main` for RapidJSON example builds; fail link when no real `main` is defined.
+- [x] Remove/disable strict-link fallback shim `main` for RapidJSON example builds; fail link when no real `main` is defined. (Done 2026-02-24: strict link now errors for executable-style links that lack a real `main` in inspected objects.)
 - [ ] Add link-time diagnostic that prints which input objects define `main`.
 - [ ] Add regression test: if source contains `main`, generated object must export `main`.
 

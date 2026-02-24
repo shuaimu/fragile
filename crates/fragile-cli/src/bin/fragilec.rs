@@ -600,36 +600,83 @@ fn object_defines_main_symbol(obj: &Path) -> Result<bool, String> {
     Ok(false)
 }
 
-fn build_rust_main_shim_object(temp_root: &Path) -> Result<PathBuf, String> {
-    let shim_rs = temp_root.join("fragile_main_shim.rs");
-    let shim_obj = temp_root.join("fragile_main_shim.o");
-    fs::write(
-        &shim_rs,
-        "#[no_mangle]\npub extern \"C\" fn main(_argc: i32, _argv: *mut *mut i8) -> i32 { 0 }\n",
-    )
-    .map_err(|e| format!("failed to write main shim source {}: {}", shim_rs.display(), e))?;
+fn output_is_non_executable_artifact(output: Option<&Path>) -> bool {
+    let Some(output) = output else {
+        return false;
+    };
+    let normalized = output.to_string_lossy().to_ascii_lowercase();
+    normalized.ends_with(".a")
+        || normalized.ends_with(".o")
+        || normalized.ends_with(".obj")
+        || normalized.ends_with(".lo")
+        || normalized.ends_with(".so")
+        || normalized.contains(".so.")
+        || normalized.ends_with(".dylib")
+        || normalized.ends_with(".dll")
+}
 
-    let output = Command::new("rustc")
-        .arg("--edition")
-        .arg("2021")
-        .arg("-A")
-        .arg("warnings")
-        .arg("--crate-type")
-        .arg("lib")
-        .arg("--emit=obj")
-        .arg(&shim_rs)
-        .arg("-o")
-        .arg(&shim_obj)
-        .output()
-        .map_err(|e| format!("failed to build main shim object: {}", e))?;
-    if !output.status.success() {
-        return Err(format!(
-            "main shim rustc build failed\nstdout:\n{}\nstderr:\n{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        ));
+fn linker_flag_disables_main_requirement(flag: &str) -> bool {
+    matches!(
+        flag,
+        "-shared"
+            | "-dynamiclib"
+            | "-r"
+            | "--relocatable"
+            | "-nostdlib"
+            | "-nostartfiles"
+            | "-e"
+            | "--entry"
+    )
+}
+
+fn linker_tokens_disable_main_requirement(tokens: &[&str]) -> bool {
+    tokens.iter().any(|token| {
+        matches!(
+            *token,
+            "-shared"
+                | "--shared"
+                | "-dylib"
+                | "--dylib"
+                | "-r"
+                | "--relocatable"
+                | "-e"
+                | "--entry"
+        ) || token.starts_with("--entry=")
+    })
+}
+
+fn link_requires_program_main(parsed: &ParsedInvocation) -> bool {
+    if output_is_non_executable_artifact(parsed.output.as_deref()) {
+        return false;
     }
-    Ok(shim_obj)
+
+    let mut skip_next = false;
+    for arg in &parsed.args {
+        let arg = arg.to_string_lossy();
+        let arg = arg.as_ref();
+
+        if skip_next {
+            skip_next = false;
+            if linker_flag_disables_main_requirement(arg) {
+                return false;
+            }
+        }
+        if arg == "-Xlinker" {
+            skip_next = true;
+            continue;
+        }
+        if linker_flag_disables_main_requirement(arg) {
+            return false;
+        }
+        if let Some(rest) = arg.strip_prefix("-Wl,") {
+            let tokens: Vec<&str> = rest.split(',').collect();
+            if linker_tokens_disable_main_requirement(&tokens) {
+                return false;
+            }
+        }
+    }
+
+    true
 }
 
 fn run_fragile_link(parsed: &ParsedInvocation) -> Result<(), String> {
@@ -686,7 +733,9 @@ fn run_fragile_link(parsed: &ParsedInvocation) -> Result<(), String> {
     }
 
     let mut has_main_symbol = false;
+    let mut inspected_objects: Vec<PathBuf> = Vec::new();
     for (_, out_obj) in &compiled_positions {
+        inspected_objects.push(out_obj.clone());
         if object_defines_main_symbol(out_obj)? {
             has_main_symbol = true;
             break;
@@ -702,15 +751,29 @@ fn run_fragile_link(parsed: &ParsedInvocation) -> Result<(), String> {
             if !obj.exists() {
                 continue;
             }
+            if inspected_objects.iter().all(|existing| existing != &obj) {
+                inspected_objects.push(obj.clone());
+            }
             if object_defines_main_symbol(&obj)? {
                 has_main_symbol = true;
                 break;
             }
         }
     }
-    if !has_main_symbol {
-        let main_shim = build_rust_main_shim_object(&temp_root)?;
-        link_args.push(OsString::from(main_shim.to_string_lossy().to_string()));
+    if !has_main_symbol && link_requires_program_main(parsed) {
+        let inspected = if inspected_objects.is_empty() {
+            "<none>".to_string()
+        } else {
+            inspected_objects
+                .iter()
+                .map(|p| p.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        return Err(format!(
+            "strict link requires a real `main` symbol for executable outputs; none found in inspected objects: {}",
+            inspected
+        ));
     }
 
     let (runtime_archive, native_libs) = build_rust_runtime_link_support(&temp_root)?;
@@ -890,6 +953,53 @@ mod tests {
             err.contains("multiple sources") && err.contains("single `-o`"),
             "unexpected error: {}",
             err
+        );
+    }
+
+    #[test]
+    fn link_requires_main_for_default_executable_shape() {
+        let parsed = ParsedInvocation::parse(args(&["program.cpp", "-o", "program"]));
+        assert!(
+            link_requires_program_main(&parsed),
+            "plain executable links should require a real main"
+        );
+    }
+
+    #[test]
+    fn link_does_not_require_main_for_shared_link_flag() {
+        let parsed = ParsedInvocation::parse(args(&["-shared", "unit.cpp", "-o", "libunit.so"]));
+        assert!(
+            !link_requires_program_main(&parsed),
+            "shared library links should not require a program main"
+        );
+    }
+
+    #[test]
+    fn link_does_not_require_main_for_non_executable_output_suffixes() {
+        let lib = ParsedInvocation::parse(args(&["unit.o", "-o", "libunit.so.1.2"]));
+        assert!(
+            !link_requires_program_main(&lib),
+            "versioned shared-object outputs should not require main"
+        );
+
+        let archive = ParsedInvocation::parse(args(&["unit.o", "-o", "libunit.a"]));
+        assert!(
+            !link_requires_program_main(&archive),
+            "archive outputs should not require main"
+        );
+    }
+
+    #[test]
+    fn link_does_not_require_main_when_custom_entrypoint_is_set() {
+        let parsed = ParsedInvocation::parse(args(&[
+            "start.o",
+            "-Wl,-e,_custom_entry",
+            "-o",
+            "kernel_like_binary",
+        ]));
+        assert!(
+            !link_requires_program_main(&parsed),
+            "custom linker entrypoint should disable default main requirement"
         );
     }
 }
