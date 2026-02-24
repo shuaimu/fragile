@@ -3519,7 +3519,10 @@ impl AstCodeGen {
 
         for (opaque_name, param_name) in types {
             // Skip if already generated
-            if self.generated_structs.contains(&opaque_name) {
+            if self.generated_structs.contains(&opaque_name)
+                || self.generated_aliases.contains(&opaque_name)
+                || self.has_top_level_module_name_conflict(&opaque_name)
+            {
                 continue;
             }
 
@@ -3750,6 +3753,7 @@ impl AstCodeGen {
                 !self.generated_structs.contains(t)
                     && !self.generated_aliases.contains(t)
                     && !defined_aliases.contains(t)
+                    && !self.has_top_level_module_name_conflict(t)
                     && t != "_"
                     && t.len() > 1 // Skip single-char names
             })
@@ -3810,6 +3814,10 @@ impl AstCodeGen {
             }
             // Skip if it's a type alias
             if self.generated_aliases.contains(rust_name) {
+                continue;
+            }
+            // Skip when this type name collides with an emitted module at top-level.
+            if self.has_top_level_module_name_conflict(rust_name) {
                 continue;
             }
             // Skip template definitions with unresolved placeholders
@@ -3895,6 +3903,10 @@ impl AstCodeGen {
             }
             // Skip if it's a type alias
             if self.generated_aliases.contains(rust_name) {
+                continue;
+            }
+            // Skip when this type name collides with an emitted module at top-level.
+            if self.has_top_level_module_name_conflict(rust_name) {
                 continue;
             }
             // Skip array types (not valid struct names)
@@ -20599,6 +20611,10 @@ impl AstCodeGen {
         self.indent -= 1;
         self.writeln("}");
         self.writeln("");
+
+        // Reserve selected preamble-owned symbol names so AST traversal does not
+        // emit duplicate helpers/types with the same identifiers in one TU.
+        self.register_preamble_owned_symbols();
     }
 
     /// Generate Rust enum definitions for all collected std::variant types.
@@ -20743,6 +20759,67 @@ impl AstCodeGen {
                 }
             })
             .collect()
+    }
+
+    fn preamble_owned_helper_function_names() -> &'static [&'static str] {
+        &[
+            "__libcpp_atomic_refcount_increment_i64",
+            "__libcpp_atomic_refcount_decrement_i64",
+            "__countl_zero_u64",
+            "__atomic_wait_std_atomic_flag_bool",
+            "__atomic_notify_one_std_atomic_flag",
+            "__atomic_notify_all_std_atomic_flag",
+            "fill_n_char_u64_i8",
+            "copy_n_char_i32_char",
+        ]
+    }
+
+    fn preamble_owned_struct_names() -> &'static [&'static str] {
+        &["fpos_mbstate_t", "__cxx_atomic_impl___cxx_contention_t"]
+    }
+
+    fn preamble_owned_alias_names() -> &'static [&'static str] {
+        &["_timespec"]
+    }
+
+    fn is_flattened_namespace_segment(segment: &str) -> bool {
+        segment == "std" || segment == "pmr" || segment.starts_with("__")
+    }
+
+    fn has_top_level_module_name_conflict(&self, rust_name: &str) -> bool {
+        self.generated_modules.iter().any(|module_key| {
+            if module_key == rust_name {
+                return true;
+            }
+            let mut parts: Vec<&str> = module_key.split("::").collect();
+            let Some(last) = parts.pop() else {
+                return false;
+            };
+            if last != rust_name {
+                return false;
+            }
+            parts
+                .iter()
+                .all(|segment| Self::is_flattened_namespace_segment(segment))
+        })
+    }
+
+    fn is_preamble_owned_helper_function(name: &str) -> bool {
+        Self::preamble_owned_helper_function_names()
+            .iter()
+            .any(|candidate| *candidate == name)
+    }
+
+    fn register_preamble_owned_symbols(&mut self) {
+        for name in Self::preamble_owned_helper_function_names() {
+            self.generated_functions.insert((*name).to_string(), 1);
+        }
+        for name in Self::preamble_owned_struct_names() {
+            self.generated_structs.insert((*name).to_string());
+        }
+        for name in Self::preamble_owned_alias_names() {
+            self.generated_aliases.insert((*name).to_string());
+        }
     }
 
     /// True when a lowered Rust array type uses an unresolved non-type template
@@ -22328,6 +22405,14 @@ impl AstCodeGen {
             sanitize_identifier(name)
         };
 
+        // Selected runtime/preamble helpers are already emitted up-front.
+        // Suppress AST redefinitions to avoid duplicate helper families in one TU.
+        if Self::is_preamble_owned_helper_function(&sanitized_base_name)
+            && self.generated_functions.contains_key(&sanitized_base_name)
+        {
+            return;
+        }
+
         // Handle function overloading by appending suffix for duplicates
         let count = self
             .generated_functions
@@ -22919,6 +23004,25 @@ impl AstCodeGen {
             || name.contains("__uninitialized_copy")  // Template metaprogramming helper
             || name.contains("_Bit_iterator")  // Bit iterator has op_index returning c_void
             || name.contains("_Bit_const_iterator")
+        {
+            return;
+        }
+
+        // Rust modules and types share the same namespace. If we've already emitted
+        // a module with this fully-qualified name, skip the colliding struct.
+        let module_path: Vec<&str> = self
+            .current_namespace
+            .iter()
+            .filter(|(_, is_inline)| !is_inline)
+            .map(|(ns, _)| ns.as_str())
+            .collect();
+        let module_key = if module_path.is_empty() {
+            name.to_string()
+        } else {
+            format!("{}::{}", module_path.join("::"), name)
+        };
+        if self.generated_modules.contains(&module_key)
+            || self.has_top_level_module_name_conflict(&rust_name)
         {
             return;
         }
@@ -41472,6 +41576,257 @@ mod tests {
         let code = AstCodeGen::new().generate(&ast);
         assert!(code.contains("pub fn add(a: i32, b: i32) -> i32"));
         assert!(code.contains("return a + b"));
+    }
+
+    #[test]
+    fn test_preamble_owned_helper_functions_are_not_reemitted() {
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![
+                make_node(
+                    ClangNodeKind::FunctionDecl {
+                        name: "__countl_zero_u64".to_string(),
+                        mangled_name: "_Z17__countl_zero_u64m".to_string(),
+                        is_static: false,
+                        return_type: CppType::Int { signed: false },
+                        params: vec![("x".to_string(), CppType::LongLong { signed: false })],
+                        is_definition: true,
+                        is_variadic: false,
+                        is_noexcept: false,
+                        is_coroutine: false,
+                        coroutine_info: None,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![make_node(
+                            ClangNodeKind::ReturnStmt,
+                            vec![make_node(
+                                ClangNodeKind::IntegerLiteral {
+                                    value: 0,
+                                    cpp_type: Some(CppType::Int { signed: false }),
+                                },
+                                vec![],
+                            )],
+                        )],
+                    )],
+                ),
+                make_node(
+                    ClangNodeKind::FunctionDecl {
+                        name: "__atomic_notify_all_std_atomic_flag".to_string(),
+                        mangled_name: "_Z35__atomic_notify_all_std_atomic_flagPK15std_atomic_flag"
+                            .to_string(),
+                        is_static: false,
+                        return_type: CppType::Void,
+                        params: vec![(
+                            "__a".to_string(),
+                            CppType::Pointer {
+                                pointee: Box::new(CppType::Named("std_atomic_flag".to_string())),
+                                is_const: true,
+                            },
+                        )],
+                        is_definition: true,
+                        is_variadic: false,
+                        is_noexcept: false,
+                        is_coroutine: false,
+                        coroutine_info: None,
+                    },
+                    vec![make_node(ClangNodeKind::CompoundStmt, vec![])],
+                ),
+            ],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert_eq!(
+            code.matches("pub fn __countl_zero_u64(").count(),
+            1,
+            "expected only preamble-owned __countl_zero_u64 helper, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("pub fn __countl_zero_u64_1("),
+            "preamble helper must not be re-emitted with overload suffix, got:\n{}",
+            code
+        );
+        assert_eq!(
+            code.matches("pub fn __atomic_notify_all_std_atomic_flag").count(),
+            1,
+            "expected only preamble-owned __atomic_notify_all_std_atomic_flag helper, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("pub fn __atomic_notify_all_std_atomic_flag_1"),
+            "preamble helper must not be re-emitted with overload suffix, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_preamble_owned_types_and_aliases_are_not_redefined() {
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![
+                make_node(
+                    ClangNodeKind::RecordDecl {
+                        name: "_timespec".to_string(),
+                        is_class: false,
+                        is_definition: true,
+                        fields: vec![],
+                    },
+                    vec![],
+                ),
+                make_node(
+                    ClangNodeKind::RecordDecl {
+                        name: "fpos_mbstate_t".to_string(),
+                        is_class: false,
+                        is_definition: true,
+                        fields: vec![],
+                    },
+                    vec![],
+                ),
+                make_node(
+                    ClangNodeKind::RecordDecl {
+                        name: "__cxx_atomic_impl___cxx_contention_t".to_string(),
+                        is_class: false,
+                        is_definition: true,
+                        fields: vec![],
+                    },
+                    vec![],
+                ),
+            ],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("pub type _timespec = std::ffi::c_void;"),
+            "preamble alias should be present, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("pub struct _timespec"),
+            "_timespec alias should suppress colliding struct emission, got:\n{}",
+            code
+        );
+        assert_eq!(
+            code.matches("pub struct fpos_mbstate_t").count(),
+            1,
+            "fpos_mbstate_t should be emitted once from preamble only, got:\n{}",
+            code
+        );
+        assert_eq!(
+            code.matches("pub struct __cxx_atomic_impl___cxx_contention_t").count(),
+            1,
+            "__cxx_atomic_impl___cxx_contention_t should be emitted once from preamble only, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_struct_generation_skips_module_name_collision() {
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![
+                make_node(
+                    ClangNodeKind::NamespaceDecl {
+                        name: Some("_Algorithm".to_string()),
+                        is_inline: false,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::FunctionDecl {
+                            name: "probe".to_string(),
+                            mangled_name: "_ZN10_Algorithm5probeEv".to_string(),
+                            is_static: false,
+                            return_type: CppType::Int { signed: true },
+                            params: vec![],
+                            is_definition: true,
+                            is_variadic: false,
+                            is_noexcept: false,
+                            is_coroutine: false,
+                            coroutine_info: None,
+                        },
+                        vec![make_node(
+                            ClangNodeKind::CompoundStmt,
+                            vec![make_node(
+                                ClangNodeKind::ReturnStmt,
+                                vec![make_node(
+                                    ClangNodeKind::IntegerLiteral {
+                                        value: 0,
+                                        cpp_type: Some(CppType::Int { signed: true }),
+                                    },
+                                    vec![],
+                                )],
+                            )],
+                        )],
+                    )],
+                ),
+                make_node(
+                    ClangNodeKind::RecordDecl {
+                        name: "_Algorithm".to_string(),
+                        is_class: false,
+                        is_definition: true,
+                        fields: vec![],
+                    },
+                    vec![],
+                ),
+            ],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("pub mod _Algorithm {"),
+            "expected namespace module to be emitted, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("pub struct _Algorithm"),
+            "struct emission should be suppressed when it collides with an emitted module name, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_placeholder_generation_skips_module_name_collision() {
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![
+                make_node(
+                    ClangNodeKind::NamespaceDecl {
+                        name: Some("_Algorithm".to_string()),
+                        is_inline: false,
+                    },
+                    vec![],
+                ),
+                make_node(
+                    ClangNodeKind::FunctionDecl {
+                        name: "consume_algo".to_string(),
+                        mangled_name: "_Z12consume_algo10_Algorithm".to_string(),
+                        is_static: false,
+                        return_type: CppType::Void,
+                        params: vec![(
+                            "algo".to_string(),
+                            CppType::Named("_Algorithm".to_string()),
+                        )],
+                        is_definition: true,
+                        is_variadic: false,
+                        is_noexcept: false,
+                        is_coroutine: false,
+                        coroutine_info: None,
+                    },
+                    vec![make_node(ClangNodeKind::CompoundStmt, vec![])],
+                ),
+            ],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("pub mod _Algorithm {"),
+            "expected namespace module to be emitted, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("/// Placeholder for unresolved template `_Algorithm`"),
+            "placeholder generation should skip module-colliding name, got:\n{}",
+            code
+        );
     }
 
     #[test]

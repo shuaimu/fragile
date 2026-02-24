@@ -72,7 +72,7 @@ Success criteria:
 ### Ordered failure-class clearance ledger (active sequence)
 Use this as the authoritative clear order after Phase 0 guardrails. Update each item with `CLEARED (YYYY-MM-DD)` and a short evidence note when resolved.
 - [ ] 1) Parser/AST fidelity mismatch in real RapidJSON headers. Status: IN PROGRESS. Evidence: strict parser ignore is now narrowed to conjunctive match (`rapidjson/document.h` path + exact const-member diagnostic) and strict `filterkeydom` compile advances to downstream rustc blockers (`E0428` duplicate helpers/types and related normalization errors).
-- [ ] 2) Duplicate symbol/type emission in single TU output. Status: OPEN. Evidence: strict build paths still hit `E0428` duplicate-definition families (for example-capitalize style outputs).
+- [ ] 2) Duplicate symbol/type emission in single TU output. Status: IN PROGRESS. Evidence: strict single-TU replays for `example/capitalize/capitalize.cpp` and `example/filterkeydom/filterkeydom.cpp` no longer report `E0428` duplicate-definition failures after preamble/helper/type collision suppression; current first failures moved to unresolved-type/name families (`E0425`).
 - [ ] 3) Placeholder fallback for required rapidjson template types. Status: OPEN. Evidence: placeholder types (for example reader/handler forms) still surface on active compile paths and miss required methods.
 - [ ] 4) C/C++ type normalization gaps. Status: OPEN. Evidence: unresolved/inconsistent aliases still appear for libc/libstd symbols (for example `__FILE`, atomic aliases, `void`-shape externs).
 - [ ] 5) Cast/decay/call-shape lowering bugs. Status: OPEN. Evidence: strict transpiled output still produces array/pointer decay and call-shape mismatches in stream/setup paths.
@@ -84,6 +84,13 @@ Use this as the authoritative clear order after Phase 0 guardrails. Update each 
 - [x] 1.2) Re-run strict compile for `example/filterkeydom/filterkeydom.cpp` and record the first post-parse failure class/command in capture logs. Done 2026-02-24. Evidence: `FRAGILEC_MODE=strict fragilec ... -c example/filterkeydom/filterkeydom.cpp` now fails in rustc (first class: duplicate emission `E0428`), not parse.
 - [x] 1.3) Replace or narrow the parser diagnostic ignore with a semantic-fidelity fix once downstream compile/codegen blockers are cleared. Done 2026-02-24 (narrowed branch): parser ignore now requires both `rapidjson/document.h` path and the exact `GenericStringRef::operator=` const-member diagnostic text.
 - [ ] 1.4) Replace the temporary narrowed parser ignore with a real semantic-fidelity fix once downstream compile/codegen blockers are cleared.
+
+### Duplicate-emission breakdown (item 2)
+- [x] 2.1) Suppress duplicate emission for preamble-owned helper symbols and known preamble-owned types/aliases (`__libcpp_atomic_refcount_*`, `__countl_zero_u64`, `__atomic_notify_*`, `__atomic_wait_*`, `fill_n_char_u64_i8`, `copy_n_char_i32_char`, `_timespec`, `fpos_mbstate_t`, `__cxx_atomic_impl___cxx_contention_t`) and block top-level module/type name collisions (for example `_Algorithm`). Done 2026-02-24. Evidence: strict `fragilec -c` replays for `capitalize.cpp` and `filterkeydom.cpp` no longer include `E0428` families.
+- [x] 2.2) Add deterministic AST-codegen regression tests that assert no duplicate definitions are emitted for 2.1 symbols. Done 2026-02-24. Evidence: added/passing `ast_codegen` tests `test_preamble_owned_helper_functions_are_not_reemitted`, `test_preamble_owned_types_and_aliases_are_not_redefined`, `test_struct_generation_skips_module_name_collision`, and `test_placeholder_generation_skips_module_name_collision`.
+- [ ] 2.3) Re-run strict `filterkeydom` and strict full no-tests CMake build capture; record first remaining failure after 2.1/2.2.
+- [ ] 2.4) Deduplicate helper/template emission path for overload-like helper names that currently emit multiple concrete bodies in one TU.
+- [ ] 2.5) Deduplicate struct/type alias emission path when preamble alias placeholders and parsed concrete records coexist.
 
 ## Phase 2: Must-fix compiler correctness blockers
 - [ ] Fix `main` rollback/drop behavior so real example `main` survives codegen + rustc object emission.
