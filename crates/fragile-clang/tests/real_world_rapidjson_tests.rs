@@ -76,6 +76,15 @@ const RAPIDJSON_ITEM6_62_CLEARED_MARKERS: &[&str] = &[
     RAPIDJSON_NUMERIC_POW10_U128_MIXED_WIDTH_FRAGMENT,
     RAPIDJSON_NUMERIC_POW10_U128_OVERFLOW_FRAGMENT,
 ];
+const RAPIDJSON_STRICT_CMAKE_CAPITALIZE_BLOCKER_MARKERS: &[&str] = &[
+    "cannot find value `__gv___c` in this scope",
+    "cannot find value `__gv_fill_n` in this scope",
+    "cannot find value `__gv_copy_n` in this scope",
+    "cannot find function `__constexpr_strlen_i8` in this scope",
+    "cannot find function `__constexpr_strlen_u8` in this scope",
+    "cannot find function `__constexpr_wmemchr_i32_i32` in this scope",
+    "no function or associated item named `new_0` found for struct `CapitalizeFilter_Writer_FileWriteStream`",
+];
 const RAPIDJSON_FILTERKEYDOM_PLACEHOLDER_API_HOLE_MARKERS: &[&str] = &[
     "no function or associated item named `new_0` found for struct `FilterKeyReader_FileReadStream`",
     "no method named `Populate` found for struct `GenericDocument_UTF8_`",
@@ -2525,6 +2534,14 @@ fn test_real_world_rapidjson_cmake_no_tests_full_build_with_fragilec_capture_fir
             first_stderr.contains("error[E0425]"),
             "post-dedupe strict cmake first failure should include unresolved E0425 diagnostics"
         );
+        for marker in RAPIDJSON_STRICT_CMAKE_CAPITALIZE_BLOCKER_MARKERS {
+            assert!(
+                first_stderr.contains(marker),
+                "strict rapidjson no-tests replay should currently include tracked capitalize blocker marker `{}`, got:\n{}",
+                marker,
+                first_stderr
+            );
+        }
         for marker in RAPIDJSON_ITEM6_63_CLEARED_MARKERS {
             assert!(
                 !first_stderr.contains(marker),
