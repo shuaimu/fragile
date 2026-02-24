@@ -65,7 +65,7 @@ Success criteria:
 - [x] Add regression test: if source contains `main`, generated object must export `main`. (Done 2026-02-24: added strict compile regression test that emits an object from a source TU containing `main` and asserts symbol export via `nm` inspection.)
 
 ## Phase 1: Repro harness and deterministic triage
-- [ ] Add a dedicated ignored real-world test: `rapidjson cmake no-tests full build with fragilec` that captures first failing compile command and stderr to stable logs.
+- [x] Add a dedicated ignored real-world test: `rapidjson cmake no-tests full build with fragilec` that captures first failing compile command and stderr to stable logs. (Done 2026-02-24: added strict cmake no-tests real-world ignored test plus stable `first_failing_compile_command.txt` / `first_failing_compile_stderr.txt` capture logs and manifest.)
 - [ ] Add a local fixture variant that replays first-failure class for quick iteration.
 - [ ] Record and maintain ordered failure classes in this file as each class is cleared.
 

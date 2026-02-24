@@ -21,6 +21,8 @@ const RAPIDJSON_FRAGILE_CONDENSE_REPLAY_DIR: &str =
     "/tmp/fragile_real_world_rapidjson_fragile_condense_replay";
 const RAPIDJSON_FRAGILEC_DRIVER_BASELINE_DIR: &str =
     "/tmp/fragile_real_world_rapidjson_fragilec_driver_baseline";
+const RAPIDJSON_STRICT_CMAKE_NO_TESTS_BUILD_DIR: &str =
+    "/tmp/fragile_real_world_rapidjson_strict_cmake_no_tests_build";
 const RAPIDJSON_REQUIRED_PATHS: &[&str] = &[
     "include/rapidjson/document.h",
     "example/condense/condense.cpp",
@@ -64,6 +66,18 @@ const RAPIDJSON_FRAGILEC_DRIVER_LOG_FILES: &[&str] = &[
     "compile_pretty_driver.stderr",
     "fragilec_driver.log",
     "fragilec_driver_manifest.txt",
+];
+const RAPIDJSON_STRICT_CMAKE_NO_TESTS_LOG_FILES: &[&str] = &[
+    "cmake_configure.status",
+    "cmake_configure.stdout",
+    "cmake_configure.stderr",
+    "cmake_build.status",
+    "cmake_build.stdout",
+    "cmake_build.stderr",
+    "fragilec_driver.log",
+    "first_failing_compile_command.txt",
+    "first_failing_compile_stderr.txt",
+    "strict_cmake_no_tests_manifest.txt",
 ];
 const RAPIDJSON_CI_SMOKE_REQUIRED_TEST_INVOCATIONS: &[&str] = &[
     "test_rapidjson_native_no_stl_examples_local_fixture_success",
@@ -177,7 +191,10 @@ fn synchronize_pinned_checkout(
         }
 
         let repo_dir_str = repo_dir.to_string_lossy().to_string();
-        run_git(&["clone", "--no-tags", repo_url, repo_dir_str.as_str()], None)?;
+        run_git(
+            &["clone", "--no-tags", repo_url, repo_dir_str.as_str()],
+            None,
+        )?;
     }
 
     run_git(
@@ -297,8 +314,8 @@ fn status_code(output: &Output) -> i32 {
 }
 
 fn read_status_file(path: &Path) -> Result<i32, String> {
-    let raw =
-        fs::read_to_string(path).map_err(|e| format!("failed to read {}: {}", path.display(), e))?;
+    let raw = fs::read_to_string(path)
+        .map_err(|e| format!("failed to read {}: {}", path.display(), e))?;
     raw.trim()
         .parse::<i32>()
         .map_err(|e| format!("failed to parse status file {}: {}", path.display(), e))
@@ -316,6 +333,93 @@ fn write_command_capture(log_dir: &Path, step: &str, output: &Output) -> Result<
         .map_err(|e| format!("failed to write {}.stdout: {}", step, e))?;
     fs::write(log_dir.join(format!("{}.stderr", step)), &output.stderr)
         .map_err(|e| format!("failed to write {}.stderr: {}", step, e))?;
+    Ok(())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FragilecDriverInvocation {
+    cwd: String,
+    args: String,
+}
+
+fn parse_fragilec_driver_invocations(driver_log: &str) -> Vec<FragilecDriverInvocation> {
+    let mut invocations = Vec::new();
+    let mut current_cwd: Option<String> = None;
+
+    for line in driver_log.lines() {
+        if let Some(rest) = line.strip_prefix("cwd=") {
+            current_cwd = Some(rest.trim().to_string());
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix("args=") {
+            invocations.push(FragilecDriverInvocation {
+                cwd: current_cwd
+                    .clone()
+                    .unwrap_or_else(|| "<unknown cwd>".to_string()),
+                args: rest.trim().to_string(),
+            });
+        }
+    }
+
+    invocations
+}
+
+fn first_failing_compile_command_from_driver_log(driver_log: &str) -> Option<String> {
+    let invocations = parse_fragilec_driver_invocations(driver_log);
+    invocations
+        .last()
+        .map(|inv| format!("cwd={}\nargs={}", inv.cwd, inv.args))
+}
+
+fn select_first_failing_compile_capture(
+    driver_log: &str,
+    build_failed: bool,
+    build_stdout: &str,
+    build_stderr: &str,
+) -> (String, String) {
+    if !build_failed {
+        return ("<none>".to_string(), "<none>".to_string());
+    }
+
+    let command = first_failing_compile_command_from_driver_log(driver_log)
+        .unwrap_or_else(|| "<unavailable>".to_string());
+    let stderr = if !build_stderr.trim().is_empty() {
+        build_stderr.trim().to_string()
+    } else if !build_stdout.trim().is_empty() {
+        build_stdout.trim().to_string()
+    } else {
+        "<none>".to_string()
+    };
+    (command, stderr)
+}
+
+fn write_first_failing_compile_capture_files(
+    log_dir: &Path,
+    first_command: &str,
+    first_stderr: &str,
+) -> Result<(), String> {
+    fs::write(
+        log_dir.join("first_failing_compile_command.txt"),
+        format!("{}\n", first_command),
+    )
+    .map_err(|e| {
+        format!(
+            "failed to write first_failing_compile_command.txt in {}: {}",
+            log_dir.display(),
+            e
+        )
+    })?;
+    fs::write(
+        log_dir.join("first_failing_compile_stderr.txt"),
+        format!("{}\n", first_stderr),
+    )
+    .map_err(|e| {
+        format!(
+            "failed to write first_failing_compile_stderr.txt in {}: {}",
+            log_dir.display(),
+            e
+        )
+    })?;
     Ok(())
 }
 
@@ -367,7 +471,8 @@ fn compile_transpiled_rust_lib(
     log_dir: &Path,
     step_name: &str,
 ) -> Result<(), String> {
-    let output = Command::new("rustc").env("RUSTC_BOOTSTRAP", "1")
+    let output = Command::new("rustc")
+        .env("RUSTC_BOOTSTRAP", "1")
         .arg("--edition")
         .arg("2021")
         .arg("-A")
@@ -391,10 +496,18 @@ fn compile_transpiled_rust_lib(
     Ok(())
 }
 
-fn transpile_rapidjson_condense_source(source_dir: &Path, source_path: &Path) -> Result<String, String> {
+fn transpile_rapidjson_condense_source(
+    source_dir: &Path,
+    source_path: &Path,
+) -> Result<String, String> {
     let include_paths = vec![source_dir.join("include").to_string_lossy().to_string()];
-    let parser = ClangParser::with_paths_and_defines(include_paths, Vec::new())
-        .map_err(|e| format!("failed to create parser for {}: {}", source_path.display(), e))?;
+    let parser = ClangParser::with_paths_and_defines(include_paths, Vec::new()).map_err(|e| {
+        format!(
+            "failed to create parser for {}: {}",
+            source_path.display(),
+            e
+        )
+    })?;
     let ast = parser
         .parse_file(source_path)
         .map_err(|e| format!("failed to parse {}: {}", source_path.display(), e))?;
@@ -447,7 +560,12 @@ fn run_native_no_stl_examples_in_tree(source_dir: &Path, log_dir: &Path) -> Resu
         "compile_condense",
     )?;
 
-    let condense_output = run_example_with_stdin(&condense_bin, RAPIDJSON_SAMPLE_JSON, log_dir, "run_condense")?;
+    let condense_output = run_example_with_stdin(
+        &condense_bin,
+        RAPIDJSON_SAMPLE_JSON,
+        log_dir,
+        "run_condense",
+    )?;
     if !condense_output.status.success() {
         return Err(format!(
             "condense example failed with status {} (logs: {})",
@@ -474,7 +592,8 @@ fn run_native_no_stl_examples_in_tree(source_dir: &Path, log_dir: &Path) -> Resu
         "compile_pretty",
     )?;
 
-    let pretty_output = run_example_with_stdin(&pretty_bin, RAPIDJSON_SAMPLE_JSON, log_dir, "run_pretty")?;
+    let pretty_output =
+        run_example_with_stdin(&pretty_bin, RAPIDJSON_SAMPLE_JSON, log_dir, "run_pretty")?;
     if !pretty_output.status.success() {
         return Err(format!(
             "pretty example failed with status {} (logs: {})",
@@ -542,14 +661,22 @@ fn compile_example_with_cxx_env(
     Ok(output)
 }
 
-fn run_fragilec_driver_no_stl_examples_in_tree(source_dir: &Path, log_dir: &Path) -> Result<(), String> {
+fn run_fragilec_driver_no_stl_examples_in_tree(
+    source_dir: &Path,
+    log_dir: &Path,
+) -> Result<(), String> {
     fs::create_dir_all(log_dir)
         .map_err(|e| format!("failed to create log dir {}: {}", log_dir.display(), e))?;
 
     let fragilec = ensure_fragilec_binary()?;
     let driver_log = log_dir.join("fragilec_driver.log");
-    fs::write(&driver_log, "")
-        .map_err(|e| format!("failed to initialize fragilec driver log {}: {}", driver_log.display(), e))?;
+    fs::write(&driver_log, "").map_err(|e| {
+        format!(
+            "failed to initialize fragilec driver log {}: {}",
+            driver_log.display(),
+            e
+        )
+    })?;
 
     let condense_bin = source_dir.join("condense_fragilec_driver");
     let condense_compile = compile_example_with_cxx_env(
@@ -603,8 +730,13 @@ fn run_fragilec_driver_no_stl_examples_in_tree(source_dir: &Path, log_dir: &Path
         ));
     }
 
-    let driver_log_content = fs::read_to_string(&driver_log)
-        .map_err(|e| format!("failed to read fragilec driver log {}: {}", driver_log.display(), e))?;
+    let driver_log_content = fs::read_to_string(&driver_log).map_err(|e| {
+        format!(
+            "failed to read fragilec driver log {}: {}",
+            driver_log.display(),
+            e
+        )
+    })?;
     if driver_log_content.trim().is_empty() {
         return Err(format!(
             "fragilec driver log {} is empty; expected compiler invocations",
@@ -658,7 +790,10 @@ fn run_no_stl_command_plan_in_tree(source_dir: &Path, log_dir: &Path) -> Result<
     })
 }
 
-fn run_fragile_condense_single_tu_replay_in_tree(source_dir: &Path, log_dir: &Path) -> Result<(), String> {
+fn run_fragile_condense_single_tu_replay_in_tree(
+    source_dir: &Path,
+    log_dir: &Path,
+) -> Result<(), String> {
     fs::create_dir_all(log_dir)
         .map_err(|e| format!("failed to create log dir {}: {}", log_dir.display(), e))?;
 
@@ -701,7 +836,11 @@ fn run_fragile_condense_single_tu_replay_in_tree(source_dir: &Path, log_dir: &Pa
         rlib_path.display(),
         object_size
     );
-    fs::write(log_dir.join("fragile_condense_replay_manifest.txt"), manifest).map_err(|e| {
+    fs::write(
+        log_dir.join("fragile_condense_replay_manifest.txt"),
+        manifest,
+    )
+    .map_err(|e| {
         format!(
             "failed to write fragile_condense_replay_manifest.txt in {}: {}",
             log_dir.display(),
@@ -860,6 +999,118 @@ fn run_rapidjson_fragile_condense_single_tu_replay() -> Result<PathBuf, String> 
     Ok(log_dir)
 }
 
+fn run_rapidjson_strict_cmake_no_tests_full_build_capture() -> Result<PathBuf, String> {
+    let checkout_dir = ensure_rapidjson_checkout()?;
+    let baseline_root = PathBuf::from(RAPIDJSON_STRICT_CMAKE_NO_TESTS_BUILD_DIR);
+    reset_dir(&baseline_root)?;
+
+    let worktree_dir = baseline_root.join("worktree");
+    let checkout_dir_str = checkout_dir.to_string_lossy().to_string();
+    let worktree_dir_str = worktree_dir.to_string_lossy().to_string();
+    run_git(
+        &[
+            "clone",
+            "--no-tags",
+            "--local",
+            checkout_dir_str.as_str(),
+            worktree_dir_str.as_str(),
+        ],
+        None,
+    )?;
+    run_git(
+        &["checkout", "--detach", RAPIDJSON_PINNED_COMMIT],
+        Some(&worktree_dir),
+    )?;
+
+    let actual_head = read_head(&worktree_dir)
+        .ok_or_else(|| format!("failed to read HEAD in {}", worktree_dir.display()))?;
+    if actual_head != RAPIDJSON_PINNED_COMMIT {
+        return Err(format!(
+            "strict cmake worktree expected commit {} but got {}",
+            RAPIDJSON_PINNED_COMMIT, actual_head
+        ));
+    }
+
+    let log_dir = baseline_root.join("strict_cmake_logs");
+    fs::create_dir_all(&log_dir)
+        .map_err(|e| format!("failed to create log dir {}: {}", log_dir.display(), e))?;
+    let fragilec = ensure_fragilec_binary()?;
+    let driver_log = log_dir.join("fragilec_driver.log");
+    fs::write(&driver_log, "")
+        .map_err(|e| format!("failed to initialize fragilec driver log: {}", e))?;
+
+    let build_dir = worktree_dir.join("build_fragilec_strict");
+    fs::create_dir_all(&build_dir)
+        .map_err(|e| format!("failed to create build dir {}: {}", build_dir.display(), e))?;
+
+    let configure_output = Command::new("cmake")
+        .arg("-DRAPIDJSON_BUILD_TESTS=OFF")
+        .arg("..")
+        .current_dir(&build_dir)
+        .env("CXX", fragilec.to_string_lossy().to_string())
+        .env("FRAGILEC_MODE", "strict")
+        .env("FRAGILEC_LOG", driver_log.to_string_lossy().to_string())
+        .output()
+        .map_err(|e| format!("failed to run rapidjson strict cmake configure: {}", e))?;
+    write_command_capture(&log_dir, "cmake_configure", &configure_output)?;
+    if !configure_output.status.success() {
+        return Err(format!(
+            "rapidjson strict cmake configure failed with status {} (logs: {})",
+            status_code(&configure_output),
+            log_dir.display()
+        ));
+    }
+
+    let build_output = Command::new("cmake")
+        .arg("--build")
+        .arg(".")
+        .arg("--verbose")
+        .arg("--")
+        .arg("-j1")
+        .current_dir(&build_dir)
+        .env("CXX", fragilec.to_string_lossy().to_string())
+        .env("FRAGILEC_MODE", "strict")
+        .env("FRAGILEC_LOG", driver_log.to_string_lossy().to_string())
+        .output()
+        .map_err(|e| format!("failed to run rapidjson strict cmake build: {}", e))?;
+    write_command_capture(&log_dir, "cmake_build", &build_output)?;
+
+    let driver_log_content = fs::read_to_string(&driver_log).map_err(|e| {
+        format!(
+            "failed to read fragilec driver log {}: {}",
+            driver_log.display(),
+            e
+        )
+    })?;
+    let build_stdout = String::from_utf8_lossy(&build_output.stdout);
+    let build_stderr = String::from_utf8_lossy(&build_output.stderr);
+    let (first_command, first_stderr) = select_first_failing_compile_capture(
+        &driver_log_content,
+        !build_output.status.success(),
+        &build_stdout,
+        &build_stderr,
+    );
+    write_first_failing_compile_capture_files(&log_dir, &first_command, &first_stderr)?;
+
+    let manifest = format!(
+        "source_dir={}\npinned_commit={}\nfragilec={}\nmode=strict\nconfigure_status={}\nbuild_status={}\nfirst_failing_compile_command_file=first_failing_compile_command.txt\nfirst_failing_compile_stderr_file=first_failing_compile_stderr.txt\n",
+        worktree_dir.display(),
+        RAPIDJSON_PINNED_COMMIT,
+        fragilec.display(),
+        status_code(&configure_output),
+        status_code(&build_output)
+    );
+    fs::write(log_dir.join("strict_cmake_no_tests_manifest.txt"), manifest).map_err(|e| {
+        format!(
+            "failed to write strict_cmake_no_tests_manifest.txt in {}: {}",
+            log_dir.display(),
+            e
+        )
+    })?;
+
+    Ok(log_dir)
+}
+
 fn unique_temp_dir(prefix: &str) -> PathBuf {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -877,8 +1128,11 @@ fn create_local_rapidjson_like_repo(base_dir: &Path) -> Result<(String, String, 
     fs::create_dir_all(remote_dir.join("example/pretty"))
         .map_err(|e| format!("failed to create pretty dir: {}", e))?;
 
-    fs::write(remote_dir.join("include/rapidjson/document.h"), "#pragma once\n")
-        .map_err(|e| format!("failed to write document.h: {}", e))?;
+    fs::write(
+        remote_dir.join("include/rapidjson/document.h"),
+        "#pragma once\n",
+    )
+    .map_err(|e| format!("failed to write document.h: {}", e))?;
     fs::write(
         remote_dir.join("example/condense/condense.cpp"),
         "#include <cstdio>\nint main(){std::fputs(\"{\\\"a\\\":1,\\\"b\\\":[true,false],\\\"msg\\\":\\\"hi\\\"}\", stdout); return 0;}\n",
@@ -889,8 +1143,11 @@ fn create_local_rapidjson_like_repo(base_dir: &Path) -> Result<(String, String, 
         "#include <cstdio>\nint main(){std::fputs(\"{\\n    \\\"a\\\": 1,\\n    \\\"b\\\": [\\n        true,\\n        false\\n    ],\\n    \\\"msg\\\": \\\"hi\\\"\\n}\\n\", stdout); return 0;}\n",
     )
     .map_err(|e| format!("failed to write pretty.cpp: {}", e))?;
-    fs::write(remote_dir.join("CMakeLists.txt"), "cmake_minimum_required(VERSION 3.5)\n")
-        .map_err(|e| format!("failed to write CMakeLists.txt: {}", e))?;
+    fs::write(
+        remote_dir.join("CMakeLists.txt"),
+        "cmake_minimum_required(VERSION 3.5)\n",
+    )
+    .map_err(|e| format!("failed to write CMakeLists.txt: {}", e))?;
 
     run_git(&["init"], Some(&remote_dir))?;
     run_git(&["config", "user.name", "Fragile Test"], Some(&remote_dir))?;
@@ -942,10 +1199,16 @@ fn test_ensure_pinned_checkout_clones_and_rewinds_local_rapidjson_fixture() {
     )
     .expect("initial checkout should succeed");
 
-    run_git(&["checkout", "--detach", newer_commit.as_str()], Some(&checkout_dir))
-        .expect("failed to move checkout to newer commit");
+    run_git(
+        &["checkout", "--detach", newer_commit.as_str()],
+        Some(&checkout_dir),
+    )
+    .expect("failed to move checkout to newer commit");
     let moved_head = read_head(&checkout_dir).expect("failed to read moved HEAD");
-    assert_eq!(moved_head, newer_commit, "checkout should move before rewind");
+    assert_eq!(
+        moved_head, newer_commit,
+        "checkout should move before rewind"
+    );
 
     ensure_pinned_checkout(
         repo_url.as_str(),
@@ -956,7 +1219,10 @@ fn test_ensure_pinned_checkout_clones_and_rewinds_local_rapidjson_fixture() {
     .expect("rewind checkout should succeed");
 
     let head = read_head(&checkout_dir).expect("failed to read pinned HEAD");
-    assert_eq!(head, pinned_commit, "checkout should rewind to pinned commit");
+    assert_eq!(
+        head, pinned_commit,
+        "checkout should rewind to pinned commit"
+    );
 
     let _ = fs::remove_dir_all(&root);
 }
@@ -1113,6 +1379,54 @@ fn test_rapidjson_fragile_condense_single_tu_replay_local_fixture_success() {
 }
 
 #[test]
+fn test_parse_fragilec_driver_invocations_extracts_cwd_and_args_pairs() {
+    let driver_log = "cwd=/tmp/work\nargs=-std=c++11 -c a.cpp -o a.o \ncwd=/tmp/work\nargs=-std=c++11 -c b.cpp -o b.o \n";
+    let invocations = parse_fragilec_driver_invocations(driver_log);
+    assert_eq!(
+        invocations,
+        vec![
+            FragilecDriverInvocation {
+                cwd: "/tmp/work".to_string(),
+                args: "-std=c++11 -c a.cpp -o a.o".to_string(),
+            },
+            FragilecDriverInvocation {
+                cwd: "/tmp/work".to_string(),
+                args: "-std=c++11 -c b.cpp -o b.o".to_string(),
+            },
+        ],
+        "driver-log parser should capture each cwd/args invocation pair"
+    );
+}
+
+#[test]
+fn test_select_first_failing_compile_capture_uses_last_driver_invocation_and_stderr() {
+    let driver_log = "cwd=/tmp/work\nargs=-std=c++11 -c first.cpp -o first.o \ncwd=/tmp/work\nargs=-std=c++11 -c failing.cpp -o failing.o \n";
+    let (command, stderr) = select_first_failing_compile_capture(
+        driver_log,
+        true,
+        "stdout text",
+        "failing stderr text",
+    );
+    assert!(
+        command.contains("failing.cpp"),
+        "capture should report failing compile invocation, got:\n{}",
+        command
+    );
+    assert_eq!(
+        stderr, "failing stderr text",
+        "capture should prefer build stderr payload on failure"
+    );
+}
+
+#[test]
+fn test_select_first_failing_compile_capture_returns_none_when_build_succeeds() {
+    let (command, stderr) =
+        select_first_failing_compile_capture("cwd=/tmp\nargs=-c ok.cpp -o ok.o\n", false, "", "");
+    assert_eq!(command, "<none>");
+    assert_eq!(stderr, "<none>");
+}
+
+#[test]
 fn test_ci_workflow_keeps_rapidjson_smoke_coverage() {
     let ci_workflow = read_workflow_file("ci.yml")
         .expect("failed to read CI workflow for rapidjson smoke coverage");
@@ -1231,6 +1545,57 @@ fn test_real_world_rapidjson_fragilec_native_no_stl_examples_baseline() {
         0,
         "real-world strict pretty compile should succeed"
     );
+}
+
+#[test]
+#[ignore = "real-world external project test (rapidjson cmake no-tests full build with fragilec strict and first-failure capture)"]
+fn test_real_world_rapidjson_cmake_no_tests_full_build_with_fragilec_capture_first_failure() {
+    let log_dir = run_rapidjson_strict_cmake_no_tests_full_build_capture()
+        .expect("failed to run rapidjson strict cmake no-tests build capture");
+
+    for rel in RAPIDJSON_STRICT_CMAKE_NO_TESTS_LOG_FILES {
+        assert!(
+            log_dir.join(rel).exists(),
+            "expected strict cmake capture log file {}",
+            log_dir.join(rel).display()
+        );
+    }
+
+    assert_eq!(
+        read_status_file(&log_dir.join("cmake_configure.status"))
+            .expect("failed to read cmake_configure.status"),
+        0,
+        "strict cmake configure should succeed with RAPIDJSON_BUILD_TESTS=OFF"
+    );
+
+    let build_status = read_status_file(&log_dir.join("cmake_build.status"))
+        .expect("failed to read cmake_build.status");
+    let first_command = fs::read_to_string(log_dir.join("first_failing_compile_command.txt"))
+        .expect("failed to read first_failing_compile_command.txt");
+    let first_stderr = fs::read_to_string(log_dir.join("first_failing_compile_stderr.txt"))
+        .expect("failed to read first_failing_compile_stderr.txt");
+    if build_status != 0 {
+        assert!(
+            first_command.contains("args=") && !first_command.trim().is_empty(),
+            "failing build should capture first failing compile command, got:\n{}",
+            first_command
+        );
+        assert!(
+            !first_stderr.trim().is_empty() && first_stderr.trim() != "<none>",
+            "failing build should capture failing stderr diagnostics"
+        );
+    } else {
+        assert_eq!(
+            first_command.trim(),
+            "<none>",
+            "successful build should not report failing compile command"
+        );
+        assert_eq!(
+            first_stderr.trim(),
+            "<none>",
+            "successful build should not report failing compile stderr"
+        );
+    }
 }
 
 #[test]
