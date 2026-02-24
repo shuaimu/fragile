@@ -67,7 +67,17 @@ Success criteria:
 ## Phase 1: Repro harness and deterministic triage
 - [x] Add a dedicated ignored real-world test: `rapidjson cmake no-tests full build with fragilec` that captures first failing compile command and stderr to stable logs. (Done 2026-02-24: added strict cmake no-tests real-world ignored test plus stable `first_failing_compile_command.txt` / `first_failing_compile_stderr.txt` capture logs and manifest.)
 - [x] Add a local fixture variant that replays first-failure class for quick iteration. (Done 2026-02-24: added a deterministic local strict-cmake fixture test that forces one compile failure via a fake `fragilec` wrapper and verifies first failing command/stderr capture artifacts.)
-- [ ] Record and maintain ordered failure classes in this file as each class is cleared.
+- [x] Record and maintain ordered failure classes in this file as each class is cleared. (Done 2026-02-24: added an explicit ordered clearance ledger with per-class status/evidence notes, plus a regression test that enforces marker presence and ordering in `TODO.md`.)
+
+### Ordered failure-class clearance ledger (active sequence)
+Use this as the authoritative clear order after Phase 0 guardrails. Update each item with `CLEARED (YYYY-MM-DD)` and a short evidence note when resolved.
+- [ ] 1) Parser/AST fidelity mismatch in real RapidJSON headers. Status: OPEN. Evidence: strict build still reports `document.h` const-member assignment parse failure in problematic examples (`filterkeydom` class).
+- [ ] 2) Duplicate symbol/type emission in single TU output. Status: OPEN. Evidence: strict build paths still hit `E0428` duplicate-definition families (for example-capitalize style outputs).
+- [ ] 3) Placeholder fallback for required rapidjson template types. Status: OPEN. Evidence: placeholder types (for example reader/handler forms) still surface on active compile paths and miss required methods.
+- [ ] 4) C/C++ type normalization gaps. Status: OPEN. Evidence: unresolved/inconsistent aliases still appear for libc/libstd symbols (for example `__FILE`, atomic aliases, `void`-shape externs).
+- [ ] 5) Cast/decay/call-shape lowering bugs. Status: OPEN. Evidence: strict transpiled output still produces array/pointer decay and call-shape mismatches in stream/setup paths.
+- [ ] 6) Numeric/sign/enum lowering issues. Status: OPEN. Evidence: signedness/literal normalization failures still surface in constant/helper expressions.
+- [ ] 7) Entrypoint correctness residual (`main` rollback/drop). Status: OPEN (partially mitigated). Evidence: Phase 0 removed shim-only false-positive links, but real example `main` preservation remains a tracked Phase 2 fix item.
 
 ## Phase 2: Must-fix compiler correctness blockers
 - [ ] Fix `main` rollback/drop behavior so real example `main` survives codegen + rustc object emission.

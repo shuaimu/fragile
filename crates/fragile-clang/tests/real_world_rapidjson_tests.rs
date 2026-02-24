@@ -103,6 +103,15 @@ const RAPIDJSON_NIGHTLY_REQUIRED_TEST_NAMES: &[&str] = &[
     "test_real_world_rapidjson_native_no_stl_examples_baseline",
     "test_real_world_rapidjson_fragilec_native_no_stl_examples_baseline",
 ];
+const RAPIDJSON_ORDERED_FAILURE_CLASS_LEDGER_MARKERS: &[&str] = &[
+    "1) Parser/AST fidelity mismatch in real RapidJSON headers.",
+    "2) Duplicate symbol/type emission in single TU output.",
+    "3) Placeholder fallback for required rapidjson template types.",
+    "4) C/C++ type normalization gaps.",
+    "5) Cast/decay/call-shape lowering bugs.",
+    "6) Numeric/sign/enum lowering issues.",
+    "7) Entrypoint correctness residual (`main` rollback/drop).",
+];
 
 fn workspace_root_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -149,6 +158,12 @@ fn read_workflow_file(file_name: &str) -> Result<String, String> {
         .join(file_name);
     fs::read_to_string(&workflow_path)
         .map_err(|e| format!("failed to read workflow {}: {}", workflow_path.display(), e))
+}
+
+fn read_todo_file() -> Result<String, String> {
+    let todo_path = workspace_root_dir().join("TODO.md");
+    fs::read_to_string(&todo_path)
+        .map_err(|e| format!("failed to read TODO {}: {}", todo_path.display(), e))
 }
 
 fn run_git(args: &[&str], cwd: Option<&Path>) -> Result<Output, String> {
@@ -1657,6 +1672,31 @@ fn test_rapidjson_nightly_workflow_keeps_matrix_coverage() {
             "rapidjson nightly workflow should keep matrix entry `{}`",
             test_name
         );
+    }
+}
+
+#[test]
+fn test_todo_keeps_ordered_failure_class_clearance_ledger() {
+    let todo = read_todo_file().expect("failed to read TODO.md for ordered failure ledger");
+    assert!(
+        todo.contains("Ordered failure-class clearance ledger (active sequence)"),
+        "TODO should keep ordered failure-class clearance ledger section"
+    );
+
+    let mut last_position = 0usize;
+    for marker in RAPIDJSON_ORDERED_FAILURE_CLASS_LEDGER_MARKERS {
+        let position = todo.find(marker).unwrap_or_else(|| {
+            panic!(
+                "TODO ordered failure-class ledger missing marker `{}`",
+                marker
+            )
+        });
+        assert!(
+            position >= last_position,
+            "TODO ordered failure-class marker `{}` should appear after prior markers",
+            marker
+        );
+        last_position = position;
     }
 }
 
