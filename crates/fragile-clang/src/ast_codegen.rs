@@ -22807,7 +22807,14 @@ impl AstCodeGen {
         // Validate generated function and rollback if invalid
         let generated = &self.output[output_start..];
         let preserve_user_hash_fn = name.starts_with("XXH") || name.starts_with("XSUM_");
-        if !preserve_user_hash_fn && Self::should_rollback_function(generated) {
+        // Preserve externally visible program entrypoints even when body-level
+        // rollback heuristics match. Dropping `main` silently can mask compile
+        // failures behind link-time shim fallback behavior.
+        let preserve_entry_main_fn = is_main && !is_static && !is_generator;
+        if !preserve_user_hash_fn
+            && !preserve_entry_main_fn
+            && Self::should_rollback_function(generated)
+        {
             self.output.truncate(output_start);
             if let Some(signature_key) = helper_template_signature_key.as_ref() {
                 self.generated_helper_template_signatures.remove(signature_key);
@@ -41982,6 +41989,146 @@ mod tests {
         assert!(
             code.contains("pub struct user_visible_probe"),
             "non-colliding records should still emit concrete structs, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_main_function_is_preserved_when_rollback_patterns_match() {
+        let int_ty = CppType::Int { signed: true };
+        let argv_ty = CppType::Pointer {
+            pointee: Box::new(CppType::Pointer {
+                pointee: Box::new(CppType::Char { signed: true }),
+                is_const: true,
+            }),
+            is_const: false,
+        };
+        let unmapped_call_ty = CppType::Function {
+            return_type: Box::new(CppType::Void),
+            params: vec![],
+            is_variadic: false,
+        };
+
+        let make_unmapped_call_stmt = || {
+            make_node(
+                ClangNodeKind::ExprStmt,
+                vec![make_node(
+                    ClangNodeKind::CallExpr {
+                        ty: CppType::Void,
+                        template_instantiation: None,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::DeclRefExpr {
+                            name: "__to_address".to_string(),
+                            ty: unmapped_call_ty.clone(),
+                            namespace_path: vec![],
+                        },
+                        vec![],
+                    )],
+                )],
+            )
+        };
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![make_node(
+                ClangNodeKind::FunctionDecl {
+                    name: "main".to_string(),
+                    mangled_name: "main".to_string(),
+                    is_static: false,
+                    return_type: int_ty.clone(),
+                    params: vec![
+                        ("argc".to_string(), int_ty.clone()),
+                        ("argv".to_string(), argv_ty),
+                    ],
+                    is_definition: true,
+                    is_variadic: false,
+                    is_noexcept: false,
+                    is_coroutine: false,
+                    coroutine_info: None,
+                },
+                vec![make_node(
+                    ClangNodeKind::CompoundStmt,
+                    vec![
+                        make_unmapped_call_stmt(),
+                        make_node(
+                            ClangNodeKind::ReturnStmt,
+                            vec![make_node(
+                                ClangNodeKind::IntegerLiteral {
+                                    value: 0,
+                                    cpp_type: Some(int_ty),
+                                },
+                                vec![],
+                            )],
+                        ),
+                    ],
+                )],
+            )],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("pub extern \"C\" fn main(argc: i32, argv: *mut *const i8) -> i32 {"),
+            "externally visible main should be preserved instead of rollback drop, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("__to_address("),
+            "main body should remain emitted when rollback heuristics match, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_non_main_function_still_rolls_back_on_unmapped_call_pattern() {
+        let unmapped_call_ty = CppType::Function {
+            return_type: Box::new(CppType::Void),
+            params: vec![],
+            is_variadic: false,
+        };
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![make_node(
+                ClangNodeKind::FunctionDecl {
+                    name: "worker".to_string(),
+                    mangled_name: "worker".to_string(),
+                    is_static: false,
+                    return_type: CppType::Void,
+                    params: vec![],
+                    is_definition: true,
+                    is_variadic: false,
+                    is_noexcept: false,
+                    is_coroutine: false,
+                    coroutine_info: None,
+                },
+                vec![make_node(
+                    ClangNodeKind::CompoundStmt,
+                    vec![make_node(
+                        ClangNodeKind::ExprStmt,
+                        vec![make_node(
+                            ClangNodeKind::CallExpr {
+                                ty: CppType::Void,
+                                template_instantiation: None,
+                            },
+                            vec![make_node(
+                                ClangNodeKind::DeclRefExpr {
+                                    name: "__to_address".to_string(),
+                                    ty: unmapped_call_ty,
+                                    namespace_path: vec![],
+                                },
+                                vec![],
+                            )],
+                        )],
+                    )],
+                )],
+            )],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            !code.contains("pub extern \"C\" fn worker(") && !code.contains("pub fn worker("),
+            "non-main functions should continue rolling back on unmapped-call patterns, got:\n{}",
             code
         );
     }
