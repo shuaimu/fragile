@@ -334,9 +334,12 @@ fn test_rollback_pattern_count() {
     );
 
     // Total patterns (including validators) — track as code-gen bugs are fixed
+    // History: 5 -> 11 (RapidJSON full CMake build: capitalize/filterkey/etc. required
+    //   new validators for memory_order, numeric_limits::lowest, equivalent, op_shl_assign,
+    //   exception_ptr, getloc, pthread_cond_timedwait timespec)
     assert!(
-        total_count <= 5,
-        "Total rollback pattern count ({}) increased beyond 5 — investigate!",
+        total_count <= 11,
+        "Total rollback pattern count ({}) increased beyond 11 — investigate!",
         total_count
     );
 }

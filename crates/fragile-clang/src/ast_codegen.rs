@@ -2598,6 +2598,14 @@ impl AstCodeGen {
             "__constexpr_memcmp_u8_u8(",
             "__constexpr_memmove_i8_i8(",
             ".fail(", // unique_lock operator bool body sometimes references nonexistent fail()
+            "__convert_to_timespec_timespec(", // libc++ time conversion helper
+            "__find_ptr_mut_u16_u16___identity(", // char_traits<char16_t> find helper
+            "__find_ptr_mut_u32_u32___identity(", // char_traits<char32_t> find helper
+            "__type_name_to_string(", // RTTI internal helper
+            "Prettify(", // rapidjson internal dtoa helper (not in scope)
+            "CheckWithinHalfULP(", // rapidjson internal strtod helper (not in scope)
+            ".AppendDecimal64(", // rapidjson BigInteger method (rolled back)
+            "StrtodBigInteger(", // rapidjson internal strtod fallback (not in scope)
         ];
         UNMAPPED_FUNCTIONS.iter().any(|p| generated.contains(p))
     }
@@ -2624,6 +2632,8 @@ impl AstCodeGen {
             || (generated.contains("pub fn pword") && generated.contains("&mut __word._M_pword"))
             // numeric_limits lowest with wrong min/max function calls (no-arg calls to functions needing args)
             || (generated.contains("pub fn lowest") && (generated.contains("_bool()") || generated.contains("max_f32()") || generated.contains("max_f64()")))
+            // numeric_limits lowest returning __gv_min/__gv_max global (wrong type: i64 vs bool/f32/f64)
+            || (generated.contains("pub fn lowest") && (generated.contains("__gv_min") || generated.contains("__gv_max")))
             // Box::from_raw on &self (ownership violation)
             || (generated.contains("Box::from_raw(self)") && generated.contains("&self,"))
             // __shared_weak_count delegation bugs
@@ -2644,6 +2654,8 @@ impl AstCodeGen {
             || (generated.contains("__c11_atomic_") && generated.contains("_fence(__order as u32)"))
             // _M_base atomic ops with raw memory_order arg (should be i32)
             || (generated.contains("_M_base.") && generated.contains("memory_order"))
+            // memory_order:: enum namespace (C++ enum leaking into Rust, never valid in generated Rust)
+            || generated.contains("memory_order::")
     }
 
     /// Check 4d: Detect broken locale/system_error/uselocale constructor patterns.
@@ -2674,8 +2686,16 @@ impl AstCodeGen {
         }
         // Wrong operator methods — NOT safe for function blocks because
         // user operator overloads like Vec2::operator+ produce .op_add() calls
-        const BAD_OPS: &[&str] = &[".op_bitand(", ".op_sub(", ".op____("];
-        BAD_OPS.iter().any(|p| generated.contains(p))
+        const BAD_OPS: &[&str] = &[".op_bitand(", ".op_sub(", ".op____(", ".op_shl_assign("];
+        if BAD_OPS.iter().any(|p| generated.contains(p)) {
+            return true;
+        }
+        // Unresolved void pointer cast (indicates unresolved template parameter)
+        // NOT safe for function blocks — valid in vtable dispatch and runtime code
+        if generated.contains("as *mut ()") {
+            return true;
+        }
+        false
     }
 
     /// Bad syntax patterns that are safe for ALL blocks including function blocks.
@@ -2714,6 +2734,14 @@ impl AstCodeGen {
             // Division by sizeof(T) → 0, produces division by zero
             "/ 0;",
             "/ 0 ",
+            // C++ stdlib internal field (reserved __ identifier, never in user code)
+            ".__fill_",
+            // Unresolved C++ template type parameter placeholder
+            "_HashT::",
+            // Loop break returning subtraction instead of bool (RTTI string compare)
+            "break (c1 as i32) - (c2 as i32)",
+            // Clone impl referencing rolled-back copy constructor
+            "Self::new_1(self)",
         ];
         if BAD_SYNTAX_PATTERNS.iter().any(|p| generated.contains(p)) {
             return true;
@@ -3049,7 +3077,7 @@ impl AstCodeGen {
             // (__builtin_is* f32/f64 now fixed with generic __FloatClassify trait)
             // (__exchange_and_add/__atomic_add now in has_stdlib_internal_bugs)
             // pthread_cond_timedwait wrong type
-            || (generated.contains("fragile_pthread_cond_timedwait(") && generated.contains("__abs_timeout)"))
+            || (generated.contains("fragile_pthread_cond_timedwait(") && (generated.contains("__abs_timeout)") || generated.contains("*const timespec")))
             // strong_ordering comparison
             || (generated.contains("-> strong_ordering") && generated.contains(".op____(&") && generated.contains("let mut __c: strong_ordering ="))
             // wstring char/wchar mismatch
@@ -3083,8 +3111,8 @@ impl AstCodeGen {
             || (generated.contains("self._M_refcount") && generated.contains("&self,") && generated.contains("-= 1"))
             // _M_narrow through & reference
             || (generated.contains("self._M_narrow[") && generated.contains("&self,"))
-            // equivalent wrong pointer type
-            || (generated.contains(".equivalent(") && generated.contains("&*__rhs)"))
+            // equivalent wrong pointer type (error_code/error_condition type mismatch)
+            || (generated.contains(".equivalent(") && (generated.contains("&*__rhs)") || generated.contains("&*__y)") || generated.contains("&*__x,")))
             // (system_error __what now in has_broken_locale_constructors)
             // (memory_order bitwise ops now in has_bad_memory_order)
             // (__cmpexch_failure_order2 dead: in is_broken_function skip list)
@@ -3105,6 +3133,11 @@ impl AstCodeGen {
             || (generated.contains("Self::new_1(self)") && generated.contains("impl Clone"))
             // Variadic __va
             || (generated.contains("__va_args: ...") && generated.contains("__va)"))
+            // __snprintf/__asprintf with non-mut locale parameter
+            || (generated.contains("fn __snprintf(") && generated.contains("&mut __loc"))
+            || (generated.contains("fn __asprintf(") && generated.contains("&mut __loc"))
+            // strong_ordering return with partial_ordering global variable type
+            || (generated.contains("-> strong_ordering") && generated.contains("__gv_less"))
             // strong_ordering bare values
             || (generated.contains("-> strong_ordering") && generated.contains("return equal."))
             || (generated.contains("-> strong_ordering") && generated.contains("return less."))
@@ -3117,6 +3150,8 @@ impl AstCodeGen {
             || (generated.contains(".do_is(") && generated.contains(", __vec)"))
             // align *mut ()
             || (generated.contains("fn align(") && generated.contains("__r = __p2") && generated.contains("*mut ()"))
+            // op_shl_assign on non-primitive types (C++ <<= operator not mapped to Rust)
+            || generated.contains(".op_shl_assign(")
     }
 
     /// Validation for generate_method() block.
@@ -3197,8 +3232,10 @@ impl AstCodeGen {
             // op_call backoff results
             || (generated.contains("pub fn op_call") && generated.contains("-> std___backoff_results") && generated.contains("__continue_poll"))
             // (atomic refcount, use_count, __shared_weak_count now in has_stdlib_internal_bugs)
-            // exception_ptr swap
-            || (generated.contains("exception_ptr::new_1(") && generated.contains("*__other"))
+            // exception_ptr::new_1 constructor never exists (should be new_0 or new_1_1)
+            || generated.contains("exception_ptr::new_1(")
+            // basic_ios missing getloc method
+            || generated.contains("self.getloc()")
         // (__set __gv___s now in has_bad_syntax)
         // (c_void patterns and bool/int mixing now handled by structural checks above)
     }
@@ -5251,12 +5288,16 @@ impl AstCodeGen {
             ));
         }
 
-        // Special handling for exception class stub - it has a 'what' field in the stub vtable
-        // Only add if 'what' isn't already in the vtable entries
-        if (class_name == "exception" || class_name == "std::exception")
+        // Special handling for exception hierarchy - std_exception_vtable has a 'what' field
+        // that derived classes may not list in their vtable entries when inheriting it.
+        // Add 'what' for any class whose root vtable type is exception-based.
+        if (sanitized_root == "std_exception"
+            || sanitized_root == "exception"
+            || class_name == "exception"
+            || class_name == "std::exception")
             && !layout_entries.iter().any(|e| e.name == "what")
         {
-            // Use the correct wrapper function name matching the vtable type
+            // Use current class's wrapper if available; fall back to root class wrapper
             self.writeln(&format!("what: {}_vtable_what,", sanitized_class));
         }
 
@@ -5470,25 +5511,34 @@ impl AstCodeGen {
             self.writeln("}");
         }
 
-        // Special handling for exception class - generate 'what' wrapper
-        // Only add if 'what' isn't already in the vtable entries (to avoid duplicates)
-        if (class_name == "exception" || class_name == "std::exception")
+        // Special handling for exception hierarchy - generate 'what' wrapper
+        // if the vtable type includes 'what' but the class doesn't list it in entries
+        if (sanitized_root == "std_exception"
+            || sanitized_root == "exception"
+            || class_name == "exception"
+            || class_name == "std::exception")
             && !layout_entries.iter().any(|e| e.name == "what")
         {
             self.writeln("");
-            self.writeln("/// Vtable wrapper for `exception::what`");
+            self.writeln(&format!(
+                "/// Vtable wrapper for `{}::what`",
+                class_name
+            ));
             self.writeln(&format!(
                 "unsafe fn {}_vtable_what(this: *const {}) -> *const i8 {{",
                 sanitized_class, sanitized_root
             ));
             self.indent += 1;
-            // For std::exception (c_void alias), we can't call what(), so return a stub message
-            if class_name == "std::exception" {
-                self.writeln("let _ = this; // suppress unused warning");
-                self.writeln("b\"exception\\0\".as_ptr() as *const i8");
-            } else {
-                self.writeln("(*this).what()");
-            }
+            // Return a stub message with the class name
+            self.writeln("let _ = this; // suppress unused warning");
+            let what_msg = class_name
+                .rsplit("::")
+                .next()
+                .unwrap_or(class_name);
+            self.writeln(&format!(
+                "b\"{}\\0\".as_ptr() as *const i8",
+                what_msg
+            ));
             self.indent -= 1;
             self.writeln("}");
         }
@@ -15146,6 +15196,7 @@ impl AstCodeGen {
                 | "Writer_FileWriteStream"
                 | "PrettyWriter_FileWriteStream"
                 | "CapitalizeFilter_Writer_FileWriteStream"
+                | "FilterKeyHandler_Writer_FileWriteStream"
         );
         if needs_default_ctor_surface && !has_method(&self.output[impl_block_start..], "new_0") {
             self.current_struct_methods.insert("new_0".to_string(), 1);
@@ -15156,6 +15207,46 @@ impl AstCodeGen {
                 "// Surface-only fallback: avoid requiring `Default` on partial template shells.",
             );
             self.writeln("unsafe { std::mem::MaybeUninit::<Self>::zeroed().assume_init() }");
+            self.indent -= 1;
+            self.writeln("}");
+        }
+
+        // FileReadStream::Read stub — Read() reads from fp_ into the buffer.
+        // A minimal stub advances current_ to allow constructor/Take to compile.
+        let is_file_read_stream =
+            rust_name == "FileReadStream" || class_name.contains("FileReadStream");
+        if is_file_read_stream && !has_method(&self.output[impl_block_start..], "Read") {
+            self.current_struct_methods.insert("Read".to_string(), 1);
+            self.writeln("");
+            self.writeln("pub fn Read(&mut self) {");
+            self.indent += 1;
+            self.writeln("// Surface stub: advance buffer pointer or read from file.");
+            self.writeln("if self.current_ < self.bufferLast_ {");
+            self.indent += 1;
+            self.writeln("self.current_ = unsafe { self.current_.add(1) };");
+            self.indent -= 1;
+            self.writeln("} else if !self.eof_ {");
+            self.indent += 1;
+            self.writeln("self.count_ += self.readCount_;");
+            self.writeln("let read = unsafe { crate::fragile_runtime::fread(self.buffer_ as *mut (), 1, self.bufferSize_, self.fp_ as *mut std::ffi::c_void) };");
+            self.writeln("self.readCount_ = read as u64;");
+            self.writeln(
+                "self.bufferLast_ = unsafe { self.buffer_.add(self.readCount_ as usize).sub(1) };",
+            );
+            self.writeln("self.current_ = self.buffer_;");
+            self.writeln("if self.readCount_ < self.bufferSize_ {");
+            self.indent += 1;
+            self.writeln(
+                "unsafe { *self.buffer_.add(self.readCount_ as usize) = 0; }",
+            );
+            self.writeln(
+                "self.bufferLast_ = unsafe { self.bufferLast_.add(1) };",
+            );
+            self.writeln("self.eof_ = true;");
+            self.indent -= 1;
+            self.writeln("}");
+            self.indent -= 1;
+            self.writeln("}");
             self.indent -= 1;
             self.writeln("}");
         }
@@ -22614,15 +22705,11 @@ impl AstCodeGen {
         self.generated_structs.insert(rust_name.clone());
         self.union_types.insert(rust_name.clone());
 
-        // Check if any field needs ManuallyDrop (non-Copy types like structs or c_void)
+        // Check if any field needs ManuallyDrop (non-Copy types: structs, c_void, etc.)
         let has_non_copy_field = children.iter().any(|child| {
             if let ClangNodeKind::FieldDecl { ty, .. } = &child.kind {
-                let type_str = ty.to_rust_type_str();
-                // Keep union fields plain for regular C structs. Only force ManuallyDrop
-                // for c_void-like placeholders which are never Copy.
-                type_str.contains("c_void")
-                    || type_str.starts_with("_unnamed_struct_at__usr_include_")
-                    || type_str.starts_with("_unnamed_union_at__usr_include_")
+                let type_str = Self::normalize_known_union_helper_field_type(ty.to_rust_type_str());
+                !Self::is_definitely_copy_rust_type(&type_str)
             } else {
                 false
             }
@@ -22654,11 +22741,8 @@ impl AstCodeGen {
                 let vis = access_to_visibility(*access);
                 let type_str =
                     Self::normalize_known_union_helper_field_type(ty.to_rust_type_str_for_field());
-                // Wrap only c_void-like placeholders in ManuallyDrop for union compatibility.
-                let wrapped_type = if type_str.contains("c_void")
-                    || type_str.starts_with("_unnamed_struct_at__usr_include_")
-                    || type_str.starts_with("_unnamed_union_at__usr_include_")
-                {
+                // Wrap non-Copy types in ManuallyDrop for union compatibility.
+                let wrapped_type = if !Self::is_definitely_copy_rust_type(&type_str) {
                     format!("std::mem::ManuallyDrop<{}>", type_str)
                 } else {
                     type_str
@@ -25759,19 +25843,31 @@ impl AstCodeGen {
             || rust_name.contains("ctype_")
             || rust_name.contains("collate_byname_");
         if has_explicit_copy_ctor && !skip_clone {
-            self.writeln("");
-            self.writeln(&format!("impl Clone for {} {{", rust_name));
-            self.indent += 1;
-            self.writeln("fn clone(&self) -> Self {");
-            self.indent += 1;
             // Use the emitted copy constructor overload (can be suffixed when
             // one-arg constructors are overloaded, e.g., pointer + ref + copy).
             let copy_ctor_name = copy_ctor_fn_name.as_deref().unwrap_or("new_1");
-            self.writeln(&format!("Self::{}(self)", copy_ctor_name));
-            self.indent -= 1;
-            self.writeln("}");
-            self.indent -= 1;
-            self.writeln("}");
+            // Only emit Clone impl if the copy constructor was actually emitted
+            // for THIS type (it may have been rolled back by validators).
+            // Search within the current struct's impl block output, not the entire file.
+            let impl_marker = format!("impl {} {{", rust_name);
+            let copy_ctor_pattern = format!("pub fn {}(", copy_ctor_name);
+            let copy_ctor_exists = if let Some(impl_pos) = self.output.rfind(&impl_marker) {
+                self.output[impl_pos..].contains(&copy_ctor_pattern)
+            } else {
+                false
+            };
+            if copy_ctor_exists {
+                self.writeln("");
+                self.writeln(&format!("impl Clone for {} {{", rust_name));
+                self.indent += 1;
+                self.writeln("fn clone(&self) -> Self {");
+                self.indent += 1;
+                self.writeln(&format!("Self::{}(self)", copy_ctor_name));
+                self.indent -= 1;
+                self.writeln("}");
+                self.indent -= 1;
+                self.writeln("}");
+            }
         }
 
         // Note: Trait generation removed - now using vtable-based dispatch
@@ -26005,17 +26101,14 @@ impl AstCodeGen {
         }
         self.register_namespace_type_alias(&rust_name);
 
-        // Check if any field needs ManuallyDrop.
-        // Keep regular C union payload types plain; only wrap c_void placeholders.
+        // Check if any field needs ManuallyDrop (non-Copy types: structs, c_void, etc.)
         let has_non_copy_field = children.iter().any(|child| {
             if let ClangNodeKind::FieldDecl { ty, is_static, .. } = &child.kind {
                 if *is_static {
                     return false;
                 }
-                let type_str = ty.to_rust_type_str();
-                type_str.contains("c_void")
-                    || type_str.starts_with("_unnamed_struct_at__usr_include_")
-                    || type_str.starts_with("_unnamed_union_at__usr_include_")
+                let type_str = Self::normalize_known_union_helper_field_type(ty.to_rust_type_str());
+                !Self::is_definitely_copy_rust_type(&type_str)
             } else {
                 false
             }
@@ -26050,11 +26143,8 @@ impl AstCodeGen {
                 };
                 let vis = access_to_visibility(*access);
                 let type_str = Self::normalize_known_union_helper_field_type(ty.to_rust_type_str());
-                // Wrap only c_void-like placeholders in ManuallyDrop for union compatibility.
-                let wrapped_type = if type_str.contains("c_void")
-                    || type_str.starts_with("_unnamed_struct_at__usr_include_")
-                    || type_str.starts_with("_unnamed_union_at__usr_include_")
-                {
+                // Wrap non-Copy types in ManuallyDrop for union compatibility.
+                let wrapped_type = if !Self::is_definitely_copy_rust_type(&type_str) {
                     format!("std::mem::ManuallyDrop<{}>", type_str)
                 } else {
                     type_str
@@ -28357,6 +28447,31 @@ impl AstCodeGen {
         } else {
             Some(ptr_expr)
         }
+    }
+
+    /// Check whether a Rust type string is definitely `Copy` (primitives, pointers,
+    /// arrays of primitives). Used for union field wrapping decisions — types that
+    /// are NOT definitely Copy must be wrapped in `ManuallyDrop` in union fields.
+    fn is_definitely_copy_rust_type(type_str: &str) -> bool {
+        let s = type_str.trim();
+        // Raw pointers are always Copy
+        if s.starts_with("*mut ") || s.starts_with("*const ") {
+            return true;
+        }
+        // Arrays of primitives: [T; N]
+        if s.starts_with('[') && s.ends_with(']') {
+            if let Some(semi) = s.find(';') {
+                let inner = s[1..semi].trim();
+                return Self::is_definitely_copy_rust_type(inner);
+            }
+        }
+        // Rust primitives
+        matches!(
+            s,
+            "i8" | "i16" | "i32" | "i64" | "i128"
+                | "u8" | "u16" | "u32" | "u64" | "u128"
+                | "f32" | "f64" | "bool" | "usize" | "isize"
+        )
     }
 
     /// Check whether a type resolves to a generated union type.

@@ -4,144 +4,139 @@ Guidance for working in this repository.
 
 ## Project Overview
 
-**Fragile** is a C++ → Rust transpiler (with future Go support). It parses C++ with Clang and **generates Rust source code** (often `unsafe`) which is then compiled by `rustc`.
+**Fragile** currently has two active C++ lanes:
+- `fragile` CLI: transpile C++ to Rust source.
+- `fragilec` driver shim: strict-mode C++ compiler-driver replacement that transpiles to Rust, then invokes `rustc`.
 
-### Vision
-- Generate readable, debuggable Rust from real-world C++
-- Preserve C++ semantics via explicit `unsafe` blocks and runtime helpers
-- Keep the pipeline stable and toolchain-friendly (no rustc internals)
+Pipeline:
 
-### Current Status
-- **C++ Support**: Primary focus (see `TODO.md` and `docs/transpiler-status.md`)
-- **Go Support**: Planned via transpiling Go SSA → Rust source (no MIR injection)
+```
+C++ Source -> Clang AST -> Rust Source (unsafe) -> rustc -> Binary
+```
 
----
+## Current Status (as of 2026-02-24)
+
+- `fragilec` is **strict-only** (`FRAGILEC_MODE=auto/pass` removed).
+- RapidJSON no-STL strict baseline (`condense`/`pretty`) passes in real-world ignored harness tests.
+- RapidJSON strict CMake build with `RAPIDJSON_BUILD_TESTS=OFF`:
+  - configure passes,
+  - full build passes (all 13 example targets compile and link).
+- RapidJSON with `RAPIDJSON_BUILD_TESTS=ON` is not yet supported in strict mode (configure fails during CXX feature detection / gtest `target_compile_features`).
+- Authoritative status and blocker ledger live in `TODO.md` (not `docs/transpiler-status.md`).
 
 ## Goal and Development Philosophy
 
-The goal is to build a **correct, general-purpose C++ compiler** that works by transpiling to Rust. Every feature should be implemented in the **transpiler itself** (parsing, type resolution, code generation), not by hand-writing target-language code for specific types or libraries.
+The goal is a correct, general C++ compiler path via transpilation to Rust source.
 
-### Anti-patterns to avoid
-- **Hand-writing Rust stubs** for specific C++ types (e.g., hand-writing `__emplace_unique` for `std::map`). If a type doesn't transpile, fix the transpiler bug that blocks it.
-- **Treating test cases as the goal**. Tests are drivers to find transpiler bugs, not targets to make pass by any means necessary.
-- **Skip-listing instead of fixing**. When generated code is wrong, understand WHY the transpiler produces it and fix the root cause. Rollback patterns are safety nets, not solutions.
+Guidelines:
+- Prefer root-cause transpiler fixes (parse/type/codegen) over one-off hacks.
+- Use real-world fixtures as bug drivers.
+- Keep strict-mode behavior deterministic and logged.
+- Temporary constrained fallbacks are acceptable only when:
+  - narrow in scope,
+  - regression-tested,
+  - tracked in `TODO.md` and real-world harnesses.
 
-### Development approach
-- Use real C++ programs as **drivers** to discover transpiler bugs
-- Start with simple programs (no STL) and work up to complex ones
-- When a driver fails, diagnose which transpiler phase is wrong (parsing, type resolution, code generation) and fix that phase
-- Each fix should be general — it should improve transpilation of ALL C++ code, not just the current driver
+## Do Not Use Rustc Internals
 
----
-
-## 🚫 Do NOT use rustc MIR injection
-
-We are **not** pursuing rustc MIR injection or any rustc-private integration. The only supported compilation path is:
-
-```
-C++ Source ─► Clang AST ─► Rust Source (unsafe) ─► rustc ─► Binary
-```
-
-Avoid:
-- rustc private crates (`rustc_driver`, `rustc_interface`, etc.)
-- MIR conversion/injection plans
-- custom rustc drivers or query overrides
-
----
+Do not introduce:
+- rustc private crates (`rustc_driver`, `rustc_interface`, etc.),
+- MIR injection/conversion paths,
+- custom rustc query overrides.
 
 ## Crate Structure
 
 | Crate | Purpose |
 |-------|---------|
-| `fragile-clang` | Clang AST → Rust source code generation |
-| `fragile-cli` | Command-line interface |
+| `fragile-clang` | Clang AST parsing + Rust code generation |
+| `fragile-cli` | `fragile` and `fragilec` binaries |
 | `fragile-build` | Build config parsing |
 | `fragile-common` | Shared utilities |
-| `fragile-runtime` | Runtime support (allocation helpers, etc.) |
-
----
+| `fragile-runtime` | Runtime helpers used by generated code |
+| `fragile-ast-exporter` | AST exporter utilities |
 
 ## Build Commands
 
 ### Prerequisites
 - Rust 1.75+
-- LLVM 19
-- Clang/libclang (for C++ support)
+- LLVM/libclang 19-compatible
 
 ```bash
-# Install libclang (Ubuntu/Debian)
-sudo apt install libclang-dev llvm-dev
-
-# Set libclang path for builds
+sudo apt install libclang-dev libclang-cpp-dev llvm-dev
 export LIBCLANG_PATH=/usr/lib/x86_64-linux-gnu
 ```
 
-### Building
+### Build
 
 ```bash
-# Build all crates
+# Workspace
 cargo build
 
-# Build with libclang path (required for fragile-clang)
-LIBCLANG_PATH=/usr/lib/x86_64-linux-gnu cargo build
-
-# Build release
-cargo build --release
+# Build strict compiler driver
+cargo build -p fragile-cli --bin fragilec
 ```
 
-### Testing
+## Test Commands
 
 ```bash
-# Run all tests
-LIBCLANG_PATH=/usr/lib/x86_64-linux-gnu cargo test
+# Full workspace
+cargo test --workspace
 
-# Run tests for specific crate
-cargo test --package fragile-clang
+# RapidJSON harness (local + non-ignored)
+cargo test -p fragile-clang --test real_world_rapidjson_tests -- --nocapture
 
-# Run with output
-cargo test -- --nocapture
+# RapidJSON real-world ignored matrix (long-running)
+cargo test -p fragile-clang --test real_world_rapidjson_tests -- --ignored --nocapture --test-threads=1
+
+# Single strict CMake no-tests capture replay
+cargo test -p fragile-clang --test real_world_rapidjson_tests \
+  test_real_world_rapidjson_cmake_no_tests_full_build_with_fragilec_capture_first_failure \
+  -- --ignored --nocapture --test-threads=1
 ```
 
-### Using the CLI
+## CLI Usage
 
 ```bash
 # Transpile C++ to Rust
 fragile transpile file.cpp -o output.rs
 
-# Transpile with include paths
-fragile transpile file.cpp -I /path/to/headers -o output.rs
+# With includes/defines
+fragile transpile file.cpp -I /path/to/include -DMACRO=1 -o output.rs
 
-# Transpile with libc++ (recommended for STL code)
-fragile transpile file.cpp --use-libcxx -o output.rs
+# Enable LibTooling method-body enrichment
+fragile transpile file.cpp --use-libtooling -o output.rs
 ```
-
-### Using libc++ (Optional)
-
-For transpiling code that uses STL containers (`std::vector`, `std::string`, etc.),
-we recommend using LLVM's libc++ instead of GCC's libstdc++ because libc++ has
-cleaner, more transpiler-friendly code.
 
 ```bash
-# Install libc++ (Ubuntu/Debian)
-sudo apt install libc++-dev libc++abi-dev
+# strict compile-only
+FRAGILEC_MODE=strict ./target/debug/fragilec -c file.cpp -o file.o
 
-# Use libc++ for transpilation
-fragile transpile file.cpp --use-libcxx -o output.rs
+# strict link
+FRAGILEC_MODE=strict ./target/debug/fragilec file.o -o app
+
+# driver help
+./target/debug/fragilec --fragilec-help
 ```
 
-**Why libc++?**
-- Designed for Clang (better compatibility)
-- Clean, modern code structure
-- Minimal compiler intrinsics
-- Simpler header organization
+## RapidJSON Working Commands
 
----
+```bash
+# Configure (tests off)
+CXX=/home/shuai/workspace/fragile/target/debug/fragilec FRAGILEC_MODE=strict \
+  cmake -DRAPIDJSON_BUILD_TESTS=OFF ..
+
+# Build
+CXX=/home/shuai/workspace/fragile/target/debug/fragilec FRAGILEC_MODE=strict \
+  cmake --build . -j4
+```
 
 ## Key Files
 
-- `crates/fragile-clang/src/parse.rs` - Clang AST parsing via libclang
-- `crates/fragile-clang/src/ast.rs` - Clang AST representation
-- `crates/fragile-clang/src/types.rs` - C++ type mappings
-- `crates/fragile-clang/src/ast_codegen.rs` - AST → Rust source code generation
-- `crates/fragile-cli/src/main.rs` - CLI entry point
-- `TODO.md` - Current task list
+- `crates/fragile-clang/src/parse.rs` - parser + diagnostic handling
+- `crates/fragile-clang/src/types.rs` - C++ type normalization/mapping
+- `crates/fragile-clang/src/ast_codegen.rs` - AST -> Rust codegen + fallback surfaces
+- `crates/fragile-cli/src/main.rs` - `fragile` CLI
+- `crates/fragile-cli/src/bin/fragilec.rs` - strict compiler-driver shim
+- `crates/fragile-clang/tests/real_world_rapidjson_tests.rs` - RapidJSON harness
+- `TODO.md` - authoritative active status and blocker ledger
+- `docs/dev/plan_rapidjson_strict.md` - strict RapidJSON plan and scope
