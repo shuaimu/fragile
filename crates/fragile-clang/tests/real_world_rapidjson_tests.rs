@@ -37,6 +37,8 @@ const RAPIDJSON_NO_STL_EXAMPLES: &[(&str, &str)] = &[
 ];
 const RAPIDJSON_SAMPLE_JSON: &str = "{\"a\":1,\"b\":[true,false],\"msg\":\"hi\"}\n";
 const RAPIDJSON_EXPECTED_CONDENSE_OUTPUT: &str = "{\"a\":1,\"b\":[true,false],\"msg\":\"hi\"}";
+const RAPIDJSON_CONST_ASSIGN_PARSER_DIAGNOSTIC_FRAGMENT: &str =
+    "cannot assign to non-static data member 'length' with const-qualified type 'const SizeType'";
 const RAPIDJSON_NATIVE_LOG_FILES: &[&str] = &[
     "compile_condense.status",
     "compile_condense.stdout",
@@ -2005,6 +2007,11 @@ fn test_real_world_rapidjson_strict_filterkeydom_compile_capture() {
         !first_stderr.contains("error[E0428]"),
         "strict filterkeydom replay should no longer surface duplicate-definition E0428 as first failure"
     );
+    assert!(
+        !first_stderr.contains(RAPIDJSON_CONST_ASSIGN_PARSER_DIAGNOSTIC_FRAGMENT),
+        "strict filterkeydom replay should not regress to rapidjson document.h const-assignment parse diagnostics, got:\n{}",
+        first_stderr
+    );
 
     let first_class = fs::read_to_string(log_dir.join("first_failing_compile_class.txt"))
         .expect("failed to read first_failing_compile_class.txt");
@@ -2058,6 +2065,11 @@ fn test_real_world_rapidjson_cmake_no_tests_full_build_with_fragilec_capture_fir
         assert!(
             !stream.contains("main symbol diagnostic:\n  defining objects: <none>"),
             "strict rapidjson no-tests replay should not report shim-only missing-main symbol diagnostics, got:\n{}",
+            stream
+        );
+        assert!(
+            !stream.contains(RAPIDJSON_CONST_ASSIGN_PARSER_DIAGNOSTIC_FRAGMENT),
+            "strict rapidjson no-tests replay should not regress to rapidjson document.h const-assignment parse diagnostics, got:\n{}",
             stream
         );
     }
