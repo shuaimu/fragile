@@ -20889,6 +20889,9 @@ impl AstCodeGen {
         self.writeln("// Memory search functions");
         self.writeln("#[inline] pub fn __constexpr_memchr_i8_i8(s: *const i8, c: i8, n: u64) -> *const i8 { unsafe { for i in 0..n as usize { if *s.add(i) == c { return s.add(i); } } std::ptr::null() } }");
         self.writeln("#[inline] pub fn __constexpr_memchr_u8_u8(s: *const u8, c: u8, n: u64) -> *const u8 { unsafe { for i in 0..n as usize { if *s.add(i) == c { return s.add(i); } } std::ptr::null() } }");
+        self.writeln("#[inline] pub fn __constexpr_strlen_i8(s: *const i8) -> u64 { unsafe { let mut len = 0u64; while *s.add(len as usize) != 0 { len += 1; } len } }");
+        self.writeln("#[inline] pub fn __constexpr_strlen_u8(s: *const u8) -> u64 { unsafe { let mut len = 0u64; while *s.add(len as usize) != 0 { len += 1; } len } }");
+        self.writeln("#[inline] pub fn __constexpr_wmemchr_i32_i32(s: *mut i32, c: i32, n: u64) -> *mut i32 { unsafe { for i in 0..n as usize { let p = s.add(i); if *p == c { return p; } } std::ptr::null_mut() } }");
         self.writeln("#[inline] pub fn fill_n_char_u64_i8(dest: *mut i8, n: u64, c: i8) -> *mut i8 { unsafe { for i in 0..n as usize { *dest.add(i) = c; } dest.add(n as usize) } }");
         self.writeln("#[inline] pub fn __find_ptr_mut_u16_ptr_mut_u16_u16(first: *mut u16, last: *mut u16, val: u16) -> *mut u16 { unsafe { let mut p = first; while p != last { if *p == val { return p; } p = p.add(1); } last } }");
         self.writeln("#[inline] pub fn __find_ptr_mut_u32_ptr_mut_u32_u32(first: *mut u32, last: *mut u32, val: u32) -> *mut u32 { unsafe { let mut p = first; while p != last { if *p == val { return p; } p = p.add(1); } last } }");
@@ -21600,6 +21603,9 @@ impl AstCodeGen {
             "__atomic_wait_std_atomic_flag_bool",
             "__atomic_notify_one_std_atomic_flag",
             "__atomic_notify_all_std_atomic_flag",
+            "__constexpr_strlen_i8",
+            "__constexpr_strlen_u8",
+            "__constexpr_wmemchr_i32_i32",
             "fill_n_char_u64_i8",
             "copy_n_char_i32_char",
         ]
@@ -42977,6 +42983,26 @@ mod tests {
         assert!(
             !code.contains("pub fn __atomic_notify_all_std_atomic_flag_1"),
             "preamble helper must not be re-emitted with overload suffix, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_preamble_emits_constexpr_char_helpers_for_rapidjson_capitalize() {
+        let code = AstCodeGen::new().generate(&make_node(ClangNodeKind::TranslationUnit, vec![]));
+        assert!(
+            code.contains("pub fn __constexpr_strlen_i8("),
+            "preamble should expose __constexpr_strlen_i8 helper, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("pub fn __constexpr_strlen_u8("),
+            "preamble should expose __constexpr_strlen_u8 helper, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("pub fn __constexpr_wmemchr_i32_i32("),
+            "preamble should expose __constexpr_wmemchr_i32_i32 helper, got:\n{}",
             code
         );
     }
