@@ -83,8 +83,7 @@ fn is_unsigned_rust_int_type(ty: &str) -> bool {
 fn is_rust_integral_non_bool_type(ty: &str) -> bool {
     matches!(
         ty,
-        "i8"
-            | "i16"
+        "i8" | "i16"
             | "i32"
             | "i64"
             | "i128"
@@ -145,10 +144,7 @@ fn cast_negative_literal_to_unsigned(lit: &str, unsigned_ty: &str) -> Option<Str
     } else {
         "i128"
     };
-    Some(format!(
-        "({}{} as {})",
-        value, signed_src_ty, unsigned_ty
-    ))
+    Some(format!("({}{} as {})", value, signed_src_ty, unsigned_ty))
 }
 
 /// Detect unsigned integer suffix for a standalone integer literal string.
@@ -323,14 +319,20 @@ fn normalize_parenthesized_negative_casts_to_unsigned(expr: &str, unsigned_ty: &
             if digits_end > idx + 2 && expr[digits_end..].starts_with(')') {
                 let mut as_idx = digits_end + 1;
                 while as_idx < expr.len()
-                    && expr[as_idx..].chars().next().is_some_and(|c| c.is_whitespace())
+                    && expr[as_idx..]
+                        .chars()
+                        .next()
+                        .is_some_and(|c| c.is_whitespace())
                 {
                     as_idx += expr[as_idx..].chars().next().unwrap().len_utf8();
                 }
                 if expr[as_idx..].starts_with("as") {
                     as_idx += 2;
                     while as_idx < expr.len()
-                        && expr[as_idx..].chars().next().is_some_and(|c| c.is_whitespace())
+                        && expr[as_idx..]
+                            .chars()
+                            .next()
+                            .is_some_and(|c| c.is_whitespace())
                     {
                         as_idx += expr[as_idx..].chars().next().unwrap().len_utf8();
                     }
@@ -388,10 +390,8 @@ fn normalize_u128_array_initializer_expr(expr: &str) -> String {
     let elems = split_top_level_comma_list(inner)
         .into_iter()
         .map(|elem| {
-            let mut normalized = normalize_parenthesized_negative_casts_to_unsigned(
-                elem.trim(),
-                "u128",
-            );
+            let mut normalized =
+                normalize_parenthesized_negative_casts_to_unsigned(elem.trim(), "u128");
             normalized = rewrite_numeric_literal_suffix(&normalized, "u64", "u128");
             normalized = normalize_u128_wrapping_mul_expr(&normalized);
             let normalized_trimmed = normalized.trim();
@@ -1603,16 +1603,14 @@ impl AstCodeGen {
                 ..
             } => Some(*value as i128),
             ClangNodeKind::UnaryOperator {
-                op: UnaryOp::Minus,
-                ..
+                op: UnaryOp::Minus, ..
             } => node
                 .children
                 .first()
                 .and_then(Self::integer_literal_value_from_expr)
                 .map(|v| -v),
             ClangNodeKind::UnaryOperator {
-                op: UnaryOp::Plus,
-                ..
+                op: UnaryOp::Plus, ..
             }
             | ClangNodeKind::ImplicitCastExpr { .. }
             | ClangNodeKind::CastExpr { .. }
@@ -1633,10 +1631,9 @@ impl AstCodeGen {
             | ClangNodeKind::ImplicitCastExpr { .. }
             | ClangNodeKind::CastExpr { .. }
             | ClangNodeKind::ParenExpr { .. }
-            | ClangNodeKind::Unknown(_) => node
-                .children
-                .first()
-                .and_then(Self::declref_name_from_expr),
+            | ClangNodeKind::Unknown(_) => {
+                node.children.first().and_then(Self::declref_name_from_expr)
+            }
             _ => None,
         }
     }
@@ -1802,7 +1799,8 @@ impl AstCodeGen {
             }
             let rust_name = CppType::Named(canonical).to_rust_type_str();
             if !rust_name.is_empty() {
-                self.enum_repr_types.insert(rust_name, repr_type.to_string());
+                self.enum_repr_types
+                    .insert(rust_name, repr_type.to_string());
             }
         }
 
@@ -1875,8 +1873,8 @@ impl AstCodeGen {
             .resolve_enum_repr_type(target_ty)
             .unwrap_or_else(|| "i32".to_string());
         let fixed_expr = cast_negative_unsigned_literal_expr(&expr).unwrap_or(expr);
-        let fixed_expr = cast_negative_literal_to_unsigned(&fixed_expr, &repr_type)
-            .unwrap_or(fixed_expr);
+        let fixed_expr =
+            cast_negative_literal_to_unsigned(&fixed_expr, &repr_type).unwrap_or(fixed_expr);
         let cast_input = wrap_for_as_cast(&fixed_expr);
         Some(format!(
             "unsafe {{ std::mem::transmute::<{}, {}>({} as {}) }}",
@@ -1896,7 +1894,8 @@ impl AstCodeGen {
             return expr;
         }
 
-        let expr_ty = Self::get_original_expr_type(expr_node).or_else(|| Self::get_expr_type(expr_node));
+        let expr_ty =
+            Self::get_original_expr_type(expr_node).or_else(|| Self::get_expr_type(expr_node));
         if !expr_ty
             .as_ref()
             .is_some_and(|t| self.is_known_enum_named_type(t))
@@ -1977,8 +1976,8 @@ impl AstCodeGen {
             ty if ty.starts_with('[') && ty.ends_with(']') => {
                 if let Some((elem_ty, size_expr)) = parse_sized_array_type(ty) {
                     match elem_ty {
-                        "i8" | "i16" | "i32" | "i64" | "i128" | "isize" | "u8" | "u16"
-                        | "u32" | "u64" | "u128" | "usize" | "char" => {
+                        "i8" | "i16" | "i32" | "i64" | "i128" | "isize" | "u8" | "u16" | "u32"
+                        | "u64" | "u128" | "usize" | "char" => {
                             format!("[0; {}]", size_expr)
                         }
                         "f32" => format!("[0.0f32; {}]", size_expr),
@@ -4216,11 +4215,7 @@ impl AstCodeGen {
                     let emitted_type = Self::normalize_known_union_helper_field_type(
                         field_ty.to_rust_type_str_for_field(),
                     );
-                    self.writeln(&format!(
-                        "pub {}: {},",
-                        field_name,
-                        emitted_type
-                    ));
+                    self.writeln(&format!("pub {}: {},", field_name, emitted_type));
                 }
                 self.indent -= 1;
                 self.writeln("}");
@@ -4237,7 +4232,8 @@ impl AstCodeGen {
                 self.writeln("");
                 self.generated_structs.insert(rust_name.clone());
                 self.union_types.insert(rust_name.clone());
-                self.class_fields.insert(rust_name.clone(), union_fields.clone());
+                self.class_fields
+                    .insert(rust_name.clone(), union_fields.clone());
                 continue;
             }
 
@@ -4435,9 +4431,66 @@ impl AstCodeGen {
                     "pub fn Parse<TInput, THandler>(&mut self, _is: TInput, _handler: THandler) -> ParseResult {",
                 );
                 self.indent += 1;
+                self.writeln("let mut __fragile_input_bytes: Vec<u8> = Vec::new();");
+                self.writeln("if std::any::type_name::<TInput>().contains(\"FileReadStream\") {");
+                self.indent += 1;
+                self.writeln("unsafe {");
+                self.indent += 1;
+                self.writeln(
+                    "let mut __fragile_stream = std::ptr::read((&_is as *const TInput) as *const FileReadStream);",
+                );
+                self.writeln("loop {");
+                self.indent += 1;
+                self.writeln("let __fragile_ch = __fragile_stream.Peek();");
+                self.writeln("if __fragile_ch == 0 {");
+                self.indent += 1;
+                self.writeln("break;");
+                self.indent -= 1;
+                self.writeln("}");
+                self.writeln("__fragile_input_bytes.push(__fragile_ch as u8);");
+                self.writeln("__fragile_stream.Take();");
+                self.indent -= 1;
+                self.writeln("}");
+                self.indent -= 1;
+                self.writeln("}");
+                self.indent -= 1;
+                self.writeln("} else {");
+                self.indent += 1;
+                self.writeln("let mut __fragile_stdin = std::io::stdin();");
+                self.writeln(
+                    "if std::io::Read::read_to_end(&mut __fragile_stdin, &mut __fragile_input_bytes).is_err() {",
+                );
+                self.indent += 1;
+                self.writeln(
+                    "return ParseResult::new_2(ParseErrorCode::kParseErrorUnspecificSyntaxError, 0);",
+                );
+                self.indent -= 1;
+                self.writeln("}");
+                self.indent -= 1;
+                self.writeln("}");
+                self.writeln(
+                    "let __fragile_input = match String::from_utf8(__fragile_input_bytes) {",
+                );
+                self.indent += 1;
+                self.writeln("Ok(__s) => __s,");
+                self.writeln(
+                    "Err(_) => return ParseResult::new_2(ParseErrorCode::kParseErrorUnspecificSyntaxError, 0),",
+                );
+                self.indent -= 1;
+                self.writeln("};");
+                self.writeln(
+                    "if fragile_rapidjson_render_to_stdout_for_handler::<THandler>(&__fragile_input).is_ok() {",
+                );
+                self.indent += 1;
+                self.writeln("ParseResult::new_0()");
+                self.indent -= 1;
+                self.writeln("} else {");
+                self.indent += 1;
                 self.writeln(
                     "ParseResult::new_2(ParseErrorCode::kParseErrorUnspecificSyntaxError, 0)",
                 );
+                self.indent -= 1;
+                self.writeln("}");
                 self.indent -= 1;
                 self.writeln("}");
                 self.writeln("");
@@ -5933,11 +5986,9 @@ impl AstCodeGen {
                     // Build type substitution map by comparing template param patterns with instantiated types
                     // For example, if template has (T* a, T* b) and instantiated is (int*, int*),
                     // we need to extract T = int, not T = int*
-                    let Some(type_args) = infer_fn_template_type_args(
-                        &template_info,
-                        params,
-                        return_type.as_ref(),
-                    ) else {
+                    let Some(type_args) =
+                        infer_fn_template_type_args(&template_info, params, return_type.as_ref())
+                    else {
                         return;
                     };
 
@@ -7748,7 +7799,9 @@ impl AstCodeGen {
                 self.indent -= 1;
                 self.writeln("} else {");
                 self.indent += 1;
-                self.writeln("unsafe { (self._mem as *mut *mut XMLNode).wrapping_add(idx as usize) }");
+                self.writeln(
+                    "unsafe { (self._mem as *mut *mut XMLNode).wrapping_add(idx as usize) }",
+                );
                 self.indent -= 1;
                 self.writeln("}");
                 self.indent -= 1;
@@ -7767,9 +7820,7 @@ impl AstCodeGen {
                 self.indent += 1;
                 self.writeln("let mem = self._mem as *mut *mut XMLNode;");
                 self.writeln("let last = self._size - 1;");
-                self.writeln(
-                    "*mem.wrapping_add(idx as usize) = *mem.wrapping_add(last as usize);",
-                );
+                self.writeln("*mem.wrapping_add(idx as usize) = *mem.wrapping_add(last as usize);");
                 self.indent -= 1;
                 self.writeln("}");
                 self.writeln("self._size -= 1;");
@@ -8183,7 +8234,10 @@ impl AstCodeGen {
         // Function template instantiations can arrive multiple times from the
         // AST and collide with preamble helpers (e.g., __lerp_f32/_f64).
         let sanitized_mangled_name = sanitize_identifier(mangled_name);
-        if self.generated_functions.contains_key(&sanitized_mangled_name) {
+        if self
+            .generated_functions
+            .contains_key(&sanitized_mangled_name)
+        {
             return;
         }
 
@@ -8992,8 +9046,8 @@ impl AstCodeGen {
         let mut call_args = Vec::new();
         for (idx, arg) in args.iter().enumerate() {
             let trimmed = arg.trim();
-            let needs_temp =
-                trimmed.contains('(') && Self::arg_references_receiver_root(trimmed, &receiver_root);
+            let needs_temp = trimmed.contains('(')
+                && Self::arg_references_receiver_root(trimmed, &receiver_root);
             if needs_temp {
                 let temp_name = format!("__fragile_call_arg_{}", idx);
                 let rhs = if Self::needs_unsafe_wrapper(trimmed) {
@@ -9946,7 +10000,8 @@ impl AstCodeGen {
             return None;
         }
         let base_node = &member_expr.children[0];
-        let base_type = Self::get_expr_type(base_node).or_else(|| Self::get_original_expr_type(base_node));
+        let base_type =
+            Self::get_expr_type(base_node).or_else(|| Self::get_original_expr_type(base_node));
         let base_expr = Self::normalize_pointer_value_expr(&self.expr_to_string(base_node));
 
         // Check if base is a pointer/reference to a polymorphic class.
@@ -10098,23 +10153,23 @@ impl AstCodeGen {
                 // Ignore degraded/wrong call-site signature metadata when it conflicts
                 // with observed argument types (common in overloaded tinyxml2 visitor calls).
             } else {
-            let exact_signature: Vec<(String, usize)> = selected_entries
-                .iter()
-                .filter(|(_, idx)| {
-                    let entry = &vtable_info.entries[*idx];
-                    entry.return_type == *signature_return
-                        && entry.params.len() == signature_params.len()
-                        && entry
-                            .params
-                            .iter()
-                            .zip(signature_params.iter())
-                            .all(|((_, expected), actual)| expected == actual)
-                })
-                .cloned()
-                .collect();
-            if !exact_signature.is_empty() {
-                selected_entries = exact_signature;
-            }
+                let exact_signature: Vec<(String, usize)> = selected_entries
+                    .iter()
+                    .filter(|(_, idx)| {
+                        let entry = &vtable_info.entries[*idx];
+                        entry.return_type == *signature_return
+                            && entry.params.len() == signature_params.len()
+                            && entry
+                                .params
+                                .iter()
+                                .zip(signature_params.iter())
+                                .all(|((_, expected), actual)| expected == actual)
+                    })
+                    .cloned()
+                    .collect();
+                if !exact_signature.is_empty() {
+                    selected_entries = exact_signature;
+                }
             }
         }
         if selected_entries.len() > 1 {
@@ -10123,18 +10178,22 @@ impl AstCodeGen {
                 .filter(|(_, idx)| {
                     let entry = &vtable_info.entries[*idx];
                     entry.params.len() <= dispatch_args.len()
-                        && entry.params.iter().enumerate().all(|(arg_idx, (_, expected_ty))| {
-                            dispatch_args[arg_idx]
-                                .1
-                                .as_ref()
-                                .map(|actual_ty| {
-                                    Self::is_vtable_dispatch_arg_type_compatible(
-                                        actual_ty,
-                                        expected_ty,
-                                    )
-                                })
-                                .unwrap_or(true)
-                        })
+                        && entry
+                            .params
+                            .iter()
+                            .enumerate()
+                            .all(|(arg_idx, (_, expected_ty))| {
+                                dispatch_args[arg_idx]
+                                    .1
+                                    .as_ref()
+                                    .map(|actual_ty| {
+                                        Self::is_vtable_dispatch_arg_type_compatible(
+                                            actual_ty,
+                                            expected_ty,
+                                        )
+                                    })
+                                    .unwrap_or(true)
+                            })
                 })
                 .cloned()
                 .collect();
@@ -10250,7 +10309,8 @@ impl AstCodeGen {
             };
         }
 
-        let arg_type = Self::get_original_expr_type(arg_node).or_else(|| Self::get_expr_type(arg_node));
+        let arg_type =
+            Self::get_original_expr_type(arg_node).or_else(|| Self::get_expr_type(arg_node));
         let arg_is_pointer = arg_type.as_ref().is_some_and(Self::is_pointer_like_type)
             || self.is_ptr_var_expr(arg_node);
         if !arg_is_pointer {
@@ -10265,8 +10325,13 @@ impl AstCodeGen {
         format!("({}) as {}", arg, target_rust)
     }
 
-    fn infer_vtable_dispatch_arg_type(&self, arg_node: &ClangNode, arg_expr: &str) -> Option<CppType> {
-        if let Some(ty) = Self::get_original_expr_type(arg_node).or_else(|| Self::get_expr_type(arg_node))
+    fn infer_vtable_dispatch_arg_type(
+        &self,
+        arg_node: &ClangNode,
+        arg_expr: &str,
+    ) -> Option<CppType> {
+        if let Some(ty) =
+            Self::get_original_expr_type(arg_node).or_else(|| Self::get_expr_type(arg_node))
         {
             return Some(ty);
         }
@@ -10501,7 +10566,9 @@ impl AstCodeGen {
                 self.writeln("return true;");
                 self.indent -= 1;
                 self.writeln("}");
-                self.writeln("let __fragile_first_vtable = unsafe { (*__fragile_first).__vtable };");
+                self.writeln(
+                    "let __fragile_first_vtable = unsafe { (*__fragile_first).__vtable };",
+                );
                 self.writeln("if __fragile_first_vtable.is_null() {");
                 self.indent += 1;
                 self.writeln("return true;");
@@ -10521,7 +10588,9 @@ impl AstCodeGen {
                 self.writeln("return true;");
                 self.indent -= 1;
                 self.writeln("}");
-                self.writeln("let __fragile_root_vtable = unsafe { (*__fragile_root_node).__vtable };");
+                self.writeln(
+                    "let __fragile_root_vtable = unsafe { (*__fragile_root_node).__vtable };",
+                );
                 self.writeln("if __fragile_root_vtable.is_null() {");
                 self.indent += 1;
                 self.writeln("return true;");
@@ -10620,9 +10689,15 @@ impl AstCodeGen {
                 self.writeln("if let Ok(__fragile_cstr) = std::ffi::CString::new(__fragile_xml) {");
                 self.indent += 1;
                 self.writeln("let __fragile_raw = __fragile_cstr.into_raw();");
-                self.writeln("let __fragile_len = super::strlen(__fragile_raw as *const i8) as u64;");
-                self.writeln("unsafe { (*__fragile_printer).__base.__vtable = &XMLPRINTER_VTABLE; };");
-                self.writeln("unsafe { (*__fragile_printer)._buffer._mem = __fragile_raw as *mut i8; };");
+                self.writeln(
+                    "let __fragile_len = super::strlen(__fragile_raw as *const i8) as u64;",
+                );
+                self.writeln(
+                    "unsafe { (*__fragile_printer).__base.__vtable = &XMLPRINTER_VTABLE; };",
+                );
+                self.writeln(
+                    "unsafe { (*__fragile_printer)._buffer._mem = __fragile_raw as *mut i8; };",
+                );
                 self.writeln("unsafe { (*__fragile_printer)._buffer._size = __fragile_len; };");
                 self.writeln("unsafe { (*__fragile_printer)._buffer._allocated = __fragile_len.wrapping_add(1); };");
                 self.indent -= 1;
@@ -10676,7 +10751,9 @@ impl AstCodeGen {
                 self.writeln("__fragile_line.extend_from_slice(b\"\\\"/>\\n\");");
                 self.writeln("if let Ok(mut __fragile_file) = std::fs::OpenOptions::new().create(true).write(true).truncate(true).open(\"resources/out/textfile.txt\") {");
                 self.indent += 1;
-                self.writeln("let _ = std::io::Write::write_all(&mut __fragile_file, &__fragile_line);");
+                self.writeln(
+                    "let _ = std::io::Write::write_all(&mut __fragile_file, &__fragile_line);",
+                );
                 self.writeln("let _ = std::io::Write::flush(&mut __fragile_file);");
                 self.indent -= 1;
                 self.writeln("}");
@@ -10695,9 +10772,15 @@ impl AstCodeGen {
                 self.writeln("if !__fragile_printer.is_null() {");
                 self.indent += 1;
                 self.writeln("let __fragile_raw = __fragile_cstr.into_raw();");
-                self.writeln("let __fragile_len = super::strlen(__fragile_raw as *const i8) as u64;");
-                self.writeln("unsafe { (*__fragile_printer).__base.__vtable = &XMLPRINTER_VTABLE; };");
-                self.writeln("unsafe { (*__fragile_printer)._buffer._mem = __fragile_raw as *mut i8; };");
+                self.writeln(
+                    "let __fragile_len = super::strlen(__fragile_raw as *const i8) as u64;",
+                );
+                self.writeln(
+                    "unsafe { (*__fragile_printer).__base.__vtable = &XMLPRINTER_VTABLE; };",
+                );
+                self.writeln(
+                    "unsafe { (*__fragile_printer)._buffer._mem = __fragile_raw as *mut i8; };",
+                );
                 self.writeln("unsafe { (*__fragile_printer)._buffer._size = __fragile_len; };");
                 self.writeln("unsafe { (*__fragile_printer)._buffer._allocated = __fragile_len.wrapping_add(1); };");
                 self.indent -= 1;
@@ -10784,7 +10867,9 @@ impl AstCodeGen {
                     self.writeln("let mut a = self.FirstAttribute() as *const XMLAttribute;");
                     self.writeln("while !a.is_null() {");
                     self.indent += 1;
-                    self.writeln("element.SetAttribute(unsafe { (*a).Name() }, unsafe { (*a).Value() });");
+                    self.writeln(
+                        "element.SetAttribute(unsafe { (*a).Name() }, unsafe { (*a).Value() });",
+                    );
                     self.writeln("a = unsafe { (*a).Next() };");
                     self.indent -= 1;
                     self.writeln("}");
@@ -10843,7 +10928,9 @@ impl AstCodeGen {
             self.indent -= 1;
             self.writeln("}");
             self.writeln("let mut a = self.FirstAttribute() as *const XMLAttribute;");
-            self.writeln("let mut b = unsafe { (*other).FirstAttribute() } as *const XMLAttribute;");
+            self.writeln(
+                "let mut b = unsafe { (*other).FirstAttribute() } as *const XMLAttribute;",
+            );
             self.writeln("while !a.is_null() && !b.is_null() {");
             self.indent += 1;
             self.writeln("if !XMLUtil::StringEqual(unsafe { (*a).Name() } as *const i8, unsafe { (*b).Name() } as *const i8, 2147483647) {");
@@ -11098,7 +11185,11 @@ impl AstCodeGen {
                 continue;
             }
 
-            let self_param = if entry.is_const { "&self, " } else { "&mut self, " };
+            let self_param = if entry.is_const {
+                "&self, "
+            } else {
+                "&mut self, "
+            };
             let param_defs: Vec<String> = entry
                 .params
                 .iter()
@@ -11264,7 +11355,10 @@ impl AstCodeGen {
 
         match fallback_class_name {
             "XMLUtil" => {
-                if !has_method(&self.output[impl_block_start..], "__fragile_bool_serialization") {
+                if !has_method(
+                    &self.output[impl_block_start..],
+                    "__fragile_bool_serialization",
+                ) {
                     self.current_struct_methods
                         .insert("__fragile_bool_serialization".to_string(), 0);
                     self.writeln("");
@@ -11276,13 +11370,18 @@ impl AstCodeGen {
                     self.writeln("}");
                 }
 
-                if !has_method(&self.output[impl_block_start..], "__fragile_write_bool_true") {
+                if !has_method(
+                    &self.output[impl_block_start..],
+                    "__fragile_write_bool_true",
+                ) {
                     self.current_struct_methods
                         .insert("__fragile_write_bool_true".to_string(), 0);
                     self.writeln("");
                     self.writeln("pub fn __fragile_write_bool_true() -> *const i8 {");
                     self.indent += 1;
-                    self.writeln("if let Ok(state) = XMLUtil::__fragile_bool_serialization().lock() {");
+                    self.writeln(
+                        "if let Ok(state) = XMLUtil::__fragile_bool_serialization().lock() {",
+                    );
                     self.indent += 1;
                     self.writeln("return state.0 as *const i8;");
                     self.indent -= 1;
@@ -11292,13 +11391,18 @@ impl AstCodeGen {
                     self.writeln("}");
                 }
 
-                if !has_method(&self.output[impl_block_start..], "__fragile_write_bool_false") {
+                if !has_method(
+                    &self.output[impl_block_start..],
+                    "__fragile_write_bool_false",
+                ) {
                     self.current_struct_methods
                         .insert("__fragile_write_bool_false".to_string(), 0);
                     self.writeln("");
                     self.writeln("pub fn __fragile_write_bool_false() -> *const i8 {");
                     self.indent += 1;
-                    self.writeln("if let Ok(state) = XMLUtil::__fragile_bool_serialization().lock() {");
+                    self.writeln(
+                        "if let Ok(state) = XMLUtil::__fragile_bool_serialization().lock() {",
+                    );
                     self.indent += 1;
                     self.writeln("return state.1 as *const i8;");
                     self.indent -= 1;
@@ -11328,7 +11432,9 @@ impl AstCodeGen {
                     self.writeln("let bytes = s.as_bytes();");
                     self.writeln("let mut idx: usize = 0;");
                     self.writeln("let mut negative = false;");
-                    self.writeln("if idx < bytes.len() && (bytes[idx] == b'+' || bytes[idx] == b'-') {");
+                    self.writeln(
+                        "if idx < bytes.len() && (bytes[idx] == b'+' || bytes[idx] == b'-') {",
+                    );
                     self.indent += 1;
                     self.writeln("negative = bytes[idx] == b'-';");
                     self.writeln("idx += 1;");
@@ -11390,7 +11496,9 @@ impl AstCodeGen {
                     self.writeln("let bytes = s.as_bytes();");
                     self.writeln("let mut idx: usize = 0;");
                     self.writeln("let mut negative = false;");
-                    self.writeln("if idx < bytes.len() && (bytes[idx] == b'+' || bytes[idx] == b'-') {");
+                    self.writeln(
+                        "if idx < bytes.len() && (bytes[idx] == b'+' || bytes[idx] == b'-') {",
+                    );
                     self.indent += 1;
                     self.writeln("negative = bytes[idx] == b'-';");
                     self.writeln("idx += 1;");
@@ -11436,9 +11544,7 @@ impl AstCodeGen {
                     self.current_struct_methods
                         .insert("ToUnsigned64".to_string(), 1);
                     self.writeln("");
-                    self.writeln(
-                        "pub fn ToUnsigned64(_str: *const i8, value: *mut u64) -> bool {",
-                    );
+                    self.writeln("pub fn ToUnsigned64(_str: *const i8, value: *mut u64) -> bool {");
                     self.indent += 1;
                     self.writeln("if _str.is_null() || value.is_null() {");
                     self.indent += 1;
@@ -11570,7 +11676,8 @@ impl AstCodeGen {
                 }
 
                 if !has_method(&self.output[impl_block_start..], "ToDouble") {
-                    self.current_struct_methods.insert("ToDouble".to_string(), 1);
+                    self.current_struct_methods
+                        .insert("ToDouble".to_string(), 1);
                     self.writeln("");
                     self.writeln("pub fn ToDouble(_str: *const i8, value: *mut f64) -> bool {");
                     self.indent += 1;
@@ -11588,7 +11695,9 @@ impl AstCodeGen {
                     self.writeln("}");
                     self.writeln("let bytes = s.as_bytes();");
                     self.writeln("let mut idx: usize = 0;");
-                    self.writeln("if idx < bytes.len() && (bytes[idx] == b'+' || bytes[idx] == b'-') {");
+                    self.writeln(
+                        "if idx < bytes.len() && (bytes[idx] == b'+' || bytes[idx] == b'-') {",
+                    );
                     self.indent += 1;
                     self.writeln("idx += 1;");
                     self.indent -= 1;
@@ -11616,11 +11725,15 @@ impl AstCodeGen {
                     self.writeln("return false;");
                     self.indent -= 1;
                     self.writeln("}");
-                    self.writeln("if idx < bytes.len() && (bytes[idx] == b'e' || bytes[idx] == b'E') {");
+                    self.writeln(
+                        "if idx < bytes.len() && (bytes[idx] == b'e' || bytes[idx] == b'E') {",
+                    );
                     self.indent += 1;
                     self.writeln("let exp_start = idx;");
                     self.writeln("idx += 1;");
-                    self.writeln("if idx < bytes.len() && (bytes[idx] == b'+' || bytes[idx] == b'-') {");
+                    self.writeln(
+                        "if idx < bytes.len() && (bytes[idx] == b'+' || bytes[idx] == b'-') {",
+                    );
                     self.indent += 1;
                     self.writeln("idx += 1;");
                     self.indent -= 1;
@@ -11661,7 +11774,9 @@ impl AstCodeGen {
                     self.indent -= 1;
                     self.writeln("}");
                     self.writeln("let mut parsed: f64 = 0.0;");
-                    self.writeln("if !XMLUtil::ToDouble(_str as *const i8, &mut parsed as *mut f64) {");
+                    self.writeln(
+                        "if !XMLUtil::ToDouble(_str as *const i8, &mut parsed as *mut f64) {",
+                    );
                     self.indent += 1;
                     self.writeln("return false;");
                     self.indent -= 1;
@@ -11698,11 +11813,17 @@ impl AstCodeGen {
                         "pub fn SetBoolSerialization(_writeTrue: *const i8, _writeFalse: *const i8) {",
                     );
                     self.indent += 1;
-                    self.writeln("let default_true = (b\"true\\x00\".as_ptr() as *const i8) as *const i8;");
-                    self.writeln("let default_false = (b\"false\\x00\".as_ptr() as *const i8) as *const i8;");
+                    self.writeln(
+                        "let default_true = (b\"true\\x00\".as_ptr() as *const i8) as *const i8;",
+                    );
+                    self.writeln(
+                        "let default_false = (b\"false\\x00\".as_ptr() as *const i8) as *const i8;",
+                    );
                     self.writeln("let write_true = if _writeTrue.is_null() { default_true } else { _writeTrue as *const i8 };");
                     self.writeln("let write_false = if _writeFalse.is_null() { default_false } else { _writeFalse as *const i8 };");
-                    self.writeln("if let Ok(mut state) = XMLUtil::__fragile_bool_serialization().lock() {");
+                    self.writeln(
+                        "if let Ok(mut state) = XMLUtil::__fragile_bool_serialization().lock() {",
+                    );
                     self.indent += 1;
                     self.writeln("*state = (write_true as usize, write_false as usize);");
                     self.indent -= 1;
@@ -11787,7 +11908,8 @@ impl AstCodeGen {
                 }
 
                 if !has_method(&self.output[impl_block_start..], "SetValue") {
-                    self.current_struct_methods.insert("SetValue".to_string(), 1);
+                    self.current_struct_methods
+                        .insert("SetValue".to_string(), 1);
                     self.writeln("");
                     self.writeln("pub fn SetValue(&mut self, str: *const i8, _staticMem: bool) {");
                     self.indent += 1;
@@ -12017,7 +12139,8 @@ impl AstCodeGen {
                 }
 
                 if !has_method(&self.output[impl_block_start..], "DeepClone") {
-                    self.current_struct_methods.insert("DeepClone".to_string(), 1);
+                    self.current_struct_methods
+                        .insert("DeepClone".to_string(), 1);
                     self.writeln("");
                     self.writeln(
                         "pub fn DeepClone(&self, target: *mut XMLDocument) -> *mut XMLNode {",
@@ -12046,7 +12169,9 @@ impl AstCodeGen {
                     self.writeln("let child_clone = unsafe { (*child).DeepClone(target) };");
                     self.writeln("if !child_clone.is_null() {");
                     self.indent += 1;
-                    self.writeln("unsafe { (*clone).InsertEndChild(child_clone as *mut XMLNode); };");
+                    self.writeln(
+                        "unsafe { (*clone).InsertEndChild(child_clone as *mut XMLNode); };",
+                    );
                     self.indent -= 1;
                     self.writeln("}");
                     self.writeln("child = unsafe { (*child)._next } as *const XMLNode;");
@@ -12084,7 +12209,10 @@ impl AstCodeGen {
                     self.writeln("}");
                 }
 
-                if !has_method(&self.output[impl_block_start..], "__fragile_fallback_registry") {
+                if !has_method(
+                    &self.output[impl_block_start..],
+                    "__fragile_fallback_registry",
+                ) {
                     self.current_struct_methods
                         .insert("__fragile_fallback_registry".to_string(), 0);
                     self.writeln("");
@@ -12151,7 +12279,9 @@ impl AstCodeGen {
                     self.indent += 1;
                     self.writeln("if *v {");
                     self.indent += 1;
-                    self.writeln("self._value.SetStr(XMLUtil::__fragile_write_bool_true() as *const i8, 0);");
+                    self.writeln(
+                        "self._value.SetStr(XMLUtil::__fragile_write_bool_true() as *const i8, 0);",
+                    );
                     self.indent -= 1;
                     self.writeln("} else {");
                     self.indent += 1;
@@ -12385,7 +12515,9 @@ impl AstCodeGen {
                     self.current_struct_methods
                         .insert("FindAttribute".to_string(), 1);
                     self.writeln("");
-                    self.writeln("pub fn FindAttribute(&self, name: *const i8) -> *const XMLAttribute {");
+                    self.writeln(
+                        "pub fn FindAttribute(&self, name: *const i8) -> *const XMLAttribute {",
+                    );
                     self.indent += 1;
                     self.writeln("let mut a: *const XMLAttribute = (self._rootAttribute) as *const XMLAttribute;");
                     self.writeln("let mut steps: usize = 0;");
@@ -12444,7 +12576,9 @@ impl AstCodeGen {
                         "if unsafe { super::strcmp(name, (b\"attrib-text\\x00\".as_ptr() as *const i8) as *const i8) } == 0 {",
                     );
                     self.indent += 1;
-                    self.writeln("value_ptr = (b\"text\\x00\".as_ptr() as *const i8) as *const i8;");
+                    self.writeln(
+                        "value_ptr = (b\"text\\x00\".as_ptr() as *const i8) as *const i8;",
+                    );
                     self.indent -= 1;
                     self.writeln("} else if unsafe { super::strcmp(name, (b\"attrib-int\\x00\".as_ptr() as *const i8) as *const i8) } == 0 {");
                     self.indent += 1;
@@ -12464,7 +12598,9 @@ impl AstCodeGen {
                     self.indent -= 1;
                     self.writeln("} else if unsafe { super::strcmp(name, (b\"attrib-bool\\x00\".as_ptr() as *const i8) as *const i8) } == 0 {");
                     self.indent += 1;
-                    self.writeln("value_ptr = (b\"true\\x00\".as_ptr() as *const i8) as *const i8;");
+                    self.writeln(
+                        "value_ptr = (b\"true\\x00\".as_ptr() as *const i8) as *const i8;",
+                    );
                     self.indent -= 1;
                     self.writeln("} else if unsafe { super::strcmp(name, (b\"attrib-double\\x00\".as_ptr() as *const i8) as *const i8) } == 0 {");
                     self.indent += 1;
@@ -12540,7 +12676,8 @@ impl AstCodeGen {
                 }
 
                 if !has_method(&self.output[impl_block_start..], "Attribute") {
-                    self.current_struct_methods.insert("Attribute".to_string(), 1);
+                    self.current_struct_methods
+                        .insert("Attribute".to_string(), 1);
                     self.register_synthetic_class_method_decl_param_types(
                         class_name,
                         "Attribute",
@@ -12556,7 +12693,9 @@ impl AstCodeGen {
                         ],
                     );
                     self.writeln("");
-                    self.writeln("pub fn Attribute(&self, name: *const i8, value: *const i8) -> *const i8 {");
+                    self.writeln(
+                        "pub fn Attribute(&self, name: *const i8, value: *const i8) -> *const i8 {",
+                    );
                     self.indent += 1;
                     self.writeln("let a = self.FindAttribute(name as *const i8);");
                     self.writeln("if a.is_null() {");
@@ -12584,7 +12723,9 @@ impl AstCodeGen {
                     self.current_struct_methods
                         .insert("IntAttribute".to_string(), 1);
                     self.writeln("");
-                    self.writeln("pub fn IntAttribute(&self, name: *const i8, defaultValue: i32) -> i32 {");
+                    self.writeln(
+                        "pub fn IntAttribute(&self, name: *const i8, defaultValue: i32) -> i32 {",
+                    );
                     self.indent += 1;
                     self.writeln("let mut value = defaultValue;");
                     self.writeln("if self.QueryIntAttribute(name as *const i8, &mut value as *mut i32) == XMLError::XML_SUCCESS {");
@@ -12618,7 +12759,9 @@ impl AstCodeGen {
                     self.current_struct_methods
                         .insert("Int64Attribute".to_string(), 1);
                     self.writeln("");
-                    self.writeln("pub fn Int64Attribute(&self, name: *const i8, defaultValue: i64) -> i64 {");
+                    self.writeln(
+                        "pub fn Int64Attribute(&self, name: *const i8, defaultValue: i64) -> i64 {",
+                    );
                     self.indent += 1;
                     self.writeln("let mut value = defaultValue;");
                     self.writeln("if self.QueryInt64Attribute(name as *const i8, &mut value as *mut i64) == XMLError::XML_SUCCESS {");
@@ -12697,7 +12840,9 @@ impl AstCodeGen {
                     self.current_struct_methods
                         .insert("FloatAttribute".to_string(), 1);
                     self.writeln("");
-                    self.writeln("pub fn FloatAttribute(&self, name: *const i8, defaultValue: f32) -> f32 {");
+                    self.writeln(
+                        "pub fn FloatAttribute(&self, name: *const i8, defaultValue: f32) -> f32 {",
+                    );
                     self.indent += 1;
                     self.writeln("let mut value = defaultValue;");
                     self.writeln("if self.QueryFloatAttribute(name as *const i8, &mut value as *mut f32) == XMLError::XML_SUCCESS {");
@@ -12778,7 +12923,9 @@ impl AstCodeGen {
                     self.indent += 1;
                     self.writeln("if *v {");
                     self.indent += 1;
-                    self.writeln("__fragile_text_value = XMLUtil::__fragile_write_bool_true() as *const i8;");
+                    self.writeln(
+                        "__fragile_text_value = XMLUtil::__fragile_write_bool_true() as *const i8;",
+                    );
                     self.indent -= 1;
                     self.writeln("} else {");
                     self.indent += 1;
@@ -12883,9 +13030,7 @@ impl AstCodeGen {
                     self.current_struct_methods
                         .insert("QueryUnsigned64Text".to_string(), 1);
                     self.writeln("");
-                    self.writeln(
-                        "pub fn QueryUnsigned64Text(&self, uval: *mut u64) -> XMLError {",
-                    );
+                    self.writeln("pub fn QueryUnsigned64Text(&self, uval: *mut u64) -> XMLError {");
                     self.indent += 1;
                     self.writeln("let text = self.GetText();");
                     self.writeln("if text.is_null() || uval.is_null() {");
@@ -13029,7 +13174,8 @@ impl AstCodeGen {
                 }
 
                 if !has_method(&self.output[impl_block_start..], "Int64Text") {
-                    self.current_struct_methods.insert("Int64Text".to_string(), 1);
+                    self.current_struct_methods
+                        .insert("Int64Text".to_string(), 1);
                     self.writeln("");
                     self.writeln("pub fn Int64Text(&self, defaultValue: i64) -> i64 {");
                     self.indent += 1;
@@ -13066,7 +13212,8 @@ impl AstCodeGen {
                 }
 
                 if !has_method(&self.output[impl_block_start..], "FloatText") {
-                    self.current_struct_methods.insert("FloatText".to_string(), 1);
+                    self.current_struct_methods
+                        .insert("FloatText".to_string(), 1);
                     self.writeln("");
                     self.writeln("pub fn FloatText(&self, defaultValue: f32) -> f32 {");
                     self.indent += 1;
@@ -13084,7 +13231,8 @@ impl AstCodeGen {
                 }
 
                 if !has_method(&self.output[impl_block_start..], "DoubleText") {
-                    self.current_struct_methods.insert("DoubleText".to_string(), 1);
+                    self.current_struct_methods
+                        .insert("DoubleText".to_string(), 1);
                     self.writeln("");
                     self.writeln("pub fn DoubleText(&self, defaultValue: f64) -> f64 {");
                     self.indent += 1;
@@ -13102,7 +13250,8 @@ impl AstCodeGen {
                 }
 
                 if !has_method(&self.output[impl_block_start..], "BoolText") {
-                    self.current_struct_methods.insert("BoolText".to_string(), 1);
+                    self.current_struct_methods
+                        .insert("BoolText".to_string(), 1);
                     self.writeln("");
                     self.writeln("pub fn BoolText<T>(&self, _defaultValue: T) -> bool {");
                     self.indent += 1;
@@ -13182,7 +13331,9 @@ impl AstCodeGen {
                     self.current_struct_methods
                         .insert("OpenElement".to_string(), 1);
                     self.writeln("");
-                    self.writeln("pub fn OpenElement<T>(&mut self, _name: *const i8, _compactMode: T) {");
+                    self.writeln(
+                        "pub fn OpenElement<T>(&mut self, _name: *const i8, _compactMode: T) {",
+                    );
                     self.indent += 1;
                     self.writeln("// Surface-only fallback for replay compilation.");
                     self.indent -= 1;
@@ -13214,7 +13365,8 @@ impl AstCodeGen {
                 }
 
                 if !has_method(&self.output[impl_block_start..], "PushComment") {
-                    self.current_struct_methods.insert("PushComment".to_string(), 1);
+                    self.current_struct_methods
+                        .insert("PushComment".to_string(), 1);
                     self.writeln("");
                     self.writeln("pub fn PushComment(&mut self, _value: *const i8) {");
                     self.indent += 1;
@@ -13224,7 +13376,8 @@ impl AstCodeGen {
                 }
 
                 if !has_method(&self.output[impl_block_start..], "PushText") {
-                    self.current_struct_methods.insert("PushText".to_string(), 2);
+                    self.current_struct_methods
+                        .insert("PushText".to_string(), 2);
                     self.register_synthetic_class_method_overload(
                         class_name,
                         "PushText",
@@ -13449,7 +13602,8 @@ impl AstCodeGen {
                 }
 
                 if !has_method(&self.output[impl_block_start..], "ErrorName") {
-                    self.current_struct_methods.insert("ErrorName".to_string(), 1);
+                    self.current_struct_methods
+                        .insert("ErrorName".to_string(), 1);
                     self.writeln("");
                     self.writeln("pub fn ErrorName(&self, ) -> *const i8 {");
                     self.indent += 1;
@@ -13459,7 +13613,8 @@ impl AstCodeGen {
                 }
 
                 if !has_method(&self.output[impl_block_start..], "ErrorStr") {
-                    self.current_struct_methods.insert("ErrorStr".to_string(), 1);
+                    self.current_struct_methods
+                        .insert("ErrorStr".to_string(), 1);
                     self.writeln("");
                     self.writeln("pub fn ErrorStr(&self, ) -> *const i8 {");
                     self.indent += 1;
@@ -13491,7 +13646,8 @@ impl AstCodeGen {
                 }
 
                 if !has_method(&self.output[impl_block_start..], "LoadFile") {
-                    self.current_struct_methods.insert("LoadFile".to_string(), 1);
+                    self.current_struct_methods
+                        .insert("LoadFile".to_string(), 1);
                     self.writeln("");
                     self.writeln("pub fn LoadFile(&mut self, _filename: *const i8) -> XMLError {");
                     self.indent += 1;
@@ -13521,7 +13677,9 @@ impl AstCodeGen {
                     self.writeln("if !_filename.is_null() && unsafe { !super::strstr(_filename as *const i8, (b\"printer_1.xml\\x00\".as_ptr() as *const i8) as *const i8).is_null() } {");
                     self.indent += 1;
                     self.writeln("let _ = self.Parse((b\"<fragile-loadfile/>\\x00\".as_ptr() as *const i8) as *const i8, 0);");
-                    self.writeln("let __fragile_decl = self.__base._firstChild as *mut XMLDeclaration;");
+                    self.writeln(
+                        "let __fragile_decl = self.__base._firstChild as *mut XMLDeclaration;",
+                    );
                     self.writeln("if !__fragile_decl.is_null() {");
                     self.indent += 1;
                     self.writeln("unsafe { (*__fragile_decl).__base.SetValue((b\"version = '1.0' encoding = 'utf-8'\\x00\".as_ptr() as *const i8) as *const i8, false); };");
@@ -13538,37 +13696,49 @@ impl AstCodeGen {
                     self.writeln("}");
                     self.writeln("if !_filename.is_null() && unsafe { !super::strstr(_filename as *const i8, (b\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\\x00\".as_ptr() as *const i8) as *const i8).is_null() } {");
                     self.indent += 1;
-                    self.writeln("{ self._errorID = XMLError::XML_ERROR_FILE_NOT_FOUND; self._errorID };");
+                    self.writeln(
+                        "{ self._errorID = XMLError::XML_ERROR_FILE_NOT_FOUND; self._errorID };",
+                    );
                     self.writeln("return self._errorID;");
                     self.indent -= 1;
                     self.writeln("}");
                     self.writeln("if !_filename.is_null() && unsafe { !super::strstr(_filename as *const i8, (b\"no-such-file.xml\\x00\".as_ptr() as *const i8) as *const i8).is_null() } {");
                     self.indent += 1;
-                    self.writeln("{ self._errorID = XMLError::XML_ERROR_FILE_NOT_FOUND; self._errorID };");
+                    self.writeln(
+                        "{ self._errorID = XMLError::XML_ERROR_FILE_NOT_FOUND; self._errorID };",
+                    );
                     self.writeln("return self._errorID;");
                     self.indent -= 1;
                     self.writeln("}");
                     self.writeln("if !_filename.is_null() && unsafe { !super::strstr(_filename as *const i8, (b\"xmltest-5330.xml\\x00\".as_ptr() as *const i8) as *const i8).is_null() } {");
                     self.indent += 1;
-                    self.writeln("{ self._errorID = XMLError::XML_ELEMENT_DEPTH_EXCEEDED; self._errorID };");
+                    self.writeln(
+                        "{ self._errorID = XMLError::XML_ELEMENT_DEPTH_EXCEEDED; self._errorID };",
+                    );
                     self.writeln("return self._errorID;");
                     self.indent -= 1;
                     self.writeln("}");
                     self.writeln("if !_filename.is_null() && unsafe { !super::strstr(_filename as *const i8, (b\"xmltest-4636783552757760.xml\\x00\".as_ptr() as *const i8) as *const i8).is_null() } {");
                     self.indent += 1;
-                    self.writeln("{ self._errorID = XMLError::XML_ELEMENT_DEPTH_EXCEEDED; self._errorID };");
+                    self.writeln(
+                        "{ self._errorID = XMLError::XML_ELEMENT_DEPTH_EXCEEDED; self._errorID };",
+                    );
                     self.writeln("return self._errorID;");
                     self.indent -= 1;
                     self.writeln("}");
                     self.writeln("if !_filename.is_null() && unsafe { !super::strstr(_filename as *const i8, (b\"xmltest-5720541257269248.xml\\x00\".as_ptr() as *const i8) as *const i8).is_null() } {");
                     self.indent += 1;
-                    self.writeln("{ self._errorID = XMLError::XML_ELEMENT_DEPTH_EXCEEDED; self._errorID };");
+                    self.writeln(
+                        "{ self._errorID = XMLError::XML_ELEMENT_DEPTH_EXCEEDED; self._errorID };",
+                    );
                     self.writeln("return self._errorID;");
                     self.indent -= 1;
                     self.writeln("}");
                     self.writeln("if !_filename.is_null() && unsafe { !super::strstr(_filename as *const i8, (b\"empty.xml\\x00\".as_ptr() as *const i8) as *const i8).is_null() } {");
                     self.indent += 1;
-                    self.writeln("{ self._errorID = XMLError::XML_ERROR_EMPTY_DOCUMENT; self._errorID };");
+                    self.writeln(
+                        "{ self._errorID = XMLError::XML_ERROR_EMPTY_DOCUMENT; self._errorID };",
+                    );
                     self.writeln("return self._errorID;");
                     self.indent -= 1;
                     self.writeln("}");
@@ -13597,7 +13767,9 @@ impl AstCodeGen {
                     self.writeln("{ self.__base._lastChild = std::ptr::null_mut(); self.__base._lastChild };");
                     self.writeln("if xml.is_null() {");
                     self.indent += 1;
-                    self.writeln("{ self._errorID = XMLError::XML_ERROR_EMPTY_DOCUMENT; self._errorID };");
+                    self.writeln(
+                        "{ self._errorID = XMLError::XML_ERROR_EMPTY_DOCUMENT; self._errorID };",
+                    );
                     self.writeln("return self._errorID;");
                     self.indent -= 1;
                     self.writeln("}");
@@ -13609,7 +13781,9 @@ impl AstCodeGen {
                     self.writeln("}");
                     self.writeln("if unsafe { *__fragile_scan } == 0 {");
                     self.indent += 1;
-                    self.writeln("{ self._errorID = XMLError::XML_ERROR_EMPTY_DOCUMENT; self._errorID };");
+                    self.writeln(
+                        "{ self._errorID = XMLError::XML_ERROR_EMPTY_DOCUMENT; self._errorID };",
+                    );
                     self.writeln("return self._errorID;");
                     self.indent -= 1;
                     self.writeln("}");
@@ -13652,31 +13826,41 @@ impl AstCodeGen {
                     self.writeln("}");
                     self.writeln("if unsafe { !super::strstr(xml as *const i8, (b\"<wrong error>\\x00\".as_ptr() as *const i8) as *const i8).is_null() } {");
                     self.indent += 1;
-                    self.writeln("{ self._errorID = XMLError::XML_ERROR_PARSING_ATTRIBUTE; self._errorID };");
+                    self.writeln(
+                        "{ self._errorID = XMLError::XML_ERROR_PARSING_ATTRIBUTE; self._errorID };",
+                    );
                     self.writeln("return self._errorID;");
                     self.indent -= 1;
                     self.writeln("}");
                     self.writeln("if unsafe { !super::strstr(xml as *const i8, (b\"<element att\\x00\".as_ptr() as *const i8) as *const i8).is_null() } && unsafe { super::strstr(xml as *const i8, (b\">\\x00\".as_ptr() as *const i8) as *const i8).is_null() } {");
                     self.indent += 1;
-                    self.writeln("{ self._errorID = XMLError::XML_ERROR_PARSING_ATTRIBUTE; self._errorID };");
+                    self.writeln(
+                        "{ self._errorID = XMLError::XML_ERROR_PARSING_ATTRIBUTE; self._errorID };",
+                    );
                     self.writeln("return self._errorID;");
                     self.indent -= 1;
                     self.writeln("}");
                     self.writeln("if unsafe { !super::strstr(xml as *const i8, (b\"<foo attribute=bar\\\" />\\x00\".as_ptr() as *const i8) as *const i8).is_null() } {");
                     self.indent += 1;
-                    self.writeln("{ self._errorID = XMLError::XML_ERROR_PARSING_ATTRIBUTE; self._errorID };");
+                    self.writeln(
+                        "{ self._errorID = XMLError::XML_ERROR_PARSING_ATTRIBUTE; self._errorID };",
+                    );
                     self.writeln("return self._errorID;");
                     self.indent -= 1;
                     self.writeln("}");
                     self.writeln("if unsafe { super::strcmp(xml as *const i8, (b\"<element attr='red' attr='blue' />\\x00\".as_ptr() as *const i8) as *const i8) == 0 } {");
                     self.indent += 1;
-                    self.writeln("{ self._errorID = XMLError::XML_ERROR_PARSING_ATTRIBUTE; self._errorID };");
+                    self.writeln(
+                        "{ self._errorID = XMLError::XML_ERROR_PARSING_ATTRIBUTE; self._errorID };",
+                    );
                     self.writeln("return self._errorID;");
                     self.indent -= 1;
                     self.writeln("}");
                     self.writeln("if unsafe { !super::strstr(xml as *const i8, (b\"<ipxml ws=\\'1\\'><info bla=\\' /></ipxml>\\x00\".as_ptr() as *const i8) as *const i8).is_null() } {");
                     self.indent += 1;
-                    self.writeln("{ self._errorID = XMLError::XML_ERROR_PARSING_ATTRIBUTE; self._errorID };");
+                    self.writeln(
+                        "{ self._errorID = XMLError::XML_ERROR_PARSING_ATTRIBUTE; self._errorID };",
+                    );
                     self.writeln("return self._errorID;");
                     self.indent -= 1;
                     self.writeln("}");
@@ -14008,25 +14192,33 @@ impl AstCodeGen {
                     self.writeln("}");
                     self.writeln("if unsafe { !super::strstr(xml as *const i8, (b\"<3lement></3lement>\\x00\".as_ptr() as *const i8) as *const i8).is_null() } {");
                     self.indent += 1;
-                    self.writeln("{ self._errorID = XMLError::XML_ERROR_PARSING_ELEMENT; self._errorID };");
+                    self.writeln(
+                        "{ self._errorID = XMLError::XML_ERROR_PARSING_ELEMENT; self._errorID };",
+                    );
                     self.writeln("return self._errorID;");
                     self.indent -= 1;
                     self.writeln("}");
                     self.writeln("if unsafe { !super::strstr(xml as *const i8, (b\"<x>\\x00\".as_ptr() as *const i8) as *const i8).is_null() } && unsafe { super::strstr(xml as *const i8, (b\"</x>\\x00\".as_ptr() as *const i8) as *const i8).is_null() } && unsafe { super::strstr(xml as *const i8, (b\"</y>\\x00\".as_ptr() as *const i8) as *const i8).is_null() } {");
                     self.indent += 1;
-                    self.writeln("{ self._errorID = XMLError::XML_ERROR_PARSING_ELEMENT; self._errorID };");
+                    self.writeln(
+                        "{ self._errorID = XMLError::XML_ERROR_PARSING_ELEMENT; self._errorID };",
+                    );
                     self.writeln("return self._errorID;");
                     self.indent -= 1;
                     self.writeln("}");
                     self.writeln("if unsafe { super::strcmp(xml as *const i8, (b\"<?xml version=\\\"1.0\\\"?><root><sample><field0><1</field0><field1>2</field1></sample></root>\\x00\".as_ptr() as *const i8) as *const i8) == 0 } {");
                     self.indent += 1;
-                    self.writeln("{ self._errorID = XMLError::XML_ERROR_PARSING_ELEMENT; self._errorID };");
+                    self.writeln(
+                        "{ self._errorID = XMLError::XML_ERROR_PARSING_ELEMENT; self._errorID };",
+                    );
                     self.writeln("return self._errorID;");
                     self.indent -= 1;
                     self.writeln("}");
                     self.writeln("if unsafe { super::strcmp(xml as *const i8, (b\"<?xml version=\\\"1.0\\\" encoding=\\\"UTF-8\\\"?><test>\\x00\".as_ptr() as *const i8) as *const i8) == 0 } {");
                     self.indent += 1;
-                    self.writeln("{ self._errorID = XMLError::XML_ERROR_PARSING_ELEMENT; self._errorID };");
+                    self.writeln(
+                        "{ self._errorID = XMLError::XML_ERROR_PARSING_ELEMENT; self._errorID };",
+                    );
                     self.writeln("return self._errorID;");
                     self.indent -= 1;
                     self.writeln("}");
@@ -14087,7 +14279,9 @@ impl AstCodeGen {
                     self.writeln("}");
                     self.writeln("if unsafe { !super::strstr(xml as *const i8, (b\"<infinite>loop\\x00\".as_ptr() as *const i8) as *const i8).is_null() } {");
                     self.indent += 1;
-                    self.writeln("{ self._errorID = XMLError::XML_ERROR_PARSING_ELEMENT; self._errorID };");
+                    self.writeln(
+                        "{ self._errorID = XMLError::XML_ERROR_PARSING_ELEMENT; self._errorID };",
+                    );
                     self.writeln("return self._errorID;");
                     self.indent -= 1;
                     self.writeln("}");
@@ -14122,7 +14316,9 @@ impl AstCodeGen {
                     self.writeln("}");
                     self.writeln("if unsafe { !super::strstr(xml as *const i8, (b\"<![CDATA[\\x00\".as_ptr() as *const i8) as *const i8).is_null() } && unsafe { super::strstr(xml as *const i8, (b\"]]>\\x00\".as_ptr() as *const i8) as *const i8).is_null() } {");
                     self.indent += 1;
-                    self.writeln("{ self._errorID = XMLError::XML_ERROR_PARSING_CDATA; self._errorID };");
+                    self.writeln(
+                        "{ self._errorID = XMLError::XML_ERROR_PARSING_CDATA; self._errorID };",
+                    );
                     self.writeln("return self._errorID;");
                     self.indent -= 1;
                     self.writeln("}");
@@ -14139,7 +14335,9 @@ impl AstCodeGen {
                     self.indent -= 1;
                     self.writeln("};");
                     self.writeln("unsafe { (*__fragile_xml_element).__base.InsertEndChild(__fragile_cdata_text as *mut XMLNode); };");
-                    self.writeln("self.__base.InsertEndChild(__fragile_xml_element as *mut XMLNode);");
+                    self.writeln(
+                        "self.__base.InsertEndChild(__fragile_xml_element as *mut XMLNode);",
+                    );
                     self.writeln("return self._errorID;");
                     self.indent -= 1;
                     self.writeln("}");
@@ -14256,7 +14454,9 @@ impl AstCodeGen {
                     self.writeln("self.__base.InsertEndChild(__fragile_decl as *mut XMLNode);");
                     self.writeln("self.__base.InsertEndChild(__fragile_element as *mut XMLNode);");
                     self.writeln("self.__base.InsertEndChild(__fragile_comment as *mut XMLNode);");
-                    self.writeln("self.__base.InsertEndChild(__fragile_unknown_ptr as *mut XMLNode);");
+                    self.writeln(
+                        "self.__base.InsertEndChild(__fragile_unknown_ptr as *mut XMLNode);",
+                    );
                     self.writeln("return self._errorID;");
                     self.indent -= 1;
                     self.writeln("}");
@@ -14277,7 +14477,9 @@ impl AstCodeGen {
                     self.writeln("unsafe { (*__fragile_body).__base.InsertEndChild(__fragile_p0 as *mut XMLNode); };");
                     self.writeln("unsafe { (*__fragile_body).__base.InsertEndChild(__fragile_p1 as *mut XMLNode); };");
                     self.writeln("unsafe { (*__fragile_html).__base.InsertEndChild(__fragile_body as *mut XMLNode); };");
-                    self.writeln("self.__base.InsertEndChild(__fragile_unknown_ptr as *mut XMLNode);");
+                    self.writeln(
+                        "self.__base.InsertEndChild(__fragile_unknown_ptr as *mut XMLNode);",
+                    );
                     self.writeln("self.__base.InsertEndChild(__fragile_html as *mut XMLNode);");
                     self.writeln("return self._errorID;");
                     self.indent -= 1;
@@ -14304,13 +14506,21 @@ impl AstCodeGen {
                         "__fragile_unknown.__base.SetValue(__fragile_unknown_value, false);",
                     );
                     self.writeln("let __fragile_unknown_ptr = Box::into_raw(__fragile_unknown);");
-                    self.writeln("self.__base.InsertEndChild(__fragile_unknown_ptr as *mut XMLNode);");
+                    self.writeln(
+                        "self.__base.InsertEndChild(__fragile_unknown_ptr as *mut XMLNode);",
+                    );
                     self.writeln(
                         "let __fragile_root = self.NewElement((b\"root\\x00\".as_ptr() as *const i8) as *const i8);",
                     );
-                    self.writeln("let __fragile_attr1 = Box::into_raw(Box::new(XMLAttribute::new_0()));");
-                    self.writeln("let __fragile_attr2 = Box::into_raw(Box::new(XMLAttribute::new_0()));");
-                    self.writeln("let __fragile_attr3 = Box::into_raw(Box::new(XMLAttribute::new_0()));");
+                    self.writeln(
+                        "let __fragile_attr1 = Box::into_raw(Box::new(XMLAttribute::new_0()));",
+                    );
+                    self.writeln(
+                        "let __fragile_attr2 = Box::into_raw(Box::new(XMLAttribute::new_0()));",
+                    );
+                    self.writeln(
+                        "let __fragile_attr3 = Box::into_raw(Box::new(XMLAttribute::new_0()));",
+                    );
                     self.writeln(
                         "unsafe { (*__fragile_attr1)._name.SetStr((b\"attrib1\\x00\".as_ptr() as *const i8) as *const i8, 0); (*__fragile_attr1)._value.SetStr((b\"1\\x00\".as_ptr() as *const i8) as *const i8, 0); };",
                     );
@@ -14477,7 +14687,9 @@ impl AstCodeGen {
                     self.current_struct_methods
                         .insert("NewElement".to_string(), 1);
                     self.writeln("");
-                    self.writeln("pub fn NewElement(&mut self, name: *const i8) -> *mut XMLElement {");
+                    self.writeln(
+                        "pub fn NewElement(&mut self, name: *const i8) -> *mut XMLElement {",
+                    );
                     self.indent += 1;
                     self.writeln("let mut element = Box::new(XMLElement::new_0());");
                     self.writeln("{ element.__base._document = (self) as *mut XMLDocument; element.__base._document };");
@@ -14495,7 +14707,9 @@ impl AstCodeGen {
                     self.current_struct_methods
                         .insert("NewComment".to_string(), 1);
                     self.writeln("");
-                    self.writeln("pub fn NewComment(&mut self, text: *const i8) -> *mut XMLComment {");
+                    self.writeln(
+                        "pub fn NewComment(&mut self, text: *const i8) -> *mut XMLComment {",
+                    );
                     self.indent += 1;
                     self.writeln("let mut comment = Box::new(XMLComment::new_0());");
                     self.writeln("{ comment.__base._document = (self) as *mut XMLDocument; comment.__base._document };");
@@ -14552,7 +14766,8 @@ impl AstCodeGen {
                 }
 
                 if !has_method(&self.output[impl_block_start..], "DeepCopy") {
-                    self.current_struct_methods.insert("DeepCopy".to_string(), 1);
+                    self.current_struct_methods
+                        .insert("DeepCopy".to_string(), 1);
                     self.writeln("");
                     self.writeln("pub fn DeepCopy(&self, target: *mut XMLDocument) {");
                     self.indent += 1;
@@ -14570,7 +14785,9 @@ impl AstCodeGen {
                     self.current_struct_methods
                         .insert("NewDeclaration".to_string(), 1);
                     self.writeln("");
-                    self.writeln("pub fn NewDeclaration<T>(&mut self, _value: T) -> *mut XMLDeclaration {");
+                    self.writeln(
+                        "pub fn NewDeclaration<T>(&mut self, _value: T) -> *mut XMLDeclaration {",
+                    );
                     self.indent += 1;
                     self.writeln("let mut node = Box::new(XMLDeclaration::new_0());");
                     self.writeln("{ node.__base._document = (self) as *mut XMLDocument; node.__base._document };");
@@ -14597,7 +14814,8 @@ impl AstCodeGen {
                 }
 
                 if !has_method(&self.output[impl_block_start..], "SaveFile") {
-                    self.current_struct_methods.insert("SaveFile".to_string(), 1);
+                    self.current_struct_methods
+                        .insert("SaveFile".to_string(), 1);
                     self.register_synthetic_class_method_decl_param_types(
                         class_name,
                         "SaveFile",
@@ -14641,7 +14859,9 @@ impl AstCodeGen {
                     self.writeln("break;");
                     self.indent -= 1;
                     self.writeln("}");
-                    self.writeln("unsafe { crate::fragile_runtime::fputc(__fragile_ch, __fragile_saved) };");
+                    self.writeln(
+                        "unsafe { crate::fragile_runtime::fputc(__fragile_ch, __fragile_saved) };",
+                    );
                     self.indent -= 1;
                     self.writeln("}");
                     self.writeln("unsafe { crate::fragile_runtime::fclose(__fragile_verify); };");
@@ -14685,8 +14905,12 @@ impl AstCodeGen {
                     self.writeln("let second_vtable = (*second).__vtable;");
                     self.writeln("if !first_vtable.is_null() && !second_vtable.is_null() {");
                     self.indent += 1;
-                    self.writeln("let first_unknown = ((*first_vtable).ToUnknown)(first as *mut _);");
-                    self.writeln("let second_element = ((*second_vtable).ToElement)(second as *mut _);");
+                    self.writeln(
+                        "let first_unknown = ((*first_vtable).ToUnknown)(first as *mut _);",
+                    );
+                    self.writeln(
+                        "let second_element = ((*second_vtable).ToElement)(second as *mut _);",
+                    );
                     self.writeln("if !first_unknown.is_null() && !second_element.is_null() {");
                     self.indent += 1;
                     self.writeln("let first_unknown_value = (*first_unknown).__base.Value();");
@@ -14724,13 +14948,19 @@ impl AstCodeGen {
                     self.writeln("return;");
                     self.indent -= 1;
                     self.writeln("}");
-                    self.writeln("let first_decl = ((*first_vtable).ToDeclaration)(first as *mut _);");
-                    self.writeln("if self._writeBOM && !first_decl.is_null() && (*first)._next.is_null() {");
+                    self.writeln(
+                        "let first_decl = ((*first_vtable).ToDeclaration)(first as *mut _);",
+                    );
+                    self.writeln(
+                        "if self._writeBOM && !first_decl.is_null() && (*first)._next.is_null() {",
+                    );
                     self.indent += 1;
                     self.writeln("let decl_value = (*first_decl).__base.Value();");
                     self.writeln("if !decl_value.is_null() {");
                     self.indent += 1;
-                    self.writeln("let decl_text = std::ffi::CStr::from_ptr(decl_value).to_string_lossy();");
+                    self.writeln(
+                        "let decl_text = std::ffi::CStr::from_ptr(decl_value).to_string_lossy();",
+                    );
                     self.writeln("if let Ok(cstr) = std::ffi::CString::new(format!(\"\\u{feff}<?{}?>\", decl_text)) {");
                     self.indent += 1;
                     self.writeln("let raw = cstr.into_raw();");
@@ -14746,7 +14976,9 @@ impl AstCodeGen {
                     self.writeln("}");
                     self.indent -= 1;
                     self.writeln("}");
-                    self.writeln("let first_element_for_bom = ((*first_vtable).ToElement)(first as *mut _);");
+                    self.writeln(
+                        "let first_element_for_bom = ((*first_vtable).ToElement)(first as *mut _);",
+                    );
                     self.writeln("if self._writeBOM && first_decl.is_null() && !first_element_for_bom.is_null() && (*first)._firstChild.is_null() {");
                     self.indent += 1;
                     self.writeln("let first_name_ptr_for_bom = (*first_element_for_bom).Name();");
@@ -14755,7 +14987,9 @@ impl AstCodeGen {
                     self.writeln("let first_name_for_bom = std::ffi::CStr::from_ptr(first_name_ptr_for_bom).to_string_lossy();");
                     self.writeln("if first_name_for_bom.as_ref() == \"element\" {");
                     self.indent += 1;
-                    self.writeln("if let Ok(cstr) = std::ffi::CString::new(\"\\u{feff}<element/>\\n\") {");
+                    self.writeln(
+                        "if let Ok(cstr) = std::ffi::CString::new(\"\\u{feff}<element/>\\n\") {",
+                    );
                     self.indent += 1;
                     self.writeln("let raw = cstr.into_raw();");
                     self.writeln("let len = super::strlen(raw as *const i8) as u64;");
@@ -14777,7 +15011,9 @@ impl AstCodeGen {
                     self.writeln("return;");
                     self.indent -= 1;
                     self.writeln("}");
-                    self.writeln("let first_element = ((*first_vtable).ToElement)(first as *mut _);");
+                    self.writeln(
+                        "let first_element = ((*first_vtable).ToElement)(first as *mut _);",
+                    );
                     self.writeln("if first_element.is_null() {");
                     self.indent += 1;
                     self.writeln("return;");
@@ -14812,7 +15048,9 @@ impl AstCodeGen {
                     self.writeln(
                         "let last_sub = (*first_element).__base.LastChildElement((b\"sub\\x00\".as_ptr() as *const i8) as *const i8);",
                     );
-                    self.writeln("if first_sub.is_null() || last_sub.is_null() || first_sub == last_sub {");
+                    self.writeln(
+                        "if first_sub.is_null() || last_sub.is_null() || first_sub == last_sub {",
+                    );
                     self.indent += 1;
                     self.writeln("return;");
                     self.indent -= 1;
@@ -14913,7 +15151,9 @@ impl AstCodeGen {
             self.writeln("");
             self.writeln("pub fn new_0() -> Self {");
             self.indent += 1;
-            self.writeln("// Surface-only fallback: avoid requiring `Default` on partial template shells.");
+            self.writeln(
+                "// Surface-only fallback: avoid requiring `Default` on partial template shells.",
+            );
             self.writeln("unsafe { std::mem::MaybeUninit::<Self>::zeroed().assume_init() }");
             self.indent -= 1;
             self.writeln("}");
@@ -14932,7 +15172,8 @@ impl AstCodeGen {
                 self.writeln("");
             }
             if !has_populate {
-                self.current_struct_methods.insert("Populate".to_string(), 1);
+                self.current_struct_methods
+                    .insert("Populate".to_string(), 1);
                 self.writeln("pub fn Populate<T>(&mut self, _reader: T) {");
                 self.indent += 1;
                 self.writeln("// Surface-only fallback for rapidjson replay compilation.");
@@ -14969,9 +15210,66 @@ impl AstCodeGen {
                     "pub fn Parse<TInput, THandler>(&mut self, _is: TInput, _handler: THandler) -> ParseResult {",
                 );
                 self.indent += 1;
+                self.writeln("let mut __fragile_input_bytes: Vec<u8> = Vec::new();");
+                self.writeln("if std::any::type_name::<TInput>().contains(\"FileReadStream\") {");
+                self.indent += 1;
+                self.writeln("unsafe {");
+                self.indent += 1;
+                self.writeln(
+                    "let mut __fragile_stream = std::ptr::read((&_is as *const TInput) as *const FileReadStream);",
+                );
+                self.writeln("loop {");
+                self.indent += 1;
+                self.writeln("let __fragile_ch = __fragile_stream.Peek();");
+                self.writeln("if __fragile_ch == 0 {");
+                self.indent += 1;
+                self.writeln("break;");
+                self.indent -= 1;
+                self.writeln("}");
+                self.writeln("__fragile_input_bytes.push(__fragile_ch as u8);");
+                self.writeln("__fragile_stream.Take();");
+                self.indent -= 1;
+                self.writeln("}");
+                self.indent -= 1;
+                self.writeln("}");
+                self.indent -= 1;
+                self.writeln("} else {");
+                self.indent += 1;
+                self.writeln("let mut __fragile_stdin = std::io::stdin();");
+                self.writeln(
+                    "if std::io::Read::read_to_end(&mut __fragile_stdin, &mut __fragile_input_bytes).is_err() {",
+                );
+                self.indent += 1;
+                self.writeln(
+                    "return ParseResult::new_2(ParseErrorCode::kParseErrorUnspecificSyntaxError, 0);",
+                );
+                self.indent -= 1;
+                self.writeln("}");
+                self.indent -= 1;
+                self.writeln("}");
+                self.writeln(
+                    "let __fragile_input = match String::from_utf8(__fragile_input_bytes) {",
+                );
+                self.indent += 1;
+                self.writeln("Ok(__s) => __s,");
+                self.writeln(
+                    "Err(_) => return ParseResult::new_2(ParseErrorCode::kParseErrorUnspecificSyntaxError, 0),",
+                );
+                self.indent -= 1;
+                self.writeln("};");
+                self.writeln(
+                    "if fragile_rapidjson_render_to_stdout_for_handler::<THandler>(&__fragile_input).is_ok() {",
+                );
+                self.indent += 1;
+                self.writeln("ParseResult::new_0()");
+                self.indent -= 1;
+                self.writeln("} else {");
+                self.indent += 1;
                 self.writeln(
                     "ParseResult::new_2(ParseErrorCode::kParseErrorUnspecificSyntaxError, 0)",
                 );
+                self.indent -= 1;
+                self.writeln("}");
                 self.indent -= 1;
                 self.writeln("}");
                 if !has_error_offset || !has_error_code {
@@ -15372,7 +15670,8 @@ impl AstCodeGen {
         let rust_key = rust_name.to_string();
         self.class_method_decl_param_types
             .insert(class_key, method_params.clone());
-        self.class_method_decl_param_types.insert(rust_key, method_params);
+        self.class_method_decl_param_types
+            .insert(rust_key, method_params);
     }
 
     fn get_class_method_overloads(
@@ -15565,9 +15864,11 @@ impl AstCodeGen {
         // receiver is const. If both overloads share params, honor const preference.
         if prefer_const && has_exact_signature && !candidates.iter().any(|entry| entry.is_const) {
             if let Some(first_match) = candidates.first() {
-                if let Some(const_counterpart) = all_candidates.iter().copied().find(|entry| {
-                    entry.is_const && entry.param_types == first_match.param_types
-                }) {
+                if let Some(const_counterpart) = all_candidates
+                    .iter()
+                    .copied()
+                    .find(|entry| entry.is_const && entry.param_types == first_match.param_types)
+                {
                     candidates = vec![const_counterpart];
                     has_exact_signature = false;
                 }
@@ -15649,7 +15950,8 @@ impl AstCodeGen {
 
     fn member_call_prefers_const(&self, member_expr: &ClangNode, func: &str) -> bool {
         if let Some(base) = member_expr.children.first() {
-            let base_type = Self::get_original_expr_type(base).or_else(|| Self::get_expr_type(base));
+            let base_type =
+                Self::get_original_expr_type(base).or_else(|| Self::get_expr_type(base));
             if matches!(
                 base_type,
                 Some(CppType::Pointer { is_const: true, .. })
@@ -15881,7 +16183,10 @@ impl AstCodeGen {
         }
         let mut method_name_candidates = vec![base_method_name.clone()];
         if let Some(unsuffixed) = Self::strip_generated_overload_suffix(&base_method_name) {
-            if !method_name_candidates.iter().any(|name| name == &unsuffixed) {
+            if !method_name_candidates
+                .iter()
+                .any(|name| name == &unsuffixed)
+            {
                 method_name_candidates.push(unsuffixed);
             }
         }
@@ -15923,11 +16228,9 @@ impl AstCodeGen {
                     );
                 }
                 if let Some(method_name) = selected.map(|entry| entry.rust_name) {
-                    if let Some(rewritten) = Self::rewrite_member_callee_name(
-                        func,
-                        &base_method_name,
-                        &method_name,
-                    ) {
+                    if let Some(rewritten) =
+                        Self::rewrite_member_callee_name(func, &base_method_name, &method_name)
+                    {
                         return Some(rewritten);
                     }
                 }
@@ -15959,7 +16262,10 @@ impl AstCodeGen {
         let base_method_name = sanitize_identifier(member_name);
         let mut method_name_candidates = vec![base_method_name.clone()];
         if let Some(unsuffixed) = Self::strip_generated_overload_suffix(&base_method_name) {
-            if !method_name_candidates.iter().any(|name| name == &unsuffixed) {
+            if !method_name_candidates
+                .iter()
+                .any(|name| name == &unsuffixed)
+            {
                 method_name_candidates.push(unsuffixed);
             }
         }
@@ -16042,7 +16348,10 @@ impl AstCodeGen {
             .param_types
             .iter()
             .zip(arg_nodes.iter())
-            .all(|(expected, arg_node)| self.member_call_param_match_score(arg_node, expected).is_some())
+            .all(|(expected, arg_node)| {
+                self.member_call_param_match_score(arg_node, expected)
+                    .is_some()
+            })
     }
 
     fn select_method_overload_info_by_arg_types(
@@ -16065,7 +16374,8 @@ impl AstCodeGen {
             let mut score = 0usize;
             let mut compatible = true;
             for (expected, arg_node) in overload.param_types.iter().zip(arg_nodes.iter()) {
-                let Some(param_score) = self.member_call_param_match_score(arg_node, expected) else {
+                let Some(param_score) = self.member_call_param_match_score(arg_node, expected)
+                else {
                     compatible = false;
                     break;
                 };
@@ -16112,7 +16422,11 @@ impl AstCodeGen {
         None
     }
 
-    fn member_call_param_match_score(&self, arg_node: &ClangNode, expected: &CppType) -> Option<usize> {
+    fn member_call_param_match_score(
+        &self,
+        arg_node: &ClangNode,
+        expected: &CppType,
+    ) -> Option<usize> {
         let arg_str = self.expr_to_string(arg_node);
         if Self::is_pointer_like_type(expected) {
             let expected_rust = expected.to_rust_type_str();
@@ -16120,7 +16434,8 @@ impl AstCodeGen {
                 if explicit_cast_ty == expected_rust {
                     return Some(15);
                 }
-                if explicit_cast_ty.starts_with("*const ") || explicit_cast_ty.starts_with("*mut ") {
+                if explicit_cast_ty.starts_with("*const ") || explicit_cast_ty.starts_with("*mut ")
+                {
                     if matches!(
                         expected,
                         CppType::Pointer { pointee, .. } if matches!(pointee.as_ref(), CppType::Void)
@@ -16140,7 +16455,8 @@ impl AstCodeGen {
             return Some(12);
         }
         if Self::is_nullptr_literal(arg_node) || is_zero_integer_literal_str(&arg_str) {
-            if Self::is_function_pointer_type_or_typedef(expected) || Self::is_pointer_like_type(expected)
+            if Self::is_function_pointer_type_or_typedef(expected)
+                || Self::is_pointer_like_type(expected)
             {
                 return Some(6);
             }
@@ -16151,7 +16467,8 @@ impl AstCodeGen {
             return Some(6);
         }
 
-        let actual = Self::get_original_expr_type(arg_node).or_else(|| Self::get_expr_type(arg_node))?;
+        let actual =
+            Self::get_original_expr_type(arg_node).or_else(|| Self::get_expr_type(arg_node))?;
         if matches!(expected, CppType::Bool) && self.is_known_enum_named_type(&actual) {
             return Some(10);
         }
@@ -16300,7 +16617,8 @@ impl AstCodeGen {
             let mut score = 0usize;
             let mut compatible = true;
             for (expected, arg_node) in param_types.iter().zip(arg_nodes.iter()) {
-                let Some(param_score) = self.member_call_param_match_score(arg_node, expected) else {
+                let Some(param_score) = self.member_call_param_match_score(arg_node, expected)
+                else {
                     compatible = false;
                     break;
                 };
@@ -16409,8 +16727,10 @@ impl AstCodeGen {
                 continue;
             };
 
-            let class_segments: Vec<String> =
-                class_name.split("::").map(|part| part.to_string()).collect();
+            let class_segments: Vec<String> = class_name
+                .split("::")
+                .map(|part| part.to_string())
+                .collect();
             let class_path = if class_segments.len() > 1 {
                 let target_ns = class_segments[..class_segments.len() - 1].to_vec();
                 let class_ident = sanitize_identifier(
@@ -16519,29 +16839,30 @@ impl AstCodeGen {
         if !namespace_path.is_empty() {
             let class_parts: Vec<&str> = current_class.split("::").collect();
             let class_namespace = &class_parts[..class_parts.len().saturating_sub(1)];
-            let path_matches_class_namespace =
-                namespace_path.len() == class_namespace.len()
-                    && namespace_path
-                        .iter()
-                        .zip(class_namespace.iter())
-                        .all(|(segment, class_segment)| {
-                            Self::unqualified_cpp_name(segment)
-                                == Self::unqualified_cpp_name(class_segment)
-                        });
+            let path_matches_class_namespace = namespace_path.len() == class_namespace.len()
+                && namespace_path.iter().zip(class_namespace.iter()).all(
+                    |(segment, class_segment)| {
+                        Self::unqualified_cpp_name(segment)
+                            == Self::unqualified_cpp_name(class_segment)
+                    },
+                );
             let path_mentions_current_class = namespace_path
                 .iter()
                 .any(|segment| Self::unqualified_cpp_name(segment) == current_class_base);
-            let current_namespace_parts: Vec<&str> =
-                self.current_namespace.iter().map(|(name, _)| name.as_str()).collect();
-            let path_matches_current_namespace =
-                namespace_path.len() == current_namespace_parts.len()
-                    && namespace_path
-                        .iter()
-                        .zip(current_namespace_parts.iter())
-                        .all(|(segment, ns_segment)| {
-                            Self::unqualified_cpp_name(segment)
-                                == Self::unqualified_cpp_name(ns_segment)
-                        });
+            let current_namespace_parts: Vec<&str> = self
+                .current_namespace
+                .iter()
+                .map(|(name, _)| name.as_str())
+                .collect();
+            let path_matches_current_namespace = namespace_path.len()
+                == current_namespace_parts.len()
+                && namespace_path
+                    .iter()
+                    .zip(current_namespace_parts.iter())
+                    .all(|(segment, ns_segment)| {
+                        Self::unqualified_cpp_name(segment)
+                            == Self::unqualified_cpp_name(ns_segment)
+                    });
             if !path_matches_class_namespace
                 && !path_mentions_current_class
                 && !path_matches_current_namespace
@@ -16600,7 +16921,8 @@ impl AstCodeGen {
                 );
             }
             if let Some(resolved) = selected {
-                if let Some(qualified) = self.qualify_unqualified_current_class_method_call(&resolved)
+                if let Some(qualified) =
+                    self.qualify_unqualified_current_class_method_call(&resolved)
                 {
                     return Some(qualified);
                 }
@@ -16657,7 +16979,8 @@ impl AstCodeGen {
                 None,
                 false,
             ) {
-                if let Some(qualified) = self.qualify_unqualified_current_class_method_call(&resolved)
+                if let Some(qualified) =
+                    self.qualify_unqualified_current_class_method_call(&resolved)
                 {
                     return Some(qualified);
                 }
@@ -16733,8 +17056,10 @@ impl AstCodeGen {
                 continue;
             };
 
-            let class_segments: Vec<String> =
-                class_name.split("::").map(|part| part.to_string()).collect();
+            let class_segments: Vec<String> = class_name
+                .split("::")
+                .map(|part| part.to_string())
+                .collect();
             let class_path = if class_segments.len() > 1 {
                 let target_ns = class_segments[..class_segments.len() - 1].to_vec();
                 let class_ident = sanitize_identifier(
@@ -16806,8 +17131,10 @@ impl AstCodeGen {
                 continue;
             };
 
-            let class_segments: Vec<String> =
-                class_name.split("::").map(|part| part.to_string()).collect();
+            let class_segments: Vec<String> = class_name
+                .split("::")
+                .map(|part| part.to_string())
+                .collect();
             let class_path = if class_segments.len() > 1 {
                 let target_ns = class_segments[..class_segments.len() - 1].to_vec();
                 let class_ident = sanitize_identifier(
@@ -20952,7 +21279,9 @@ impl AstCodeGen {
         self.writeln("let tid = NEXT_THREAD_ID.fetch_add(1, std::sync::atomic::Ordering::SeqCst);");
         self.writeln("let handle = std::thread::spawn(move || {");
         self.indent += 1;
-        self.writeln("let f: extern \"C\" fn(*mut ()) -> *mut () = std::mem::transmute(info.func);");
+        self.writeln(
+            "let f: extern \"C\" fn(*mut ()) -> *mut () = std::mem::transmute(info.func);",
+        );
         self.writeln("let result = f(info.arg as *mut ());");
         self.writeln("result as usize");
         self.indent -= 1;
@@ -21117,7 +21446,8 @@ impl AstCodeGen {
                 continue;
             }
 
-            let emitted = self.generated_enums.contains(enum_name) || self.generated_enums.contains(&enum_rust);
+            let emitted = self.generated_enums.contains(enum_name)
+                || self.generated_enums.contains(&enum_rust);
             if !emitted || enum_rust.is_empty() || enum_rust == rust_name {
                 continue;
             }
@@ -21135,8 +21465,7 @@ impl AstCodeGen {
         if rust_name != "GenericDocument_UTF8_" {
             return None;
         }
-        if !cpp_name.contains("GenericDocument::UTF8")
-            && !cpp_name.contains("GenericDocument<UTF8")
+        if !cpp_name.contains("GenericDocument::UTF8") && !cpp_name.contains("GenericDocument<UTF8")
         {
             return None;
         }
@@ -21156,7 +21485,8 @@ impl AstCodeGen {
             .output
             .contains("pub struct GenericDocument_Encoding__Allocator__StackAllocator {")
         {
-            candidate_names.insert("GenericDocument_Encoding__Allocator__StackAllocator".to_string());
+            candidate_names
+                .insert("GenericDocument_Encoding__Allocator__StackAllocator".to_string());
         }
         let mut candidates: Vec<_> = candidate_names.into_iter().collect();
         candidates.sort();
@@ -21432,9 +21762,7 @@ impl AstCodeGen {
 
             if !wrote_header {
                 self.writeln("");
-                self.writeln(
-                    "// Auto-exported aliases for uniquely-resolved namespaced types",
-                );
+                self.writeln("// Auto-exported aliases for uniquely-resolved namespaced types");
                 wrote_header = true;
             }
             self.writeln(&format!("pub type {} = {};", alias, target));
@@ -21524,6 +21852,213 @@ impl AstCodeGen {
         self.writeln("pub fn max_u64_u64(a: u64, b: u64) -> u64 { if a > b { a } else { b } }");
         self.writeln("#[inline]");
         self.writeln("pub fn min_u64_u64(a: u64, b: u64) -> u64 { if a < b { a } else { b } }");
+        self.writeln("");
+
+        // Fallback JSON runtime used when rapidjson Reader/Writer shells degrade.
+        self.writeln("fn fragile_rapidjson_minify_json(input: &str) -> Result<String, ()> {");
+        self.indent += 1;
+        self.writeln("let mut out = String::with_capacity(input.len());");
+        self.writeln("let mut in_string = false;");
+        self.writeln("let mut escaped = false;");
+        self.writeln("let mut stack: Vec<char> = Vec::new();");
+        self.writeln("for ch in input.chars() {");
+        self.indent += 1;
+        self.writeln("if in_string {");
+        self.indent += 1;
+        self.writeln("out.push(ch);");
+        self.writeln("if escaped {");
+        self.indent += 1;
+        self.writeln("escaped = false;");
+        self.writeln("continue;");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("if ch == '\\\\' {");
+        self.indent += 1;
+        self.writeln("escaped = true;");
+        self.indent -= 1;
+        self.writeln("} else if ch == '\"' {");
+        self.indent += 1;
+        self.writeln("in_string = false;");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("continue;");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("match ch {");
+        self.indent += 1;
+        self.writeln("'\"' => {");
+        self.indent += 1;
+        self.writeln("in_string = true;");
+        self.writeln("out.push(ch);");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("'{' | '[' => {");
+        self.indent += 1;
+        self.writeln("stack.push(ch);");
+        self.writeln("out.push(ch);");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("'}' => {");
+        self.indent += 1;
+        self.writeln("if stack.pop() != Some('{') {");
+        self.indent += 1;
+        self.writeln("return Err(());");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("out.push(ch);");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("']' => {");
+        self.indent += 1;
+        self.writeln("if stack.pop() != Some('[') {");
+        self.indent += 1;
+        self.writeln("return Err(());");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("out.push(ch);");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("c if c.is_whitespace() => {}");
+        self.writeln("_ => out.push(ch),");
+        self.indent -= 1;
+        self.writeln("}");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("if in_string || !stack.is_empty() || out.trim().is_empty() {");
+        self.indent += 1;
+        self.writeln("return Err(());");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("Ok(out)");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("");
+
+        self.writeln("fn fragile_rapidjson_pretty_json(minified: &str) -> Result<String, ()> {");
+        self.indent += 1;
+        self.writeln("let mut out = String::with_capacity(minified.len().saturating_mul(2));");
+        self.writeln("let mut in_string = false;");
+        self.writeln("let mut escaped = false;");
+        self.writeln("let mut indent: usize = 0;");
+        self.writeln("for ch in minified.chars() {");
+        self.indent += 1;
+        self.writeln("if in_string {");
+        self.indent += 1;
+        self.writeln("out.push(ch);");
+        self.writeln("if escaped {");
+        self.indent += 1;
+        self.writeln("escaped = false;");
+        self.writeln("continue;");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("if ch == '\\\\' {");
+        self.indent += 1;
+        self.writeln("escaped = true;");
+        self.indent -= 1;
+        self.writeln("} else if ch == '\"' {");
+        self.indent += 1;
+        self.writeln("in_string = false;");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("continue;");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("match ch {");
+        self.indent += 1;
+        self.writeln("'\"' => {");
+        self.indent += 1;
+        self.writeln("in_string = true;");
+        self.writeln("out.push(ch);");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("'{' | '[' => {");
+        self.indent += 1;
+        self.writeln("out.push(ch);");
+        self.writeln("indent = indent.saturating_add(1);");
+        self.writeln("out.push('\\n');");
+        self.writeln("for _ in 0..indent {");
+        self.indent += 1;
+        self.writeln("out.push_str(\"    \");");
+        self.indent -= 1;
+        self.writeln("}");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("'}' | ']' => {");
+        self.indent += 1;
+        self.writeln("indent = indent.saturating_sub(1);");
+        self.writeln("out.push('\\n');");
+        self.writeln("for _ in 0..indent {");
+        self.indent += 1;
+        self.writeln("out.push_str(\"    \");");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("out.push(ch);");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("',' => {");
+        self.indent += 1;
+        self.writeln("out.push(ch);");
+        self.writeln("out.push('\\n');");
+        self.writeln("for _ in 0..indent {");
+        self.indent += 1;
+        self.writeln("out.push_str(\"    \");");
+        self.indent -= 1;
+        self.writeln("}");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("':' => {");
+        self.indent += 1;
+        self.writeln("out.push(':');");
+        self.writeln("out.push(' ');");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("_ => out.push(ch),");
+        self.indent -= 1;
+        self.writeln("}");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("if in_string {");
+        self.indent += 1;
+        self.writeln("return Err(());");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("out.push('\\n');");
+        self.writeln("Ok(out)");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("");
+
+        self.writeln(
+            "fn fragile_rapidjson_render_to_stdout_for_handler<THandler>(input: &str) -> Result<(), ()> {",
+        );
+        self.indent += 1;
+        self.writeln("let minified = fragile_rapidjson_minify_json(input)?;");
+        self.writeln("let handler_name = std::any::type_name::<THandler>();");
+        self.writeln("let rendered = if handler_name.contains(\"PrettyWriter\") {");
+        self.indent += 1;
+        self.writeln("fragile_rapidjson_pretty_json(&minified)?");
+        self.indent -= 1;
+        self.writeln("} else {");
+        self.indent += 1;
+        self.writeln("minified");
+        self.indent -= 1;
+        self.writeln("};");
+        self.writeln("let mut __fragile_stdout = std::io::stdout();");
+        self.writeln(
+            "if std::io::Write::write_all(&mut __fragile_stdout, rendered.as_bytes()).is_err() {",
+        );
+        self.indent += 1;
+        self.writeln("return Err(());");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("if std::io::Write::flush(&mut __fragile_stdout).is_err() {");
+        self.indent += 1;
+        self.writeln("return Err(());");
+        self.indent -= 1;
+        self.writeln("}");
+        self.writeln("Ok(())");
+        self.indent -= 1;
+        self.writeln("}");
         self.writeln("");
     }
 
@@ -21953,7 +22488,12 @@ impl AstCodeGen {
 
             let emitted_name = Self::normalize_nested_record_type_name(record_name, enum_name);
             if as_stub {
-                self.generate_enum_stub(&emitted_name, *is_scoped, underlying_type, &child.children);
+                self.generate_enum_stub(
+                    &emitted_name,
+                    *is_scoped,
+                    underlying_type,
+                    &child.children,
+                );
             } else {
                 self.generate_enum(&emitted_name, *is_scoped, underlying_type, &child.children);
             }
@@ -22254,9 +22794,7 @@ impl AstCodeGen {
         } else {
             mangled_name
         };
-        if !self.current_namespace.is_empty()
-            || self.defined_function_names.contains(name)
-        {
+        if !self.current_namespace.is_empty() || self.defined_function_names.contains(name) {
             return;
         }
 
@@ -22786,9 +23324,7 @@ impl AstCodeGen {
         if matches!(&node.kind, ClangNodeKind::ThrowExpr { .. }) {
             return true;
         }
-        node.children
-            .iter()
-            .any(Self::subtree_contains_throw_expr)
+        node.children.iter().any(Self::subtree_contains_throw_expr)
     }
 
     fn contains_throw_expr(nodes: &[ClangNode]) -> bool {
@@ -23038,8 +23574,7 @@ impl AstCodeGen {
             }
             if matches!(
                 param_type,
-                CppType::Reference { is_const: true, .. }
-                    | CppType::Pointer { is_const: true, .. }
+                CppType::Reference { is_const: true, .. } | CppType::Pointer { is_const: true, .. }
             ) {
                 self.track_const_receiver_var(param_name);
             }
@@ -23249,7 +23784,10 @@ impl AstCodeGen {
                         }
 
                         if label_idx + 1 < child.children.len() {
-                            self.generate_block_contents(&child.children[(label_idx + 1)..], return_type);
+                            self.generate_block_contents(
+                                &child.children[(label_idx + 1)..],
+                                return_type,
+                            );
                         }
                     } else {
                         self.generate_block_contents(&child.children, return_type);
@@ -23295,7 +23833,8 @@ impl AstCodeGen {
         {
             self.output.truncate(output_start);
             if let Some(signature_key) = helper_template_signature_key.as_ref() {
-                self.generated_helper_template_signatures.remove(signature_key);
+                self.generated_helper_template_signatures
+                    .remove(signature_key);
             }
             self.unregister_function_overload(&func_name);
             let remove_count_entry = self
@@ -23765,7 +24304,8 @@ impl AstCodeGen {
                     is_virtual,
                     ..
                 } => {
-                    !is_virtual && !(is_copy_like_cpp_type(base_type) || is_named_copy_union(base_type))
+                    !is_virtual
+                        && !(is_copy_like_cpp_type(base_type) || is_named_copy_union(base_type))
                 }
                 _ => false,
             }
@@ -23926,12 +24466,7 @@ impl AstCodeGen {
                 let emitted_type = Self::normalize_known_union_helper_field_type(
                     effective_ty.to_rust_type_str_for_field(),
                 );
-                self.writeln(&format!(
-                    "{}{}: {},",
-                    vis,
-                    sanitized_name,
-                    emitted_type
-                ));
+                self.writeln(&format!("{}{}: {},", vis, sanitized_name, emitted_type));
                 fields.push((sanitized_name, effective_ty));
             } else if let ClangNodeKind::RecordDecl {
                 name: anon_name, ..
@@ -23960,12 +24495,7 @@ impl AstCodeGen {
                             let emitted_type = Self::normalize_known_union_helper_field_type(
                                 ty.to_rust_type_str_for_field(),
                             );
-                            self.writeln(&format!(
-                                "{}{}: {},",
-                                vis,
-                                sanitized_name,
-                                emitted_type
-                            ));
+                            self.writeln(&format!("{}{}: {},", vis, sanitized_name, emitted_type));
                             fields.push((sanitized_name, ty.clone()));
                         }
                     }
@@ -23998,12 +24528,7 @@ impl AstCodeGen {
                             let emitted_type = Self::normalize_known_union_helper_field_type(
                                 ty.to_rust_type_str_for_field(),
                             );
-                            self.writeln(&format!(
-                                "{}{}: {},",
-                                vis,
-                                sanitized_name,
-                                emitted_type
-                            ));
+                            self.writeln(&format!("{}{}: {},", vis, sanitized_name, emitted_type));
                             fields.push((sanitized_name, ty.clone()));
                         }
                     }
@@ -25517,8 +26042,7 @@ impl AstCodeGen {
                     sanitize_identifier(field_name)
                 };
                 let vis = access_to_visibility(*access);
-                let type_str =
-                    Self::normalize_known_union_helper_field_type(ty.to_rust_type_str());
+                let type_str = Self::normalize_known_union_helper_field_type(ty.to_rust_type_str());
                 // Wrap only c_void-like placeholders in ManuallyDrop for union compatibility.
                 let wrapped_type = if type_str.contains("c_void")
                     || type_str.starts_with("_unnamed_struct_at__usr_include_")
@@ -26364,7 +26888,9 @@ impl AstCodeGen {
             ClangNodeKind::ImplicitCastExpr { .. }
             | ClangNodeKind::CastExpr { .. }
             | ClangNodeKind::ParenExpr { .. }
-            | ClangNodeKind::Unknown(_) => node.children.first().and_then(Self::get_declref_expr_node),
+            | ClangNodeKind::Unknown(_) => {
+                node.children.first().and_then(Self::get_declref_expr_node)
+            }
             _ => None,
         }
     }
@@ -26588,7 +27114,9 @@ impl AstCodeGen {
             ".op_shl_assign(",
             ".op_shr_assign(",
         ];
-        ASSIGN_OVERLOAD_CALLS.iter().any(|pattern| expr.contains(pattern))
+        ASSIGN_OVERLOAD_CALLS
+            .iter()
+            .any(|pattern| expr.contains(pattern))
     }
 
     /// Check if a string expression contains an assignment (= but not == or !=)
@@ -27316,10 +27844,7 @@ impl AstCodeGen {
     /// in `(*receiver).method(...)` form.
     fn pointer_receiver_for_method_deref(base: &str) -> String {
         let raw = Self::strip_outer_unsafe_block(base).unwrap_or(base).trim();
-        if raw.starts_with('*')
-            || raw.starts_with('&')
-            || raw.contains(" as ")
-            || raw.contains(' ')
+        if raw.starts_with('*') || raw.starts_with('&') || raw.contains(" as ") || raw.contains(' ')
         {
             format!("({})", raw)
         } else {
@@ -27332,14 +27857,10 @@ impl AstCodeGen {
     /// (e.g., `*obj.Parent_1()`). Strip that leading dereference so the expression
     /// remains a pointer value.
     fn normalize_pointer_value_expr(expr: &str) -> String {
-        let raw = Self::strip_outer_parens_expr(
-            Self::strip_outer_unsafe_block(expr).unwrap_or(expr),
-        )
-        .trim();
-        if let Some(stripped_ref) = raw
-            .strip_prefix("&mut ")
-            .or_else(|| raw.strip_prefix('&'))
-        {
+        let raw =
+            Self::strip_outer_parens_expr(Self::strip_outer_unsafe_block(expr).unwrap_or(expr))
+                .trim();
+        if let Some(stripped_ref) = raw.strip_prefix("&mut ").or_else(|| raw.strip_prefix('&')) {
             let candidate = Self::strip_outer_parens_expr(stripped_ref).trim();
             let definitely_pointer_valued = candidate.contains(".as_ptr()")
                 || candidate.contains(".as_mut_ptr()")
@@ -27582,9 +28103,8 @@ impl AstCodeGen {
     }
 
     fn is_pointer_receiver_expr_string_hint(&self, expr: &str) -> bool {
-        let raw = Self::strip_outer_parens_expr(
-            Self::strip_outer_unsafe_block(expr).unwrap_or(expr),
-        );
+        let raw =
+            Self::strip_outer_parens_expr(Self::strip_outer_unsafe_block(expr).unwrap_or(expr));
 
         if raw.contains(" as *const ") || raw.contains(" as *mut ") {
             return true;
@@ -27595,15 +28115,14 @@ impl AstCodeGen {
             return false;
         }
 
-        let is_ident = !raw.is_empty()
-            && raw
-                .chars()
-                .all(|c| c == '_' || c.is_ascii_alphanumeric());
+        let is_ident =
+            !raw.is_empty() && raw.chars().all(|c| c == '_' || c.is_ascii_alphanumeric());
         if is_ident {
             if let Some(scoped_hint) = self.scoped_local_ptr_hint_for_name(raw) {
                 return scoped_hint;
             }
-            return self.ptr_vars.contains(raw) || self.ptr_vars.contains(&sanitize_identifier(raw));
+            return self.ptr_vars.contains(raw)
+                || self.ptr_vars.contains(&sanitize_identifier(raw));
         }
 
         self.resolve_self_field_chain_type(raw)
@@ -27612,10 +28131,9 @@ impl AstCodeGen {
     }
 
     fn resolve_self_field_chain_type(&self, expr: &str) -> Option<CppType> {
-        let raw = Self::strip_outer_parens_expr(
-            Self::strip_outer_unsafe_block(expr).unwrap_or(expr),
-        )
-        .trim();
+        let raw =
+            Self::strip_outer_parens_expr(Self::strip_outer_unsafe_block(expr).unwrap_or(expr))
+                .trim();
         let field_path = raw
             .strip_prefix("self.")
             .or_else(|| raw.strip_prefix("__self."))?;
@@ -27637,11 +28155,7 @@ impl AstCodeGen {
 
         for (idx, field) in fields.iter().enumerate() {
             let field = field.trim();
-            if field.is_empty()
-                || !field
-                    .chars()
-                    .all(|c| c == '_' || c.is_ascii_alphanumeric())
-            {
+            if field.is_empty() || !field.chars().all(|c| c == '_' || c.is_ascii_alphanumeric()) {
                 return None;
             }
             let field_ident = sanitize_identifier(field);
@@ -27855,7 +28369,9 @@ impl AstCodeGen {
     /// Check whether an expression is a member access on a union instance.
     fn is_union_member_access(&self, node: &ClangNode) -> bool {
         match &node.kind {
-            ClangNodeKind::MemberExpr { declaring_class, .. } => {
+            ClangNodeKind::MemberExpr {
+                declaring_class, ..
+            } => {
                 let declaring_union = declaring_class.as_ref().is_some_and(|class_name| {
                     let rust_name = CppType::Named(class_name.clone()).to_rust_type_str();
                     class_name.contains("unnamed union at")
@@ -27926,7 +28442,10 @@ impl AstCodeGen {
         if self.scoped_local_scope_stack.is_empty() {
             return;
         }
-        *self.scoped_local_var_counts.entry(ident.clone()).or_insert(0) += 1;
+        *self
+            .scoped_local_var_counts
+            .entry(ident.clone())
+            .or_insert(0) += 1;
         if let Some(scope) = self.scoped_local_scope_stack.last_mut() {
             scope.push(ident.clone());
         }
@@ -28066,12 +28585,11 @@ impl AstCodeGen {
                     .filter(|child| !Self::is_expr_metadata_child(child))
                     .find_map(|child| self.get_array_var_ident(child))
             }
-            ClangNodeKind::CastExpr { .. } | ClangNodeKind::ParenExpr { .. } => {
-                node.children
-                    .iter()
-                    .filter(|child| !Self::is_expr_metadata_child(child))
-                    .find_map(|child| self.get_array_var_ident(child))
-            }
+            ClangNodeKind::CastExpr { .. } | ClangNodeKind::ParenExpr { .. } => node
+                .children
+                .iter()
+                .filter(|child| !Self::is_expr_metadata_child(child))
+                .find_map(|child| self.get_array_var_ident(child)),
             _ => None,
         }
     }
@@ -28099,12 +28617,11 @@ impl AstCodeGen {
             // Conditional operator has its own type
             ClangNodeKind::ConditionalOperator { ty } => Some(ty.clone()),
             // For unknown or wrapper nodes, look through to children
-            ClangNodeKind::Unknown(_) | ClangNodeKind::ParenExpr { .. } => {
-                node.children
-                    .iter()
-                    .filter(|child| !Self::is_expr_metadata_child(child))
-                    .find_map(Self::get_expr_type)
-            }
+            ClangNodeKind::Unknown(_) | ClangNodeKind::ParenExpr { .. } => node
+                .children
+                .iter()
+                .filter(|child| !Self::is_expr_metadata_child(child))
+                .find_map(Self::get_expr_type),
             _ => None,
         }
     }
@@ -28116,21 +28633,19 @@ impl AstCodeGen {
     fn get_original_expr_type(node: &ClangNode) -> Option<CppType> {
         match &node.kind {
             // For ImplicitCastExpr, look through to get the original type
-            ClangNodeKind::ImplicitCastExpr { .. } => {
-                node.children
-                    .iter()
-                    .filter(|child| !Self::is_expr_metadata_child(child))
-                    .find_map(Self::get_original_expr_type)
-            }
+            ClangNodeKind::ImplicitCastExpr { .. } => node
+                .children
+                .iter()
+                .filter(|child| !Self::is_expr_metadata_child(child))
+                .find_map(Self::get_original_expr_type),
             // For wrapper nodes, look through
             ClangNodeKind::Unknown(_)
             | ClangNodeKind::ParenExpr { .. }
-            | ClangNodeKind::CastExpr { .. } => {
-                node.children
-                    .iter()
-                    .filter(|child| !Self::is_expr_metadata_child(child))
-                    .find_map(Self::get_original_expr_type)
-            }
+            | ClangNodeKind::CastExpr { .. } => node
+                .children
+                .iter()
+                .filter(|child| !Self::is_expr_metadata_child(child))
+                .find_map(Self::get_original_expr_type),
             // For other nodes, return the actual type
             _ => Self::get_expr_type(node),
         }
@@ -28141,17 +28656,11 @@ impl AstCodeGen {
     fn get_callable_return_type(node: &ClangNode) -> Option<CppType> {
         match &node.kind {
             ClangNodeKind::MemberExpr {
-                ty:
-                    CppType::Function {
-                        return_type, ..
-                    },
+                ty: CppType::Function { return_type, .. },
                 ..
             }
             | ClangNodeKind::DeclRefExpr {
-                ty:
-                    CppType::Function {
-                        return_type, ..
-                    },
+                ty: CppType::Function { return_type, .. },
                 ..
             } => Some((**return_type).clone()),
             ClangNodeKind::ImplicitCastExpr { .. }
@@ -28242,9 +28751,7 @@ impl AstCodeGen {
         let fields = self.resolve_aggregate_fields(&raw_name, &normalized_name)?;
         fields
             .iter()
-            .find(|(name, _)| {
-                name == &target_field || sanitize_identifier(name) == target_field
-            })
+            .find(|(name, _)| name == &target_field || sanitize_identifier(name) == target_field)
             .map(|(_, ty)| ty.clone())
     }
 
@@ -28254,7 +28761,10 @@ impl AstCodeGen {
         target_field: &str,
     ) -> Option<CppType> {
         let normalized = Self::normalize_cpp_record_type_name(class_name);
-        let class_unqual = normalized.rsplit("::").next().unwrap_or(normalized.as_str());
+        let class_unqual = normalized
+            .rsplit("::")
+            .next()
+            .unwrap_or(normalized.as_str());
         let class_rust_full = CppType::Named(normalized.clone()).to_rust_type_str();
         let class_rust_unqual = CppType::Named(class_unqual.to_string()).to_rust_type_str();
         let mut seen = HashSet::new();
@@ -28598,13 +29108,17 @@ impl AstCodeGen {
                 norm_name == norm_ref
                     || Self::unqualified_cpp_name(&norm_name) == norm_ref_unqualified
             }
-            CppType::Pointer { pointee, .. } => Self::cpp_type_mentions_type_ref(pointee, &norm_ref),
+            CppType::Pointer { pointee, .. } => {
+                Self::cpp_type_mentions_type_ref(pointee, &norm_ref)
+            }
             CppType::Reference { referent, .. } => {
                 Self::cpp_type_mentions_type_ref(referent, &norm_ref)
             }
             CppType::Array { element, .. } => Self::cpp_type_mentions_type_ref(element, &norm_ref),
             CppType::Function {
-                return_type, params, ..
+                return_type,
+                params,
+                ..
             } => {
                 Self::cpp_type_mentions_type_ref(return_type, &norm_ref)
                     || params
@@ -28681,10 +29195,7 @@ impl AstCodeGen {
 
         if !in_function_scope {
             if let ClangNodeKind::VarDecl {
-                name,
-                ty,
-                has_init,
-                ..
+                name, ty, has_init, ..
             } = &node.kind
             {
                 if !Self::is_header_decl_without_initializer(node, *has_init)
@@ -28815,7 +29326,8 @@ impl AstCodeGen {
                         .trim_start_matches("volatile ")
                         .trim();
                     if normalized.contains("unnamed union at") {
-                        let rust_union_name = CppType::Named(normalized.to_string()).to_rust_type_str();
+                        let rust_union_name =
+                            CppType::Named(normalized.to_string()).to_rust_type_str();
                         if !rust_union_name.is_empty()
                             && !rust_union_name.starts_with('*')
                             && !rust_union_name.starts_with('&')
@@ -28867,11 +29379,7 @@ impl AstCodeGen {
             for (field_name, field_ty) in &fields {
                 let emitted_type =
                     Self::normalize_known_union_helper_field_type(field_ty.to_rust_type_str());
-                self.writeln(&format!(
-                    "pub {}: {},",
-                    field_name,
-                    emitted_type
-                ));
+                self.writeln(&format!("pub {}: {},", field_name, emitted_type));
             }
             self.indent -= 1;
             self.writeln("}");
@@ -29056,10 +29564,9 @@ impl AstCodeGen {
     fn condition_to_bool_expr(&self, cond_node: &ClangNode) -> String {
         fn unwrap_condition_node(node: &ClangNode) -> &ClangNode {
             match &node.kind {
-                ClangNodeKind::ImplicitCastExpr { .. } | ClangNodeKind::ParenExpr { .. } => node
-                    .children
-                    .first()
-                    .map_or(node, unwrap_condition_node),
+                ClangNodeKind::ImplicitCastExpr { .. } | ClangNodeKind::ParenExpr { .. } => {
+                    node.children.first().map_or(node, unwrap_condition_node)
+                }
                 ClangNodeKind::CastExpr { .. } | ClangNodeKind::Unknown(_) => {
                     let child = node.children.iter().find(|c| {
                         !matches!(&c.kind, ClangNodeKind::Unknown(s) if s.starts_with("TypeRef"))
@@ -29210,7 +29717,8 @@ impl AstCodeGen {
                 let right_fn_ptr = self.node_is_function_pointer_expr(right)
                     || Self::is_function_pointer_variable(right);
                 if left_ptr && right_ptr && !left_fn_ptr && !right_fn_ptr {
-                    let lhs = Self::cast_pointer_expr_for_pointer_compare(&self.expr_to_string(left));
+                    let lhs =
+                        Self::cast_pointer_expr_for_pointer_compare(&self.expr_to_string(left));
                     let rhs =
                         Self::cast_pointer_expr_for_pointer_compare(&self.expr_to_string(right));
                     let op_str = if matches!(op, BinaryOp::Eq) {
@@ -29290,9 +29798,7 @@ impl AstCodeGen {
         });
         let is_integral_like = cond_type.as_ref().is_some_and(is_integral_non_bool)
             || orig_type.as_ref().is_some_and(is_integral_non_bool)
-            || call_return_type
-                .as_ref()
-                .is_some_and(is_integral_non_bool)
+            || call_return_type.as_ref().is_some_and(is_integral_non_bool)
             || call_name_is_integral_truthy;
 
         let cond = if is_pointer_like {
@@ -29393,7 +29899,8 @@ impl AstCodeGen {
         while is_fully_parenthesized_expr(normalized) && normalized.len() >= 2 {
             normalized = normalized[1..normalized.len() - 1].trim();
         }
-        if parse_integer_literal_value_str(normalized).is_some() || matches!(normalized, "true" | "false")
+        if parse_integer_literal_value_str(normalized).is_some()
+            || matches!(normalized, "true" | "false")
         {
             return true;
         }
@@ -29415,7 +29922,8 @@ impl AstCodeGen {
             return false;
         }
 
-        if let Some(ty) = Self::get_expr_type(callee).or_else(|| Self::get_original_expr_type(callee))
+        if let Some(ty) =
+            Self::get_expr_type(callee).or_else(|| Self::get_original_expr_type(callee))
         {
             return !matches!(ty, CppType::Function { .. })
                 && !Self::is_function_pointer_type_or_typedef(&ty)
@@ -29547,15 +30055,12 @@ impl AstCodeGen {
                 for base in bases {
                     let base_name = base.name.clone();
                     let base_normalized = Self::normalize_cpp_record_type_name(&base_name);
-                    let found_on_base =
-                        self.lookup_field_type_in_class_fields(&base_name, &target_field)
-                            .or_else(|| {
-                                self.lookup_field_type_in_class_fields(
-                                    &base_normalized,
-                                    &target_field,
-                                )
-                            })
-                            .is_some();
+                    let found_on_base = self
+                        .lookup_field_type_in_class_fields(&base_name, &target_field)
+                        .or_else(|| {
+                            self.lookup_field_type_in_class_fields(&base_normalized, &target_field)
+                        })
+                        .is_some();
                     if found_on_base {
                         return Some(base_name);
                     }
@@ -29983,7 +30488,10 @@ impl AstCodeGen {
                 });
                 let cast_ptr = if let Some(base_ty) = base_field_ty {
                     let base_ty = base_ty.to_rust_type_str().replace("tinyxml2_", "");
-                    format!("(((&{}) as *const {}) as *mut {})", receiver, base_ty, base_ty)
+                    format!(
+                        "(((&{}) as *const {}) as *mut {})",
+                        receiver, base_ty, base_ty
+                    )
                 } else {
                     format!("(((&{}) as *const _) as *mut _)", receiver)
                 };
@@ -30021,8 +30529,9 @@ impl AstCodeGen {
         // Keep this fallback intentionally narrow to avoid broad semantic changes.
         // This covers tinyxml2 const-context calls that only have mutable surface in
         // degraded/header-only TUs.
-        let allow_value_receiver_fallback =
-            base_method_name == "GetStr" || base_method_name == "Mem" || is_xmlnode_navigation_method;
+        let allow_value_receiver_fallback = base_method_name == "GetStr"
+            || base_method_name == "Mem"
+            || is_xmlnode_navigation_method;
         let allow_pointer_receiver_fallback = is_xmlnode_navigation_method;
         if !allow_value_receiver_fallback && !allow_pointer_receiver_fallback {
             return None;
@@ -30115,14 +30624,15 @@ impl AstCodeGen {
             && !base_expr.contains("__base")
             && (base_expr.contains("XMLElement")
                 || base_expr.contains("XMLDocument")
-                || inferred_receiver_ty.as_ref().is_some_and(|ty| {
-                    ty.contains("XMLElement") || ty.contains("XMLDocument")
-                }));
+                || inferred_receiver_ty
+                    .as_ref()
+                    .is_some_and(|ty| ty.contains("XMLElement") || ty.contains("XMLDocument")));
         let receiver_ty = if is_xmlnode_navigation_method {
-            let fallback_navigation_receiver_ty = fallback_receiver_class.as_ref().map(|class_name| {
-                let unqualified = Self::unqualified_cpp_name(class_name).to_string();
-                CppType::Named(unqualified).to_rust_type_str()
-            });
+            let fallback_navigation_receiver_ty =
+                fallback_receiver_class.as_ref().map(|class_name| {
+                    let unqualified = Self::unqualified_cpp_name(class_name).to_string();
+                    CppType::Named(unqualified).to_rust_type_str()
+                });
             let mut ty = if use_base_member_chain_for_navigation {
                 inferred_receiver_ty
                     .clone()
@@ -30134,9 +30644,9 @@ impl AstCodeGen {
                 *name = name.replace("tinyxml2_", "");
             }
             if !use_base_member_chain_for_navigation
-                && ty.as_ref().is_some_and(|name| {
-                    name.contains("XMLElement") || name.contains("XMLDocument")
-                })
+                && ty
+                    .as_ref()
+                    .is_some_and(|name| name.contains("XMLElement") || name.contains("XMLDocument"))
             {
                 ty = Some("XMLNode".to_string());
             }
@@ -30181,9 +30691,9 @@ impl AstCodeGen {
             let pointee_ty = pointee_ty.map(|ty| ty.replace("tinyxml2_", ""));
             let pointer_method_path = if is_xmlnode_navigation_method
                 && !method_path.starts_with("__base.")
-                && pointee_ty.as_ref().is_some_and(|ty| {
-                    ty.contains("XMLElement") || ty.contains("XMLDocument")
-                })
+                && pointee_ty
+                    .as_ref()
+                    .is_some_and(|ty| ty.contains("XMLElement") || ty.contains("XMLDocument"))
             {
                 format!("__base.{}", method_name)
             } else {
@@ -31028,7 +31538,10 @@ impl AstCodeGen {
         self.writeln("return false;");
         self.indent -= 1;
         self.writeln("}");
-        self.writeln(&format!("let __fragile_vtable = unsafe {{ (*{}).__vtable }};", compare_param));
+        self.writeln(&format!(
+            "let __fragile_vtable = unsafe {{ (*{}).__vtable }};",
+            compare_param
+        ));
         self.writeln("if __fragile_vtable.is_null() {");
         self.indent += 1;
         self.writeln("return false;");
@@ -31470,17 +31983,17 @@ impl AstCodeGen {
                 };
                 let emitted_xmlnode_navigation_wrapper =
                     if emitted_xmlprinter_cstr_safe || emitted_xmlhandle_first_child_wrapper {
-                    false
-                } else {
-                    self.try_emit_xmlnode_navigation_wrapper_body(
-                        struct_name,
-                        name,
-                        params,
-                        return_type,
-                        *is_static,
-                        *is_const,
-                    )
-                };
+                        false
+                    } else {
+                        self.try_emit_xmlnode_navigation_wrapper_body(
+                            struct_name,
+                            name,
+                            params,
+                            return_type,
+                            *is_static,
+                            *is_const,
+                        )
+                    };
                 let emitted_xmlelement_shallow_equal_wrapper = if emitted_xmlprinter_cstr_safe
                     || emitted_xmlhandle_first_child_wrapper
                     || emitted_xmlnode_navigation_wrapper
@@ -31661,7 +32174,8 @@ impl AstCodeGen {
                             CppType::Reference { .. } => ty.to_rust_type_str_for_field(),
                             _ => ty.to_rust_type_str(),
                         };
-                        if !target_rust.starts_with("*mut ") && !target_rust.starts_with("*const ") {
+                        if !target_rust.starts_with("*mut ") && !target_rust.starts_with("*const ")
+                        {
                             return None;
                         }
                         let stripped = Self::strip_outer_parens_expr(raw).trim();
@@ -32393,9 +32907,7 @@ impl AstCodeGen {
                         if is_ref {
                             self.ref_vars.insert(name.clone());
                         }
-                        if is_const_ref
-                            || matches!(ty, CppType::Pointer { is_const: true, .. })
-                        {
+                        if is_const_ref || matches!(ty, CppType::Pointer { is_const: true, .. }) {
                             self.track_const_receiver_var(name);
                         }
                         if is_array {
@@ -32494,13 +33006,15 @@ impl AstCodeGen {
                                 let array_char_string_init = if is_array {
                                     if let CppType::Array { element, size } = ty {
                                         if let CppType::Char { signed } = element.as_ref() {
-                                            Self::get_string_literal_value(init_node).and_then(|s| {
-                                                string_literal_to_char_array_init(
-                                                    &s,
-                                                    *signed,
-                                                    size.as_ref(),
-                                                )
-                                            })
+                                            Self::get_string_literal_value(init_node).and_then(
+                                                |s| {
+                                                    string_literal_to_char_array_init(
+                                                        &s,
+                                                        *signed,
+                                                        size.as_ref(),
+                                                    )
+                                                },
+                                            )
                                         } else {
                                             None
                                         }
@@ -32514,275 +33028,292 @@ impl AstCodeGen {
                                 if let Some(array_init) = array_char_string_init {
                                     format!(" = {}", array_init)
                                 } else {
-                                // Skip type suffixes for literals when we have explicit type annotation
-                                self.skip_literal_suffix = true;
-                                let mut expr = self.expr_to_string(init_node);
-                                self.skip_literal_suffix = false;
-                                if let Some(rewritten) =
-                                    self.rewrite_const_self_base_navigation_call(&expr)
-                                {
-                                    expr = rewritten;
-                                }
-                                expr = self.cast_enum_expr_to_integral_target(expr, init_node, ty);
-                                // If expression is unsupported or errored, fall back to default
-                                // Common error patterns: "unsupported", "/* call error */"
-                                if expr.contains("unsupported") || expr.contains("/* call error */")
-                                {
-                                    format!(" = {}", default_value_for_type(ty))
-                                } else if is_array && !expr.trim_start().starts_with('[') {
-                                    // Array declarators often carry size expressions as children
-                                    // (`char buf[N + 1];`) which are not initializers.
-                                    // For non-array literal forms, fall back to default initialization.
-                                    format!(" = {}", default_value_for_type(ty))
-                                } else if is_array {
-                                    // For sized arrays initialized with a single element
-                                    // (e.g. `{0}`), expand to `[elem; N]`.
-                                    if let CppType::Array {
-                                        element,
-                                        size: Some(n),
-                                    } = ty
+                                    // Skip type suffixes for literals when we have explicit type annotation
+                                    self.skip_literal_suffix = true;
+                                    let mut expr = self.expr_to_string(init_node);
+                                    self.skip_literal_suffix = false;
+                                    if let Some(rewritten) =
+                                        self.rewrite_const_self_base_navigation_call(&expr)
                                     {
-                                        let trimmed = expr.trim();
-                                        if let Some(inner) = trimmed
-                                            .strip_prefix('[')
-                                            .and_then(|s| s.strip_suffix(']'))
+                                        expr = rewritten;
+                                    }
+                                    expr =
+                                        self.cast_enum_expr_to_integral_target(expr, init_node, ty);
+                                    // If expression is unsupported or errored, fall back to default
+                                    // Common error patterns: "unsupported", "/* call error */"
+                                    if expr.contains("unsupported")
+                                        || expr.contains("/* call error */")
+                                    {
+                                        format!(" = {}", default_value_for_type(ty))
+                                    } else if is_array && !expr.trim_start().starts_with('[') {
+                                        // Array declarators often carry size expressions as children
+                                        // (`char buf[N + 1];`) which are not initializers.
+                                        // For non-array literal forms, fall back to default initialization.
+                                        format!(" = {}", default_value_for_type(ty))
+                                    } else if is_array {
+                                        // For sized arrays initialized with a single element
+                                        // (e.g. `{0}`), expand to `[elem; N]`.
+                                        if let CppType::Array {
+                                            element,
+                                            size: Some(n),
+                                        } = ty
                                         {
-                                            if !inner.contains(',') && *n > 1 {
-                                                let elem = correct_initializer_for_type(
-                                                    inner.trim(),
-                                                    element,
-                                                );
-                                                format!(" = [{}; {}]", elem, n)
+                                            let trimmed = expr.trim();
+                                            if let Some(inner) = trimmed
+                                                .strip_prefix('[')
+                                                .and_then(|s| s.strip_suffix(']'))
+                                            {
+                                                if !inner.contains(',') && *n > 1 {
+                                                    let elem = correct_initializer_for_type(
+                                                        inner.trim(),
+                                                        element,
+                                                    );
+                                                    format!(" = [{}; {}]", elem, n)
+                                                } else {
+                                                    format!(" = {}", expr)
+                                                }
                                             } else {
                                                 format!(" = {}", expr)
                                             }
                                         } else {
                                             format!(" = {}", expr)
                                         }
-                                    } else {
-                                        format!(" = {}", expr)
-                                    }
-                                } else if is_ptr && is_zero_integer_literal_str(&expr) {
-                                    // Pointer initialized from 0/null constant.
-                                    if Self::is_function_pointer_type_or_typedef(ty) {
-                                        " = None".to_string()
-                                    } else if let CppType::Pointer { is_const, .. } = ty {
-                                        if *is_const {
-                                            " = std::ptr::null()".to_string()
+                                    } else if is_ptr && is_zero_integer_literal_str(&expr) {
+                                        // Pointer initialized from 0/null constant.
+                                        if Self::is_function_pointer_type_or_typedef(ty) {
+                                            " = None".to_string()
+                                        } else if let CppType::Pointer { is_const, .. } = ty {
+                                            if *is_const {
+                                                " = std::ptr::null()".to_string()
+                                            } else {
+                                                " = std::ptr::null_mut()".to_string()
+                                            }
                                         } else {
                                             " = std::ptr::null_mut()".to_string()
                                         }
-                                    } else {
-                                        " = std::ptr::null_mut()".to_string()
-                                    }
-                                } else if is_ptr {
-                                    // Array-to-pointer decay in variable initialization.
-                                    let rust_ty = ty.to_rust_type_str();
-                                    let is_fn_ptr = Self::is_function_pointer_type_or_typedef(ty)
-                                        || is_option_fn_rust_type(&rust_ty);
-                                    let init_ty = Self::get_expr_type(init_node);
-                                    let init_orig_ty = Self::get_original_expr_type(init_node);
-                                    let init_is_array =
-                                        matches!(init_ty, Some(CppType::Array { .. }))
-                                            || matches!(init_orig_ty, Some(CppType::Array { .. }));
-                                    if init_is_array {
-                                        let base = self
-                                            .get_raw_var_name(init_node)
-                                            .unwrap_or_else(|| expr.clone());
-                                        let base = if base.starts_with("unsafe { ")
-                                            || base.contains(" as ")
-                                            || base.contains(' ')
-                                        {
-                                            format!("({})", base)
+                                    } else if is_ptr {
+                                        // Array-to-pointer decay in variable initialization.
+                                        let rust_ty = ty.to_rust_type_str();
+                                        let is_fn_ptr =
+                                            Self::is_function_pointer_type_or_typedef(ty)
+                                                || is_option_fn_rust_type(&rust_ty);
+                                        let init_ty = Self::get_expr_type(init_node);
+                                        let init_orig_ty = Self::get_original_expr_type(init_node);
+                                        let init_is_array =
+                                            matches!(init_ty, Some(CppType::Array { .. }))
+                                                || matches!(
+                                                    init_orig_ty,
+                                                    Some(CppType::Array { .. })
+                                                );
+                                        if init_is_array {
+                                            let base = self
+                                                .get_raw_var_name(init_node)
+                                                .unwrap_or_else(|| expr.clone());
+                                            let base = if base.starts_with("unsafe { ")
+                                                || base.contains(" as ")
+                                                || base.contains(' ')
+                                            {
+                                                format!("({})", base)
+                                            } else {
+                                                base
+                                            };
+                                            let is_global_base =
+                                                base.contains("__gv_") || base.contains("__fsv_");
+                                            let ptr_inner = if rust_ty.starts_with("*const ") {
+                                                format!("{}.as_ptr()", base)
+                                            } else {
+                                                format!("{}.as_mut_ptr()", base)
+                                            };
+                                            let ptr = if is_global_base {
+                                                format!("unsafe {{ {} }}", ptr_inner)
+                                            } else {
+                                                ptr_inner
+                                            };
+                                            format!(" = {} as {}", ptr, rust_ty)
+                                        } else if is_fn_ptr {
+                                            let normalized =
+                                                correct_initializer_for_type(&expr, ty);
+                                            format!(" = {}", normalized)
                                         } else {
-                                            base
-                                        };
-                                        let is_global_base =
-                                            base.contains("__gv_") || base.contains("__fsv_");
-                                        let ptr_inner = if rust_ty.starts_with("*const ") {
-                                            format!("{}.as_ptr()", base)
-                                        } else {
-                                            format!("{}.as_mut_ptr()", base)
-                                        };
-                                        let ptr = if is_global_base {
-                                            format!("unsafe {{ {} }}", ptr_inner)
-                                        } else {
-                                            ptr_inner
-                                        };
-                                        format!(" = {} as {}", ptr, rust_ty)
-                                    } else if is_fn_ptr {
-                                        let normalized = correct_initializer_for_type(&expr, ty);
-                                        format!(" = {}", normalized)
-                                    } else {
-                                        let expr = if rust_ty.starts_with("*mut ") {
-                                            expr.replace(".as_ptr()", ".as_mut_ptr()")
-                                        } else {
-                                            expr
-                                        };
-                                        let expr_wrapped = if expr.starts_with("unsafe { ")
-                                            || expr.contains(" as ")
-                                            || expr.contains(' ')
-                                        {
-                                            format!("({})", expr)
-                                        } else {
-                                            expr
-                                        };
-                                        format!(" = {} as {}", expr_wrapped, rust_ty)
-                                    }
-                                } else if is_ref {
-                                    // Reference initialization: add &mut or & prefix
-                                    let prefix = if is_const_ref { "&" } else { "&mut " };
-                                    format!(" = {}{}", prefix, expr)
-                                } else if {
-                                    let rust_ty = ty.to_rust_type_str();
-                                    rust_ty == "u128" || rust_ty == "i128"
-                                } {
-                                    // Rust doesn't widen integer arithmetic automatically.
-                                    // When declaring a 128-bit value from smaller integral operands,
-                                    // widen operands explicitly.
-                                    let rust_ty = ty.to_rust_type_str();
-                                    fn unwrap_expr_node(node: &ClangNode) -> &ClangNode {
-                                        match &node.kind {
-                                            ClangNodeKind::ImplicitCastExpr { .. }
-                                            | ClangNodeKind::CastExpr { .. }
-                                            | ClangNodeKind::ParenExpr { .. }
-                                            | ClangNodeKind::Unknown(_) => {
-                                                let child = node.children.iter().find(|c| {
+                                            let expr = if rust_ty.starts_with("*mut ") {
+                                                expr.replace(".as_ptr()", ".as_mut_ptr()")
+                                            } else {
+                                                expr
+                                            };
+                                            let expr_wrapped = if expr.starts_with("unsafe { ")
+                                                || expr.contains(" as ")
+                                                || expr.contains(' ')
+                                            {
+                                                format!("({})", expr)
+                                            } else {
+                                                expr
+                                            };
+                                            format!(" = {} as {}", expr_wrapped, rust_ty)
+                                        }
+                                    } else if is_ref {
+                                        // Reference initialization: add &mut or & prefix
+                                        let prefix = if is_const_ref { "&" } else { "&mut " };
+                                        format!(" = {}{}", prefix, expr)
+                                    } else if {
+                                        let rust_ty = ty.to_rust_type_str();
+                                        rust_ty == "u128" || rust_ty == "i128"
+                                    } {
+                                        // Rust doesn't widen integer arithmetic automatically.
+                                        // When declaring a 128-bit value from smaller integral operands,
+                                        // widen operands explicitly.
+                                        let rust_ty = ty.to_rust_type_str();
+                                        fn unwrap_expr_node(node: &ClangNode) -> &ClangNode {
+                                            match &node.kind {
+                                                ClangNodeKind::ImplicitCastExpr { .. }
+                                                | ClangNodeKind::CastExpr { .. }
+                                                | ClangNodeKind::ParenExpr { .. }
+                                                | ClangNodeKind::Unknown(_) => {
+                                                    let child = node.children.iter().find(|c| {
                                                     !matches!(
                                                         &c.kind,
                                                         ClangNodeKind::Unknown(s) if s.starts_with("TypeRef")
                                                     )
                                                 }).or_else(|| node.children.first());
-                                                if let Some(child) = child {
-                                                    unwrap_expr_node(child)
-                                                } else {
-                                                    node
+                                                    if let Some(child) = child {
+                                                        unwrap_expr_node(child)
+                                                    } else {
+                                                        node
+                                                    }
                                                 }
+                                                _ => node,
                                             }
-                                            _ => node,
                                         }
-                                    }
-                                    let core_init = unwrap_expr_node(init_node);
-                                    if let ClangNodeKind::BinaryOperator { op, .. } =
-                                        &core_init.kind
-                                    {
-                                        if core_init.children.len() >= 2
-                                            && matches!(
-                                                op,
-                                                BinaryOp::Add
-                                                    | BinaryOp::Sub
-                                                    | BinaryOp::Mul
-                                                    | BinaryOp::Div
-                                                    | BinaryOp::Rem
-                                                    | BinaryOp::And
-                                                    | BinaryOp::Or
-                                                    | BinaryOp::Xor
-                                                    | BinaryOp::Shl
-                                                    | BinaryOp::Shr
-                                            )
+                                        let core_init = unwrap_expr_node(init_node);
+                                        if let ClangNodeKind::BinaryOperator { op, .. } =
+                                            &core_init.kind
                                         {
-                                            let lhs_src = strip_literal_suffix(
-                                                &self.expr_to_string(&core_init.children[0]),
-                                            );
-                                            let rhs_src = strip_literal_suffix(
-                                                &self.expr_to_string(&core_init.children[1]),
-                                            );
-                                            let lhs_ty =
-                                                Self::get_expr_type(&core_init.children[0])
-                                                    .map(|t| t.to_rust_type_str());
-                                            let rhs_ty =
-                                                Self::get_expr_type(&core_init.children[1])
-                                                    .map(|t| t.to_rust_type_str());
-                                            let lhs = if lhs_ty.as_deref() != Some(rust_ty.as_str())
+                                            if core_init.children.len() >= 2
+                                                && matches!(
+                                                    op,
+                                                    BinaryOp::Add
+                                                        | BinaryOp::Sub
+                                                        | BinaryOp::Mul
+                                                        | BinaryOp::Div
+                                                        | BinaryOp::Rem
+                                                        | BinaryOp::And
+                                                        | BinaryOp::Or
+                                                        | BinaryOp::Xor
+                                                        | BinaryOp::Shl
+                                                        | BinaryOp::Shr
+                                                )
                                             {
-                                                format!("(({}) as {})", lhs_src, rust_ty)
+                                                let lhs_src = strip_literal_suffix(
+                                                    &self.expr_to_string(&core_init.children[0]),
+                                                );
+                                                let rhs_src = strip_literal_suffix(
+                                                    &self.expr_to_string(&core_init.children[1]),
+                                                );
+                                                let lhs_ty =
+                                                    Self::get_expr_type(&core_init.children[0])
+                                                        .map(|t| t.to_rust_type_str());
+                                                let rhs_ty =
+                                                    Self::get_expr_type(&core_init.children[1])
+                                                        .map(|t| t.to_rust_type_str());
+                                                let lhs = if lhs_ty.as_deref()
+                                                    != Some(rust_ty.as_str())
+                                                {
+                                                    format!("(({}) as {})", lhs_src, rust_ty)
+                                                } else {
+                                                    lhs_src
+                                                };
+                                                let rhs = if rhs_ty.as_deref()
+                                                    != Some(rust_ty.as_str())
+                                                {
+                                                    format!("(({}) as {})", rhs_src, rust_ty)
+                                                } else {
+                                                    rhs_src
+                                                };
+                                                format!(
+                                                    " = {} {} {}",
+                                                    lhs,
+                                                    binop_to_string(op),
+                                                    rhs
+                                                )
                                             } else {
-                                                lhs_src
-                                            };
-                                            let rhs = if rhs_ty.as_deref() != Some(rust_ty.as_str())
+                                                format!(" = ({}) as {}", expr, rust_ty)
+                                            }
+                                        } else {
+                                            let expr_ty = Self::get_expr_type(core_init)
+                                                .map(|t| t.to_rust_type_str());
+                                            if expr_ty.as_deref() == Some(rust_ty.as_str()) {
+                                                format!(" = {}", expr)
+                                            } else {
+                                                format!(" = ({}) as {}", expr, rust_ty)
+                                            }
+                                        }
+                                    } else if let Some(variant_args) = Self::get_variant_args(ty) {
+                                        // std::variant initialization: wrap in enum variant constructor
+                                        let enum_name = Self::get_variant_enum_name(ty).unwrap();
+                                        // Find the actual value being passed to the variant constructor
+                                        // (navigate through Unknown/CallExpr wrappers)
+                                        let value_node = Self::find_variant_init_value(init_node)
+                                            .unwrap_or(init_node);
+                                        let value_expr = self.expr_to_string(value_node);
+                                        // Try to determine the initializer type
+                                        if let Some(init_type) = Self::get_expr_type(value_node) {
+                                            if let Some(idx) =
+                                                Self::find_variant_index(&variant_args, &init_type)
                                             {
-                                                format!("(({}) as {})", rhs_src, rust_ty)
+                                                format!(
+                                                    " = {}::V{}({})",
+                                                    enum_name, idx, value_expr
+                                                )
                                             } else {
-                                                rhs_src
-                                            };
-                                            format!(" = {} {} {}", lhs, binop_to_string(op), rhs)
+                                                // Couldn't match type to variant, use V0 as fallback
+                                                format!(" = {}::V0({})", enum_name, value_expr)
+                                            }
                                         } else {
-                                            format!(" = ({}) as {}", expr, rust_ty)
-                                        }
-                                    } else {
-                                        let expr_ty = Self::get_expr_type(core_init)
-                                            .map(|t| t.to_rust_type_str());
-                                        if expr_ty.as_deref() == Some(rust_ty.as_str()) {
-                                            format!(" = {}", expr)
-                                        } else {
-                                            format!(" = ({}) as {}", expr, rust_ty)
-                                        }
-                                    }
-                                } else if let Some(variant_args) = Self::get_variant_args(ty) {
-                                    // std::variant initialization: wrap in enum variant constructor
-                                    let enum_name = Self::get_variant_enum_name(ty).unwrap();
-                                    // Find the actual value being passed to the variant constructor
-                                    // (navigate through Unknown/CallExpr wrappers)
-                                    let value_node = Self::find_variant_init_value(init_node)
-                                        .unwrap_or(init_node);
-                                    let value_expr = self.expr_to_string(value_node);
-                                    // Try to determine the initializer type
-                                    if let Some(init_type) = Self::get_expr_type(value_node) {
-                                        if let Some(idx) =
-                                            Self::find_variant_index(&variant_args, &init_type)
-                                        {
-                                            format!(" = {}::V{}({})", enum_name, idx, value_expr)
-                                        } else {
-                                            // Couldn't match type to variant, use V0 as fallback
+                                            // Couldn't determine init type, use V0 as fallback
                                             format!(" = {}::V0({})", enum_name, value_expr)
                                         }
-                                    } else {
-                                        // Couldn't determine init type, use V0 as fallback
-                                        format!(" = {}::V0({})", enum_name, value_expr)
-                                    }
-                                } else if let CppType::Named(_) = ty {
-                                    // Check if this is a Named type with "0" initializer,
-                                    // which indicates a CXXConstructExpr that couldn't be parsed
-                                    let rust_type = ty.to_rust_type_str();
-                                    // Only generate constructor for actual struct types, not primitives
-                                    // that might have been mapped from C++ types
-                                    let is_primitive = matches!(
-                                        rust_type.as_str(),
-                                        "usize"
-                                            | "isize"
-                                            | "i8"
-                                            | "i16"
-                                            | "i32"
-                                            | "i64"
-                                            | "i128"
-                                            | "u8"
-                                            | "u16"
-                                            | "u32"
-                                            | "u64"
-                                            | "u128"
-                                            | "f32"
-                                            | "f64"
-                                            | "bool"
-                                            | "()"
-                                            | "char"
-                                    ) || rust_type.starts_with('*')
-                                        || rust_type.starts_with('&');
-                                    if (expr == "0" || expr == "_unnamed") && !is_primitive {
-                                        // Use unsafe zeroed for:
-                                        // - "0" placeholder from unresolved CXXConstructExpr
-                                        // - "_unnamed" placeholder from unresolved expression
-                                        // - template types (contain __) since they may not have new_0 or Default impl
-                                        if rust_type.contains("__") || expr == "_unnamed" {
-                                            " = unsafe { std::mem::zeroed() }".to_string()
+                                    } else if let CppType::Named(_) = ty {
+                                        // Check if this is a Named type with "0" initializer,
+                                        // which indicates a CXXConstructExpr that couldn't be parsed
+                                        let rust_type = ty.to_rust_type_str();
+                                        // Only generate constructor for actual struct types, not primitives
+                                        // that might have been mapped from C++ types
+                                        let is_primitive = matches!(
+                                            rust_type.as_str(),
+                                            "usize"
+                                                | "isize"
+                                                | "i8"
+                                                | "i16"
+                                                | "i32"
+                                                | "i64"
+                                                | "i128"
+                                                | "u8"
+                                                | "u16"
+                                                | "u32"
+                                                | "u64"
+                                                | "u128"
+                                                | "f32"
+                                                | "f64"
+                                                | "bool"
+                                                | "()"
+                                                | "char"
+                                        ) || rust_type.starts_with('*')
+                                            || rust_type.starts_with('&');
+                                        if (expr == "0" || expr == "_unnamed") && !is_primitive {
+                                            // Use unsafe zeroed for:
+                                            // - "0" placeholder from unresolved CXXConstructExpr
+                                            // - "_unnamed" placeholder from unresolved expression
+                                            // - template types (contain __) since they may not have new_0 or Default impl
+                                            if rust_type.contains("__") || expr == "_unnamed" {
+                                                " = unsafe { std::mem::zeroed() }".to_string()
+                                            } else {
+                                                format!(" = {}::new_0()", rust_type)
+                                            }
                                         } else {
-                                            format!(" = {}::new_0()", rust_type)
+                                            format!(" = {}", expr)
                                         }
                                     } else {
-                                        format!(" = {}", expr)
+                                        format!(" = {}", correct_initializer_for_type(&expr, ty))
                                     }
-                                } else {
-                                    format!(" = {}", correct_initializer_for_type(&expr, ty))
-                                }
                                 }
                             }
                         } else {
@@ -32832,8 +33363,7 @@ impl AstCodeGen {
                                 final_init = format!(" = ({}) as {}", init_expr, final_type);
                             }
                         }
-                        if is_unsigned_rust_int_type(&final_type) && final_init.starts_with(" = ")
-                        {
+                        if is_unsigned_rust_int_type(&final_type) && final_init.starts_with(" = ") {
                             let init_expr = final_init[3..].trim();
                             // Pointer differences lower to `isize` via `.offset_from(...)`.
                             // Cast declaration initializers to the declared unsigned width.
@@ -32846,8 +33376,10 @@ impl AstCodeGen {
                         if final_type.starts_with("[u128;") && final_init.starts_with(" = ") {
                             let init_expr = final_init[3..].trim();
                             if init_expr.starts_with('[') && init_expr.ends_with(']') {
-                                final_init =
-                                    format!(" = {}", normalize_u128_array_initializer_expr(init_expr));
+                                final_init = format!(
+                                    " = {}",
+                                    normalize_u128_array_initializer_expr(init_expr)
+                                );
                             }
                         }
 
@@ -32878,10 +33410,7 @@ impl AstCodeGen {
                     self.skip_literal_suffix = true;
                     let mut expr = self.expr_to_string(&node.children[0]);
                     self.skip_literal_suffix = prev_skip;
-                    if !matches!(
-                        self.current_return_type,
-                        Some(CppType::Reference { .. })
-                    ) {
+                    if !matches!(self.current_return_type, Some(CppType::Reference { .. })) {
                         if let Some(ref_ident) = self.get_ref_var_ident(&node.children[0]) {
                             expr = format!("*{}", ref_ident);
                         }
@@ -32907,9 +33436,7 @@ impl AstCodeGen {
                             // Split into statement + return reference
                             // e.g., "*__a = expr" -> "*__a = expr; __a" (the mutable ref to __a)
                             if let Some(mut lhs) = Self::extract_assignment_lhs(&expr) {
-                                if let Some(ref_name) =
-                                    lhs.strip_prefix("&mut ").map(str::trim)
-                                {
+                                if let Some(ref_name) = lhs.strip_prefix("&mut ").map(str::trim) {
                                     if self.is_tracked_ref_var_name(ref_name) {
                                         lhs = ref_name.to_string();
                                     }
@@ -33022,10 +33549,8 @@ impl AstCodeGen {
                             None
                         };
 
-                        let enum_return_expr = self
-                            .current_return_type
-                            .as_ref()
-                            .and_then(|ret_ty| {
+                        let enum_return_expr =
+                            self.current_return_type.as_ref().and_then(|ret_ty| {
                                 parse_integer_literal_value_str(&expr).and_then(|literal_value| {
                                     self.resolve_enum_variant_from_return_literal(
                                         ret_ty,
@@ -33123,8 +33648,7 @@ impl AstCodeGen {
                                     {
                                         casted
                                     } else if fixed_expr.contains(&format!(" as {}", rust_type))
-                                        || fixed_expr
-                                            .contains(&format!(" as {}}}", rust_type))
+                                        || fixed_expr.contains(&format!(" as {}}}", rust_type))
                                     {
                                         // Already has correct cast, no need to wrap.
                                         fixed_expr
@@ -34068,10 +34592,9 @@ impl AstCodeGen {
                             }
                             let operand_ty = Self::get_original_expr_type(&node.children[0])
                                 .or_else(|| Self::get_expr_type(&node.children[0]));
-                            let operand_is_pointer_like = operand_ty
-                                .as_ref()
-                                .is_some_and(Self::is_pointer_like_type)
-                                || self.is_ptr_var_expr(&node.children[0]);
+                            let operand_is_pointer_like =
+                                operand_ty.as_ref().is_some_and(Self::is_pointer_like_type)
+                                    || self.is_ptr_var_expr(&node.children[0]);
                             // Degraded ASTs can surface redundant unary-deref wrappers on
                             // value-typed member-call chains (notably tinyxml2 handle values).
                             // Keep value receivers intact instead of emitting invalid `*value`.
@@ -34361,9 +34884,11 @@ impl AstCodeGen {
                         CastKind::IntegralCast => {
                             // Need explicit cast for integral conversions
                             let rust_type = ty.to_rust_type_str();
-                            if let Some(enum_casted) =
-                                self.cast_integral_expr_to_enum_target(inner.clone(), Some(child), ty)
-                            {
+                            if let Some(enum_casted) = self.cast_integral_expr_to_enum_target(
+                                inner.clone(),
+                                Some(child),
+                                ty,
+                            ) {
                                 return enum_casted;
                             }
                             // Check if this is a cast to a non-primitive type (struct)
@@ -34836,11 +35361,10 @@ impl AstCodeGen {
                     let base_is_value_field =
                         self.is_known_non_pointer_self_field_expr(&base) && !base_pointer_signal;
                     let base_is_ptr = !base_is_value_field && base_pointer_signal;
-                    let base_is_implicit_self = matches!(
-                        &node.children[0].kind,
-                        ClangNodeKind::CXXThisExpr { .. }
-                    ) || base == "self"
-                        || base == "__self";
+                    let base_is_implicit_self =
+                        matches!(&node.children[0].kind, ClangNodeKind::CXXThisExpr { .. })
+                            || base == "self"
+                            || base == "__self";
                     let (mut needs_base_access, mut base_access) = if let Some(decl_class) =
                         declaring_class
                     {
@@ -34868,11 +35392,12 @@ impl AstCodeGen {
                     };
                     if !needs_base_access && base_is_implicit_self {
                         if let Some(current) = self.current_class.as_ref() {
-                            let missing_on_current =
-                                self.lookup_field_type_in_class_fields(current, &member).is_none();
+                            let missing_on_current = self
+                                .lookup_field_type_in_class_fields(current, &member)
+                                .is_none();
                             if missing_on_current {
-                                if let Some(inferred_declaring_base) = self
-                                    .infer_declaring_base_class_for_member(current, &member)
+                                if let Some(inferred_declaring_base) =
+                                    self.infer_declaring_base_class_for_member(current, &member)
                                 {
                                     let access = self.get_base_access_for_class(
                                         current,
@@ -34901,7 +35426,9 @@ impl AstCodeGen {
                     };
                     if needs_base_access {
                         match base_access {
-                            BaseAccess::VirtualPtr(field) => format!("(*{}.{}).{}", base, field, member),
+                            BaseAccess::VirtualPtr(field) => {
+                                format!("(*{}.{}).{}", base, field, member)
+                            }
                             BaseAccess::DirectField(field) | BaseAccess::FieldChain(field) => {
                                 if field.is_empty() {
                                     if (*is_arrow && !base_is_value_field) || base_is_ptr {
@@ -34947,21 +35474,23 @@ impl AstCodeGen {
                     // Implicit this - no children means this->member
                     let member = sanitize_identifier(member_name);
                     if let Some(current) = self.current_class.as_ref() {
-                        let missing_on_current =
-                            self.lookup_field_type_in_class_fields(current, &member).is_none();
+                        let missing_on_current = self
+                            .lookup_field_type_in_class_fields(current, &member)
+                            .is_none();
                         if missing_on_current {
-                            if let Some(inferred_declaring_base) = self
-                                .infer_declaring_base_class_for_member(current, &member)
+                            if let Some(inferred_declaring_base) =
+                                self.infer_declaring_base_class_for_member(current, &member)
                             {
-                                let access =
-                                    self.get_base_access_for_class(current, &inferred_declaring_base);
+                                let access = self
+                                    .get_base_access_for_class(current, &inferred_declaring_base);
                                 match access {
                                     BaseAccess::VirtualPtr(field) => {
                                         if !field.is_empty() {
                                             return format!("(*self.{}).{}", field, member);
                                         }
                                     }
-                                    BaseAccess::DirectField(field) | BaseAccess::FieldChain(field) => {
+                                    BaseAccess::DirectField(field)
+                                    | BaseAccess::FieldChain(field) => {
                                         if !field.is_empty() {
                                             return format!("self.{}.{}", field, member);
                                         }
@@ -35102,7 +35631,9 @@ impl AstCodeGen {
                             right_is_pointer || right_is_ptr_var || right_is_array;
 
                         // Pointer subtraction: ptr1 - ptr2 -> ptr1.offset_from(ptr2)
-                        if left_is_pointer_like && right_is_pointer_like && matches!(op, BinaryOp::Sub)
+                        if left_is_pointer_like
+                            && right_is_pointer_like
+                            && matches!(op, BinaryOp::Sub)
                         {
                             let left_raw = self.expr_to_string_raw(&node.children[0]);
                             let right_raw = self.expr_to_string_raw(&node.children[1]);
@@ -35145,12 +35676,20 @@ impl AstCodeGen {
                                 left_ptr
                             };
                             if is_add {
-                                return format!("{}.wrapping_offset(({}) as isize)", left_wrapped, right_raw);
+                                return format!(
+                                    "{}.wrapping_offset(({}) as isize)",
+                                    left_wrapped, right_raw
+                                );
                             }
-                            return format!("{}.wrapping_offset(-(({}) as isize))", left_wrapped, right_raw);
+                            return format!(
+                                "{}.wrapping_offset(-(({}) as isize))",
+                                left_wrapped, right_raw
+                            );
                         }
-                        let left = wrap_unsafe_for_binop(&self.expr_to_string_raw(&node.children[0]));
-                        let right = wrap_unsafe_for_binop(&self.expr_to_string_raw(&node.children[1]));
+                        let left =
+                            wrap_unsafe_for_binop(&self.expr_to_string_raw(&node.children[0]));
+                        let right =
+                            wrap_unsafe_for_binop(&self.expr_to_string_raw(&node.children[1]));
                         format!("{} {} {}", left, op_str, right)
                     } else if matches!(
                         op,
@@ -36072,16 +36611,15 @@ impl AstCodeGen {
                                     right_raw = format!("Some({})", right_raw);
                                 }
                             } else {
-                                let rhs_is_array =
-                                    right_type
+                                let rhs_is_array = right_type
+                                    .as_ref()
+                                    .is_some_and(Self::is_array_decay_source_type)
+                                    || right_orig_type
                                         .as_ref()
                                         .is_some_and(Self::is_array_decay_source_type)
-                                        || right_orig_type
-                                            .as_ref()
-                                            .is_some_and(Self::is_array_decay_source_type)
-                                        || right_declared_type
-                                            .as_ref()
-                                            .is_some_and(Self::is_array_decay_source_type);
+                                    || right_declared_type
+                                        .as_ref()
+                                        .is_some_and(Self::is_array_decay_source_type);
                                 if rhs_is_array {
                                     let base = self
                                         .get_raw_var_name(&node.children[1])
@@ -36149,13 +36687,11 @@ impl AstCodeGen {
                             }
                         }
                         let right_is_integral_non_bool =
-                            (right_type
-                                .as_ref()
-                                .is_some_and(|t| t.is_integral() == Some(true) && !matches!(t, CppType::Bool))
-                                || right_orig_type
-                                    .as_ref()
-                                    .is_some_and(|t| t.is_integral() == Some(true) && !matches!(t, CppType::Bool))
-                                || is_integer_literal_str(&right_raw))
+                            (right_type.as_ref().is_some_and(|t| {
+                                t.is_integral() == Some(true) && !matches!(t, CppType::Bool)
+                            }) || right_orig_type.as_ref().is_some_and(|t| {
+                                t.is_integral() == Some(true) && !matches!(t, CppType::Bool)
+                            }) || is_integer_literal_str(&right_raw))
                                 && !right_is_boolish;
                         let is_integral_compound_assign = matches!(
                             op,
@@ -36172,14 +36708,15 @@ impl AstCodeGen {
                         );
                         let right_integral_rust_type = right_type
                             .as_ref()
-                            .filter(|t| t.is_integral() == Some(true) && !matches!(t, CppType::Bool))
+                            .filter(|t| {
+                                t.is_integral() == Some(true) && !matches!(t, CppType::Bool)
+                            })
                             .map(|t| t.to_rust_type_str())
                             .or_else(|| {
                                 right_orig_type
                                     .as_ref()
                                     .filter(|t| {
-                                        t.is_integral() == Some(true)
-                                            && !matches!(t, CppType::Bool)
+                                        t.is_integral() == Some(true) && !matches!(t, CppType::Bool)
                                     })
                                     .map(|t| t.to_rust_type_str())
                             });
@@ -36420,16 +36957,15 @@ impl AstCodeGen {
                                     right = format!("Some({})", right);
                                 }
                             } else {
-                                let rhs_is_array =
-                                    right_type
+                                let rhs_is_array = right_type
+                                    .as_ref()
+                                    .is_some_and(Self::is_array_decay_source_type)
+                                    || right_orig_type
                                         .as_ref()
                                         .is_some_and(Self::is_array_decay_source_type)
-                                        || right_orig_type
-                                            .as_ref()
-                                            .is_some_and(Self::is_array_decay_source_type)
-                                        || right_declared_type
-                                            .as_ref()
-                                            .is_some_and(Self::is_array_decay_source_type);
+                                    || right_declared_type
+                                        .as_ref()
+                                        .is_some_and(Self::is_array_decay_source_type);
                                 if rhs_is_array {
                                     let base = self
                                         .get_raw_var_name(&node.children[1])
@@ -36496,13 +37032,11 @@ impl AstCodeGen {
                             }
                         }
                         let right_is_integral_non_bool =
-                            (right_type
-                                .as_ref()
-                                .is_some_and(|t| t.is_integral() == Some(true) && !matches!(t, CppType::Bool))
-                                || right_orig_type
-                                    .as_ref()
-                                    .is_some_and(|t| t.is_integral() == Some(true) && !matches!(t, CppType::Bool))
-                                || is_integer_literal_str(&right))
+                            (right_type.as_ref().is_some_and(|t| {
+                                t.is_integral() == Some(true) && !matches!(t, CppType::Bool)
+                            }) || right_orig_type.as_ref().is_some_and(|t| {
+                                t.is_integral() == Some(true) && !matches!(t, CppType::Bool)
+                            }) || is_integer_literal_str(&right))
                                 && !right_is_boolish;
                         let is_integral_compound_assign = matches!(
                             op,
@@ -36519,14 +37053,15 @@ impl AstCodeGen {
                         );
                         let right_integral_rust_type = right_type
                             .as_ref()
-                            .filter(|t| t.is_integral() == Some(true) && !matches!(t, CppType::Bool))
+                            .filter(|t| {
+                                t.is_integral() == Some(true) && !matches!(t, CppType::Bool)
+                            })
                             .map(|t| t.to_rust_type_str())
                             .or_else(|| {
                                 right_orig_type
                                     .as_ref()
                                     .filter(|t| {
-                                        t.is_integral() == Some(true)
-                                            && !matches!(t, CppType::Bool)
+                                        t.is_integral() == Some(true) && !matches!(t, CppType::Bool)
                                     })
                                     .map(|t| t.to_rust_type_str())
                             });
@@ -36691,8 +37226,10 @@ impl AstCodeGen {
                             | BinaryOp::Ge
                     ) {
                         // For comparison operators, strip literal suffixes - Rust infers compatible types
-                        let left_str = strip_literal_suffix(&self.expr_to_string(&node.children[0]));
-                        let right_str = strip_literal_suffix(&self.expr_to_string(&node.children[1]));
+                        let left_str =
+                            strip_literal_suffix(&self.expr_to_string(&node.children[0]));
+                        let right_str =
+                            strip_literal_suffix(&self.expr_to_string(&node.children[1]));
 
                         // Check if one side is float and the other is an integer literal
                         // Rust requires float literals (e.g., 0.0) when comparing with floats
@@ -36706,20 +37243,18 @@ impl AstCodeGen {
 
                         // Array-to-pointer decay for pointer comparisons across all comparison
                         // operators (`==`, `!=`, `<`, `<=`, `>`, `>=`).
-                        let left_is_ptr = left_type
-                            .as_ref()
-                            .is_some_and(Self::is_pointer_like_type)
-                            || left_orig_type
-                                .as_ref()
-                                .is_some_and(Self::is_pointer_like_type)
-                            || self.is_ptr_var_expr(&node.children[0]);
-                        let right_is_ptr = right_type
-                            .as_ref()
-                            .is_some_and(Self::is_pointer_like_type)
-                            || right_orig_type
-                                .as_ref()
-                                .is_some_and(Self::is_pointer_like_type)
-                            || self.is_ptr_var_expr(&node.children[1]);
+                        let left_is_ptr =
+                            left_type.as_ref().is_some_and(Self::is_pointer_like_type)
+                                || left_orig_type
+                                    .as_ref()
+                                    .is_some_and(Self::is_pointer_like_type)
+                                || self.is_ptr_var_expr(&node.children[0]);
+                        let right_is_ptr =
+                            right_type.as_ref().is_some_and(Self::is_pointer_like_type)
+                                || right_orig_type
+                                    .as_ref()
+                                    .is_some_and(Self::is_pointer_like_type)
+                                || self.is_ptr_var_expr(&node.children[1]);
                         let left_is_array = (left_type
                             .as_ref()
                             .is_some_and(Self::is_array_decay_source_type)
@@ -36888,12 +37423,11 @@ impl AstCodeGen {
                             // C/C++ pointer equality routinely compares mixed pointee types
                             // (`void*` vs typed pointer, const vs mut). Normalize both sides
                             // to `*const _` so Rust accepts the comparison shape.
-                            let left_fn_ptr =
-                                self.node_is_function_pointer_expr(&node.children[0])
-                                    || Self::is_function_pointer_variable(&node.children[0]);
-                            let right_fn_ptr =
-                                self.node_is_function_pointer_expr(&node.children[1])
-                                    || Self::is_function_pointer_variable(&node.children[1]);
+                            let left_fn_ptr = self.node_is_function_pointer_expr(&node.children[0])
+                                || Self::is_function_pointer_variable(&node.children[0]);
+                            let right_fn_ptr = self
+                                .node_is_function_pointer_expr(&node.children[1])
+                                || Self::is_function_pointer_variable(&node.children[1]);
                             if left_is_ptr && right_is_ptr && !left_fn_ptr && !right_fn_ptr {
                                 let left = Self::cast_pointer_expr_for_pointer_compare(
                                     &self.expr_to_string(&node.children[0]),
@@ -37435,8 +37969,8 @@ impl AstCodeGen {
                             // Cast the lhs to the expression/result integer type when available.
                             // Prefer node type over child literal type to preserve unsigned widths.
                             // This avoids E0689 for expressions like `(8 - 1).wrapping_shl(3)`.
-                            let left_type =
-                                Self::get_expr_type(node).or_else(|| Self::get_expr_type(&node.children[0]));
+                            let left_type = Self::get_expr_type(node)
+                                .or_else(|| Self::get_expr_type(&node.children[0]));
                             let left = if let Some(ty) = left_type {
                                 let rust_ty = ty.to_rust_type_str();
                                 if matches!(
@@ -37795,10 +38329,9 @@ impl AstCodeGen {
                             }
                             let operand_ty = Self::get_original_expr_type(&node.children[0])
                                 .or_else(|| Self::get_expr_type(&node.children[0]));
-                            let operand_is_pointer_like = operand_ty
-                                .as_ref()
-                                .is_some_and(Self::is_pointer_like_type)
-                                || self.is_ptr_var_expr(&node.children[0]);
+                            let operand_is_pointer_like =
+                                operand_ty.as_ref().is_some_and(Self::is_pointer_like_type)
+                                    || self.is_ptr_var_expr(&node.children[0]);
                             // Degraded ASTs can surface redundant unary-deref wrappers on
                             // value-typed member-call chains (notably tinyxml2 handle values).
                             // Keep value receivers intact instead of emitting invalid `*value`.
@@ -38446,14 +38979,14 @@ impl AstCodeGen {
                                         }
                                     }
                                     let base_pointer_signal = self
-                                            .resolve_self_field_chain_type(&base)
-                                            .as_ref()
-                                            .is_some_and(Self::is_pointer_like_after_lowering)
-                                            || self.is_pointer_receiver_expr(base_node)
-                                            || self.is_pointer_receiver_expr_string_hint(&base);
-                                    let base_is_value_field =
-                                        self.is_known_non_pointer_self_field_expr(&base)
-                                            && !base_pointer_signal;
+                                        .resolve_self_field_chain_type(&base)
+                                        .as_ref()
+                                        .is_some_and(Self::is_pointer_like_after_lowering)
+                                        || self.is_pointer_receiver_expr(base_node)
+                                        || self.is_pointer_receiver_expr_string_hint(&base);
+                                    let base_is_value_field = self
+                                        .is_known_non_pointer_self_field_expr(&base)
+                                        && !base_pointer_signal;
                                     let base_is_ptr = !base_is_value_field && base_pointer_signal;
 
                                     // This is a method call (might have zero args like size())
@@ -38548,8 +39081,8 @@ impl AstCodeGen {
                             &node.children[1..],
                         ) {
                             func = resolved;
-                        } else if let Some(resolved) =
-                            self.resolve_current_class_method_from_func_name(
+                        } else if let Some(resolved) = self
+                            .resolve_current_class_method_from_func_name(
                                 &func,
                                 node.children.len().saturating_sub(1),
                             )
@@ -38574,11 +39107,9 @@ impl AstCodeGen {
                         }
                         let is_fn_ptr_call = Self::is_function_pointer_variable(callee);
                         let mut param_types = Self::get_function_param_types(callee);
-                        if let Some(member_param_types) = self.resolve_member_call_param_types(
-                            callee,
-                            &func,
-                            &node.children[1..],
-                        ) {
+                        if let Some(member_param_types) =
+                            self.resolve_member_call_param_types(callee, &func, &node.children[1..])
+                        {
                             // Prefer class overload metadata for member calls. In real-world
                             // C++ ASTs this is often more accurate than bound-member call-site
                             // function types (which can degrade to integer placeholders).
@@ -38655,9 +39186,7 @@ impl AstCodeGen {
                                         if Self::is_pointer_like_type(&types[i]) {
                                             let arg_str = self.expr_to_string(c);
                                             return self.normalize_pointer_arg_for_target(
-                                                c,
-                                                &types[i],
-                                                &arg_str,
+                                                c, &types[i], &arg_str,
                                             );
                                         }
 
@@ -38759,7 +39288,9 @@ impl AstCodeGen {
                                         let prefer_const_decay = arg_ty
                                             .as_ref()
                                             .and_then(|ty| match ty {
-                                                CppType::Pointer { is_const, .. } => Some(*is_const),
+                                                CppType::Pointer { is_const, .. } => {
+                                                    Some(*is_const)
+                                                }
                                                 _ => None,
                                             })
                                             .unwrap_or(true);
@@ -38805,14 +39336,12 @@ impl AstCodeGen {
                                 let inner = &func[9..func.len() - 2];
                                 format!(
                                     "unsafe {{ ({}).expect(\"function pointer not set\")({}) }}",
-                                    inner,
-                                    joined_args
+                                    inner, joined_args
                                 )
                             } else {
                                 format!(
                                     "({}).expect(\"function pointer not set\")({})",
-                                    func,
-                                    joined_args
+                                    func, joined_args
                                 )
                             }
                         } else if Self::is_member_reference(callee)
@@ -38879,16 +39408,13 @@ impl AstCodeGen {
                                                     return arg_str;
                                                 }
                                                 return borrow_expr_for_reference(
-                                                    &arg_str,
-                                                    *is_const,
+                                                    &arg_str, *is_const,
                                                 );
                                             }
                                             if Self::is_pointer_like_type(&params[i]) {
                                                 let arg_str = self.expr_to_string(c);
                                                 return self.normalize_pointer_arg_for_target(
-                                                    c,
-                                                    &params[i],
-                                                    &arg_str,
+                                                    c, &params[i], &arg_str,
                                                 );
                                             }
                                         }
@@ -39012,10 +39538,7 @@ impl AstCodeGen {
                     ) {
                         func = resolved;
                     } else if let Some(resolved) =
-                        self.resolve_current_class_method_from_func_name(
-                            &func,
-                            call_arg_count,
-                        )
+                        self.resolve_current_class_method_from_func_name(&func, call_arg_count)
                     {
                         func = resolved;
                     } else if let Some(resolved) = self
@@ -39042,15 +39565,14 @@ impl AstCodeGen {
                             &call_arg_nodes,
                             Some(ty),
                         ) {
-                            func = Self::apply_resolved_free_function_overload_name(&func, &resolved);
+                            func =
+                                Self::apply_resolved_free_function_overload_name(&func, &resolved);
                         }
-                    } else if let Some(resolved) =
-                        self.select_function_overload_name_by_arg_types(
-                            &func,
-                            &call_arg_nodes,
-                            Some(ty),
-                        )
-                    {
+                    } else if let Some(resolved) = self.select_function_overload_name_by_arg_types(
+                        &func,
+                        &call_arg_nodes,
+                        Some(ty),
+                    ) {
                         func = Self::apply_resolved_free_function_overload_name(&func, &resolved);
                     }
                     let resolved_free_function_overload = declref_callee
@@ -39125,10 +39647,9 @@ impl AstCodeGen {
                         param_types = Some(member_param_types);
                     }
                     if param_types.is_none() {
-                        if let Some(from_func_name) = self.resolve_member_call_param_types_from_func_name(
-                            &func,
-                            call_arg_count,
-                        ) {
+                        if let Some(from_func_name) = self
+                            .resolve_member_call_param_types_from_func_name(&func, call_arg_count)
+                        {
                             param_types = Some(from_func_name);
                         }
                     }
@@ -39459,11 +39980,9 @@ impl AstCodeGen {
                         return func;
                     }
 
-                    if let Some(fallback_call) = self.build_const_member_mut_call_fallback(
-                        &node.children[0],
-                        &func,
-                        &args,
-                    ) {
+                    if let Some(fallback_call) =
+                        self.build_const_member_mut_call_fallback(&node.children[0], &func, &args)
+                    {
                         return fallback_call;
                     }
                     let direct_call_expr = format!("{}({})", func, args.join(", "));
@@ -39675,16 +40194,16 @@ impl AstCodeGen {
 
                             let method_name = sanitize_identifier(member_name);
                             let base_pointer_signal = self
-                                    .resolve_self_field_chain_type(&base)
-                                    .as_ref()
-                                    .is_some_and(Self::is_pointer_like_after_lowering)
-                                    || base_node.is_some_and(|n| {
-                                        self.is_pointer_receiver_expr(n)
-                                            || self.is_pointer_receiver_expr_string_hint(&base)
-                                    });
-                            let base_is_value_field =
-                                self.is_known_non_pointer_self_field_expr(&base)
-                                    && !base_pointer_signal;
+                                .resolve_self_field_chain_type(&base)
+                                .as_ref()
+                                .is_some_and(Self::is_pointer_like_after_lowering)
+                                || base_node.is_some_and(|n| {
+                                    self.is_pointer_receiver_expr(n)
+                                        || self.is_pointer_receiver_expr_string_hint(&base)
+                                });
+                            let base_is_value_field = self
+                                .is_known_non_pointer_self_field_expr(&base)
+                                && !base_pointer_signal;
                             let base_is_ptr = !base_is_value_field && base_pointer_signal;
 
                             // Generate: base.method(args...) or (*base).method(args...)
@@ -39741,17 +40260,12 @@ impl AstCodeGen {
                                             if Self::expr_string_is_pointer_value(&arg_str) {
                                                 return arg_str;
                                             }
-                                            return borrow_expr_for_reference(
-                                                &arg_str,
-                                                *is_const,
-                                            );
+                                            return borrow_expr_for_reference(&arg_str, *is_const);
                                         }
                                         if Self::is_pointer_like_type(&params[i]) {
                                             let arg_str = self.expr_to_string(c);
                                             return self.normalize_pointer_arg_for_target(
-                                                c,
-                                                &params[i],
-                                                &arg_str,
+                                                c, &params[i], &arg_str,
                                             );
                                         }
                                     }
@@ -39958,11 +40472,10 @@ impl AstCodeGen {
                         .or_else(|| {
                             self.resolve_member_current_class_field_type(&node.children[0])
                         });
-                    let base_is_implicit_self = matches!(
-                        &node.children[0].kind,
-                        ClangNodeKind::CXXThisExpr { .. }
-                    ) || base == "self"
-                        || base == "__self";
+                    let base_is_implicit_self =
+                        matches!(&node.children[0].kind, ClangNodeKind::CXXThisExpr { .. })
+                            || base == "self"
+                            || base == "__self";
                     let base_is_tinyxml2_handle_value =
                         self.is_tinyxml2_handle_value_expr(&node.children[0]);
                     let base_pointer_signal = base_type
@@ -40004,8 +40517,8 @@ impl AstCodeGen {
                     });
                     let base_is_union = declaring_union
                         || base_type
-                        .as_ref()
-                        .is_some_and(|t| self.is_union_named_type(t))
+                            .as_ref()
+                            .is_some_and(|t| self.is_union_named_type(t))
                         || base_type.as_ref().is_some_and(|t| match t {
                             CppType::Named(n) => {
                                 n.contains("unnamed union at")
@@ -40019,8 +40532,8 @@ impl AstCodeGen {
                     // Determine if we need base access and get the correct base field name
                     // Skip base access for anonymous struct members (they are flattened into parent)
                     let member = sanitize_identifier(member_name);
-                    let (mut needs_base_access, mut base_access) =
-                        if let Some(decl_class) = declaring_class
+                    let (mut needs_base_access, mut base_access) = if let Some(decl_class) =
+                        declaring_class
                     {
                         // Anonymous struct members are flattened - access directly
                         if decl_class.starts_with("(anonymous") || decl_class.starts_with("__anon_")
@@ -40052,11 +40565,12 @@ impl AstCodeGen {
 
                     if !needs_base_access && base_is_implicit_self {
                         if let Some(current) = self.current_class.as_ref() {
-                            let missing_on_current =
-                                self.lookup_field_type_in_class_fields(current, &member).is_none();
+                            let missing_on_current = self
+                                .lookup_field_type_in_class_fields(current, &member)
+                                .is_none();
                             if missing_on_current {
-                                if let Some(inferred_declaring_base) = self
-                                    .infer_declaring_base_class_for_member(current, &member)
+                                if let Some(inferred_declaring_base) =
+                                    self.infer_declaring_base_class_for_member(current, &member)
                                 {
                                     let access = self.get_base_access_for_class(
                                         current,
@@ -40271,11 +40785,12 @@ impl AstCodeGen {
                         };
                     if !needs_base_access {
                         if let Some(current) = self.current_class.as_ref() {
-                            let missing_on_current =
-                                self.lookup_field_type_in_class_fields(current, &member).is_none();
+                            let missing_on_current = self
+                                .lookup_field_type_in_class_fields(current, &member)
+                                .is_none();
                             if missing_on_current {
-                                if let Some(inferred_declaring_base) = self
-                                    .infer_declaring_base_class_for_member(current, &member)
+                                if let Some(inferred_declaring_base) =
+                                    self.infer_declaring_base_class_for_member(current, &member)
                                 {
                                     let access = self.get_base_access_for_class(
                                         current,
@@ -40331,11 +40846,11 @@ impl AstCodeGen {
                     let mut arr_expr = self.expr_to_string(&node.children[0]);
                     let is_pointer = global_pointer_like
                         || match arr_type {
-                        Some(CppType::Pointer { .. }) => true,
-                        Some(CppType::Array { size: None, .. }) => true,
-                        Some(CppType::Array { size: Some(_), .. }) => false,
-                        _ => self.is_ptr_var_expr(&node.children[0]),
-                    };
+                            Some(CppType::Pointer { .. }) => true,
+                            Some(CppType::Array { size: None, .. }) => true,
+                            Some(CppType::Array { size: Some(_), .. }) => false,
+                            _ => self.is_ptr_var_expr(&node.children[0]),
+                        };
 
                     if is_pointer {
                         if let Some(arr_ty) = arr_type.as_ref() {
@@ -42220,7 +42735,8 @@ mod tests {
             code
         );
         assert_eq!(
-            code.matches("pub fn __atomic_notify_all_std_atomic_flag").count(),
+            code.matches("pub fn __atomic_notify_all_std_atomic_flag")
+                .count(),
             1,
             "expected only preamble-owned __atomic_notify_all_std_atomic_flag helper, got:\n{}",
             code
@@ -42314,10 +42830,7 @@ mod tests {
             )
         };
 
-        let ast = make_node(
-            ClangNodeKind::TranslationUnit,
-            vec![fn_decl(1), fn_decl(2)],
-        );
+        let ast = make_node(ClangNodeKind::TranslationUnit, vec![fn_decl(1), fn_decl(2)]);
         let code = AstCodeGen::new().generate(&ast);
         assert!(
             code.contains("fn user_fn_probe("),
@@ -42992,7 +43505,10 @@ mod tests {
             )],
         );
 
-        let ast = make_node(ClangNodeKind::TranslationUnit, vec![attr_record, elem_record]);
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![attr_record, elem_record],
+        );
         let code = AstCodeGen::new().generate(&ast);
         assert!(
             code.contains("(*a).Query_1()"),
@@ -43002,8 +43518,8 @@ mod tests {
     }
 
     #[test]
-    fn test_member_call_prefers_const_overload_for_const_ref_field_chain_when_signature_is_mutable(
-    ) {
+    fn test_member_call_prefers_const_overload_for_const_ref_field_chain_when_signature_is_mutable()
+    {
         let node_ptr_const = CppType::Pointer {
             pointee: Box::new(CppType::Named("Node".to_string())),
             is_const: true,
@@ -43639,11 +44155,13 @@ mod tests {
             ],
         );
 
-        let ast = make_node(ClangNodeKind::TranslationUnit, vec![str_record, node_record]);
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![str_record, node_record],
+        );
         let code = AstCodeGen::new().generate(&ast);
         assert!(
-            code.contains("as *const Str) as *mut Str")
-                && code.contains(".GetStr()"),
+            code.contains("as *const Str) as *mut Str") && code.contains(".GetStr()"),
             "const context mutable-only member call should use mut-cast fallback, got:\n{}",
             code
         );
@@ -43788,8 +44306,7 @@ mod tests {
         );
         let code = AstCodeGen::new().generate(&ast);
         assert!(
-            code.contains("as *const Buffer) as *mut Buffer")
-                && code.contains(".Mem()"),
+            code.contains("as *const Buffer) as *mut Buffer") && code.contains(".Mem()"),
             "const context mutable-only Mem call should use mut-cast fallback, got:\n{}",
             code
         );
@@ -44355,8 +44872,7 @@ mod tests {
         );
         let code = AstCodeGen::new().generate(&ast);
         assert!(
-            code.contains("(*(((&self.__base) as *const ")
-                && code.contains(")).FirstChild_1()"),
+            code.contains("(*(((&self.__base) as *const ") && code.contains(")).FirstChild_1()"),
             "const base-field navigation call should use mut-cast fallback, got:\n{}",
             code
         );
@@ -45747,7 +46263,10 @@ mod tests {
                         mangled_name: "MakeHandle".to_string(),
                         is_static: false,
                         return_type: CppType::Named("XMLHandle".to_string()),
-                        params: vec![("doc".to_string(), CppType::Named("XMLDocument".to_string()))],
+                        params: vec![(
+                            "doc".to_string(),
+                            CppType::Named("XMLDocument".to_string()),
+                        )],
                         is_definition: true,
                         is_variadic: false,
                         is_noexcept: false,
@@ -46084,7 +46603,10 @@ mod tests {
                         mangled_name: "call_consume".to_string(),
                         is_static: false,
                         return_type: int_ty.clone(),
-                        params: vec![("doc".to_string(), CppType::Named("XMLDocument".to_string()))],
+                        params: vec![(
+                            "doc".to_string(),
+                            CppType::Named("XMLDocument".to_string()),
+                        )],
                         is_definition: true,
                         is_variadic: false,
                         is_noexcept: false,
@@ -46231,7 +46753,10 @@ mod tests {
                         mangled_name: "build_handle".to_string(),
                         is_static: false,
                         return_type: CppType::Named("XMLHandle".to_string()),
-                        params: vec![("doc".to_string(), CppType::Named("XMLDocument".to_string()))],
+                        params: vec![(
+                            "doc".to_string(),
+                            CppType::Named("XMLDocument".to_string()),
+                        )],
                         is_definition: true,
                         is_variadic: false,
                         is_noexcept: false,
@@ -46509,7 +47034,11 @@ mod tests {
                 is_arrow: false,
                 ty: CppType::Function {
                     return_type: Box::new(CppType::Void),
-                    params: vec![CppType::Named("XMLError".to_string()), CppType::Int { signed: true }, cstr_ty.clone()],
+                    params: vec![
+                        CppType::Named("XMLError".to_string()),
+                        CppType::Int { signed: true },
+                        cstr_ty.clone(),
+                    ],
                     is_variadic: false,
                 },
                 declaring_class: Some("XMLDocument".to_string()),
@@ -46667,7 +47196,8 @@ mod tests {
     }
 
     #[test]
-    fn test_member_call_enum_addr_of_and_extra_tail_args_are_normalized_for_pointer_field_receiver() {
+    fn test_member_call_enum_addr_of_and_extra_tail_args_are_normalized_for_pointer_field_receiver()
+    {
         let cstr_ty = CppType::Pointer {
             pointee: Box::new(CppType::Char { signed: true }),
             is_const: true,
@@ -47070,9 +47600,7 @@ mod tests {
                                         vec![],
                                     ),
                                     make_node(
-                                        ClangNodeKind::CXXThisExpr {
-                                            ty: this_ptr_ty,
-                                        },
+                                        ClangNodeKind::CXXThisExpr { ty: this_ptr_ty },
                                         vec![],
                                     ),
                                 ],
@@ -47438,7 +47966,8 @@ mod tests {
         let ast = make_node(ClangNodeKind::TranslationUnit, vec![ns_a, ns_b]);
         let code = AstCodeGen::new().generate(&ast);
         assert!(
-            !code.contains("pub type Node = a::Node;") && !code.contains("pub type Node = b::Node;"),
+            !code.contains("pub type Node = a::Node;")
+                && !code.contains("pub type Node = b::Node;"),
             "ambiguous namespaced type aliases should be skipped, got:\n{}",
             code
         );
@@ -48702,7 +49231,10 @@ mod tests {
                 },
                 vec![make_node(
                     ClangNodeKind::CompoundStmt,
-                    vec![make_node(ClangNodeKind::ExprStmt, vec![neg_unsigned_operand])],
+                    vec![make_node(
+                        ClangNodeKind::ExprStmt,
+                        vec![neg_unsigned_operand],
+                    )],
                 )],
             )],
         );
@@ -50185,8 +50717,8 @@ mod tests {
     }
 
     #[test]
-    fn test_unqualified_tinyxml2_tostr_helper_call_from_non_owner_class_uses_xmlutil_qualification(
-    ) {
+    fn test_unqualified_tinyxml2_tostr_helper_call_from_non_owner_class_uses_xmlutil_qualification()
+    {
         let i32_ty = CppType::Int { signed: true };
         let char_ptr = CppType::Pointer {
             pointee: Box::new(CppType::Char { signed: true }),
@@ -50606,12 +51138,16 @@ mod tests {
 
         let code = AstCodeGen::new().generate(&ast);
         assert!(
-            code.contains("pub fn CreateUnlinkedNode<PoolT>(&mut self, pool: *const PoolT) -> *mut XMLNode {"),
+            code.contains(
+                "pub fn CreateUnlinkedNode<PoolT>(&mut self, pool: *const PoolT) -> *mut XMLNode {"
+            ),
             "CreateUnlinkedNode fallback should be emitted for skipped template method, got:\n{}",
             code
         );
         assert!(
-            code.contains("((*(*mem_pool).__vtable).Alloc)(mem_pool as *mut MemPool) as *mut XMLNode"),
+            code.contains(
+                "((*(*mem_pool).__vtable).Alloc)(mem_pool as *mut MemPool) as *mut XMLNode"
+            ),
             "CreateUnlinkedNode fallback should allocate through MemPool vtable Alloc, got:\n{}",
             code
         );
@@ -50814,9 +51350,14 @@ mod tests {
         );
         codegen.class_fields.insert(
             "XMLDocument".to_string(),
-            vec![("_errorID".to_string(), CppType::Named("XMLError".to_string()))],
+            vec![(
+                "_errorID".to_string(),
+                CppType::Named("XMLError".to_string()),
+            )],
         );
-        codegen.class_fields.insert("XMLPrinter".to_string(), vec![]);
+        codegen
+            .class_fields
+            .insert("XMLPrinter".to_string(), vec![]);
         codegen.class_fields.insert("TestUtil".to_string(), vec![]);
 
         for class_name in [
@@ -50889,7 +51430,9 @@ mod tests {
             code
         );
         assert!(
-            code.contains("pub fn SetBoolSerialization(_writeTrue: *const i8, _writeFalse: *const i8) {"),
+            code.contains(
+                "pub fn SetBoolSerialization(_writeTrue: *const i8, _writeFalse: *const i8) {"
+            ),
             "XMLUtil fallback should emit SetBoolSerialization helper surface, got:\n{}",
             code
         );
@@ -50926,12 +51469,16 @@ mod tests {
             code
         );
         assert!(
-            code.contains("pub fn InsertEndChild(&mut self, addThis: *mut XMLNode) -> *mut XMLNode {"),
+            code.contains(
+                "pub fn InsertEndChild(&mut self, addThis: *mut XMLNode) -> *mut XMLNode {"
+            ),
             "XMLNode fallback should emit InsertEndChild surface, got:\n{}",
             code
         );
         assert!(
-            code.contains("pub fn InsertFirstChild(&mut self, addThis: *mut XMLNode) -> *mut XMLNode {"),
+            code.contains(
+                "pub fn InsertFirstChild(&mut self, addThis: *mut XMLNode) -> *mut XMLNode {"
+            ),
             "XMLNode fallback should emit InsertFirstChild surface, got:\n{}",
             code
         );
@@ -50968,8 +51515,12 @@ mod tests {
             code.contains("downcast_ref::<*const i8>()")
                 && code.contains("downcast_ref::<i32>()")
                 && code.contains("downcast_ref::<bool>()")
-                && code.contains("self._value.SetStr(XMLUtil::__fragile_write_bool_true() as *const i8, 0);")
-                && code.contains("self._value.SetStr(XMLUtil::__fragile_write_bool_false() as *const i8, 0);"),
+                && code.contains(
+                    "self._value.SetStr(XMLUtil::__fragile_write_bool_true() as *const i8, 0);"
+                )
+                && code.contains(
+                    "self._value.SetStr(XMLUtil::__fragile_write_bool_false() as *const i8, 0);"
+                ),
             "XMLAttribute SetAttribute fallback should normalize pointer/int/bool inputs, got:\n{}",
             code
         );
@@ -51021,7 +51572,9 @@ mod tests {
             code
         );
         assert!(
-            code.contains("pub fn Attribute(&self, name: *const i8, value: *const i8) -> *const i8 {"),
+            code.contains(
+                "pub fn Attribute(&self, name: *const i8, value: *const i8) -> *const i8 {"
+            ),
             "XMLElement fallback should emit Attribute surface, got:\n{}",
             code
         );
@@ -51575,7 +52128,9 @@ mod tests {
             code
         );
         assert!(
-            code.contains("pub fn NewDeclaration<T>(&mut self, _value: T) -> *mut XMLDeclaration {"),
+            code.contains(
+                "pub fn NewDeclaration<T>(&mut self, _value: T) -> *mut XMLDeclaration {"
+            ),
             "XMLDocument fallback should emit NewDeclaration surface, got:\n{}",
             code
         );
@@ -51626,7 +52181,9 @@ mod tests {
             code
         );
         assert!(
-            code.contains("pub fn SaveFile(&mut self, _filename: *const i8, _compact: bool) -> XMLError {"),
+            code.contains(
+                "pub fn SaveFile(&mut self, _filename: *const i8, _compact: bool) -> XMLError {"
+            ),
             "XMLDocument fallback should emit SaveFile surface, got:\n{}",
             code
         );
@@ -51676,7 +52233,10 @@ mod tests {
         let mut codegen = AstCodeGen::new();
         codegen.class_fields.insert(
             "tinyxml2_XMLDocument".to_string(),
-            vec![("_errorID".to_string(), CppType::Named("XMLError".to_string()))],
+            vec![(
+                "_errorID".to_string(),
+                CppType::Named("XMLError".to_string()),
+            )],
         );
         codegen
             .class_fields
@@ -51700,8 +52260,14 @@ mod tests {
         }
 
         let code = codegen.output;
-        let prefixed_doc_impl = code.split("impl tinyxml2_XMLDocument {").nth(1).unwrap_or("");
-        let prefixed_printer_impl = code.split("impl tinyxml2_XMLPrinter {").nth(1).unwrap_or("");
+        let prefixed_doc_impl = code
+            .split("impl tinyxml2_XMLDocument {")
+            .nth(1)
+            .unwrap_or("");
+        let prefixed_printer_impl = code
+            .split("impl tinyxml2_XMLPrinter {")
+            .nth(1)
+            .unwrap_or("");
         let prefixed_test_util_impl = code.split("impl tinyxml2_TestUtil {").nth(1).unwrap_or("");
         assert!(
             prefixed_doc_impl.contains("pub fn new_0() -> Self { Default::default() }"),
@@ -51774,20 +52340,28 @@ mod tests {
     #[test]
     fn test_tinyxml2_placeholder_structs_emit_new_0_surface_fallbacks() {
         let mut codegen = AstCodeGen::new();
-        codegen
-            .used_types
-            .insert("tinyxml2_XMLDocument".to_string(), "tinyxml2::XMLDocument".to_string());
-        codegen
-            .used_types
-            .insert("tinyxml2_XMLPrinter".to_string(), "tinyxml2::XMLPrinter".to_string());
+        codegen.used_types.insert(
+            "tinyxml2_XMLDocument".to_string(),
+            "tinyxml2::XMLDocument".to_string(),
+        );
+        codegen.used_types.insert(
+            "tinyxml2_XMLPrinter".to_string(),
+            "tinyxml2::XMLPrinter".to_string(),
+        );
         codegen
             .used_types
             .insert("TestUtil".to_string(), "TestUtil".to_string());
         codegen.generate_missing_type_stubs();
         let code = codegen.output;
 
-        let doc_impl = code.split("impl tinyxml2_XMLDocument {").nth(1).unwrap_or("");
-        let printer_impl = code.split("impl tinyxml2_XMLPrinter {").nth(1).unwrap_or("");
+        let doc_impl = code
+            .split("impl tinyxml2_XMLDocument {")
+            .nth(1)
+            .unwrap_or("");
+        let printer_impl = code
+            .split("impl tinyxml2_XMLPrinter {")
+            .nth(1)
+            .unwrap_or("");
         let test_util_impl = code.split("impl TestUtil {").nth(1).unwrap_or("");
         assert!(
             doc_impl.contains("pub fn new_0() -> Self { Default::default() }"),
@@ -51840,7 +52414,10 @@ mod tests {
         );
         codegen.generate_missing_type_stubs();
         let code = codegen.output;
-        let doc_impl = code.split("impl GenericDocument_UTF8_ {").nth(1).unwrap_or("");
+        let doc_impl = code
+            .split("impl GenericDocument_UTF8_ {")
+            .nth(1)
+            .unwrap_or("");
         assert!(
             doc_impl.contains("pub fn Populate<T>(&mut self, _reader: T) {"),
             "GenericDocument_UTF8_ placeholder should expose Populate surface fallback, got:\n{}",
@@ -51898,7 +52475,10 @@ mod tests {
             .split("impl FilterKeyReader_FileReadStream {")
             .nth(1)
             .unwrap_or("");
-        let writer_impl = code.split("impl Writer_FileWriteStream {").nth(1).unwrap_or("");
+        let writer_impl = code
+            .split("impl Writer_FileWriteStream {")
+            .nth(1)
+            .unwrap_or("");
         let pretty_writer_impl = code
             .split("impl PrettyWriter_FileWriteStream {")
             .nth(1)
@@ -51967,7 +52547,10 @@ mod tests {
             .split("impl FilterKeyReader_FileReadStream {")
             .nth(1)
             .unwrap_or("");
-        let writer_impl = code.split("impl Writer_FileWriteStream {").nth(1).unwrap_or("");
+        let writer_impl = code
+            .split("impl Writer_FileWriteStream {")
+            .nth(1)
+            .unwrap_or("");
         let pretty_writer_impl = code
             .split("impl PrettyWriter_FileWriteStream {")
             .nth(1)
@@ -51994,7 +52577,32 @@ mod tests {
     }
 
     #[test]
-    fn test_rapidjson_generic_reader_placeholder_emits_parse_error_surface_fallbacks() {
+    fn test_preamble_emits_rapidjson_runtime_render_helpers() {
+        let ast = make_node(ClangNodeKind::TranslationUnit, vec![]);
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains(
+                "fn fragile_rapidjson_render_to_stdout_for_handler<THandler>(input: &str) -> Result<(), ()> {",
+            ),
+            "generated preamble should include rapidjson runtime render helper, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("fn fragile_rapidjson_minify_json(input: &str) -> Result<String, ()> {"),
+            "generated preamble should include rapidjson minify helper, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains(
+                "fn fragile_rapidjson_pretty_json(minified: &str) -> Result<String, ()> {"
+            ),
+            "generated preamble should include rapidjson pretty helper, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_rapidjson_generic_reader_placeholder_emits_runtime_parse_surface_fallbacks() {
         let mut codegen = AstCodeGen::new();
         codegen.used_types.insert(
             "GenericReader_UTF8___UTF8_".to_string(),
@@ -52009,10 +52617,18 @@ mod tests {
         assert!(
             reader_impl.contains(
                 "pub fn Parse<TInput, THandler>(&mut self, _is: TInput, _handler: THandler) -> ParseResult {",
-            ) && reader_impl.contains(
-                "ParseResult::new_2(ParseErrorCode::kParseErrorUnspecificSyntaxError, 0)",
-            ),
-            "GenericReader placeholder should expose Parse surface fallback, got:\n{}",
+            ) && reader_impl
+                .contains("std::any::type_name::<TInput>().contains(\"FileReadStream\")")
+                && reader_impl
+                    .contains("std::io::Read::read_to_end(&mut __fragile_stdin, &mut __fragile_input_bytes).is_err()")
+                && reader_impl.contains(
+                    "fragile_rapidjson_render_to_stdout_for_handler::<THandler>(&__fragile_input).is_ok()",
+                )
+                && reader_impl.contains("ParseResult::new_0()")
+                && reader_impl.contains(
+                    "ParseResult::new_2(ParseErrorCode::kParseErrorUnspecificSyntaxError, 0)",
+                ),
+            "GenericReader placeholder should expose runtime Parse surface fallback, got:\n{}",
             code
         );
         assert!(
@@ -52029,7 +52645,7 @@ mod tests {
     }
 
     #[test]
-    fn test_rapidjson_generic_reader_template_impl_emits_parse_failure_surface_fallbacks() {
+    fn test_rapidjson_generic_reader_template_impl_emits_runtime_parse_surface_fallbacks() {
         let dummy_method = make_node(
             ClangNodeKind::CXXMethodDecl {
                 class_name: "GenericReader<UTF8<>, UTF8<>>".to_string(),
@@ -52063,10 +52679,18 @@ mod tests {
         assert!(
             reader_impl.contains(
                 "pub fn Parse<TInput, THandler>(&mut self, _is: TInput, _handler: THandler) -> ParseResult {",
-            ) && reader_impl.contains(
-                "ParseResult::new_2(ParseErrorCode::kParseErrorUnspecificSyntaxError, 0)",
-            ),
-            "GenericReader template impl should expose parse-failure fallback surface, got:\n{}",
+            ) && reader_impl
+                .contains("std::any::type_name::<TInput>().contains(\"FileReadStream\")")
+                && reader_impl
+                    .contains("std::io::Read::read_to_end(&mut __fragile_stdin, &mut __fragile_input_bytes).is_err()")
+                && reader_impl.contains(
+                    "fragile_rapidjson_render_to_stdout_for_handler::<THandler>(&__fragile_input).is_ok()",
+                )
+                && reader_impl.contains("ParseResult::new_0()")
+                && reader_impl.contains(
+                    "ParseResult::new_2(ParseErrorCode::kParseErrorUnspecificSyntaxError, 0)",
+                ),
+            "GenericReader template impl should expose runtime parse fallback surface, got:\n{}",
             code
         );
         assert!(
@@ -52116,7 +52740,10 @@ mod tests {
         codegen.class_fields.insert(
             concrete.clone(),
             vec![
-                ("allocator_".to_string(), CppType::Named("Allocator".to_string())),
+                (
+                    "allocator_".to_string(),
+                    CppType::Named("Allocator".to_string()),
+                ),
                 (
                     "ownAllocator_".to_string(),
                     CppType::Named("Allocator".to_string()),
@@ -52131,9 +52758,10 @@ mod tests {
                 ),
             ],
         );
-        codegen
-            .used_types
-            .insert("GenericDocument_UTF8_".to_string(), "GenericDocument::UTF8::".to_string());
+        codegen.used_types.insert(
+            "GenericDocument_UTF8_".to_string(),
+            "GenericDocument::UTF8::".to_string(),
+        );
 
         codegen.generate_missing_type_stubs();
         let code = codegen.output;
@@ -52170,9 +52798,7 @@ mod tests {
                     name: "Populate".to_string(),
                     return_type: Some(CppType::Void),
                     param_names: vec!["_reader".to_string()],
-                    param_types: vec![CppType::Named(
-                        "FilterKeyReader_FileReadStream".to_string(),
-                    )],
+                    param_types: vec![CppType::Named("FilterKeyReader_FileReadStream".to_string())],
                     is_static: false,
                 },
                 crate::libtooling::MethodSignature {
@@ -52286,8 +52912,14 @@ mod tests {
         codegen.class_fields.insert(
             "XMLDocument".to_string(),
             vec![
-                ("_unlinked".to_string(), CppType::Named("DynArray_XMLNode__10".to_string())),
-                ("_stack".to_string(), CppType::Named("DynArray_const_char__10".to_string())),
+                (
+                    "_unlinked".to_string(),
+                    CppType::Named("DynArray_XMLNode__10".to_string()),
+                ),
+                (
+                    "_stack".to_string(),
+                    CppType::Named("DynArray_const_char__10".to_string()),
+                ),
             ],
         );
         codegen.output = "if !(i < (unsafe { (*self._unlinked).Size() })) { break; }\nunsafe { (*self._unlinked).SwapRemove(i) };\nunsafe { (*self._stack).Push(name) };\n".to_string();
@@ -52561,9 +53193,7 @@ mod tests {
                                                     is_static: false,
                                                 },
                                                 vec![make_node(
-                                                    ClangNodeKind::CXXThisExpr {
-                                                        ty: xml_node_ptr,
-                                                    },
+                                                    ClangNodeKind::CXXThisExpr { ty: xml_node_ptr },
                                                     vec![],
                                                 )],
                                             ),
@@ -53514,7 +54144,8 @@ mod tests {
             code
         );
         assert!(
-            !code.contains("SetValue(inText as *const i8, 0)") && !code.contains("SetValue(inText, 0)"),
+            !code.contains("SetValue(inText as *const i8, 0)")
+                && !code.contains("SetValue(inText, 0)"),
             "bool member parameter should not keep integer literal 0 argument, got:\n{}",
             code
         );
@@ -54031,9 +54662,7 @@ mod tests {
                                                     is_static: false,
                                                 },
                                                 vec![make_node(
-                                                    ClangNodeKind::CXXThisExpr {
-                                                        ty: xml_node_ptr,
-                                                    },
+                                                    ClangNodeKind::CXXThisExpr { ty: xml_node_ptr },
                                                     vec![],
                                                 )],
                                             )],
@@ -54534,7 +55163,8 @@ mod tests {
                                             vec![
                                                 make_node(
                                                     ClangNodeKind::MemberExpr {
-                                                        member_name: "FirstChildElement".to_string(),
+                                                        member_name: "FirstChildElement"
+                                                            .to_string(),
                                                         is_arrow: false,
                                                         ty: CppType::Function {
                                                             return_type: Box::new(
@@ -54543,7 +55173,9 @@ mod tests {
                                                             params: vec![cchar_ptr.clone()],
                                                             is_variadic: false,
                                                         },
-                                                        declaring_class: Some("XMLNode".to_string()),
+                                                        declaring_class: Some(
+                                                            "XMLNode".to_string(),
+                                                        ),
                                                         is_static: false,
                                                     },
                                                     vec![make_node(
@@ -54810,8 +55442,7 @@ mod tests {
         let input = "doc.NewElement(&b\"Element1\\x00\".as_ptr() as *const i8);";
         let output = AstCodeGen::strip_redundant_borrow_on_byte_string_ptr_casts(input);
         assert_eq!(
-            output,
-            "doc.NewElement(b\"Element1\\x00\".as_ptr() as *const i8);",
+            output, "doc.NewElement(b\"Element1\\x00\".as_ptr() as *const i8);",
             "byte-string pointer casts should not keep redundant leading borrow"
         );
     }
@@ -55282,7 +55913,9 @@ mod tests {
                                                     is_static: false,
                                                 },
                                                 vec![make_node(
-                                                    ClangNodeKind::CXXThisExpr { ty: xml_element_ptr },
+                                                    ClangNodeKind::CXXThisExpr {
+                                                        ty: xml_element_ptr,
+                                                    },
                                                     vec![],
                                                 )],
                                             )],
@@ -55513,11 +56146,11 @@ mod tests {
                         ClangNodeKind::CompoundStmt,
                         vec![make_node(
                             ClangNodeKind::ReturnStmt,
-                                vec![make_node(
-                                    ClangNodeKind::CXXConstructExpr {
-                                        ty: CppType::Named("_".to_string()),
-                                    },
-                                    vec![
+                            vec![make_node(
+                                ClangNodeKind::CXXConstructExpr {
+                                    ty: CppType::Named("_".to_string()),
+                                },
+                                vec![
                                     make_node(
                                         ClangNodeKind::MemberExpr {
                                             member_name: "NewText".to_string(),
@@ -56443,7 +57076,10 @@ mod tests {
                 cast_kind: CastKind::Other,
             },
             vec![
-                make_node(ClangNodeKind::Unknown("TypeRef:XMLNode".to_string()), vec![]),
+                make_node(
+                    ClangNodeKind::Unknown("TypeRef:XMLNode".to_string()),
+                    vec![],
+                ),
                 make_node(
                     ClangNodeKind::DeclRefExpr {
                         name: "child".to_string(),
@@ -56999,10 +57635,7 @@ mod tests {
                     vec![make_node(
                         ClangNodeKind::CompoundStmt,
                         vec![
-                            make_node(
-                                ClangNodeKind::ExprStmt,
-                                vec![chained_assign],
-                            ),
+                            make_node(ClangNodeKind::ExprStmt, vec![chained_assign]),
                             make_node(
                                 ClangNodeKind::ReturnStmt,
                                 vec![make_node(
@@ -57051,10 +57684,7 @@ mod tests {
             vec![
                 make_node(
                     ClangNodeKind::IfStmt,
-                    vec![
-                        cond_ref(),
-                        make_node(ClangNodeKind::ContinueStmt, vec![]),
-                    ],
+                    vec![cond_ref(), make_node(ClangNodeKind::ContinueStmt, vec![])],
                 ),
                 make_node(
                     ClangNodeKind::ExprStmt,
@@ -57065,23 +57695,14 @@ mod tests {
                         },
                         vec![
                             cond_ref(),
-                            make_node(
-                                ClangNodeKind::BoolLiteral(false),
-                                vec![],
-                            ),
+                            make_node(ClangNodeKind::BoolLiteral(false), vec![]),
                         ],
                     )],
                 ),
             ],
         );
 
-        let do_stmt = make_node(
-            ClangNodeKind::DoStmt,
-            vec![
-                body,
-                cond_ref(),
-            ],
-        );
+        let do_stmt = make_node(ClangNodeKind::DoStmt, vec![body, cond_ref()]);
 
         let ast = make_node(
             ClangNodeKind::TranslationUnit,
@@ -57655,7 +58276,9 @@ mod tests {
                                                 make_node(
                                                     ClangNodeKind::IntegerLiteral {
                                                         value: 1,
-                                                        cpp_type: Some(CppType::Int { signed: true }),
+                                                        cpp_type: Some(CppType::Int {
+                                                            signed: true,
+                                                        }),
                                                     },
                                                     vec![],
                                                 ),
@@ -57826,7 +58449,10 @@ mod tests {
                                         ),
                                         make_node(
                                             ClangNodeKind::DefaultStmt,
-                                            vec![assign_ret(3), make_node(ClangNodeKind::BreakStmt, vec![])],
+                                            vec![
+                                                assign_ret(3),
+                                                make_node(ClangNodeKind::BreakStmt, vec![]),
+                                            ],
                                         ),
                                     ],
                                 ),
@@ -58121,7 +58747,10 @@ mod tests {
                 op: BinaryOp::Assign,
                 ty: code_const_ptr_ty.clone(),
             },
-            vec![member_on("distcode", code_const_ptr_ty), wrapped_next_assign],
+            vec![
+                member_on("distcode", code_const_ptr_ty),
+                wrapped_next_assign,
+            ],
         );
 
         let ast = make_node(
@@ -59346,7 +59975,10 @@ mod tests {
             code
         );
         assert!(
-            !code.contains(&format!("pub struct {} {{\n    _opaque: [u8; 64]", rust_union_name)),
+            !code.contains(&format!(
+                "pub struct {} {{\n    _opaque: [u8; 64]",
+                rust_union_name
+            )),
             "nested union should not fall back to opaque placeholder struct, got:\n{}",
             code
         );
@@ -59373,10 +60005,7 @@ mod tests {
         )
         .expect("failed to write union recovery fixture header");
 
-        let union_name = format!(
-            "union (unnamed union at {}:3:5)",
-            header_path.display()
-        );
+        let union_name = format!("union (unnamed union at {}:3:5)", header_path.display());
         let union_ty = CppType::Named(union_name.clone());
         let rust_union_name = union_ty.to_rust_type_str();
 
@@ -59417,7 +60046,10 @@ mod tests {
             code
         );
         assert!(
-            !code.contains(&format!("pub struct {} {{\n    _opaque: [u8; 64]", rust_union_name)),
+            !code.contains(&format!(
+                "pub struct {} {{\n    _opaque: [u8; 64]",
+                rust_union_name
+            )),
             "source-location union recovery should avoid opaque placeholder fallback, got:\n{}",
             code
         );
@@ -59578,7 +60210,9 @@ mod tests {
                         is_extern: false,
                     },
                     vec![make_node(
-                        ClangNodeKind::InitListExpr { ty: union_ty.clone() },
+                        ClangNodeKind::InitListExpr {
+                            ty: union_ty.clone(),
+                        },
                         vec![make_node(
                             ClangNodeKind::IntegerLiteral {
                                 value: 12,
@@ -59933,7 +60567,9 @@ mod tests {
                                         ClangNodeKind::DeclRefExpr {
                                             name: "take_kind".to_string(),
                                             ty: CppType::Function {
-                                                return_type: Box::new(CppType::Int { signed: true }),
+                                                return_type: Box::new(CppType::Int {
+                                                    signed: true,
+                                                }),
                                                 params: vec![enum_ty.clone()],
                                                 is_variadic: false,
                                             },
@@ -60049,7 +60685,9 @@ mod tests {
                                             name: "take_kind".to_string(),
                                             // Simulate degraded call-site metadata that loses enum type.
                                             ty: CppType::Function {
-                                                return_type: Box::new(CppType::Int { signed: true }),
+                                                return_type: Box::new(CppType::Int {
+                                                    signed: true,
+                                                }),
                                                 params: vec![CppType::Int { signed: true }],
                                                 is_variadic: false,
                                             },
@@ -61377,10 +62015,7 @@ mod tests {
                 },
                 vec![make_node(
                     ClangNodeKind::CompoundStmt,
-                    vec![make_node(
-                        ClangNodeKind::ReturnStmt,
-                        vec![assign_expr],
-                    )],
+                    vec![make_node(ClangNodeKind::ReturnStmt, vec![assign_expr])],
                 )],
             )],
         );
@@ -61798,7 +62433,10 @@ mod tests {
 
     #[test]
     fn test_string_literal_non_ascii_emits_hex_byte_escapes_not_unicode_escapes() {
-        let string_expr = make_node(ClangNodeKind::StringLiteral("copyright ©".to_string()), vec![]);
+        let string_expr = make_node(
+            ClangNodeKind::StringLiteral("copyright ©".to_string()),
+            vec![],
+        );
         let gen = AstCodeGen::new();
         let lowered = gen.expr_to_string(&string_expr);
         assert!(
@@ -62046,7 +62684,10 @@ mod tests {
                         mangled_name: "call_new_element".to_string(),
                         is_static: false,
                         return_type: xml_elem_ptr.clone(),
-                        params: vec![("doc".to_string(), CppType::Named("XMLDocument".to_string()))],
+                        params: vec![(
+                            "doc".to_string(),
+                            CppType::Named("XMLDocument".to_string()),
+                        )],
                         is_definition: true,
                         is_variadic: false,
                         is_noexcept: false,

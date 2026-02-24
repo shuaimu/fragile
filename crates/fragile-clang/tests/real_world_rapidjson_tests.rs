@@ -39,8 +39,6 @@ const RAPIDJSON_NO_STL_EXAMPLES: &[(&str, &str)] = &[
 ];
 const RAPIDJSON_SAMPLE_JSON: &str = "{\"a\":1,\"b\":[true,false],\"msg\":\"hi\"}\n";
 const RAPIDJSON_EXPECTED_CONDENSE_OUTPUT: &str = "{\"a\":1,\"b\":[true,false],\"msg\":\"hi\"}";
-const RAPIDJSON_PARSE_ERROR_UNSPECIFIC_FRAGMENT: &str = "Unspecific syntax error";
-const RAPIDJSON_PARSE_ERROR_NO_ERROR_FRAGMENT: &str = "No error.";
 const RAPIDJSON_CONST_ASSIGN_PARSER_DIAGNOSTIC_FRAGMENT: &str =
     "cannot assign to non-static data member 'length' with const-qualified type 'const SizeType'";
 const RAPIDJSON_DUPLICATE_DEFINITION_E0428_FRAGMENT: &str = "error[E0428]";
@@ -68,8 +66,7 @@ const RAPIDJSON_NUMERIC_I64_AS_FUNCTION_FRAGMENT: &str =
     "error[E0618]: expected function, found `i64`";
 const RAPIDJSON_NUMERIC_POW10_U128_MIXED_WIDTH_FRAGMENT: &str =
     "static mut __gv___pow10_128: [u128; 40] = [0, 10u64";
-const RAPIDJSON_NUMERIC_POW10_U128_OVERFLOW_FRAGMENT: &str =
-    "error[E0080]: attempt to compute";
+const RAPIDJSON_NUMERIC_POW10_U128_OVERFLOW_FRAGMENT: &str = "error[E0080]: attempt to compute";
 const RAPIDJSON_ITEM6_63_CLEARED_MARKERS: &[&str] = &[
     RAPIDJSON_NUMERIC_U8_TO_CHAR_CAST_FRAGMENT,
     RAPIDJSON_NUMERIC_I64_AS_FUNCTION_FRAGMENT,
@@ -1696,42 +1693,6 @@ fn create_local_rapidjson_like_repo(base_dir: &Path) -> Result<(String, String, 
     Ok((repo_url, pinned_commit, newer_commit))
 }
 
-fn assert_runtime_output_or_explicit_parse_failure(
-    example_name: &str,
-    run_status: i32,
-    stderr: &str,
-    output_matches_expected: bool,
-) {
-    if output_matches_expected {
-        assert_eq!(
-            run_status, 0,
-            "real-world strict {} should exit successfully when output matches expected JSON",
-            example_name
-        );
-        return;
-    }
-
-    assert_ne!(
-        run_status, 0,
-        "real-world strict {} output mismatch must not be a silent-success (status=0) run",
-        example_name
-    );
-    assert!(
-        stderr.contains(RAPIDJSON_PARSE_ERROR_UNSPECIFIC_FRAGMENT),
-        "real-world strict {} mismatch should report explicit parse error (`{}`), got stderr:\n{}",
-        example_name,
-        RAPIDJSON_PARSE_ERROR_UNSPECIFIC_FRAGMENT,
-        stderr
-    );
-    assert!(
-        !stderr.contains(RAPIDJSON_PARSE_ERROR_NO_ERROR_FRAGMENT),
-        "real-world strict {} mismatch should not report misleading `{}` diagnostics, got stderr:\n{}",
-        example_name,
-        RAPIDJSON_PARSE_ERROR_NO_ERROR_FRAGMENT,
-        stderr
-    );
-}
-
 #[test]
 fn test_ensure_pinned_checkout_clones_and_rewinds_local_rapidjson_fixture() {
     let root = unique_temp_dir("rapidjson_checkout_pin");
@@ -2230,24 +2191,40 @@ fn test_real_world_rapidjson_fragilec_native_no_stl_examples_baseline() {
         .expect("failed to read run_condense_driver.stdout");
     let condense_stderr = fs::read_to_string(log_dir.join("run_condense_driver.stderr"))
         .expect("failed to read run_condense_driver.stderr");
-    let condense_matches_expected = condense_stdout.trim() == RAPIDJSON_EXPECTED_CONDENSE_OUTPUT;
-    assert_runtime_output_or_explicit_parse_failure(
-        "condense",
-        condense_run_status,
-        &condense_stderr,
-        condense_matches_expected,
+    assert_eq!(
+        condense_run_status, 0,
+        "real-world strict condense run should succeed; stderr:\n{}",
+        condense_stderr
+    );
+    assert!(
+        condense_stderr.trim().is_empty(),
+        "real-world strict condense stderr should be empty, got:\n{}",
+        condense_stderr
+    );
+    assert_eq!(
+        condense_stdout.trim(),
+        RAPIDJSON_EXPECTED_CONDENSE_OUTPUT,
+        "real-world strict condense output should match expected compact JSON"
     );
 
     let pretty_stdout = fs::read_to_string(log_dir.join("run_pretty_driver.stdout"))
         .expect("failed to read run_pretty_driver.stdout");
     let pretty_stderr = fs::read_to_string(log_dir.join("run_pretty_driver.stderr"))
         .expect("failed to read run_pretty_driver.stderr");
-    let pretty_matches_expected = rapidjson_pretty_output_matches_expected(&pretty_stdout);
-    assert_runtime_output_or_explicit_parse_failure(
-        "pretty",
-        pretty_run_status,
-        &pretty_stderr,
-        pretty_matches_expected,
+    assert_eq!(
+        pretty_run_status, 0,
+        "real-world strict pretty run should succeed; stderr:\n{}",
+        pretty_stderr
+    );
+    assert!(
+        pretty_stderr.trim().is_empty(),
+        "real-world strict pretty stderr should be empty, got:\n{}",
+        pretty_stderr
+    );
+    assert!(
+        rapidjson_pretty_output_matches_expected(&pretty_stdout),
+        "real-world strict pretty output should preserve JSON fields, got:\n{}",
+        pretty_stdout
     );
 }
 
