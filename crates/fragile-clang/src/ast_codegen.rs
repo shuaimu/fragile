@@ -29270,6 +29270,74 @@ impl AstCodeGen {
         Some(inner.trim())
     }
 
+    fn symbol_like_identifier(expr: &str) -> Option<String> {
+        let mut candidate = expr.trim();
+        if let Some(inner) = Self::strip_outer_unsafe_block(candidate) {
+            candidate = inner;
+        }
+        while is_fully_parenthesized_expr(candidate) && candidate.len() >= 2 {
+            candidate = candidate[1..candidate.len() - 1].trim();
+        }
+        let tail = candidate.rsplit("::").next().unwrap_or(candidate).trim();
+        if tail.is_empty() {
+            return None;
+        }
+        let mut chars = tail.chars();
+        let first = chars.next()?;
+        if !(first == '_' || first.is_ascii_alphabetic()) {
+            return None;
+        }
+        if chars.all(|c| c == '_' || c.is_ascii_alphanumeric()) {
+            Some(tail.to_string())
+        } else {
+            None
+        }
+    }
+
+    fn is_non_callable_callee_value_expr(&self, callee: &ClangNode, func_expr: &str) -> bool {
+        let mut normalized = func_expr.trim();
+        if let Some(inner) = Self::strip_outer_unsafe_block(normalized) {
+            normalized = inner.trim();
+        }
+        while is_fully_parenthesized_expr(normalized) && normalized.len() >= 2 {
+            normalized = normalized[1..normalized.len() - 1].trim();
+        }
+        if parse_integer_literal_value_str(normalized).is_some() || matches!(normalized, "true" | "false")
+        {
+            return true;
+        }
+
+        if let Some(symbol) = Self::symbol_like_identifier(normalized) {
+            if let Some(ty) = self.global_var_types.get(&symbol) {
+                return !matches!(ty, CppType::Function { .. })
+                    && !Self::is_function_pointer_type_or_typedef(ty);
+            }
+            if symbol.starts_with("__gv_") || symbol.starts_with("__fsv_") {
+                return true;
+            }
+        }
+
+        if Self::is_function_reference(callee)
+            || Self::is_function_pointer_variable(callee)
+            || Self::is_member_reference(callee)
+        {
+            return false;
+        }
+
+        if let Some(ty) = Self::get_expr_type(callee).or_else(|| Self::get_original_expr_type(callee))
+        {
+            return !matches!(ty, CppType::Function { .. })
+                && !Self::is_function_pointer_type_or_typedef(&ty)
+                && (ty.is_integral() == Some(true)
+                    || matches!(
+                        ty,
+                        CppType::Bool | CppType::Float | CppType::Double | CppType::Pointer { .. }
+                    ));
+        }
+
+        false
+    }
+
     /// Get the base access path for a member declared in a specific base class.
     fn get_base_access_for_class(&self, current_class: &str, declaring_class: &str) -> BaseAccess {
         // Strip namespace prefix from current_class for lookup
@@ -34223,6 +34291,7 @@ impl AstCodeGen {
                             ) || rust_type.starts_with("i")
                                 || rust_type.starts_with("u")
                                 || rust_type.starts_with("f")
+                                || rust_type == "char"
                                 || rust_type == "bool"
                                 || rust_type.starts_with("*");
                             // Check if inner is a zero literal (possibly with type suffix)
@@ -34242,7 +34311,18 @@ impl AstCodeGen {
                                     } else {
                                         wrap_for_as_cast(&inner)
                                     };
-                                    format!("{} as {}", cast_inner, rust_type)
+                                    if rust_type == "char" {
+                                        if Self::get_expr_type(child)
+                                            .as_ref()
+                                            .is_some_and(Self::is_pointer_like_type)
+                                        {
+                                            format!("(({} as usize) as u8) as char", cast_inner)
+                                        } else {
+                                            format!("({} as u8) as char", cast_inner)
+                                        }
+                                    } else {
+                                        format!("{} as {}", cast_inner, rust_type)
+                                    }
                                 }
                             } else {
                                 // Non-zero to non-primitive - can't do proper cast, use zeroed
@@ -34405,25 +34485,27 @@ impl AstCodeGen {
                     }
 
                     // Check if this is a global variable (already in unsafe context, no wrapper needed)
-                    // Global variables are prefixed with __gv_ to avoid parameter shadowing
-                    // But only if it's not a local variable (local vars shadow globals)
+                    // Global variables are prefixed with __gv_ to avoid parameter shadowing.
+                    // Never remap function references through value-storage symbols.
                     if self.is_scoped_local_var_active(&ident) {
                         if self.is_tracked_ref_var_name(name) {
                             return format!("*{}", ident);
                         }
                         return ident;
                     }
-                    if let Some(static_name) = self.function_static_var_mapping.get(&ident) {
-                        return static_name.clone();
-                    }
-                    if !self.is_scoped_local_var_active(&ident) {
-                        let composite_ident = sanitize_identifier_for_composite(name);
-                        if let Some(prefixed_name) = self
-                            .global_var_mapping
-                            .get(&ident)
-                            .or_else(|| self.global_var_mapping.get(&composite_ident))
-                        {
-                            return prefixed_name.clone();
+                    if !matches!(ty, CppType::Function { .. }) {
+                        if let Some(static_name) = self.function_static_var_mapping.get(&ident) {
+                            return static_name.clone();
+                        }
+                        if !self.is_scoped_local_var_active(&ident) {
+                            let composite_ident = sanitize_identifier_for_composite(name);
+                            if let Some(prefixed_name) = self
+                                .global_var_mapping
+                                .get(&ident)
+                                .or_else(|| self.global_var_mapping.get(&composite_ident))
+                            {
+                                return prefixed_name.clone();
+                            }
                         }
                     }
 
@@ -38613,6 +38695,10 @@ impl AstCodeGen {
                                 }
                             }
                         }
+                        if !is_fn_ptr_call && self.is_non_callable_callee_value_expr(callee, &func)
+                        {
+                            return func;
+                        }
                         if let Some((rust_code, needs_unsafe)) =
                             Self::map_builtin_function(&func, &args)
                         {
@@ -39275,6 +39361,11 @@ impl AstCodeGen {
                                 args.truncate(types.len());
                             }
                         }
+                    }
+                    if !is_fn_ptr_call
+                        && self.is_non_callable_callee_value_expr(&node.children[0], &func)
+                    {
+                        return func;
                     }
 
                     if let Some(fallback_call) = self.build_const_member_mut_call_fallback(
@@ -40402,6 +40493,7 @@ impl AstCodeGen {
                             ) || rust_type.starts_with("i")
                                 || rust_type.starts_with("u")
                                 || rust_type.starts_with("f")
+                                || rust_type == "char"
                                 || rust_type == "bool"
                                 || rust_type.starts_with("*");
                             // Check if inner is a zero literal (possibly with type suffix)
@@ -40421,7 +40513,18 @@ impl AstCodeGen {
                                 } else {
                                     wrap_for_as_cast(&inner)
                                 };
-                                format!("{} as {}", cast_inner, rust_type)
+                                if rust_type == "char" {
+                                    if Self::get_expr_type(child)
+                                        .as_ref()
+                                        .is_some_and(Self::is_pointer_like_type)
+                                    {
+                                        format!("(({} as usize) as u8) as char", cast_inner)
+                                    } else {
+                                        format!("({} as u8) as char", cast_inner)
+                                    }
+                                } else {
+                                    format!("{} as {}", cast_inner, rust_type)
+                                }
                             } else {
                                 // Non-zero to non-primitive - can't do proper cast, use zeroed
                                 format!("unsafe {{ std::mem::zeroed::<{}>() }}", rust_type)
@@ -52752,6 +52855,237 @@ mod tests {
         assert!(
             code.contains("!= 0 {"),
             "condition lowering should preserve C int-return truthiness checks for degraded bool call expr types, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_call_expr_function_declref_is_not_remapped_to_global_storage_symbol() {
+        let int_ty = CppType::Int { signed: true };
+        let target_fn_ty = CppType::Function {
+            return_type: Box::new(int_ty.clone()),
+            params: vec![],
+            is_variadic: false,
+        };
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![
+                make_node(
+                    ClangNodeKind::VarDecl {
+                        name: "target".to_string(),
+                        ty: int_ty.clone(),
+                        has_init: true,
+                        is_extern: false,
+                        is_static: false,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::IntegerLiteral {
+                            value: 7,
+                            cpp_type: Some(int_ty.clone()),
+                        },
+                        vec![],
+                    )],
+                ),
+                make_node(
+                    ClangNodeKind::FunctionDecl {
+                        name: "target".to_string(),
+                        mangled_name: "target".to_string(),
+                        is_static: false,
+                        return_type: int_ty.clone(),
+                        params: vec![],
+                        is_definition: true,
+                        is_variadic: false,
+                        is_noexcept: false,
+                        is_coroutine: false,
+                        coroutine_info: None,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![make_node(
+                            ClangNodeKind::ReturnStmt,
+                            vec![make_node(
+                                ClangNodeKind::IntegerLiteral {
+                                    value: 42,
+                                    cpp_type: Some(int_ty.clone()),
+                                },
+                                vec![],
+                            )],
+                        )],
+                    )],
+                ),
+                make_node(
+                    ClangNodeKind::FunctionDecl {
+                        name: "probe".to_string(),
+                        mangled_name: "probe".to_string(),
+                        is_static: false,
+                        return_type: int_ty.clone(),
+                        params: vec![],
+                        is_definition: true,
+                        is_variadic: false,
+                        is_noexcept: false,
+                        is_coroutine: false,
+                        coroutine_info: None,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![make_node(
+                            ClangNodeKind::ReturnStmt,
+                            vec![make_node(
+                                ClangNodeKind::CallExpr {
+                                    ty: int_ty.clone(),
+                                    template_instantiation: None,
+                                },
+                                vec![make_node(
+                                    ClangNodeKind::DeclRefExpr {
+                                        name: "target".to_string(),
+                                        ty: target_fn_ty,
+                                        namespace_path: vec![],
+                                    },
+                                    vec![],
+                                )],
+                            )],
+                        )],
+                    )],
+                ),
+            ],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("return target();"),
+            "function-typed DeclRefExpr call should keep the function symbol, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("__gv_target()"),
+            "function call should not be remapped through global storage symbols, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_call_expr_non_callable_global_value_is_not_invoked() {
+        let int_ty = CppType::Int { signed: true };
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![
+                make_node(
+                    ClangNodeKind::VarDecl {
+                        name: "counter".to_string(),
+                        ty: int_ty.clone(),
+                        has_init: true,
+                        is_extern: false,
+                        is_static: false,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::IntegerLiteral {
+                            value: 3,
+                            cpp_type: Some(int_ty.clone()),
+                        },
+                        vec![],
+                    )],
+                ),
+                make_node(
+                    ClangNodeKind::FunctionDecl {
+                        name: "probe_counter".to_string(),
+                        mangled_name: "probe_counter".to_string(),
+                        is_static: false,
+                        return_type: int_ty.clone(),
+                        params: vec![],
+                        is_definition: true,
+                        is_variadic: false,
+                        is_noexcept: false,
+                        is_coroutine: false,
+                        coroutine_info: None,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![make_node(
+                            ClangNodeKind::ReturnStmt,
+                            vec![make_node(
+                                ClangNodeKind::CallExpr {
+                                    ty: int_ty.clone(),
+                                    template_instantiation: None,
+                                },
+                                vec![make_node(
+                                    ClangNodeKind::DeclRefExpr {
+                                        name: "counter".to_string(),
+                                        ty: int_ty.clone(),
+                                        namespace_path: vec![],
+                                    },
+                                    vec![],
+                                )],
+                            )],
+                        )],
+                    )],
+                ),
+            ],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("__gv_counter")
+                && !code.contains("__gv_counter()")
+                && !code.contains("unsafe { __gv_counter }()"),
+            "non-callable global values should not lower to call syntax, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_integral_cast_to_char_from_pointer_routes_through_u8() {
+        let ptr_ty = CppType::Pointer {
+            pointee: Box::new(CppType::Char { signed: true }),
+            is_const: false,
+        };
+        let char_dependent_ty = CppType::DependentType {
+            spelling: "char".to_string(),
+        };
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![make_node(
+                ClangNodeKind::FunctionDecl {
+                    name: "pointer_to_char".to_string(),
+                    mangled_name: "pointer_to_char".to_string(),
+                    is_static: false,
+                    return_type: CppType::Void,
+                    params: vec![("p".to_string(), ptr_ty.clone())],
+                    is_definition: true,
+                    is_variadic: false,
+                    is_noexcept: false,
+                    is_coroutine: false,
+                    coroutine_info: None,
+                },
+                vec![make_node(
+                    ClangNodeKind::CompoundStmt,
+                    vec![make_node(
+                        ClangNodeKind::ExprStmt,
+                        vec![make_node(
+                            ClangNodeKind::ImplicitCastExpr {
+                                cast_kind: CastKind::IntegralCast,
+                                ty: char_dependent_ty.clone(),
+                            },
+                            vec![make_node(
+                                ClangNodeKind::DeclRefExpr {
+                                    name: "p".to_string(),
+                                    ty: ptr_ty.clone(),
+                                    namespace_path: vec![],
+                                },
+                                vec![],
+                            )],
+                        )],
+                    )],
+                )],
+            )],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("as usize) as u8) as char"),
+            "pointer-to-char integral casts should route through usize->u8 before char, got:\n{}",
             code
         );
     }
