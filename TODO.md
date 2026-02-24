@@ -71,7 +71,7 @@ Success criteria:
 
 ### Ordered failure-class clearance ledger (active sequence)
 Use this as the authoritative clear order after Phase 0 guardrails. Update each item with `CLEARED (YYYY-MM-DD)` and a short evidence note when resolved.
-- [ ] 1) Parser/AST fidelity mismatch in real RapidJSON headers. Status: IN PROGRESS. Evidence: strict parser now ignores the known RapidJSON v1.1.0 `document.h` const-member assignment diagnostic (`GenericStringRef::operator=`); strict `filterkeydom` compile now advances to downstream rustc blockers (`E0428` duplicate helpers/types and related normalization errors).
+- [ ] 1) Parser/AST fidelity mismatch in real RapidJSON headers. Status: IN PROGRESS. Evidence: strict parser ignore is now narrowed to conjunctive match (`rapidjson/document.h` path + exact const-member diagnostic) and strict `filterkeydom` compile advances to downstream rustc blockers (`E0428` duplicate helpers/types and related normalization errors).
 - [ ] 2) Duplicate symbol/type emission in single TU output. Status: OPEN. Evidence: strict build paths still hit `E0428` duplicate-definition families (for example-capitalize style outputs).
 - [ ] 3) Placeholder fallback for required rapidjson template types. Status: OPEN. Evidence: placeholder types (for example reader/handler forms) still surface on active compile paths and miss required methods.
 - [ ] 4) C/C++ type normalization gaps. Status: OPEN. Evidence: unresolved/inconsistent aliases still appear for libc/libstd symbols (for example `__FILE`, atomic aliases, `void`-shape externs).
@@ -82,7 +82,8 @@ Use this as the authoritative clear order after Phase 0 guardrails. Update each 
 ### Parser fidelity breakdown (item 1)
 - [x] 1.1) Add a targeted strict-parser diagnostic ignore for RapidJSON v1.1.0 `GenericStringRef::operator=` const-member assignment in `document.h` (C++ strict compile path only). Done 2026-02-24.
 - [x] 1.2) Re-run strict compile for `example/filterkeydom/filterkeydom.cpp` and record the first post-parse failure class/command in capture logs. Done 2026-02-24. Evidence: `FRAGILEC_MODE=strict fragilec ... -c example/filterkeydom/filterkeydom.cpp` now fails in rustc (first class: duplicate emission `E0428`), not parse.
-- [ ] 1.3) Replace or narrow the parser diagnostic ignore with a semantic-fidelity fix once downstream compile/codegen blockers are cleared.
+- [x] 1.3) Replace or narrow the parser diagnostic ignore with a semantic-fidelity fix once downstream compile/codegen blockers are cleared. Done 2026-02-24 (narrowed branch): parser ignore now requires both `rapidjson/document.h` path and the exact `GenericStringRef::operator=` const-member diagnostic text.
+- [ ] 1.4) Replace the temporary narrowed parser ignore with a real semantic-fidelity fix once downstream compile/codegen blockers are cleared.
 
 ## Phase 2: Must-fix compiler correctness blockers
 - [ ] Fix `main` rollback/drop behavior so real example `main` survives codegen + rustc object emission.

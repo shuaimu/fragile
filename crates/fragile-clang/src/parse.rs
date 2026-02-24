@@ -376,14 +376,19 @@ impl ClangParser {
                     let is_system_header =
                         clang_sys::clang_Location_isInSystemHeader(location) != 0;
 
-                    // Check if this error matches any ignored pattern
-                    let is_ignored = self
-                        .ignored_error_patterns
-                        .iter()
-                        .any(|pattern| msg.contains(pattern));
+                    let diagnostic_text = format!("{}:{}:{}: {}", file_name, line, column, msg);
+
+                    // Check if this error matches any ignored pattern.
+                    // Match against both raw message text and the full location-qualified
+                    // diagnostic text so callers can scope ignores to specific files/lines.
+                    // Patterns may use `&&` to require multiple fragments (for example,
+                    // file path + message substring).
+                    let is_ignored = self.ignored_error_patterns.iter().any(|pattern| {
+                        diagnostic_matches_ignore_pattern(pattern, &msg, &diagnostic_text)
+                    });
 
                     if !is_system_header && !is_ignored {
-                        user_errors.push(format!("{}:{}:{}: {}", file_name, line, column, msg));
+                        user_errors.push(diagnostic_text);
                     }
                 }
                 clang_sys::clang_disposeDiagnostic(diag);
@@ -4406,6 +4411,17 @@ fn cursor_mangled_name(cursor: clang_sys::CXCursor) -> String {
     }
 }
 
+fn diagnostic_matches_ignore_pattern(pattern: &str, msg: &str, diagnostic_text: &str) -> bool {
+    let mut saw_part = false;
+    for part in pattern.split("&&").map(str::trim).filter(|p| !p.is_empty()) {
+        saw_part = true;
+        if !msg.contains(part) && !diagnostic_text.contains(part) {
+            return false;
+        }
+    }
+    saw_part
+}
+
 #[cfg(test)]
 #[allow(clippy::approx_constant)] // Test values that happen to be close to PI aren't using PI
 mod tests {
@@ -4430,6 +4446,28 @@ mod tests {
             ClangNodeKind::TranslationUnit => {}
             _ => panic!("Expected TranslationUnit"),
         }
+    }
+
+    #[test]
+    fn test_diagnostic_matches_ignore_pattern_supports_conjunctive_fragments() {
+        let msg = "cannot assign to non-static data member 'length'";
+        let diagnostic_text = "/tmp/include/rapidjson/document.h:319:82: cannot assign to non-static data member 'length'";
+        assert!(
+            diagnostic_matches_ignore_pattern(
+                "rapidjson/document.h&&cannot assign",
+                msg,
+                diagnostic_text
+            ),
+            "conjunctive ignore pattern should require all fragments"
+        );
+        assert!(
+            !diagnostic_matches_ignore_pattern(
+                "rapidjson/document.h&&different message",
+                msg,
+                diagnostic_text
+            ),
+            "conjunctive ignore pattern should fail when a fragment is missing"
+        );
     }
 
     #[test]
@@ -4513,6 +4551,100 @@ int main() { return 0; }
         let ast = parser
             .parse_file(&source)
             .expect("parse should succeed when diagnostic pattern is ignored");
+        assert!(
+            matches!(ast.translation_unit.kind, ClangNodeKind::TranslationUnit),
+            "expected translation unit root"
+        );
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_parse_file_accepts_const_member_assignment_with_location_scoped_ignore_pattern() {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock must be monotonic")
+            .as_nanos();
+        let temp_dir = std::env::temp_dir().join(format!(
+            "fragile_parse_const_assign_location_ignore_{}",
+            stamp
+        ));
+        std::fs::create_dir_all(&temp_dir).expect("failed to create temp dir");
+        let source = temp_dir.join("rapidjson_like.cpp");
+        std::fs::write(
+            &source,
+            r#"
+typedef unsigned int SizeType;
+template<typename CharType>
+struct GenericStringRef {
+    const CharType* const s;
+    const SizeType length;
+    GenericStringRef(const CharType* str, SizeType len) : s(str), length(len) {}
+    GenericStringRef& operator=(const GenericStringRef& rhs) { length = rhs.length; return *this; }
+};
+int main() { return 0; }
+"#,
+        )
+        .expect("failed to write source");
+
+        let parser = ClangParser::with_paths_defines_language_and_ignored_errors(
+            Vec::new(),
+            Vec::new(),
+            ParserLanguage::Cpp,
+            vec!["rapidjson_like.cpp:8:71: cannot assign".to_string()],
+        )
+        .expect("failed to create parser");
+        let ast = parser
+            .parse_file(&source)
+            .expect("parse should succeed when location-scoped diagnostic is ignored");
+        assert!(
+            matches!(ast.translation_unit.kind, ClangNodeKind::TranslationUnit),
+            "expected translation unit root"
+        );
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_parse_file_accepts_const_member_assignment_with_conjunctive_ignore_pattern() {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock must be monotonic")
+            .as_nanos();
+        let temp_dir = std::env::temp_dir().join(format!(
+            "fragile_parse_const_assign_conjunctive_ignore_{}",
+            stamp
+        ));
+        std::fs::create_dir_all(&temp_dir).expect("failed to create temp dir");
+        let source = temp_dir.join("rapidjson_like.cpp");
+        std::fs::write(
+            &source,
+            r#"
+typedef unsigned int SizeType;
+template<typename CharType>
+struct GenericStringRef {
+    const CharType* const s;
+    const SizeType length;
+    GenericStringRef(const CharType* str, SizeType len) : s(str), length(len) {}
+    GenericStringRef& operator=(const GenericStringRef& rhs) { length = rhs.length; return *this; }
+};
+int main() { return 0; }
+"#,
+        )
+        .expect("failed to write source");
+
+        let parser = ClangParser::with_paths_defines_language_and_ignored_errors(
+            Vec::new(),
+            Vec::new(),
+            ParserLanguage::Cpp,
+            vec![
+                "rapidjson_like.cpp&&cannot assign to non-static data member 'length'".to_string(),
+            ],
+        )
+        .expect("failed to create parser");
+        let ast = parser
+            .parse_file(&source)
+            .expect("parse should succeed when conjunctive diagnostic pattern is ignored");
         assert!(
             matches!(ast.translation_unit.kind, ClangNodeKind::TranslationUnit),
             "expected translation unit root"

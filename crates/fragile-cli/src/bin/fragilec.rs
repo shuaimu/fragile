@@ -16,7 +16,7 @@ const FRAGILEC_REQUIRE_META_ENV: &str = "FRAGILEC_REQUIRE_META";
 const FRAGILEC_KEEP_RS_ENV: &str = "FRAGILEC_KEEP_RS";
 const FRAGILEC_LINKER_ENV: &str = "FRAGILEC_LINKER";
 const RAPIDJSON_GENERIC_STRING_REF_CONST_ASSIGN_DIAGNOSTIC: &str =
-    "cannot assign to non-static data member 'length' with const-qualified type 'const SizeType'";
+    "rapidjson/document.h&&cannot assign to non-static data member 'length' with const-qualified type 'const SizeType'";
 
 fn validate_strict_mode_value(mode: &str) -> Result<(), String> {
     match mode.to_ascii_lowercase().as_str() {
@@ -1227,6 +1227,64 @@ mod tests {
             stamp
         ));
         fs::create_dir_all(&temp_dir).expect("failed to create temp dir");
+        let include_dir = temp_dir.join("include/rapidjson");
+        fs::create_dir_all(&include_dir).expect("failed to create include dir");
+        let header = include_dir.join("document.h");
+        let source = temp_dir.join("rapidjson_like.cpp");
+        let out_obj = temp_dir.join("rapidjson_like.o");
+        fs::write(
+            &header,
+            r#"
+typedef unsigned int SizeType;
+template<typename CharType>
+struct GenericStringRef {
+    const CharType* const s;
+    const SizeType length;
+    GenericStringRef(const CharType* str, SizeType len) : s(str), length(len) {}
+    GenericStringRef& operator=(const GenericStringRef& rhs) { s = rhs.s; length = rhs.length; return *this; }
+};
+"#,
+        )
+        .expect("failed to write header");
+        fs::write(
+            &source,
+            r#"
+#include "rapidjson/document.h"
+int main() { return 0; }
+"#,
+        )
+        .expect("failed to write source");
+
+        strict_compile_source_to_object(
+            &source,
+            &out_obj,
+            &[temp_dir.join("include").to_string_lossy().to_string()],
+            &[],
+            &[],
+        )
+        .expect(
+            "strict compile should tolerate known rapidjson const-member assignment parse diagnostic",
+        );
+        assert!(
+            out_obj.exists(),
+            "expected object output at {}",
+            out_obj.display()
+        );
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn strict_compile_does_not_ignore_non_rapidjson_const_assignment_diagnostic() {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock must be monotonic")
+            .as_nanos();
+        let temp_dir = std::env::temp_dir().join(format!(
+            "fragilec_non_rapidjson_const_assign_diag_test_{}",
+            stamp
+        ));
+        fs::create_dir_all(&temp_dir).expect("failed to create temp dir");
         let source = temp_dir.join("rapidjson_like.cpp");
         let out_obj = temp_dir.join("rapidjson_like.o");
         fs::write(
@@ -1238,20 +1296,19 @@ struct GenericStringRef {
     const CharType* const s;
     const SizeType length;
     GenericStringRef(const CharType* str, SizeType len) : s(str), length(len) {}
-    GenericStringRef& operator=(const GenericStringRef& rhs) { length = rhs.length; return *this; }
+    GenericStringRef& operator=(const GenericStringRef& rhs) { s = rhs.s; length = rhs.length; return *this; }
 };
 int main() { return 0; }
 "#,
         )
         .expect("failed to write source");
 
-        strict_compile_source_to_object(&source, &out_obj, &[], &[], &[]).expect(
-            "strict compile should tolerate known rapidjson const-member assignment parse diagnostic",
-        );
+        let err = strict_compile_source_to_object(&source, &out_obj, &[], &[], &[])
+            .expect_err("non-rapidjson const-assignment diagnostic should not be ignored");
         assert!(
-            out_obj.exists(),
-            "expected object output at {}",
-            out_obj.display()
+            err.contains("cannot assign to non-static data member 'length'"),
+            "expected const-member assignment parse diagnostic, got:\n{}",
+            err
         );
 
         let _ = fs::remove_dir_all(&temp_dir);
