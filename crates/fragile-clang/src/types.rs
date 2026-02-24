@@ -418,7 +418,29 @@ impl CppType {
                         "std::ffi::VaList".to_string()
                     }
                     // C standard I/O
-                    "FILE" | "struct _IO_FILE" => "std::ffi::c_void".to_string(), // Opaque file handle
+                    "FILE"
+                    | "__FILE"
+                    | "struct __FILE"
+                    | "_IO_FILE"
+                    | "struct _IO_FILE"
+                    | "__sFILE"
+                    | "struct __sFILE"
+                    | "std::FILE"
+                    | "std::__FILE"
+                    | "std::_IO_FILE"
+                    | "std::__sFILE"
+                    | "std::__1::FILE"
+                    | "std::__1::__FILE"
+                    | "std::__1::_IO_FILE"
+                    | "std::__1::__sFILE"
+                    | "std::__2::FILE"
+                    | "std::__2::__FILE"
+                    | "std::__2::_IO_FILE"
+                    | "std::__2::__sFILE"
+                    | "std::__ndk1::FILE"
+                    | "std::__ndk1::__FILE"
+                    | "std::__ndk1::_IO_FILE"
+                    | "std::__ndk1::__sFILE" => "std::ffi::c_void".to_string(), // Opaque file handle aliases
                     // nullptr_t type
                     "std::nullptr_t" | "nullptr_t" | "decltype(nullptr)" => {
                         "*mut std::ffi::c_void".to_string()
@@ -1596,6 +1618,46 @@ mod tests {
             !converted.contains('='),
             "converted type name should not contain '=', got: {}",
             converted
+        );
+    }
+
+    #[test]
+    fn test_file_like_aliases_lower_to_opaque_c_void() {
+        assert_eq!(
+            CppType::Named("__FILE".to_string()).to_rust_type_str(),
+            "std::ffi::c_void"
+        );
+        assert_eq!(
+            CppType::Named("struct __FILE".to_string()).to_rust_type_str(),
+            "std::ffi::c_void"
+        );
+        assert_eq!(
+            CppType::Named("struct __sFILE".to_string()).to_rust_type_str(),
+            "std::ffi::c_void"
+        );
+        assert_eq!(
+            CppType::Named("std::FILE".to_string()).to_rust_type_str(),
+            "std::ffi::c_void"
+        );
+        assert_eq!(
+            CppType::Named("std::__1::FILE".to_string()).to_rust_type_str(),
+            "std::ffi::c_void"
+        );
+        assert_eq!(
+            CppType::Pointer {
+                pointee: Box::new(CppType::Named("__FILE".to_string())),
+                is_const: false,
+            }
+            .to_rust_type_str(),
+            "*mut std::ffi::c_void"
+        );
+        assert_eq!(
+            CppType::Pointer {
+                pointee: Box::new(CppType::Named("__FILE".to_string())),
+                is_const: true,
+            }
+            .to_rust_type_str(),
+            "*const std::ffi::c_void"
         );
     }
 
