@@ -4435,7 +4435,9 @@ impl AstCodeGen {
                     "pub fn Parse<TInput, THandler>(&mut self, _is: TInput, _handler: THandler) -> ParseResult {",
                 );
                 self.indent += 1;
-                self.writeln("ParseResult::new_0()");
+                self.writeln(
+                    "ParseResult::new_2(ParseErrorCode::kParseErrorUnspecificSyntaxError, 0)",
+                );
                 self.indent -= 1;
                 self.writeln("}");
                 self.writeln("");
@@ -14967,7 +14969,9 @@ impl AstCodeGen {
                     "pub fn Parse<TInput, THandler>(&mut self, _is: TInput, _handler: THandler) -> ParseResult {",
                 );
                 self.indent += 1;
-                self.writeln("ParseResult::new_0()");
+                self.writeln(
+                    "ParseResult::new_2(ParseErrorCode::kParseErrorUnspecificSyntaxError, 0)",
+                );
                 self.indent -= 1;
                 self.writeln("}");
                 if !has_error_offset || !has_error_code {
@@ -52005,7 +52009,9 @@ mod tests {
         assert!(
             reader_impl.contains(
                 "pub fn Parse<TInput, THandler>(&mut self, _is: TInput, _handler: THandler) -> ParseResult {",
-            ) && reader_impl.contains("ParseResult::new_0()"),
+            ) && reader_impl.contains(
+                "ParseResult::new_2(ParseErrorCode::kParseErrorUnspecificSyntaxError, 0)",
+            ),
             "GenericReader placeholder should expose Parse surface fallback, got:\n{}",
             code
         );
@@ -52018,6 +52024,60 @@ mod tests {
             reader_impl.contains("pub fn GetParseErrorCode(&self) -> ParseErrorCode {")
                 && reader_impl.contains("ParseErrorCode::kParseErrorNone"),
             "GenericReader placeholder should expose GetParseErrorCode surface fallback, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_rapidjson_generic_reader_template_impl_emits_parse_failure_surface_fallbacks() {
+        let dummy_method = make_node(
+            ClangNodeKind::CXXMethodDecl {
+                class_name: "GenericReader<UTF8<>, UTF8<>>".to_string(),
+                name: "dummy".to_string(),
+                return_type: CppType::Void,
+                params: vec![],
+                is_definition: true,
+                is_static: false,
+                is_virtual: false,
+                is_pure_virtual: false,
+                is_override: false,
+                is_final: false,
+                is_const: false,
+                access: AccessSpecifier::Public,
+            },
+            vec![],
+        );
+        let children = vec![dummy_method];
+
+        let mut codegen = AstCodeGen::new();
+        codegen.generate_template_impl(
+            "GenericReader<UTF8<>, UTF8<>>",
+            "GenericReader_UTF8___UTF8_",
+            &children,
+        );
+        let code = codegen.output;
+        let reader_impl = code
+            .split("impl GenericReader_UTF8___UTF8_ {")
+            .nth(1)
+            .unwrap_or("");
+        assert!(
+            reader_impl.contains(
+                "pub fn Parse<TInput, THandler>(&mut self, _is: TInput, _handler: THandler) -> ParseResult {",
+            ) && reader_impl.contains(
+                "ParseResult::new_2(ParseErrorCode::kParseErrorUnspecificSyntaxError, 0)",
+            ),
+            "GenericReader template impl should expose parse-failure fallback surface, got:\n{}",
+            code
+        );
+        assert!(
+            reader_impl.contains("pub fn GetErrorOffset(&self) -> u64 {"),
+            "GenericReader template impl should expose GetErrorOffset fallback surface, got:\n{}",
+            code
+        );
+        assert!(
+            reader_impl.contains("pub fn GetParseErrorCode(&self) -> ParseErrorCode {")
+                && reader_impl.contains("ParseErrorCode::kParseErrorNone"),
+            "GenericReader template impl should expose GetParseErrorCode fallback surface, got:\n{}",
             code
         );
     }
