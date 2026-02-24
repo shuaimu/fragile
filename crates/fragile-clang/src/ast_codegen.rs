@@ -205,6 +205,206 @@ fn cast_unary_minus_unsigned_literal_operand(operand: &str) -> Option<String> {
     None
 }
 
+/// Split a comma-delimited list while respecting (), [], and {} nesting.
+fn split_top_level_comma_list(src: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut start = 0usize;
+    let mut paren_depth = 0usize;
+    let mut bracket_depth = 0usize;
+    let mut brace_depth = 0usize;
+    for (idx, ch) in src.char_indices() {
+        match ch {
+            '(' => paren_depth += 1,
+            ')' => {
+                if paren_depth > 0 {
+                    paren_depth -= 1;
+                }
+            }
+            '[' => bracket_depth += 1,
+            ']' => {
+                if bracket_depth > 0 {
+                    bracket_depth -= 1;
+                }
+            }
+            '{' => brace_depth += 1,
+            '}' => {
+                if brace_depth > 0 {
+                    brace_depth -= 1;
+                }
+            }
+            ',' if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 => {
+                out.push(src[start..idx].to_string());
+                start = idx + 1;
+            }
+            _ => {}
+        }
+    }
+    out.push(src[start..].to_string());
+    out
+}
+
+/// Split by a top-level binary operator character while respecting (), [], and {} nesting.
+fn split_top_level_by_operator(src: &str, op: char) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut start = 0usize;
+    let mut paren_depth = 0usize;
+    let mut bracket_depth = 0usize;
+    let mut brace_depth = 0usize;
+    for (idx, ch) in src.char_indices() {
+        match ch {
+            '(' => paren_depth += 1,
+            ')' => {
+                if paren_depth > 0 {
+                    paren_depth -= 1;
+                }
+            }
+            '[' => bracket_depth += 1,
+            ']' => {
+                if bracket_depth > 0 {
+                    bracket_depth -= 1;
+                }
+            }
+            '{' => brace_depth += 1,
+            '}' => {
+                if brace_depth > 0 {
+                    brace_depth -= 1;
+                }
+            }
+            _ if ch == op && paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 => {
+                out.push(src[start..idx].to_string());
+                start = idx + ch.len_utf8();
+            }
+            _ => {}
+        }
+    }
+    out.push(src[start..].to_string());
+    out
+}
+
+/// Rewrite integer suffixes (e.g. `10u64`) to a new suffix when they are numeric literals.
+fn rewrite_numeric_literal_suffix(expr: &str, from: &str, to: &str) -> String {
+    let mut out = String::new();
+    let mut idx = 0usize;
+    while idx < expr.len() {
+        if expr[idx..].starts_with(from) {
+            let prev = expr[..idx].chars().last();
+            let next = expr[idx + from.len()..].chars().next();
+            let prev_is_digit = prev.is_some_and(|c| c.is_ascii_digit());
+            let next_is_ident = next.is_some_and(|c| c.is_ascii_alphanumeric() || c == '_');
+            if prev_is_digit && !next_is_ident {
+                out.push_str(to);
+                idx += from.len();
+                continue;
+            }
+        }
+        let ch = expr[idx..].chars().next().unwrap();
+        out.push(ch);
+        idx += ch.len_utf8();
+    }
+    out
+}
+
+/// Normalize `(-N) as uX` forms so Rust sees a signed-source literal cast.
+fn normalize_parenthesized_negative_casts_to_unsigned(expr: &str, unsigned_ty: &str) -> String {
+    let mut out = String::new();
+    let mut idx = 0usize;
+    let mut last = 0usize;
+    while idx < expr.len() {
+        if expr[idx..].starts_with("(-") {
+            let mut digits_end = idx + 2;
+            while digits_end < expr.len()
+                && expr[digits_end..]
+                    .chars()
+                    .next()
+                    .is_some_and(|c| c.is_ascii_digit())
+            {
+                digits_end += expr[digits_end..].chars().next().unwrap().len_utf8();
+            }
+            if digits_end > idx + 2 && expr[digits_end..].starts_with(')') {
+                let mut as_idx = digits_end + 1;
+                while as_idx < expr.len()
+                    && expr[as_idx..].chars().next().is_some_and(|c| c.is_whitespace())
+                {
+                    as_idx += expr[as_idx..].chars().next().unwrap().len_utf8();
+                }
+                if expr[as_idx..].starts_with("as") {
+                    as_idx += 2;
+                    while as_idx < expr.len()
+                        && expr[as_idx..].chars().next().is_some_and(|c| c.is_whitespace())
+                    {
+                        as_idx += expr[as_idx..].chars().next().unwrap().len_utf8();
+                    }
+                    if expr[as_idx..].starts_with(unsigned_ty) {
+                        let lit = &expr[idx + 1..digits_end];
+                        if let Some(casted) = cast_negative_literal_to_unsigned(lit, unsigned_ty) {
+                            out.push_str(&expr[last..idx]);
+                            out.push_str(&casted);
+                            idx = as_idx + unsigned_ty.len();
+                            last = idx;
+                            continue;
+                        }
+                    }
+                }
+            }
+        }
+        idx += expr[idx..].chars().next().unwrap().len_utf8();
+    }
+    out.push_str(&expr[last..]);
+    out
+}
+
+/// Normalize `[u128; N]` aggregate initializer text so all numeric constants are valid u128 forms.
+fn normalize_u128_array_initializer_expr(expr: &str) -> String {
+    fn normalize_u128_wrapping_mul_expr(expr: &str) -> String {
+        let mut core = expr.trim();
+        while is_fully_parenthesized_expr(core) && core.len() >= 2 {
+            core = core[1..core.len() - 1].trim();
+        }
+        let factors = split_top_level_by_operator(core, '*');
+        if factors.len() <= 1 {
+            return core.to_string();
+        }
+        let mut iter = factors
+            .into_iter()
+            .map(|f| normalize_u128_wrapping_mul_expr(f.as_str()));
+        let first = iter.next().unwrap();
+        let mut acc = format!("({})", first);
+        for factor in iter {
+            let rhs = factor.trim();
+            let rhs = if is_integer_literal_str(rhs) {
+                format!("({}) as u128", strip_literal_suffix(rhs))
+            } else {
+                format!("({})", rhs)
+            };
+            acc = format!("({}).wrapping_mul({})", acc, rhs);
+        }
+        acc
+    }
+
+    let trimmed = expr.trim();
+    let Some(inner) = trimmed.strip_prefix('[').and_then(|s| s.strip_suffix(']')) else {
+        return trimmed.to_string();
+    };
+    let elems = split_top_level_comma_list(inner)
+        .into_iter()
+        .map(|elem| {
+            let mut normalized = normalize_parenthesized_negative_casts_to_unsigned(
+                elem.trim(),
+                "u128",
+            );
+            normalized = rewrite_numeric_literal_suffix(&normalized, "u64", "u128");
+            normalized = normalize_u128_wrapping_mul_expr(&normalized);
+            let normalized_trimmed = normalized.trim();
+            if is_integer_literal_str(normalized_trimmed) {
+                format!("({}) as u128", strip_literal_suffix(normalized_trimmed))
+            } else {
+                normalized
+            }
+        })
+        .collect::<Vec<_>>();
+    format!("[{}]", elems.join(", "))
+}
+
 /// Convert an integer literal string to a float literal.
 /// E.g., "0" -> "0.0", "123i32" -> "123.0", "-5" -> "-5.0"
 /// Special values like "inf", "NaN" are converted to proper Rust constants.
@@ -25584,7 +25784,7 @@ impl AstCodeGen {
         // - Arrays with initializers have InitListExpr as first child
         // - Static member definitions have TypeRef as first child (skip it)
         // - Regular variables have their initializer as first child
-        let init_value = if !children.is_empty() {
+        let mut init_value = if !children.is_empty() {
             // Find the actual initializer, skipping TypeRef for qualified definitions
             let init_idx = if matches!(&children[0].kind, ClangNodeKind::Unknown(s) if s.starts_with("TypeRef:"))
             {
@@ -25721,6 +25921,13 @@ impl AstCodeGen {
             // No children: use default value
             Self::default_value_for_static(ty)
         };
+
+        if rust_type.starts_with("[u128;")
+            && init_value.trim().starts_with('[')
+            && init_value.trim().ends_with(']')
+        {
+            init_value = normalize_u128_array_initializer_expr(&init_value);
+        }
 
         if should_export_c_global {
             self.writeln(&format!("#[export_name = \"{}\"]", name));
@@ -32475,6 +32682,13 @@ impl AstCodeGen {
                                 && !init_expr.contains(&format!(" as {}", final_type))
                             {
                                 final_init = format!(" = ({}) as {}", init_expr, final_type);
+                            }
+                        }
+                        if final_type.starts_with("[u128;") && final_init.starts_with(" = ") {
+                            let init_expr = final_init[3..].trim();
+                            if init_expr.starts_with('[') && init_expr.ends_with(']') {
+                                final_init =
+                                    format!(" = {}", normalize_u128_array_initializer_expr(init_expr));
                             }
                         }
 
@@ -40197,6 +40411,11 @@ impl AstCodeGen {
                                 // Casting 0 to a struct type - use zeroed() instead
                                 format!("unsafe {{ std::mem::zeroed::<{}>() }}", rust_type)
                             } else if is_primitive {
+                                if let Some(casted) =
+                                    cast_negative_literal_to_unsigned(&inner, &rust_type)
+                                {
+                                    return casted;
+                                }
                                 let cast_inner = if needs_parens {
                                     format!("({})", inner)
                                 } else {
@@ -48233,6 +48452,27 @@ mod tests {
             Some("(-42i32 as usize)".to_string())
         );
         assert_eq!(cast_negative_unsigned_literal_expr("-1"), None);
+    }
+
+    #[test]
+    fn test_rewrite_numeric_literal_suffix_only_retargets_numeric_literals() {
+        let expr = "__countl_zero_u64(10u64) + 100u64";
+        let rewritten = rewrite_numeric_literal_suffix(expr, "u64", "u128");
+        assert_eq!(rewritten, "__countl_zero_u64(10u128) + 100u128");
+    }
+
+    #[test]
+    fn test_normalize_u128_array_initializer_expr_fixes_mixed_width_and_negative_casts() {
+        let input = "[0, 10u64, (-8446744073709551616) as u128 * 10]";
+        let normalized = normalize_u128_array_initializer_expr(input);
+        assert!(normalized.contains("(0) as u128"), "{}", normalized);
+        assert!(normalized.contains("(10) as u128"), "{}", normalized);
+        assert!(
+            normalized.contains("(-8446744073709551616i64 as u128)")
+                && normalized.contains(".wrapping_mul((10) as u128)"),
+            "{}",
+            normalized
+        );
     }
 
     #[test]

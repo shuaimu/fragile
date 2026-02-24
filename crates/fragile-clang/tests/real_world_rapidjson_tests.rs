@@ -64,13 +64,18 @@ const RAPIDJSON_NUMERIC_U8_TO_CHAR_CAST_FRAGMENT: &str =
     "error[E0604]: only `u8` can be cast as `char`";
 const RAPIDJSON_NUMERIC_I64_AS_FUNCTION_FRAGMENT: &str =
     "error[E0618]: expected function, found `i64`";
-const RAPIDJSON_NUMERIC_POW10_U128_TABLE_FRAGMENT: &str =
-    "static mut __gv___pow10_128: [u128; 40]";
-const RAPIDJSON_ITEM6_NUMERIC_SIGN_ENUM_MARKERS: &[&str] = &[
-    RAPIDJSON_NUMERIC_U128_UNARY_NEG_FRAGMENT,
+const RAPIDJSON_NUMERIC_POW10_U128_MIXED_WIDTH_FRAGMENT: &str =
+    "static mut __gv___pow10_128: [u128; 40] = [0, 10u64";
+const RAPIDJSON_NUMERIC_POW10_U128_OVERFLOW_FRAGMENT: &str =
+    "error[E0080]: attempt to compute";
+const RAPIDJSON_ITEM6_RESIDUAL_NUMERIC_SIGN_MARKERS: &[&str] = &[
     RAPIDJSON_NUMERIC_U8_TO_CHAR_CAST_FRAGMENT,
     RAPIDJSON_NUMERIC_I64_AS_FUNCTION_FRAGMENT,
-    RAPIDJSON_NUMERIC_POW10_U128_TABLE_FRAGMENT,
+];
+const RAPIDJSON_ITEM6_62_CLEARED_MARKERS: &[&str] = &[
+    RAPIDJSON_NUMERIC_U128_UNARY_NEG_FRAGMENT,
+    RAPIDJSON_NUMERIC_POW10_U128_MIXED_WIDTH_FRAGMENT,
+    RAPIDJSON_NUMERIC_POW10_U128_OVERFLOW_FRAGMENT,
 ];
 const RAPIDJSON_FILTERKEYDOM_PLACEHOLDER_API_HOLE_MARKERS: &[&str] = &[
     "no function or associated item named `new_0` found for struct `FilterKeyReader_FileReadStream`",
@@ -2293,10 +2298,18 @@ fn test_real_world_rapidjson_strict_filterkeydom_compile_capture() {
             first_stderr
         );
     }
-    for marker in RAPIDJSON_ITEM6_NUMERIC_SIGN_ENUM_MARKERS {
+    for marker in RAPIDJSON_ITEM6_RESIDUAL_NUMERIC_SIGN_MARKERS {
         assert!(
             first_stderr.contains(marker),
-            "strict filterkeydom replay should currently surface item-6 numeric/sign marker `{}` while item 6 remains open, got:\n{}",
+            "strict filterkeydom replay should still surface residual item-6 marker `{}` while 6.3 remains open, got:\n{}",
+            marker,
+            first_stderr
+        );
+    }
+    for marker in RAPIDJSON_ITEM6_62_CLEARED_MARKERS {
+        assert!(
+            !first_stderr.contains(marker),
+            "strict filterkeydom replay should no longer surface cleared item-6.2 marker `{}`, got:\n{}",
             marker,
             first_stderr
         );
@@ -2415,10 +2428,18 @@ fn test_real_world_rapidjson_cmake_no_tests_full_build_with_fragilec_capture_fir
             first_stderr.contains("error[E0425]"),
             "post-dedupe strict cmake first failure should include unresolved E0425 diagnostics"
         );
-        for marker in RAPIDJSON_ITEM6_NUMERIC_SIGN_ENUM_MARKERS {
+        for marker in RAPIDJSON_ITEM6_RESIDUAL_NUMERIC_SIGN_MARKERS {
             assert!(
                 first_stderr.contains(marker),
-                "strict rapidjson no-tests replay should currently surface item-6 numeric/sign marker `{}` while item 6 remains open, got:\n{}",
+                "strict rapidjson no-tests replay should still surface residual item-6 marker `{}` while 6.3 remains open, got:\n{}",
+                marker,
+                first_stderr
+            );
+        }
+        for marker in RAPIDJSON_ITEM6_62_CLEARED_MARKERS {
+            assert!(
+                !first_stderr.contains(marker),
+                "strict rapidjson no-tests replay should no longer surface cleared item-6.2 marker `{}`, got:\n{}",
                 marker,
                 first_stderr
             );
