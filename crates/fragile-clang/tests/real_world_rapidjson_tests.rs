@@ -58,6 +58,20 @@ const RAPIDJSON_ITEM5_CAST_DECAY_CALL_SHAPE_MARKERS: &[&str] = &[
     RAPIDJSON_NON_PRIMITIVE_CAST_ERROR_FRAGMENT,
     RAPIDJSON_NON_PRIMITIVE_CAST_E0605_FRAGMENT,
 ];
+const RAPIDJSON_NUMERIC_U128_UNARY_NEG_FRAGMENT: &str =
+    "error[E0600]: cannot apply unary operator `-` to type `u128`";
+const RAPIDJSON_NUMERIC_U8_TO_CHAR_CAST_FRAGMENT: &str =
+    "error[E0604]: only `u8` can be cast as `char`";
+const RAPIDJSON_NUMERIC_I64_AS_FUNCTION_FRAGMENT: &str =
+    "error[E0618]: expected function, found `i64`";
+const RAPIDJSON_NUMERIC_POW10_U128_TABLE_FRAGMENT: &str =
+    "static mut __gv___pow10_128: [u128; 40]";
+const RAPIDJSON_ITEM6_NUMERIC_SIGN_ENUM_MARKERS: &[&str] = &[
+    RAPIDJSON_NUMERIC_U128_UNARY_NEG_FRAGMENT,
+    RAPIDJSON_NUMERIC_U8_TO_CHAR_CAST_FRAGMENT,
+    RAPIDJSON_NUMERIC_I64_AS_FUNCTION_FRAGMENT,
+    RAPIDJSON_NUMERIC_POW10_U128_TABLE_FRAGMENT,
+];
 const RAPIDJSON_FILTERKEYDOM_PLACEHOLDER_API_HOLE_MARKERS: &[&str] = &[
     "no function or associated item named `new_0` found for struct `FilterKeyReader_FileReadStream`",
     "no method named `Populate` found for struct `GenericDocument_UTF8_`",
@@ -2279,6 +2293,14 @@ fn test_real_world_rapidjson_strict_filterkeydom_compile_capture() {
             first_stderr
         );
     }
+    for marker in RAPIDJSON_ITEM6_NUMERIC_SIGN_ENUM_MARKERS {
+        assert!(
+            first_stderr.contains(marker),
+            "strict filterkeydom replay should currently surface item-6 numeric/sign marker `{}` while item 6 remains open, got:\n{}",
+            marker,
+            first_stderr
+        );
+    }
 
     let first_class = fs::read_to_string(log_dir.join("first_failing_compile_class.txt"))
         .expect("failed to read first_failing_compile_class.txt");
@@ -2393,6 +2415,14 @@ fn test_real_world_rapidjson_cmake_no_tests_full_build_with_fragilec_capture_fir
             first_stderr.contains("error[E0425]"),
             "post-dedupe strict cmake first failure should include unresolved E0425 diagnostics"
         );
+        for marker in RAPIDJSON_ITEM6_NUMERIC_SIGN_ENUM_MARKERS {
+            assert!(
+                first_stderr.contains(marker),
+                "strict rapidjson no-tests replay should currently surface item-6 numeric/sign marker `{}` while item 6 remains open, got:\n{}",
+                marker,
+                first_stderr
+            );
+        }
     } else {
         assert_eq!(
             first_command.trim(),
