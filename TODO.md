@@ -103,7 +103,7 @@ Use this as the authoritative clear order after Phase 0 guardrails. Update each 
 
 ### Entrypoint residual breakdown (phase 2 item 1)
 - [x] 7.1) Preserve externally visible `main` definitions even when function rollback heuristics match (keep rollback behavior unchanged for non-`main` functions). Done 2026-02-24. Evidence: `AstCodeGen::generate_function` now bypasses `should_rollback_function` for non-static non-generator `main`; added/passing regressions `test_main_function_is_preserved_when_rollback_patterns_match` and `test_non_main_function_still_rolls_back_on_unmapped_call_pattern`.
-- [ ] 7.2) Add strict compile regression that replays a degraded real-world `main` body shape and verifies emitted object still exports `main`.
+- [x] 7.2) Add strict compile regression that replays a degraded real-world `main` body shape and verifies emitted object still exports `main`. Done 2026-02-24. Evidence: added/passing `fragilec` test `strict_compile_degraded_main_shape_still_exports_main_symbol` (Probe `.fail()` call-shape in `main(argc, argv)`), asserting strict-compiled object still defines `main` symbol.
 - [ ] 7.3) Re-run strict RapidJSON no-tests full build and confirm no shim-only main fallback diagnostics remain in link failures.
 
 ## Phase 3: Build-level validation

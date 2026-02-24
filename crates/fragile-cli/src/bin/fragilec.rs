@@ -1217,6 +1217,47 @@ mod tests {
     }
 
     #[test]
+    fn strict_compile_degraded_main_shape_still_exports_main_symbol() {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock must be monotonic")
+            .as_nanos();
+        let temp_dir =
+            std::env::temp_dir().join(format!("fragilec_main_degraded_shape_test_{}", stamp));
+        fs::create_dir_all(&temp_dir).expect("failed to create temp dir");
+        let source = temp_dir.join("program.cpp");
+        let out_obj = temp_dir.join("program.o");
+        fs::write(
+            &source,
+            r#"
+struct Probe {
+    int fail() { return 7; }
+};
+int main(int argc, char** argv) {
+    Probe probe;
+    return probe.fail() - 7 + (argc ? 0 : 0) + (argv ? 0 : 0);
+}
+"#,
+        )
+        .expect("failed to write source");
+
+        strict_compile_source_to_object(&source, &out_obj, &[], &[], &[])
+            .expect("strict compile should preserve degraded main body shapes");
+        assert!(
+            out_obj.exists(),
+            "expected object output at {}",
+            out_obj.display()
+        );
+        assert!(
+            object_defines_main_symbol(&out_obj).expect("failed to inspect object symbols"),
+            "strict-compiled degraded-shape main should define main symbol: {}",
+            out_obj.display()
+        );
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
     fn strict_compile_ignores_rapidjson_const_assignment_parser_diagnostic() {
         let stamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
