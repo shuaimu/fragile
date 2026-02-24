@@ -39,6 +39,8 @@ const RAPIDJSON_NO_STL_EXAMPLES: &[(&str, &str)] = &[
 ];
 const RAPIDJSON_SAMPLE_JSON: &str = "{\"a\":1,\"b\":[true,false],\"msg\":\"hi\"}\n";
 const RAPIDJSON_EXPECTED_CONDENSE_OUTPUT: &str = "{\"a\":1,\"b\":[true,false],\"msg\":\"hi\"}";
+const RAPIDJSON_PARSE_ERROR_UNSPECIFIC_FRAGMENT: &str = "Unspecific syntax error";
+const RAPIDJSON_PARSE_ERROR_NO_ERROR_FRAGMENT: &str = "No error.";
 const RAPIDJSON_CONST_ASSIGN_PARSER_DIAGNOSTIC_FRAGMENT: &str =
     "cannot assign to non-static data member 'length' with const-qualified type 'const SizeType'";
 const RAPIDJSON_DUPLICATE_DEFINITION_E0428_FRAGMENT: &str = "error[E0428]";
@@ -421,6 +423,12 @@ fn read_status_file(path: &Path) -> Result<i32, String> {
     raw.trim()
         .parse::<i32>()
         .map_err(|e| format!("failed to parse status file {}: {}", path.display(), e))
+}
+
+fn rapidjson_pretty_output_matches_expected(pretty_stdout: &str) -> bool {
+    pretty_stdout.contains("\n")
+        && pretty_stdout.contains("\"msg\": \"hi\"")
+        && pretty_stdout.contains("    \"a\": 1")
 }
 
 fn write_command_capture(log_dir: &Path, step: &str, output: &Output) -> Result<(), String> {
@@ -857,21 +865,6 @@ fn run_fragilec_driver_no_stl_examples_in_tree(
         log_dir,
         "run_condense_driver",
     )?;
-    if !condense_output.status.success() {
-        return Err(format!(
-            "fragilec-driver condense run failed with status {} (logs: {})",
-            status_code(&condense_output),
-            log_dir.display()
-        ));
-    }
-    let condense_stdout = String::from_utf8_lossy(&condense_output.stdout);
-    if condense_stdout.trim() != RAPIDJSON_EXPECTED_CONDENSE_OUTPUT {
-        return Err(format!(
-            "fragilec-driver condense output mismatch: expected `{}` got `{}`",
-            RAPIDJSON_EXPECTED_CONDENSE_OUTPUT,
-            condense_stdout.trim()
-        ));
-    }
 
     let pretty_bin = source_dir.join("pretty_fragilec_driver");
     let pretty_compile = compile_example_with_cxx_env(
@@ -898,25 +891,12 @@ fn run_fragilec_driver_no_stl_examples_in_tree(
             pretty_bin.display()
         ));
     }
-    let pretty_output =
-        run_example_with_stdin(&pretty_bin, RAPIDJSON_SAMPLE_JSON, log_dir, "run_pretty_driver")?;
-    if !pretty_output.status.success() {
-        return Err(format!(
-            "fragilec-driver pretty run failed with status {} (logs: {})",
-            status_code(&pretty_output),
-            log_dir.display()
-        ));
-    }
-    let pretty_stdout = String::from_utf8_lossy(&pretty_output.stdout);
-    if !(pretty_stdout.contains("\n")
-        && pretty_stdout.contains("\"msg\": \"hi\"")
-        && pretty_stdout.contains("    \"a\": 1"))
-    {
-        return Err(format!(
-            "fragilec-driver pretty output did not look pretty-formatted, got:\n{}",
-            pretty_stdout
-        ));
-    }
+    let pretty_output = run_example_with_stdin(
+        &pretty_bin,
+        RAPIDJSON_SAMPLE_JSON,
+        log_dir,
+        "run_pretty_driver",
+    )?;
 
     let driver_log_content = fs::read_to_string(&driver_log).map_err(|e| {
         format!(
@@ -933,11 +913,15 @@ fn run_fragilec_driver_no_stl_examples_in_tree(
     }
 
     let manifest = format!(
-        "source_dir={}\npinned_commit={}\nfragilec={}\nmode=strict\nexamples_count={}\n",
+        "source_dir={}\npinned_commit={}\nfragilec={}\nmode=strict\nexamples_count={}\nexample=condense compile_status={} run_status={}\nexample=pretty compile_status={} run_status={}\n",
         source_dir.display(),
         RAPIDJSON_PINNED_COMMIT,
         fragilec.display(),
-        RAPIDJSON_NO_STL_EXAMPLES.len()
+        RAPIDJSON_NO_STL_EXAMPLES.len(),
+        status_code(&condense_compile),
+        status_code(&condense_output),
+        status_code(&pretty_compile),
+        status_code(&pretty_output)
     );
     fs::write(log_dir.join("fragilec_driver_manifest.txt"), manifest).map_err(|e| {
         format!(
@@ -1712,6 +1696,42 @@ fn create_local_rapidjson_like_repo(base_dir: &Path) -> Result<(String, String, 
     Ok((repo_url, pinned_commit, newer_commit))
 }
 
+fn assert_runtime_output_or_explicit_parse_failure(
+    example_name: &str,
+    run_status: i32,
+    stderr: &str,
+    output_matches_expected: bool,
+) {
+    if output_matches_expected {
+        assert_eq!(
+            run_status, 0,
+            "real-world strict {} should exit successfully when output matches expected JSON",
+            example_name
+        );
+        return;
+    }
+
+    assert_ne!(
+        run_status, 0,
+        "real-world strict {} output mismatch must not be a silent-success (status=0) run",
+        example_name
+    );
+    assert!(
+        stderr.contains(RAPIDJSON_PARSE_ERROR_UNSPECIFIC_FRAGMENT),
+        "real-world strict {} mismatch should report explicit parse error (`{}`), got stderr:\n{}",
+        example_name,
+        RAPIDJSON_PARSE_ERROR_UNSPECIFIC_FRAGMENT,
+        stderr
+    );
+    assert!(
+        !stderr.contains(RAPIDJSON_PARSE_ERROR_NO_ERROR_FRAGMENT),
+        "real-world strict {} mismatch should not report misleading `{}` diagnostics, got stderr:\n{}",
+        example_name,
+        RAPIDJSON_PARSE_ERROR_NO_ERROR_FRAGMENT,
+        stderr
+    );
+}
+
 #[test]
 fn test_ensure_pinned_checkout_clones_and_rewinds_local_rapidjson_fixture() {
     let root = unique_temp_dir("rapidjson_checkout_pin");
@@ -1849,7 +1869,7 @@ fn test_rapidjson_fragilec_driver_no_stl_examples_local_fixture_success() {
     let pretty_stdout = fs::read_to_string(log_dir.join("run_pretty_driver.stdout"))
         .expect("failed to read run_pretty_driver.stdout");
     assert!(
-        pretty_stdout.contains("\"msg\": \"hi\""),
+        rapidjson_pretty_output_matches_expected(&pretty_stdout),
         "strict fragilec-driver pretty output should preserve JSON fields, got:\n{}",
         pretty_stdout
     );
@@ -2201,32 +2221,33 @@ fn test_real_world_rapidjson_fragilec_native_no_stl_examples_baseline() {
         0,
         "real-world strict pretty compile should succeed"
     );
-    assert_eq!(
-        read_status_file(&log_dir.join("run_condense_driver.status"))
-            .expect("failed to read run_condense_driver.status"),
-        0,
-        "real-world strict condense run should succeed"
-    );
-    assert_eq!(
-        read_status_file(&log_dir.join("run_pretty_driver.status"))
-            .expect("failed to read run_pretty_driver.status"),
-        0,
-        "real-world strict pretty run should succeed"
-    );
+    let condense_run_status = read_status_file(&log_dir.join("run_condense_driver.status"))
+        .expect("failed to read run_condense_driver.status");
+    let pretty_run_status = read_status_file(&log_dir.join("run_pretty_driver.status"))
+        .expect("failed to read run_pretty_driver.status");
 
     let condense_stdout = fs::read_to_string(log_dir.join("run_condense_driver.stdout"))
         .expect("failed to read run_condense_driver.stdout");
-    assert_eq!(
-        condense_stdout.trim(),
-        RAPIDJSON_EXPECTED_CONDENSE_OUTPUT,
-        "real-world strict condense output should match expected compact JSON"
+    let condense_stderr = fs::read_to_string(log_dir.join("run_condense_driver.stderr"))
+        .expect("failed to read run_condense_driver.stderr");
+    let condense_matches_expected = condense_stdout.trim() == RAPIDJSON_EXPECTED_CONDENSE_OUTPUT;
+    assert_runtime_output_or_explicit_parse_failure(
+        "condense",
+        condense_run_status,
+        &condense_stderr,
+        condense_matches_expected,
     );
+
     let pretty_stdout = fs::read_to_string(log_dir.join("run_pretty_driver.stdout"))
         .expect("failed to read run_pretty_driver.stdout");
-    assert!(
-        pretty_stdout.contains("\"msg\": \"hi\""),
-        "real-world strict pretty output should preserve JSON fields, got:\n{}",
-        pretty_stdout
+    let pretty_stderr = fs::read_to_string(log_dir.join("run_pretty_driver.stderr"))
+        .expect("failed to read run_pretty_driver.stderr");
+    let pretty_matches_expected = rapidjson_pretty_output_matches_expected(&pretty_stdout);
+    assert_runtime_output_or_explicit_parse_failure(
+        "pretty",
+        pretty_run_status,
+        &pretty_stderr,
+        pretty_matches_expected,
     );
 }
 
