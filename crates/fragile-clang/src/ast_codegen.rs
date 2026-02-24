@@ -4449,7 +4449,7 @@ impl AstCodeGen {
                 self.writeln("");
                 self.writeln("pub fn GetParseErrorCode(&self) -> ParseErrorCode {");
                 self.indent += 1;
-                self.writeln("ParseErrorCode::kParseErrorNone");
+                self.writeln("ParseErrorCode::kParseErrorUnspecificSyntaxError");
                 self.indent -= 1;
                 self.writeln("}");
                 self.indent -= 1;
@@ -14995,7 +14995,7 @@ impl AstCodeGen {
                     .insert("GetParseErrorCode".to_string(), 1);
                 self.writeln("pub fn GetParseErrorCode(&self) -> ParseErrorCode {");
                 self.indent += 1;
-                self.writeln("ParseErrorCode::kParseErrorNone");
+                self.writeln("ParseErrorCode::kParseErrorUnspecificSyntaxError");
                 self.indent -= 1;
                 self.writeln("}");
             }
@@ -52022,7 +52022,7 @@ mod tests {
         );
         assert!(
             reader_impl.contains("pub fn GetParseErrorCode(&self) -> ParseErrorCode {")
-                && reader_impl.contains("ParseErrorCode::kParseErrorNone"),
+                && reader_impl.contains("ParseErrorCode::kParseErrorUnspecificSyntaxError"),
             "GenericReader placeholder should expose GetParseErrorCode surface fallback, got:\n{}",
             code
         );
@@ -52076,7 +52076,7 @@ mod tests {
         );
         assert!(
             reader_impl.contains("pub fn GetParseErrorCode(&self) -> ParseErrorCode {")
-                && reader_impl.contains("ParseErrorCode::kParseErrorNone"),
+                && reader_impl.contains("ParseErrorCode::kParseErrorUnspecificSyntaxError"),
             "GenericReader template impl should expose GetParseErrorCode fallback surface, got:\n{}",
             code
         );
