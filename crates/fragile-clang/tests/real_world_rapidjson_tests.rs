@@ -86,7 +86,7 @@ const RAPIDJSON_STRICT_CMAKE_CAPITALIZE_CONSTEXPR_BLOCKER_MARKERS: &[&str] = &[
     "cannot find function `__constexpr_strlen_u8` in this scope",
     "cannot find function `__constexpr_wmemchr_i32_i32` in this scope",
 ];
-const RAPIDJSON_STRICT_CMAKE_CAPITALIZE_POST_CONSTEXPR_BLOCKER_MARKERS: &[&str] = &[
+const RAPIDJSON_STRICT_CMAKE_CAPITALIZE_NEW0_CLEARED_MARKERS: &[&str] = &[
     "no function or associated item named `new_0` found for struct `CapitalizeFilter_Writer_FileWriteStream`",
 ];
 const RAPIDJSON_FILTERKEYDOM_PLACEHOLDER_API_HOLE_MARKERS: &[&str] = &[
@@ -2554,10 +2554,10 @@ fn test_real_world_rapidjson_cmake_no_tests_full_build_with_fragilec_capture_fir
                 first_stderr
             );
         }
-        for marker in RAPIDJSON_STRICT_CMAKE_CAPITALIZE_POST_CONSTEXPR_BLOCKER_MARKERS {
+        for marker in RAPIDJSON_STRICT_CMAKE_CAPITALIZE_NEW0_CLEARED_MARKERS {
             assert!(
-                first_stderr.contains(marker),
-                "strict rapidjson no-tests replay should still surface downstream 3.4 blocker marker `{}`, got:\n{}",
+                !first_stderr.contains(marker),
+                "strict rapidjson no-tests replay should no longer surface cleared 3.4 marker `{}`, got:\n{}",
                 marker,
                 first_stderr
             );

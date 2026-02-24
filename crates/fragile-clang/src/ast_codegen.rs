@@ -15145,6 +15145,7 @@ impl AstCodeGen {
             "FilterKeyReader_FileReadStream"
                 | "Writer_FileWriteStream"
                 | "PrettyWriter_FileWriteStream"
+                | "CapitalizeFilter_Writer_FileWriteStream"
         );
         if needs_default_ctor_surface && !has_method(&self.output[impl_block_start..], "new_0") {
             self.current_struct_methods.insert("new_0".to_string(), 1);
@@ -52729,6 +52730,18 @@ mod tests {
         codegen.writeln("}");
         codegen.writeln("");
 
+        codegen.writeln("impl CapitalizeFilter_Writer_FileWriteStream {");
+        codegen.indent += 1;
+        let capitalize_filter_impl_start = codegen.output.len();
+        codegen.emit_missing_rapidjson_method_surface_stubs(
+            "CapitalizeFilter<Writer<FileWriteStream>>",
+            "CapitalizeFilter_Writer_FileWriteStream",
+            capitalize_filter_impl_start,
+        );
+        codegen.indent -= 1;
+        codegen.writeln("}");
+        codegen.writeln("");
+
         let code = codegen.output;
         let filter_impl = code
             .split("impl FilterKeyReader_FileReadStream {")
@@ -52740,6 +52753,10 @@ mod tests {
             .unwrap_or("");
         let pretty_writer_impl = code
             .split("impl PrettyWriter_FileWriteStream {")
+            .nth(1)
+            .unwrap_or("");
+        let capitalize_filter_impl = code
+            .split("impl CapitalizeFilter_Writer_FileWriteStream {")
             .nth(1)
             .unwrap_or("");
         assert!(
@@ -52759,6 +52776,13 @@ mod tests {
                 && pretty_writer_impl
                     .contains("std::mem::MaybeUninit::<Self>::zeroed().assume_init()"),
             "PrettyWriter<FileWriteStream> should expose fallback new_0 surface, got:\n{}",
+            code
+        );
+        assert!(
+            capitalize_filter_impl.contains("pub fn new_0() -> Self {")
+                && capitalize_filter_impl
+                    .contains("std::mem::MaybeUninit::<Self>::zeroed().assume_init()"),
+            "CapitalizeFilter<Writer<FileWriteStream>> should expose fallback new_0 surface, got:\n{}",
             code
         );
     }
@@ -52800,6 +52824,11 @@ mod tests {
             "PrettyWriter_FileWriteStream",
             &children,
         );
+        codegen.generate_template_impl(
+            "CapitalizeFilter<Writer<FileWriteStream>>",
+            "CapitalizeFilter_Writer_FileWriteStream",
+            &children,
+        );
 
         let code = codegen.output;
         let filter_impl = code
@@ -52812,6 +52841,10 @@ mod tests {
             .unwrap_or("");
         let pretty_writer_impl = code
             .split("impl PrettyWriter_FileWriteStream {")
+            .nth(1)
+            .unwrap_or("");
+        let capitalize_filter_impl = code
+            .split("impl CapitalizeFilter_Writer_FileWriteStream {")
             .nth(1)
             .unwrap_or("");
         assert!(
@@ -52831,6 +52864,13 @@ mod tests {
                 && pretty_writer_impl
                     .contains("std::mem::MaybeUninit::<Self>::zeroed().assume_init()"),
             "template impl path should inject PrettyWriter<FileWriteStream>::new_0 fallback, got:\n{}",
+            code
+        );
+        assert!(
+            capitalize_filter_impl.contains("pub fn new_0() -> Self {")
+                && capitalize_filter_impl
+                    .contains("std::mem::MaybeUninit::<Self>::zeroed().assume_init()"),
+            "template impl path should inject CapitalizeFilter<Writer<FileWriteStream>>::new_0 fallback, got:\n{}",
             code
         );
     }
