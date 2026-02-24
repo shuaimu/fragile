@@ -38510,7 +38510,18 @@ impl AstCodeGen {
                                         } else {
                                             base_raw
                                         };
-                                        let decayed_inner = format!("{}.as_ptr()", base);
+                                        let prefer_const_decay = arg_ty
+                                            .as_ref()
+                                            .and_then(|ty| match ty {
+                                                CppType::Pointer { is_const, .. } => Some(*is_const),
+                                                _ => None,
+                                            })
+                                            .unwrap_or(true);
+                                        let decayed_inner = if prefer_const_decay {
+                                            format!("{}.as_ptr()", base)
+                                        } else {
+                                            format!("{}.as_mut_ptr()", base)
+                                        };
                                         if base.contains("__gv_") || base.contains("__fsv_") {
                                             format!("unsafe {{ {} }}", decayed_inner)
                                         } else {
@@ -39283,7 +39294,18 @@ impl AstCodeGen {
                                     } else {
                                         base_raw
                                     };
-                                    let decayed_inner = format!("{}.as_ptr()", base);
+                                    let prefer_const_decay = arg_ty
+                                        .as_ref()
+                                        .and_then(|ty| match ty {
+                                            CppType::Pointer { is_const, .. } => Some(*is_const),
+                                            _ => None,
+                                        })
+                                        .unwrap_or(true);
+                                    let decayed_inner = if prefer_const_decay {
+                                        format!("{}.as_ptr()", base)
+                                    } else {
+                                        format!("{}.as_mut_ptr()", base)
+                                    };
                                     if base.contains("__gv_") || base.contains("__fsv_") {
                                         format!("unsafe {{ {} }}", decayed_inner)
                                     } else {
@@ -45741,6 +45763,116 @@ mod tests {
             !line.contains("readBuffer as *mut i8"),
             "constructor pointer parameter should not emit non-primitive array cast, got line:\n{}\nfull code:\n{}",
             line,
+            code
+        );
+    }
+
+    #[test]
+    fn test_call_expr_array_decay_prefers_mut_ptr_from_implicit_decay_type() {
+        let int_ty = CppType::Int { signed: true };
+        let read_buffer_ty = CppType::Array {
+            element: Box::new(CppType::Char { signed: true }),
+            size: Some(32),
+        };
+        let char_ptr_ty = CppType::Pointer {
+            pointee: Box::new(CppType::Char { signed: true }),
+            is_const: false,
+        };
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![make_node(
+                ClangNodeKind::FunctionDecl {
+                    name: "call_with_array_decay_mut".to_string(),
+                    mangled_name: "call_with_array_decay_mut".to_string(),
+                    is_static: false,
+                    return_type: int_ty.clone(),
+                    params: vec![],
+                    is_definition: true,
+                    is_variadic: false,
+                    is_noexcept: false,
+                    is_coroutine: false,
+                    coroutine_info: None,
+                },
+                vec![make_node(
+                    ClangNodeKind::CompoundStmt,
+                    vec![
+                        make_node(
+                            ClangNodeKind::DeclStmt,
+                            vec![make_node(
+                                ClangNodeKind::VarDecl {
+                                    name: "readBuffer".to_string(),
+                                    ty: read_buffer_ty.clone(),
+                                    has_init: false,
+                                    is_static: false,
+                                    is_extern: false,
+                                },
+                                vec![],
+                            )],
+                        ),
+                        make_node(
+                            ClangNodeKind::ExprStmt,
+                            vec![make_node(
+                                ClangNodeKind::CallExpr {
+                                    ty: CppType::Void,
+                                    template_instantiation: None,
+                                },
+                                vec![
+                                    make_node(
+                                        ClangNodeKind::DeclRefExpr {
+                                            name: "consume".to_string(),
+                                            ty: CppType::Named("unknown_fn".to_string()),
+                                            namespace_path: vec![],
+                                        },
+                                        vec![],
+                                    ),
+                                    make_node(
+                                        ClangNodeKind::ImplicitCastExpr {
+                                            cast_kind: CastKind::ArrayToPointerDecay,
+                                            ty: char_ptr_ty,
+                                        },
+                                        vec![make_node(
+                                            ClangNodeKind::DeclRefExpr {
+                                                name: "readBuffer".to_string(),
+                                                ty: read_buffer_ty.clone(),
+                                                namespace_path: vec![],
+                                            },
+                                            vec![],
+                                        )],
+                                    ),
+                                ],
+                            )],
+                        ),
+                        make_node(
+                            ClangNodeKind::ReturnStmt,
+                            vec![make_node(
+                                ClangNodeKind::IntegerLiteral {
+                                    value: 0,
+                                    cpp_type: Some(int_ty),
+                                },
+                                vec![],
+                            )],
+                        ),
+                    ],
+                )],
+            )],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        let call_line = code
+            .lines()
+            .find(|line| line.contains("readBuffer.as_"))
+            .unwrap_or_default();
+        assert!(
+            call_line.contains("readBuffer.as_mut_ptr()"),
+            "degraded callExpr array decay should prefer .as_mut_ptr() when implicit decay type is mutable pointer, got line:\n{}\nfull code:\n{}",
+            call_line,
+            code
+        );
+        assert!(
+            !call_line.contains("readBuffer.as_ptr()"),
+            "degraded callExpr array decay should not force const pointer decay for mutable pointer targets, got line:\n{}\nfull code:\n{}",
+            call_line,
             code
         );
     }
