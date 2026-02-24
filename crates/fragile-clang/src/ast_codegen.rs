@@ -27116,7 +27116,84 @@ impl AstCodeGen {
             }
         };
 
-        let arg_ty = Self::get_original_expr_type(arg_node).or_else(|| Self::get_expr_type(arg_node));
+        let arg_ty =
+            Self::get_original_expr_type(arg_node).or_else(|| Self::get_expr_type(arg_node));
+        let child_is_array = arg_node.children.first().is_some_and(|child| {
+            Self::get_original_expr_type(child)
+                .as_ref()
+                .is_some_and(Self::is_array_decay_source_type)
+                || Self::get_expr_type(child)
+                    .as_ref()
+                    .is_some_and(Self::is_array_decay_source_type)
+        });
+        let arg_is_array = (arg_ty
+            .as_ref()
+            .is_some_and(Self::is_array_decay_source_type)
+            || matches!(
+                &arg_node.kind,
+                ClangNodeKind::ImplicitCastExpr {
+                    cast_kind: CastKind::ArrayToPointerDecay,
+                    ..
+                }
+            )
+            || child_is_array)
+            && !self.is_ptr_var_expr(arg_node)
+            && !Self::is_pointer_arithmetic_expr(arg_node);
+        if arg_is_array {
+            if let Some(base_raw) = self.get_raw_var_name(arg_node) {
+                if base_raw.contains(".as_ptr()") || base_raw.contains(".as_mut_ptr()") {
+                    let base = if base_raw.starts_with("unsafe { ")
+                        || base_raw.contains(" as ")
+                        || base_raw.contains(' ')
+                    {
+                        format!("({})", base_raw)
+                    } else {
+                        base_raw
+                    };
+                    return format!("{} as {}", base, target_rust);
+                }
+                let base = if base_raw.starts_with("unsafe { ")
+                    || base_raw.contains(" as ")
+                    || base_raw.contains(' ')
+                {
+                    format!("({})", base_raw)
+                } else {
+                    base_raw
+                };
+                let is_global_base = base.contains("__gv_") || base.contains("__fsv_");
+                let decayed_inner = if target_is_const {
+                    format!("{}.as_ptr()", base)
+                } else {
+                    format!("{}.as_mut_ptr()", base)
+                };
+                let decayed = if is_global_base {
+                    format!("unsafe {{ {} }}", decayed_inner)
+                } else {
+                    decayed_inner
+                };
+                return format!("{} as {}", decayed, target_rust);
+            }
+
+            if Self::expr_string_is_pointer_value(&arg_str) {
+                return format!("{} as {}", wrap_arg(arg_str), target_rust);
+            }
+            let ptr_expr = if let Some(inner) = unwrap_outer_unsafe_expr(&arg_str) {
+                if target_is_const {
+                    format!("unsafe {{ ({}).as_ptr() }}", inner)
+                } else {
+                    format!("unsafe {{ ({}).as_mut_ptr() }}", inner)
+                }
+            } else {
+                let arg_expr = wrap_arg(arg_str.clone());
+                if target_is_const {
+                    format!("{}.as_ptr()", arg_expr)
+                } else {
+                    format!("{}.as_mut_ptr()", arg_expr)
+                }
+            };
+            return format!("{} as {}", ptr_expr, target_rust);
+        }
+
         let arg_is_pointer_like = arg_ty.as_ref().is_some_and(Self::is_pointer_like_type)
             || self.is_ptr_var_expr(arg_node);
         if arg_is_pointer_like {
@@ -45548,6 +45625,121 @@ mod tests {
         assert!(
             !line.contains("XMLHandle::new_1(doc as *mut XMLNode)"),
             "pointer constructor should not emit invalid direct value-to-pointer cast, got line:\n{}\nfull code:\n{}",
+            line,
+            code
+        );
+    }
+
+    #[test]
+    fn test_constructor_pointer_param_array_argument_decays_to_mut_ptr() {
+        let char_ptr_ty = CppType::Pointer {
+            pointee: Box::new(CppType::Char { signed: true }),
+            is_const: false,
+        };
+        let int_ty = CppType::Int { signed: true };
+        let read_buffer_ty = CppType::Array {
+            element: Box::new(CppType::Char { signed: true }),
+            size: Some(65536),
+        };
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![
+                make_node(
+                    ClangNodeKind::RecordDecl {
+                        name: "FileReadStream".to_string(),
+                        is_class: true,
+                        is_definition: true,
+                        fields: vec![],
+                    },
+                    vec![make_node(
+                        ClangNodeKind::ConstructorDecl {
+                            class_name: "FileReadStream".to_string(),
+                            params: vec![
+                                ("buffer".to_string(), char_ptr_ty.clone()),
+                                ("size".to_string(), int_ty.clone()),
+                            ],
+                            is_definition: true,
+                            ctor_kind: ConstructorKind::Other,
+                            access: AccessSpecifier::Public,
+                        },
+                        vec![make_node(ClangNodeKind::CompoundStmt, vec![])],
+                    )],
+                ),
+                make_node(
+                    ClangNodeKind::FunctionDecl {
+                        name: "make_stream".to_string(),
+                        mangled_name: "make_stream".to_string(),
+                        is_static: false,
+                        return_type: CppType::Named("FileReadStream".to_string()),
+                        params: vec![],
+                        is_definition: true,
+                        is_variadic: false,
+                        is_noexcept: false,
+                        is_coroutine: false,
+                        coroutine_info: None,
+                    },
+                    vec![make_node(
+                        ClangNodeKind::CompoundStmt,
+                        vec![
+                            make_node(
+                                ClangNodeKind::DeclStmt,
+                                vec![make_node(
+                                    ClangNodeKind::VarDecl {
+                                        name: "readBuffer".to_string(),
+                                        ty: read_buffer_ty.clone(),
+                                        has_init: false,
+                                        is_static: false,
+                                        is_extern: false,
+                                    },
+                                    vec![],
+                                )],
+                            ),
+                            make_node(
+                                ClangNodeKind::ReturnStmt,
+                                vec![make_node(
+                                    ClangNodeKind::CXXConstructExpr {
+                                        ty: CppType::Named("FileReadStream".to_string()),
+                                    },
+                                    vec![
+                                        make_node(
+                                            ClangNodeKind::DeclRefExpr {
+                                                name: "readBuffer".to_string(),
+                                                ty: read_buffer_ty,
+                                                namespace_path: vec![],
+                                            },
+                                            vec![],
+                                        ),
+                                        make_node(
+                                            ClangNodeKind::IntegerLiteral {
+                                                value: 65536,
+                                                cpp_type: Some(int_ty),
+                                            },
+                                            vec![],
+                                        ),
+                                    ],
+                                )],
+                            ),
+                        ],
+                    )],
+                ),
+            ],
+        );
+
+        let code = AstCodeGen::new().generate(&ast);
+        let line = code
+            .lines()
+            .find(|line| line.contains("return FileReadStream::new_2("))
+            .unwrap_or_default();
+        assert!(
+            line.contains("readBuffer.as_mut_ptr() as *mut i8"),
+            "constructor pointer parameter should decay local array argument to .as_mut_ptr(), got line:\n{}\nfull code:\n{}",
+            line,
+            code
+        );
+        assert!(
+            !line.contains("readBuffer as *mut i8"),
+            "constructor pointer parameter should not emit non-primitive array cast, got line:\n{}\nfull code:\n{}",
             line,
             code
         );
