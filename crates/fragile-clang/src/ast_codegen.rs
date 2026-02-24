@@ -849,6 +849,10 @@ pub struct AstCodeGen {
     bit_field_groups: HashMap<String, Vec<BitFieldGroup>>,
     /// Track generated function signatures to handle overloads: name -> count
     generated_functions: HashMap<String, usize>,
+    /// Internal helper/template signatures already emitted in this TU.
+    /// Prevents re-emitting helper/template concrete bodies as faux overloads
+    /// when multiple equivalent declarations/instantiations are visited.
+    generated_helper_template_signatures: HashSet<String>,
     /// Global/free function overload metadata for call-site overload resolution.
     /// Key: base function name, Value: emitted overload entries.
     function_overloads: HashMap<String, Vec<FunctionOverloadInfo>>,
@@ -1038,6 +1042,7 @@ impl AstCodeGen {
             namespace_type_alias_conflicts: HashSet::new(),
             bit_field_groups: HashMap::new(),
             generated_functions: HashMap::new(),
+            generated_helper_template_signatures: HashSet::new(),
             function_overloads: HashMap::new(),
             defined_function_names: HashSet::new(),
             defined_global_var_names: HashSet::new(),
@@ -14637,6 +14642,38 @@ impl AstCodeGen {
         }
     }
 
+    fn unregister_function_overload(&mut self, rust_name: &str) {
+        for overloads in self.function_overloads.values_mut() {
+            overloads.retain(|entry| entry.rust_name != rust_name);
+        }
+        self.function_overloads
+            .retain(|_, overloads| !overloads.is_empty());
+    }
+
+    fn is_helper_template_like_function_name(sanitized_base_name: &str) -> bool {
+        sanitized_base_name.starts_with("__") || sanitized_base_name.starts_with("std___")
+    }
+
+    fn helper_template_signature_key(
+        sanitized_base_name: &str,
+        params: &[(String, CppType)],
+        return_type: &CppType,
+        is_variadic: bool,
+    ) -> String {
+        let param_key = params
+            .iter()
+            .map(|(_, ty)| ty.to_rust_type_str())
+            .collect::<Vec<_>>()
+            .join("|");
+        format!(
+            "{}|{}|{}|{}",
+            sanitized_base_name,
+            param_key,
+            return_type.to_rust_type_str(),
+            is_variadic
+        )
+    }
+
     fn select_function_overload_name_by_arg_types(
         &self,
         base_name: &str,
@@ -22413,6 +22450,28 @@ impl AstCodeGen {
             return;
         }
 
+        let helper_template_signature_key =
+            if Self::is_helper_template_like_function_name(&sanitized_base_name) {
+                Some(Self::helper_template_signature_key(
+                    &sanitized_base_name,
+                    params,
+                    return_type,
+                    is_variadic,
+                ))
+            } else {
+                None
+            };
+        if let Some(signature_key) = helper_template_signature_key.as_ref() {
+            if !self
+                .generated_helper_template_signatures
+                .insert(signature_key.clone())
+            {
+                return;
+            }
+        }
+
+        let base_name_for_tracking = sanitized_base_name.clone();
+
         // Handle function overloading by appending suffix for duplicates
         let count = self
             .generated_functions
@@ -22719,6 +22778,21 @@ impl AstCodeGen {
         let preserve_user_hash_fn = name.starts_with("XXH") || name.starts_with("XSUM_");
         if !preserve_user_hash_fn && Self::should_rollback_function(generated) {
             self.output.truncate(output_start);
+            if let Some(signature_key) = helper_template_signature_key.as_ref() {
+                self.generated_helper_template_signatures.remove(signature_key);
+            }
+            self.unregister_function_overload(&func_name);
+            let remove_count_entry = self
+                .generated_functions
+                .get(&base_name_for_tracking)
+                .is_some_and(|count| *count <= 1);
+            if remove_count_entry {
+                self.generated_functions.remove(&base_name_for_tracking);
+            } else if let Some(existing_count) =
+                self.generated_functions.get_mut(&base_name_for_tracking)
+            {
+                *existing_count -= 1;
+            }
         }
     }
 
@@ -41656,6 +41730,105 @@ mod tests {
         assert!(
             !code.contains("pub fn __atomic_notify_all_std_atomic_flag_1"),
             "preamble helper must not be re-emitted with overload suffix, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_helper_template_like_functions_with_same_signature_are_deduplicated() {
+        let helper_decl = |value: i128| {
+            make_node(
+                ClangNodeKind::FunctionDecl {
+                    name: "__helper_template_probe".to_string(),
+                    mangled_name: "_Z22__helper_template_probei".to_string(),
+                    is_static: false,
+                    return_type: CppType::Int { signed: true },
+                    params: vec![("x".to_string(), CppType::Int { signed: true })],
+                    is_definition: true,
+                    is_variadic: false,
+                    is_noexcept: false,
+                    is_coroutine: false,
+                    coroutine_info: None,
+                },
+                vec![make_node(
+                    ClangNodeKind::CompoundStmt,
+                    vec![make_node(
+                        ClangNodeKind::ReturnStmt,
+                        vec![make_node(
+                            ClangNodeKind::IntegerLiteral {
+                                value,
+                                cpp_type: Some(CppType::Int { signed: true }),
+                            },
+                            vec![],
+                        )],
+                    )],
+                )],
+            )
+        };
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![helper_decl(1), helper_decl(2)],
+        );
+        let code = AstCodeGen::new().generate(&ast);
+        assert_eq!(
+            code.matches("fn __helper_template_probe(").count(),
+            1,
+            "helper/template duplicate signatures should emit one concrete body, got:\n{}",
+            code
+        );
+        assert!(
+            !code.contains("fn __helper_template_probe_1("),
+            "helper/template duplicate signatures should not emit overload-like suffix variants, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_non_helper_functions_preserve_existing_overload_suffix_behavior() {
+        let fn_decl = |value: i128| {
+            make_node(
+                ClangNodeKind::FunctionDecl {
+                    name: "user_fn_probe".to_string(),
+                    mangled_name: "_Z13user_fn_probei".to_string(),
+                    is_static: false,
+                    return_type: CppType::Int { signed: true },
+                    params: vec![("x".to_string(), CppType::Int { signed: true })],
+                    is_definition: true,
+                    is_variadic: false,
+                    is_noexcept: false,
+                    is_coroutine: false,
+                    coroutine_info: None,
+                },
+                vec![make_node(
+                    ClangNodeKind::CompoundStmt,
+                    vec![make_node(
+                        ClangNodeKind::ReturnStmt,
+                        vec![make_node(
+                            ClangNodeKind::IntegerLiteral {
+                                value,
+                                cpp_type: Some(CppType::Int { signed: true }),
+                            },
+                            vec![],
+                        )],
+                    )],
+                )],
+            )
+        };
+
+        let ast = make_node(
+            ClangNodeKind::TranslationUnit,
+            vec![fn_decl(1), fn_decl(2)],
+        );
+        let code = AstCodeGen::new().generate(&ast);
+        assert!(
+            code.contains("fn user_fn_probe("),
+            "primary user function should be emitted, got:\n{}",
+            code
+        );
+        assert!(
+            code.contains("fn user_fn_probe_1("),
+            "non-helper duplicate signatures should keep overload-style suffix behavior, got:\n{}",
             code
         );
     }
