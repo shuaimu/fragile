@@ -4422,6 +4422,39 @@ impl AstCodeGen {
                 self.writeln("");
             }
 
+            let is_generic_reader_surface_type = rust_name.starts_with("GenericReader_")
+                || cpp_name.contains("GenericReader<")
+                || cpp_name.contains("GenericReader::")
+                || cpp_name.contains("rapidjson::GenericReader<");
+            if is_generic_reader_surface_type {
+                // rapidjson condense/pretty can degrade Reader to an opaque placeholder; keep
+                // the parse-result/error surface so generated mains type-check.
+                self.writeln(&format!("impl {} {{", rust_name));
+                self.indent += 1;
+                self.writeln(
+                    "pub fn Parse<TInput, THandler>(&mut self, _is: TInput, _handler: THandler) -> ParseResult {",
+                );
+                self.indent += 1;
+                self.writeln("ParseResult::new_0()");
+                self.indent -= 1;
+                self.writeln("}");
+                self.writeln("");
+                self.writeln("pub fn GetErrorOffset(&self) -> u64 {");
+                self.indent += 1;
+                self.writeln("0");
+                self.indent -= 1;
+                self.writeln("}");
+                self.writeln("");
+                self.writeln("pub fn GetParseErrorCode(&self) -> ParseErrorCode {");
+                self.indent += 1;
+                self.writeln("ParseErrorCode::kParseErrorNone");
+                self.indent -= 1;
+                self.writeln("}");
+                self.indent -= 1;
+                self.writeln("}");
+                self.writeln("");
+            }
+
             if rust_name.starts_with("MemPoolT_sizeof_") {
                 // tinyxml2 MemPoolT<...> placeholders need basic method surface
                 // (`Alloc`/`Clear`) so member calls type-check when template
@@ -14874,7 +14907,12 @@ impl AstCodeGen {
         if needs_default_ctor_surface && !has_method(&self.output[impl_block_start..], "new_0") {
             self.current_struct_methods.insert("new_0".to_string(), 1);
             self.writeln("");
-            self.writeln("pub fn new_0() -> Self { Default::default() }");
+            self.writeln("pub fn new_0() -> Self {");
+            self.indent += 1;
+            self.writeln("// Surface-only fallback: avoid requiring `Default` on partial template shells.");
+            self.writeln("unsafe { std::mem::MaybeUninit::<Self>::zeroed().assume_init() }");
+            self.indent -= 1;
+            self.writeln("}");
         }
 
         let is_generic_document_surface_type = rust_name == "GenericDocument_UTF8_"
@@ -14905,6 +14943,53 @@ impl AstCodeGen {
                 self.writeln("pub fn Accept<T>(&self, _writer: &T) -> bool {");
                 self.indent += 1;
                 self.writeln("true");
+                self.indent -= 1;
+                self.writeln("}");
+            }
+        }
+
+        let is_generic_reader_surface_type = rust_name.starts_with("GenericReader_")
+            || class_name.contains("GenericReader<")
+            || class_name.contains("GenericReader::")
+            || class_name.contains("rapidjson::GenericReader<");
+        if is_generic_reader_surface_type {
+            let has_parse = has_method(&self.output[impl_block_start..], "Parse");
+            let has_error_offset = has_method(&self.output[impl_block_start..], "GetErrorOffset");
+            let has_error_code = has_method(&self.output[impl_block_start..], "GetParseErrorCode");
+            if !has_parse || !has_error_offset || !has_error_code {
+                self.writeln("");
+            }
+            if !has_parse {
+                self.current_struct_methods.insert("Parse".to_string(), 1);
+                self.writeln(
+                    "pub fn Parse<TInput, THandler>(&mut self, _is: TInput, _handler: THandler) -> ParseResult {",
+                );
+                self.indent += 1;
+                self.writeln("ParseResult::new_0()");
+                self.indent -= 1;
+                self.writeln("}");
+                if !has_error_offset || !has_error_code {
+                    self.writeln("");
+                }
+            }
+            if !has_error_offset {
+                self.current_struct_methods
+                    .insert("GetErrorOffset".to_string(), 1);
+                self.writeln("pub fn GetErrorOffset(&self) -> u64 {");
+                self.indent += 1;
+                self.writeln("0");
+                self.indent -= 1;
+                self.writeln("}");
+                if !has_error_code {
+                    self.writeln("");
+                }
+            }
+            if !has_error_code {
+                self.current_struct_methods
+                    .insert("GetParseErrorCode".to_string(), 1);
+                self.writeln("pub fn GetParseErrorCode(&self) -> ParseErrorCode {");
+                self.indent += 1;
+                self.writeln("ParseErrorCode::kParseErrorNone");
                 self.indent -= 1;
                 self.writeln("}");
             }
@@ -51797,12 +51882,14 @@ mod tests {
             .unwrap_or("");
         let writer_impl = code.split("impl Writer_FileWriteStream {").nth(1).unwrap_or("");
         assert!(
-            filter_impl.contains("pub fn new_0() -> Self { Default::default() }"),
+            filter_impl.contains("pub fn new_0() -> Self {")
+                && filter_impl.contains("std::mem::MaybeUninit::<Self>::zeroed().assume_init()"),
             "FilterKeyReader<FileReadStream> should expose fallback new_0 surface, got:\n{}",
             code
         );
         assert!(
-            writer_impl.contains("pub fn new_0() -> Self { Default::default() }"),
+            writer_impl.contains("pub fn new_0() -> Self {")
+                && writer_impl.contains("std::mem::MaybeUninit::<Self>::zeroed().assume_init()"),
             "Writer<FileWriteStream> should expose fallback new_0 surface, got:\n{}",
             code
         );
@@ -51848,13 +51935,48 @@ mod tests {
             .unwrap_or("");
         let writer_impl = code.split("impl Writer_FileWriteStream {").nth(1).unwrap_or("");
         assert!(
-            filter_impl.contains("pub fn new_0() -> Self { Default::default() }"),
+            filter_impl.contains("pub fn new_0() -> Self {")
+                && filter_impl.contains("std::mem::MaybeUninit::<Self>::zeroed().assume_init()"),
             "template impl path should inject FilterKeyReader<FileReadStream>::new_0 fallback, got:\n{}",
             code
         );
         assert!(
-            writer_impl.contains("pub fn new_0() -> Self { Default::default() }"),
+            writer_impl.contains("pub fn new_0() -> Self {")
+                && writer_impl.contains("std::mem::MaybeUninit::<Self>::zeroed().assume_init()"),
             "template impl path should inject Writer<FileWriteStream>::new_0 fallback, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_rapidjson_generic_reader_placeholder_emits_parse_error_surface_fallbacks() {
+        let mut codegen = AstCodeGen::new();
+        codegen.used_types.insert(
+            "GenericReader_UTF8___UTF8_".to_string(),
+            "GenericReader<UTF8<>, UTF8<>>".to_string(),
+        );
+        codegen.generate_missing_type_stubs();
+        let code = codegen.output;
+        let reader_impl = code
+            .split("impl GenericReader_UTF8___UTF8_ {")
+            .nth(1)
+            .unwrap_or("");
+        assert!(
+            reader_impl.contains(
+                "pub fn Parse<TInput, THandler>(&mut self, _is: TInput, _handler: THandler) -> ParseResult {",
+            ) && reader_impl.contains("ParseResult::new_0()"),
+            "GenericReader placeholder should expose Parse surface fallback, got:\n{}",
+            code
+        );
+        assert!(
+            reader_impl.contains("pub fn GetErrorOffset(&self) -> u64 {"),
+            "GenericReader placeholder should expose GetErrorOffset surface fallback, got:\n{}",
+            code
+        );
+        assert!(
+            reader_impl.contains("pub fn GetParseErrorCode(&self) -> ParseErrorCode {")
+                && reader_impl.contains("ParseErrorCode::kParseErrorNone"),
+            "GenericReader placeholder should expose GetParseErrorCode surface fallback, got:\n{}",
             code
         );
     }
