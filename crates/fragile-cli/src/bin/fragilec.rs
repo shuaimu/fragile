@@ -15,8 +15,6 @@ const FRAGILEC_ENFORCE_BUILD_ID_ENV: &str = "FRAGILEC_ENFORCE_BUILD_ID";
 const FRAGILEC_REQUIRE_META_ENV: &str = "FRAGILEC_REQUIRE_META";
 const FRAGILEC_KEEP_RS_ENV: &str = "FRAGILEC_KEEP_RS";
 const FRAGILEC_LINKER_ENV: &str = "FRAGILEC_LINKER";
-const RAPIDJSON_GENERIC_STRING_REF_CONST_ASSIGN_DIAGNOSTIC: &str =
-    "rapidjson/document.h&&cannot assign to non-static data member 'length' with const-qualified type 'const SizeType'";
 
 fn validate_strict_mode_value(mode: &str) -> Result<(), String> {
     match mode.to_ascii_lowercase().as_str() {
@@ -223,11 +221,8 @@ fn source_language(source: &Path) -> ParserLanguage {
 }
 
 fn strict_parser_ignored_error_patterns(language: ParserLanguage) -> Vec<String> {
-    if language == ParserLanguage::Cpp {
-        vec![RAPIDJSON_GENERIC_STRING_REF_CONST_ASSIGN_DIAGNOSTIC.to_string()]
-    } else {
-        Vec::new()
-    }
+    let _ = language;
+    Vec::new()
 }
 
 fn crate_name_for_source(source: &Path) -> String {
@@ -1010,16 +1005,15 @@ mod tests {
     }
 
     #[test]
-    fn strict_parser_ignored_patterns_are_cpp_only() {
+    fn strict_parser_ignored_patterns_are_empty_by_default() {
         let cpp = strict_parser_ignored_error_patterns(ParserLanguage::Cpp);
         assert!(
-            cpp.iter()
-                .any(|p| p.contains("const-qualified type 'const SizeType'")),
-            "cpp strict parser should ignore rapidjson const-assignment diagnostic"
+            cpp.is_empty(),
+            "cpp strict parser ignore list should be empty"
         );
 
         let c = strict_parser_ignored_error_patterns(ParserLanguage::C);
-        assert!(c.is_empty(), "c strict parser should not add c++ patterns");
+        assert!(c.is_empty(), "c strict parser ignore list should be empty");
     }
 
     #[test]

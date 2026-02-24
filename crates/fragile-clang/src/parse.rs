@@ -7,6 +7,7 @@ use crate::ast::{
 use crate::types::CppType;
 use miette::{miette, Result};
 use std::ffi::{CStr, CString};
+use std::fs;
 use std::path::Path;
 use std::ptr;
 
@@ -386,8 +387,12 @@ impl ClangParser {
                     let is_ignored = self.ignored_error_patterns.iter().any(|pattern| {
                         diagnostic_matches_ignore_pattern(pattern, &msg, &diagnostic_text)
                     });
+                    let is_semantically_tolerated =
+                        is_known_rapidjson_generic_string_ref_const_assign_diagnostic(
+                            &file_name, line, &msg,
+                        );
 
-                    if !is_system_header && !is_ignored {
+                    if !is_system_header && !is_ignored && !is_semantically_tolerated {
                         user_errors.push(diagnostic_text);
                     }
                 }
@@ -4411,6 +4416,61 @@ fn cursor_mangled_name(cursor: clang_sys::CXCursor) -> String {
     }
 }
 
+const RAPIDJSON_GENERIC_STRING_REF_CONST_ASSIGN_DIAGNOSTIC_FRAGMENT: &str =
+    "cannot assign to non-static data member 'length' with const-qualified type 'const SizeType'";
+
+fn is_known_rapidjson_generic_string_ref_const_assign_diagnostic(
+    file_name: &str,
+    line: u32,
+    msg: &str,
+) -> bool {
+    if !msg.contains(RAPIDJSON_GENERIC_STRING_REF_CONST_ASSIGN_DIAGNOSTIC_FRAGMENT) {
+        return false;
+    }
+
+    // Ensure we only special-case the exact RapidJSON header path.
+    let normalized_file_name = file_name.replace('\\', "/");
+    if !normalized_file_name.contains("rapidjson/document.h") {
+        return false;
+    }
+
+    let line_number = usize::try_from(line).ok();
+    let line_index = match line_number.and_then(|n| n.checked_sub(1)) {
+        Some(idx) => idx,
+        None => return false,
+    };
+
+    let source = match fs::read_to_string(file_name) {
+        Ok(content) => content,
+        Err(_) => return false,
+    };
+    let lines: Vec<&str> = source.lines().collect();
+    if line_index >= lines.len() {
+        return false;
+    }
+
+    // Require the exact assignment-operator line shape to avoid broad suppression.
+    let diagnostic_line = lines[line_index];
+    if !diagnostic_line.contains("GenericStringRef& operator=(const GenericStringRef& rhs)") {
+        return false;
+    }
+    if !diagnostic_line.contains("length = rhs.length") {
+        return false;
+    }
+
+    let window_start = line_index.saturating_sub(12);
+    let window_end = (line_index + 12).min(lines.len().saturating_sub(1));
+    let context = &lines[window_start..=window_end];
+    let has_const_pointer_member = context
+        .iter()
+        .any(|text| text.contains("const Ch* const s") || text.contains("const CharType* const s"));
+    let has_const_length_member = context
+        .iter()
+        .any(|text| text.contains("const SizeType length"));
+
+    has_const_pointer_member && has_const_length_member
+}
+
 fn diagnostic_matches_ignore_pattern(pattern: &str, msg: &str, diagnostic_text: &str) -> bool {
     let mut saw_part = false;
     for part in pattern.split("&&").map(str::trim).filter(|p| !p.is_empty()) {
@@ -4648,6 +4708,113 @@ int main() { return 0; }
         assert!(
             matches!(ast.translation_unit.kind, ClangNodeKind::TranslationUnit),
             "expected translation unit root"
+        );
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_parse_file_accepts_rapidjson_const_member_assignment_with_semantic_tolerance() {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock must be monotonic")
+            .as_nanos();
+        let temp_dir = std::env::temp_dir().join(format!(
+            "fragile_parse_rapidjson_semantic_tolerance_{}",
+            stamp
+        ));
+        let include_dir = temp_dir.join("include/rapidjson");
+        std::fs::create_dir_all(&include_dir).expect("failed to create include dir");
+        let header = include_dir.join("document.h");
+        let source = temp_dir.join("rapidjson_like.cpp");
+        std::fs::write(
+            &header,
+            r#"
+typedef unsigned int SizeType;
+template<typename CharType>
+struct GenericStringRef {
+    typedef CharType Ch;
+    const Ch* const s;
+    const SizeType length;
+    GenericStringRef(const CharType* str, SizeType len) : s(str), length(len) {}
+    GenericStringRef& operator=(const GenericStringRef& rhs) { s = rhs.s; length = rhs.length; return *this; }
+};
+"#,
+        )
+        .expect("failed to write header");
+        std::fs::write(
+            &source,
+            r#"
+#include "rapidjson/document.h"
+int main() { return 0; }
+"#,
+        )
+        .expect("failed to write source");
+
+        let parser = ClangParser::with_paths_defines_and_language(
+            vec![temp_dir.join("include").to_string_lossy().to_string()],
+            Vec::new(),
+            ParserLanguage::Cpp,
+        )
+        .expect("failed to create parser");
+        let ast = parser
+            .parse_file(&source)
+            .expect("parse should succeed via built-in semantic tolerance");
+        assert!(
+            matches!(ast.translation_unit.kind, ClangNodeKind::TranslationUnit),
+            "expected translation unit root"
+        );
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_parse_file_reports_non_matching_rapidjson_const_member_assignment_shape() {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock must be monotonic")
+            .as_nanos();
+        let temp_dir =
+            std::env::temp_dir().join(format!("fragile_parse_rapidjson_shape_guard_{}", stamp));
+        let include_dir = temp_dir.join("include/rapidjson");
+        std::fs::create_dir_all(&include_dir).expect("failed to create include dir");
+        let header = include_dir.join("document.h");
+        let source = temp_dir.join("rapidjson_like.cpp");
+        std::fs::write(
+            &header,
+            r#"
+typedef unsigned int SizeType;
+struct NotGenericStringRef {
+    const SizeType length;
+    NotGenericStringRef(SizeType len) : length(len) {}
+    NotGenericStringRef& operator=(const NotGenericStringRef& rhs) { length = rhs.length; return *this; }
+};
+"#,
+        )
+        .expect("failed to write header");
+        std::fs::write(
+            &source,
+            r#"
+#include "rapidjson/document.h"
+int main() { return 0; }
+"#,
+        )
+        .expect("failed to write source");
+
+        let parser = ClangParser::with_paths_defines_and_language(
+            vec![temp_dir.join("include").to_string_lossy().to_string()],
+            Vec::new(),
+            ParserLanguage::Cpp,
+        )
+        .expect("failed to create parser");
+        let err = parser
+            .parse_file(&source)
+            .expect_err("non-matching const-member assignment should remain an error");
+        let err_text = err.to_string();
+        assert!(
+            err_text.contains("cannot assign to non-static data member 'length'"),
+            "expected const-member assignment diagnostic, got:\n{}",
+            err_text
         );
 
         let _ = std::fs::remove_dir_all(&temp_dir);
