@@ -4321,6 +4321,20 @@ impl AstCodeGen {
                 continue;
             }
 
+            // Check for namespace-qualified RapidJSON types (e.g., rapidjson_GenericValue_rapidjson_UTF8_)
+            // that resolve to already-generated types without the namespace prefix.
+            if rust_name.starts_with("rapidjson_") {
+                let stripped = &rust_name["rapidjson_".len()..];
+                // Also strip inner "rapidjson_" prefixes (double-qualified names)
+                let stripped = stripped.replace("rapidjson_", "");
+                if self.generated_structs.contains(&stripped) || self.generated_aliases.contains(&stripped) {
+                    self.writeln(&format!("pub type {} = {};", rust_name, stripped));
+                    self.generated_aliases.insert(rust_name.clone());
+                    self.writeln("");
+                    continue;
+                }
+            }
+
             if let Some(concrete_alias_target) =
                 self.resolve_missing_stub_concrete_alias_target(&rust_name, &cpp_name)
             {
@@ -4591,6 +4605,8 @@ impl AstCodeGen {
                 self.indent += 1;
                 self.writeln("pub fn new_0() -> Self { Default::default() }");
                 self.writeln("pub fn op_index(&mut self, _key: *const i8) -> *mut Self { self as *mut Self }");
+                self.writeln("pub fn op_index_1(&mut self, _idx: u32) -> *mut Self { self as *mut Self }");
+                self.writeln("pub fn op_assign<T>(&mut self, _val: T) -> &mut Self { self }");
                 self.writeln("pub fn IsNull(&self) -> bool { true }");
                 self.writeln("pub fn IsObject(&self) -> bool { false }");
                 self.writeln("pub fn IsArray(&self) -> bool { false }");
@@ -4602,7 +4618,7 @@ impl AstCodeGen {
                 self.writeln("pub fn IsDouble(&self) -> bool { false }");
                 self.writeln("pub fn IsBool(&self) -> bool { false }");
                 self.writeln("pub fn GetString(&self) -> *const i8 { b\"\\0\".as_ptr() as *const i8 }");
-                self.writeln("pub fn GetStringLength(&self) -> u64 { 0 }");
+                self.writeln("pub fn GetStringLength(&self) -> u32 { 0 }");
                 self.writeln("pub fn GetInt(&self) -> i32 { 0 }");
                 self.writeln("pub fn GetUint(&self) -> u32 { 0 }");
                 self.writeln("pub fn GetInt64(&self) -> i64 { 0 }");
@@ -4616,18 +4632,39 @@ impl AstCodeGen {
                 self.writeln("pub fn SetUint64(&mut self, _u: u64) {}");
                 self.writeln("pub fn SetDouble(&mut self, _d: f64) {}");
                 self.writeln("pub fn SetBool(&mut self, _b: bool) {}");
-                self.writeln("pub fn SetString<A>(&mut self, _s: *const i8, _len: u64, _allocator: A) {}");
+                self.writeln("pub fn SetString(&mut self, _s: *const i8, _len: u32, _allocator: *mut Self) {}");
                 self.writeln("pub fn Accept<T>(&self, _writer: &T) -> bool { true }");
                 self.writeln("pub fn HasMember(&self, _name: *const i8) -> bool { false }");
+                self.writeln("pub fn FindMember(&self, _name: *const i8) -> *const Self { std::ptr::null() }");
                 self.writeln("pub fn MemberBegin(&self) -> *const Self { std::ptr::null() }");
                 self.writeln("pub fn MemberEnd(&self) -> *const Self { std::ptr::null() }");
                 self.writeln("pub fn Begin(&self) -> *const Self { std::ptr::null() }");
                 self.writeln("pub fn End(&self) -> *const Self { std::ptr::null() }");
-                self.writeln("pub fn Size(&self) -> u64 { 0 }");
+                self.writeln("pub fn Size(&self) -> u32 { 0 }");
                 self.writeln("pub fn PushBack<A>(&mut self, _val: Self, _allocator: A) -> &mut Self { self }");
                 self.writeln("pub fn AddMember<K, V, A>(&mut self, _key: K, _val: V, _allocator: A) -> &mut Self { self }");
                 self.writeln("pub fn SetObject(&mut self) -> &mut Self { self }");
                 self.writeln("pub fn SetArray(&mut self) -> &mut Self { self }");
+                self.indent -= 1;
+                self.writeln("}");
+                self.writeln("");
+            }
+
+            // RapidJSON GenericMemberIterator opaque placeholder: iterator operation stubs.
+            let is_member_iterator_stub = rust_name.contains("MemberIterator")
+                || rust_name.contains("ConstMemberIterator");
+            if is_member_iterator_stub {
+                self.writeln(&format!("impl {} {{", rust_name));
+                self.indent += 1;
+                self.writeln("pub fn new_0() -> Self { Default::default() }");
+                self.writeln("pub fn op_ne(&self, _other: &Self) -> bool { false }");
+                self.writeln("pub fn op_eq(&self, _other: &Self) -> bool { true }");
+                self.writeln("pub fn op_arrow(&self) -> *const Self { self as *const Self }");
+                self.writeln("pub fn op_inc(&mut self) -> &mut Self { self }");
+                self.writeln("pub fn op_deref(&self) -> &Self { self }");
+                // MemberIterator has .name and .value fields (GenericMember<Encoding>)
+                self.writeln("pub fn name(&self) -> *const i8 { b\"\\0\".as_ptr() as *const i8 }");
+                self.writeln("pub fn value(&self) -> *const Self { self as *const Self }");
                 self.indent -= 1;
                 self.writeln("}");
                 self.writeln("");
@@ -4671,6 +4708,29 @@ impl AstCodeGen {
                 self.writeln("");
             }
 
+            // RapidJSON GenericSchemaValidator opaque placeholder: surface stubs.
+            let is_schema_validator_stub = rust_name.contains("SchemaValidator");
+            if is_schema_validator_stub {
+                // Ensure GenericPointer_UTF8_ exists (referenced by validator stubs)
+                if !self.generated_structs.contains("GenericPointer_UTF8_") {
+                    self.writeln("#[repr(C)] #[derive(Clone, Copy)] pub struct GenericPointer_UTF8_ { _opaque: [u8; 64] }");
+                    self.writeln("impl Default for GenericPointer_UTF8_ { fn default() -> Self { Self { _opaque: [0u8; 64] } } }");
+                    self.writeln("impl GenericPointer_UTF8_ { pub fn Stringify<T>(&self, _buffer: &mut T) {} }");
+                    self.generated_structs.insert("GenericPointer_UTF8_".to_string());
+                    self.writeln("");
+                }
+                self.writeln(&format!("impl {} {{", rust_name));
+                self.indent += 1;
+                self.writeln("pub fn new_1<T>(_schema: &T) -> Self { Default::default() }");
+                self.writeln("pub fn IsValid(&self) -> bool { true }");
+                self.writeln("pub fn GetInvalidSchemaPointer(&self) -> GenericPointer_UTF8_ { Default::default() }");
+                self.writeln("pub fn GetInvalidSchemaKeyword(&self) -> *const i8 { b\"\\0\".as_ptr() as *const i8 }");
+                self.writeln("pub fn GetInvalidDocumentPointer(&self) -> GenericPointer_UTF8_ { Default::default() }");
+                self.indent -= 1;
+                self.writeln("}");
+                self.writeln("");
+            }
+
             // RapidJSON Writer/PrettyWriter<StringBuffer> opaque placeholder: JSON serialization stubs.
             let is_writer_sb_stub = (rust_name.contains("Writer_") || rust_name.contains("PrettyWriter_"))
                 && (rust_name.contains("StringBuffer") || rust_name.contains("GenericStringBuffer"));
@@ -4684,8 +4744,8 @@ impl AstCodeGen {
                     "pub fn EndObject(&mut self, _member_count: u64) -> bool { true }",
                     "pub fn StartArray(&mut self) -> bool { true }",
                     "pub fn EndArray(&mut self, _element_count: u64) -> bool { true }",
-                    "pub fn Key(&mut self, _str: *const i8, _length: u64, _copy: bool) -> bool { true }",
-                    "pub fn String(&mut self, _str: *const i8, _length: u64, _copy: bool) -> bool { true }",
+                    "pub fn Key(&mut self, _str: *const i8) -> bool { true }",
+                    "pub fn String(&mut self, _str: *const i8) -> bool { true }",
                     "pub fn Bool(&mut self, _b: bool) -> bool { true }",
                     "pub fn Null(&mut self) -> bool { true }",
                     "pub fn Int(&mut self, _i: i32) -> bool { true }",
@@ -15870,8 +15930,8 @@ impl AstCodeGen {
                     ("EndObject", "pub fn EndObject(&mut self, _member_count: u64) -> bool { true }"),
                     ("StartArray", "pub fn StartArray(&mut self) -> bool { true }"),
                     ("EndArray", "pub fn EndArray(&mut self, _element_count: u64) -> bool { true }"),
-                    ("Key", "pub fn Key(&mut self, _str: *const i8, _length: u64, _copy: bool) -> bool { true }"),
-                    ("String", "pub fn String(&mut self, _str: *const i8, _length: u64, _copy: bool) -> bool { true }"),
+                    ("Key", "pub fn Key(&mut self, _str: *const i8) -> bool { true }"),
+                    ("String", "pub fn String(&mut self, _str: *const i8) -> bool { true }"),
                     ("Bool", "pub fn Bool(&mut self, _b: bool) -> bool { true }"),
                     ("Null", "pub fn Null(&mut self) -> bool { true }"),
                     ("Int", "pub fn Int(&mut self, _i: i32) -> bool { true }"),
@@ -19799,6 +19859,11 @@ impl AstCodeGen {
         self.generated_aliases.insert("fpos_t".to_string());
         self.generated_aliases.insert("fpos64_t".to_string());
         self.writeln("");
+        // C library struct tm (from <time.h>/<ctime>) - opaque stub (56 bytes on Linux x86-64)
+        self.writeln("#[repr(C)] #[derive(Clone, Copy)] pub struct tm { _opaque: [u8; 56] }");
+        self.writeln("impl Default for tm { fn default() -> Self { Self { _opaque: [0u8; 56] } } }");
+        self.generated_structs.insert("tm".to_string());
+        self.writeln("");
         // Placeholder types that need Clone/Default (can't use c_void as base for structs)
         // string_view with data/size/length methods
         self.writeln("#[repr(C)] #[derive(Default, Clone, Copy)] pub struct string_view { pub __data: *const i8, pub __size: u64 }");
@@ -22245,7 +22310,7 @@ impl AstCodeGen {
     }
 
     fn preamble_owned_struct_names() -> &'static [&'static str] {
-        &["fpos_mbstate_t", "__cxx_atomic_impl___cxx_contention_t"]
+        &["fpos_mbstate_t", "__cxx_atomic_impl___cxx_contention_t", "tm"]
     }
 
     fn preamble_owned_alias_names() -> &'static [&'static str] {
@@ -34112,7 +34177,11 @@ impl AstCodeGen {
                                     } else if is_ref {
                                         // Reference initialization: add &mut or & prefix
                                         let prefix = if is_const_ref { "&" } else { "&mut " };
-                                        format!(" = {}{}", prefix, expr)
+                                        if Self::needs_unsafe_wrapper(&expr) {
+                                            format!(" = unsafe {{ {}{} }}", prefix, expr)
+                                        } else {
+                                            format!(" = {}{}", prefix, expr)
+                                        }
                                     } else if {
                                         let rust_ty = ty.to_rust_type_str();
                                         rust_ty == "u128" || rust_ty == "i128"
@@ -41506,18 +41575,28 @@ impl AstCodeGen {
                             || base == "__self";
                     let base_is_tinyxml2_handle_value =
                         self.is_tinyxml2_handle_value_expr(&node.children[0]);
-                    let base_pointer_signal = base_type
-                        .as_ref()
-                        .is_some_and(Self::is_pointer_like_after_lowering)
-                        || Self::get_expr_type(&node.children[0])
+                    // If base already starts with `*` it was dereferenced by operator[]
+                    // or similar — the Rust expression is a value, not a pointer,
+                    // even though the C++ AST type is still a reference.
+                    let base_already_derefed = {
+                        let stripped = Self::strip_outer_parens_expr(
+                            Self::strip_outer_unsafe_block(&base).unwrap_or(&base),
+                        );
+                        stripped.starts_with('*')
+                    };
+                    let base_pointer_signal = !base_already_derefed
+                        && (base_type
                             .as_ref()
                             .is_some_and(Self::is_pointer_like_after_lowering)
-                        || fallback_base_type
-                            .as_ref()
-                            .is_some_and(Self::is_pointer_like_after_lowering)
-                        || self.is_ptr_var_expr(&node.children[0])
-                        || self.is_pointer_receiver_expr(&node.children[0])
-                        || self.is_pointer_receiver_expr_string_hint(&base);
+                            || Self::get_expr_type(&node.children[0])
+                                .as_ref()
+                                .is_some_and(Self::is_pointer_like_after_lowering)
+                            || fallback_base_type
+                                .as_ref()
+                                .is_some_and(Self::is_pointer_like_after_lowering)
+                            || self.is_ptr_var_expr(&node.children[0])
+                            || self.is_pointer_receiver_expr(&node.children[0])
+                            || self.is_pointer_receiver_expr_string_hint(&base));
                     let base_is_value_field =
                         self.is_known_non_pointer_self_field_expr(&base) && !base_pointer_signal;
                     let base_is_ptr = !base_is_implicit_self
